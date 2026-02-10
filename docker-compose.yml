@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  # 1. RabbitMQ - Xabarlar tashuvchi
+  rabbitmq:
+    image: rabbitmq:3-management
+    ports:
+      - "5672:5672"   # Mikroservislar ulanadigan port
+      - "15672:15672" # Brauzerda ko'rish uchun panel (User: guest, Pass: guest)
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+
+  # 2. PostgreSQL - Asosiy baza
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_USER: myuser
+      POSTGRES_PASSWORD: mypassword
+      POSTGRES_DB: elchipochta_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  rabbitmq_data:
+  postgres_data:
