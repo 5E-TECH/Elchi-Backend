@@ -11,6 +11,6 @@ async function bootstrap() {
 
   await app.startAllMicroservices();
   // HTTP porti (shart emas, lekin turaversin)
-  await app.listen(3006);
+  await app.listen(3011);
 }
 bootstrap();
