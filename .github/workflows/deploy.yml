@@ -21,7 +21,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             # Serverdagi loyiha papkasiga o'tamiz
-            cd /home/ubuntu/loyiha-papkangiz-nomi  
+            cd /home/ubuntu/Elchi-Backend  
             
             # Yangi kodlarni tortib olamiz
             git pull origin main
