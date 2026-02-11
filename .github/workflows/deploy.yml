@@ -1,0 +1,34 @@
+name: CI/CD Deploy
+
+on:
+  push:
+    branches:
+      - main  # Faqat main branchga kod push bo'lganda ishlaydi
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Deploy via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.SERVER_IP }}
+          username: ${{ secrets.SERVER_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          script: |
+            # Serverdagi loyiha papkasiga o'tamiz
+            cd /home/ubuntu/loyiha-papkangiz-nomi  
+            
+            # Yangi kodlarni tortib olamiz
+            git pull origin main
+            
+            # Docker containerlarni yangilaymiz
+            # --build bayrog'i o'zgarishlarni qayta yig'adi
+            docker-compose up -d --build
+            
+            # Keraksiz eski imagelarni o'chirib yuboramiz (serverda joy tejash uchun)
+            docker image prune -f
