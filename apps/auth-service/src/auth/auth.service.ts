@@ -24,7 +24,12 @@ export class AuthService {
       throw new ConflictException('Username already taken');
     }
 
-    const user = await this.createUser(dto.username, dto.password);
+    const existingByPhone = await this.getUserByPhoneNumber(dto.phone_number);
+    if (existingByPhone) {
+      throw new ConflictException('Phone number already taken');
+    }
+
+    const user = await this.createUser(dto.username, dto.password, dto.phone_number);
 
     const tokens = await this.issueTokens(user);
     return {
@@ -34,7 +39,7 @@ export class AuthService {
   }
 
   async login(dto: LoginDto) {
-    const user = await this.getUserByUsername(dto.username);
+    const user = await this.getUserByPhoneNumber(dto.phone_number);
     if (!user) {
       throw new UnauthorizedException('Invalid credentials');
     }
@@ -128,9 +133,19 @@ export class AuthService {
     return lastValueFrom(this.userClient.send({ cmd: 'get_user_by_id' }, { id }));
   }
 
-  private async createUser(username: string, password: string): Promise<UserRecord> {
+  private async getUserByPhoneNumber(phone_number: string): Promise<UserRecord | null> {
     return lastValueFrom(
-      this.userClient.send({ cmd: 'create_user' }, { username, password }),
+      this.userClient.send({ cmd: 'get_user_by_phone' }, { phone_number }),
+    );
+  }
+
+  private async createUser(
+    username: string,
+    password: string,
+    phone_number: string,
+  ): Promise<UserRecord> {
+    return lastValueFrom(
+      this.userClient.send({ cmd: 'create_user' }, { username, password, phone_number }),
     );
   }
 }
