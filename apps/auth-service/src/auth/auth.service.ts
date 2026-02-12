@@ -8,7 +8,7 @@ import type { StringValue } from 'ms';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
-import { Roles } from '@app/common';
+import { Roles, Status } from '@app/common';
 
 @Injectable()
 export class AuthService {
@@ -24,8 +24,7 @@ export class AuthService {
       throw new ConflictException('Username already taken');
     }
 
-    const passwordHash = await bcrypt.hash(dto.password, 10);
-    const user = await this.createUser(dto.username, passwordHash);
+    const user = await this.createUser(dto.username, dto.password);
 
     const tokens = await this.issueTokens(user);
     return {
@@ -110,6 +109,10 @@ export class AuthService {
     return {
       id: user.id,
       username: user.username,
+      name: user.name,
+      phone_number: user.phone_number,
+      role: user.role,
+      status: user.status,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
     };
@@ -134,8 +137,12 @@ export class AuthService {
 
 interface UserRecord {
   id: string;
+  name: string | null;
   username: string;
+  phone_number: string | null;
   password: string;
+  role: Roles;
+  status: Status;
   createdAt: Date;
   updatedAt: Date;
 }

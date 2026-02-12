@@ -1,19 +1,43 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateUserRequestDto {
+  @ApiPropertyOptional({ example: 'Ali Valiyev' })
+  name?: string;
+
   @ApiProperty({ example: 'ali123' })
   username!: string;
 
+  @ApiPropertyOptional({ example: '+998901234567' })
+  phone_number?: string;
+
   @ApiProperty({ example: '123456' })
   password!: string;
+
+  @ApiPropertyOptional({ example: 'customer' })
+  role?: string;
+
+  @ApiPropertyOptional({ example: 'active' })
+  status?: string;
 }
 
 export class UpdateUserRequestDto {
+  @ApiPropertyOptional({ example: 'Ali Valiyev' })
+  name?: string;
+
   @ApiPropertyOptional({ example: 'ali_new' })
   username?: string;
 
+  @ApiPropertyOptional({ example: '+998901234567' })
+  phone_number?: string;
+
   @ApiPropertyOptional({ example: '654321' })
   password?: string;
+
+  @ApiPropertyOptional({ example: 'admin' })
+  role?: string;
+
+  @ApiPropertyOptional({ example: 'inactive' })
+  status?: string;
 }
 
 export class UserItemDto {
@@ -28,6 +52,18 @@ export class UserItemDto {
 
   @ApiProperty({ example: 'ali123' })
   username!: string;
+
+  @ApiPropertyOptional({ example: 'Ali Valiyev' })
+  name?: string;
+
+  @ApiPropertyOptional({ example: '+998901234567' })
+  phone_number?: string;
+
+  @ApiProperty({ example: 'customer' })
+  role!: string;
+
+  @ApiProperty({ example: 'active' })
+  status!: string;
 }
 
 export class SingleUserResponseDto {
@@ -64,6 +100,10 @@ export class UserListResponseDto {
           createdAt: '2026-02-12T09:34:04.236Z',
           updatedAt: '2026-02-12T09:34:04.236Z',
           username: 'ali123',
+          name: 'Ali Valiyev',
+          phone_number: '+998901234567',
+          role: 'customer',
+          status: 'active',
         },
       ],
       meta: { page: 1, limit: 10, total: 1, totalPages: 1 },
