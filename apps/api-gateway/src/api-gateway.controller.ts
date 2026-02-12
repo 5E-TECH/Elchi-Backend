@@ -8,9 +8,12 @@ import {
   Patch,
   Post,
   Query,
+  UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
+import { Roles as RoleEnum } from '@app/common';
 import {
+  ApiBearerAuth,
   ApiBody,
   ApiConflictResponse,
   ApiNotFoundResponse,
@@ -20,6 +23,11 @@ import {
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
+import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { Roles } from './auth/roles.decorator';
+import { RolesGuard } from './auth/roles.guard';
+import { Self } from './auth/self.decorator';
+import { SelfGuard } from './auth/self.guard';
 import {
   CreateUserRequestDto,
   DeleteUserResponseDto,
@@ -41,6 +49,9 @@ export class ApiGatewayController {
   }
 
   @Post('users')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.CUSTOMER)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Create user' })
   @ApiBody({ type: CreateUserRequestDto })
   @ApiOkResponse({ type: SingleUserResponseDto })
@@ -50,6 +61,10 @@ export class ApiGatewayController {
   }
 
   @Patch('users/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard, SelfGuard)
+  @Roles(RoleEnum.CUSTOMER)
+  @Self('id')
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Update user' })
   @ApiParam({ name: 'id', description: 'User ID (uuid)' })
   @ApiBody({ type: UpdateUserRequestDto })
@@ -64,6 +79,10 @@ export class ApiGatewayController {
   }
 
   @Delete('users/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard, SelfGuard)
+  @Roles(RoleEnum.CUSTOMER)
+  @Self('id')
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete user' })
   @ApiParam({ name: 'id', description: 'User ID (uuid)' })
   @ApiOkResponse({ type: DeleteUserResponseDto })
@@ -73,6 +92,10 @@ export class ApiGatewayController {
   }
 
   @Get('users/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard, SelfGuard)
+  @Roles(RoleEnum.CUSTOMER)
+  @Self('id')
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Get user by id' })
   @ApiParam({ name: 'id', description: 'User ID (uuid)' })
   @ApiOkResponse({ type: SingleUserResponseDto })
@@ -82,6 +105,9 @@ export class ApiGatewayController {
   }
 
   @Get('users/by-username/:username')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.CUSTOMER)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'Get user by username' })
   @ApiParam({ name: 'username', description: 'Username' })
   @ApiOkResponse({ type: SingleUserResponseDto })
@@ -91,6 +117,9 @@ export class ApiGatewayController {
   }
 
   @Get('users')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.CUSTOMER)
+  @ApiBearerAuth()
   @ApiOperation({ summary: 'List users with filtering and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })

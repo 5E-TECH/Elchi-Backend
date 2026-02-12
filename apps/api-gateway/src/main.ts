@@ -9,6 +9,7 @@ async function bootstrap() {
     .setTitle('Elchi API Gateway')
     .setDescription('API Gateway docs for user-service routes')
     .setVersion('1.0.0')
+    .addBearerAuth()
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);

@@ -19,6 +19,9 @@ import { RmqModule } from '@app/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { JwtStrategy } from './auth/jwt.strategy';
+import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { RolesGuard } from './auth/roles.guard';
+import { SelfGuard } from './auth/self.guard';
 import type { StringValue } from 'ms';
 
 @Module({
@@ -42,6 +45,6 @@ import type { StringValue } from 'ms';
     RmqModule.register({ name: 'USER' }), 
   ],
   controllers: [ApiGatewayController],
-  providers: [ApiGatewayService, JwtStrategy],
+  providers: [ApiGatewayService, JwtStrategy, JwtAuthGuard, RolesGuard, SelfGuard],
 })
 export class ApiGatewayModule {}
