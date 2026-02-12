@@ -24,6 +24,8 @@ export interface FindUserByUsernamePayload {
 
 export interface UserFilterQuery {
   search?: string;
+  role?: string;
+  status?: string;
   page?: number;
   limit?: number;
 }

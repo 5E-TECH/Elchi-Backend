@@ -56,7 +56,17 @@ export class ApiGatewayController {
   @ApiBody({ type: CreateUserRequestDto })
   @ApiOkResponse({ type: SingleUserResponseDto })
   @ApiConflictResponse({ type: ErrorResponseDto })
-  createUser(@Body() dto: { username: string; password: string }) {
+  createUser(
+    @Body()
+    dto: {
+      name?: string;
+      username: string;
+      phone_number?: string;
+      password: string;
+      role?: string;
+      status?: string;
+    },
+  ) {
     return this.userClient.send({ cmd: 'user.create' }, { dto });
   }
 
@@ -73,7 +83,15 @@ export class ApiGatewayController {
   @ApiNotFoundResponse({ type: ErrorResponseDto })
   updateUser(
     @Param('id') id: string,
-    @Body() dto: { username?: string; password?: string },
+    @Body()
+    dto: {
+      name?: string;
+      username?: string;
+      phone_number?: string;
+      password?: string;
+      role?: string;
+      status?: string;
+    },
   ) {
     return this.userClient.send({ cmd: 'user.update' }, { id, dto });
   }
@@ -122,11 +140,15 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List users with filtering and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'role', required: false, type: String, example: 'customer' })
+  @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({ type: UserListResponseDto })
   getUsers(
     @Query('search') search?: string,
+    @Query('role') role?: string,
+    @Query('status') status?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
@@ -135,6 +157,8 @@ export class ApiGatewayController {
       {
         query: {
           search,
+          role,
+          status,
           page: page ? Number(page) : undefined,
           limit: limit ? Number(limit) : undefined,
         },

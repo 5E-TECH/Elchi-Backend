@@ -85,7 +85,7 @@ export class UserServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.userService.createUser({ username: data.username, password: data.password }),
+      this.userService.createUserForAuth(data.username, data.password),
     );
   }
 
@@ -94,7 +94,9 @@ export class UserServiceController {
     @Payload() data: { username: string },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.userService.findByUsername(data.username));
+    return this.executeAndAck(context, () =>
+      this.userService.findByUsernameForAuth(data.username),
+    );
   }
 
   @MessagePattern({ cmd: 'get_user_by_id' })
@@ -102,6 +104,6 @@ export class UserServiceController {
     @Payload() data: { id: string },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.userService.findById(data.id));
+    return this.executeAndAck(context, () => this.userService.findByIdForAuth(data.id));
   }
 }

@@ -19,6 +19,7 @@ import { ConfigModule } from '@nestjs/config';
 import { RmqModule, DatabaseModule } from '@app/common'; // Bizning liblar
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { User } from './entities/user.entity';
+import { BcryptEncryption } from './common/bcrypt.encryption';
 
 @Module({
   imports: [
@@ -34,6 +35,6 @@ import { User } from './entities/user.entity';
     TypeOrmModule.forFeature([User]),
   ],
   controllers: [UserServiceController],
-  providers: [UserServiceService],
+  providers: [UserServiceService, BcryptEncryption],
 })
 export class UserServiceModule {}
