@@ -8,6 +8,7 @@ import type { StringValue } from 'ms';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
+import { Roles } from '@app/common';
 
 @Injectable()
 export class AuthService {
@@ -89,7 +90,11 @@ export class AuthService {
   }
 
   private async issueTokens(user: UserRecord) {
-    const payload: Record<string, unknown> = { sub: user.id, username: user.username };
+    const payload: Record<string, unknown> = {
+      sub: user.id,
+      username: user.username,
+      roles: [Roles.CUSTOMER],
+    };
 
     const accessToken = await this.jwtService.signAsync(payload);
     const refreshToken = await this.jwtService.signAsync(payload, {
