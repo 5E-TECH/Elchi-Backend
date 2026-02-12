@@ -69,22 +69,62 @@ export class UserServiceService implements OnModuleInit {
       const adminPassword =
         this.configService.get<string>('ADMIN_PASSWORD') ?? 'superadmin123';
       const adminName = this.configService.get<string>('ADMIN_NAME') ?? 'Super Admin';
+      const adminPhone =
+        this.configService.get<string>('ADMIN_PHONE_NUMBER') ?? null;
 
       const isSuperAdmin = await this.users.findOne({
         where: { role: Roles.SUPERADMIN, is_deleted: false },
       });
 
-      if (!isSuperAdmin) {
-        const hashedPassword = await this.bcryptEncryption.encrypt(adminPassword);
-        const superAdminUser = this.users.create({
-          name: adminName,
-          username: adminUsername,
-          password: hashedPassword,
-          role: Roles.SUPERADMIN,
-          status: Status.ACTIVE,
-        });
-        await this.users.save(superAdminUser);
+      if (isSuperAdmin) {
+        return;
       }
+
+      const existingByUsername = await this.users.findOne({
+        where: { username: adminUsername },
+      });
+
+      if (existingByUsername) {
+        existingByUsername.name = adminName;
+        existingByUsername.role = Roles.SUPERADMIN;
+        existingByUsername.status = Status.ACTIVE;
+        existingByUsername.is_deleted = false;
+        existingByUsername.phone_number = adminPhone;
+        existingByUsername.password =
+          await this.bcryptEncryption.encrypt(adminPassword);
+        await this.users.save(existingByUsername);
+        return;
+      }
+
+      if (adminPhone) {
+        const existingByPhone = await this.users.findOne({
+          where: { phone_number: adminPhone },
+        });
+
+        if (existingByPhone) {
+          existingByPhone.name = adminName;
+          existingByPhone.role = Roles.SUPERADMIN;
+          existingByPhone.status = Status.ACTIVE;
+          existingByPhone.is_deleted = false;
+          existingByPhone.username = adminUsername;
+          existingByPhone.password =
+            await this.bcryptEncryption.encrypt(adminPassword);
+          await this.users.save(existingByPhone);
+          return;
+        }
+      }
+
+      const hashedPassword = await this.bcryptEncryption.encrypt(adminPassword);
+      const superAdminUser = this.users.create({
+        name: adminName,
+        username: adminUsername,
+        phone_number: adminPhone,
+        password: hashedPassword,
+        role: Roles.SUPERADMIN,
+        status: Status.ACTIVE,
+        is_deleted: false,
+      });
+      await this.users.save(superAdminUser);
     } catch (error) {
       throw new Error(`Error on init super admin: ${error}`);
     }
@@ -117,7 +157,7 @@ export class UserServiceService implements OnModuleInit {
     };
   }
 
-  async createUserForAuth(username: string, password: string) {
+  async createUserForAuth(username: string, password: string, phone_number?: string) {
     const exists = await this.users.findOne({
       where: { username, is_deleted: false },
     });
@@ -125,8 +165,11 @@ export class UserServiceService implements OnModuleInit {
       this.conflict('Username allaqachon mavjud');
     }
 
+    await this.ensurePhoneUnique(phone_number);
+
     const user = this.users.create({
       username,
+      phone_number: phone_number ?? null,
       password: await this.bcryptEncryption.encrypt(password),
       role: Roles.CUSTOMER,
       status: Status.ACTIVE,
@@ -217,6 +260,12 @@ export class UserServiceService implements OnModuleInit {
   async findByUsernameForAuth(username: string) {
     return this.users.findOne({
       where: { username, is_deleted: false, status: Status.ACTIVE },
+    });
+  }
+
+  async findByPhoneForAuth(phone_number: string) {
+    return this.users.findOne({
+      where: { phone_number, is_deleted: false, status: Status.ACTIVE },
     });
   }
 

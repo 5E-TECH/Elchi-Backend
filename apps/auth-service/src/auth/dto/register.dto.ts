@@ -6,6 +6,10 @@ export class RegisterDto {
   username!: string;
 
   @IsString()
+  @MinLength(9)
+  phone_number!: string;
+
+  @IsString()
   @MinLength(6)
   password!: string;
 }

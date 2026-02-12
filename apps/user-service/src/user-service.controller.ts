@@ -81,11 +81,15 @@ export class UserServiceController {
   // Backward compatibility for old command names
   @MessagePattern({ cmd: 'create_user' })
   createUserLegacy(
-    @Payload() data: { username: string; password: string },
+    @Payload() data: { username: string; password: string; phone_number?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.userService.createUserForAuth(data.username, data.password),
+      this.userService.createUserForAuth(
+        data.username,
+        data.password,
+        data.phone_number,
+      ),
     );
   }
 
@@ -105,5 +109,15 @@ export class UserServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () => this.userService.findByIdForAuth(data.id));
+  }
+
+  @MessagePattern({ cmd: 'get_user_by_phone' })
+  getUserByPhoneLegacy(
+    @Payload() data: { phone_number: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.findByPhoneForAuth(data.phone_number),
+    );
   }
 }
