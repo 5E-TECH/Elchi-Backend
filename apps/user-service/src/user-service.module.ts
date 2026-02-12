@@ -17,6 +17,8 @@ import { UserServiceController } from './user-service.controller';
 import { UserServiceService } from './user-service.service';
 import { ConfigModule } from '@nestjs/config';
 import { RmqModule, DatabaseModule } from '@app/common'; // Bizning liblar
+import { TypeOrmModule } from '@nestjs/typeorm';
+import { User } from './entities/user.entity';
 
 @Module({
   imports: [
@@ -29,6 +31,7 @@ import { RmqModule, DatabaseModule } from '@app/common'; // Bizning liblar
     RmqModule, 
     // 3. Bazaga ulanish
     DatabaseModule, 
+    TypeOrmModule.forFeature([User]),
   ],
   controllers: [UserServiceController],
   providers: [UserServiceService],

@@ -14,8 +14,12 @@
 import { Module } from '@nestjs/common';
 import { ApiGatewayController } from './api-gateway.controller';
 import { ApiGatewayService } from './api-gateway.service';
-import { ConfigModule } from '@nestjs/config';
+import { ConfigModule, ConfigService } from '@nestjs/config';
 import { RmqModule } from '@app/common';
+import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
+import { JwtStrategy } from './auth/jwt.strategy';
+import type { StringValue } from 'ms';
 
 @Module({
   imports: [
@@ -23,10 +27,21 @@ import { RmqModule } from '@app/common';
       isGlobal: true,
       envFilePath: './.env',
     }),
+    PassportModule,
+    JwtModule.registerAsync({
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        secret: configService.get<string>('ACCESS_TOKEN_KEY'),
+        signOptions: {
+          expiresIn: (configService.get<string>('ACCESS_TOKEN_TIME') ??
+            '15m') as StringValue,
+        },
+      }),
+    }),
     // Gateway USER servisga xabar yuborish huquqini olyapti
     RmqModule.register({ name: 'USER' }), 
   ],
   controllers: [ApiGatewayController],
-  providers: [ApiGatewayService],
+  providers: [ApiGatewayService, JwtStrategy],
 })
 export class ApiGatewayModule {}
