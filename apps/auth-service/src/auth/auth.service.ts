@@ -7,6 +7,7 @@ import * as bcrypt from 'bcryptjs';
 import type { StringValue } from 'ms';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
+import { RefreshDto } from './dto/refresh.dto';
 
 @Injectable()
 export class AuthService {
@@ -57,6 +58,34 @@ export class AuthService {
     }
 
     return this.sanitize(user);
+  }
+
+  async refresh(dto: RefreshDto) {
+    const refreshSecret = this.configService.get<string>('REFRESH_TOKEN_KEY');
+    if (!refreshSecret) {
+      throw new UnauthorizedException('Refresh secret not configured');
+    }
+
+    let payload: { sub: string; username: string };
+    try {
+      payload = await this.jwtService.verifyAsync<{ sub: string; username: string }>(
+        dto.refreshToken,
+        { secret: refreshSecret },
+      );
+    } catch {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const user = await this.getUserById(payload.sub);
+    if (!user || user.username !== payload.username) {
+      throw new UnauthorizedException('Invalid refresh token');
+    }
+
+    const tokens = await this.issueTokens(user);
+    return {
+      user: this.sanitize(user),
+      ...tokens,
+    };
   }
 
   private async issueTokens(user: UserRecord) {
