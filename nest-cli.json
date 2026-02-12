@@ -19,13 +19,13 @@
         "tsConfigPath": "apps/api-gateway/tsconfig.app.json"
       }
     },
-    "user-service": {
+    "identity-service": {
       "type": "application",
-      "root": "apps/user-service",
+      "root": "apps/identity-service",
       "entryFile": "main",
-      "sourceRoot": "apps/user-service/src",
+      "sourceRoot": "apps/identity-service/src",
       "compilerOptions": {
-        "tsConfigPath": "apps/user-service/tsconfig.app.json"
+        "tsConfigPath": "apps/identity-service/tsconfig.app.json"
       }
     },
     "order-service": {
@@ -37,13 +37,94 @@
         "tsConfigPath": "apps/order-service/tsconfig.app.json"
       }
     },
-    "auth-service": {
+    "catalog-service": {
       "type": "application",
-      "root": "apps/auth-service",
+      "root": "apps/catalog-service",
       "entryFile": "main",
-      "sourceRoot": "apps/auth-service/src",
+      "sourceRoot": "apps/catalog-service/src",
       "compilerOptions": {
-        "tsConfigPath": "apps/auth-service/tsconfig.app.json"
+        "tsConfigPath": "apps/catalog-service/tsconfig.app.json"
+      }
+    },
+    "logistics-service": {
+      "type": "application",
+      "root": "apps/logistics-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/logistics-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/logistics-service/tsconfig.app.json"
+      }
+    },
+    "finance-service": {
+      "type": "application",
+      "root": "apps/finance-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/finance-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/finance-service/tsconfig.app.json"
+      }
+    },
+    "notification-service": {
+      "type": "application",
+      "root": "apps/notification-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/notification-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/notification-service/tsconfig.app.json"
+      }
+    },
+    "integration-service": {
+      "type": "application",
+      "root": "apps/integration-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/integration-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/integration-service/tsconfig.app.json"
+      }
+    },
+    "analytics-service": {
+      "type": "application",
+      "root": "apps/analytics-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/analytics-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/analytics-service/tsconfig.app.json"
+      }
+    },
+    "branch-service": {
+      "type": "application",
+      "root": "apps/branch-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/branch-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/branch-service/tsconfig.app.json"
+      }
+    },
+    "investor-service": {
+      "type": "application",
+      "root": "apps/investor-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/investor-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/investor-service/tsconfig.app.json"
+      }
+    },
+    "file-service": {
+      "type": "application",
+      "root": "apps/file-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/file-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/file-service/tsconfig.app.json"
+      }
+    },
+    "c2c-service": {
+      "type": "application",
+      "root": "apps/c2c-service",
+      "entryFile": "main",
+      "sourceRoot": "apps/c2c-service/src",
+      "compilerOptions": {
+        "tsConfigPath": "apps/c2c-service/tsconfig.app.json"
       }
     },
     "common": {

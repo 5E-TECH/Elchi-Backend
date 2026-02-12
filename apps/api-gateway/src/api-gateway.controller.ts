@@ -40,12 +40,12 @@ import {
 @ApiTags('Users')
 @Controller()
 export class ApiGatewayController {
-  constructor(@Inject('USER') private readonly userClient: ClientProxy) {}
+  constructor(@Inject('IDENTITY') private readonly identityClient: ClientProxy) {}
 
   @Get()
-  @ApiOperation({ summary: 'Gateway health check via user service' })
+  @ApiOperation({ summary: 'Gateway health check via identity service' })
   getHello() {
-    return this.userClient.send({ cmd: 'salom_ber' }, {});
+    return this.identityClient.send({ cmd: 'identity.health' }, {});
   }
 
   @Post('users')
@@ -67,7 +67,7 @@ export class ApiGatewayController {
       status?: string;
     },
   ) {
-    return this.userClient.send({ cmd: 'user.create' }, { dto });
+    return this.identityClient.send({ cmd: 'identity.user.create' }, { dto });
   }
 
   @Patch('users/:id')
@@ -93,7 +93,7 @@ export class ApiGatewayController {
       status?: string;
     },
   ) {
-    return this.userClient.send({ cmd: 'user.update' }, { id, dto });
+    return this.identityClient.send({ cmd: 'identity.user.update' }, { id, dto });
   }
 
   @Delete('users/:id')
@@ -106,7 +106,7 @@ export class ApiGatewayController {
   @ApiOkResponse({ type: DeleteUserResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
   deleteUser(@Param('id') id: string) {
-    return this.userClient.send({ cmd: 'user.delete' }, { id });
+    return this.identityClient.send({ cmd: 'identity.user.delete' }, { id });
   }
 
   @Get('users/:id')
@@ -119,7 +119,7 @@ export class ApiGatewayController {
   @ApiOkResponse({ type: SingleUserResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
   getUserById(@Param('id') id: string) {
-    return this.userClient.send({ cmd: 'user.find_by_id' }, { id });
+    return this.identityClient.send({ cmd: 'identity.user.find_by_id' }, { id });
   }
 
   @Get('users/by-username/:username')
@@ -131,7 +131,7 @@ export class ApiGatewayController {
   @ApiOkResponse({ type: SingleUserResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
   getUserByUsername(@Param('username') username: string) {
-    return this.userClient.send({ cmd: 'user.find_by_username' }, { username });
+    return this.identityClient.send({ cmd: 'identity.user.find_by_username' }, { username });
   }
 
   @Get('users')
@@ -152,8 +152,8 @@ export class ApiGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.userClient.send(
-      { cmd: 'user.find_all' },
+    return this.identityClient.send(
+      { cmd: 'identity.user.find_all' },
       {
         query: {
           search,

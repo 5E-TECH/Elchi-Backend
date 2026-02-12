@@ -15,11 +15,6 @@ export enum Status {
   INACTIVE = 'inactive',
 }
 
-// export enum AddOrder {
-//   ALLOW = "true",
-//   FORBID = 'forbid',
-// }
-
 export enum PaymentMethod {
   CASH = 'cash',
   CLICK = 'click',

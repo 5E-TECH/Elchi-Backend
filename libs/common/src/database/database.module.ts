@@ -7,10 +7,11 @@ import { TypeOrmModule } from '@nestjs/typeorm';
     TypeOrmModule.forRootAsync({
       useFactory: (configService: ConfigService) => ({
         type: 'postgres',
-        // Bazaga ulanish manzili .env dan olinadi
         url: configService.get<string>('POSTGRES_URI'),
+        schema: configService.get<string>('DB_SCHEMA') || 'public',
         autoLoadEntities: true,
-        synchronize: true, // Diqqat: Prodakshnda buni false qilish kerak!
+        synchronize: configService.get<string>('NODE_ENV') !== 'production',
+        logging: configService.get<string>('NODE_ENV') !== 'production',
       }),
       inject: [ConfigService],
     }),
