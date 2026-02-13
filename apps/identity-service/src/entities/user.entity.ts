@@ -5,7 +5,7 @@ import {
   CreateDateColumn,
   UpdateDateColumn,
 } from 'typeorm';
-import { Roles, Status } from '@app/common';
+import { Roles, Status, Where_deliver } from '@app/common';
 
 @Entity({ name: 'admins', schema: 'identity_schema' }) // Schema nomini o'zingizga moslang
 export class UserAdminEntity {
@@ -44,4 +44,18 @@ export class UserAdminEntity {
 
   @Column({ type: 'enum', enum: Status, default: Status.ACTIVE })
   status: Status;
+
+  @Column({ type: 'int', nullable: true })
+  tariff_home: number | null;
+
+  @Column({ type: 'int', nullable: true })
+  tariff_center: number | null;
+
+  @Column({
+    type: 'enum',
+    enum: Where_deliver,
+    default: Where_deliver.CENTER,
+    nullable: true,
+  })
+  default_tariff: Where_deliver | null;
 }
