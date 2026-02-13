@@ -16,10 +16,9 @@ import {
 import { ClientProxy } from '@nestjs/microservices';
 import { Roles as RoleEnum } from '@app/common';
 import {
-  ApiBody,
   ApiBearerAuth,
+  ApiCreatedResponse,
   ApiConsumes,
-  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiQuery,
@@ -54,6 +53,7 @@ export class CatalogGatewayController {
   @Roles(RoleEnum.MARKET, RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create a new product' })
+  @ApiCreatedResponse({ description: 'Product created successfully' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({ type: CreateProductRequestDto })
   create(

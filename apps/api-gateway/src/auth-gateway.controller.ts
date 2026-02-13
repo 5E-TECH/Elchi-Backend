@@ -4,6 +4,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiConflictResponse,
+  ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
   ApiTags,
@@ -33,7 +34,7 @@ export class AuthGatewayController {
   @Post('register')
   @ApiOperation({ summary: 'Register a new user' })
   @ApiBody({ type: RegisterRequestDto })
-  @ApiOkResponse({ type: AuthResponseDto })
+  @ApiCreatedResponse({ type: AuthResponseDto })
   @ApiConflictResponse({ type: AuthErrorResponseDto })
   register(@Body() dto: { username: string; phone_number: string; password: string }) {
     return this.identityClient.send({ cmd: 'identity.register' }, dto);
@@ -42,7 +43,7 @@ export class AuthGatewayController {
   @Post('login')
   @ApiOperation({ summary: 'Login with phone number and password' })
   @ApiBody({ type: LoginRequestDto })
-  @ApiOkResponse({ type: AuthResponseDto })
+  @ApiCreatedResponse({ type: AuthResponseDto })
   @ApiUnauthorizedResponse({ type: AuthErrorResponseDto })
   login(@Body() dto: { phone_number: string; password: string }) {
     return this.identityClient.send({ cmd: 'identity.login' }, dto);
@@ -51,7 +52,7 @@ export class AuthGatewayController {
   @Post('refresh')
   @ApiOperation({ summary: 'Refresh access token' })
   @ApiBody({ type: RefreshRequestDto })
-  @ApiOkResponse({ type: AuthResponseDto })
+  @ApiCreatedResponse({ type: AuthResponseDto })
   @ApiUnauthorizedResponse({ type: AuthErrorResponseDto })
   refresh(@Body() dto: { refreshToken: string }) {
     return this.identityClient.send({ cmd: 'identity.refresh' }, dto);
