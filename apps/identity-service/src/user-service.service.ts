@@ -9,47 +9,28 @@ import { ConfigService } from '@nestjs/config';
 import { Brackets, Repository } from 'typeorm';
 import { lastValueFrom } from 'rxjs';
 import { User } from './entities/user.entity';
-import { CreateUserDto } from './dto/create-user.dto';
-import { UpdateUserDto } from './dto/update-user.dto';
+import { Injectable, OnModuleInit } from '@nestjs/common';
+import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
+import { Brackets, Repository } from 'typeorm';
+import { RpcException } from '@nestjs/microservices';
+import {Roles} from "../../../libs/common/enums"
+import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
+import { UserAdminEntity } from './entities/user.entity';
+import { CreateAdminDto } from './dto/create-admin.dto';
 import { UserFilterQuery } from './contracts/user.payloads';
-import { BcryptEncryption } from './common/bcrypt.encryption';
 import { Roles, Status } from '@app/common';
 
 @Injectable()
 export class UserServiceService implements OnModuleInit {
   constructor(
-    @InjectRepository(User) private readonly users: Repository<User>,
+    @InjectRepository(UserAdminEntity)
+    private readonly users: Repository<UserAdminEntity>,
     private readonly bcryptEncryption: BcryptEncryption,
     private readonly configService: ConfigService,
     @Inject('SEARCH') private readonly searchClient: ClientProxy,
   ) {}
 
-  private sanitize(user: User) {
-    const { password, ...safeUser } = user;
-    return safeUser;
-  }
-
-  private notFound(message: string): never {
-    throw new RpcException({ statusCode: 404, message });
-  }
-
-  private conflict(message: string): never {
-    throw new RpcException({ statusCode: 409, message });
-  }
-
-  private async ensurePhoneUnique(phone?: string | null, exceptId?: string) {
-    if (!phone) {
-      return;
-    }
-
-    const found = await this.users.findOne({
-      where: { phone_number: phone, is_deleted: false },
-    });
-
-    if (found && found.id !== exceptId) {
-      this.conflict('Telefon raqam allaqachon mavjud');
-    }
-  }
 
   private normalizeQuery(query: UserFilterQuery = {}) {
     const page = Number(query.page) > 0 ? Number(query.page) : 1;
@@ -118,14 +99,20 @@ export class UserServiceService implements OnModuleInit {
       const isSuperAdmin = await this.users.findOne({
         where: { role: Roles.SUPERADMIN, is_deleted: false },
       });
+  private async ensurePhoneUnique(phone: string, exceptId?: string) {
+    const found = await this.users.findOne({
+      where: { phone_number: phone, is_deleted: false },
+    });
 
-      if (isSuperAdmin) {
-        return;
-      }
+    if (found && found.id !== exceptId) {
+      this.conflict('Bu telefon raqam allaqachon mavjud');
+    }
+  }
 
-      const existingByUsername = await this.users.findOne({
-        where: { username: adminUsername },
-      });
+  private async ensureUsernameUnique(username: string, exceptId?: string) {
+    const found = await this.users.findOne({
+      where: { username, is_deleted: false },
+    });
 
       if (existingByUsername) {
         existingByUsername.name = adminName;
@@ -173,157 +160,213 @@ export class UserServiceService implements OnModuleInit {
       await this.syncUserToSearch(saved);
     } catch (error) {
       throw new Error(`Error on init super admin: ${error}`);
+    if (found && found.id !== exceptId) {
+      this.conflict('Bu username allaqachon mavjud');
     }
   }
 
-  async createUser(dto: CreateUserDto) {
-    const exists = await this.users.findOne({
-      where: { username: dto.username, is_deleted: false },
-    });
-    if (exists) {
-      this.conflict('Username allaqachon mavjud');
-    }
-    await this.ensurePhoneUnique(dto.phone_number);
+  async onModuleInit() {
+    const adminName = this.configService.get<string>('SUPERADMIN_NAME') ?? 'Super Admin';
+    const adminPhone = this.configService.get<string>('SUPERADMIN_PHONE_NUMBER') ?? '';
+    const adminPassword = this.configService.get<string>('SUPERADMIN_PASSWORD') ?? '';
 
-    const user = this.users.create({
-      name: dto.name ?? null,
-      username: dto.username,
-      phone_number: dto.phone_number ?? null,
-      password: await this.bcryptEncryption.encrypt(dto.password),
-      role: dto.role ?? Roles.CUSTOMER,
-      status: dto.status ?? Status.ACTIVE,
+    if (!adminPhone || !adminPassword) {
+      return;
+    }
+
+    const existingSuperAdmin = await this.users.findOne({
+      where: { role: Roles.SUPERADMIN, is_deleted: false },
+    });
+
+    if (existingSuperAdmin) {
+      return;
+    }
+
+    const existingByPhone = await this.users.findOne({
+      where: { phone_number: adminPhone },
+    });
+
+    const hashedPassword = await this.bcryptEncryption.encrypt(adminPassword);
+
+    if (existingByPhone) {
+      existingByPhone.name = adminName;
+      existingByPhone.role = Roles.SUPERADMIN;
+      existingByPhone.status = Status.ACTIVE;
+      existingByPhone.is_deleted = false;
+      existingByPhone.password = hashedPassword;
+      if (!existingByPhone.username) {
+        existingByPhone.username = adminPhone;
+      }
+      await this.users.save(existingByPhone);
+      return;
+    }
+
+    const superAdmin = this.users.create({
+      name: adminName,
+      phone_number: adminPhone,
+      username: adminPhone,
+      password: hashedPassword,
+      salary: 0,
+      payment_day: undefined,
+      role: Roles.SUPERADMIN,
+      status: Status.ACTIVE,
+      is_deleted: false,
+    });
+
+    await this.users.save(superAdmin);
+  }
+
+  async createAdmin(dto: CreateAdminDto) {
+    await this.ensurePhoneUnique(dto.phone_number);
+    await this.ensureUsernameUnique(dto.phone_number);
+
+    const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
+
+    const admin = this.users.create({
+      name: dto.name,
+      phone_number: dto.phone_number,
+      username: dto.phone_number,
+      password: hashedPassword,
+      salary: dto.salary,
+      payment_day: dto.payment_day ?? new Date().getDate(),
+      role: Roles.ADMIN,
+      status: Status.ACTIVE,
       is_deleted: false,
     });
 
     const saved = await this.users.save(user);
     await this.syncUserToSearch(saved);
+    const saved = await this.users.save(admin);
     return {
       success: true,
-      message: 'User yaratildi',
+      message: 'Admin yaratildi',
       data: this.sanitize(saved),
     };
   }
 
-  async updateUser(id: string, dto: UpdateUserDto) {
-    const user = await this.users.findOne({ where: { id, is_deleted: false } });
-    if (!user) {
-      this.notFound('User topilmadi');
+  async updateAdmin(id: string, dto: UpdateUserDto) {
+    const admin = await this.users.findOne({
+      where: { id, is_deleted: false },
+    });
+
+    if (!admin) {
+      this.notFound('Admin topilmadi');
     }
 
-    if (dto.username && dto.username !== user.username) {
-      const conflict = await this.users.findOne({
-        where: { username: dto.username, is_deleted: false },
-      });
-      if (conflict) {
-        this.conflict('Username allaqachon mavjud');
-      }
-      user.username = dto.username;
+    if (dto.phone_number && dto.phone_number !== admin.phone_number) {
+      await this.ensurePhoneUnique(dto.phone_number, id);
+      admin.phone_number = dto.phone_number;
+    }
+
+    if (dto.username && dto.username !== admin.username) {
+      await this.ensureUsernameUnique(dto.username, id);
+      admin.username = dto.username;
     }
 
     if (dto.password) {
-      user.password = await this.bcryptEncryption.encrypt(dto.password);
-    }
-
-    if (dto.phone_number && dto.phone_number !== user.phone_number) {
-      await this.ensurePhoneUnique(dto.phone_number, id);
-      user.phone_number = dto.phone_number;
+      admin.password = await this.bcryptEncryption.encrypt(dto.password);
     }
 
     if (typeof dto.name !== 'undefined') {
-      user.name = dto.name;
+      admin.name = dto.name;
     }
 
     if (dto.role) {
-      user.role = dto.role;
+      admin.role = dto.role;
     }
 
     if (dto.status) {
-      user.status = dto.status;
+      admin.status = dto.status;
     }
 
     const saved = await this.users.save(user);
     await this.syncUserToSearch(saved);
+    const saved = await this.users.save(admin);
+
     return {
       success: true,
-      message: 'User yangilandi',
+      message: 'Admin yangilandi',
       data: this.sanitize(saved),
     };
   }
 
-  async deleteUser(id: string) {
-    const user = await this.users.findOne({ where: { id, is_deleted: false } });
-    if (!user) {
-      this.notFound('User topilmadi');
+  async deleteAdmin(id: string) {
+    const admin = await this.users.findOne({ where: { id, is_deleted: false } });
+    if (!admin) {
+      this.notFound('Admin topilmadi');
     }
 
-    user.is_deleted = true;
-    user.status = Status.INACTIVE;
-    user.username = `${user.username}#deleted#${Date.now()}`;
-    if (user.phone_number) {
-      user.phone_number = `${user.phone_number}#deleted#${Date.now()}`;
-    }
-    await this.users.save(user);
-    await this.removeUserFromSearch(id);
+    admin.is_deleted = true;
+    admin.status = Status.INACTIVE;
+    admin.username = `${admin.username ?? admin.phone_number}#deleted#${Date.now()}`;
+    admin.phone_number = `${admin.phone_number}#deleted#${Date.now()}`;
+
+    await this.users.save(admin);
 
     return {
       success: true,
-      message: 'User o‘chirildi',
+      message: 'Admin o‘chirildi',
       data: { id },
     };
   }
 
-  async findByUsername(username: string) {
-    const user = await this.users.findOne({ where: { username, is_deleted: false } });
-    if (!user) {
-      this.notFound('User topilmadi');
+  async findAdminById(id: string) {
+    const admin = await this.users.findOne({ where: { id, is_deleted: false } });
+    if (!admin) {
+      this.notFound('Admin topilmadi');
     }
 
     return {
       success: true,
-      data: this.sanitize(user),
+      data: this.sanitize(admin),
     };
   }
 
-  async findById(id: string) {
-    const user = await this.users.findOne({ where: { id, is_deleted: false } });
-    if (!user) {
-      this.notFound('User topilmadi');
+  async findAdminByUsername(username: string) {
+    const admin = await this.users.findOne({
+      where: { username, is_deleted: false },
+    });
+    if (!admin) {
+      this.notFound('Admin topilmadi');
     }
 
     return {
       success: true,
-      data: this.sanitize(user),
+      data: this.sanitize(admin),
     };
   }
 
-  async findAll(query: UserFilterQuery = {}) {
+  async findAllAdmins(query: UserFilterQuery = {}) {
     const { search, role, status, page, limit, skip } = this.normalizeQuery(query);
 
     const qb = this.users
-      .createQueryBuilder('user')
-      .where('user.is_deleted = :isDeleted', { isDeleted: false });
+      .createQueryBuilder('admin')
+      .where('admin.is_deleted = :isDeleted', { isDeleted: false })
+      .andWhere('admin.role IN (:...roles)', {
+        roles: [Roles.SUPERADMIN, Roles.ADMIN],
+      });
 
     if (search) {
       qb.andWhere(
         new Brackets((nested) => {
           nested
-            .where('user.username ILIKE :search', { search: `%${search}%` })
-            .orWhere('user.name ILIKE :search', { search: `%${search}%` })
-            .orWhere('user.phone_number ILIKE :search', { search: `%${search}%` });
+            .where('admin.name ILIKE :search', { search: `%${search}%` })
+            .orWhere('admin.phone_number ILIKE :search', { search: `%${search}%` })
+            .orWhere('admin.username ILIKE :search', { search: `%${search}%` });
         }),
       );
     }
 
     if (role) {
-      qb.andWhere('user.role = :role', { role });
+      qb.andWhere('admin.role = :role', { role });
     }
 
     if (status) {
-      qb.andWhere('user.status = :status', { status });
+      qb.andWhere('admin.status = :status', { status });
     }
 
     const [rows, total] = await qb
-      .orderBy('user.createdAt', 'DESC')
+      .orderBy('admin.createdAt', 'DESC')
       .skip(skip)
       .take(limit)
       .getManyAndCount();
@@ -340,5 +383,42 @@ export class UserServiceService implements OnModuleInit {
         },
       },
     };
+  }
+
+  async findByUsernameForAuth(username: string) {
+    return this.users.findOne({
+      where: { username, is_deleted: false, status: Status.ACTIVE },
+    });
+  }
+
+  async findByPhoneForAuth(phone_number: string) {
+    return this.users.findOne({
+      where: { phone_number, is_deleted: false, status: Status.ACTIVE },
+    });
+  }
+
+  async findByIdForAuth(id: string) {
+    return this.users.findOne({
+      where: { id, is_deleted: false, status: Status.ACTIVE },
+    });
+  }
+
+  async createUserForAuth(username: string, password: string, phone_number?: string) {
+    await this.ensureUsernameUnique(username);
+    await this.ensurePhoneUnique(phone_number ?? username);
+
+    const user = this.users.create({
+      name: username,
+      username,
+      phone_number: phone_number ?? username,
+      password: await this.bcryptEncryption.encrypt(password),
+      salary: 0,
+      payment_day: undefined,
+      role: Roles.CUSTOMER,
+      status: Status.ACTIVE,
+      is_deleted: false,
+    });
+
+    return this.users.save(user);
   }
 }
