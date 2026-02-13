@@ -1,42 +1,75 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsEnum,
+  IsOptional,
+  IsPhoneNumber,
+  IsString,
+  MinLength,
+} from 'class-validator';
 
 export class CreateUserRequestDto {
   @ApiPropertyOptional({ example: 'Ali Valiyev' })
+  @IsOptional()
+  @IsString()
   name?: string;
 
   @ApiProperty({ example: 'ali123' })
+  @IsString()
+  @MinLength(3)
   username!: string;
 
   @ApiPropertyOptional({ example: '+998901234567' })
+  @IsOptional()
+  @IsPhoneNumber('UZ')
   phone_number?: string;
 
   @ApiProperty({ example: '123456' })
+  @IsString()
+  @MinLength(6)
   password!: string;
 
   @ApiPropertyOptional({ example: 'customer' })
+  @IsOptional()
+  @IsEnum(['superadmin', 'admin', 'market', 'customer'])
   role?: string;
 
   @ApiPropertyOptional({ example: 'active' })
+  @IsOptional()
+  @IsEnum(['active', 'inactive'])
   status?: string;
 }
 
 export class UpdateUserRequestDto {
   @ApiPropertyOptional({ example: 'Ali Valiyev' })
+  @IsOptional()
+  @IsString()
   name?: string;
 
   @ApiPropertyOptional({ example: 'ali_new' })
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
   username?: string;
 
   @ApiPropertyOptional({ example: '+998901234567' })
+  @IsOptional()
+  @IsPhoneNumber('UZ')
   phone_number?: string;
 
   @ApiPropertyOptional({ example: '654321' })
+  @IsOptional()
+  @IsString()
+  @MinLength(6)
   password?: string;
 
   @ApiPropertyOptional({ example: 'admin' })
+  @IsOptional()
+  @IsEnum(['superadmin', 'admin', 'market', 'customer'])
   role?: string;
 
   @ApiPropertyOptional({ example: 'inactive' })
+  @IsOptional()
+  @IsEnum(['active', 'inactive'])
   status?: string;
 }
 

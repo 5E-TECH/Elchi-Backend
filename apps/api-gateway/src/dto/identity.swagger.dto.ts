@@ -1,79 +1,140 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import {
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsPhoneNumber,
+  IsString,
+  Max,
+  Min,
+  MinLength,
+} from 'class-validator';
 
 export class CreateAdminRequestDto {
   @ApiProperty({ example: 'Admin User' })
+  @IsString()
+  @MinLength(2)
   name!: string;
 
   @ApiProperty({ example: '+998901234567' })
+  @IsPhoneNumber('UZ')
   phone_number!: string;
 
   @ApiProperty({ example: 'strongPassword123' })
+  @IsString()
+  @MinLength(6)
   password!: string;
 
   @ApiProperty({ example: 3000000 })
+  @IsNumber()
+  @Min(0)
   salary!: number;
 
   @ApiPropertyOptional({ example: 10 })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(30)
   payment_day?: number;
 }
 
 export class UpdateAdminRequestDto {
   @ApiPropertyOptional({ example: 'Admin User Updated' })
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
   name?: string;
 
   @ApiPropertyOptional({ example: '+998901234567' })
+  @IsOptional()
+  @IsPhoneNumber('UZ')
   phone_number?: string;
 
   @ApiPropertyOptional({ example: 'newStrongPassword123' })
+  @IsOptional()
+  @IsString()
+  @MinLength(6)
   password?: string;
 
   @ApiPropertyOptional({ example: 'admin' })
+  @IsOptional()
+  @IsEnum(['superadmin', 'admin'])
   role?: string;
 
   @ApiPropertyOptional({ example: 'active' })
+  @IsOptional()
+  @IsEnum(['active', 'inactive'])
   status?: string;
 }
 
 export class CreateMarketRequestDto {
   @ApiProperty({ example: 'Market 1' })
+  @IsString()
+  @MinLength(2)
   name!: string;
 
   @ApiProperty({ example: '+998901234567' })
+  @IsPhoneNumber('UZ')
   phone_number!: string;
 
   @ApiProperty({ example: 'secret123' })
+  @IsString()
+  @MinLength(6)
   password!: string;
 
   @ApiProperty({ example: 10000 })
+  @IsNumber()
+  @Min(0)
   tariff_home!: number;
 
   @ApiProperty({ example: 8000 })
+  @IsNumber()
+  @Min(0)
   tariff_center!: number;
 
   @ApiProperty({ example: 'center', enum: ['center', 'address'] })
+  @IsEnum(['center', 'address'])
   default_tariff!: string;
 }
 
 export class UpdateMarketRequestDto {
   @ApiPropertyOptional({ example: 'Market 1 Updated' })
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
   name?: string;
 
   @ApiPropertyOptional({ example: '+998901234567' })
+  @IsOptional()
+  @IsPhoneNumber('UZ')
   phone_number?: string;
 
   @ApiPropertyOptional({ example: 'newSecret123' })
+  @IsOptional()
+  @IsString()
+  @MinLength(6)
   password?: string;
 
   @ApiPropertyOptional({ example: 'active' })
+  @IsOptional()
+  @IsEnum(['active', 'inactive'])
   status?: string;
 
   @ApiPropertyOptional({ example: 11000 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
   tariff_home?: number;
 
   @ApiPropertyOptional({ example: 9000 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
   tariff_center?: number;
 
   @ApiPropertyOptional({ example: 'address', enum: ['center', 'address'] })
+  @IsOptional()
+  @IsEnum(['center', 'address'])
   default_tariff?: string;
 }
 
