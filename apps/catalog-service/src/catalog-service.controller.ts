@@ -62,11 +62,23 @@ export class CatalogServiceController {
     return this.executeAndAck(context, () => this.catalogService.update(data.id, data.dto));
   }
 
-  @MessagePattern({ cmd: 'catalog.product.delete' })
-  remove(
-    @Payload() data: { id: string },
+  @MessagePattern({ cmd: 'catalog.product.update_own' })
+  updateOwn(
+    @Payload() data: { id: string; user_id: string; dto: { name?: string; image_url?: string } },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.catalogService.remove(data.id));
+    return this.executeAndAck(context, () =>
+      this.catalogService.updateOwn(data.id, data.user_id, data.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'catalog.product.delete' })
+  remove(
+    @Payload() data: { id: string; requester?: { id: string; roles: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.catalogService.remove(data.id, data.requester),
+    );
   }
 }
