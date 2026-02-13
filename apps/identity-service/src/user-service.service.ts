@@ -1,25 +1,17 @@
-import {
-  Inject,
-  Injectable,
-  OnModuleInit,
-} from '@nestjs/common';
-import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { InjectRepository } from '@nestjs/typeorm';
-import { ConfigService } from '@nestjs/config';
-import { Brackets, Repository } from 'typeorm';
-import { lastValueFrom } from 'rxjs';
-import { User } from './entities/user.entity';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Brackets, Repository } from 'typeorm';
 import { RpcException } from '@nestjs/microservices';
-import {Roles} from "../../../libs/common/enums"
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import { UserAdminEntity } from './entities/user.entity';
 import { CreateAdminDto } from './dto/create-admin.dto';
+import { UpdateUserDto } from './dto/update-user.dto';
+import { CreateMarketDto } from './dto/create-market.dto';
+import { UpdateMarketDto } from './dto/update-market.dto';
 import { UserFilterQuery } from './contracts/user.payloads';
 import { Roles, Status } from '@app/common';
+import { catchError } from '../../../libs/common/helpers/response';
 
 @Injectable()
 export class UserServiceService implements OnModuleInit {
@@ -28,9 +20,20 @@ export class UserServiceService implements OnModuleInit {
     private readonly users: Repository<UserAdminEntity>,
     private readonly bcryptEncryption: BcryptEncryption,
     private readonly configService: ConfigService,
-    @Inject('SEARCH') private readonly searchClient: ClientProxy,
   ) {}
 
+  private sanitize(user: UserAdminEntity) {
+    const { password, ...safeUser } = user;
+    return safeUser;
+  }
+
+  private notFound(message: string): never {
+    throw new RpcException({ statusCode: 404, message });
+  }
+
+  private conflict(message: string): never {
+    throw new RpcException({ statusCode: 409, message });
+  }
 
   private normalizeQuery(query: UserFilterQuery = {}) {
     const page = Number(query.page) > 0 ? Number(query.page) : 1;
@@ -46,59 +49,6 @@ export class UserServiceService implements OnModuleInit {
     };
   }
 
-  private async syncUserToSearch(user: User) {
-    try {
-      await lastValueFrom(
-        this.searchClient.send(
-          { cmd: 'search.index.upsert' },
-          {
-            source: 'identity',
-            type: 'user',
-            sourceId: user.id,
-            title: user.name || user.username,
-            content: [user.username, user.phone_number].filter(Boolean).join(' '),
-            tags: [user.role, user.status],
-            metadata: {
-              username: user.username,
-              name: user.name,
-              phone_number: user.phone_number,
-              role: user.role,
-              status: user.status,
-            },
-          },
-        ),
-      );
-    } catch {
-      // Search index sync should not block core user flows.
-    }
-  }
-
-  private async removeUserFromSearch(id: string) {
-    try {
-      await lastValueFrom(
-        this.searchClient.send(
-          { cmd: 'search.index.remove' },
-          { source: 'identity', type: 'user', sourceId: id },
-        ),
-      );
-    } catch {
-      // Search index sync should not block core user flows.
-    }
-  }
-
-  async onModuleInit() {
-    try {
-      const adminUsername =
-        this.configService.get<string>('ADMIN_USERNAME') ?? 'superadmin';
-      const adminPassword =
-        this.configService.get<string>('ADMIN_PASSWORD') ?? 'superadmin123';
-      const adminName = this.configService.get<string>('ADMIN_NAME') ?? 'Super Admin';
-      const adminPhone =
-        this.configService.get<string>('ADMIN_PHONE_NUMBER') ?? null;
-
-      const isSuperAdmin = await this.users.findOne({
-        where: { role: Roles.SUPERADMIN, is_deleted: false },
-      });
   private async ensurePhoneUnique(phone: string, exceptId?: string) {
     const found = await this.users.findOne({
       where: { phone_number: phone, is_deleted: false },
@@ -114,106 +64,49 @@ export class UserServiceService implements OnModuleInit {
       where: { username, is_deleted: false },
     });
 
-      if (existingByUsername) {
-        existingByUsername.name = adminName;
-        existingByUsername.role = Roles.SUPERADMIN;
-        existingByUsername.status = Status.ACTIVE;
-        existingByUsername.is_deleted = false;
-        existingByUsername.phone_number = adminPhone;
-        existingByUsername.password =
-          await this.bcryptEncryption.encrypt(adminPassword);
-        const saved = await this.users.save(existingByUsername);
-        await this.syncUserToSearch(saved);
-        return;
-      }
-
-      if (adminPhone) {
-        const existingByPhone = await this.users.findOne({
-          where: { phone_number: adminPhone },
-        });
-
-        if (existingByPhone) {
-          existingByPhone.name = adminName;
-          existingByPhone.role = Roles.SUPERADMIN;
-          existingByPhone.status = Status.ACTIVE;
-          existingByPhone.is_deleted = false;
-          existingByPhone.username = adminUsername;
-          existingByPhone.password =
-            await this.bcryptEncryption.encrypt(adminPassword);
-          const saved = await this.users.save(existingByPhone);
-          await this.syncUserToSearch(saved);
-          return;
-        }
-      }
-
-      const hashedPassword = await this.bcryptEncryption.encrypt(adminPassword);
-      const superAdminUser = this.users.create({
-        name: adminName,
-        username: adminUsername,
-        phone_number: adminPhone,
-        password: hashedPassword,
-        role: Roles.SUPERADMIN,
-        status: Status.ACTIVE,
-        is_deleted: false,
-      });
-      const saved = await this.users.save(superAdminUser);
-      await this.syncUserToSearch(saved);
-    } catch (error) {
-      throw new Error(`Error on init super admin: ${error}`);
     if (found && found.id !== exceptId) {
       this.conflict('Bu username allaqachon mavjud');
     }
   }
 
   async onModuleInit() {
-    const adminName = this.configService.get<string>('SUPERADMIN_NAME') ?? 'Super Admin';
-    const adminPhone = this.configService.get<string>('SUPERADMIN_PHONE_NUMBER') ?? '';
-    const adminPassword = this.configService.get<string>('SUPERADMIN_PASSWORD') ?? '';
+    const config = {
+      ADMIN_NAME: this.configService.get<string>('SUPERADMIN_NAME'),
+      ADMIN_PHONE_NUMBER: this.configService.get<string>('SUPERADMIN_PHONE_NUMBER'),
+      ADMIN_PASSWORD: this.configService.get<string>('SUPERADMIN_PASSWORD'),
+    };
 
-    if (!adminPhone || !adminPassword) {
-      return;
+    if (!config.ADMIN_NAME || !config.ADMIN_PHONE_NUMBER || !config.ADMIN_PASSWORD) {
+      throw new RpcException({
+        statusCode: 500,
+        message:
+          'SUPERADMIN_NAME, SUPERADMIN_PHONE_NUMBER, SUPERADMIN_PASSWORD .env da bo‘lishi shart',
+      });
     }
 
-    const existingSuperAdmin = await this.users.findOne({
-      where: { role: Roles.SUPERADMIN, is_deleted: false },
-    });
+    try {
+      const isSuperAdmin = await this.users.findOne({
+        where: { role: Roles.SUPERADMIN },
+      });
 
-    if (existingSuperAdmin) {
-      return;
-    }
-
-    const existingByPhone = await this.users.findOne({
-      where: { phone_number: adminPhone },
-    });
-
-    const hashedPassword = await this.bcryptEncryption.encrypt(adminPassword);
-
-    if (existingByPhone) {
-      existingByPhone.name = adminName;
-      existingByPhone.role = Roles.SUPERADMIN;
-      existingByPhone.status = Status.ACTIVE;
-      existingByPhone.is_deleted = false;
-      existingByPhone.password = hashedPassword;
-      if (!existingByPhone.username) {
-        existingByPhone.username = adminPhone;
+      if (!isSuperAdmin) {
+        const hashedPassword = await this.bcryptEncryption.encrypt(
+          config.ADMIN_PASSWORD,
+        );
+        const superAdminThis = this.users.create({
+          name: config.ADMIN_NAME,
+          phone_number: config.ADMIN_PHONE_NUMBER,
+          username: config.ADMIN_PHONE_NUMBER,
+          password: hashedPassword,
+          role: Roles.SUPERADMIN,
+          status: Status.ACTIVE,
+          is_deleted: false,
+        });
+        await this.users.save(superAdminThis);
       }
-      await this.users.save(existingByPhone);
-      return;
+    } catch (error) {
+      return catchError(error);
     }
-
-    const superAdmin = this.users.create({
-      name: adminName,
-      phone_number: adminPhone,
-      username: adminPhone,
-      password: hashedPassword,
-      salary: 0,
-      payment_day: undefined,
-      role: Roles.SUPERADMIN,
-      status: Status.ACTIVE,
-      is_deleted: false,
-    });
-
-    await this.users.save(superAdmin);
   }
 
   async createAdmin(dto: CreateAdminDto) {
@@ -234,8 +127,6 @@ export class UserServiceService implements OnModuleInit {
       is_deleted: false,
     });
 
-    const saved = await this.users.save(user);
-    await this.syncUserToSearch(saved);
     const saved = await this.users.save(admin);
     return {
       success: true,
@@ -279,10 +170,7 @@ export class UserServiceService implements OnModuleInit {
       admin.status = dto.status;
     }
 
-    const saved = await this.users.save(user);
-    await this.syncUserToSearch(saved);
     const saved = await this.users.save(admin);
-
     return {
       success: true,
       message: 'Admin yangilandi',
@@ -367,6 +255,161 @@ export class UserServiceService implements OnModuleInit {
 
     const [rows, total] = await qb
       .orderBy('admin.createdAt', 'DESC')
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    return {
+      success: true,
+      data: {
+        items: rows.map((row) => this.sanitize(row)),
+        meta: {
+          page,
+          limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+        },
+      },
+    };
+  }
+
+  async createMarket(dto: CreateMarketDto) {
+    await this.ensurePhoneUnique(dto.phone_number);
+    await this.ensureUsernameUnique(dto.phone_number);
+
+    const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
+
+    const market = this.users.create({
+      name: dto.name,
+      phone_number: dto.phone_number,
+      username: dto.phone_number,
+      password: hashedPassword,
+      salary: 0,
+      payment_day: undefined,
+      role: Roles.MARKET,
+      status: Status.ACTIVE,
+      tariff_home: dto.tariff_home,
+      tariff_center: dto.tariff_center,
+      default_tariff: dto.default_tariff,
+      is_deleted: false,
+    });
+
+    const saved = await this.users.save(market);
+    return {
+      success: true,
+      message: 'Market yaratildi',
+      data: this.sanitize(saved),
+    };
+  }
+
+  async updateMarket(id: string, dto: UpdateMarketDto) {
+    const market = await this.users.findOne({
+      where: { id, role: Roles.MARKET, is_deleted: false },
+    });
+
+    if (!market) {
+      this.notFound('Market topilmadi');
+    }
+
+    if (dto.phone_number && dto.phone_number !== market.phone_number) {
+      await this.ensurePhoneUnique(dto.phone_number, id);
+      market.phone_number = dto.phone_number;
+      market.username = dto.phone_number;
+    }
+
+    if (dto.password) {
+      market.password = await this.bcryptEncryption.encrypt(dto.password);
+    }
+
+    if (typeof dto.name !== 'undefined') {
+      market.name = dto.name;
+    }
+
+    if (typeof dto.status !== 'undefined') {
+      market.status = dto.status;
+    }
+
+    if (typeof dto.tariff_home !== 'undefined') {
+      market.tariff_home = dto.tariff_home;
+    }
+
+    if (typeof dto.tariff_center !== 'undefined') {
+      market.tariff_center = dto.tariff_center;
+    }
+
+    if (typeof dto.default_tariff !== 'undefined') {
+      market.default_tariff = dto.default_tariff;
+    }
+
+    const saved = await this.users.save(market);
+    return {
+      success: true,
+      message: 'Market yangilandi',
+      data: this.sanitize(saved),
+    };
+  }
+
+  async deleteMarket(id: string) {
+    const market = await this.users.findOne({
+      where: { id, role: Roles.MARKET, is_deleted: false },
+    });
+    if (!market) {
+      this.notFound('Market topilmadi');
+    }
+
+    market.is_deleted = true;
+    market.status = Status.INACTIVE;
+    market.username = `${market.username ?? market.phone_number}#deleted#${Date.now()}`;
+    market.phone_number = `${market.phone_number}#deleted#${Date.now()}`;
+
+    await this.users.save(market);
+
+    return {
+      success: true,
+      message: 'Market o‘chirildi',
+      data: { id },
+    };
+  }
+
+  async findMarketById(id: string) {
+    const market = await this.users.findOne({
+      where: { id, role: Roles.MARKET, is_deleted: false },
+    });
+    if (!market) {
+      this.notFound('Market topilmadi');
+    }
+
+    return {
+      success: true,
+      data: this.sanitize(market),
+    };
+  }
+
+  async findAllMarkets(query: UserFilterQuery = {}) {
+    const { search, status, page, limit, skip } = this.normalizeQuery(query);
+
+    const qb = this.users
+      .createQueryBuilder('market')
+      .where('market.is_deleted = :isDeleted', { isDeleted: false })
+      .andWhere('market.role = :role', { role: Roles.MARKET });
+
+    if (search) {
+      qb.andWhere(
+        new Brackets((nested) => {
+          nested
+            .where('market.name ILIKE :search', { search: `%${search}%` })
+            .orWhere('market.phone_number ILIKE :search', { search: `%${search}%` })
+            .orWhere('market.username ILIKE :search', { search: `%${search}%` });
+        }),
+      );
+    }
+
+    if (status) {
+      qb.andWhere('market.status = :status', { status });
+    }
+
+    const [rows, total] = await qb
+      .orderBy('market.createdAt', 'DESC')
       .skip(skip)
       .take(limit)
       .getManyAndCount();

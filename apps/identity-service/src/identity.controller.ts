@@ -11,6 +11,13 @@ import type {
   FindUserByUsernamePayload,
   UpdateUserPayload,
 } from './contracts/user.payloads';
+import type {
+  CreateMarketPayload,
+  DeleteMarketPayload,
+  FindAllMarketsPayload,
+  FindMarketByIdPayload,
+  UpdateMarketPayload,
+} from './contracts/market.payloads';
 
 @Controller()
 export class IdentityController {
@@ -116,5 +123,37 @@ export class IdentityController {
   @MessagePattern({ cmd: 'identity.user.find_all' })
   getAdmins(@Payload() payload: FindAllUsersPayload, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.userService.findAllAdmins(payload?.query));
+  }
+
+  // ==================== Market CRUD ====================
+
+  @MessagePattern({ cmd: 'identity.market.create' })
+  createMarket(@Payload() payload: CreateMarketPayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.userService.createMarket(payload.dto));
+  }
+
+  @MessagePattern({ cmd: 'identity.market.update' })
+  updateMarket(@Payload() payload: UpdateMarketPayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.userService.updateMarket(payload.id, payload.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'identity.market.delete' })
+  deleteMarket(@Payload() payload: DeleteMarketPayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.userService.deleteMarket(payload.id));
+  }
+
+  @MessagePattern({ cmd: 'identity.market.find_by_id' })
+  getMarketById(
+    @Payload() payload: FindMarketByIdPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.userService.findMarketById(payload.id));
+  }
+
+  @MessagePattern({ cmd: 'identity.market.find_all' })
+  getMarkets(@Payload() payload: FindAllMarketsPayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.userService.findAllMarkets(payload?.query));
   }
 }

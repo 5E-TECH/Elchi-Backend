@@ -10,7 +10,7 @@ describe('ApiGatewayController', () => {
       controllers: [ApiGatewayController],
       providers: [
         {
-          provide: 'USER',
+          provide: 'IDENTITY',
           useValue: {
             send: jest.fn().mockReturnValue(of({ ok: true })),
           },
