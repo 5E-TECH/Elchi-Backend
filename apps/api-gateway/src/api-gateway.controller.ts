@@ -16,6 +16,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiConflictResponse,
+  ApiCreatedResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -56,7 +57,7 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create admin' })
   @ApiBody({ type: CreateAdminRequestDto })
-  @ApiOkResponse({ type: SingleEntityResponseDto })
+  @ApiCreatedResponse({ type: SingleEntityResponseDto })
   @ApiConflictResponse({ type: ErrorResponseDto })
   createAdmin(@Body() dto: CreateAdminRequestDto) {
     return this.identityClient.send({ cmd: 'identity.user.create' }, { dto });
@@ -153,7 +154,7 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create market' })
   @ApiBody({ type: CreateMarketRequestDto })
-  @ApiOkResponse({ type: SingleEntityResponseDto })
+  @ApiCreatedResponse({ type: SingleEntityResponseDto })
   @ApiConflictResponse({ type: ErrorResponseDto })
   createMarket(@Body() dto: CreateMarketRequestDto) {
     return this.identityClient.send({ cmd: 'identity.market.create' }, { dto });
