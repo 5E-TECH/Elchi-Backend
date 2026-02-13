@@ -11,11 +11,14 @@ import {
   Post,
   Query,
   Req,
+  UseInterceptors,
   UseGuards,
 } from '@nestjs/common';
+import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { ClientProxy } from '@nestjs/microservices';
 import { Roles as RoleEnum } from '@app/common';
 import {
+  ApiBody,
   ApiBearerAuth,
   ApiCreatedResponse,
   ApiConsumes,
@@ -56,10 +59,15 @@ export class CatalogGatewayController {
   @ApiCreatedResponse({ description: 'Product created successfully' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({ type: CreateProductRequestDto })
+  @UseInterceptors(AnyFilesInterceptor())
   create(
-    @Body() dto: { name: string; image_url?: string; market_id?: string },
+    @Body() dto: { name?: string; image_url?: string; market_id?: string },
     @Req() req: { user: JwtUser },
   ) {
+    if (!dto?.name) {
+      throw new BadRequestException('name is required');
+    }
+
     const roles = req.user.roles ?? [];
     let marketId: string | undefined = dto.market_id;
 
