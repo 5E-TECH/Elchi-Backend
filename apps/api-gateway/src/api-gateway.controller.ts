@@ -157,7 +157,19 @@ export class ApiGatewayController {
   @ApiCreatedResponse({ type: SingleEntityResponseDto })
   @ApiConflictResponse({ type: ErrorResponseDto })
   createMarket(@Body() dto: CreateMarketRequestDto) {
-    return this.identityClient.send({ cmd: 'identity.market.create' }, { dto });
+    return this.identityClient.send(
+      { cmd: 'identity.market.create' },
+      {
+        dto: {
+          name: dto.name,
+          phone_number: dto.phone_number,
+          password: dto.password,
+          tariff_home: dto.tariff_home ?? dto.tariffHome,
+          tariff_center: dto.tariff_center ?? dto.tariffCenter,
+          default_tariff: dto.default_tariff ?? dto.defaultTariff,
+        },
+      },
+    );
   }
 
   @Patch('markets/:id')
@@ -171,7 +183,21 @@ export class ApiGatewayController {
   @ApiConflictResponse({ type: ErrorResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
   updateMarket(@Param('id') id: string, @Body() dto: UpdateMarketRequestDto) {
-    return this.identityClient.send({ cmd: 'identity.market.update' }, { id, dto });
+    return this.identityClient.send(
+      { cmd: 'identity.market.update' },
+      {
+        id,
+        dto: {
+          name: dto.name,
+          phone_number: dto.phone_number,
+          password: dto.password,
+          status: dto.status,
+          tariff_home: dto.tariff_home ?? dto.tariffHome,
+          tariff_center: dto.tariff_center ?? dto.tariffCenter,
+          default_tariff: dto.default_tariff ?? dto.defaultTariff,
+        },
+      },
+    );
   }
 
   @Delete('markets/:id')

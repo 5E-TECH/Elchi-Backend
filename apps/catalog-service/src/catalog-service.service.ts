@@ -1,8 +1,8 @@
-import { ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
-import { ClientProxy } from '@nestjs/microservices';
+import { Inject, Injectable } from '@nestjs/common';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { lastValueFrom } from 'rxjs';
-import { Repository } from 'typeorm';
+import { QueryFailedError, Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
 
 @Injectable()
@@ -12,6 +12,18 @@ export class CatalogServiceService {
     private readonly productRepo: Repository<Product>,
     @Inject('SEARCH') private readonly searchClient: ClientProxy,
   ) {}
+
+  private notFound(message: string): never {
+    throw new RpcException({ statusCode: 404, message });
+  }
+
+  private forbidden(message: string): never {
+    throw new RpcException({ statusCode: 403, message });
+  }
+
+  private conflict(message: string): never {
+    throw new RpcException({ statusCode: 409, message });
+  }
 
   private async syncProductToSearch(product: Product) {
     try {
@@ -52,7 +64,19 @@ export class CatalogServiceService {
 
   async create(dto: { name: string; user_id: string; image_url?: string }) {
     const product = this.productRepo.create(dto);
-    const saved = await this.productRepo.save(product);
+    let saved: Product;
+    try {
+      saved = await this.productRepo.save(product);
+    } catch (error) {
+      if (error instanceof QueryFailedError) {
+        const pgError = error.driverError as { code?: string };
+        if (pgError?.code === '23505') {
+          this.conflict('Bu marketda bu nomdagi product allaqachon mavjud');
+        }
+      }
+      throw error;
+    }
+
     await this.syncProductToSearch(saved);
     return saved;
   }
@@ -90,7 +114,7 @@ export class CatalogServiceService {
       where: { id, isDeleted: false },
     });
     if (!product) {
-      throw new NotFoundException(`Product #${id} topilmadi`);
+      this.notFound(`Product #${id} topilmadi`);
     }
     return product;
   }
@@ -101,7 +125,19 @@ export class CatalogServiceService {
   ) {
     const product = await this.findById(id);
     Object.assign(product, dto);
-    const saved = await this.productRepo.save(product);
+    let saved: Product;
+    try {
+      saved = await this.productRepo.save(product);
+    } catch (error) {
+      if (error instanceof QueryFailedError) {
+        const pgError = error.driverError as { code?: string };
+        if (pgError?.code === '23505') {
+          this.conflict('Bu marketda bu nomdagi product allaqachon mavjud');
+        }
+      }
+      throw error;
+    }
+
     await this.syncProductToSearch(saved);
     return saved;
   }
@@ -113,11 +149,23 @@ export class CatalogServiceService {
   ) {
     const product = await this.findById(id);
     if (product.user_id !== userId) {
-      throw new ForbiddenException('You can update only your own product');
+      this.forbidden('You can update only your own product');
     }
 
     Object.assign(product, dto);
-    const saved = await this.productRepo.save(product);
+    let saved: Product;
+    try {
+      saved = await this.productRepo.save(product);
+    } catch (error) {
+      if (error instanceof QueryFailedError) {
+        const pgError = error.driverError as { code?: string };
+        if (pgError?.code === '23505') {
+          this.conflict('Bu marketda bu nomdagi product allaqachon mavjud');
+        }
+      }
+      throw error;
+    }
+
     await this.syncProductToSearch(saved);
     return saved;
   }
@@ -126,7 +174,7 @@ export class CatalogServiceService {
     const product = await this.findById(id);
 
     if (requester?.roles?.includes('market') && product.user_id !== requester.id) {
-      throw new ForbiddenException('You can delete only your own product');
+      this.forbidden('You can delete only your own product');
     }
 
     product.isDeleted = true;
