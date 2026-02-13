@@ -1,12 +1,23 @@
+import {
+  Inject,
+  Injectable,
+  OnModuleInit,
+} from '@nestjs/common';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
+import { InjectRepository } from '@nestjs/typeorm';
+import { ConfigService } from '@nestjs/config';
+import { Brackets, Repository } from 'typeorm';
+import { lastValueFrom } from 'rxjs';
+import { User } from './entities/user.entity';
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Brackets, Repository } from 'typeorm';
 import { RpcException } from '@nestjs/microservices';
+import {Roles} from "../../../libs/common/enums"
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import { UserAdminEntity } from './entities/user.entity';
 import { CreateAdminDto } from './dto/create-admin.dto';
-import { UpdateUserDto } from './dto/update-user.dto';
 import { UserFilterQuery } from './contracts/user.payloads';
 import { Roles, Status } from '@app/common';
 
@@ -17,20 +28,9 @@ export class UserServiceService implements OnModuleInit {
     private readonly users: Repository<UserAdminEntity>,
     private readonly bcryptEncryption: BcryptEncryption,
     private readonly configService: ConfigService,
+    @Inject('SEARCH') private readonly searchClient: ClientProxy,
   ) {}
 
-  private sanitize(user: UserAdminEntity) {
-    const { password, ...safeUser } = user;
-    return safeUser;
-  }
-
-  private notFound(message: string): never {
-    throw new RpcException({ statusCode: 404, message });
-  }
-
-  private conflict(message: string): never {
-    throw new RpcException({ statusCode: 409, message });
-  }
 
   private normalizeQuery(query: UserFilterQuery = {}) {
     const page = Number(query.page) > 0 ? Number(query.page) : 1;
@@ -46,6 +46,59 @@ export class UserServiceService implements OnModuleInit {
     };
   }
 
+  private async syncUserToSearch(user: User) {
+    try {
+      await lastValueFrom(
+        this.searchClient.send(
+          { cmd: 'search.index.upsert' },
+          {
+            source: 'identity',
+            type: 'user',
+            sourceId: user.id,
+            title: user.name || user.username,
+            content: [user.username, user.phone_number].filter(Boolean).join(' '),
+            tags: [user.role, user.status],
+            metadata: {
+              username: user.username,
+              name: user.name,
+              phone_number: user.phone_number,
+              role: user.role,
+              status: user.status,
+            },
+          },
+        ),
+      );
+    } catch {
+      // Search index sync should not block core user flows.
+    }
+  }
+
+  private async removeUserFromSearch(id: string) {
+    try {
+      await lastValueFrom(
+        this.searchClient.send(
+          { cmd: 'search.index.remove' },
+          { source: 'identity', type: 'user', sourceId: id },
+        ),
+      );
+    } catch {
+      // Search index sync should not block core user flows.
+    }
+  }
+
+  async onModuleInit() {
+    try {
+      const adminUsername =
+        this.configService.get<string>('ADMIN_USERNAME') ?? 'superadmin';
+      const adminPassword =
+        this.configService.get<string>('ADMIN_PASSWORD') ?? 'superadmin123';
+      const adminName = this.configService.get<string>('ADMIN_NAME') ?? 'Super Admin';
+      const adminPhone =
+        this.configService.get<string>('ADMIN_PHONE_NUMBER') ?? null;
+
+      const isSuperAdmin = await this.users.findOne({
+        where: { role: Roles.SUPERADMIN, is_deleted: false },
+      });
   private async ensurePhoneUnique(phone: string, exceptId?: string) {
     const found = await this.users.findOne({
       where: { phone_number: phone, is_deleted: false },
@@ -61,6 +114,52 @@ export class UserServiceService implements OnModuleInit {
       where: { username, is_deleted: false },
     });
 
+      if (existingByUsername) {
+        existingByUsername.name = adminName;
+        existingByUsername.role = Roles.SUPERADMIN;
+        existingByUsername.status = Status.ACTIVE;
+        existingByUsername.is_deleted = false;
+        existingByUsername.phone_number = adminPhone;
+        existingByUsername.password =
+          await this.bcryptEncryption.encrypt(adminPassword);
+        const saved = await this.users.save(existingByUsername);
+        await this.syncUserToSearch(saved);
+        return;
+      }
+
+      if (adminPhone) {
+        const existingByPhone = await this.users.findOne({
+          where: { phone_number: adminPhone },
+        });
+
+        if (existingByPhone) {
+          existingByPhone.name = adminName;
+          existingByPhone.role = Roles.SUPERADMIN;
+          existingByPhone.status = Status.ACTIVE;
+          existingByPhone.is_deleted = false;
+          existingByPhone.username = adminUsername;
+          existingByPhone.password =
+            await this.bcryptEncryption.encrypt(adminPassword);
+          const saved = await this.users.save(existingByPhone);
+          await this.syncUserToSearch(saved);
+          return;
+        }
+      }
+
+      const hashedPassword = await this.bcryptEncryption.encrypt(adminPassword);
+      const superAdminUser = this.users.create({
+        name: adminName,
+        username: adminUsername,
+        phone_number: adminPhone,
+        password: hashedPassword,
+        role: Roles.SUPERADMIN,
+        status: Status.ACTIVE,
+        is_deleted: false,
+      });
+      const saved = await this.users.save(superAdminUser);
+      await this.syncUserToSearch(saved);
+    } catch (error) {
+      throw new Error(`Error on init super admin: ${error}`);
     if (found && found.id !== exceptId) {
       this.conflict('Bu username allaqachon mavjud');
     }
@@ -135,6 +234,8 @@ export class UserServiceService implements OnModuleInit {
       is_deleted: false,
     });
 
+    const saved = await this.users.save(user);
+    await this.syncUserToSearch(saved);
     const saved = await this.users.save(admin);
     return {
       success: true,
@@ -178,6 +279,8 @@ export class UserServiceService implements OnModuleInit {
       admin.status = dto.status;
     }
 
+    const saved = await this.users.save(user);
+    await this.syncUserToSearch(saved);
     const saved = await this.users.save(admin);
 
     return {
