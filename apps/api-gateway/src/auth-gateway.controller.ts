@@ -66,4 +66,14 @@ export class AuthGatewayController {
   validate(@Req() req: { user: JwtUser }) {
     return this.identityClient.send({ cmd: 'identity.validate' }, { userId: req.user.sub });
   }
+
+  @Get('my-profile')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get current user profile' })
+  @ApiOkResponse({ type: ValidateResponseDto })
+  @ApiUnauthorizedResponse({ type: AuthErrorResponseDto })
+  myProfile(@Req() req: { user: JwtUser }) {
+    return this.identityClient.send({ cmd: 'identity.validate' }, { userId: req.user.sub });
+  }
 }
