@@ -1,4 +1,4 @@
-import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ForbiddenException, Inject, Injectable, NotFoundException } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { lastValueFrom } from 'rxjs';
@@ -106,8 +106,29 @@ export class CatalogServiceService {
     return saved;
   }
 
-  async remove(id: string) {
+  async updateOwn(
+    id: string,
+    userId: string,
+    dto: { name?: string; image_url?: string },
+  ) {
     const product = await this.findById(id);
+    if (product.user_id !== userId) {
+      throw new ForbiddenException('You can update only your own product');
+    }
+
+    Object.assign(product, dto);
+    const saved = await this.productRepo.save(product);
+    await this.syncProductToSearch(saved);
+    return saved;
+  }
+
+  async remove(id: string, requester?: { id: string; roles: string[] }) {
+    const product = await this.findById(id);
+
+    if (requester?.roles?.includes('market') && product.user_id !== requester.id) {
+      throw new ForbiddenException('You can delete only your own product');
+    }
+
     product.isDeleted = true;
     await this.productRepo.save(product);
     await this.removeProductFromSearch(id);
