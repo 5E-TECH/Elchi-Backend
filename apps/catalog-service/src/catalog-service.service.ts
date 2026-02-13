@@ -1,5 +1,7 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
+import { Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { ClientProxy } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
+import { lastValueFrom } from 'rxjs';
 import { Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
 
@@ -8,11 +10,51 @@ export class CatalogServiceService {
   constructor(
     @InjectRepository(Product)
     private readonly productRepo: Repository<Product>,
+    @Inject('SEARCH') private readonly searchClient: ClientProxy,
   ) {}
+
+  private async syncProductToSearch(product: Product) {
+    try {
+      await lastValueFrom(
+        this.searchClient.send(
+          { cmd: 'search.index.upsert' },
+          {
+            source: 'catalog',
+            type: 'product',
+            sourceId: product.id,
+            title: product.name,
+            content: product.user_id,
+            tags: ['product'],
+            metadata: {
+              user_id: product.user_id,
+              image_url: product.image_url,
+            },
+          },
+        ),
+      );
+    } catch {
+      // Search index sync should not block product flows.
+    }
+  }
+
+  private async removeProductFromSearch(id: string) {
+    try {
+      await lastValueFrom(
+        this.searchClient.send(
+          { cmd: 'search.index.remove' },
+          { source: 'catalog', type: 'product', sourceId: id },
+        ),
+      );
+    } catch {
+      // Search index sync should not block product flows.
+    }
+  }
 
   async create(dto: { name: string; user_id: string; image_url?: string }) {
     const product = this.productRepo.create(dto);
-    return this.productRepo.save(product);
+    const saved = await this.productRepo.save(product);
+    await this.syncProductToSearch(saved);
+    return saved;
   }
 
   async findAll(query: {
@@ -59,13 +101,16 @@ export class CatalogServiceService {
   ) {
     const product = await this.findById(id);
     Object.assign(product, dto);
-    return this.productRepo.save(product);
+    const saved = await this.productRepo.save(product);
+    await this.syncProductToSearch(saved);
+    return saved;
   }
 
   async remove(id: string) {
     const product = await this.findById(id);
     product.isDeleted = true;
     await this.productRepo.save(product);
+    await this.removeProductFromSearch(id);
     return { message: `Product #${id} o'chirildi` };
   }
 }

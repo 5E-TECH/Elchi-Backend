@@ -1,11 +1,13 @@
 import {
+  Inject,
   Injectable,
   OnModuleInit,
 } from '@nestjs/common';
-import { RpcException } from '@nestjs/microservices';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Brackets, Repository } from 'typeorm';
+import { lastValueFrom } from 'rxjs';
 import { User } from './entities/user.entity';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -19,6 +21,7 @@ export class UserServiceService implements OnModuleInit {
     @InjectRepository(User) private readonly users: Repository<User>,
     private readonly bcryptEncryption: BcryptEncryption,
     private readonly configService: ConfigService,
+    @Inject('SEARCH') private readonly searchClient: ClientProxy,
   ) {}
 
   private sanitize(user: User) {
@@ -62,6 +65,46 @@ export class UserServiceService implements OnModuleInit {
     };
   }
 
+  private async syncUserToSearch(user: User) {
+    try {
+      await lastValueFrom(
+        this.searchClient.send(
+          { cmd: 'search.index.upsert' },
+          {
+            source: 'identity',
+            type: 'user',
+            sourceId: user.id,
+            title: user.name || user.username,
+            content: [user.username, user.phone_number].filter(Boolean).join(' '),
+            tags: [user.role, user.status],
+            metadata: {
+              username: user.username,
+              name: user.name,
+              phone_number: user.phone_number,
+              role: user.role,
+              status: user.status,
+            },
+          },
+        ),
+      );
+    } catch {
+      // Search index sync should not block core user flows.
+    }
+  }
+
+  private async removeUserFromSearch(id: string) {
+    try {
+      await lastValueFrom(
+        this.searchClient.send(
+          { cmd: 'search.index.remove' },
+          { source: 'identity', type: 'user', sourceId: id },
+        ),
+      );
+    } catch {
+      // Search index sync should not block core user flows.
+    }
+  }
+
   async onModuleInit() {
     try {
       const adminUsername =
@@ -92,7 +135,8 @@ export class UserServiceService implements OnModuleInit {
         existingByUsername.phone_number = adminPhone;
         existingByUsername.password =
           await this.bcryptEncryption.encrypt(adminPassword);
-        await this.users.save(existingByUsername);
+        const saved = await this.users.save(existingByUsername);
+        await this.syncUserToSearch(saved);
         return;
       }
 
@@ -109,7 +153,8 @@ export class UserServiceService implements OnModuleInit {
           existingByPhone.username = adminUsername;
           existingByPhone.password =
             await this.bcryptEncryption.encrypt(adminPassword);
-          await this.users.save(existingByPhone);
+          const saved = await this.users.save(existingByPhone);
+          await this.syncUserToSearch(saved);
           return;
         }
       }
@@ -124,7 +169,8 @@ export class UserServiceService implements OnModuleInit {
         status: Status.ACTIVE,
         is_deleted: false,
       });
-      await this.users.save(superAdminUser);
+      const saved = await this.users.save(superAdminUser);
+      await this.syncUserToSearch(saved);
     } catch (error) {
       throw new Error(`Error on init super admin: ${error}`);
     }
@@ -150,6 +196,7 @@ export class UserServiceService implements OnModuleInit {
     });
 
     const saved = await this.users.save(user);
+    await this.syncUserToSearch(saved);
     return {
       success: true,
       message: 'User yaratildi',
@@ -195,6 +242,7 @@ export class UserServiceService implements OnModuleInit {
     }
 
     const saved = await this.users.save(user);
+    await this.syncUserToSearch(saved);
     return {
       success: true,
       message: 'User yangilandi',
@@ -215,6 +263,7 @@ export class UserServiceService implements OnModuleInit {
       user.phone_number = `${user.phone_number}#deleted#${Date.now()}`;
     }
     await this.users.save(user);
+    await this.removeUserFromSearch(id);
 
     return {
       success: true,

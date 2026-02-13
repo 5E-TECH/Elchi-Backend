@@ -17,6 +17,7 @@ export const gatewayValidationSchema = Joi.object({
   RABBITMQ_INVESTOR_QUEUE: Joi.string().required(),
   RABBITMQ_FILE_QUEUE: Joi.string().required(),
   RABBITMQ_C2C_QUEUE: Joi.string().required(),
+  RABBITMQ_SEARCH_QUEUE: Joi.string().required(),
 });
 
 export const identityValidationSchema = Joi.object({
@@ -103,4 +104,11 @@ export const c2cValidationSchema = Joi.object({
   DB_SCHEMA: Joi.string().default('c2c_schema'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_C2C_QUEUE: Joi.string().required(),
+});
+
+export const searchValidationSchema = Joi.object({
+  POSTGRES_URI: Joi.string().required(),
+  DB_SCHEMA: Joi.string().default('search_schema'),
+  RABBITMQ_URI: Joi.string().required(),
+  RABBITMQ_SEARCH_QUEUE: Joi.string().required(),
 });

@@ -18,6 +18,7 @@ import type { StringValue } from 'ms';
       validationSchema: identityValidationSchema,
     }),
     RmqModule,
+    RmqModule.register({ name: 'SEARCH' }),
     DatabaseModule,
     TypeOrmModule.forFeature([User]),
     JwtModule.registerAsync({

@@ -14,6 +14,7 @@ import { SelfGuard } from './auth/self.guard';
 import { AuthGatewayController } from './auth-gateway.controller';
 import { CatalogGatewayController } from './catalog-gateway.controller';
 import { HealthController } from './health.controller';
+import { SearchGatewayController } from './search-gateway.controller';
 import type { StringValue } from 'ms';
 
 @Module({
@@ -51,11 +52,13 @@ import type { StringValue } from 'ms';
     RmqModule.register({ name: 'INVESTOR' }),
     RmqModule.register({ name: 'FILE' }),
     RmqModule.register({ name: 'C2C' }),
+    RmqModule.register({ name: 'SEARCH' }),
   ],
   controllers: [
     ApiGatewayController,
     AuthGatewayController,
     CatalogGatewayController,
+    SearchGatewayController,
     HealthController,
     // TODO: Qolgan gateway controllerlarni qo'shish
     // LogisticsGatewayController,

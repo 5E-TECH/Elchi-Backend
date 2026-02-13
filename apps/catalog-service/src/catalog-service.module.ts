@@ -14,6 +14,7 @@ import { Product } from './entities/product.entity';
       validationSchema: catalogValidationSchema,
     }),
     RmqModule,
+    RmqModule.register({ name: 'SEARCH' }),
     DatabaseModule,
     TypeOrmModule.forFeature([Product]),
   ],
