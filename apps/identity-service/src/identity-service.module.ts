@@ -6,8 +6,8 @@ import { RmqModule, DatabaseModule, identityValidationSchema } from '@app/common
 import { IdentityController } from './identity.controller';
 import { UserServiceService } from './user-service.service';
 import { AuthService } from './auth/auth.service';
-import { User } from './entities/user.entity';
-import { BcryptEncryption } from './common/bcrypt.encryption';
+import { UserAdminEntity } from './entities/user.entity';
+import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import type { StringValue } from 'ms';
 
 @Module({
@@ -19,7 +19,7 @@ import type { StringValue } from 'ms';
     }),
     RmqModule,
     DatabaseModule,
-    TypeOrmModule.forFeature([User]),
+    TypeOrmModule.forFeature([UserAdminEntity]),
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({

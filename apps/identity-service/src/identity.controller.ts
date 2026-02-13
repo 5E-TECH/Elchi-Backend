@@ -79,42 +79,42 @@ export class IdentityController {
   // ==================== User CRUD ====================
 
   @MessagePattern({ cmd: 'identity.user.create' })
-  createUser(@Payload() payload: CreateUserPayload, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.userService.createUser(payload.dto));
+  createAdmin(@Payload() payload: CreateUserPayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.userService.createAdmin(payload.dto));
   }
 
   @MessagePattern({ cmd: 'identity.user.update' })
-  updateUser(@Payload() payload: UpdateUserPayload, @Ctx() context: RmqContext) {
+  updateAdmin(@Payload() payload: UpdateUserPayload, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.userService.updateUser(payload.id, payload.dto),
+      this.userService.updateAdmin(payload.id, payload.dto),
     );
   }
 
   @MessagePattern({ cmd: 'identity.user.delete' })
-  deleteUser(@Payload() payload: DeleteUserPayload, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.userService.deleteUser(payload.id));
+  deleteAdmin(@Payload() payload: DeleteUserPayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.userService.deleteAdmin(payload.id));
   }
 
   @MessagePattern({ cmd: 'identity.user.find_by_id' })
-  getUserById(
+  getAdminById(
     @Payload() payload: FindUserByIdPayload,
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.userService.findById(payload.id));
+    return this.executeAndAck(context, () => this.userService.findAdminById(payload.id));
   }
 
   @MessagePattern({ cmd: 'identity.user.find_by_username' })
-  getUserByUsername(
+  getAdminByUsername(
     @Payload() payload: FindUserByUsernamePayload,
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.userService.findByUsername(payload.username),
+      this.userService.findAdminByUsername(payload.username),
     );
   }
 
   @MessagePattern({ cmd: 'identity.user.find_all' })
-  getUsers(@Payload() payload: FindAllUsersPayload, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.userService.findAll(payload?.query));
+  getAdmins(@Payload() payload: FindAllUsersPayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.userService.findAllAdmins(payload?.query));
   }
 }

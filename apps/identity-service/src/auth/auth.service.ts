@@ -5,8 +5,8 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import type { StringValue } from 'ms';
-import { User } from '../entities/user.entity';
-import { BcryptEncryption } from '../common/bcrypt.encryption';
+import { UserAdminEntity } from '../entities/user.entity';
+import { BcryptEncryption } from '../../../../libs/common/helpers/bcrypt';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
@@ -15,7 +15,8 @@ import { Roles, Status } from '@app/common';
 @Injectable()
 export class AuthService {
   constructor(
-    @InjectRepository(User) private readonly users: Repository<User>,
+    @InjectRepository(UserAdminEntity)
+    private readonly users: Repository<UserAdminEntity>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly bcryptEncryption: BcryptEncryption,
@@ -114,7 +115,7 @@ export class AuthService {
     };
   }
 
-  private async issueTokens(user: User) {
+  private async issueTokens(user: UserAdminEntity) {
     const payload: Record<string, unknown> = {
       sub: user.id,
       username: user.username,
@@ -131,7 +132,7 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  private sanitize(user: User) {
+  private sanitize(user: UserAdminEntity) {
     return {
       id: user.id,
       username: user.username,

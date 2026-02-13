@@ -1,29 +1,47 @@
-import { Column, Entity, Index } from 'typeorm';
-import { BaseEntity } from '@app/common';
+import {
+  Entity,
+  Column,
+  PrimaryGeneratedColumn,
+  CreateDateColumn,
+  UpdateDateColumn,
+} from 'typeorm';
 import { Roles, Status } from '@app/common';
 
-@Entity({ name: 'users' })
-export class User extends BaseEntity {
-  @Column({ type: 'varchar', length: 100, nullable: true })
-  name!: string | null;
+@Entity({ name: 'admins', schema: 'identity_schema' }) // Schema nomini o'zingizga moslang
+export class UserAdminEntity {
+  @PrimaryGeneratedColumn('uuid')
+  id: string;
 
-  @Index({ unique: true })
-  @Column({ type: 'varchar', length: 50 })
-  username!: string;
+  @Column({ type: 'varchar', length: 100 })
+  name: string;
 
-  @Index({ unique: true })
-  @Column({ type: 'varchar', length: 20, nullable: true })
-  phone_number!: string | null;
+  @Column({ type: 'varchar', length: 20, unique: true })
+  phone_number: string;
 
-  @Column({ type: 'varchar', length: 255 })
-  password!: string;
+  @Column({ type: 'varchar', length: 60, unique: true, nullable: true })
+  username: string | null;
 
-  @Column({ type: 'enum', enum: Roles, default: Roles.CUSTOMER })
-  role!: Roles;
+  @Column({ type: 'varchar', length: 255 }) // Bcrypt hash uchun uzunlik yetarli bo'lishi kerak
+  password: string;
 
-  @Column({ type: 'enum', enum: Status, default: Status.ACTIVE })
-  status!: Status;
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  salary: number;
+
+  @Column({ type: 'int', nullable: true })
+  payment_day: number;
+
+  @CreateDateColumn({ type: 'timestamp with time zone' })
+  createdAt: Date;
+
+  @UpdateDateColumn({ type: 'timestamp with time zone' })
+  updatedAt: Date;
 
   @Column({ type: 'boolean', default: false })
-  is_deleted!: boolean;
+  is_deleted: boolean;
+
+  @Column({ type: 'enum', enum: Roles, default: Roles.ADMIN })
+  role: Roles;
+
+  @Column({ type: 'enum', enum: Status, default: Status.ACTIVE })
+  status: Status;
 }

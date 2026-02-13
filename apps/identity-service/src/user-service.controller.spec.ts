@@ -1,24 +1,38 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { UserServiceController } from './user-service.controller';
+import { IdentityController } from './identity.controller';
 import { UserServiceService } from './user-service.service';
 import { RmqService } from '@app/common';
+import { AuthService } from './auth/auth.service';
 
-describe('UserServiceController', () => {
-  let userServiceController: UserServiceController;
+describe('IdentityController', () => {
+  let identityController: IdentityController;
 
   beforeEach(async () => {
     const app: TestingModule = await Test.createTestingModule({
-      controllers: [UserServiceController],
+      controllers: [IdentityController],
       providers: [
         {
           provide: UserServiceService,
           useValue: {
-            createUser: jest.fn(),
-            updateUser: jest.fn(),
-            deleteUser: jest.fn(),
-            findById: jest.fn(),
-            findByUsername: jest.fn(),
-            findAll: jest.fn(),
+            createAdmin: jest.fn(),
+            updateAdmin: jest.fn(),
+            deleteAdmin: jest.fn(),
+            findAdminById: jest.fn(),
+            findAdminByUsername: jest.fn(),
+            findAllAdmins: jest.fn(),
+            createUserForAuth: jest.fn(),
+            findByPhoneForAuth: jest.fn(),
+            findByUsernameForAuth: jest.fn(),
+            findByIdForAuth: jest.fn(),
+          },
+        },
+        {
+          provide: AuthService,
+          useValue: {
+            register: jest.fn(),
+            login: jest.fn(),
+            refresh: jest.fn(),
+            validateUser: jest.fn(),
           },
         },
         {
@@ -30,10 +44,10 @@ describe('UserServiceController', () => {
       ],
     }).compile();
 
-    userServiceController = app.get<UserServiceController>(UserServiceController);
+    identityController = app.get<IdentityController>(IdentityController);
   });
 
   it('should define controller', () => {
-    expect(userServiceController).toBeDefined();
+    expect(identityController).toBeDefined();
   });
 });

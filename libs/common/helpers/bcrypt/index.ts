@@ -1,13 +1,12 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import * as bcrypt from 'bcrypt';
 
-const SALT_OR_ROUNDS = 10;
-
+const salt_or_rounds = 10;
 @Injectable()
 export class BcryptEncryption {
   async encrypt(password: string) {
     try {
-      return await bcrypt.hash(password, SALT_OR_ROUNDS);
+      return await bcrypt.hash(password, salt_or_rounds);
     } catch (error) {
       throw new BadRequestException(`Error on encrypt: ${error}`);
     }
