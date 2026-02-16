@@ -23,7 +23,7 @@ export class UserServiceService implements OnModuleInit {
   ) {}
 
   private sanitize(user: UserAdminEntity) {
-    const { password, ...safeUser } = user;
+    const { password, refresh_token, ...safeUser } = user;
     return safeUser;
   }
 
@@ -252,10 +252,7 @@ export class UserServiceService implements OnModuleInit {
 
     const qb = this.users
       .createQueryBuilder('admin')
-      .where('admin.is_deleted = :isDeleted', { isDeleted: false })
-      .andWhere('admin.role IN (:...roles)', {
-        roles: [Roles.SUPERADMIN, Roles.ADMIN],
-      });
+      .where('admin.is_deleted = :isDeleted', { isDeleted: false });
 
     if (search) {
       qb.andWhere(

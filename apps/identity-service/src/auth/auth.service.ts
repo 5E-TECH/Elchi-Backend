@@ -48,6 +48,7 @@ export class AuthService {
     const saved = await this.users.save(user);
 
     const tokens = await this.issueTokens(saved);
+    await this.saveRefreshToken(saved.id, tokens.refreshToken);
     return {
       user: this.sanitize(saved),
       ...tokens,
@@ -68,6 +69,7 @@ export class AuthService {
     }
 
     const tokens = await this.issueTokens(user);
+    await this.saveRefreshToken(user.id, tokens.refreshToken);
     return {
       user: this.sanitize(user),
       ...tokens,
@@ -108,11 +110,38 @@ export class AuthService {
       throw new RpcException({ statusCode: 401, message: 'Invalid refresh token' });
     }
 
+    if (!user.refresh_token || user.refresh_token !== dto.refreshToken) {
+      throw new RpcException({ statusCode: 401, message: 'Invalid refresh token' });
+    }
+
     const tokens = await this.issueTokens(user);
+    await this.saveRefreshToken(user.id, tokens.refreshToken);
     return {
       user: this.sanitize(user),
       ...tokens,
     };
+  }
+
+  async logout(userId: string) {
+    const user = await this.users.findOne({
+      where: { id: userId, is_deleted: false, status: Status.ACTIVE },
+    });
+
+    if (!user) {
+      throw new RpcException({ statusCode: 401, message: 'User not found' });
+    }
+
+    user.refresh_token = null;
+    await this.users.save(user);
+
+    return {
+      success: true,
+      message: 'Logged out successfully',
+    };
+  }
+
+  private async saveRefreshToken(userId: string, refreshToken: string) {
+    await this.users.update({ id: userId }, { refresh_token: refreshToken });
   }
 
   private async issueTokens(user: UserAdminEntity) {

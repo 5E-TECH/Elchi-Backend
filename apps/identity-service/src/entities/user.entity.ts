@@ -24,6 +24,9 @@ export class UserAdminEntity {
   @Column({ type: 'varchar', length: 255 }) // Bcrypt hash uchun uzunlik yetarli bo'lishi kerak
   password: string;
 
+  @Column({ type: 'varchar', length: 512, nullable: true })
+  refresh_token: string | null;
+
   @Column({
     type: 'decimal',
     precision: 12,
