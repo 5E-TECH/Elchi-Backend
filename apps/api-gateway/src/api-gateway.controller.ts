@@ -92,18 +92,6 @@ export class ApiGatewayController {
     return this.identityClient.send({ cmd: 'identity.user.delete' }, { id });
   }
 
-  @Get('admins/by-username/:username')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get admin by username' })
-  @ApiParam({ name: 'username', description: 'Username' })
-  @ApiOkResponse({ type: SingleEntityResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
-  getAdminByUsername(@Param('username') username: string) {
-    return this.identityClient.send({ cmd: 'identity.user.find_by_username' }, { username });
-  }
-
   @Get('admins/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
@@ -116,18 +104,18 @@ export class ApiGatewayController {
     return this.identityClient.send({ cmd: 'identity.user.find_by_id' }, { id });
   }
 
-  @Get('admins')
+  @Get('users')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'List admins with filtering and pagination' })
+  @ApiOperation({ summary: 'List all users with filtering and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String })
-  @ApiQuery({ name: 'role', required: false, type: String, example: 'admin' })
+  @ApiQuery({ name: 'role', required: false, type: String, example: 'customer' })
   @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({ type: ListEntityResponseDto })
-  getAdmins(
+  getUsers(
     @Query('search') search?: string,
     @Query('role') role?: string,
     @Query('status') status?: string,

@@ -67,9 +67,9 @@ async function bootstrap() {
   });
 
   // AWS va Docker interfeyslari uchun 0.0.0.0 majburiy
-  const port = process.env.PORT || 3004;
+  const port = Number(process.env.PORT || 3004);
   await app.listen(port, '0.0.0.0');
 
-  console.log(`🚀 Gateway is running on: http://13.233.93.197:${port}/api`);
+  console.log(`Gateway is running on: http://localhost:${port}/api`);
 }
 bootstrap();

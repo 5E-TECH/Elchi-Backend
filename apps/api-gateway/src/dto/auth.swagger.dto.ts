@@ -90,3 +90,11 @@ export class AuthErrorResponseDto {
   @ApiProperty({ example: 'Invalid credentials' })
   message!: string;
 }
+
+export class LogoutResponseDto {
+  @ApiProperty({ example: true })
+  success!: boolean;
+
+  @ApiProperty({ example: 'Logged out successfully' })
+  message!: string;
+}

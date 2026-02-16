@@ -75,6 +75,14 @@ export class IdentityController {
     return this.executeAndAck(context, () => this.authService.refresh(data));
   }
 
+  @MessagePattern({ cmd: 'identity.logout' })
+  logout(
+    @Payload() data: { userId: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.authService.logout(data.userId));
+  }
+
   @MessagePattern({ cmd: 'identity.validate' })
   validate(
     @Payload() data: { userId: string },
