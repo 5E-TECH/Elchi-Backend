@@ -24,7 +24,19 @@ export class UserAdminEntity {
   @Column({ type: 'varchar', length: 255 }) // Bcrypt hash uchun uzunlik yetarli bo'lishi kerak
   password: string;
 
-  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  @Column({ type: 'varchar', length: 512, nullable: true })
+  refresh_token: string | null;
+
+  @Column({
+    type: 'decimal',
+    precision: 12,
+    scale: 2,
+    default: 0,
+    transformer: {
+      to: (value: number) => value,
+      from: (value: string | null) => (value === null ? 0 : Number(value)),
+    },
+  })
   salary: number;
 
   @Column({ type: 'int', nullable: true })

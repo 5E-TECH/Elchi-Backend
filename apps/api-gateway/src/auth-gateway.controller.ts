@@ -3,7 +3,6 @@ import { ClientProxy } from '@nestjs/microservices';
 import {
   ApiBearerAuth,
   ApiBody,
-  ApiConflictResponse,
   ApiCreatedResponse,
   ApiOkResponse,
   ApiOperation,
@@ -13,11 +12,11 @@ import {
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import {
   LoginRequestDto,
-  RegisterRequestDto,
   RefreshRequestDto,
   AuthResponseDto,
   ValidateResponseDto,
   AuthErrorResponseDto,
+  LogoutResponseDto,
 } from './dto/auth.swagger.dto';
 
 interface JwtUser {
@@ -30,15 +29,6 @@ interface JwtUser {
 @Controller('auth')
 export class AuthGatewayController {
   constructor(@Inject('IDENTITY') private readonly identityClient: ClientProxy) {}
-
-  @Post('register')
-  @ApiOperation({ summary: 'Register a new user' })
-  @ApiBody({ type: RegisterRequestDto })
-  @ApiCreatedResponse({ type: AuthResponseDto })
-  @ApiConflictResponse({ type: AuthErrorResponseDto })
-  register(@Body() dto: { username: string; phone_number: string; password: string }) {
-    return this.identityClient.send({ cmd: 'identity.register' }, dto);
-  }
 
   @Post('login')
   @ApiOperation({ summary: 'Login with phone number and password' })
@@ -56,6 +46,16 @@ export class AuthGatewayController {
   @ApiUnauthorizedResponse({ type: AuthErrorResponseDto })
   refresh(@Body() dto: { refreshToken: string }) {
     return this.identityClient.send({ cmd: 'identity.refresh' }, dto);
+  }
+
+  @Post('logout')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Logout current user' })
+  @ApiOkResponse({ type: LogoutResponseDto })
+  @ApiUnauthorizedResponse({ type: AuthErrorResponseDto })
+  logout(@Req() req: { user: JwtUser }) {
+    return this.identityClient.send({ cmd: 'identity.logout' }, { userId: req.user.sub });
   }
 
   @Get('validate')

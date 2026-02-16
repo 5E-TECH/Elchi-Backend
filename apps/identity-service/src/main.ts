@@ -9,6 +9,6 @@ async function bootstrap() {
   app.connectMicroservice(rmqService.getOptions('IDENTITY'));
 
   await app.startAllMicroservices();
-  await app.listen(3011);
+  await app.listen(Number(process.env.IDENTITY_PORT || 3011));
 }
 bootstrap();
