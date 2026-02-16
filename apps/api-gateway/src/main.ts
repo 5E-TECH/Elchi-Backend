@@ -8,7 +8,19 @@ import { RpcExceptionFilter, AllExceptionsFilter } from '@app/common';
 async function bootstrap() {
   const app = await NestFactory.create(ApiGatewayModule);
 
-  app.use(helmet());
+  // Helmet konfiguratsiyasini o'zgartiramiz
+  app.use(
+    helmet({
+      contentSecurityPolicy: {
+        directives: {
+          defaultSrc: [`'self'`],
+          styleSrc: [`'self'`, `'unsafe-inline'`],
+          imgSrc: [`'self'`, 'data:', 'validator.swagger.io'],
+          scriptSrc: [`'self'`, `https: 'unsafe-inline'`],
+        },
+      },
+    }),
+  );
 
   app.enableCors({
     origin: true,
@@ -33,8 +45,21 @@ async function bootstrap() {
     .build();
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);
-  SwaggerModule.setup('api', app, document);
 
-  await app.listen(process.env.PORT ?? 2004);
+  // Swagger setup qismiga CDN linklarini qo'shish oq ekranni 100% yo'qotadi
+  SwaggerModule.setup('api', app, document, {
+    customJs: [
+      'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-bundle.min.js',
+      'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-standalone-preset.min.js',
+    ],
+    customCssUrl: [
+      'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui.min.css',
+    ],
+  });
+
+  // 0.0.0.0 qo'shish AWS da tashqi dunyo bilan ishlash uchun juda muhim
+  const port = process.env.PORT || 3004;
+  await app.listen(port, '0.0.0.0');
+  console.log(`Gateway is running on: http://13.233.93.197:${port}/api`);
 }
 bootstrap();
