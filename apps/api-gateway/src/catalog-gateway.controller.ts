@@ -41,7 +41,7 @@ interface JwtUser {
 }
 
 @ApiTags('Products')
-@Controller('api/v1/product')
+@Controller('product')
 export class CatalogGatewayController {
   constructor(@Inject('CATALOG') private readonly catalogClient: ClientProxy) {}
 
