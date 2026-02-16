@@ -122,7 +122,7 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List admins with filtering and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String })
-  @ApiQuery({ name: 'role', required: false, type: String, example: 'customer' })
+  @ApiQuery({ name: 'role', required: false, type: String, example: 'admin' })
   @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })

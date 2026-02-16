@@ -1,7 +1,7 @@
 import { Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { Brackets, Repository } from 'typeorm';
+import { Brackets, In, Repository } from 'typeorm';
 import { RpcException } from '@nestjs/microservices';
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import { UserAdminEntity } from './entities/user.entity';
@@ -31,8 +31,20 @@ export class UserServiceService implements OnModuleInit {
     throw new RpcException({ statusCode: 404, message });
   }
 
+  private badRequest(message: string): never {
+    throw new RpcException({ statusCode: 400, message });
+  }
+
   private conflict(message: string): never {
     throw new RpcException({ statusCode: 409, message });
+  }
+
+  private readonly adminRoles: Roles[] = [Roles.SUPERADMIN, Roles.ADMIN];
+
+  private ensureRoleIsAdmin(role: Roles) {
+    if (!this.adminRoles.includes(role)) {
+      this.badRequest('Admin endpoint orqali faqat admin yoki superadmin roli berilishi mumkin');
+    }
   }
 
   private normalizeQuery(query: UserFilterQuery = {}) {
@@ -86,7 +98,7 @@ export class UserServiceService implements OnModuleInit {
 
     try {
       const isSuperAdmin = await this.users.findOne({
-        where: { role: Roles.SUPERADMIN },
+        where: { role: Roles.SUPERADMIN, is_deleted: false },
       });
 
       if (!isSuperAdmin) {
@@ -137,7 +149,7 @@ export class UserServiceService implements OnModuleInit {
 
   async updateAdmin(id: string, dto: UpdateUserDto) {
     const admin = await this.users.findOne({
-      where: { id, is_deleted: false },
+      where: { id, is_deleted: false, role: In(this.adminRoles) },
     });
 
     if (!admin) {
@@ -146,7 +158,13 @@ export class UserServiceService implements OnModuleInit {
 
     if (dto.phone_number && dto.phone_number !== admin.phone_number) {
       await this.ensurePhoneUnique(dto.phone_number, id);
+      if (!dto.username) {
+        await this.ensureUsernameUnique(dto.phone_number, id);
+      }
       admin.phone_number = dto.phone_number;
+      if (!dto.username) {
+        admin.username = dto.phone_number;
+      }
     }
 
     if (dto.username && dto.username !== admin.username) {
@@ -163,6 +181,7 @@ export class UserServiceService implements OnModuleInit {
     }
 
     if (dto.role) {
+      this.ensureRoleIsAdmin(dto.role);
       admin.role = dto.role;
     }
 
@@ -179,7 +198,9 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async deleteAdmin(id: string) {
-    const admin = await this.users.findOne({ where: { id, is_deleted: false } });
+    const admin = await this.users.findOne({
+      where: { id, is_deleted: false, role: In(this.adminRoles) },
+    });
     if (!admin) {
       this.notFound('Admin topilmadi');
     }
@@ -199,7 +220,9 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async findAdminById(id: string) {
-    const admin = await this.users.findOne({ where: { id, is_deleted: false } });
+    const admin = await this.users.findOne({
+      where: { id, is_deleted: false, role: In(this.adminRoles) },
+    });
     if (!admin) {
       this.notFound('Admin topilmadi');
     }
@@ -212,7 +235,7 @@ export class UserServiceService implements OnModuleInit {
 
   async findAdminByUsername(username: string) {
     const admin = await this.users.findOne({
-      where: { username, is_deleted: false },
+      where: { username, is_deleted: false, role: In(this.adminRoles) },
     });
     if (!admin) {
       this.notFound('Admin topilmadi');
