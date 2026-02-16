@@ -8,9 +8,12 @@ import { RpcExceptionFilter, AllExceptionsFilter } from '@app/common';
 async function bootstrap() {
   const app = await NestFactory.create(ApiGatewayModule);
 
-  // Helmet konfiguratsiyasini Swagger va CDN uchun to'g'irlaymiz
+  // Helmet-ni HTTP uchun moslaymiz
   app.use(
     helmet({
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      // HTTPS-ga majburlashni butunlay o'chiramiz
+      hsts: false,
       contentSecurityPolicy: {
         directives: {
           defaultSrc: [`'self'`],
@@ -26,6 +29,7 @@ async function bootstrap() {
             `'unsafe-eval'`,
             'https://cdnjs.cloudflare.com',
           ],
+          upgradeInsecureRequests: null, // HTTP -> HTTPS avtomatik o'tkazishni o'chirish
         },
       },
     }),
@@ -55,7 +59,7 @@ async function bootstrap() {
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);
 
-  // Swagger setup - CDN linklar orqali statik fayllarni yuklaymiz
+  // Swagger Setup
   SwaggerModule.setup('api', app, document, {
     customJs: [
       'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-bundle.min.js',
@@ -66,10 +70,8 @@ async function bootstrap() {
     ],
   });
 
-  // AWS va Docker interfeyslari uchun 0.0.0.0 majburiy
   const port = process.env.PORT || 3004;
   await app.listen(port, '0.0.0.0');
-
   console.log(`🚀 Gateway is running on: http://13.233.93.197:${port}/api`);
 }
 bootstrap();
