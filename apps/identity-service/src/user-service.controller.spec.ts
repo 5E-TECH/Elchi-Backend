@@ -18,7 +18,6 @@ describe('IdentityController', () => {
             updateAdmin: jest.fn(),
             deleteAdmin: jest.fn(),
             findAdminById: jest.fn(),
-            findAdminByUsername: jest.fn(),
             findAllAdmins: jest.fn(),
             createUserForAuth: jest.fn(),
             findByPhoneForAuth: jest.fn(),
@@ -29,7 +28,6 @@ describe('IdentityController', () => {
         {
           provide: AuthService,
           useValue: {
-            register: jest.fn(),
             login: jest.fn(),
             refresh: jest.fn(),
             validateUser: jest.fn(),

@@ -7,7 +7,6 @@ import { Repository } from 'typeorm';
 import type { StringValue } from 'ms';
 import { UserAdminEntity } from '../entities/user.entity';
 import { BcryptEncryption } from '../../../../libs/common/helpers/bcrypt';
-import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { Roles, Status } from '@app/common';
@@ -21,39 +20,6 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly bcryptEncryption: BcryptEncryption,
   ) {}
-
-  async register(dto: RegisterDto) {
-    const existing = await this.users.findOne({
-      where: { username: dto.username, is_deleted: false, status: Status.ACTIVE },
-    });
-    if (existing) {
-      throw new RpcException({ statusCode: 409, message: 'Username already taken' });
-    }
-
-    const existingByPhone = await this.users.findOne({
-      where: { phone_number: dto.phone_number, is_deleted: false, status: Status.ACTIVE },
-    });
-    if (existingByPhone) {
-      throw new RpcException({ statusCode: 409, message: 'Phone number already taken' });
-    }
-
-    const user = this.users.create({
-      username: dto.username,
-      phone_number: dto.phone_number,
-      password: await this.bcryptEncryption.encrypt(dto.password),
-      role: Roles.CUSTOMER,
-      status: Status.ACTIVE,
-      is_deleted: false,
-    });
-    const saved = await this.users.save(user);
-
-    const tokens = await this.issueTokens(saved);
-    await this.saveRefreshToken(saved.id, tokens.refreshToken);
-    return {
-      user: this.sanitize(saved),
-      ...tokens,
-    };
-  }
 
   async login(dto: LoginDto) {
     const user = await this.users.findOne({

@@ -233,20 +233,6 @@ export class UserServiceService implements OnModuleInit {
     };
   }
 
-  async findAdminByUsername(username: string) {
-    const admin = await this.users.findOne({
-      where: { username, is_deleted: false, role: In(this.adminRoles) },
-    });
-    if (!admin) {
-      this.notFound('Admin topilmadi');
-    }
-
-    return {
-      success: true,
-      data: this.sanitize(admin),
-    };
-  }
-
   async findAllAdmins(query: UserFilterQuery = {}) {
     const { search, role, status, page, limit, skip } = this.normalizeQuery(query);
 
