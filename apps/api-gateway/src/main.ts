@@ -8,15 +8,24 @@ import { RpcExceptionFilter, AllExceptionsFilter } from '@app/common';
 async function bootstrap() {
   const app = await NestFactory.create(ApiGatewayModule);
 
-  // Helmet konfiguratsiyasini o'zgartiramiz
+  // Helmet konfiguratsiyasini Swagger va CDN uchun to'g'irlaymiz
   app.use(
     helmet({
       contentSecurityPolicy: {
         directives: {
           defaultSrc: [`'self'`],
-          styleSrc: [`'self'`, `'unsafe-inline'`],
+          styleSrc: [
+            `'self'`,
+            `'unsafe-inline'`,
+            'https://cdnjs.cloudflare.com',
+          ],
           imgSrc: [`'self'`, 'data:', 'validator.swagger.io'],
-          scriptSrc: [`'self'`, `https: 'unsafe-inline'`],
+          scriptSrc: [
+            `'self'`,
+            `'unsafe-inline'`,
+            `'unsafe-eval'`,
+            'https://cdnjs.cloudflare.com',
+          ],
         },
       },
     }),
@@ -46,7 +55,7 @@ async function bootstrap() {
 
   const document = SwaggerModule.createDocument(app, swaggerConfig);
 
-  // Swagger setup qismiga CDN linklarini qo'shish oq ekranni 100% yo'qotadi
+  // Swagger setup - CDN linklar orqali statik fayllarni yuklaymiz
   SwaggerModule.setup('api', app, document, {
     customJs: [
       'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-bundle.min.js',
@@ -57,9 +66,10 @@ async function bootstrap() {
     ],
   });
 
-  // 0.0.0.0 qo'shish AWS da tashqi dunyo bilan ishlash uchun juda muhim
+  // AWS va Docker interfeyslari uchun 0.0.0.0 majburiy
   const port = process.env.PORT || 3004;
   await app.listen(port, '0.0.0.0');
-  console.log(`Gateway is running on: http://13.233.93.197:${port}/api`);
+
+  console.log(`🚀 Gateway is running on: http://13.233.93.197:${port}/api`);
 }
 bootstrap();
