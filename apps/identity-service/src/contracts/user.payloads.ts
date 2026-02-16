@@ -18,10 +18,6 @@ export interface FindUserByIdPayload {
   id: string;
 }
 
-export interface FindUserByUsernamePayload {
-  username: string;
-}
-
 export interface UserFilterQuery {
   search?: string;
   role?: string;

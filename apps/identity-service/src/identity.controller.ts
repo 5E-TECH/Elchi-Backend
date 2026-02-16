@@ -8,7 +8,6 @@ import type {
   DeleteUserPayload,
   FindAllUsersPayload,
   FindUserByIdPayload,
-  FindUserByUsernamePayload,
   UpdateUserPayload,
 } from './contracts/user.payloads';
 import type {
@@ -50,14 +49,6 @@ export class IdentityController {
   }
 
   // ==================== Auth ====================
-
-  @MessagePattern({ cmd: 'identity.register' })
-  register(
-    @Payload() data: { username: string; phone_number: string; password: string },
-    @Ctx() context: RmqContext,
-  ) {
-    return this.executeAndAck(context, () => this.authService.register(data));
-  }
 
   @MessagePattern({ cmd: 'identity.login' })
   login(
@@ -116,16 +107,6 @@ export class IdentityController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () => this.userService.findAdminById(payload.id));
-  }
-
-  @MessagePattern({ cmd: 'identity.user.find_by_username' })
-  getAdminByUsername(
-    @Payload() payload: FindUserByUsernamePayload,
-    @Ctx() context: RmqContext,
-  ) {
-    return this.executeAndAck(context, () =>
-      this.userService.findAdminByUsername(payload.username),
-    );
   }
 
   @MessagePattern({ cmd: 'identity.user.find_all' })
