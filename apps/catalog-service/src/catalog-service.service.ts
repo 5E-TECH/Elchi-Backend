@@ -84,7 +84,7 @@ export class CatalogServiceService {
       this.handleDbError(error);
     }
 
-    await this.syncProductToSearch(saved);
+    void this.syncProductToSearch(saved);
     return saved;
   }
 
@@ -150,7 +150,7 @@ export class CatalogServiceService {
       this.handleDbError(error);
     }
 
-    await this.syncProductToSearch(saved);
+    void this.syncProductToSearch(saved);
     return saved;
   }
 
@@ -172,7 +172,7 @@ export class CatalogServiceService {
       this.handleDbError(error);
     }
 
-    await this.syncProductToSearch(saved);
+    void this.syncProductToSearch(saved);
     return saved;
   }
 
@@ -185,7 +185,7 @@ export class CatalogServiceService {
 
     product.isDeleted = true;
     await this.productRepo.save(product);
-    await this.removeProductFromSearch(id);
+    void this.removeProductFromSearch(id);
     return { message: `Product #${id} o'chirildi` };
   }
 }

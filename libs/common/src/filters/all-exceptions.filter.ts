@@ -12,7 +12,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost) {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
-    const status =
+    let status =
       exception instanceof HttpException
         ? exception.getStatus()
         : HttpStatus.INTERNAL_SERVER_ERROR;
@@ -30,6 +30,27 @@ export class AllExceptionsFilter implements ExceptionFilter {
         } else if (typeof msg === 'string') {
           message = msg;
         }
+      }
+    } else if (typeof exception === 'object' && exception !== null) {
+      const obj = exception as Record<string, unknown>;
+      const nestedResponse =
+        typeof obj.response === 'object' && obj.response !== null
+          ? (obj.response as Record<string, unknown>)
+          : undefined;
+
+      status =
+        (typeof obj.statusCode === 'number' && obj.statusCode) ||
+        (typeof obj.status === 'number' && obj.status) ||
+        (typeof nestedResponse?.statusCode === 'number' && nestedResponse.statusCode) ||
+        status;
+
+      const objMessage =
+        obj.message ?? nestedResponse?.message ?? obj.error ?? nestedResponse?.error;
+
+      if (Array.isArray(objMessage)) {
+        message = objMessage.join('. ');
+      } else if (typeof objMessage === 'string' && objMessage.trim()) {
+        message = objMessage;
       }
     } else if (exception instanceof Error) {
       const msg = exception.message || '';
