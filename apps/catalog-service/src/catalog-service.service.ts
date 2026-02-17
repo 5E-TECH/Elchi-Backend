@@ -25,6 +25,19 @@ export class CatalogServiceService {
     throw new RpcException({ statusCode: 409, message });
   }
 
+  private handleDbError(error: unknown): never {
+    if (error instanceof QueryFailedError) {
+      const pgError = error.driverError as { code?: string };
+      if (pgError?.code === '22P02') {
+        throw new RpcException({ statusCode: 400, message: 'ID format noto‘g‘ri' });
+      }
+      if (pgError?.code === '23505') {
+        this.conflict('Bu marketda bu nomdagi product allaqachon mavjud');
+      }
+    }
+    throw error;
+  }
+
   private async syncProductToSearch(product: Product) {
     try {
       await lastValueFrom(
@@ -68,13 +81,7 @@ export class CatalogServiceService {
     try {
       saved = await this.productRepo.save(product);
     } catch (error) {
-      if (error instanceof QueryFailedError) {
-        const pgError = error.driverError as { code?: string };
-        if (pgError?.code === '23505') {
-          this.conflict('Bu marketda bu nomdagi product allaqachon mavjud');
-        }
-      }
-      throw error;
+      this.handleDbError(error);
     }
 
     await this.syncProductToSearch(saved);
@@ -105,14 +112,25 @@ export class CatalogServiceService {
       .skip((page - 1) * limit)
       .take(limit);
 
-    const [data, total] = await qb.getManyAndCount();
+    let data: Product[];
+    let total: number;
+    try {
+      [data, total] = await qb.getManyAndCount();
+    } catch (error) {
+      this.handleDbError(error);
+    }
     return { data, total, page, limit };
   }
 
   async findById(id: string) {
-    const product = await this.productRepo.findOne({
-      where: { id, isDeleted: false },
-    });
+    let product: Product | null;
+    try {
+      product = await this.productRepo.findOne({
+        where: { id, isDeleted: false },
+      });
+    } catch (error) {
+      this.handleDbError(error);
+    }
     if (!product) {
       this.notFound(`Product #${id} topilmadi`);
     }
@@ -129,13 +147,7 @@ export class CatalogServiceService {
     try {
       saved = await this.productRepo.save(product);
     } catch (error) {
-      if (error instanceof QueryFailedError) {
-        const pgError = error.driverError as { code?: string };
-        if (pgError?.code === '23505') {
-          this.conflict('Bu marketda bu nomdagi product allaqachon mavjud');
-        }
-      }
-      throw error;
+      this.handleDbError(error);
     }
 
     await this.syncProductToSearch(saved);
@@ -157,13 +169,7 @@ export class CatalogServiceService {
     try {
       saved = await this.productRepo.save(product);
     } catch (error) {
-      if (error instanceof QueryFailedError) {
-        const pgError = error.driverError as { code?: string };
-        if (pgError?.code === '23505') {
-          this.conflict('Bu marketda bu nomdagi product allaqachon mavjud');
-        }
-      }
-      throw error;
+      this.handleDbError(error);
     }
 
     await this.syncProductToSearch(saved);
