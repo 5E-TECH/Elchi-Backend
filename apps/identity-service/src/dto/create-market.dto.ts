@@ -1,12 +1,14 @@
 import {
+  IsBoolean,
   IsEnum,
   IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
   Min,
+  MinLength,
 } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Where_deliver } from '../../../../libs/common/enums';
 
 export class CreateMarketDto {
@@ -19,6 +21,12 @@ export class CreateMarketDto {
   @IsNotEmpty()
   @IsString()
   phone_number: string;
+
+  @ApiPropertyOptional({ example: 'market_01' })
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
+  username?: string;
 
   @ApiProperty({ example: 10000, minimum: 0 })
   @IsNotEmpty()
@@ -43,8 +51,13 @@ export class CreateMarketDto {
   })
   default_tariff: Where_deliver;
 
+  @ApiProperty({ example: false })
+  @IsBoolean()
+  add_order: boolean;
+
   @ApiProperty({ example: 'secret123' })
   @IsNotEmpty()
   @IsString()
+  @MinLength(4)
   password: string;
 }

@@ -219,18 +219,22 @@ export class UserServiceService implements OnModuleInit {
     };
   }
 
-  async findAdminById(id: string) {
-    const admin = await this.users.findOne({
-      where: { id, is_deleted: false, role: In(this.adminRoles) },
+  async findUserById(id: string) {
+    const user = await this.users.findOne({
+      where: { id, is_deleted: false },
     });
-    if (!admin) {
-      this.notFound('Admin topilmadi');
+    if (!user) {
+      this.notFound('User topilmadi');
     }
 
     return {
       success: true,
-      data: this.sanitize(admin),
+      data: this.sanitize(user),
     };
+  }
+
+  async findAdminById(id: string) {
+    return this.findUserById(id);
   }
 
   async findAllAdmins(query: UserFilterQuery = {}) {
@@ -296,6 +300,7 @@ export class UserServiceService implements OnModuleInit {
       status: Status.ACTIVE,
       tariff_home: dto.tariff_home,
       tariff_center: dto.tariff_center,
+      add_order: dto.add_order,
       default_tariff: dto.default_tariff,
       is_deleted: false,
     });
@@ -347,6 +352,10 @@ export class UserServiceService implements OnModuleInit {
       market.default_tariff = dto.default_tariff;
     }
 
+    if (typeof dto.add_order !== 'undefined') {
+      market.add_order = dto.add_order;
+    }
+
     const saved = await this.users.save(market);
     return {
       success: true,
@@ -378,17 +387,7 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async findMarketById(id: string) {
-    const market = await this.users.findOne({
-      where: { id, role: Roles.MARKET, is_deleted: false },
-    });
-    if (!market) {
-      this.notFound('Market topilmadi');
-    }
-
-    return {
-      success: true,
-      data: this.sanitize(market),
-    };
+    return this.findUserById(id);
   }
 
   async findAllMarkets(query: UserFilterQuery = {}) {
@@ -431,6 +430,25 @@ export class UserServiceService implements OnModuleInit {
           totalPages: Math.max(1, Math.ceil(total / limit)),
         },
       },
+    };
+  }
+
+  async setUserStatus(id: string, status: Status) {
+    const user = await this.users.findOne({
+      where: { id, is_deleted: false },
+    });
+
+    if (!user) {
+      this.notFound('User topilmadi');
+    }
+
+    user.status = status;
+    const saved = await this.users.save(user);
+
+    return {
+      success: true,
+      message: 'User status yangilandi',
+      data: this.sanitize(saved),
     };
   }
 

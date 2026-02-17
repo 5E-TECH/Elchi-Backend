@@ -37,7 +37,9 @@ import {
   ListEntityResponseDto,
   SingleEntityResponseDto,
   UpdateAdminRequestDto,
+  UpdateMarketAddOrderRequestDto,
   UpdateMarketRequestDto,
+  UpdateUserStatusRequestDto,
 } from './dto/identity.swagger.dto';
 
 @ApiTags('Identity')
@@ -92,18 +94,6 @@ export class ApiGatewayController {
     return this.identityClient.send({ cmd: 'identity.user.delete' }, { id });
   }
 
-  @Get('admins/:id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get admin by id' })
-  @ApiParam({ name: 'id', description: 'Admin ID (uuid)' })
-  @ApiOkResponse({ type: SingleEntityResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
-  getAdminById(@Param('id') id: string) {
-    return this.identityClient.send({ cmd: 'identity.user.find_by_id' }, { id });
-  }
-
   @Get('users')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
@@ -136,6 +126,34 @@ export class ApiGatewayController {
     );
   }
 
+  @Get('users/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get user by id (all roles)' })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiOkResponse({ type: SingleEntityResponseDto })
+  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  getUserById(@Param('id') id: string) {
+    return this.identityClient.send({ cmd: 'identity.user.find_by_id' }, { id });
+  }
+
+  @Patch('users/:id/status')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Set user status (active/inactive)' })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiBody({ type: UpdateUserStatusRequestDto })
+  @ApiOkResponse({ type: SingleEntityResponseDto })
+  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  updateUserStatus(
+    @Param('id') id: string,
+    @Body() dto: UpdateUserStatusRequestDto,
+  ) {
+    return this.identityClient.send({ cmd: 'identity.user.status' }, { id, status: dto.status });
+  }
+
   @Post('markets')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
@@ -155,6 +173,7 @@ export class ApiGatewayController {
           tariff_home: dto.tariff_home ?? dto.tariffHome,
           tariff_center: dto.tariff_center ?? dto.tariffCenter,
           default_tariff: dto.default_tariff ?? dto.defaultTariff,
+          add_order: dto.add_order,
         },
       },
     );
@@ -183,8 +202,28 @@ export class ApiGatewayController {
           tariff_home: dto.tariff_home ?? dto.tariffHome,
           tariff_center: dto.tariff_center ?? dto.tariffCenter,
           default_tariff: dto.default_tariff ?? dto.defaultTariff,
+          add_order: dto.add_order,
         },
       },
+    );
+  }
+
+  @Patch('markets/:id/add-order')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Toggle market add_order flag' })
+  @ApiParam({ name: 'id', description: 'Market ID' })
+  @ApiBody({ type: UpdateMarketAddOrderRequestDto })
+  @ApiOkResponse({ type: SingleEntityResponseDto })
+  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  updateMarketAddOrder(
+    @Param('id') id: string,
+    @Body() dto: UpdateMarketAddOrderRequestDto,
+  ) {
+    return this.identityClient.send(
+      { cmd: 'identity.market.update' },
+      { id, dto: { add_order: dto.add_order } },
     );
   }
 
@@ -198,18 +237,6 @@ export class ApiGatewayController {
   @ApiNotFoundResponse({ type: ErrorResponseDto })
   deleteMarket(@Param('id') id: string) {
     return this.identityClient.send({ cmd: 'identity.market.delete' }, { id });
-  }
-
-  @Get('markets/:id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get market by id' })
-  @ApiParam({ name: 'id', description: 'Market ID (uuid)' })
-  @ApiOkResponse({ type: SingleEntityResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
-  getMarketById(@Param('id') id: string) {
-    return this.identityClient.send({ cmd: 'identity.market.find_by_id' }, { id });
   }
 
   @Get('markets')

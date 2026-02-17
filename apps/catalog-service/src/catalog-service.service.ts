@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import { lastValueFrom } from 'rxjs';
+import { lastValueFrom, timeout } from 'rxjs';
 import { QueryFailedError, Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
 
@@ -42,7 +42,7 @@ export class CatalogServiceService {
               image_url: product.image_url,
             },
           },
-        ),
+        ).pipe(timeout(1500)),
       );
     } catch {
       // Search index sync should not block product flows.
@@ -55,7 +55,7 @@ export class CatalogServiceService {
         this.searchClient.send(
           { cmd: 'search.index.remove' },
           { source: 'catalog', type: 'product', sourceId: id },
-        ),
+        ).pipe(timeout(1500)),
       );
     } catch {
       // Search index sync should not block product flows.

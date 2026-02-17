@@ -63,6 +63,9 @@ export class UserAdminEntity {
   @Column({ type: 'int', nullable: true })
   tariff_center: number | null;
 
+  @Column({ type: 'boolean', default: false })
+  add_order: boolean;
+
   @Column({
     type: 'enum',
     enum: Where_deliver,

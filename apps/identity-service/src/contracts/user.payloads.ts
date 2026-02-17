@@ -1,5 +1,6 @@
 import { CreateAdminDto } from '../dto/create-admin.dto';
 import { UpdateUserDto } from '../dto/update-user.dto';
+import { Status } from '@app/common';
 
 export interface CreateUserPayload {
   dto: CreateAdminDto;
@@ -28,4 +29,9 @@ export interface UserFilterQuery {
 
 export interface FindAllUsersPayload {
   query?: UserFilterQuery;
+}
+
+export interface UpdateUserStatusPayload {
+  id: string;
+  status: Status;
 }
