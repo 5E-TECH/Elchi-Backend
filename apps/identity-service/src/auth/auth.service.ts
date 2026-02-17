@@ -23,9 +23,12 @@ export class AuthService {
 
   async login(dto: LoginDto) {
     const user = await this.users.findOne({
-      where: { phone_number: dto.phone_number, is_deleted: false, status: Status.ACTIVE },
+      where: { phone_number: dto.phone_number, is_deleted: false },
     });
     if (!user) {
+      throw new RpcException({ statusCode: 401, message: 'Invalid credentials' });
+    }
+    if (user.status !== Status.ACTIVE) {
       throw new RpcException({ statusCode: 401, message: 'Invalid credentials' });
     }
 
@@ -44,9 +47,12 @@ export class AuthService {
 
   async validateUser(userId: string) {
     const user = await this.users.findOne({
-      where: { id: userId, is_deleted: false, status: Status.ACTIVE },
+      where: { id: userId, is_deleted: false },
     });
     if (!user) {
+      throw new RpcException({ statusCode: 401, message: 'User not found' });
+    }
+    if (user.status !== Status.ACTIVE) {
       throw new RpcException({ statusCode: 401, message: 'User not found' });
     }
 
@@ -70,9 +76,9 @@ export class AuthService {
     }
 
     const user = await this.users.findOne({
-      where: { id: payload.sub, is_deleted: false, status: Status.ACTIVE },
+      where: { id: payload.sub, is_deleted: false },
     });
-    if (!user || user.username !== payload.username) {
+    if (!user || user.username !== payload.username || user.status !== Status.ACTIVE) {
       throw new RpcException({ statusCode: 401, message: 'Invalid refresh token' });
     }
 
@@ -90,7 +96,7 @@ export class AuthService {
 
   async logout(userId: string) {
     const user = await this.users.findOne({
-      where: { id: userId, is_deleted: false, status: Status.ACTIVE },
+      where: { id: userId, is_deleted: false },
     });
 
     if (!user) {
