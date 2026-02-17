@@ -25,7 +25,7 @@ export class CreateUserRequestDto {
 
   @ApiProperty({ example: '123456' })
   @IsString()
-  @MinLength(6)
+  @MinLength(4)
   password!: string;
 
   @ApiPropertyOptional({ example: 'customer' })
@@ -59,7 +59,7 @@ export class UpdateUserRequestDto {
   @ApiPropertyOptional({ example: '654321' })
   @IsOptional()
   @IsString()
-  @MinLength(6)
+  @MinLength(4)
   password?: string;
 
   @ApiPropertyOptional({ example: 'admin' })

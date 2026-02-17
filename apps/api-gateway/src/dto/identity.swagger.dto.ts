@@ -5,6 +5,7 @@ import {
   IsOptional,
   IsPhoneNumber,
   IsString,
+  IsBoolean,
   Max,
   Min,
   MinLength,
@@ -20,9 +21,15 @@ export class CreateAdminRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
+  @ApiPropertyOptional({ example: 'admin_01' })
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
+  username?: string;
+
   @ApiProperty({ example: 'strongPassword123' })
   @IsString()
-  @MinLength(6)
+  @MinLength(4)
   password!: string;
 
   @ApiProperty({ example: 3000000 })
@@ -50,10 +57,16 @@ export class UpdateAdminRequestDto {
   @IsPhoneNumber('UZ')
   phone_number?: string;
 
+  @ApiPropertyOptional({ example: 'admin_01' })
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
+  username?: string;
+
   @ApiPropertyOptional({ example: 'newStrongPassword123' })
   @IsOptional()
   @IsString()
-  @MinLength(6)
+  @MinLength(4)
   password?: string;
 
   @ApiPropertyOptional({ example: 'admin' })
@@ -77,9 +90,15 @@ export class CreateMarketRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
+  @ApiPropertyOptional({ example: 'market_01' })
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
+  username?: string;
+
   @ApiProperty({ example: 'secret123' })
   @IsString()
-  @MinLength(6)
+  @MinLength(4)
   password!: string;
 
   @ApiProperty({ example: 10000 })
@@ -95,6 +114,10 @@ export class CreateMarketRequestDto {
   @ApiProperty({ example: 'center', enum: ['center', 'address'] })
   @IsEnum(['center', 'address'])
   default_tariff!: string;
+
+  @ApiProperty({ example: false })
+  @IsBoolean()
+  add_order!: boolean;
 
   // Compatibility aliases (ignored in business logic, mapped in gateway)
   @ApiPropertyOptional({ example: 10000, description: 'Alias for tariff_home' })
@@ -147,16 +170,27 @@ export class UpdateMarketRequestDto {
   @IsPhoneNumber('UZ')
   phone_number?: string;
 
+  @ApiPropertyOptional({ example: 'market_01' })
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
+  username?: string;
+
   @ApiPropertyOptional({ example: 'newSecret123' })
   @IsOptional()
   @IsString()
-  @MinLength(6)
+  @MinLength(4)
   password?: string;
 
   @ApiPropertyOptional({ example: 'active' })
   @IsOptional()
   @IsEnum(['active', 'inactive'])
   status?: string;
+
+  @ApiPropertyOptional({ example: false })
+  @IsOptional()
+  @IsBoolean()
+  add_order?: boolean;
 
   @ApiPropertyOptional({ example: 11000 })
   @IsOptional()
@@ -193,6 +227,18 @@ export class UpdateMarketRequestDto {
   defaultTariff?: string;
 }
 
+export class UpdateMarketAddOrderRequestDto {
+  @ApiProperty({ example: true })
+  @IsBoolean()
+  add_order!: boolean;
+}
+
+export class UpdateUserStatusRequestDto {
+  @ApiProperty({ example: 'active', enum: ['active', 'inactive'] })
+  @IsEnum(['active', 'inactive'])
+  status!: string;
+}
+
 export class EntityItemDto {
   @ApiProperty({ example: '10a142dd-df52-418e-bf3b-fe8fbf1b77f5' })
   id!: string;
@@ -223,6 +269,9 @@ export class EntityItemDto {
 
   @ApiPropertyOptional({ example: 'center' })
   default_tariff?: string;
+
+  @ApiPropertyOptional({ example: false })
+  add_order?: boolean;
 }
 
 export class SingleEntityResponseDto {

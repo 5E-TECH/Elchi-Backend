@@ -8,6 +8,7 @@ import type {
   DeleteUserPayload,
   FindAllUsersPayload,
   FindUserByIdPayload,
+  UpdateUserStatusPayload,
   UpdateUserPayload,
 } from './contracts/user.payloads';
 import type {
@@ -52,7 +53,7 @@ export class IdentityController {
 
   @MessagePattern({ cmd: 'identity.login' })
   login(
-    @Payload() data: { phone_number: string; password: string },
+    @Payload() data: { username?: string; phone_number?: string; password: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () => this.authService.login(data));
@@ -106,12 +107,22 @@ export class IdentityController {
     @Payload() payload: FindUserByIdPayload,
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.userService.findAdminById(payload.id));
+    return this.executeAndAck(context, () => this.userService.findUserById(payload.id));
   }
 
   @MessagePattern({ cmd: 'identity.user.find_all' })
   getAdmins(@Payload() payload: FindAllUsersPayload, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.userService.findAllAdmins(payload?.query));
+  }
+
+  @MessagePattern({ cmd: 'identity.user.status' })
+  updateUserStatus(
+    @Payload() payload: UpdateUserStatusPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.setUserStatus(payload.id, payload.status),
+    );
   }
 
   // ==================== Market CRUD ====================
@@ -138,7 +149,7 @@ export class IdentityController {
     @Payload() payload: FindMarketByIdPayload,
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.userService.findMarketById(payload.id));
+    return this.executeAndAck(context, () => this.userService.findUserById(payload.id));
   }
 
   @MessagePattern({ cmd: 'identity.market.find_all' })

@@ -9,7 +9,7 @@ import { UserAdminEntity } from '../entities/user.entity';
 import { BcryptEncryption } from '../../../../libs/common/helpers/bcrypt';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
-import { Roles, Status } from '@app/common';
+import { Status } from '@app/common';
 
 @Injectable()
 export class AuthService {
@@ -22,8 +22,19 @@ export class AuthService {
   ) {}
 
   async login(dto: LoginDto) {
+    const identifier = dto.username?.trim() || dto.phone_number?.trim();
+    if (!identifier) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'username yoki phone_number yuborilishi shart',
+      });
+    }
+
     const user = await this.users.findOne({
-      where: { phone_number: dto.phone_number, is_deleted: false, status: Status.ACTIVE },
+      where: [
+        { username: identifier, is_deleted: false, status: Status.ACTIVE },
+        { phone_number: identifier, is_deleted: false, status: Status.ACTIVE },
+      ],
     });
     if (!user) {
       throw new RpcException({ statusCode: 401, message: 'Invalid credentials' });

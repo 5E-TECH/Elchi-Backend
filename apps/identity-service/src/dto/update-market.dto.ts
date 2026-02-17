@@ -1,4 +1,12 @@
-import { IsEnum, IsNumber, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Min,
+  MinLength,
+} from 'class-validator';
 import { Status, Where_deliver } from '@app/common';
 
 export class UpdateMarketDto {
@@ -12,6 +20,7 @@ export class UpdateMarketDto {
 
   @IsOptional()
   @IsString()
+  @MinLength(4)
   password?: string;
 
   @IsOptional()
@@ -31,4 +40,8 @@ export class UpdateMarketDto {
   @IsOptional()
   @IsEnum(Where_deliver)
   default_tariff?: Where_deliver;
+
+  @IsOptional()
+  @IsBoolean()
+  add_order?: boolean;
 }

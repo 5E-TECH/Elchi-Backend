@@ -6,6 +6,7 @@ import {
   IsString,
   Max,
   Min,
+  MinLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
@@ -20,9 +21,16 @@ export class CreateAdminDto {
   @IsPhoneNumber('UZ')
   phone_number: string;
 
+  @ApiPropertyOptional({ example: 'admin_01' })
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
+  username?: string;
+
   @ApiProperty({ example: 'strongPassword123' })
   @IsNotEmpty()
   @IsString()
+  @MinLength(4)
   password: string;
 
   @ApiProperty({ example: 3000000, minimum: 0 })
