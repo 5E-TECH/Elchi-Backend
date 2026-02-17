@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   ForbiddenException,
+  GatewayTimeoutException,
   Get,
   Inject,
   Param,
@@ -16,6 +17,7 @@ import {
 } from '@nestjs/common';
 import { AnyFilesInterceptor } from '@nestjs/platform-express';
 import { ClientProxy } from '@nestjs/microservices';
+import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { Roles as RoleEnum } from '@app/common';
 import {
   ApiBody,
@@ -81,10 +83,19 @@ export class CatalogGatewayController {
       throw new ForbiddenException('You are not allowed to create product');
     }
 
-    return this.catalogClient.send(
-      { cmd: 'catalog.product.create' },
-      { dto: { name: dto.name, image_url: dto.image_url, user_id: marketId } },
-    );
+    return firstValueFrom(
+      this.catalogClient
+        .send(
+          { cmd: 'catalog.product.create' },
+          { dto: { name: dto.name, image_url: dto.image_url, user_id: marketId } },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Catalog service response timeout');
+      }
+      throw error;
+    });
   }
 
   @Get()

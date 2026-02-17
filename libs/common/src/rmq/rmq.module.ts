@@ -19,13 +19,20 @@ export class RmqModule {
         ClientsModule.registerAsync([
           {
             name,
-            useFactory: (configService: ConfigService) => ({
-              transport: Transport.RMQ,
-              options: {
-                urls: [configService.get<string>('RABBITMQ_URI')!],
-                queue: configService.get<string>(`RABBITMQ_${name}_QUEUE`)!,
-              },
-            }),
+            useFactory: (configService: ConfigService) => {
+              const ttl = Number(configService.get<string>('RMQ_RPC_TTL_MS') ?? 10000);
+              return {
+                transport: Transport.RMQ,
+                options: {
+                  urls: [configService.get<string>('RABBITMQ_URI')!],
+                  queue: configService.get<string>(`RABBITMQ_${name}_QUEUE`)!,
+                  queueOptions: {
+                    durable: true,
+                    messageTtl: Number.isFinite(ttl) && ttl > 0 ? ttl : 10000,
+                  },
+                },
+              };
+            },
             inject: [ConfigService],
           },
         ]),
