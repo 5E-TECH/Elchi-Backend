@@ -53,7 +53,7 @@ export class IdentityController {
 
   @MessagePattern({ cmd: 'identity.login' })
   login(
-    @Payload() data: { username?: string; phone_number?: string; password: string },
+    @Payload() data: { phone_number: string; password: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () => this.authService.login(data));

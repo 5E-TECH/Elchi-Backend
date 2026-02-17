@@ -22,19 +22,8 @@ export class AuthService {
   ) {}
 
   async login(dto: LoginDto) {
-    const identifier = dto.username?.trim() || dto.phone_number?.trim();
-    if (!identifier) {
-      throw new RpcException({
-        statusCode: 400,
-        message: 'username yoki phone_number yuborilishi shart',
-      });
-    }
-
     const user = await this.users.findOne({
-      where: [
-        { username: identifier, is_deleted: false, status: Status.ACTIVE },
-        { phone_number: identifier, is_deleted: false, status: Status.ACTIVE },
-      ],
+      where: { phone_number: dto.phone_number, is_deleted: false, status: Status.ACTIVE },
     });
     if (!user) {
       throw new RpcException({ statusCode: 401, message: 'Invalid credentials' });

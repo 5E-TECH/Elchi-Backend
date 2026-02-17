@@ -31,11 +31,11 @@ export class AuthGatewayController {
   constructor(@Inject('IDENTITY') private readonly identityClient: ClientProxy) {}
 
   @Post('login')
-  @ApiOperation({ summary: 'Login with username or phone number and password' })
+  @ApiOperation({ summary: 'Login with phone number and password' })
   @ApiBody({ type: LoginRequestDto })
   @ApiCreatedResponse({ type: AuthResponseDto })
   @ApiUnauthorizedResponse({ type: AuthErrorResponseDto })
-  login(@Body() dto: { username?: string; phone_number?: string; password: string }) {
+  login(@Body() dto: { phone_number: string; password: string }) {
     return this.identityClient.send({ cmd: 'identity.login' }, dto);
   }
 
