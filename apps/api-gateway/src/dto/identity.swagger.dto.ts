@@ -84,6 +84,11 @@ export class CreateMarketRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
+  @ApiProperty({ example: 'market_01' })
+  @IsString()
+  @MinLength(3)
+  username!: string;
+
   @ApiProperty({ example: 'secret123' })
   @IsString()
   @MinLength(4)
@@ -103,9 +108,10 @@ export class CreateMarketRequestDto {
   @IsEnum(['center', 'address'])
   default_tariff!: string;
 
-  @ApiProperty({ example: false })
+  @ApiPropertyOptional({ example: false, default: false })
+  @IsOptional()
   @IsBoolean()
-  add_order!: boolean;
+  add_order?: boolean;
 }
 
 export class UpdateMarketRequestDto {

@@ -285,14 +285,14 @@ export class UserServiceService implements OnModuleInit {
 
   async createMarket(dto: CreateMarketDto) {
     await this.ensurePhoneUnique(dto.phone_number);
-    await this.ensureUsernameUnique(dto.phone_number);
+    await this.ensureUsernameUnique(dto.username);
 
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const market = this.users.create({
       name: dto.name,
       phone_number: dto.phone_number,
-      username: dto.phone_number,
+      username: dto.username,
       password: hashedPassword,
       salary: 0,
       payment_day: undefined,
@@ -300,7 +300,7 @@ export class UserServiceService implements OnModuleInit {
       status: Status.ACTIVE,
       tariff_home: dto.tariff_home,
       tariff_center: dto.tariff_center,
-      add_order: dto.add_order,
+      add_order: dto.add_order ?? false,
       default_tariff: dto.default_tariff,
       is_deleted: false,
     });

@@ -22,11 +22,11 @@ export class CreateMarketDto {
   @IsString()
   phone_number: string;
 
-  @ApiPropertyOptional({ example: 'market_01' })
-  @IsOptional()
+  @ApiProperty({ example: 'market_01' })
+  @IsNotEmpty()
   @IsString()
   @MinLength(3)
-  username?: string;
+  username: string;
 
   @ApiProperty({ example: 10000, minimum: 0 })
   @IsNotEmpty()
@@ -51,9 +51,10 @@ export class CreateMarketDto {
   })
   default_tariff: Where_deliver;
 
-  @ApiProperty({ example: false })
+  @ApiPropertyOptional({ example: false, default: false })
+  @IsOptional()
   @IsBoolean()
-  add_order: boolean;
+  add_order?: boolean;
 
   @ApiProperty({ example: 'secret123' })
   @IsNotEmpty()

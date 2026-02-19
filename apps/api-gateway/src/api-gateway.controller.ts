@@ -169,6 +169,7 @@ export class ApiGatewayController {
         dto: {
           name: dto.name,
           phone_number: dto.phone_number,
+          username: dto.username,
           password: dto.password,
           tariff_home: dto.tariff_home,
           tariff_center: dto.tariff_center,
