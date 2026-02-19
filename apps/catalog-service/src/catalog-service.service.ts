@@ -3,13 +3,17 @@ import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
 import { QueryFailedError, Repository } from 'typeorm';
+import { Roles, Status } from '@app/common';
 import { Product } from './entities/product.entity';
+import { MarketEntity } from './entities/market.entity';
 
 @Injectable()
 export class CatalogServiceService {
   constructor(
     @InjectRepository(Product)
     private readonly productRepo: Repository<Product>,
+    @InjectRepository(MarketEntity)
+    private readonly marketRepo: Repository<MarketEntity>,
     @Inject('SEARCH') private readonly searchClient: ClientProxy,
   ) {}
 
@@ -23,6 +27,26 @@ export class CatalogServiceService {
 
   private conflict(message: string): never {
     throw new RpcException({ statusCode: 409, message });
+  }
+
+  private async ensureMarketExists(marketId: string): Promise<void> {
+    let market: MarketEntity | null;
+    try {
+      market = await this.marketRepo.findOne({
+        where: {
+          id: marketId,
+          role: Roles.MARKET,
+          is_deleted: false,
+          status: Status.ACTIVE,
+        },
+      });
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    if (!market) {
+      this.notFound(`Market #${marketId} topilmadi yoki faol emas`);
+    }
   }
 
   private handleDbError(error: unknown): never {
@@ -76,6 +100,8 @@ export class CatalogServiceService {
   }
 
   async create(dto: { name: string; user_id: string; image_url?: string }) {
+    await this.ensureMarketExists(dto.user_id);
+
     const product = this.productRepo.create(dto);
     let saved: Product;
     try {
@@ -85,7 +111,7 @@ export class CatalogServiceService {
     }
 
     void this.syncProductToSearch(saved);
-    return saved;
+    return this.findById(saved.id);
   }
 
   async findAll(query: {
@@ -98,6 +124,7 @@ export class CatalogServiceService {
 
     const qb = this.productRepo
       .createQueryBuilder('product')
+      .leftJoinAndSelect('product.market', 'market')
       .where('product.isDeleted = :isDeleted', { isDeleted: false });
 
     if (user_id) {
@@ -127,6 +154,7 @@ export class CatalogServiceService {
     try {
       product = await this.productRepo.findOne({
         where: { id, isDeleted: false },
+        relations: { market: true },
       });
     } catch (error) {
       this.handleDbError(error);
@@ -151,7 +179,7 @@ export class CatalogServiceService {
     }
 
     void this.syncProductToSearch(saved);
-    return saved;
+    return this.findById(saved.id);
   }
 
   async updateOwn(
@@ -173,7 +201,7 @@ export class CatalogServiceService {
     }
 
     void this.syncProductToSearch(saved);
-    return saved;
+    return this.findById(saved.id);
   }
 
   async remove(id: string, requester?: { id: string; roles: string[] }) {

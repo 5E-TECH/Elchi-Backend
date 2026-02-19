@@ -1,5 +1,6 @@
-import { Column, Entity, Index } from 'typeorm';
+import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '@app/common';
+import { MarketEntity } from './market.entity';
 
 @Entity({ name: 'products' })
 @Index(['name', 'user_id'], { unique: true })
@@ -11,6 +12,10 @@ export class Product extends BaseEntity {
 
   @Column({ type: 'uuid' })
   user_id!: string;
+
+  @ManyToOne(() => MarketEntity, { nullable: false, onDelete: 'RESTRICT' })
+  @JoinColumn({ name: 'user_id', referencedColumnName: 'id' })
+  market!: MarketEntity;
 
   @Column({ type: 'varchar', nullable: true })
   image_url!: string | null;
