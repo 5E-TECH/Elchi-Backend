@@ -21,12 +21,6 @@ export class CreateAdminRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
-  @ApiPropertyOptional({ example: 'admin_01' })
-  @IsOptional()
-  @IsString()
-  @MinLength(3)
-  username?: string;
-
   @ApiProperty({ example: 'strongPassword123' })
   @IsString()
   @MinLength(4)
@@ -90,12 +84,6 @@ export class CreateMarketRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
-  @ApiPropertyOptional({ example: 'market_01' })
-  @IsOptional()
-  @IsString()
-  @MinLength(3)
-  username?: string;
-
   @ApiProperty({ example: 'secret123' })
   @IsString()
   @MinLength(4)
@@ -118,44 +106,6 @@ export class CreateMarketRequestDto {
   @ApiProperty({ example: false })
   @IsBoolean()
   add_order!: boolean;
-
-  // Compatibility aliases (ignored in business logic, mapped in gateway)
-  @ApiPropertyOptional({ example: 10000, description: 'Alias for tariff_home' })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  tariffHome?: number;
-
-  @ApiPropertyOptional({ example: 8000, description: 'Alias for tariff_center' })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  tariffCenter?: number;
-
-  @ApiPropertyOptional({ example: 'center', enum: ['center', 'address'], description: 'Alias for default_tariff' })
-  @IsOptional()
-  @IsEnum(['center', 'address'])
-  defaultTariff?: string;
-
-  @ApiPropertyOptional({ example: 0, description: 'Ignored for market create' })
-  @IsOptional()
-  @IsNumber()
-  salary?: number;
-
-  @ApiPropertyOptional({ example: 10, description: 'Ignored for market create' })
-  @IsOptional()
-  @IsNumber()
-  payment_day?: number;
-
-  @ApiPropertyOptional({ example: 'market', description: 'Ignored for market create' })
-  @IsOptional()
-  @IsString()
-  role?: string;
-
-  @ApiPropertyOptional({ example: 'active', description: 'Ignored for market create' })
-  @IsOptional()
-  @IsString()
-  status?: string;
 }
 
 export class UpdateMarketRequestDto {
@@ -169,12 +119,6 @@ export class UpdateMarketRequestDto {
   @IsOptional()
   @IsPhoneNumber('UZ')
   phone_number?: string;
-
-  @ApiPropertyOptional({ example: 'market_01' })
-  @IsOptional()
-  @IsString()
-  @MinLength(3)
-  username?: string;
 
   @ApiPropertyOptional({ example: 'newSecret123' })
   @IsOptional()
@@ -208,23 +152,6 @@ export class UpdateMarketRequestDto {
   @IsOptional()
   @IsEnum(['center', 'address'])
   default_tariff?: string;
-
-  @ApiPropertyOptional({ example: 11000, description: 'Alias for tariff_home' })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  tariffHome?: number;
-
-  @ApiPropertyOptional({ example: 9000, description: 'Alias for tariff_center' })
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  tariffCenter?: number;
-
-  @ApiPropertyOptional({ example: 'address', enum: ['center', 'address'], description: 'Alias for default_tariff' })
-  @IsOptional()
-  @IsEnum(['center', 'address'])
-  defaultTariff?: string;
 }
 
 export class UpdateMarketAddOrderRequestDto {
