@@ -1,7 +1,7 @@
 import { Column, Entity, PrimaryGeneratedColumn } from 'typeorm';
 import { Roles, Status } from '@app/common';
 
-@Entity({ name: 'admins', schema: 'identity_schema' })
+@Entity({ name: 'admins', schema: 'identity_schema', synchronize: false })
 export class MarketEntity {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
