@@ -3,12 +3,11 @@ import {
   IsEnum,
   IsNotEmpty,
   IsNumber,
-  IsOptional,
   IsString,
   Min,
   MinLength,
 } from 'class-validator';
-import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { ApiProperty } from '@nestjs/swagger';
 import { Where_deliver } from '../../../../libs/common/enums';
 
 export class CreateMarketDto {
@@ -22,11 +21,11 @@ export class CreateMarketDto {
   @IsString()
   phone_number: string;
 
-  @ApiPropertyOptional({ example: 'market_01' })
-  @IsOptional()
+  @ApiProperty({ example: 'market_01' })
+  @IsNotEmpty()
   @IsString()
   @MinLength(3)
-  username?: string;
+  username: string;
 
   @ApiProperty({ example: 10000, minimum: 0 })
   @IsNotEmpty()

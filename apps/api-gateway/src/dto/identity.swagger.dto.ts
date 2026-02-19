@@ -84,6 +84,11 @@ export class CreateMarketRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
+  @ApiProperty({ example: 'market_01' })
+  @IsString()
+  @MinLength(3)
+  username!: string;
+
   @ApiProperty({ example: 'secret123' })
   @IsString()
   @MinLength(4)
