@@ -108,9 +108,10 @@ export class CreateMarketRequestDto {
   @IsEnum(['center', 'address'])
   default_tariff!: string;
 
-  @ApiProperty({ example: false })
+  @ApiPropertyOptional({ example: false, default: false })
+  @IsOptional()
   @IsBoolean()
-  add_order!: boolean;
+  add_order?: boolean;
 }
 
 export class UpdateMarketRequestDto {

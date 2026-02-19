@@ -300,7 +300,7 @@ export class UserServiceService implements OnModuleInit {
       status: Status.ACTIVE,
       tariff_home: dto.tariff_home,
       tariff_center: dto.tariff_center,
-      add_order: dto.add_order,
+      add_order: dto.add_order ?? false,
       default_tariff: dto.default_tariff,
       is_deleted: false,
     });
