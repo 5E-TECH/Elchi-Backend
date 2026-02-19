@@ -15,7 +15,7 @@ export class Product extends BaseEntity {
 
   @ManyToOne(() => MarketEntity, { nullable: false, onDelete: 'RESTRICT' })
   @JoinColumn({ name: 'user_id', referencedColumnName: 'id' })
-  market!: MarketEntity;
+  market?: MarketEntity | null;
 
   @Column({ type: 'varchar', nullable: true })
   image_url!: string | null;
