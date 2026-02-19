@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
-import { QueryFailedError, Repository } from 'typeorm';
+import { In, QueryFailedError, Repository } from 'typeorm';
 import { Roles, Status } from '@app/common';
 import { Product } from './entities/product.entity';
 import { MarketEntity } from './entities/market.entity';
@@ -99,6 +99,61 @@ export class CatalogServiceService {
     }
   }
 
+  private async attachMarket(product: Product): Promise<Product & { market: MarketEntity | null }> {
+    const market = await this.marketRepo.findOne({
+      where: {
+        id: product.user_id,
+        role: Roles.MARKET,
+        is_deleted: false,
+      },
+    });
+
+    return {
+      ...product,
+      market,
+    };
+  }
+
+  private async attachMarkets(
+    products: Product[],
+  ): Promise<Array<Product & { market: MarketEntity | null }>> {
+    if (products.length === 0) {
+      return [];
+    }
+
+    const marketIds = [...new Set(products.map((p) => p.user_id))];
+    const markets = await this.marketRepo.find({
+      where: {
+        id: In(marketIds),
+        role: Roles.MARKET,
+        is_deleted: false,
+      },
+    });
+    const byId = new Map(markets.map((m) => [m.id, m]));
+
+    return products.map((product) => ({
+      ...product,
+      market: byId.get(product.user_id) ?? null,
+    }));
+  }
+
+  private async findByIdEntity(id: string): Promise<Product> {
+    let product: Product | null;
+    try {
+      product = await this.productRepo.findOne({
+        where: { id, isDeleted: false },
+      });
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    if (!product) {
+      this.notFound(`Product #${id} topilmadi`);
+    }
+
+    return product;
+  }
+
   async create(dto: { name: string; user_id: string; image_url?: string }) {
     await this.ensureMarketExists(dto.user_id);
 
@@ -124,7 +179,6 @@ export class CatalogServiceService {
 
     const qb = this.productRepo
       .createQueryBuilder('product')
-      .leftJoinAndSelect('product.market', 'market')
       .where('product.isDeleted = :isDeleted', { isDeleted: false });
 
     if (user_id) {
@@ -146,30 +200,20 @@ export class CatalogServiceService {
     } catch (error) {
       this.handleDbError(error);
     }
-    return { data, total, page, limit };
+    const enriched = await this.attachMarkets(data);
+    return { data: enriched, total, page, limit };
   }
 
   async findById(id: string) {
-    let product: Product | null;
-    try {
-      product = await this.productRepo.findOne({
-        where: { id, isDeleted: false },
-        relations: { market: true },
-      });
-    } catch (error) {
-      this.handleDbError(error);
-    }
-    if (!product) {
-      this.notFound(`Product #${id} topilmadi`);
-    }
-    return product;
+    const product = await this.findByIdEntity(id);
+    return this.attachMarket(product);
   }
 
   async update(
     id: string,
     dto: { name?: string; image_url?: string },
   ) {
-    const product = await this.findById(id);
+    const product = await this.findByIdEntity(id);
     Object.assign(product, dto);
     let saved: Product;
     try {
@@ -187,7 +231,7 @@ export class CatalogServiceService {
     userId: string,
     dto: { name?: string; image_url?: string },
   ) {
-    const product = await this.findById(id);
+    const product = await this.findByIdEntity(id);
     if (product.user_id !== userId) {
       this.forbidden('You can update only your own product');
     }
@@ -205,7 +249,7 @@ export class CatalogServiceService {
   }
 
   async remove(id: string, requester?: { id: string; roles: string[] }) {
-    const product = await this.findById(id);
+    const product = await this.findByIdEntity(id);
 
     if (requester?.roles?.includes('market') && product.user_id !== requester.id) {
       this.forbidden('You can delete only your own product');
