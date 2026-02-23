@@ -9,6 +9,7 @@ import { CreateAdminDto } from './dto/create-admin.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { CreateMarketDto } from './dto/create-market.dto';
 import { UpdateMarketDto } from './dto/update-market.dto';
+import { CreateCourierDto } from './dto/create-courier.dto';
 import { UserFilterQuery } from './contracts/user.payloads';
 import { Roles, Status } from '@app/common';
 import { catchError } from '../../../libs/common/helpers/response';
@@ -148,12 +149,16 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async updateAdmin(id: string, dto: UpdateUserDto) {
+    return this.updateUser(id, dto);
+  }
+
+  async updateUser(id: string, dto: UpdateUserDto) {
     const admin = await this.users.findOne({
-      where: { id, is_deleted: false, role: In(this.adminRoles) },
+      where: { id, is_deleted: false },
     });
 
     if (!admin) {
-      this.notFound('Admin topilmadi');
+      this.notFound('User topilmadi');
     }
 
     if (dto.phone_number && dto.phone_number !== admin.phone_number) {
@@ -181,7 +186,6 @@ export class UserServiceService implements OnModuleInit {
     }
 
     if (dto.role) {
-      this.ensureRoleIsAdmin(dto.role);
       admin.role = dto.role;
     }
 
@@ -192,17 +196,21 @@ export class UserServiceService implements OnModuleInit {
     const saved = await this.users.save(admin);
     return {
       success: true,
-      message: 'Admin yangilandi',
+      message: 'User yangilandi',
       data: this.sanitize(saved),
     };
   }
 
   async deleteAdmin(id: string) {
+    return this.deleteUser(id);
+  }
+
+  async deleteUser(id: string) {
     const admin = await this.users.findOne({
-      where: { id, is_deleted: false, role: In(this.adminRoles) },
+      where: { id, is_deleted: false },
     });
     if (!admin) {
-      this.notFound('Admin topilmadi');
+      this.notFound('User topilmadi');
     }
 
     admin.is_deleted = true;
@@ -214,7 +222,7 @@ export class UserServiceService implements OnModuleInit {
 
     return {
       success: true,
-      message: 'Admin o‘chirildi',
+      message: 'User o‘chirildi',
       data: { id },
     };
   }
@@ -242,7 +250,8 @@ export class UserServiceService implements OnModuleInit {
 
     const qb = this.users
       .createQueryBuilder('admin')
-      .where('admin.is_deleted = :isDeleted', { isDeleted: false });
+      .where('admin.is_deleted = :isDeleted', { isDeleted: false })
+      .andWhere('admin.role != :superadminRole', { superadminRole: Roles.SUPERADMIN });
 
     if (search) {
       qb.andWhere(
@@ -309,6 +318,36 @@ export class UserServiceService implements OnModuleInit {
     return {
       success: true,
       message: 'Market yaratildi',
+      data: this.sanitize(saved),
+    };
+  }
+
+  async createCourier(dto: CreateCourierDto) {
+    await this.ensurePhoneUnique(dto.phone_number);
+    await this.ensureUsernameUnique(dto.phone_number);
+
+    const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
+
+    const courier = this.users.create({
+      name: dto.name,
+      phone_number: dto.phone_number,
+      username: dto.phone_number,
+      password: hashedPassword,
+      salary: 0,
+      payment_day: undefined,
+      role: Roles.COURIER,
+      status: Status.ACTIVE,
+      tariff_home: dto.tariff_home,
+      tariff_center: dto.tariff_center,
+      add_order: false,
+      default_tariff: null,
+      is_deleted: false,
+    });
+
+    const saved = await this.users.save(courier);
+    return {
+      success: true,
+      message: 'Courier yaratildi',
       data: this.sanitize(saved),
     };
   }

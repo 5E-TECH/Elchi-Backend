@@ -4,6 +4,7 @@ import { RmqService } from '@app/common';
 import { UserServiceService } from './user-service.service';
 import { AuthService } from './auth/auth.service';
 import type {
+  CreateCourierPayload,
   CreateUserPayload,
   DeleteUserPayload,
   FindAllUsersPayload,
@@ -90,16 +91,21 @@ export class IdentityController {
     return this.executeAndAck(context, () => this.userService.createAdmin(payload.dto));
   }
 
+  @MessagePattern({ cmd: 'identity.courier.create' })
+  createCourier(@Payload() payload: CreateCourierPayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.userService.createCourier(payload.dto));
+  }
+
   @MessagePattern({ cmd: 'identity.user.update' })
   updateAdmin(@Payload() payload: UpdateUserPayload, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.userService.updateAdmin(payload.id, payload.dto),
+      this.userService.updateUser(payload.id, payload.dto),
     );
   }
 
   @MessagePattern({ cmd: 'identity.user.delete' })
   deleteAdmin(@Payload() payload: DeleteUserPayload, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.userService.deleteAdmin(payload.id));
+    return this.executeAndAck(context, () => this.userService.deleteUser(payload.id));
   }
 
   @MessagePattern({ cmd: 'identity.user.find_by_id' })
