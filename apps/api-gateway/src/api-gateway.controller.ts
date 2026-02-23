@@ -32,13 +32,12 @@ import {
 } from './dto/user.swagger.dto';
 import {
   CreateAdminRequestDto,
+  CreateCourierRequestDto,
   CreateMarketRequestDto,
   DeleteEntityResponseDto,
   ListEntityResponseDto,
   SingleEntityResponseDto,
   UpdateAdminRequestDto,
-  UpdateMarketAddOrderRequestDto,
-  UpdateMarketRequestDto,
   UpdateUserStatusRequestDto,
 } from './dto/identity.swagger.dto';
 
@@ -65,33 +64,16 @@ export class ApiGatewayController {
     return this.identityClient.send({ cmd: 'identity.user.create' }, { dto });
   }
 
-  @Patch('admins/:id')
+  @Post('couriers')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Update admin' })
-  @ApiParam({ name: 'id', description: 'Admin ID (id)' })
-  @ApiBody({ type: UpdateAdminRequestDto })
-  @ApiOkResponse({ type: SingleEntityResponseDto })
+  @ApiOperation({ summary: 'Create courier' })
+  @ApiBody({ type: CreateCourierRequestDto })
+  @ApiCreatedResponse({ type: SingleEntityResponseDto })
   @ApiConflictResponse({ type: ErrorResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
-  updateAdmin(
-    @Param('id') id: string,
-    @Body() dto: UpdateAdminRequestDto,
-  ) {
-    return this.identityClient.send({ cmd: 'identity.user.update' }, { id, dto });
-  }
-
-  @Delete('admins/:id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Delete admin' })
-  @ApiParam({ name: 'id', description: 'Admin ID (id)' })
-  @ApiOkResponse({ type: DeleteEntityResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
-  deleteAdmin(@Param('id') id: string) {
-    return this.identityClient.send({ cmd: 'identity.user.delete' }, { id });
+  createCourier(@Body() dto: CreateCourierRequestDto) {
+    return this.identityClient.send({ cmd: 'identity.courier.create' }, { dto });
   }
 
   @Get('users')
@@ -138,6 +120,32 @@ export class ApiGatewayController {
     return this.identityClient.send({ cmd: 'identity.user.find_by_id' }, { id });
   }
 
+  @Patch('users/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update user (all roles)' })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiBody({ type: UpdateAdminRequestDto })
+  @ApiOkResponse({ type: SingleEntityResponseDto })
+  @ApiConflictResponse({ type: ErrorResponseDto })
+  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  updateUser(@Param('id') id: string, @Body() dto: UpdateAdminRequestDto) {
+    return this.identityClient.send({ cmd: 'identity.user.update' }, { id, dto });
+  }
+
+  @Delete('users/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Delete user (all roles)' })
+  @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiOkResponse({ type: DeleteEntityResponseDto })
+  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  deleteUser(@Param('id') id: string) {
+    return this.identityClient.send({ cmd: 'identity.user.delete' }, { id });
+  }
+
   @Patch('users/:id/status')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
@@ -178,66 +186,6 @@ export class ApiGatewayController {
         },
       },
     );
-  }
-
-  @Patch('markets/:id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Update market' })
-  @ApiParam({ name: 'id', description: 'Market ID (id)' })
-  @ApiBody({ type: UpdateMarketRequestDto })
-  @ApiOkResponse({ type: SingleEntityResponseDto })
-  @ApiConflictResponse({ type: ErrorResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
-  updateMarket(@Param('id') id: string, @Body() dto: UpdateMarketRequestDto) {
-    return this.identityClient.send(
-      { cmd: 'identity.market.update' },
-      {
-        id,
-        dto: {
-          name: dto.name,
-          phone_number: dto.phone_number,
-          password: dto.password,
-          status: dto.status,
-          tariff_home: dto.tariff_home,
-          tariff_center: dto.tariff_center,
-          default_tariff: dto.default_tariff,
-          add_order: dto.add_order,
-        },
-      },
-    );
-  }
-
-  @Patch('markets/:id/add-order')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Toggle market add_order flag' })
-  @ApiParam({ name: 'id', description: 'Market ID' })
-  @ApiBody({ type: UpdateMarketAddOrderRequestDto })
-  @ApiOkResponse({ type: SingleEntityResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
-  updateMarketAddOrder(
-    @Param('id') id: string,
-    @Body() dto: UpdateMarketAddOrderRequestDto,
-  ) {
-    return this.identityClient.send(
-      { cmd: 'identity.market.update' },
-      { id, dto: { add_order: dto.add_order } },
-    );
-  }
-
-  @Delete('markets/:id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Delete market' })
-  @ApiParam({ name: 'id', description: 'Market ID (id)' })
-  @ApiOkResponse({ type: DeleteEntityResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
-  deleteMarket(@Param('id') id: string) {
-    return this.identityClient.send({ cmd: 'identity.market.delete' }, { id });
   }
 
   @Get('markets')

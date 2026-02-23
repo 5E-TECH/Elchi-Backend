@@ -1,9 +1,14 @@
 import { CreateAdminDto } from '../dto/create-admin.dto';
+import { CreateCourierDto } from '../dto/create-courier.dto';
 import { UpdateUserDto } from '../dto/update-user.dto';
 import { Status } from '@app/common';
 
 export interface CreateUserPayload {
   dto: CreateAdminDto;
+}
+
+export interface CreateCourierPayload {
+  dto: CreateCourierDto;
 }
 
 export interface UpdateUserPayload {

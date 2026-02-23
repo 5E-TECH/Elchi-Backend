@@ -114,6 +114,36 @@ export class CreateMarketRequestDto {
   add_order?: boolean;
 }
 
+export class CreateCourierRequestDto {
+  @ApiProperty({ example: '1' })
+  @IsString()
+  region_id!: string;
+
+  @ApiProperty({ example: 'Akmal Abdullaev' })
+  @IsString()
+  @MinLength(2)
+  name!: string;
+
+  @ApiProperty({ example: '+998901234567' })
+  @IsPhoneNumber('UZ')
+  phone_number!: string;
+
+  @ApiProperty({ example: 'secret123' })
+  @IsString()
+  @MinLength(4)
+  password!: string;
+
+  @ApiProperty({ example: 10000 })
+  @IsNumber()
+  @Min(0)
+  tariff_home!: number;
+
+  @ApiProperty({ example: 8000 })
+  @IsNumber()
+  @Min(0)
+  tariff_center!: number;
+}
+
 export class UpdateMarketRequestDto {
   @ApiPropertyOptional({ example: 'Market 1 Updated' })
   @IsOptional()
