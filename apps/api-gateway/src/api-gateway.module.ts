@@ -15,6 +15,7 @@ import { AuthGatewayController } from './auth-gateway.controller';
 import { CatalogGatewayController } from './catalog-gateway.controller';
 import { HealthController } from './health.controller';
 import { SearchGatewayController } from './search-gateway.controller';
+import { LogisticsGatewayController } from './logistics-gateway.controller';
 import type { StringValue } from 'ms';
 
 @Module({
@@ -58,10 +59,10 @@ import type { StringValue } from 'ms';
     ApiGatewayController,
     AuthGatewayController,
     CatalogGatewayController,
+    LogisticsGatewayController,
     SearchGatewayController,
     HealthController,
     // TODO: Qolgan gateway controllerlarni qo'shish
-    // LogisticsGatewayController,
     // FinanceGatewayController,
     // NotificationGatewayController,
     // IntegrationGatewayController,
