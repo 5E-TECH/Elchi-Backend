@@ -7,7 +7,7 @@ import { Post_status } from '@app/common';
 @Index('IDX_POST_COURIER', ['courier_id'])
 @Index('IDX_POST_REGION', ['region_id'])
 export class Post extends BaseEntity {
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   courier_id!: string;
 
   @Column({ type: 'float', default: 0 })
@@ -19,7 +19,7 @@ export class Post extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   qr_code_token!: string | null;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'bigint', nullable: true })
   region_id!: string | null;
 
   @Column({ type: 'enum', enum: Post_status, default: Post_status.NEW })

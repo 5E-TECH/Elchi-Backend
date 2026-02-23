@@ -5,10 +5,10 @@ import { OrderItem } from './order-item.entity';
 
 @Entity({ name: 'orders' })
 export class Order extends BaseEntity {
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   market_id!: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   customer_id!: string;
 
   @Column({ type: 'int', default: 0 })
@@ -35,10 +35,10 @@ export class Order extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   operator!: string | null;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'bigint', nullable: true })
   post_id!: string | null;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'bigint', nullable: true })
   district_id!: string | null;
 
   @Column({ type: 'varchar', nullable: true })

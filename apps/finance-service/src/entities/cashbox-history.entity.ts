@@ -13,16 +13,16 @@ export class CashboxHistory extends BaseEntity {
   @Column({ type: 'enum', enum: Operation_type })
   operation_type!: Operation_type;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   cashbox_id!: string;
 
   @Column({ type: 'enum', enum: Source_type })
   source_type!: Source_type;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'bigint', nullable: true })
   source_id!: string | null;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'bigint', nullable: true })
   source_user_id!: string | null;
 
   @Column({ type: 'float' })
@@ -37,7 +37,7 @@ export class CashboxHistory extends BaseEntity {
   @Column({ type: 'text', nullable: true })
   comment!: string | null;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'bigint', nullable: true })
   created_by!: string | null;
 
   @Column({ type: 'timestamptz', nullable: true })

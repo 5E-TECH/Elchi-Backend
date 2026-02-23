@@ -16,13 +16,13 @@ export enum C2COrderStatus {
 @Index('IDX_C2C_ORDER_SELLER', ['seller_id'])
 @Index('IDX_C2C_ORDER_STATUS', ['status'])
 export class C2COrder extends BaseEntity {
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   listing_id!: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   buyer_id!: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   seller_id!: string;
 
   @Column({ type: 'float' })

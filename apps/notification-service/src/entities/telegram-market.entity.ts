@@ -7,7 +7,7 @@ import { Group_type } from '@app/common';
 @Index('IDX_TG_GROUP_TYPE', ['group_type'])
 @Index('IDX_TG_MARKET_GROUP', ['market_id', 'group_type'])
 export class TelegramMarket extends BaseEntity {
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   market_id!: string;
 
   @Column({ type: 'varchar' })

@@ -11,10 +11,10 @@ export type SyncStatus = 'pending' | 'processing' | 'success' | 'failed';
 @Index('IDX_SYNC_QUEUE_ORDER', ['order_id'])
 @Index('IDX_SYNC_QUEUE_RETRY', ['status', 'next_retry_at'])
 export class SyncQueue extends BaseEntity {
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   order_id!: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   integration_id!: string;
 
   @Column({ type: 'varchar' })

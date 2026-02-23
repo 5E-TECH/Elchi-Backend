@@ -12,10 +12,10 @@ export enum DisputeStatus {
 @Index('IDX_DISPUTE_ORDER', ['order_id'])
 @Index('IDX_DISPUTE_STATUS', ['status'])
 export class Dispute extends BaseEntity {
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   order_id!: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   opened_by!: string;
 
   @Column({ type: 'text' })
@@ -27,7 +27,7 @@ export class Dispute extends BaseEntity {
   @Column({ type: 'text', nullable: true })
   resolution!: string | null;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'bigint', nullable: true })
   resolved_by!: string | null;
 
   @Column({ type: 'timestamptz', nullable: true })

@@ -3,7 +3,7 @@ import { Roles, Status } from '@app/common';
 
 @Entity({ name: 'admins', schema: 'identity_schema', synchronize: false })
 export class MarketEntity {
-  @PrimaryGeneratedColumn('uuid')
+  @PrimaryGeneratedColumn({ type: 'bigint' })
   id!: string;
 
   @Column({ type: 'varchar' })

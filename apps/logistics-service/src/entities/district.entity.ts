@@ -12,13 +12,17 @@ export class District extends BaseEntity {
   @Column({ type: 'varchar' })
   sato_code!: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   region_id!: string;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'bigint', nullable: true })
   assigned_region!: string | null;
 
   @ManyToOne(() => Region, (region) => region.districts, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'region_id' })
   region!: Region;
+
+  @ManyToOne(() => Region, { nullable: true, onDelete: 'SET NULL' })
+  @JoinColumn({ name: 'assigned_region' })
+  assignedToRegion!: Region | null;
 }

@@ -6,10 +6,10 @@ import { Investor } from './investor.entity';
 @Index('IDX_INVESTMENT_INVESTOR', ['investor_id'])
 @Index('IDX_INVESTMENT_BRANCH', ['branch_id'])
 export class Investment extends BaseEntity {
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   investor_id!: string;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'bigint', nullable: true })
   branch_id!: string | null;
 
   @Column({ type: 'float' })

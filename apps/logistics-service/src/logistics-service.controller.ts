@@ -2,6 +2,11 @@ import { Controller } from '@nestjs/common';
 import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
 import { RmqService } from '@app/common';
 import { LogisticsServiceService } from './logistics-service.service';
+import { CreateDistrictDto } from './dto/create-district.dto';
+import { UpdateDistrictDto } from './dto/update-district.dto';
+import { UpdateDistrictNameDto } from './dto/update-district-name.dto';
+import { CreateRegionDto } from './dto/create-region.dto';
+import { UpdateRegionDto } from './dto/update-region.dto';
 
 @Controller()
 export class LogisticsServiceController {
@@ -56,33 +61,87 @@ export class LogisticsServiceController {
 
   // --- Region ---
   @MessagePattern({ cmd: 'logistics.region.create' })
-  createRegion(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+  createRegion(
+    @Payload() payload: { dto: CreateRegionDto },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.createRegion(payload.dto),
+    );
   }
 
   @MessagePattern({ cmd: 'logistics.region.find_all' })
-  findAllRegions(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+  findAllRegions(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.logisticsService.findAllRegions());
   }
 
   @MessagePattern({ cmd: 'logistics.region.find_by_id' })
-  findRegionById(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+  findRegionById(@Payload() payload: { id: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.logisticsService.findRegionById(payload.id));
+  }
+
+  @MessagePattern({ cmd: 'logistics.region.update' })
+  updateRegion(
+    @Payload() payload: { id: string; dto: UpdateRegionDto },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.updateRegion(payload.id, payload.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.region.delete' })
+  deleteRegion(@Payload() payload: { id: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.logisticsService.deleteRegion(payload.id));
   }
 
   // --- District ---
   @MessagePattern({ cmd: 'logistics.district.create' })
-  createDistrict(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+  createDistrict(
+    @Payload() payload: { dto: CreateDistrictDto },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.createDistrict(payload.dto),
+    );
   }
 
   @MessagePattern({ cmd: 'logistics.district.find_all' })
-  findAllDistricts(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+  findAllDistricts(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.logisticsService.findAllDistricts());
   }
 
   @MessagePattern({ cmd: 'logistics.district.find_by_id' })
-  findDistrictById(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+  findDistrictById(@Payload() payload: { id: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.findDistrictById(payload.id),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.district.update' })
+  updateDistrict(
+    @Payload() payload: { id: string; dto: UpdateDistrictDto },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.updateDistrict(payload.id, payload.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.district.update_name' })
+  updateDistrictName(
+    @Payload() payload: { id: string; dto: UpdateDistrictNameDto },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.updateDistrictName(payload.id, payload.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.district.delete' })
+  deleteDistrict(@Payload() payload: { id: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.deleteDistrict(payload.id),
+    );
   }
 }

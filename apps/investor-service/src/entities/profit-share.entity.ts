@@ -6,7 +6,7 @@ import { Investor } from './investor.entity';
 @Index('IDX_PROFIT_INVESTOR', ['investor_id'])
 @Index('IDX_PROFIT_PERIOD', ['period_start', 'period_end'])
 export class ProfitShare extends BaseEntity {
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   investor_id!: string;
 
   @Column({ type: 'float' })

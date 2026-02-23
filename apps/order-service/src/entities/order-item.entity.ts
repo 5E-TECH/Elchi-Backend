@@ -4,10 +4,10 @@ import { Order } from './order.entity';
 
 @Entity({ name: 'order_items' })
 export class OrderItem extends BaseEntity {
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   product_id!: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   order_id!: string;
 
   @Column({ type: 'int', default: 1 })
