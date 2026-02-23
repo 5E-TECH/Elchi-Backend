@@ -11,7 +11,7 @@ export class CreateProductRequestDto {
   image_url?: string;
 
   @ApiPropertyOptional({
-    example: '3fa85f64-5717-4562-b3fc-2c963f66afa6',
+    example: '1',
     description: 'Admin/Superadmin yuboradi. MARKET role uchun token sub ishlatiladi.',
   })
   market_id?: string;

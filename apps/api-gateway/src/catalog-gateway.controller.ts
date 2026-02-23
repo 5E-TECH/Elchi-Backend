@@ -129,7 +129,7 @@ export class CatalogGatewayController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get products by market id' })
-  @ApiParam({ name: 'marketId', description: 'Market ID (uuid)' })
+  @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
   getByMarketId(@Param('marketId') marketId: string) {
     return this.catalogClient.send(
       { cmd: 'catalog.product.find_all' },
@@ -153,7 +153,7 @@ export class CatalogGatewayController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get product by ID' })
-  @ApiParam({ name: 'id', description: 'Product ID (uuid)' })
+  @ApiParam({ name: 'id', description: 'Product ID (id)' })
   findById(@Param('id') id: string) {
     return this.catalogClient.send({ cmd: 'catalog.product.find_by_id' }, { id });
   }
@@ -163,7 +163,7 @@ export class CatalogGatewayController {
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update product (admin/registrator)' })
-  @ApiParam({ name: 'id', description: 'Product ID (uuid)' })
+  @ApiParam({ name: 'id', description: 'Product ID (id)' })
   @ApiBody({ type: UpdateProductRequestDto })
   update(
     @Param('id') id: string,
@@ -177,7 +177,7 @@ export class CatalogGatewayController {
   @Roles(RoleEnum.MARKET, RoleEnum.ADMIN, RoleEnum.SUPERADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete product (soft delete)' })
-  @ApiParam({ name: 'id', description: 'Product ID (uuid)' })
+  @ApiParam({ name: 'id', description: 'Product ID (id)' })
   remove(@Param('id') id: string, @Req() req: { user: JwtUser }) {
     return this.catalogClient.send(
       { cmd: 'catalog.product.delete' },
@@ -190,7 +190,7 @@ export class CatalogGatewayController {
   @Roles(RoleEnum.MARKET)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update own product (market)' })
-  @ApiParam({ name: 'id', description: 'Product ID (uuid)' })
+  @ApiParam({ name: 'id', description: 'Product ID (id)' })
   @ApiBody({ type: UpdateProductRequestDto })
   updateMyProduct(
     @Param('id') id: string,
