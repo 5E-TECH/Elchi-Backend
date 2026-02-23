@@ -74,7 +74,7 @@ export class UpdateUserRequestDto {
 }
 
 export class UserItemDto {
-  @ApiProperty({ example: '10a142dd-df52-418e-bf3b-fe8fbf1b77f5' })
+  @ApiProperty({ example: '1' })
   id!: string;
 
   @ApiProperty({ example: '2026-02-12T09:34:04.236Z' })
@@ -117,7 +117,7 @@ export class DeleteUserResponseDto {
   @ApiProperty({ example: 'User o‘chirildi' })
   message!: string;
 
-  @ApiProperty({ example: { id: '10a142dd-df52-418e-bf3b-fe8fbf1b77f5' } })
+  @ApiProperty({ example: { id: '1' } })
   data!: { id: string };
 }
 
@@ -129,7 +129,7 @@ export class UserListResponseDto {
     example: {
       items: [
         {
-          id: '10a142dd-df52-418e-bf3b-fe8fbf1b77f5',
+          id: '1',
           createdAt: '2026-02-12T09:34:04.236Z',
           updatedAt: '2026-02-12T09:34:04.236Z',
           username: 'ali123',

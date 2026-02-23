@@ -20,7 +20,7 @@ export class RefreshRequestDto {
 }
 
 export class AuthUserDto {
-  @ApiProperty({ example: '10a142dd-df52-418e-bf3b-fe8fbf1b77f5' })
+  @ApiProperty({ example: '1' })
   id!: string;
 
   @ApiProperty({ example: 'ali123' })
@@ -51,7 +51,7 @@ export class AuthResponseDto {
 }
 
 export class ValidateResponseDto {
-  @ApiProperty({ example: '10a142dd-df52-418e-bf3b-fe8fbf1b77f5' })
+  @ApiProperty({ example: '1' })
   id!: string;
 
   @ApiProperty({ example: 'ali123' })

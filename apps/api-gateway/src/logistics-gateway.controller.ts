@@ -83,7 +83,7 @@ export class LogisticsGatewayController {
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get region by id' })
-  @ApiParam({ name: 'id', description: 'Region ID (uuid)' })
+  @ApiParam({ name: 'id', description: 'Region ID (id)' })
   getRegionById(@Param('id') id: string) {
     return this.logisticsClient.send({ cmd: 'logistics.region.find_by_id' }, { id });
   }
@@ -93,7 +93,7 @@ export class LogisticsGatewayController {
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update region' })
-  @ApiParam({ name: 'id', description: 'Region ID (uuid)' })
+  @ApiParam({ name: 'id', description: 'Region ID (id)' })
   @ApiBody({ type: UpdateRegionRequestDto })
   updateRegion(@Param('id') id: string, @Body() dto: UpdateRegionRequestDto) {
     return this.logisticsClient.send({ cmd: 'logistics.region.update' }, { id, dto });
@@ -104,7 +104,7 @@ export class LogisticsGatewayController {
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete region' })
-  @ApiParam({ name: 'id', description: 'Region ID (uuid)' })
+  @ApiParam({ name: 'id', description: 'Region ID (id)' })
   deleteRegion(@Param('id') id: string) {
     return this.logisticsClient.send({ cmd: 'logistics.region.delete' }, { id });
   }
@@ -148,7 +148,7 @@ export class LogisticsGatewayController {
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get district by id' })
-  @ApiParam({ name: 'id', description: 'District ID (uuid)' })
+  @ApiParam({ name: 'id', description: 'District ID (id)' })
   getById(@Param('id') id: string) {
     return this.logisticsClient.send({ cmd: 'logistics.district.find_by_id' }, { id });
   }
@@ -158,7 +158,7 @@ export class LogisticsGatewayController {
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN, RoleEnum.COURIER, RoleEnum.MARKET)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Assign district to another region' })
-  @ApiParam({ name: 'id', description: 'District ID (uuid)' })
+  @ApiParam({ name: 'id', description: 'District ID (id)' })
   @ApiBody({ type: UpdateDistrictRequestDto })
   update(@Param('id') id: string, @Body() dto: UpdateDistrictRequestDto) {
     return this.logisticsClient.send({ cmd: 'logistics.district.update' }, { id, dto });
@@ -169,7 +169,7 @@ export class LogisticsGatewayController {
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update district name' })
-  @ApiParam({ name: 'id', description: 'District ID (uuid)' })
+  @ApiParam({ name: 'id', description: 'District ID (id)' })
   @ApiBody({ type: UpdateDistrictNameRequestDto })
   updateName(@Param('id') id: string, @Body() dto: UpdateDistrictNameRequestDto) {
     return this.logisticsClient.send(
@@ -183,7 +183,7 @@ export class LogisticsGatewayController {
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete district' })
-  @ApiParam({ name: 'id', description: 'District ID (uuid)' })
+  @ApiParam({ name: 'id', description: 'District ID (id)' })
   deleteDistrict(@Param('id') id: string) {
     return this.logisticsClient.send({ cmd: 'logistics.district.delete' }, { id });
   }
