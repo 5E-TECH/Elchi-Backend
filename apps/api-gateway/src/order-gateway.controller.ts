@@ -78,6 +78,14 @@ export class OrderGatewayController {
     );
   }
 
+  @Get('markets/today')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Today's markets with orders" })
+  findTodayMarkets() {
+    return this.orderClient.send({ cmd: 'order.find_today_markets' }, {});
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
