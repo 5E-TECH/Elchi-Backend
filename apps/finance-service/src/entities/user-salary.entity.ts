@@ -5,7 +5,7 @@ import { BaseEntity } from '@app/common';
 @Index('IDX_SALARY_USER', ['user_id'])
 @Index('IDX_SALARY_PAYMENT_DAY', ['payment_day'])
 export class UserSalary extends BaseEntity {
-  @Column({ type: 'uuid', unique: true })
+  @Column({ type: 'bigint', unique: true })
   user_id!: string;
 
   @Column({ type: 'float', default: 0 })

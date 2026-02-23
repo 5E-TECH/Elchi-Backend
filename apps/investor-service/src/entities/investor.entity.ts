@@ -6,7 +6,7 @@ import { Status } from '@app/common';
 @Index('IDX_INVESTOR_USER', ['user_id'])
 @Index('IDX_INVESTOR_STATUS', ['status'])
 export class Investor extends BaseEntity {
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   user_id!: string;
 
   @Column({ type: 'varchar' })

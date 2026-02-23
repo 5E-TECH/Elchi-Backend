@@ -35,7 +35,7 @@ export class ExternalIntegration extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   password!: string | null;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'bigint', nullable: true })
   market_id!: string | null;
 
   @Column({ type: 'boolean', default: true })

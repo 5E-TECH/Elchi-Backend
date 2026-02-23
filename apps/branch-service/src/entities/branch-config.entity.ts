@@ -6,7 +6,7 @@ import { Branch } from './branch.entity';
 @Index('IDX_BRANCH_CONFIG_BRANCH', ['branch_id'])
 @Index('IDX_BRANCH_CONFIG_KEY', ['branch_id', 'config_key'], { unique: true })
 export class BranchConfig extends BaseEntity {
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   branch_id!: string;
 
   @Column({ type: 'varchar' })

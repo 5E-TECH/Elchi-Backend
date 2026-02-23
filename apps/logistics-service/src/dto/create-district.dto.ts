@@ -1,4 +1,4 @@
-import { IsNotEmpty, IsString, IsUUID } from 'class-validator';
+import { IsNotEmpty, IsNumberString, IsString } from 'class-validator';
 
 export class CreateDistrictDto {
   @IsNotEmpty()
@@ -6,7 +6,6 @@ export class CreateDistrictDto {
   name!: string;
 
   @IsNotEmpty()
-  @IsUUID()
+  @IsNumberString()
   region_id!: string;
 }
-

@@ -9,7 +9,7 @@ import { Roles, Status, Where_deliver } from '@app/common';
 
 @Entity({ name: 'admins', schema: 'identity_schema' }) // Schema nomini o'zingizga moslang
 export class UserAdminEntity {
-  @PrimaryGeneratedColumn('uuid')
+  @PrimaryGeneratedColumn({ type: 'bigint' })
   id: string;
 
   @Column({ type: 'varchar', length: 100 })

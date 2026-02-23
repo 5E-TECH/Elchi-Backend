@@ -20,7 +20,7 @@ export class Cashbox extends BaseEntity {
   @Column({ type: 'enum', enum: Cashbox_type, default: Cashbox_type.MAIN })
   cashbox_type!: Cashbox_type;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   user_id!: string;
 
   @OneToMany(() => CashboxHistory, (history) => history.cashbox)

@@ -6,7 +6,7 @@ import { ExternalIntegration } from './external-integration.entity';
 @Index('IDX_SYNC_HISTORY_INTEGRATION', ['integration_id'])
 @Index('IDX_SYNC_HISTORY_DATE', ['sync_date'])
 export class SyncHistory extends BaseEntity {
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   integration_id!: string;
 
   @Column({ type: 'varchar' })

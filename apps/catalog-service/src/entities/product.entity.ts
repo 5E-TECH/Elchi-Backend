@@ -10,7 +10,7 @@ export class Product extends BaseEntity {
   @Column({ type: 'varchar' })
   name!: string;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   user_id!: string;
 
   @ManyToOne(() => MarketEntity, { nullable: false, onDelete: 'RESTRICT' })

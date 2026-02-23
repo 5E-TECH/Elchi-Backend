@@ -1,8 +1,7 @@
-import { IsNotEmpty, IsUUID } from 'class-validator';
+import { IsNotEmpty, IsNumberString } from 'class-validator';
 
 export class UpdateDistrictDto {
   @IsNotEmpty()
-  @IsUUID()
+  @IsNumberString()
   assigned_region!: string;
 }
-

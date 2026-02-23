@@ -22,7 +22,7 @@ export class Listing extends BaseEntity {
   @Column({ type: 'float' })
   price!: number;
 
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   seller_id!: string;
 
   @Column({ type: 'varchar', nullable: true })

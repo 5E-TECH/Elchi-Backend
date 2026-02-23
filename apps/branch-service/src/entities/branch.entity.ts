@@ -15,15 +15,15 @@ export class Branch extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   phone_number!: string | null;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'bigint', nullable: true })
   region_id!: string | null;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'bigint', nullable: true })
   district_id!: string | null;
 
   @Column({ type: 'enum', enum: Status, default: Status.ACTIVE })
   status!: Status;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'bigint', nullable: true })
   manager_id!: string | null;
 }

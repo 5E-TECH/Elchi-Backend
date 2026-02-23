@@ -11,10 +11,10 @@ export enum ShiftStatus {
 @Index('IDX_SHIFT_STATUS', ['status'])
 @Index('IDX_SHIFT_OPENED_AT', ['opened_at'])
 export class Shift extends BaseEntity {
-  @Column({ type: 'uuid' })
+  @Column({ type: 'bigint' })
   opened_by!: string;
 
-  @Column({ type: 'uuid', nullable: true })
+  @Column({ type: 'bigint', nullable: true })
   closed_by!: string | null;
 
   @Column({ type: 'timestamptz' })
