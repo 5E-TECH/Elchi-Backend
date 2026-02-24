@@ -63,15 +63,50 @@ export class UpdateAdminRequestDto {
   @MinLength(4)
   password?: string;
 
-  @ApiPropertyOptional({ example: 'admin' })
-  @IsOptional()
-  @IsEnum(['superadmin', 'admin'])
-  role?: string;
-
   @ApiPropertyOptional({ example: 'active' })
   @IsOptional()
   @IsEnum(['active', 'inactive'])
   status?: string;
+
+  @ApiPropertyOptional({ example: 3000000 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  salary?: number;
+
+  @ApiPropertyOptional({ example: 10 })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(30)
+  payment_day?: number;
+
+  @ApiPropertyOptional({ example: 11000 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  tariff_home?: number;
+
+  @ApiPropertyOptional({ example: 9000 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  tariff_center?: number;
+
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  add_order?: boolean;
+
+  @ApiPropertyOptional({ example: 'center', enum: ['center', 'address'] })
+  @IsOptional()
+  @IsEnum(['center', 'address'])
+  default_tariff?: string;
+
+  @ApiPropertyOptional({ example: '1' })
+  @IsOptional()
+  @IsString()
+  region_id?: string;
 }
 
 export class CreateMarketRequestDto {
