@@ -1,5 +1,14 @@
-import { IsEnum, IsOptional, IsString, MinLength } from 'class-validator';
-import { Roles, Status } from '@app/common';
+import {
+  IsBoolean,
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsPhoneNumber,
+  IsString,
+  Min,
+  MinLength,
+} from 'class-validator';
+import { Status, Where_deliver } from '@app/common';
 
 export class UpdateUserDto {
   @IsOptional()
@@ -12,7 +21,7 @@ export class UpdateUserDto {
   username?: string;
 
   @IsOptional()
-  @IsString()
+  @IsPhoneNumber('UZ')
   phone_number?: string;
 
   @IsOptional()
@@ -21,10 +30,37 @@ export class UpdateUserDto {
   password?: string;
 
   @IsOptional()
-  @IsEnum(Roles)
-  role?: Roles;
-
-  @IsOptional()
   @IsEnum(Status)
   status?: Status;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  salary?: number;
+
+  @IsOptional()
+  @IsNumber()
+  payment_day?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  tariff_home?: number;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  tariff_center?: number;
+
+  @IsOptional()
+  @IsBoolean()
+  add_order?: boolean;
+
+  @IsOptional()
+  @IsEnum(Where_deliver)
+  default_tariff?: Where_deliver;
+
+  @IsOptional()
+  @IsString()
+  region_id?: string;
 }

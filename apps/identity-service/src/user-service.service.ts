@@ -163,13 +163,7 @@ export class UserServiceService implements OnModuleInit {
 
     if (dto.phone_number && dto.phone_number !== admin.phone_number) {
       await this.ensurePhoneUnique(dto.phone_number, id);
-      if (!dto.username) {
-        await this.ensureUsernameUnique(dto.phone_number, id);
-      }
       admin.phone_number = dto.phone_number;
-      if (!dto.username) {
-        admin.username = dto.phone_number;
-      }
     }
 
     if (dto.username && dto.username !== admin.username) {
@@ -185,12 +179,32 @@ export class UserServiceService implements OnModuleInit {
       admin.name = dto.name;
     }
 
-    if (dto.role) {
-      admin.role = dto.role;
-    }
-
     if (dto.status) {
       admin.status = dto.status;
+    }
+
+    if (typeof dto.salary !== 'undefined') {
+      admin.salary = dto.salary;
+    }
+
+    if (typeof dto.payment_day !== 'undefined') {
+      admin.payment_day = dto.payment_day;
+    }
+
+    if (typeof dto.tariff_home !== 'undefined') {
+      admin.tariff_home = dto.tariff_home;
+    }
+
+    if (typeof dto.tariff_center !== 'undefined') {
+      admin.tariff_center = dto.tariff_center;
+    }
+
+    if (typeof dto.add_order !== 'undefined') {
+      admin.add_order = dto.add_order;
+    }
+
+    if (typeof dto.default_tariff !== 'undefined') {
+      admin.default_tariff = dto.default_tariff;
     }
 
     const saved = await this.users.save(admin);
@@ -364,7 +378,6 @@ export class UserServiceService implements OnModuleInit {
     if (dto.phone_number && dto.phone_number !== market.phone_number) {
       await this.ensurePhoneUnique(dto.phone_number, id);
       market.phone_number = dto.phone_number;
-      market.username = dto.phone_number;
     }
 
     if (dto.password) {

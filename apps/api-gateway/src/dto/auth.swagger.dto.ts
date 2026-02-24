@@ -2,11 +2,11 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { IsPhoneNumber, IsString, MinLength } from 'class-validator';
 
 export class LoginRequestDto {
-  @ApiProperty({ example: '+998901234567' })
+  @ApiProperty({ example: '+998905234382' })
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
-  @ApiProperty({ example: '123456' })
+  @ApiProperty({ example: '0990' })
   @IsString()
   @MinLength(4)
   password!: string;
