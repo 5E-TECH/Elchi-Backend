@@ -171,7 +171,7 @@ export class IdentityController {
     @Payload() payload: FindMarketByIdPayload,
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.userService.findUserById(payload.id));
+    return this.executeAndAck(context, () => this.userService.findMarketById(payload.id));
   }
 
   @MessagePattern({ cmd: 'identity.market.find_all' })
