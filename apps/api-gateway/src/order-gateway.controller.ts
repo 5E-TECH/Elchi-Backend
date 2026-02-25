@@ -113,8 +113,37 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Today's markets with orders" })
-  findTodayMarkets() {
-    return this.orderClient.send({ cmd: 'order.find_today_markets' }, {});
+  async findTodayMarkets() {
+    const rows = await firstValueFrom(
+      this.orderClient.send({ cmd: 'order.find_today_markets' }, {}).pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+
+    const markets = await Promise.all(
+      (rows ?? []).map(async (row: { market_id: string }) => {
+        try {
+          const res = await firstValueFrom(
+            this.identityClient
+              .send({ cmd: 'identity.market.find_by_id' }, { id: row.market_id })
+              .pipe(timeout(8000)),
+          );
+          return res?.data ?? res ?? null;
+        } catch {
+          return null;
+        }
+      }),
+    );
+
+    return (rows ?? []).map(
+      (row: { market_id: string; orders_count: number; total_price_sum: number }, i: number) => ({
+        ...row,
+        market: markets[i],
+      }),
+    );
   }
 
   @Get(':id')
