@@ -93,6 +93,21 @@ export class OrderServiceController {
     return this.executeAndAck(context, () => this.orderService.findNewMarkets());
   }
 
+  @MessagePattern({ cmd: 'order.find_new_by_market' })
+  findNewByMarket(
+    @Payload()
+    data: { market_id: string; page?: number; limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findNewOrdersByMarket(
+        data.market_id,
+        data.page,
+        data.limit,
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.update' })
   update(
     @Payload()

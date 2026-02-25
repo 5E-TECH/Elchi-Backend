@@ -265,6 +265,37 @@ export class OrderGatewayController {
     );
   }
 
+  @Get('markets/:marketId/new')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'NEW orders by market id' })
+  @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
+  async findNewOrdersByMarket(
+    @Param('marketId') marketId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.find_new_by_market' },
+          {
+            market_id: marketId,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
