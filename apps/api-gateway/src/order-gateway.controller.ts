@@ -32,6 +32,7 @@ export class OrderGatewayController {
   constructor(
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
   ) {}
 
   @Post()
@@ -111,7 +112,7 @@ export class OrderGatewayController {
         )
         .pipe(timeout(8000)),
     )
-      .then(async (response: { data?: Array<{ market_id?: string; customer_id?: string }>; [key: string]: unknown }) => {
+      .then(async (response: { data?: Array<{ market_id?: string; customer_id?: string; district_id?: string | null }>; [key: string]: unknown }) => {
         const rows = response?.data ?? [];
         const marketIds = Array.from(
           new Set(rows.map((row) => row.market_id).filter(Boolean) as string[]),
@@ -119,8 +120,11 @@ export class OrderGatewayController {
         const customerIds = Array.from(
           new Set(rows.map((row) => row.customer_id).filter(Boolean) as string[]),
         );
+        const districtIds = Array.from(
+          new Set(rows.map((row) => row.district_id).filter(Boolean) as string[]),
+        );
 
-        const [markets, customers] = await Promise.all([
+        const [markets, customers, districts] = await Promise.all([
           Promise.all(
             marketIds.map(async (id) => {
               try {
@@ -149,10 +153,25 @@ export class OrderGatewayController {
               }
             }),
           ),
+          Promise.all(
+            districtIds.map(async (id) => {
+              try {
+                const res = await firstValueFrom(
+                  this.logisticsClient
+                    .send({ cmd: 'logistics.district.find_by_id' }, { id })
+                    .pipe(timeout(8000)),
+                );
+                return [id, res?.data ?? res ?? null] as const;
+              } catch {
+                return [id, null] as const;
+              }
+            }),
+          ),
         ]);
 
         const marketMap = new Map(markets);
         const customerMap = new Map(customers);
+        const districtMap = new Map(districts);
 
         return {
           ...response,
@@ -160,6 +179,7 @@ export class OrderGatewayController {
             ...row,
             market: row.market_id ? marketMap.get(row.market_id) ?? null : null,
             customer: row.customer_id ? customerMap.get(row.customer_id) ?? null : null,
+            district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
           })),
         };
       })
