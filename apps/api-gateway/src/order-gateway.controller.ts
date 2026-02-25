@@ -156,7 +156,7 @@ export class OrderGatewayController {
               try {
                 const res = await firstValueFrom(
                   this.identityClient
-                    .send({ cmd: 'identity.user.find_by_id' }, { id })
+                    .send({ cmd: 'identity.customer.find_by_id' }, { id })
                     .pipe(timeout(8000)),
                 );
                 return [id, res?.data ?? res ?? null] as const;
@@ -385,7 +385,7 @@ export class OrderGatewayController {
               try {
                 const res = await firstValueFrom(
                   this.identityClient
-                    .send({ cmd: 'identity.user.find_by_id' }, { id })
+                    .send({ cmd: 'identity.customer.find_by_id' }, { id })
                     .pipe(timeout(8000)),
                 );
                 return [id, res?.data ?? res ?? null] as const;
