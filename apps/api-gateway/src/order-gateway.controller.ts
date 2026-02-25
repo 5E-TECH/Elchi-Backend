@@ -95,18 +95,80 @@ export class OrderGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.orderClient.send(
-      { cmd: 'order.find_all' },
-      {
-        query: {
-          market_id,
-          customer_id,
-          status,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
-        },
-      },
-    );
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.find_all' },
+          {
+            query: {
+              market_id,
+              customer_id,
+              status,
+              page: page ? Number(page) : undefined,
+              limit: limit ? Number(limit) : undefined,
+            },
+          },
+        )
+        .pipe(timeout(8000)),
+    )
+      .then(async (response: { data?: Array<{ market_id?: string; customer_id?: string }>; [key: string]: unknown }) => {
+        const rows = response?.data ?? [];
+        const marketIds = Array.from(
+          new Set(rows.map((row) => row.market_id).filter(Boolean) as string[]),
+        );
+        const customerIds = Array.from(
+          new Set(rows.map((row) => row.customer_id).filter(Boolean) as string[]),
+        );
+
+        const [markets, customers] = await Promise.all([
+          Promise.all(
+            marketIds.map(async (id) => {
+              try {
+                const res = await firstValueFrom(
+                  this.identityClient
+                    .send({ cmd: 'identity.market.find_by_id' }, { id })
+                    .pipe(timeout(8000)),
+                );
+                return [id, res?.data ?? res ?? null] as const;
+              } catch {
+                return [id, null] as const;
+              }
+            }),
+          ),
+          Promise.all(
+            customerIds.map(async (id) => {
+              try {
+                const res = await firstValueFrom(
+                  this.identityClient
+                    .send({ cmd: 'identity.user.find_by_id' }, { id })
+                    .pipe(timeout(8000)),
+                );
+                return [id, res?.data ?? res ?? null] as const;
+              } catch {
+                return [id, null] as const;
+              }
+            }),
+          ),
+        ]);
+
+        const marketMap = new Map(markets);
+        const customerMap = new Map(customers);
+
+        return {
+          ...response,
+          data: rows.map((row) => ({
+            ...row,
+            market: row.market_id ? marketMap.get(row.market_id) ?? null : null,
+            customer: row.customer_id ? customerMap.get(row.customer_id) ?? null : null,
+          })),
+        };
+      })
+      .catch((error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Order service response timeout');
+        }
+        throw error;
+      });
   }
 
   @Get('markets/today')
