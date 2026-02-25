@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -28,17 +29,47 @@ import { Order_status } from '@app/common';
 @ApiTags('Orders')
 @Controller('orders')
 export class OrderGatewayController {
-  constructor(@Inject('ORDER') private readonly orderClient: ClientProxy) {}
+  constructor(
+    @Inject('ORDER') private readonly orderClient: ClientProxy,
+    @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+  ) {}
 
   @Post()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create order' })
   @ApiBody({ type: CreateOrderRequestDto })
-  create(@Body() dto: CreateOrderRequestDto) {
+  async create(@Body() dto: CreateOrderRequestDto) {
+    const { customer, ...orderDto } = dto;
+    let customerId = dto.customer_id;
+
+    if (!customerId) {
+      if (!customer) {
+        throw new BadRequestException('customer_id yoki customer obyekt yuborilishi shart');
+      }
+
+      const customerResponse = await firstValueFrom(
+        this.identityClient
+          .send({ cmd: 'identity.customer.create' }, { dto: customer })
+          .pipe(timeout(8000)),
+      ).catch((error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Identity service response timeout');
+        }
+        throw error;
+      });
+
+      const createdCustomer = customerResponse?.data ?? customerResponse;
+      customerId = createdCustomer?.id;
+      if (!customerId) {
+        throw new BadRequestException('Customer yaratildi, lekin id qaytmadi');
+      }
+    }
+    const finalCustomerId = customerId;
+
     return firstValueFrom(
       this.orderClient
-        .send({ cmd: 'order.create' }, { dto })
+        .send({ cmd: 'order.create' }, { dto: { ...orderDto, customer_id: finalCustomerId } })
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {

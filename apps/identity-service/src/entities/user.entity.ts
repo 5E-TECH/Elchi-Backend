@@ -18,6 +18,9 @@ export class UserAdminEntity {
   @Column({ type: 'varchar', length: 20, unique: true })
   phone_number: string;
 
+  @Column({ type: 'varchar', length: 20, nullable: true })
+  extra_number: string | null;
+
   @Column({ type: 'varchar', length: 60, unique: true, nullable: true })
   username: string | null;
 

@@ -9,12 +9,35 @@ export class OrderItemDto {
   quantity?: number;
 }
 
+export class CreateOrderCustomerDto {
+  @ApiProperty({ example: 'Ali Valiyev' })
+  name!: string;
+
+  @ApiProperty({ example: '+998901112233' })
+  phone_number!: string;
+
+  @ApiPropertyOptional({ example: '1' })
+  market_id?: string;
+
+  @ApiProperty({ example: '12' })
+  district_id!: string;
+
+  @ApiPropertyOptional({ example: '90-111-22-33' })
+  extra_number?: string;
+
+  @ApiPropertyOptional({ example: 'Yunusobod, 12-kvartal' })
+  address?: string;
+}
+
 export class CreateOrderRequestDto {
   @ApiProperty({ example: '1', description: 'Market ID (as string/bigint)' })
   market_id!: string;
 
-  @ApiProperty({ example: '1', description: 'Customer ID (as string/bigint)' })
-  customer_id!: string;
+  @ApiPropertyOptional({ example: '1', description: 'Customer ID (as string/bigint)' })
+  customer_id?: string;
+
+  @ApiPropertyOptional({ type: CreateOrderCustomerDto })
+  customer?: CreateOrderCustomerDto;
 
   @ApiPropertyOptional({ enum: Where_deliver, default: Where_deliver.CENTER })
   where_deliver?: Where_deliver;
@@ -42,6 +65,9 @@ export class CreateOrderRequestDto {
 
   @ApiPropertyOptional({ example: '1' })
   district_id?: string | null;
+
+  @ApiPropertyOptional({ example: '1' })
+  region_id?: string | null;
 
   @ApiPropertyOptional({ example: 'Toshkent, Chilonzor' })
   address?: string | null;
@@ -80,6 +106,9 @@ export class UpdateOrderRequestDto {
 
   @ApiPropertyOptional({ example: '1' })
   district_id?: string | null;
+
+  @ApiPropertyOptional({ example: '1' })
+  region_id?: string | null;
 
   @ApiPropertyOptional({ example: 'Toshkent, Chilonzor' })
   address?: string | null;

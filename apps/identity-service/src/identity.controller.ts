@@ -4,6 +4,7 @@ import { RmqService } from '@app/common';
 import { UserServiceService } from './user-service.service';
 import { AuthService } from './auth/auth.service';
 import type {
+  CreateCustomerPayload,
   CreateCourierPayload,
   CreateUserPayload,
   DeleteUserPayload,
@@ -94,6 +95,11 @@ export class IdentityController {
   @MessagePattern({ cmd: 'identity.courier.create' })
   createCourier(@Payload() payload: CreateCourierPayload, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.userService.createCourier(payload.dto));
+  }
+
+  @MessagePattern({ cmd: 'identity.customer.create' })
+  createCustomer(@Payload() payload: CreateCustomerPayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.userService.createCustomer(payload.dto));
   }
 
   @MessagePattern({ cmd: 'identity.user.update' })
