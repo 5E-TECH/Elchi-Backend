@@ -64,19 +64,32 @@ export class OrderServiceService {
       deleted: false,
     });
 
+    let saved: Order;
+    try {
+      saved = await this.orderRepo.save(order);
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
     const items = (dto.items ?? []).map((item) =>
       this.orderItemRepo.create({
         product_id: item.product_id,
         quantity: item.quantity ?? 1,
-        order,
+        order_id: saved.id,
       }),
     );
-    order.items = items;
-    order.product_quantity = items.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
 
-    let saved: Order;
+    if (items.length) {
+      try {
+        await this.orderItemRepo.save(items);
+      } catch (error) {
+        this.handleDbError(error);
+      }
+    }
+
+    saved.product_quantity = items.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
     try {
-      saved = await this.orderRepo.save(order);
+      await this.orderRepo.save(saved);
     } catch (error) {
       this.handleDbError(error);
     }
@@ -210,10 +223,16 @@ export class OrderServiceService {
         this.orderItemRepo.create({
           product_id: item.product_id,
           quantity: item.quantity ?? 1,
-          order,
+          order_id: order.id,
         }),
       );
-      order.items = items;
+      if (items.length) {
+        try {
+          await this.orderItemRepo.save(items);
+        } catch (error) {
+          this.handleDbError(error);
+        }
+      }
       order.product_quantity = items.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
     }
 
