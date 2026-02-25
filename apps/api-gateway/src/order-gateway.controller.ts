@@ -33,6 +33,7 @@ export class OrderGatewayController {
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
+    @Inject('CATALOG') private readonly catalogClient: ClientProxy,
   ) {}
 
   @Post()
@@ -112,7 +113,7 @@ export class OrderGatewayController {
         )
         .pipe(timeout(8000)),
     )
-      .then(async (response: { data?: Array<{ market_id?: string; customer_id?: string; district_id?: string | null }>; [key: string]: unknown }) => {
+      .then(async (response: { data?: Array<{ market_id?: string; customer_id?: string; district_id?: string | null; region_id?: string | null; items?: Array<{ product_id?: string }> }>; [key: string]: unknown }) => {
         const rows = response?.data ?? [];
         const marketIds = Array.from(
           new Set(rows.map((row) => row.market_id).filter(Boolean) as string[]),
@@ -123,8 +124,19 @@ export class OrderGatewayController {
         const districtIds = Array.from(
           new Set(rows.map((row) => row.district_id).filter(Boolean) as string[]),
         );
+        const regionIds = Array.from(
+          new Set(rows.map((row) => row.region_id).filter(Boolean) as string[]),
+        );
+        const productIds = Array.from(
+          new Set(
+            rows
+              .flatMap((row) => row.items ?? [])
+              .map((item) => item.product_id)
+              .filter(Boolean) as string[],
+          ),
+        );
 
-        const [markets, customers, districts] = await Promise.all([
+        const [markets, customers, districts, regions, products] = await Promise.all([
           Promise.all(
             marketIds.map(async (id) => {
               try {
@@ -167,19 +179,60 @@ export class OrderGatewayController {
               }
             }),
           ),
+          Promise.all(
+            regionIds.map(async (id) => {
+              try {
+                const res = await firstValueFrom(
+                  this.logisticsClient
+                    .send({ cmd: 'logistics.region.find_by_id' }, { id })
+                    .pipe(timeout(8000)),
+                );
+                return [id, res?.data ?? res ?? null] as const;
+              } catch {
+                return [id, null] as const;
+              }
+            }),
+          ),
+          Promise.all(
+            productIds.map(async (id) => {
+              try {
+                const res = await firstValueFrom(
+                  this.catalogClient
+                    .send({ cmd: 'catalog.product.find_by_id' }, { id })
+                    .pipe(timeout(8000)),
+                );
+                return [id, res?.data ?? res ?? null] as const;
+              } catch {
+                return [id, null] as const;
+              }
+            }),
+          ),
         ]);
 
         const marketMap = new Map(markets);
         const customerMap = new Map(customers);
         const districtMap = new Map(districts);
+        const regionMap = new Map(regions);
+        const productMap = new Map(products);
 
         return {
           ...response,
           data: rows.map((row) => ({
             ...row,
             market: row.market_id ? marketMap.get(row.market_id) ?? null : null,
-            customer: row.customer_id ? customerMap.get(row.customer_id) ?? null : null,
+            customer: row.customer_id
+              ? {
+                  ...(customerMap.get(row.customer_id) ?? null),
+                  district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
+                  region: row.region_id ? regionMap.get(row.region_id) ?? null : null,
+                }
+              : null,
             district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
+            region: row.region_id ? regionMap.get(row.region_id) ?? null : null,
+            items: (row.items ?? []).map((item) => ({
+              ...item,
+              product: item.product_id ? productMap.get(item.product_id) ?? null : null,
+            })),
           })),
         };
       })
@@ -288,12 +341,136 @@ export class OrderGatewayController {
           },
         )
         .pipe(timeout(8000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
-      }
-      throw error;
-    });
+    )
+      .then(async (response: { data?: Array<{ market_id?: string; customer_id?: string; district_id?: string | null; region_id?: string | null; items?: Array<{ product_id?: string }> }>; [key: string]: unknown }) => {
+        const rows = response?.data ?? [];
+        const marketIds = Array.from(
+          new Set(rows.map((row) => row.market_id).filter(Boolean) as string[]),
+        );
+        const customerIds = Array.from(
+          new Set(rows.map((row) => row.customer_id).filter(Boolean) as string[]),
+        );
+        const districtIds = Array.from(
+          new Set(rows.map((row) => row.district_id).filter(Boolean) as string[]),
+        );
+        const regionIds = Array.from(
+          new Set(rows.map((row) => row.region_id).filter(Boolean) as string[]),
+        );
+        const productIds = Array.from(
+          new Set(
+            rows
+              .flatMap((row) => row.items ?? [])
+              .map((item) => item.product_id)
+              .filter(Boolean) as string[],
+          ),
+        );
+
+        const [markets, customers, districts, regions, products] = await Promise.all([
+          Promise.all(
+            marketIds.map(async (id) => {
+              try {
+                const res = await firstValueFrom(
+                  this.identityClient
+                    .send({ cmd: 'identity.market.find_by_id' }, { id })
+                    .pipe(timeout(8000)),
+                );
+                return [id, res?.data ?? res ?? null] as const;
+              } catch {
+                return [id, null] as const;
+              }
+            }),
+          ),
+          Promise.all(
+            customerIds.map(async (id) => {
+              try {
+                const res = await firstValueFrom(
+                  this.identityClient
+                    .send({ cmd: 'identity.user.find_by_id' }, { id })
+                    .pipe(timeout(8000)),
+                );
+                return [id, res?.data ?? res ?? null] as const;
+              } catch {
+                return [id, null] as const;
+              }
+            }),
+          ),
+          Promise.all(
+            districtIds.map(async (id) => {
+              try {
+                const res = await firstValueFrom(
+                  this.logisticsClient
+                    .send({ cmd: 'logistics.district.find_by_id' }, { id })
+                    .pipe(timeout(8000)),
+                );
+                return [id, res?.data ?? res ?? null] as const;
+              } catch {
+                return [id, null] as const;
+              }
+            }),
+          ),
+          Promise.all(
+            regionIds.map(async (id) => {
+              try {
+                const res = await firstValueFrom(
+                  this.logisticsClient
+                    .send({ cmd: 'logistics.region.find_by_id' }, { id })
+                    .pipe(timeout(8000)),
+                );
+                return [id, res?.data ?? res ?? null] as const;
+              } catch {
+                return [id, null] as const;
+              }
+            }),
+          ),
+          Promise.all(
+            productIds.map(async (id) => {
+              try {
+                const res = await firstValueFrom(
+                  this.catalogClient
+                    .send({ cmd: 'catalog.product.find_by_id' }, { id })
+                    .pipe(timeout(8000)),
+                );
+                return [id, res?.data ?? res ?? null] as const;
+              } catch {
+                return [id, null] as const;
+              }
+            }),
+          ),
+        ]);
+
+        const marketMap = new Map(markets);
+        const customerMap = new Map(customers);
+        const districtMap = new Map(districts);
+        const regionMap = new Map(regions);
+        const productMap = new Map(products);
+
+        return {
+          ...response,
+          data: rows.map((row) => ({
+            ...row,
+            market: row.market_id ? marketMap.get(row.market_id) ?? null : null,
+            customer: row.customer_id
+              ? {
+                  ...(customerMap.get(row.customer_id) ?? null),
+                  district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
+                  region: row.region_id ? regionMap.get(row.region_id) ?? null : null,
+                }
+              : null,
+            district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
+            region: row.region_id ? regionMap.get(row.region_id) ?? null : null,
+            items: (row.items ?? []).map((item) => ({
+              ...item,
+              product: item.product_id ? productMap.get(item.product_id) ?? null : null,
+            })),
+          })),
+        };
+      })
+      .catch((error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Order service response timeout');
+        }
+        throw error;
+      });
   }
 
   @Get(':id')
