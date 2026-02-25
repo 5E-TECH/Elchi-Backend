@@ -1,5 +1,6 @@
 import { CreateAdminDto } from '../dto/create-admin.dto';
 import { CreateCourierDto } from '../dto/create-courier.dto';
+import { CreateCustomerDto } from '../dto/create-customer.dto';
 import { UpdateUserDto } from '../dto/update-user.dto';
 import { Status } from '@app/common';
 
@@ -9,6 +10,10 @@ export interface CreateUserPayload {
 
 export interface CreateCourierPayload {
   dto: CreateCourierDto;
+}
+
+export interface CreateCustomerPayload {
+  dto: CreateCustomerDto;
 }
 
 export interface UpdateUserPayload {

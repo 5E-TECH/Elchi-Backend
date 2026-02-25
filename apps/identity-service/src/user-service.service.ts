@@ -10,6 +10,7 @@ import { UpdateUserDto } from './dto/update-user.dto';
 import { CreateMarketDto } from './dto/create-market.dto';
 import { UpdateMarketDto } from './dto/update-market.dto';
 import { CreateCourierDto } from './dto/create-courier.dto';
+import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UserFilterQuery } from './contracts/user.payloads';
 import { Roles, Status } from '@app/common';
 import { catchError } from '../../../libs/common/helpers/response';
@@ -362,6 +363,49 @@ export class UserServiceService implements OnModuleInit {
     return {
       success: true,
       message: 'Courier yaratildi',
+      data: this.sanitize(saved),
+    };
+  }
+
+  async createCustomer(dto: CreateCustomerDto) {
+    const existing = await this.users.findOne({
+      where: { phone_number: dto.phone_number, is_deleted: false },
+    });
+
+    if (existing) {
+      if (existing.role !== Roles.CUSTOMER) {
+        this.conflict('Bu telefon raqam boshqa rolda allaqachon mavjud');
+      }
+
+      return {
+        success: true,
+        message: 'Customer allaqachon mavjud',
+        data: this.sanitize(existing),
+      };
+    }
+
+    const generatedPassword = `cust_${Math.random().toString(36).slice(2, 12)}`;
+    const customer = this.users.create({
+      name: dto.name,
+      phone_number: dto.phone_number,
+      extra_number: dto.extra_number ?? null,
+      username: dto.phone_number,
+      password: await this.bcryptEncryption.encrypt(generatedPassword),
+      salary: 0,
+      payment_day: undefined,
+      role: Roles.CUSTOMER,
+      status: Status.ACTIVE,
+      tariff_home: null,
+      tariff_center: null,
+      add_order: false,
+      default_tariff: null,
+      is_deleted: false,
+    });
+
+    const saved = await this.users.save(customer);
+    return {
+      success: true,
+      message: 'Customer yaratildi',
       data: this.sanitize(saved),
     };
   }

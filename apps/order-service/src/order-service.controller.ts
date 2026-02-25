@@ -47,6 +47,7 @@ export class OrderServiceController {
         operator?: string | null;
         post_id?: string | null;
         district_id?: string | null;
+        region_id?: string | null;
         address?: string | null;
         qr_code_token?: string | null;
         items?: Array<{ product_id: string; quantity?: number }>;
@@ -102,6 +103,7 @@ export class OrderServiceController {
         operator?: string | null;
         post_id?: string | null;
         district_id?: string | null;
+        region_id?: string | null;
         address?: string | null;
         qr_code_token?: string | null;
         items?: Array<{ product_id: string; quantity?: number }>;

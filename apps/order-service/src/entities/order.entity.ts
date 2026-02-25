@@ -41,6 +41,9 @@ export class Order extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   district_id!: string | null;
 
+  @Column({ type: 'bigint', nullable: true })
+  region_id!: string | null;
+
   @Column({ type: 'varchar', nullable: true })
   address!: string | null;
 

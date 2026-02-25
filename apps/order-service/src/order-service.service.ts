@@ -41,6 +41,7 @@ export class OrderServiceService {
     operator?: string | null;
     post_id?: string | null;
     district_id?: string | null;
+    region_id?: string | null;
     address?: string | null;
     qr_code_token?: string | null;
     items?: Array<{ product_id: string; quantity?: number }>;
@@ -57,6 +58,7 @@ export class OrderServiceService {
       operator: dto.operator ?? null,
       post_id: dto.post_id ?? null,
       district_id: dto.district_id ?? null,
+      region_id: dto.region_id ?? null,
       address: dto.address ?? null,
       qr_code_token: dto.qr_code_token ?? null,
       deleted: false,
@@ -179,6 +181,7 @@ export class OrderServiceService {
       operator?: string | null;
       post_id?: string | null;
       district_id?: string | null;
+      region_id?: string | null;
       address?: string | null;
       qr_code_token?: string | null;
       items?: Array<{ product_id: string; quantity?: number }>;
@@ -196,6 +199,7 @@ export class OrderServiceService {
       operator: dto.operator ?? order.operator,
       post_id: dto.post_id ?? order.post_id,
       district_id: dto.district_id ?? order.district_id,
+      region_id: dto.region_id ?? order.region_id,
       address: dto.address ?? order.address,
       qr_code_token: dto.qr_code_token ?? order.qr_code_token,
     });
