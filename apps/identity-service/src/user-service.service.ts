@@ -235,16 +235,13 @@ export class UserServiceService implements OnModuleInit {
     }
 
     if (admin.role === Roles.MARKET) {
-      console.log('[deleteUser] delete_by_market send', admin.id);
       try {
-        const res = await lastValueFrom(
+        await lastValueFrom(
           this.catalogClient
             .send({ cmd: 'catalog.product.delete_by_market' }, { user_id: admin.id })
             .pipe(timeout(5000)),
         );
-        console.log('[deleteUser] delete_by_market ok', res);
-      } catch (err) {
-        console.error('[deleteUser] delete_by_market failed', err);
+      } catch {
         throw new RpcException({
           statusCode: 502,
           message: 'Marketga tegishli productlarni o‘chirishda xatolik',
