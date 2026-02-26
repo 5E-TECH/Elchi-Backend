@@ -64,6 +64,36 @@ export class ApiGatewayController {
     return this.identityClient.send({ cmd: 'identity.user.create' }, { dto });
   }
 
+  @Get('admins')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List admins with filtering and pagination' })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiOkResponse({ type: ListEntityResponseDto })
+  getAdmins(
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.identityClient.send(
+      { cmd: 'identity.user.find_all' },
+      {
+        query: {
+          role: RoleEnum.ADMIN,
+          search,
+          status,
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+        },
+      },
+    );
+  }
+
   @Post('couriers')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
@@ -74,6 +104,35 @@ export class ApiGatewayController {
   @ApiConflictResponse({ type: ErrorResponseDto })
   createCourier(@Body() dto: CreateCourierRequestDto) {
     return this.identityClient.send({ cmd: 'identity.courier.create' }, { dto });
+  }
+
+  @Get('couriers')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List couriers with filtering and pagination' })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiOkResponse({ type: ListEntityResponseDto })
+  getCouriers(
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.identityClient.send(
+      { cmd: 'identity.courier.find_all' },
+      {
+        query: {
+          search,
+          status,
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+        },
+      },
+    );
   }
 
   @Get('users')

@@ -228,10 +228,17 @@ export class UserServiceService implements OnModuleInit {
       this.notFound('User topilmadi');
     }
 
+    const ts = Date.now();
+    const deletedPhone = `${admin.phone_number}-d${ts % 100000}`.slice(0, 20);
+    const deletedUsername =
+      admin.username?.length
+        ? `${admin.username}#del#${ts % 100000}`.slice(0, 60)
+        : null;
+
     admin.is_deleted = true;
     admin.status = Status.INACTIVE;
-    admin.username = `${admin.username ?? admin.phone_number}#deleted#${Date.now()}`;
-    admin.phone_number = `${admin.phone_number}#deleted#${Date.now()}`;
+    admin.username = deletedUsername;
+    admin.phone_number = deletedPhone;
 
     await this.users.save(admin);
 
@@ -280,7 +287,8 @@ export class UserServiceService implements OnModuleInit {
     const qb = this.users
       .createQueryBuilder('admin')
       .where('admin.is_deleted = :isDeleted', { isDeleted: false })
-      .andWhere('admin.role != :superadminRole', { superadminRole: Roles.SUPERADMIN });
+      .andWhere('admin.role != :superadminRole', { superadminRole: Roles.SUPERADMIN })
+      .andWhere('admin.role != :customerRole', { customerRole: Roles.CUSTOMER });
 
     if (search) {
       qb.andWhere(
@@ -303,6 +311,49 @@ export class UserServiceService implements OnModuleInit {
 
     const [rows, total] = await qb
       .orderBy('admin.createdAt', 'DESC')
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    return {
+      success: true,
+      data: {
+        items: rows.map((row) => this.sanitize(row)),
+        meta: {
+          page,
+          limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+        },
+      },
+    };
+  }
+
+  async findAllCouriers(query: UserFilterQuery = {}) {
+    const { search, status, page, limit, skip } = this.normalizeQuery(query);
+
+    const qb = this.users
+      .createQueryBuilder('courier')
+      .where('courier.is_deleted = :isDeleted', { isDeleted: false })
+      .andWhere('courier.role = :role', { role: Roles.COURIER });
+
+    if (search) {
+      qb.andWhere(
+        new Brackets((nested) => {
+          nested
+            .where('courier.name ILIKE :search', { search: `%${search}%` })
+            .orWhere('courier.phone_number ILIKE :search', { search: `%${search}%` })
+            .orWhere('courier.username ILIKE :search', { search: `%${search}%` });
+        }),
+      );
+    }
+
+    if (status) {
+      qb.andWhere('courier.status = :status', { status });
+    }
+
+    const [rows, total] = await qb
+      .orderBy('courier.createdAt', 'DESC')
       .skip(skip)
       .take(limit)
       .getManyAndCount();
@@ -482,10 +533,17 @@ export class UserServiceService implements OnModuleInit {
       this.notFound('Market topilmadi');
     }
 
+    const ts = Date.now();
+    const deletedPhone = `${market.phone_number}-d${ts % 100000}`.slice(0, 20);
+    const deletedUsername =
+      market.username?.length
+        ? `${market.username}#del#${ts % 100000}`.slice(0, 60)
+        : null;
+
     market.is_deleted = true;
     market.status = Status.INACTIVE;
-    market.username = `${market.username ?? market.phone_number}#deleted#${Date.now()}`;
-    market.phone_number = `${market.phone_number}#deleted#${Date.now()}`;
+    market.username = deletedUsername;
+    market.phone_number = deletedPhone;
 
     await this.users.save(market);
 

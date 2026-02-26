@@ -97,6 +97,13 @@ export class IdentityController {
     return this.executeAndAck(context, () => this.userService.createCourier(payload.dto));
   }
 
+  @MessagePattern({ cmd: 'identity.courier.find_all' })
+  getCouriers(@Payload() payload: FindAllUsersPayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.userService.findAllCouriers(payload?.query),
+    );
+  }
+
   @MessagePattern({ cmd: 'identity.customer.create' })
   createCustomer(@Payload() payload: CreateCustomerPayload, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.userService.createCustomer(payload.dto));
