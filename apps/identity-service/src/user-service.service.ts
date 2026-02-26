@@ -287,7 +287,8 @@ export class UserServiceService implements OnModuleInit {
     const qb = this.users
       .createQueryBuilder('admin')
       .where('admin.is_deleted = :isDeleted', { isDeleted: false })
-      .andWhere('admin.role != :superadminRole', { superadminRole: Roles.SUPERADMIN });
+      .andWhere('admin.role != :superadminRole', { superadminRole: Roles.SUPERADMIN })
+      .andWhere('admin.role != :customerRole', { customerRole: Roles.CUSTOMER });
 
     if (search) {
       qb.andWhere(
