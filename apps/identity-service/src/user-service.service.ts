@@ -234,6 +234,24 @@ export class UserServiceService implements OnModuleInit {
       this.badRequest('Superadminni o‘chirib bo‘lmaydi');
     }
 
+    if (admin.role === Roles.MARKET) {
+      console.log('[deleteUser] delete_by_market send', admin.id);
+      try {
+        const res = await lastValueFrom(
+          this.catalogClient
+            .send({ cmd: 'catalog.product.delete_by_market' }, { user_id: admin.id })
+            .pipe(timeout(5000)),
+        );
+        console.log('[deleteUser] delete_by_market ok', res);
+      } catch (err) {
+        console.error('[deleteUser] delete_by_market failed', err);
+        throw new RpcException({
+          statusCode: 502,
+          message: 'Marketga tegishli productlarni o‘chirishda xatolik',
+        });
+      }
+    }
+
     const ts = Date.now();
     const deletedPhone = `${admin.phone_number}-d${ts % 100000}`.slice(0, 20);
     const deletedUsername =
