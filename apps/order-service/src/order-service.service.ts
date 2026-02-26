@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { RpcException } from '@nestjs/microservices';
-import { QueryFailedError, Repository } from 'typeorm';
+import { Brackets, QueryFailedError, Repository } from 'typeorm';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { Order_status, Where_deliver } from '@app/common';
@@ -101,10 +101,24 @@ export class OrderServiceService {
     market_id?: string;
     customer_id?: string;
     status?: Order_status;
+    start_day?: string;
+    end_day?: string;
+    courier?: string;
+    region_id?: string;
     page?: number;
     limit?: number;
   }) {
-    const { market_id, customer_id, status, page = 1, limit = 10 } = query;
+    const {
+      market_id,
+      customer_id,
+      status,
+      start_day,
+      end_day,
+      courier,
+      region_id,
+      page = 1,
+      limit = 10,
+    } = query;
 
     const qb = this.orderRepo
       .createQueryBuilder('order')
@@ -119,6 +133,35 @@ export class OrderServiceService {
     }
     if (status) {
       qb.andWhere('order.status = :status', { status });
+    }
+    if (region_id) {
+      qb.andWhere('order.region_id = :region_id', { region_id });
+    }
+    if (courier) {
+      qb.andWhere(
+        new Brackets((nested) => {
+          nested
+            .where('order.operator ILIKE :courierLike', { courierLike: `%${courier}%` })
+            .orWhere('order.post_id = :courierId', { courierId: courier });
+        }),
+      );
+    }
+    if (start_day) {
+      const startDate = new Date(start_day);
+      if (Number.isNaN(startDate.getTime())) {
+        throw new RpcException({ statusCode: 400, message: 'start_day noto\'g\'ri sana formatida' });
+      }
+      qb.andWhere('order.createdAt >= :startDate', { startDate });
+    }
+    if (end_day) {
+      const endDate = new Date(end_day);
+      if (Number.isNaN(endDate.getTime())) {
+        throw new RpcException({ statusCode: 400, message: 'end_day noto\'g\'ri sana formatida' });
+      }
+      if (!end_day.includes('T')) {
+        endDate.setHours(23, 59, 59, 999);
+      }
+      qb.andWhere('order.createdAt <= :endDate', { endDate });
     }
 
     qb.orderBy('order.createdAt', 'DESC')

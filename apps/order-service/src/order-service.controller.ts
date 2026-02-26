@@ -66,6 +66,10 @@ export class OrderServiceController {
         market_id?: string;
         customer_id?: string;
         status?: Order_status;
+        start_day?: string;
+        end_day?: string;
+        courier?: string;
+        region_id?: string;
         page?: number;
         limit?: number;
       };

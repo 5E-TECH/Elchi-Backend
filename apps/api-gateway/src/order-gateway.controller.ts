@@ -88,15 +88,30 @@ export class OrderGatewayController {
   @ApiQuery({ name: 'market_id', required: false, type: String })
   @ApiQuery({ name: 'customer_id', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, enum: Order_status })
+  @ApiQuery({ name: 'search', required: false, type: String, description: 'Customer name/family/phone search' })
+  @ApiQuery({ name: 'start_day', required: false, type: String, description: 'Start date (YYYY-MM-DD or ISO)' })
+  @ApiQuery({ name: 'end_day', required: false, type: String, description: 'End date (YYYY-MM-DD or ISO)' })
+  @ApiQuery({ name: 'courier', required: false, type: String, description: 'Courier (operator text or post_id)' })
+  @ApiQuery({ name: 'region_id', required: false, type: String })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   findAll(
     @Query('market_id') market_id?: string,
     @Query('customer_id') customer_id?: string,
     @Query('status') status?: Order_status,
+    @Query('search') search?: string,
+    @Query('start_day') start_day?: string,
+    @Query('end_day') end_day?: string,
+    @Query('courier') courier?: string,
+    @Query('region_id') region_id?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
+    const requestedPage = page ? Number(page) : 1;
+    const requestedLimit = limit ? Number(limit) : 10;
+    const normalizedSearch = search?.trim().toLowerCase();
+    const useInMemorySearch = Boolean(normalizedSearch);
+
     return firstValueFrom(
       this.orderClient
         .send(
@@ -106,8 +121,12 @@ export class OrderGatewayController {
               market_id,
               customer_id,
               status,
-              page: page ? Number(page) : undefined,
-              limit: limit ? Number(limit) : undefined,
+              start_day,
+              end_day,
+              courier,
+              region_id,
+              page: useInMemorySearch ? 1 : requestedPage,
+              limit: useInMemorySearch ? 1000 : requestedLimit,
             },
           },
         )
@@ -215,25 +234,49 @@ export class OrderGatewayController {
         const regionMap = new Map(regions);
         const productMap = new Map(products);
 
+        let enrichedRows = rows.map((row) => ({
+          ...row,
+          market: row.market_id ? marketMap.get(row.market_id) ?? null : null,
+          customer: row.customer_id
+            ? {
+                ...(customerMap.get(row.customer_id) ?? null),
+                district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
+                region: row.region_id ? regionMap.get(row.region_id) ?? null : null,
+              }
+            : null,
+          district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
+          region: row.region_id ? regionMap.get(row.region_id) ?? null : null,
+          items: (row.items ?? []).map((item) => ({
+            ...item,
+            product: item.product_id ? productMap.get(item.product_id) ?? null : null,
+          })),
+        }));
+
+        if (normalizedSearch) {
+          enrichedRows = enrichedRows.filter((row) => {
+            const customer = row.customer as { name?: string; phone_number?: string } | null;
+            if (!customer) return false;
+            const fullName = (customer.name ?? '').toLowerCase();
+            const phone = (customer.phone_number ?? '').toLowerCase();
+            return fullName.includes(normalizedSearch) || phone.includes(normalizedSearch);
+          });
+        }
+
+        if (useInMemorySearch) {
+          const from = (requestedPage - 1) * requestedLimit;
+          const to = from + requestedLimit;
+          return {
+            ...response,
+            data: enrichedRows.slice(from, to),
+            total: enrichedRows.length,
+            page: requestedPage,
+            limit: requestedLimit,
+          };
+        }
+
         return {
           ...response,
-          data: rows.map((row) => ({
-            ...row,
-            market: row.market_id ? marketMap.get(row.market_id) ?? null : null,
-            customer: row.customer_id
-              ? {
-                  ...(customerMap.get(row.customer_id) ?? null),
-                  district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
-                  region: row.region_id ? regionMap.get(row.region_id) ?? null : null,
-                }
-              : null,
-            district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
-            region: row.region_id ? regionMap.get(row.region_id) ?? null : null,
-            items: (row.items ?? []).map((item) => ({
-              ...item,
-              product: item.product_id ? productMap.get(item.product_id) ?? null : null,
-            })),
-          })),
+          data: enrichedRows,
         };
       })
       .catch((error: unknown) => {
