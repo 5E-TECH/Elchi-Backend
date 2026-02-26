@@ -1,8 +1,8 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Brackets, In, Repository } from 'typeorm';
-import { RpcException } from '@nestjs/microservices';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import { UserAdminEntity } from './entities/user.entity';
 import { CreateAdminDto } from './dto/create-admin.dto';
@@ -14,6 +14,7 @@ import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UserFilterQuery } from './contracts/user.payloads';
 import { Roles, Status } from '@app/common';
 import { catchError } from '../../../libs/common/helpers/response';
+import { lastValueFrom, timeout } from 'rxjs';
 
 @Injectable()
 export class UserServiceService implements OnModuleInit {
@@ -22,6 +23,7 @@ export class UserServiceService implements OnModuleInit {
     private readonly users: Repository<UserAdminEntity>,
     private readonly bcryptEncryption: BcryptEncryption,
     private readonly configService: ConfigService,
+    @Inject('CATALOG') private readonly catalogClient: ClientProxy,
   ) {}
 
   private sanitize(user: UserAdminEntity) {
@@ -226,6 +228,28 @@ export class UserServiceService implements OnModuleInit {
     });
     if (!admin) {
       this.notFound('User topilmadi');
+    }
+
+    if (admin.role === Roles.SUPERADMIN) {
+      this.badRequest('Superadminni o‘chirib bo‘lmaydi');
+    }
+
+    if (admin.role === Roles.MARKET) {
+      try {
+        await lastValueFrom(
+          this.catalogClient
+            .send(
+              { cmd: 'catalog.product.delete_by_market' },
+              { user_id: admin.id },
+            )
+            .pipe(timeout(5000)),
+        );
+      } catch {
+        throw new RpcException({
+          statusCode: 502,
+          message: 'Market productlarini o‘chirishda xatolik',
+        });
+      }
     }
 
     const ts = Date.now();

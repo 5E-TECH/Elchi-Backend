@@ -260,4 +260,34 @@ export class CatalogServiceService {
     void this.removeProductFromSearch(id);
     return { message: `Product #${id} o'chirildi` };
   }
+
+  async removeByMarket(userId: string) {
+    let products: Product[];
+    try {
+      products = await this.productRepo.find({
+        where: { user_id: userId, isDeleted: false },
+      });
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    if (products.length === 0) {
+      return { message: `Market #${userId} uchun product yo‘q`, count: 0 };
+    }
+
+    try {
+      await this.productRepo.update(
+        { user_id: userId, isDeleted: false },
+        { isDeleted: true },
+      );
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    products.forEach((product) => void this.removeProductFromSearch(product.id));
+    return {
+      message: `Market #${userId} productlari o‘chirildi`,
+      count: products.length,
+    };
+  }
 }
