@@ -521,8 +521,101 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get order by ID' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
-  findById(@Param('id') id: string) {
-    return this.orderClient.send({ cmd: 'order.find_by_id' }, { id });
+  async findById(@Param('id') id: string) {
+    const order = await firstValueFrom(
+      this.orderClient.send({ cmd: 'order.find_by_id' }, { id }).pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+
+    const [market, customer, district, region, post] = await Promise.all([
+      order?.market_id
+        ? firstValueFrom(
+            this.identityClient
+              .send({ cmd: 'identity.market.find_by_id' }, { id: order.market_id })
+              .pipe(timeout(8000)),
+          )
+            .then((res) => res?.data ?? res ?? null)
+            .catch(() => null)
+        : Promise.resolve(null),
+      order?.customer_id
+        ? firstValueFrom(
+            this.identityClient
+              .send({ cmd: 'identity.customer.find_by_id' }, { id: order.customer_id })
+              .pipe(timeout(8000)),
+          )
+            .then((res) => res?.data ?? res ?? null)
+            .catch(() => null)
+        : Promise.resolve(null),
+      order?.district_id
+        ? firstValueFrom(
+            this.logisticsClient
+              .send({ cmd: 'logistics.district.find_by_id' }, { id: order.district_id })
+              .pipe(timeout(8000)),
+          )
+            .then((res) => res?.data ?? res ?? null)
+            .catch(() => null)
+        : Promise.resolve(null),
+      order?.region_id
+        ? firstValueFrom(
+            this.logisticsClient
+              .send({ cmd: 'logistics.region.find_by_id' }, { id: order.region_id })
+              .pipe(timeout(8000)),
+          )
+            .then((res) => res?.data ?? res ?? null)
+            .catch(() => null)
+        : Promise.resolve(null),
+      order?.post_id
+        ? firstValueFrom(
+            this.logisticsClient
+              .send({ cmd: 'logistics.post.find_by_id' }, { id: order.post_id })
+              .pipe(timeout(8000)),
+          )
+            .then((res) => res?.data ?? null)
+            .catch(() => null)
+        : Promise.resolve(null),
+    ]);
+
+    const items = await Promise.all(
+      (order?.items ?? []).map(async (item: { product_id?: string }) => {
+        if (!item?.product_id) {
+          return { ...item, product: null };
+        }
+        try {
+          const res = await firstValueFrom(
+            this.catalogClient
+              .send({ cmd: 'catalog.product.find_by_id' }, { id: item.product_id })
+              .pipe(timeout(8000)),
+          );
+          return { ...item, product: res?.data ?? res ?? null };
+        } catch {
+          return { ...item, product: null };
+        }
+      }),
+    );
+
+    return {
+      statusCode: 200,
+      message: 'Order by id',
+      data: {
+        ...order,
+        market,
+        customer: customer
+          ? {
+              ...customer,
+              district,
+              region,
+            }
+          : null,
+        district,
+        region,
+        post,
+        items,
+      },
+    };
   }
 
   @Patch(':id')
