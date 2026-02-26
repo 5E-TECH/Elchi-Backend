@@ -122,6 +122,16 @@ export class IdentityController {
     return this.executeAndAck(context, () => this.userService.findUserById(payload.id));
   }
 
+  @MessagePattern({ cmd: 'identity.customer.find_by_id' })
+  getCustomerById(
+    @Payload() payload: FindUserByIdPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.findCustomerById(payload.id),
+    );
+  }
+
   @MessagePattern({ cmd: 'identity.user.find_all' })
   getAdmins(@Payload() payload: FindAllUsersPayload, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.userService.findAllAdmins(payload?.query));
@@ -161,7 +171,7 @@ export class IdentityController {
     @Payload() payload: FindMarketByIdPayload,
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.userService.findUserById(payload.id));
+    return this.executeAndAck(context, () => this.userService.findMarketById(payload.id));
   }
 
   @MessagePattern({ cmd: 'identity.market.find_all' })

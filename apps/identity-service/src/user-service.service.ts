@@ -256,6 +256,20 @@ export class UserServiceService implements OnModuleInit {
     };
   }
 
+  async findCustomerById(id: string) {
+    const user = await this.users.findOne({
+      where: { id, role: Roles.CUSTOMER, is_deleted: false },
+    });
+    if (!user) {
+      this.notFound('Customer topilmadi');
+    }
+
+    return {
+      success: true,
+      data: this.sanitize(user),
+    };
+  }
+
   async findAdminById(id: string) {
     return this.findUserById(id);
   }
