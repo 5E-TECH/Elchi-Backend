@@ -228,6 +228,10 @@ export class UserServiceService implements OnModuleInit {
       this.notFound('User topilmadi');
     }
 
+    if (admin.role === Roles.SUPERADMIN) {
+      this.badRequest('Superadminni o‘chirib bo‘lmaydi');
+    }
+
     const ts = Date.now();
     const deletedPhone = `${admin.phone_number}-d${ts % 100000}`.slice(0, 20);
     const deletedUsername =
