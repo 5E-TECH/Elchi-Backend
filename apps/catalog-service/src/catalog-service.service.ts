@@ -260,4 +260,40 @@ export class CatalogServiceService {
     void this.removeProductFromSearch(id);
     return { message: `Product #${id} o'chirildi` };
   }
+
+  async removeByMarket(userId: string) {
+    let products: Product[];
+    try {
+      products = await this.productRepo.find({
+        where: { user_id: userId, isDeleted: false },
+        select: ['id'],
+      });
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    if (products.length === 0) {
+      return { message: 'No products to delete', count: 0 };
+    }
+
+    const ids = products.map((p) => p.id);
+
+    try {
+      await this.productRepo
+        .createQueryBuilder()
+        .update(Product)
+        .set({ isDeleted: true })
+        .where('user_id = :user_id', { user_id: userId })
+        .andWhere('isDeleted = :isDeleted', { isDeleted: false })
+        .execute();
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    for (const id of ids) {
+      void this.removeProductFromSearch(id);
+    }
+
+    return { message: 'Products deleted', count: ids.length };
+  }
 }
