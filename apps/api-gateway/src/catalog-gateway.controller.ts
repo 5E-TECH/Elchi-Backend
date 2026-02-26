@@ -102,21 +102,25 @@ export class CatalogGatewayController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List products with filtering and pagination' })
+  @ApiQuery({ name: 'market_id', required: false, type: String })
   @ApiQuery({ name: 'user_id', required: false, type: String })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   findAll(
+    @Query('market_id') market_id?: string,
     @Query('user_id') user_id?: string,
     @Query('search') search?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
+    const resolvedUserId = market_id ?? user_id;
+
     return this.catalogClient.send(
       { cmd: 'catalog.product.find_all' },
       {
         query: {
-          user_id,
+          user_id: resolvedUserId,
           search,
           page: page ? Number(page) : undefined,
           limit: limit ? Number(limit) : undefined,
