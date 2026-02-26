@@ -1,8 +1,9 @@
-import { Injectable, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Brackets, In, Repository } from 'typeorm';
-import { RpcException } from '@nestjs/microservices';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
+import { lastValueFrom, timeout } from 'rxjs';
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import { UserAdminEntity } from './entities/user.entity';
 import { CreateAdminDto } from './dto/create-admin.dto';
@@ -20,6 +21,7 @@ export class UserServiceService implements OnModuleInit {
   constructor(
     @InjectRepository(UserAdminEntity)
     private readonly users: Repository<UserAdminEntity>,
+    @Inject('CATALOG') private readonly catalogClient: ClientProxy,
     private readonly bcryptEncryption: BcryptEncryption,
     private readonly configService: ConfigService,
   ) {}
@@ -226,6 +228,10 @@ export class UserServiceService implements OnModuleInit {
     });
     if (!admin) {
       this.notFound('User topilmadi');
+    }
+
+    if (admin.role === Roles.SUPERADMIN) {
+      this.badRequest('Superadminni o‘chirib bo‘lmaydi');
     }
 
     const ts = Date.now();
@@ -531,6 +537,19 @@ export class UserServiceService implements OnModuleInit {
     });
     if (!market) {
       this.notFound('Market topilmadi');
+    }
+
+    try {
+      await lastValueFrom(
+        this.catalogClient
+          .send({ cmd: 'catalog.product.delete_by_market' }, { user_id: id })
+          .pipe(timeout(5000)),
+      );
+    } catch {
+      throw new RpcException({
+        statusCode: 502,
+        message: 'Marketga tegishli productlarni o‘chirishda xatolik',
+      });
     }
 
     const ts = Date.now();

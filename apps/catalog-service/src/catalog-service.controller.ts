@@ -81,4 +81,14 @@ export class CatalogServiceController {
       this.catalogService.remove(data.id, data.requester),
     );
   }
+
+  @MessagePattern({ cmd: 'catalog.product.delete_by_market' })
+  removeByMarket(
+    @Payload() data: { user_id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.catalogService.removeByMarket(data.user_id),
+    );
+  }
 }
