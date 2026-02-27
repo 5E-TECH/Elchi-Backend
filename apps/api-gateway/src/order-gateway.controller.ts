@@ -637,6 +637,8 @@ export class OrderGatewayController {
         })),
         market,
         customer,
+        district,
+        region,
         post,
       },
     };
