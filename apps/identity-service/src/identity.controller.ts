@@ -89,7 +89,9 @@ export class IdentityController {
 
   @MessagePattern({ cmd: 'identity.user.create' })
   createAdmin(@Payload() payload: CreateUserPayload, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.userService.createAdmin(payload.dto));
+    return this.executeAndAck(context, () =>
+      this.userService.createAdmin(payload.dto, payload.requester),
+    );
   }
 
   @MessagePattern({ cmd: 'identity.courier.create' })
@@ -112,13 +114,15 @@ export class IdentityController {
   @MessagePattern({ cmd: 'identity.user.update' })
   updateAdmin(@Payload() payload: UpdateUserPayload, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.userService.updateUser(payload.id, payload.dto),
+      this.userService.updateUser(payload.id, payload.dto, payload.requester),
     );
   }
 
   @MessagePattern({ cmd: 'identity.user.delete' })
   deleteAdmin(@Payload() payload: DeleteUserPayload, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.userService.deleteUser(payload.id));
+    return this.executeAndAck(context, () =>
+      this.userService.deleteUser(payload.id, payload.requester),
+    );
   }
 
   @MessagePattern({ cmd: 'identity.user.find_by_id' })
@@ -150,7 +154,11 @@ export class IdentityController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.userService.setUserStatus(payload.id, payload.status),
+      this.userService.setUserStatus(
+        payload.id,
+        payload.status,
+        payload.requester,
+      ),
     );
   }
 

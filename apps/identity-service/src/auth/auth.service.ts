@@ -10,6 +10,7 @@ import { BcryptEncryption } from '../../../../libs/common/helpers/bcrypt';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import { Status } from '@app/common';
+import { errorRes, successRes } from '../../../../libs/common/helpers/response';
 
 @Injectable()
 export class AuthService {
@@ -26,20 +27,22 @@ export class AuthService {
       where: { phone_number: dto.phone_number, is_deleted: false },
     });
     if (!user) {
-      throw new RpcException({ statusCode: 401, message: 'Invalid credentials' });
+      throw new RpcException(errorRes('Invalid credentials', 401));
     }
     if (user.status !== Status.ACTIVE) {
-      throw new RpcException({ statusCode: 401, message: 'Invalid credentials' });
+      throw new RpcException(errorRes('Invalid credentials', 401));
     }
 
     const isMatch = await this.bcryptEncryption.compare(dto.password, user.password);
     if (!isMatch) {
-      throw new RpcException({ statusCode: 401, message: 'Invalid credentials' });
+      throw new RpcException(errorRes('Invalid credentials', 401));
     }
 
     const tokens = await this.issueTokens(user);
     await this.saveRefreshToken(user.id, tokens.refreshToken);
     return {
+      statusCode: 200,
+      message: 'success',
       user: this.sanitize(user),
       ...tokens,
     };
@@ -50,19 +53,23 @@ export class AuthService {
       where: { id: userId, is_deleted: false },
     });
     if (!user) {
-      throw new RpcException({ statusCode: 401, message: 'User not found' });
+      throw new RpcException(errorRes('User not found', 401));
     }
     if (user.status !== Status.ACTIVE) {
-      throw new RpcException({ statusCode: 401, message: 'User not found' });
+      throw new RpcException(errorRes('User not found', 401));
     }
 
-    return this.sanitize(user);
+    return {
+      statusCode: 200,
+      message: 'success',
+      user: this.sanitize(user),
+    };
   }
 
   async refresh(dto: RefreshDto) {
     const refreshSecret = this.configService.get<string>('REFRESH_TOKEN_KEY');
     if (!refreshSecret) {
-      throw new RpcException({ statusCode: 401, message: 'Refresh secret not configured' });
+      throw new RpcException(errorRes('Refresh secret not configured', 401));
     }
 
     let payload: { sub: string; username: string };
@@ -72,23 +79,25 @@ export class AuthService {
         { secret: refreshSecret },
       );
     } catch {
-      throw new RpcException({ statusCode: 401, message: 'Invalid refresh token' });
+      throw new RpcException(errorRes('Invalid refresh token', 401));
     }
 
     const user = await this.users.findOne({
       where: { id: payload.sub, is_deleted: false },
     });
     if (!user || user.username !== payload.username || user.status !== Status.ACTIVE) {
-      throw new RpcException({ statusCode: 401, message: 'Invalid refresh token' });
+      throw new RpcException(errorRes('Invalid refresh token', 401));
     }
 
     if (!user.refresh_token || user.refresh_token !== dto.refreshToken) {
-      throw new RpcException({ statusCode: 401, message: 'Invalid refresh token' });
+      throw new RpcException(errorRes('Invalid refresh token', 401));
     }
 
     const tokens = await this.issueTokens(user);
     await this.saveRefreshToken(user.id, tokens.refreshToken);
     return {
+      statusCode: 200,
+      message: 'success',
       user: this.sanitize(user),
       ...tokens,
     };
@@ -100,16 +109,13 @@ export class AuthService {
     });
 
     if (!user) {
-      throw new RpcException({ statusCode: 401, message: 'User not found' });
+      throw new RpcException(errorRes('User not found', 401));
     }
 
     user.refresh_token = null;
     await this.users.save(user);
 
-    return {
-      success: true,
-      message: 'Logged out successfully',
-    };
+    return successRes({}, 200, 'Logged out successfully');
   }
 
   private async saveRefreshToken(userId: string, refreshToken: string) {

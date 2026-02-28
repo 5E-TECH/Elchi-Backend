@@ -273,19 +273,22 @@ export class EntityItemDto {
 }
 
 export class SingleEntityResponseDto {
-  @ApiProperty({ example: true })
-  success!: boolean;
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
 
-  @ApiPropertyOptional({ example: 'Yaratildi' })
-  message?: string;
+  @ApiPropertyOptional({ example: 'success' })
+  message!: string;
 
   @ApiProperty({ type: EntityItemDto })
   data!: EntityItemDto;
 }
 
 export class ListEntityResponseDto {
-  @ApiProperty({ example: true })
-  success!: boolean;
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiPropertyOptional({ example: 'success' })
+  message!: string;
 
   @ApiProperty({
     example: {
@@ -315,8 +318,8 @@ export class ListEntityResponseDto {
 }
 
 export class DeleteEntityResponseDto {
-  @ApiProperty({ example: true })
-  success!: boolean;
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
 
   @ApiProperty({ example: 'O‘chirildi' })
   message!: string;

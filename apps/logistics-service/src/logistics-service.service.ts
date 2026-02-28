@@ -11,6 +11,7 @@ import { UpdateDistrictDto } from './dto/update-district.dto';
 import { UpdateDistrictNameDto } from './dto/update-district-name.dto';
 import { CreateRegionDto } from './dto/create-region.dto';
 import { UpdateRegionDto } from './dto/update-region.dto';
+import { errorRes, successRes } from '../../../libs/common/helpers/response';
 
 @Injectable()
 export class LogisticsServiceService implements OnModuleInit {
@@ -21,19 +22,15 @@ export class LogisticsServiceService implements OnModuleInit {
   ) {}
 
   private notFound(message: string): never {
-    throw new RpcException({ statusCode: 404, message });
+    throw new RpcException(errorRes(message, 404));
   }
 
   private badRequest(message: string): never {
-    throw new RpcException({ statusCode: 400, message });
+    throw new RpcException(errorRes(message, 400));
   }
 
   private conflict(message: string): never {
-    throw new RpcException({ statusCode: 409, message });
-  }
-
-  private success<T>(data: T, message = 'OK', statusCode = 200) {
-    return { success: true, statusCode, message, data };
+    throw new RpcException(errorRes(message, 409));
   }
 
   async onModuleInit() {
@@ -102,7 +99,7 @@ export class LogisticsServiceService implements OnModuleInit {
       assigned_region: dto.region_id,
     });
     const saved = await this.districtRepo.save(district);
-    return this.success(saved, 'New district added', 201);
+    return successRes(saved, 201, 'New district added');
   }
 
   async findAllDistricts() {
@@ -110,7 +107,7 @@ export class LogisticsServiceService implements OnModuleInit {
       relations: ['region', 'assignedToRegion'],
       order: { createdAt: 'DESC' },
     });
-    return this.success(districts);
+    return successRes(districts);
   }
 
   async findDistrictById(id: string) {
@@ -121,7 +118,7 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!district) {
       this.notFound('District not found');
     }
-    return this.success(district);
+    return successRes(district);
   }
 
   async updateDistrict(id: string, dto: UpdateDistrictDto) {
@@ -145,7 +142,7 @@ export class LogisticsServiceService implements OnModuleInit {
     district.assignedToRegion = assigningRegion;
 
     const saved = await this.districtRepo.save(district);
-    return this.success(saved, 'District assigned to new region');
+    return successRes(saved, 200, 'District assigned to new region');
   }
 
   async updateDistrictName(id: string, dto: UpdateDistrictNameDto) {
@@ -168,7 +165,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
     district.name = trimmedName;
     await this.districtRepo.save(district);
-    return this.success({}, 'District name updated');
+    return successRes({}, 200, 'District name updated');
   }
 
   async deleteDistrict(id: string) {
@@ -178,7 +175,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     await this.districtRepo.remove(district);
-    return this.success({ id }, 'District deleted');
+    return successRes({ id }, 200, 'District deleted');
   }
 
   async createRegion(dto: CreateRegionDto) {
@@ -203,7 +200,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const region = this.regionRepo.create({ name, sato_code: satoCode });
     const saved = await this.regionRepo.save(region);
-    return this.success(saved, 'Region created', 201);
+    return successRes(saved, 201, 'Region created');
   }
 
   async findAllRegions() {
@@ -211,7 +208,7 @@ export class LogisticsServiceService implements OnModuleInit {
       relations: ['districts'],
       order: { createdAt: 'DESC' },
     });
-    return this.success(rows);
+    return successRes(rows);
   }
 
   async findRegionById(id: string) {
@@ -222,7 +219,7 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!region) {
       this.notFound('Region not found');
     }
-    return this.success(region);
+    return successRes(region);
   }
 
   async updateRegion(id: string, dto: UpdateRegionDto) {
@@ -258,7 +255,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     const saved = await this.regionRepo.save(region);
-    return this.success(saved, 'Region updated');
+    return successRes(saved, 200, 'Region updated');
   }
 
   async deleteRegion(id: string) {
@@ -268,7 +265,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     await this.regionRepo.remove(region);
-    return this.success({ id }, 'Region deleted');
+    return successRes({ id }, 200, 'Region deleted');
   }
 
   // TODO: Post CRUD

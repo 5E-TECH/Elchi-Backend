@@ -159,4 +159,7 @@ export class ErrorResponseDto {
 
   @ApiProperty({ example: 'User topilmadi' })
   message!: string;
+
+  @ApiPropertyOptional({ example: null })
+  data?: null;
 }

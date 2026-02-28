@@ -4,8 +4,14 @@ import { CreateCustomerDto } from '../dto/create-customer.dto';
 import { UpdateUserDto } from '../dto/update-user.dto';
 import { Status } from '@app/common';
 
+export interface RequesterContext {
+  id: string;
+  roles: string[];
+}
+
 export interface CreateUserPayload {
   dto: CreateAdminDto;
+  requester?: RequesterContext;
 }
 
 export interface CreateCourierPayload {
@@ -19,10 +25,12 @@ export interface CreateCustomerPayload {
 export interface UpdateUserPayload {
   id: string;
   dto: UpdateUserDto;
+  requester?: RequesterContext;
 }
 
 export interface DeleteUserPayload {
   id: string;
+  requester?: RequesterContext;
 }
 
 export interface FindUserByIdPayload {
@@ -44,4 +52,5 @@ export interface FindAllUsersPayload {
 export interface UpdateUserStatusPayload {
   id: string;
   status: Status;
+  requester?: RequesterContext;
 }

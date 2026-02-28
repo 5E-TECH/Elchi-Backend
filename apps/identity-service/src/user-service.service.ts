@@ -14,7 +14,8 @@ import { CreateCourierDto } from './dto/create-courier.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UserFilterQuery } from './contracts/user.payloads';
 import { Roles, Status } from '@app/common';
-import { catchError } from '../../../libs/common/helpers/response';
+import { catchError, errorRes, successRes } from '../../../libs/common/helpers/response';
+import { RequesterContext } from './contracts/user.payloads';
 
 @Injectable()
 export class UserServiceService implements OnModuleInit {
@@ -32,23 +33,61 @@ export class UserServiceService implements OnModuleInit {
   }
 
   private notFound(message: string): never {
-    throw new RpcException({ statusCode: 404, message });
+    throw new RpcException(errorRes(message, 404));
   }
 
   private badRequest(message: string): never {
-    throw new RpcException({ statusCode: 400, message });
+    throw new RpcException(errorRes(message, 400));
   }
 
   private conflict(message: string): never {
-    throw new RpcException({ statusCode: 409, message });
+    throw new RpcException(errorRes(message, 409));
   }
 
-  private readonly adminRoles: Roles[] = [Roles.SUPERADMIN, Roles.ADMIN];
+  private forbidden(message: string): never {
+    throw new RpcException(errorRes(message, 403));
+  }
 
-  private ensureRoleIsAdmin(role: Roles) {
-    if (!this.adminRoles.includes(role)) {
-      this.badRequest('Admin endpoint orqali faqat admin yoki superadmin roli berilishi mumkin');
+  private hasRole(requester: RequesterContext | undefined, role: Roles): boolean {
+    return requester?.roles?.includes(role) ?? false;
+  }
+
+  private assertRequesterCanCreateAdmin(requester?: RequesterContext) {
+    if (!requester) {
+      return;
     }
+
+    if (this.hasRole(requester, Roles.SUPERADMIN)) {
+      return;
+    }
+
+    if (this.hasRole(requester, Roles.ADMIN)) {
+      this.forbidden('Admin admin yarata olmaydi');
+    }
+
+    this.forbidden('Bu amal uchun ruxsat yoq');
+  }
+
+  private assertRequesterCanMutateUser(
+    requester: RequesterContext | undefined,
+    targetRole: Roles,
+  ) {
+    if (!requester) {
+      return;
+    }
+
+    if (this.hasRole(requester, Roles.SUPERADMIN)) {
+      return;
+    }
+
+    if (this.hasRole(requester, Roles.ADMIN)) {
+      if (targetRole === Roles.SUPERADMIN || targetRole === Roles.ADMIN) {
+        this.forbidden('Admin admin yoki superadminni boshqara olmaydi');
+      }
+      return;
+    }
+
+    this.forbidden('Bu amal uchun ruxsat yoq');
   }
 
   private normalizeQuery(query: UserFilterQuery = {}) {
@@ -93,11 +132,12 @@ export class UserServiceService implements OnModuleInit {
     };
 
     if (!config.ADMIN_NAME || !config.ADMIN_PHONE_NUMBER || !config.ADMIN_PASSWORD) {
-      throw new RpcException({
-        statusCode: 500,
-        message:
+      throw new RpcException(
+        errorRes(
           'SUPERADMIN_NAME, SUPERADMIN_PHONE_NUMBER, SUPERADMIN_PASSWORD .env da bo‘lishi shart',
-      });
+          500,
+        ),
+      );
     }
 
     try {
@@ -125,7 +165,9 @@ export class UserServiceService implements OnModuleInit {
     }
   }
 
-  async createAdmin(dto: CreateAdminDto) {
+  async createAdmin(dto: CreateAdminDto, requester?: RequesterContext) {
+    this.assertRequesterCanCreateAdmin(requester);
+
     await this.ensurePhoneUnique(dto.phone_number);
     await this.ensureUsernameUnique(dto.phone_number);
 
@@ -144,18 +186,14 @@ export class UserServiceService implements OnModuleInit {
     });
 
     const saved = await this.users.save(admin);
-    return {
-      success: true,
-      message: 'Admin yaratildi',
-      data: this.sanitize(saved),
-    };
+    return successRes(this.sanitize(saved), 201, 'Admin yaratildi');
   }
 
   async updateAdmin(id: string, dto: UpdateUserDto) {
     return this.updateUser(id, dto);
   }
 
-  async updateUser(id: string, dto: UpdateUserDto) {
+  async updateUser(id: string, dto: UpdateUserDto, requester?: RequesterContext) {
     const admin = await this.users.findOne({
       where: { id, is_deleted: false },
     });
@@ -163,6 +201,7 @@ export class UserServiceService implements OnModuleInit {
     if (!admin) {
       this.notFound('User topilmadi');
     }
+    this.assertRequesterCanMutateUser(requester, admin.role);
 
     if (dto.phone_number && dto.phone_number !== admin.phone_number) {
       await this.ensurePhoneUnique(dto.phone_number, id);
@@ -211,24 +250,21 @@ export class UserServiceService implements OnModuleInit {
     }
 
     const saved = await this.users.save(admin);
-    return {
-      success: true,
-      message: 'User yangilandi',
-      data: this.sanitize(saved),
-    };
+    return successRes(this.sanitize(saved), 200, 'User yangilandi');
   }
 
   async deleteAdmin(id: string) {
     return this.deleteUser(id);
   }
 
-  async deleteUser(id: string) {
+  async deleteUser(id: string, requester?: RequesterContext) {
     const admin = await this.users.findOne({
       where: { id, is_deleted: false },
     });
     if (!admin) {
       this.notFound('User topilmadi');
     }
+    this.assertRequesterCanMutateUser(requester, admin.role);
 
     if (admin.role === Roles.SUPERADMIN) {
       this.badRequest('Superadminni o‘chirib bo‘lmaydi');
@@ -242,10 +278,9 @@ export class UserServiceService implements OnModuleInit {
             .pipe(timeout(5000)),
         );
       } catch {
-        throw new RpcException({
-          statusCode: 502,
-          message: 'Marketga tegishli productlarni o‘chirishda xatolik',
-        });
+        throw new RpcException(
+          errorRes('Marketga tegishli productlarni o‘chirishda xatolik', 502),
+        );
       }
     }
 
@@ -263,11 +298,7 @@ export class UserServiceService implements OnModuleInit {
 
     await this.users.save(admin);
 
-    return {
-      success: true,
-      message: 'User o‘chirildi',
-      data: { id },
-    };
+    return successRes({ id }, 200, 'User o‘chirildi');
   }
 
   async findUserById(id: string) {
@@ -278,10 +309,7 @@ export class UserServiceService implements OnModuleInit {
       this.notFound('User topilmadi');
     }
 
-    return {
-      success: true,
-      data: this.sanitize(user),
-    };
+    return successRes(this.sanitize(user));
   }
 
   async findCustomerById(id: string) {
@@ -292,10 +320,7 @@ export class UserServiceService implements OnModuleInit {
       this.notFound('Customer topilmadi');
     }
 
-    return {
-      success: true,
-      data: this.sanitize(user),
-    };
+    return successRes(this.sanitize(user));
   }
 
   async findAdminById(id: string) {
@@ -336,18 +361,15 @@ export class UserServiceService implements OnModuleInit {
       .take(limit)
       .getManyAndCount();
 
-    return {
-      success: true,
-      data: {
-        items: rows.map((row) => this.sanitize(row)),
-        meta: {
-          page,
-          limit,
-          total,
-          totalPages: Math.max(1, Math.ceil(total / limit)),
-        },
+    return successRes({
+      items: rows.map((row) => this.sanitize(row)),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
       },
-    };
+    });
   }
 
   async findAllCouriers(query: UserFilterQuery = {}) {
@@ -379,18 +401,15 @@ export class UserServiceService implements OnModuleInit {
       .take(limit)
       .getManyAndCount();
 
-    return {
-      success: true,
-      data: {
-        items: rows.map((row) => this.sanitize(row)),
-        meta: {
-          page,
-          limit,
-          total,
-          totalPages: Math.max(1, Math.ceil(total / limit)),
-        },
+    return successRes({
+      items: rows.map((row) => this.sanitize(row)),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
       },
-    };
+    });
   }
 
   async createMarket(dto: CreateMarketDto) {
@@ -416,11 +435,7 @@ export class UserServiceService implements OnModuleInit {
     });
 
     const saved = await this.users.save(market);
-    return {
-      success: true,
-      message: 'Market yaratildi',
-      data: this.sanitize(saved),
-    };
+    return successRes(this.sanitize(saved), 201, 'Market yaratildi');
   }
 
   async createCourier(dto: CreateCourierDto) {
@@ -446,11 +461,7 @@ export class UserServiceService implements OnModuleInit {
     });
 
     const saved = await this.users.save(courier);
-    return {
-      success: true,
-      message: 'Courier yaratildi',
-      data: this.sanitize(saved),
-    };
+    return successRes(this.sanitize(saved), 201, 'Courier yaratildi');
   }
 
   async createCustomer(dto: CreateCustomerDto) {
@@ -463,11 +474,7 @@ export class UserServiceService implements OnModuleInit {
         this.conflict('Bu telefon raqam boshqa rolda allaqachon mavjud');
       }
 
-      return {
-        success: true,
-        message: 'Customer allaqachon mavjud',
-        data: this.sanitize(existing),
-      };
+      return successRes(this.sanitize(existing), 200, 'Customer allaqachon mavjud');
     }
 
     const generatedPassword = `cust_${Math.random().toString(36).slice(2, 12)}`;
@@ -489,11 +496,7 @@ export class UserServiceService implements OnModuleInit {
     });
 
     const saved = await this.users.save(customer);
-    return {
-      success: true,
-      message: 'Customer yaratildi',
-      data: this.sanitize(saved),
-    };
+    return successRes(this.sanitize(saved), 201, 'Customer yaratildi');
   }
 
   async updateMarket(id: string, dto: UpdateMarketDto) {
@@ -539,11 +542,7 @@ export class UserServiceService implements OnModuleInit {
     }
 
     const saved = await this.users.save(market);
-    return {
-      success: true,
-      message: 'Market yangilandi',
-      data: this.sanitize(saved),
-    };
+    return successRes(this.sanitize(saved), 200, 'Market yangilandi');
   }
 
   async deleteMarket(id: string) {
@@ -561,10 +560,9 @@ export class UserServiceService implements OnModuleInit {
           .pipe(timeout(5000)),
       );
     } catch {
-      throw new RpcException({
-        statusCode: 502,
-        message: 'Marketga tegishli productlarni o‘chirishda xatolik',
-      });
+      throw new RpcException(
+        errorRes('Marketga tegishli productlarni o‘chirishda xatolik', 502),
+      );
     }
 
     const ts = Date.now();
@@ -581,11 +579,7 @@ export class UserServiceService implements OnModuleInit {
 
     await this.users.save(market);
 
-    return {
-      success: true,
-      message: 'Market o‘chirildi',
-      data: { id },
-    };
+    return successRes({ id }, 200, 'Market o‘chirildi');
   }
 
   async findMarketById(id: string) {
@@ -621,21 +615,22 @@ export class UserServiceService implements OnModuleInit {
       .take(limit)
       .getManyAndCount();
 
-    return {
-      success: true,
-      data: {
-        items: rows.map((row) => this.sanitize(row)),
-        meta: {
-          page,
-          limit,
-          total,
-          totalPages: Math.max(1, Math.ceil(total / limit)),
-        },
+    return successRes({
+      items: rows.map((row) => this.sanitize(row)),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
       },
-    };
+    });
   }
 
-  async setUserStatus(id: string, status: Status) {
+  async setUserStatus(
+    id: string,
+    status: Status,
+    requester?: RequesterContext,
+  ) {
     const user = await this.users.findOne({
       where: { id, is_deleted: false },
     });
@@ -643,15 +638,12 @@ export class UserServiceService implements OnModuleInit {
     if (!user) {
       this.notFound('User topilmadi');
     }
+    this.assertRequesterCanMutateUser(requester, user.role);
 
     user.status = status;
     const saved = await this.users.save(user);
 
-    return {
-      success: true,
-      message: 'User status yangilandi',
-      data: this.sanitize(saved),
-    };
+    return successRes(this.sanitize(saved), 200, 'User status yangilandi');
   }
 
   async findByUsernameForAuth(username: string) {

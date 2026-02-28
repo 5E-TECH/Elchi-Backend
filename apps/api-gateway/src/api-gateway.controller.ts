@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
@@ -41,10 +42,23 @@ import {
   UpdateUserStatusRequestDto,
 } from './dto/identity.swagger.dto';
 
+interface JwtUser {
+  sub: string;
+  username: string;
+  roles?: string[];
+}
+
 @ApiTags('Identity')
 @Controller()
 export class ApiGatewayController {
   constructor(@Inject('IDENTITY') private readonly identityClient: ClientProxy) {}
+
+  private toRequester(req: { user: JwtUser }) {
+    return {
+      id: req.user.sub,
+      roles: req.user.roles ?? [],
+    };
+  }
 
   @Get()
   @ApiOperation({ summary: 'Gateway health check via identity service' })
@@ -54,14 +68,17 @@ export class ApiGatewayController {
 
   @Post('admins')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create admin' })
   @ApiBody({ type: CreateAdminRequestDto })
   @ApiCreatedResponse({ type: SingleEntityResponseDto })
   @ApiConflictResponse({ type: ErrorResponseDto })
-  createAdmin(@Body() dto: CreateAdminRequestDto) {
-    return this.identityClient.send({ cmd: 'identity.user.create' }, { dto });
+  createAdmin(@Body() dto: CreateAdminRequestDto, @Req() req: { user: JwtUser }) {
+    return this.identityClient.send(
+      { cmd: 'identity.user.create' },
+      { dto, requester: this.toRequester(req) },
+    );
   }
 
   @Get('admins')
@@ -189,8 +206,15 @@ export class ApiGatewayController {
   @ApiOkResponse({ type: SingleEntityResponseDto })
   @ApiConflictResponse({ type: ErrorResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
-  updateUser(@Param('id') id: string, @Body() dto: UpdateAdminRequestDto) {
-    return this.identityClient.send({ cmd: 'identity.user.update' }, { id, dto });
+  updateUser(
+    @Param('id') id: string,
+    @Body() dto: UpdateAdminRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.identityClient.send(
+      { cmd: 'identity.user.update' },
+      { id, dto, requester: this.toRequester(req) },
+    );
   }
 
   @Delete('users/:id')
@@ -201,8 +225,11 @@ export class ApiGatewayController {
   @ApiParam({ name: 'id', description: 'User ID' })
   @ApiOkResponse({ type: DeleteEntityResponseDto })
   @ApiNotFoundResponse({ type: ErrorResponseDto })
-  deleteUser(@Param('id') id: string) {
-    return this.identityClient.send({ cmd: 'identity.user.delete' }, { id });
+  deleteUser(@Param('id') id: string, @Req() req: { user: JwtUser }) {
+    return this.identityClient.send(
+      { cmd: 'identity.user.delete' },
+      { id, requester: this.toRequester(req) },
+    );
   }
 
   @Patch('users/:id/status')
@@ -217,8 +244,12 @@ export class ApiGatewayController {
   updateUserStatus(
     @Param('id') id: string,
     @Body() dto: UpdateUserStatusRequestDto,
+    @Req() req: { user: JwtUser },
   ) {
-    return this.identityClient.send({ cmd: 'identity.user.status' }, { id, status: dto.status });
+    return this.identityClient.send(
+      { cmd: 'identity.user.status' },
+      { id, status: dto.status, requester: this.toRequester(req) },
+    );
   }
 
   @Post('markets')
