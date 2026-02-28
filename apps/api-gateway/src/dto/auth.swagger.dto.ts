@@ -40,6 +40,12 @@ export class AuthUserDto {
 }
 
 export class AuthResponseDto {
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiProperty({ example: 'success' })
+  message!: string;
+
   @ApiProperty({ type: AuthUserDto })
   user!: AuthUserDto;
 
@@ -51,20 +57,14 @@ export class AuthResponseDto {
 }
 
 export class ValidateResponseDto {
-  @ApiProperty({ example: '1' })
-  id!: string;
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
 
-  @ApiProperty({ example: 'ali123' })
-  username!: string;
+  @ApiProperty({ example: 'success' })
+  message!: string;
 
-  @ApiPropertyOptional({ example: 'Ali Valiyev' })
-  name?: string;
-
-  @ApiProperty({ example: 'customer' })
-  role!: string;
-
-  @ApiProperty({ example: 'active' })
-  status!: string;
+  @ApiProperty({ type: AuthUserDto })
+  user!: AuthUserDto;
 }
 
 export class AuthErrorResponseDto {
@@ -73,12 +73,18 @@ export class AuthErrorResponseDto {
 
   @ApiProperty({ example: 'Invalid credentials' })
   message!: string;
+
+  @ApiPropertyOptional({ example: null })
+  data?: null;
 }
 
 export class LogoutResponseDto {
-  @ApiProperty({ example: true })
-  success!: boolean;
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
 
   @ApiProperty({ example: 'Logged out successfully' })
   message!: string;
+
+  @ApiProperty({ example: {} })
+  data!: Record<string, never>;
 }

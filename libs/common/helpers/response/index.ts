@@ -11,6 +11,14 @@ export const catchError = (error: any) => {
   }
 };
 
+export const errorRes = (message?: string, code?: number, data?: any) => {
+  return {
+    statusCode: code ?? 500,
+    message: message ?? 'error',
+    data: data ?? null,
+  };
+};
+
 export const successRes = (resData: any, code?: number, message?: string) => {
   return {
     statusCode: code ? code : 200,

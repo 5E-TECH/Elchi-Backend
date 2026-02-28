@@ -7,6 +7,7 @@ import { UpdateDistrictDto } from './dto/update-district.dto';
 import { UpdateDistrictNameDto } from './dto/update-district-name.dto';
 import { CreateRegionDto } from './dto/create-region.dto';
 import { UpdateRegionDto } from './dto/update-region.dto';
+import { successRes } from '../../../libs/common/helpers/response';
 
 @Controller()
 export class LogisticsServiceController {
@@ -28,11 +29,17 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.health' })
   health(@Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({
-      service: 'logistics-service',
-      status: 'ok',
-      timestamp: new Date().toISOString(),
-    }));
+    return this.executeAndAck(context, () =>
+      successRes(
+        {
+          service: 'logistics-service',
+          status: 'ok',
+          timestamp: new Date().toISOString(),
+        },
+        200,
+        'success',
+      ),
+    );
   }
 
   // --- Post ---
@@ -40,23 +47,29 @@ export class LogisticsServiceController {
   createPost(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => {
       // TODO: implement
-      return { message: 'not implemented' };
+      return successRes({ message: 'not implemented' }, 200, 'success');
     });
   }
 
   @MessagePattern({ cmd: 'logistics.post.find_all' })
   findAllPosts(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      successRes({ message: 'not implemented' }, 200, 'success'),
+    );
   }
 
   @MessagePattern({ cmd: 'logistics.post.find_by_id' })
   findPostById(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      successRes({ message: 'not implemented' }, 200, 'success'),
+    );
   }
 
   @MessagePattern({ cmd: 'logistics.post.update' })
   updatePost(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      successRes({ message: 'not implemented' }, 200, 'success'),
+    );
   }
 
   // --- Region ---
