@@ -66,7 +66,7 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create admin' })
   @ApiBody({ type: CreateAdminRequestDto })
-  @ApiCreatedResponse({ description: 'Created' })
+  @ApiCreatedResponse({ description: 'Admin created' })
   @ApiConflictResponse({ description: 'Conflict' })
   createAdmin(@Body() dto: CreateAdminRequestDto, @Req() req: { user: JwtUser }) {
     return this.identityClient.send(
@@ -84,7 +84,7 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
-  @ApiOkResponse({ description: 'OK' })
+  @ApiOkResponse({ description: 'Admin list' })
   getAdmins(
     @Query('search') search?: string,
     @Query('status') status?: string,
@@ -111,7 +111,7 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create courier' })
   @ApiBody({ type: CreateCourierRequestDto })
-  @ApiCreatedResponse({ description: 'Created' })
+  @ApiCreatedResponse({ description: 'Courier created' })
   @ApiConflictResponse({ description: 'Conflict' })
   createCourier(@Body() dto: CreateCourierRequestDto) {
     return this.identityClient.send({ cmd: 'identity.courier.create' }, { dto });
@@ -126,7 +126,7 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
-  @ApiOkResponse({ description: 'OK' })
+  @ApiOkResponse({ description: 'Courier list' })
   getCouriers(
     @Query('search') search?: string,
     @Query('status') status?: string,
@@ -156,7 +156,7 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
-  @ApiOkResponse({ description: 'OK' })
+  @ApiOkResponse({ description: 'User list' })
   getUsers(
     @Query('search') search?: string,
     @Query('role') role?: string,
@@ -184,7 +184,7 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get user by id (all roles)' })
   @ApiParam({ name: 'id', description: 'User ID' })
-  @ApiOkResponse({ description: 'OK' })
+  @ApiOkResponse({ description: 'User by id' })
   @ApiNotFoundResponse({ description: 'Not found' })
   getUserById(@Param('id') id: string) {
     return this.identityClient.send({ cmd: 'identity.user.find_by_id' }, { id });
@@ -197,7 +197,7 @@ export class ApiGatewayController {
   @ApiOperation({ summary: 'Update user (all roles)' })
   @ApiParam({ name: 'id', description: 'User ID' })
   @ApiBody({ type: UpdateAdminRequestDto })
-  @ApiOkResponse({ description: 'OK' })
+  @ApiOkResponse({ description: 'User updated' })
   @ApiConflictResponse({ description: 'Conflict' })
   @ApiNotFoundResponse({ description: 'Not found' })
   updateUser(
@@ -217,7 +217,7 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete user (all roles)' })
   @ApiParam({ name: 'id', description: 'User ID' })
-  @ApiOkResponse({ description: 'Deleted' })
+  @ApiOkResponse({ description: 'User deleted' })
   @ApiNotFoundResponse({ description: 'Not found' })
   deleteUser(@Param('id') id: string, @Req() req: { user: JwtUser }) {
     return this.identityClient.send(
@@ -233,7 +233,7 @@ export class ApiGatewayController {
   @ApiOperation({ summary: 'Set user status (active/inactive)' })
   @ApiParam({ name: 'id', description: 'User ID' })
   @ApiBody({ type: UpdateUserStatusRequestDto })
-  @ApiOkResponse({ description: 'OK' })
+  @ApiOkResponse({ description: 'Status updated' })
   @ApiNotFoundResponse({ description: 'Not found' })
   updateUserStatus(
     @Param('id') id: string,
@@ -252,7 +252,7 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create market' })
   @ApiBody({ type: CreateMarketRequestDto })
-  @ApiCreatedResponse({ description: 'Created' })
+  @ApiCreatedResponse({ description: 'Market created' })
   @ApiConflictResponse({ description: 'Conflict' })
   createMarket(@Body() dto: CreateMarketRequestDto) {
     return this.identityClient.send(
@@ -281,7 +281,7 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
-  @ApiOkResponse({ description: 'OK' })
+  @ApiOkResponse({ description: 'Market list' })
   getMarkets(
     @Query('search') search?: string,
     @Query('status') status?: string,

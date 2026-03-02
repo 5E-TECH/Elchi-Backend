@@ -29,8 +29,8 @@ export class AuthGatewayController {
   @Post('login')
   @ApiOperation({ summary: 'Login with phone number and password' })
   @ApiBody({ type: LoginRequestDto })
-  @ApiCreatedResponse({ description: 'Auth response' })
-  @ApiUnauthorizedResponse({ description: 'Unauthorized' })
+  @ApiCreatedResponse({ description: 'Login successful' })
+  @ApiUnauthorizedResponse({ description: 'Invalid credentials' })
   login(@Body() dto: { phone_number: string; password: string }) {
     return this.identityClient.send({ cmd: 'identity.login' }, dto);
   }
@@ -38,8 +38,8 @@ export class AuthGatewayController {
   @Post('refresh')
   @ApiOperation({ summary: 'Refresh access token' })
   @ApiBody({ type: RefreshRequestDto })
-  @ApiCreatedResponse({ description: 'Auth response' })
-  @ApiUnauthorizedResponse({ description: 'Unauthorized' })
+  @ApiCreatedResponse({ description: 'Token refreshed' })
+  @ApiUnauthorizedResponse({ description: 'Invalid refresh token' })
   refresh(@Body() dto: { refreshToken: string }) {
     return this.identityClient.send({ cmd: 'identity.refresh' }, dto);
   }
@@ -48,7 +48,7 @@ export class AuthGatewayController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Logout current user' })
-  @ApiOkResponse({ description: 'Logout response' })
+  @ApiOkResponse({ description: 'Logged out' })
   @ApiUnauthorizedResponse({ description: 'Unauthorized' })
   logout(@Req() req: { user: JwtUser }) {
     return this.identityClient.send({ cmd: 'identity.logout' }, { userId: req.user.sub });
@@ -58,7 +58,7 @@ export class AuthGatewayController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Validate current JWT token' })
-  @ApiOkResponse({ description: 'Validate response' })
+  @ApiOkResponse({ description: 'Token valid' })
   @ApiUnauthorizedResponse({ description: 'Unauthorized' })
   validate(@Req() req: { user: JwtUser }) {
     return this.identityClient.send({ cmd: 'identity.validate' }, { userId: req.user.sub });
@@ -68,7 +68,7 @@ export class AuthGatewayController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get current user profile' })
-  @ApiOkResponse({ description: 'Profile response' })
+  @ApiOkResponse({ description: 'Current user profile' })
   @ApiUnauthorizedResponse({ description: 'Unauthorized' })
   myProfile(@Req() req: { user: JwtUser }) {
     return this.identityClient.send({ cmd: 'identity.validate' }, { userId: req.user.sub });

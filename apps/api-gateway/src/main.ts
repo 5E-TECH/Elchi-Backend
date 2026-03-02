@@ -50,25 +50,30 @@ async function bootstrap() {
 
   app.useGlobalFilters(new AllExceptionsFilter(), new RpcExceptionFilter());
 
-  const swaggerConfig = new DocumentBuilder()
-    .setTitle('Elchi API Gateway')
-    .setDescription('API Gateway docs for all microservice routes')
-    .setVersion('1.0.0')
-    .addBearerAuth()
-    .build();
+  try {
+    const swaggerConfig = new DocumentBuilder()
+      .setTitle('Elchi API Gateway')
+      .setDescription('API Gateway docs for all microservice routes')
+      .setVersion('1.0.0')
+      .addBearerAuth()
+      .build();
 
-  const document = SwaggerModule.createDocument(app, swaggerConfig);
+    const document = SwaggerModule.createDocument(app, swaggerConfig);
 
-  // Swagger Setup
-  SwaggerModule.setup('api', app, document, {
-    customJs: [
-      'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-bundle.min.js',
-      'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-standalone-preset.min.js',
-    ],
-    customCssUrl: [
-      'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui.min.css',
-    ],
-  });
+    // Swagger Setup
+    SwaggerModule.setup('api', app, document, {
+      customJs: [
+        'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-bundle.min.js',
+        'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-standalone-preset.min.js',
+      ],
+      customCssUrl: [
+        'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui.min.css',
+      ],
+    });
+  } catch (error) {
+    // Swagger schema xatosi bo'lsa ham API ishlashda davom etadi.
+    console.error('Swagger initialization failed:', error);
+  }
 
  
   // AWS va Docker interfeyslari uchun 0.0.0.0 majburiy
