@@ -97,17 +97,17 @@ export class CreateOrderRequestDto {
   @IsString()
   operator?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   post_id?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   district_id?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   region_id?: string | null;
@@ -151,17 +151,17 @@ export class UpdateOrderRequestDto {
   @IsString()
   operator?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   post_id?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   district_id?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   region_id?: string | null;
@@ -205,17 +205,17 @@ export class UpdateOrderByIdRequestDto {
   @IsString()
   operator?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   post_id?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   district_id?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   region_id?: string | null;
