@@ -56,6 +56,36 @@ export class OrderServiceService {
     throw error;
   }
 
+  private async replaceOrderItems(
+    orderId: string,
+    items?: Array<{ product_id: string; quantity?: number }>,
+  ): Promise<number> {
+    try {
+      await this.orderItemRepo.delete({ order_id: orderId });
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    const normalizedItems = (items ?? []).map((item) => ({
+      product_id: item.product_id,
+      quantity: item.quantity ?? 1,
+      order_id: orderId,
+    }));
+
+    if (!normalizedItems.length) {
+      return 0;
+    }
+
+    try {
+      // Use explicit insert so order_id is always written and never treated as DEFAULT/null.
+      await this.orderItemRepo.createQueryBuilder().insert().values(normalizedItems).execute();
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    return normalizedItems.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
+  }
+
   async create(dto: {
     market_id: string;
     customer_id: string;
@@ -98,23 +128,7 @@ export class OrderServiceService {
       this.handleDbError(error);
     }
 
-    const items = (dto.items ?? []).map((item) =>
-      this.orderItemRepo.create({
-        product_id: item.product_id,
-        quantity: item.quantity ?? 1,
-        order_id: saved.id,
-      }),
-    );
-
-    if (items.length) {
-      try {
-        await this.orderItemRepo.save(items);
-      } catch (error) {
-        this.handleDbError(error);
-      }
-    }
-
-    saved.product_quantity = items.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
+    saved.product_quantity = await this.replaceOrderItems(saved.id, dto.items);
     try {
       await this.orderRepo.save(saved);
     } catch (error) {
@@ -348,26 +362,7 @@ export class OrderServiceService {
     });
 
     if (dto.items) {
-      try {
-        await this.orderItemRepo.delete({ order_id: order.id });
-      } catch (error) {
-        this.handleDbError(error);
-      }
-      const items = dto.items.map((item) =>
-        this.orderItemRepo.create({
-          product_id: item.product_id,
-          quantity: item.quantity ?? 1,
-          order_id: order.id,
-        }),
-      );
-      if (items.length) {
-        try {
-          await this.orderItemRepo.save(items);
-        } catch (error) {
-          this.handleDbError(error);
-        }
-      }
-      order.product_quantity = items.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
+      order.product_quantity = await this.replaceOrderItems(order.id, dto.items);
     }
 
     try {
