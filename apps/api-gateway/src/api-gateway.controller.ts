@@ -29,15 +29,9 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
-  ErrorResponseDto,
-} from './dto/user.swagger.dto';
-import {
   CreateAdminRequestDto,
   CreateCourierRequestDto,
   CreateMarketRequestDto,
-  DeleteEntityResponseDto,
-  ListEntityResponseDto,
-  SingleEntityResponseDto,
   UpdateAdminRequestDto,
   UpdateUserStatusRequestDto,
 } from './dto/identity.swagger.dto';
@@ -72,8 +66,8 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create admin' })
   @ApiBody({ type: CreateAdminRequestDto })
-  @ApiCreatedResponse({ type: SingleEntityResponseDto })
-  @ApiConflictResponse({ type: ErrorResponseDto })
+  @ApiCreatedResponse({ description: 'Admin created' })
+  @ApiConflictResponse({ description: 'Conflict' })
   createAdmin(@Body() dto: CreateAdminRequestDto, @Req() req: { user: JwtUser }) {
     return this.identityClient.send(
       { cmd: 'identity.user.create' },
@@ -90,7 +84,7 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
-  @ApiOkResponse({ type: ListEntityResponseDto })
+  @ApiOkResponse({ description: 'Admin list' })
   getAdmins(
     @Query('search') search?: string,
     @Query('status') status?: string,
@@ -117,8 +111,8 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create courier' })
   @ApiBody({ type: CreateCourierRequestDto })
-  @ApiCreatedResponse({ type: SingleEntityResponseDto })
-  @ApiConflictResponse({ type: ErrorResponseDto })
+  @ApiCreatedResponse({ description: 'Courier created' })
+  @ApiConflictResponse({ description: 'Conflict' })
   createCourier(@Body() dto: CreateCourierRequestDto) {
     return this.identityClient.send({ cmd: 'identity.courier.create' }, { dto });
   }
@@ -132,7 +126,7 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
-  @ApiOkResponse({ type: ListEntityResponseDto })
+  @ApiOkResponse({ description: 'Courier list' })
   getCouriers(
     @Query('search') search?: string,
     @Query('status') status?: string,
@@ -162,7 +156,7 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
-  @ApiOkResponse({ type: ListEntityResponseDto })
+  @ApiOkResponse({ description: 'User list' })
   getUsers(
     @Query('search') search?: string,
     @Query('role') role?: string,
@@ -190,8 +184,8 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get user by id (all roles)' })
   @ApiParam({ name: 'id', description: 'User ID' })
-  @ApiOkResponse({ type: SingleEntityResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  @ApiOkResponse({ description: 'User by id' })
+  @ApiNotFoundResponse({ description: 'Not found' })
   getUserById(@Param('id') id: string) {
     return this.identityClient.send({ cmd: 'identity.user.find_by_id' }, { id });
   }
@@ -203,9 +197,9 @@ export class ApiGatewayController {
   @ApiOperation({ summary: 'Update user (all roles)' })
   @ApiParam({ name: 'id', description: 'User ID' })
   @ApiBody({ type: UpdateAdminRequestDto })
-  @ApiOkResponse({ type: SingleEntityResponseDto })
-  @ApiConflictResponse({ type: ErrorResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  @ApiOkResponse({ description: 'User updated' })
+  @ApiConflictResponse({ description: 'Conflict' })
+  @ApiNotFoundResponse({ description: 'Not found' })
   updateUser(
     @Param('id') id: string,
     @Body() dto: UpdateAdminRequestDto,
@@ -223,8 +217,8 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete user (all roles)' })
   @ApiParam({ name: 'id', description: 'User ID' })
-  @ApiOkResponse({ type: DeleteEntityResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  @ApiOkResponse({ description: 'User deleted' })
+  @ApiNotFoundResponse({ description: 'Not found' })
   deleteUser(@Param('id') id: string, @Req() req: { user: JwtUser }) {
     return this.identityClient.send(
       { cmd: 'identity.user.delete' },
@@ -239,8 +233,8 @@ export class ApiGatewayController {
   @ApiOperation({ summary: 'Set user status (active/inactive)' })
   @ApiParam({ name: 'id', description: 'User ID' })
   @ApiBody({ type: UpdateUserStatusRequestDto })
-  @ApiOkResponse({ type: SingleEntityResponseDto })
-  @ApiNotFoundResponse({ type: ErrorResponseDto })
+  @ApiOkResponse({ description: 'Status updated' })
+  @ApiNotFoundResponse({ description: 'Not found' })
   updateUserStatus(
     @Param('id') id: string,
     @Body() dto: UpdateUserStatusRequestDto,
@@ -258,8 +252,8 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create market' })
   @ApiBody({ type: CreateMarketRequestDto })
-  @ApiCreatedResponse({ type: SingleEntityResponseDto })
-  @ApiConflictResponse({ type: ErrorResponseDto })
+  @ApiCreatedResponse({ description: 'Market created' })
+  @ApiConflictResponse({ description: 'Conflict' })
   createMarket(@Body() dto: CreateMarketRequestDto) {
     return this.identityClient.send(
       { cmd: 'identity.market.create' },
@@ -287,7 +281,7 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
-  @ApiOkResponse({ type: ListEntityResponseDto })
+  @ApiOkResponse({ description: 'Market list' })
   getMarkets(
     @Query('search') search?: string,
     @Query('status') status?: string,
