@@ -140,6 +140,36 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.update_full' })
+  updateFull(
+    @Payload()
+    data: {
+      id: string;
+      dto: {
+        market_id?: string;
+        customer_id?: string;
+        where_deliver?: Where_deliver;
+        total_price?: number;
+        to_be_paid?: number;
+        paid_amount?: number;
+        status?: Order_status;
+        comment?: string | null;
+        operator?: string | null;
+        post_id?: string | null;
+        district_id?: string | null;
+        region_id?: string | null;
+        address?: string | null;
+        qr_code_token?: string | null;
+        items?: Array<{ product_id: string; quantity?: number }>;
+      };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.updateFull(data.id, data.dto),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.delete' })
   remove(
     @Payload() data: { id: string },

@@ -178,3 +178,30 @@ export class UpdateOrderRequestDto {
   @Type(() => OrderItemDto)
   items?: OrderItemDto[];
 }
+
+export class UpdateOrderByIdRequestDto extends UpdateOrderRequestDto {
+  @ApiPropertyOptional({ example: '1', description: 'Market ID (as string/bigint)' })
+  @IsOptional()
+  @IsString()
+  market_id?: string;
+
+  @ApiPropertyOptional({ example: '1', description: 'Customer ID (as string/bigint)' })
+  @IsOptional()
+  @IsString()
+  customer_id?: string;
+
+  @ApiPropertyOptional({ example: 0 })
+  @IsOptional()
+  @IsNumber()
+  to_be_paid?: number;
+
+  @ApiPropertyOptional({ example: 0 })
+  @IsOptional()
+  @IsNumber()
+  paid_amount?: number;
+
+  @ApiPropertyOptional({ example: 'qr_token' })
+  @IsOptional()
+  @IsString()
+  qr_code_token?: string | null;
+}

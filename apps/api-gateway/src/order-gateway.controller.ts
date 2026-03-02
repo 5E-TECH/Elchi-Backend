@@ -23,7 +23,11 @@ import {
 } from '@nestjs/swagger';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
-import { CreateOrderRequestDto, UpdateOrderRequestDto } from './dto/order.swagger.dto';
+import {
+  CreateOrderRequestDto,
+  UpdateOrderByIdRequestDto,
+  UpdateOrderRequestDto,
+} from './dto/order.swagger.dto';
 import { Order_status } from '@app/common';
 
 @ApiTags('Orders')
@@ -652,6 +656,16 @@ export class OrderGatewayController {
   @ApiBody({ type: UpdateOrderRequestDto })
   update(@Param('id') id: string, @Body() dto: UpdateOrderRequestDto) {
     return this.orderClient.send({ cmd: 'order.update' }, { id, dto });
+  }
+
+  @Patch(':id/full')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update order by id (full fields)' })
+  @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
+  @ApiBody({ type: UpdateOrderByIdRequestDto })
+  updateFull(@Param('id') id: string, @Body() dto: UpdateOrderByIdRequestDto) {
+    return this.orderClient.send({ cmd: 'order.update_full' }, { id, dto });
   }
 
   @Delete(':id')
