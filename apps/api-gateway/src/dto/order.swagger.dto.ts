@@ -179,7 +179,59 @@ export class UpdateOrderRequestDto {
   items?: OrderItemDto[];
 }
 
-export class UpdateOrderByIdRequestDto extends UpdateOrderRequestDto {
+export class UpdateOrderByIdRequestDto {
+  @ApiPropertyOptional({ enum: Where_deliver })
+  @IsOptional()
+  @IsEnum(Where_deliver)
+  where_deliver?: Where_deliver;
+
+  @ApiPropertyOptional({ example: 0 })
+  @IsOptional()
+  @IsNumber()
+  total_price?: number;
+
+  @ApiPropertyOptional({ enum: Order_status })
+  @IsOptional()
+  @IsEnum(Order_status)
+  status?: Order_status;
+
+  @ApiPropertyOptional({ example: 'Izoh' })
+  @IsOptional()
+  @IsString()
+  comment?: string | null;
+
+  @ApiPropertyOptional({ example: 'Operator' })
+  @IsOptional()
+  @IsString()
+  operator?: string | null;
+
+  @ApiPropertyOptional({ example: '1' })
+  @IsOptional()
+  @IsString()
+  post_id?: string | null;
+
+  @ApiPropertyOptional({ example: '1' })
+  @IsOptional()
+  @IsString()
+  district_id?: string | null;
+
+  @ApiPropertyOptional({ example: '1' })
+  @IsOptional()
+  @IsString()
+  region_id?: string | null;
+
+  @ApiPropertyOptional({ example: 'Toshkent, Chilonzor' })
+  @IsOptional()
+  @IsString()
+  address?: string | null;
+
+  @ApiPropertyOptional({ type: [OrderItemDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => OrderItemDto)
+  items?: OrderItemDto[];
+
   @ApiPropertyOptional({ example: '1', description: 'Market ID (as string/bigint)' })
   @IsOptional()
   @IsString()
