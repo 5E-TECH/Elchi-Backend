@@ -78,6 +78,8 @@ export class AuthErrorResponseDto {
   data?: null;
 }
 
+export class EmptyDataDto {}
+
 export class LogoutResponseDto {
   @ApiProperty({ example: 200 })
   statusCode!: number;
@@ -85,6 +87,6 @@ export class LogoutResponseDto {
   @ApiProperty({ example: 'Logged out successfully' })
   message!: string;
 
-  @ApiProperty({ example: {} })
-  data!: Record<string, never>;
+  @ApiProperty({ type: () => EmptyDataDto })
+  data!: EmptyDataDto;
 }

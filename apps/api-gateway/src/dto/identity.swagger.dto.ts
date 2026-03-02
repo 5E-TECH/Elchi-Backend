@@ -279,8 +279,18 @@ export class SingleEntityResponseDto {
   @ApiPropertyOptional({ example: 'success' })
   message!: string;
 
-  @ApiProperty({ type: EntityItemDto })
-  data!: EntityItemDto;
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    example: {
+      id: '1',
+      name: 'Admin User',
+      phone_number: '+998901234567',
+      role: 'admin',
+      status: 'active',
+    },
+  })
+  data!: Record<string, unknown>;
 }
 
 export class ListEntityResponseDto {
@@ -306,15 +316,7 @@ export class ListEntityResponseDto {
       meta: { page: 1, limit: 10, total: 1, totalPages: 1 },
     },
   })
-  data!: {
-    items: EntityItemDto[];
-    meta: {
-      page: number;
-      limit: number;
-      total: number;
-      totalPages: number;
-    };
-  };
+  data!: Record<string, unknown>;
 }
 
 export class DeleteEntityResponseDto {
@@ -324,6 +326,6 @@ export class DeleteEntityResponseDto {
   @ApiProperty({ example: 'O‘chirildi' })
   message!: string;
 
-  @ApiProperty({ example: { id: '1' } })
-  data!: { id: string };
+  @ApiProperty({ type: 'object', additionalProperties: false, example: { id: '1' } })
+  data!: Record<string, unknown>;
 }

@@ -20,6 +20,7 @@ import type { StringValue } from 'ms';
     RmqModule,
     RmqModule.register({ name: 'SEARCH' }),
     RmqModule.register({ name: 'CATALOG' }),
+    RmqModule.register({ name: 'ORDER' }),
     DatabaseModule,
     TypeOrmModule.forFeature([UserAdminEntity]),
     JwtModule.registerAsync({
