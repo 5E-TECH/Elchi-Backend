@@ -5,7 +5,6 @@ import { CatalogServiceController } from './catalog-service.controller';
 import { CatalogServiceService } from './catalog-service.service';
 import { RmqModule, DatabaseModule, catalogValidationSchema } from '@app/common';
 import { Product } from './entities/product.entity';
-import { MarketEntity } from './entities/market.entity';
 
 @Module({
   imports: [
@@ -16,8 +15,9 @@ import { MarketEntity } from './entities/market.entity';
     }),
     RmqModule,
     RmqModule.register({ name: 'SEARCH' }),
+    RmqModule.register({ name: 'IDENTITY' }),
     DatabaseModule,
-    TypeOrmModule.forFeature([Product, MarketEntity]),
+    TypeOrmModule.forFeature([Product]),
   ],
   controllers: [CatalogServiceController],
   providers: [CatalogServiceService],

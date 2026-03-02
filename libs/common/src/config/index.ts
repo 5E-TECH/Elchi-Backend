@@ -46,6 +46,7 @@ export const catalogValidationSchema = Joi.object({
   DB_SCHEMA: Joi.string().default('catalog_schema'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_CATALOG_QUEUE: Joi.string().required(),
+  RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
 });
 
 export const logisticsValidationSchema = Joi.object({
