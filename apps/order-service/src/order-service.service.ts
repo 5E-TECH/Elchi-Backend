@@ -21,7 +21,12 @@ export class OrderServiceService {
 
   private handleDbError(error: unknown): never {
     if (error instanceof QueryFailedError) {
-      const pgError = error.driverError as { code?: string };
+      const pgError = error.driverError as { code?: string; message?: string };
+      const rawMessage = pgError?.message ?? '';
+
+      if (rawMessage.includes('orders_status_enum')) {
+        throw new RpcException({ statusCode: 400, message: "status noto'g'ri qiymat" });
+      }
       if (pgError?.code === '22P02') {
         throw new RpcException({ statusCode: 400, message: "ID format noto'g'ri" });
       }
