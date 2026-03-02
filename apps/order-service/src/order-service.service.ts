@@ -261,6 +261,8 @@ export class OrderServiceService {
   async update(
     id: string,
     dto: {
+      market_id?: string;
+      customer_id?: string;
       where_deliver?: Where_deliver;
       total_price?: number;
       to_be_paid?: number;
@@ -276,49 +278,7 @@ export class OrderServiceService {
       items?: Array<{ product_id: string; quantity?: number }>;
     },
   ) {
-    const order = await this.findById(id);
-
-    Object.assign(order, {
-      where_deliver: dto.where_deliver ?? order.where_deliver,
-      total_price: dto.total_price ?? order.total_price,
-      to_be_paid: dto.to_be_paid ?? order.to_be_paid,
-      paid_amount: dto.paid_amount ?? order.paid_amount,
-      status: dto.status ?? order.status,
-      comment: dto.comment ?? order.comment,
-      operator: dto.operator ?? order.operator,
-      post_id: dto.post_id ?? order.post_id,
-      district_id: dto.district_id ?? order.district_id,
-      region_id: dto.region_id ?? order.region_id,
-      address: dto.address ?? order.address,
-      qr_code_token: dto.qr_code_token ?? order.qr_code_token,
-    });
-
-    if (dto.items) {
-      await this.orderItemRepo.delete({ order_id: order.id });
-      const items = dto.items.map((item) =>
-        this.orderItemRepo.create({
-          product_id: item.product_id,
-          quantity: item.quantity ?? 1,
-          order_id: order.id,
-        }),
-      );
-      if (items.length) {
-        try {
-          await this.orderItemRepo.save(items);
-        } catch (error) {
-          this.handleDbError(error);
-        }
-      }
-      order.product_quantity = items.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
-    }
-
-    try {
-      await this.orderRepo.save(order);
-    } catch (error) {
-      this.handleDbError(error);
-    }
-
-    return this.findById(order.id);
+    return this.updateFull(id, dto);
   }
 
   async updateFull(
