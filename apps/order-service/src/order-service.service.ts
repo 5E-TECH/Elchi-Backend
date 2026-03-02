@@ -21,7 +21,12 @@ export class OrderServiceService {
 
   private handleDbError(error: unknown): never {
     if (error instanceof QueryFailedError) {
-      const pgError = error.driverError as { code?: string; message?: string };
+      const pgError = error.driverError as {
+        code?: string;
+        message?: string;
+        column?: string;
+        table?: string;
+      };
       const rawMessage = pgError?.message ?? '';
 
       if (rawMessage.includes('orders_status_enum')) {
@@ -37,7 +42,12 @@ export class OrderServiceService {
         throw new RpcException({ statusCode: 400, message: "Noto'g'ri formatdagi qiymat yuborildi" });
       }
       if (pgError?.code === '23502') {
-        throw new RpcException({ statusCode: 400, message: "Majburiy maydon bo'sh yuborildi" });
+        const column = pgError?.column ?? 'unknown';
+        const table = pgError?.table ?? 'unknown';
+        throw new RpcException({
+          statusCode: 400,
+          message: `Majburiy maydon bo'sh yuborildi: ${table}.${column}`,
+        });
       }
       if (pgError?.code === '23503') {
         throw new RpcException({ statusCode: 400, message: "Bog'langan ma'lumot topilmadi" });
