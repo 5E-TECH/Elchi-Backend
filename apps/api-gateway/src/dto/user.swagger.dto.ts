@@ -106,8 +106,18 @@ export class SingleUserResponseDto {
   @ApiPropertyOptional({ example: 'User yaratildi' })
   message?: string;
 
-  @ApiProperty({ type: UserItemDto })
-  data!: UserItemDto;
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: true,
+    example: {
+      id: '1',
+      username: 'ali123',
+      name: 'Ali Valiyev',
+      role: 'customer',
+      status: 'active',
+    },
+  })
+  data!: Record<string, unknown>;
 }
 
 export class DeleteUserResponseDto {
@@ -117,8 +127,8 @@ export class DeleteUserResponseDto {
   @ApiProperty({ example: 'User o‘chirildi' })
   message!: string;
 
-  @ApiProperty({ example: { id: '1' } })
-  data!: { id: string };
+  @ApiProperty({ type: 'object', additionalProperties: false, example: { id: '1' } })
+  data!: Record<string, unknown>;
 }
 
 export class UserListResponseDto {
@@ -142,15 +152,7 @@ export class UserListResponseDto {
       meta: { page: 1, limit: 10, total: 1, totalPages: 1 },
     },
   })
-  data!: {
-    items: UserItemDto[];
-    meta: {
-      page: number;
-      limit: number;
-      total: number;
-      totalPages: number;
-    };
-  };
+  data!: Record<string, unknown>;
 }
 
 export class ErrorResponseDto {

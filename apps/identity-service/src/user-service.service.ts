@@ -23,6 +23,7 @@ export class UserServiceService implements OnModuleInit {
     @InjectRepository(UserAdminEntity)
     private readonly users: Repository<UserAdminEntity>,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
+    @Inject('ORDER') private readonly orderClient: ClientProxy,
     private readonly bcryptEncryption: BcryptEncryption,
     private readonly configService: ConfigService,
   ) {}
@@ -309,7 +310,37 @@ export class UserServiceService implements OnModuleInit {
       this.notFound('User topilmadi');
     }
 
-    return successRes(this.sanitize(user));
+    const safeUser = this.sanitize(user);
+
+    if (safeUser.role !== Roles.CUSTOMER) {
+      return successRes(safeUser);
+    }
+
+    try {
+      const orders = await lastValueFrom(
+        this.orderClient
+          .send(
+            { cmd: 'order.find_all' },
+            {
+              query: {
+                customer_id: safeUser.id,
+                page: 1,
+                limit: 1000,
+              },
+            },
+          )
+          .pipe(timeout(5000)),
+      );
+
+      return successRes({
+        ...safeUser,
+        orders: orders?.data ?? [],
+      });
+    } catch {
+      throw new RpcException(
+        errorRes('Customer orderlarini olishda xatolik', 502),
+      );
+    }
   }
 
   async findCustomerById(id: string) {
