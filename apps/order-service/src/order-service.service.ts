@@ -27,8 +27,20 @@ export class OrderServiceService {
       if (rawMessage.includes('orders_status_enum')) {
         throw new RpcException({ statusCode: 400, message: "status noto'g'ri qiymat" });
       }
+      if (rawMessage.includes('orders_where_deliver_enum')) {
+        throw new RpcException({ statusCode: 400, message: "where_deliver noto'g'ri qiymat" });
+      }
       if (pgError?.code === '22P02') {
-        throw new RpcException({ statusCode: 400, message: "ID format noto'g'ri" });
+        if (rawMessage.includes('bigint')) {
+          throw new RpcException({ statusCode: 400, message: "ID qiymatlari raqam ko'rinishida bo'lishi kerak" });
+        }
+        throw new RpcException({ statusCode: 400, message: "Noto'g'ri formatdagi qiymat yuborildi" });
+      }
+      if (pgError?.code === '23502') {
+        throw new RpcException({ statusCode: 400, message: "Majburiy maydon bo'sh yuborildi" });
+      }
+      if (pgError?.code === '23503') {
+        throw new RpcException({ statusCode: 400, message: "Bog'langan ma'lumot topilmadi" });
       }
     }
     throw error;
@@ -326,7 +338,11 @@ export class OrderServiceService {
     });
 
     if (dto.items) {
-      await this.orderItemRepo.delete({ order_id: order.id });
+      try {
+        await this.orderItemRepo.delete({ order_id: order.id });
+      } catch (error) {
+        this.handleDbError(error);
+      }
       const items = dto.items.map((item) =>
         this.orderItemRepo.create({
           product_id: item.product_id,

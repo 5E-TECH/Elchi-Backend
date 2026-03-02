@@ -27,7 +27,7 @@ import {
   CreateOrderRequestDto,
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
-import { Order_status } from '@app/common';
+import { Order_status, Where_deliver } from '@app/common';
 
 @ApiTags('Orders')
 @Controller('orders')
@@ -38,6 +38,33 @@ export class OrderGatewayController {
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
   ) {}
+
+  private normalizeUpdatePayload(dto: UpdateOrderByIdRequestDto): UpdateOrderByIdRequestDto {
+    const payload = { ...dto };
+
+    // Compatibility: some clients send enum values in upper case.
+    if (typeof payload.where_deliver === 'string') {
+      const normalizedWhereDeliver = payload.where_deliver.toLowerCase();
+      if (normalizedWhereDeliver === Where_deliver.CENTER || normalizedWhereDeliver === Where_deliver.ADDRESS) {
+        payload.where_deliver = normalizedWhereDeliver as Where_deliver;
+      }
+    }
+
+    if (typeof payload.status === 'string') {
+      const normalizedStatus = payload.status.toLowerCase();
+      // "created" is normalized to "new" to avoid DB enum drift between environments.
+      payload.status = (normalizedStatus === Order_status.CREATED ? Order_status.NEW : normalizedStatus) as Order_status;
+    }
+
+    if (payload.items) {
+      payload.items = payload.items.map((item) => ({
+        product_id: String(item.product_id),
+        quantity: item.quantity ?? 1,
+      }));
+    }
+
+    return payload;
+  }
 
   @Post()
   @UseGuards(JwtAuthGuard)
@@ -654,8 +681,17 @@ export class OrderGatewayController {
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
   @ApiBody({ type: UpdateOrderByIdRequestDto })
   update(@Param('id') id: string, @Body() dto: UpdateOrderByIdRequestDto) {
-    // Keep PATCH /orders/:id as the primary full-update endpoint.
-    return this.orderClient.send({ cmd: 'order.update_full' }, { id, dto });
+    const normalizedDto = this.normalizeUpdatePayload(dto);
+    return firstValueFrom(
+      this.orderClient
+        .send({ cmd: 'order.update_full' }, { id, dto: normalizedDto })
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
   }
 
   @Patch(':id/full')
@@ -665,7 +701,17 @@ export class OrderGatewayController {
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
   @ApiBody({ type: UpdateOrderByIdRequestDto })
   updateFull(@Param('id') id: string, @Body() dto: UpdateOrderByIdRequestDto) {
-    return this.orderClient.send({ cmd: 'order.update_full' }, { id, dto });
+    const normalizedDto = this.normalizeUpdatePayload(dto);
+    return firstValueFrom(
+      this.orderClient
+        .send({ cmd: 'order.update_full' }, { id, dto: normalizedDto })
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
   }
 
   @Delete(':id')
