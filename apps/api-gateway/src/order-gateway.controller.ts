@@ -26,7 +26,6 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import {
   CreateOrderRequestDto,
   UpdateOrderByIdRequestDto,
-  UpdateOrderRequestDto,
 } from './dto/order.swagger.dto';
 import { Order_status } from '@app/common';
 
@@ -651,11 +650,12 @@ export class OrderGatewayController {
   @Patch(':id')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Update order' })
+  @ApiOperation({ summary: 'Update order (full fields, including items)' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
-  @ApiBody({ type: UpdateOrderRequestDto })
-  update(@Param('id') id: string, @Body() dto: UpdateOrderRequestDto) {
-    return this.orderClient.send({ cmd: 'order.update' }, { id, dto });
+  @ApiBody({ type: UpdateOrderByIdRequestDto })
+  update(@Param('id') id: string, @Body() dto: UpdateOrderByIdRequestDto) {
+    // Keep PATCH /orders/:id as the primary full-update endpoint.
+    return this.orderClient.send({ cmd: 'order.update_full' }, { id, dto });
   }
 
   @Patch(':id/full')

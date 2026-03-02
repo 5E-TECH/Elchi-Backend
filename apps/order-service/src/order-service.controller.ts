@@ -118,6 +118,8 @@ export class OrderServiceController {
     data: {
       id: string;
       dto: {
+        market_id?: string;
+        customer_id?: string;
         where_deliver?: Where_deliver;
         total_price?: number;
         to_be_paid?: number;
@@ -135,8 +137,9 @@ export class OrderServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
+    // Backward compatibility: old pattern now supports full update payload too.
     return this.executeAndAck(context, () =>
-      this.orderService.update(data.id, data.dto),
+      this.orderService.updateFull(data.id, data.dto),
     );
   }
 
