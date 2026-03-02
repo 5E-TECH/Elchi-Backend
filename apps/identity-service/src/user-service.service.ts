@@ -589,7 +589,36 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async findMarketById(id: string) {
-    return this.findUserById(id);
+    const market = await this.users.findOne({
+      where: { id, role: Roles.MARKET, is_deleted: false },
+    });
+    if (!market) {
+      this.notFound('Market topilmadi yoki faol emas');
+    }
+
+    return {
+      success: true,
+      data: this.sanitize(market),
+    };
+  }
+
+  async findMarketsByIds(ids: string[]) {
+    if (!ids.length) {
+      return { success: true, data: [] };
+    }
+
+    const markets = await this.users.find({
+      where: {
+        id: In(ids),
+        role: Roles.MARKET,
+        is_deleted: false,
+      },
+    });
+
+    return {
+      success: true,
+      data: markets.map((m) => this.sanitize(m)),
+    };
   }
 
   async findAllMarkets(query: UserFilterQuery = {}) {

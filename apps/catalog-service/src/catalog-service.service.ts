@@ -2,19 +2,23 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
-import { In, QueryFailedError, Repository } from 'typeorm';
-import { Roles, Status } from '@app/common';
+import { QueryFailedError, Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
-import { MarketEntity } from './entities/market.entity';
+
+interface MarketInfo {
+  id: string;
+  name: string;
+  role: string;
+  status: string;
+}
 
 @Injectable()
 export class CatalogServiceService {
   constructor(
     @InjectRepository(Product)
     private readonly productRepo: Repository<Product>,
-    @InjectRepository(MarketEntity)
-    private readonly marketRepo: Repository<MarketEntity>,
     @Inject('SEARCH') private readonly searchClient: ClientProxy,
+    @Inject('IDENTITY') private readonly identityClient: ClientProxy,
   ) {}
 
   private notFound(message: string): never {
@@ -30,22 +34,28 @@ export class CatalogServiceService {
   }
 
   private async ensureMarketExists(marketId: string): Promise<void> {
-    let market: MarketEntity | null;
     try {
-      market = await this.marketRepo.findOne({
-        where: {
-          id: marketId,
-          role: Roles.MARKET,
-          is_deleted: false,
-          status: Status.ACTIVE,
-        },
-      });
-    } catch (error) {
-      this.handleDbError(error);
-    }
+      const result = await lastValueFrom(
+        this.identityClient
+          .send({ cmd: 'identity.market.find_by_id' }, { id: marketId })
+          .pipe(timeout(5000)),
+      );
 
-    if (!market) {
-      this.notFound(`Market #${marketId} topilmadi yoki faol emas`);
+      if (!result?.success) {
+        this.notFound(`Market #${marketId} topilmadi yoki faol emas`);
+      }
+    } catch (error) {
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      const rpcError = error as { statusCode?: number; message?: string };
+      if (rpcError?.statusCode === 404) {
+        this.notFound(`Market #${marketId} topilmadi yoki faol emas`);
+      }
+      throw new RpcException({
+        statusCode: 502,
+        message: 'Identity servisiga ulanishda xatolik',
+      });
     }
   }
 
@@ -99,37 +109,46 @@ export class CatalogServiceService {
     }
   }
 
-  private async attachMarket(product: Product): Promise<Product & { market: MarketEntity | null }> {
-    const market = await this.marketRepo.findOne({
-      where: {
-        id: product.user_id,
-        role: Roles.MARKET,
-        is_deleted: false,
-      },
-    });
+  private async attachMarket(product: Product): Promise<Product & { market: MarketInfo | null }> {
+    try {
+      const result = await lastValueFrom(
+        this.identityClient
+          .send({ cmd: 'identity.market.find_by_id' }, { id: product.user_id })
+          .pipe(timeout(3000)),
+      );
 
-    return {
-      ...product,
-      market,
-    };
+      return {
+        ...product,
+        market: result?.data ?? null,
+      };
+    } catch {
+      return { ...product, market: null };
+    }
   }
 
   private async attachMarkets(
     products: Product[],
-  ): Promise<Array<Product & { market: MarketEntity | null }>> {
+  ): Promise<Array<Product & { market: MarketInfo | null }>> {
     if (products.length === 0) {
       return [];
     }
 
     const marketIds = [...new Set(products.map((p) => p.user_id))];
-    const markets = await this.marketRepo.find({
-      where: {
-        id: In(marketIds),
-        role: Roles.MARKET,
-        is_deleted: false,
-      },
-    });
-    const byId = new Map(markets.map((m) => [m.id, m]));
+
+    let byId = new Map<string, MarketInfo>();
+    try {
+      const result = await lastValueFrom(
+        this.identityClient
+          .send({ cmd: 'identity.market.find_by_ids' }, { ids: marketIds })
+          .pipe(timeout(5000)),
+      );
+
+      if (result?.data) {
+        byId = new Map(result.data.map((m: MarketInfo) => [m.id, m]));
+      }
+    } catch {
+      // Market ma'lumotlari olinmasa, null qo'yiladi
+    }
 
     return products.map((product) => ({
       ...product,

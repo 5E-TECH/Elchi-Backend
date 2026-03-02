@@ -18,6 +18,7 @@ import type {
   DeleteMarketPayload,
   FindAllMarketsPayload,
   FindMarketByIdPayload,
+  FindMarketsByIdsPayload,
   UpdateMarketPayload,
 } from './contracts/market.payloads';
 
@@ -179,6 +180,14 @@ export class IdentityController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () => this.userService.findMarketById(payload.id));
+  }
+
+  @MessagePattern({ cmd: 'identity.market.find_by_ids' })
+  getMarketsByIds(
+    @Payload() payload: FindMarketsByIdsPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.userService.findMarketsByIds(payload.ids));
   }
 
   @MessagePattern({ cmd: 'identity.market.find_all' })

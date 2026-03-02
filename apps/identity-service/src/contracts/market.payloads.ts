@@ -19,6 +19,10 @@ export interface FindMarketByIdPayload {
   id: string;
 }
 
+export interface FindMarketsByIdsPayload {
+  ids: string[];
+}
+
 export interface FindAllMarketsPayload {
   query?: UserFilterQuery;
 }
