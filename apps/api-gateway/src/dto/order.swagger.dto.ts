@@ -8,7 +8,7 @@ import {
   IsString,
   ValidateNested,
 } from 'class-validator';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import { Order_status, Where_deliver } from '@app/common';
 
 export class OrderItemDto {
@@ -73,6 +73,7 @@ export class CreateOrderRequestDto {
   customer?: CreateOrderCustomerDto;
 
   @ApiPropertyOptional({ enum: Where_deliver, default: Where_deliver.CENTER })
+  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
   @IsOptional()
   @IsEnum(Where_deliver)
   where_deliver?: Where_deliver;
@@ -83,6 +84,7 @@ export class CreateOrderRequestDto {
   total_price?: number;
 
   @ApiPropertyOptional({ enum: Order_status, default: Order_status.NEW })
+  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
   @IsOptional()
   @IsEnum(Order_status)
   status?: Order_status;
@@ -97,17 +99,17 @@ export class CreateOrderRequestDto {
   @IsString()
   operator?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   post_id?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   district_id?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   region_id?: string | null;
@@ -127,6 +129,7 @@ export class CreateOrderRequestDto {
 
 export class UpdateOrderRequestDto {
   @ApiPropertyOptional({ enum: Where_deliver })
+  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
   @IsOptional()
   @IsEnum(Where_deliver)
   where_deliver?: Where_deliver;
@@ -137,6 +140,7 @@ export class UpdateOrderRequestDto {
   total_price?: number;
 
   @ApiPropertyOptional({ enum: Order_status })
+  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
   @IsOptional()
   @IsEnum(Order_status)
   status?: Order_status;
@@ -151,17 +155,17 @@ export class UpdateOrderRequestDto {
   @IsString()
   operator?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   post_id?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   district_id?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   region_id?: string | null;
@@ -181,6 +185,7 @@ export class UpdateOrderRequestDto {
 
 export class UpdateOrderByIdRequestDto {
   @ApiPropertyOptional({ enum: Where_deliver })
+  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
   @IsOptional()
   @IsEnum(Where_deliver)
   where_deliver?: Where_deliver;
@@ -191,6 +196,7 @@ export class UpdateOrderByIdRequestDto {
   total_price?: number;
 
   @ApiPropertyOptional({ enum: Order_status })
+  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
   @IsOptional()
   @IsEnum(Order_status)
   status?: Order_status;
@@ -205,17 +211,17 @@ export class UpdateOrderByIdRequestDto {
   @IsString()
   operator?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   post_id?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   district_id?: string | null;
 
-  @ApiPropertyOptional({ example: '1' })
+  @ApiPropertyOptional({ type: String, example: '1' })
   @IsOptional()
   @IsString()
   region_id?: string | null;

@@ -21,12 +21,69 @@ export class OrderServiceService {
 
   private handleDbError(error: unknown): never {
     if (error instanceof QueryFailedError) {
-      const pgError = error.driverError as { code?: string };
+      const pgError = error.driverError as {
+        code?: string;
+        message?: string;
+        column?: string;
+        table?: string;
+      };
+      const rawMessage = pgError?.message ?? '';
+
+      if (rawMessage.includes('orders_status_enum')) {
+        throw new RpcException({ statusCode: 400, message: "status noto'g'ri qiymat" });
+      }
+      if (rawMessage.includes('orders_where_deliver_enum')) {
+        throw new RpcException({ statusCode: 400, message: "where_deliver noto'g'ri qiymat" });
+      }
       if (pgError?.code === '22P02') {
-        throw new RpcException({ statusCode: 400, message: "ID format noto'g'ri" });
+        if (rawMessage.includes('bigint')) {
+          throw new RpcException({ statusCode: 400, message: "ID qiymatlari raqam ko'rinishida bo'lishi kerak" });
+        }
+        throw new RpcException({ statusCode: 400, message: "Noto'g'ri formatdagi qiymat yuborildi" });
+      }
+      if (pgError?.code === '23502') {
+        const column = pgError?.column ?? 'unknown';
+        const table = pgError?.table ?? 'unknown';
+        throw new RpcException({
+          statusCode: 400,
+          message: `Majburiy maydon bo'sh yuborildi: ${table}.${column}`,
+        });
+      }
+      if (pgError?.code === '23503') {
+        throw new RpcException({ statusCode: 400, message: "Bog'langan ma'lumot topilmadi" });
       }
     }
     throw error;
+  }
+
+  private async replaceOrderItems(
+    orderId: string,
+    items?: Array<{ product_id: string; quantity?: number }>,
+  ): Promise<number> {
+    try {
+      await this.orderItemRepo.delete({ order_id: orderId });
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    const normalizedItems = (items ?? []).map((item) => ({
+      product_id: item.product_id,
+      quantity: item.quantity ?? 1,
+      order_id: orderId,
+    }));
+
+    if (!normalizedItems.length) {
+      return 0;
+    }
+
+    try {
+      // Use explicit insert so order_id is always written and never treated as DEFAULT/null.
+      await this.orderItemRepo.createQueryBuilder().insert().values(normalizedItems).execute();
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    return normalizedItems.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
   }
 
   async create(dto: {
@@ -71,23 +128,7 @@ export class OrderServiceService {
       this.handleDbError(error);
     }
 
-    const items = (dto.items ?? []).map((item) =>
-      this.orderItemRepo.create({
-        product_id: item.product_id,
-        quantity: item.quantity ?? 1,
-        order_id: saved.id,
-      }),
-    );
-
-    if (items.length) {
-      try {
-        await this.orderItemRepo.save(items);
-      } catch (error) {
-        this.handleDbError(error);
-      }
-    }
-
-    saved.product_quantity = items.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
+    saved.product_quantity = await this.replaceOrderItems(saved.id, dto.items);
     try {
       await this.orderRepo.save(saved);
     } catch (error) {
@@ -321,23 +362,11 @@ export class OrderServiceService {
     });
 
     if (dto.items) {
-      await this.orderItemRepo.delete({ order_id: order.id });
-      const items = dto.items.map((item) =>
-        this.orderItemRepo.create({
-          product_id: item.product_id,
-          quantity: item.quantity ?? 1,
-          order_id: order.id,
-        }),
-      );
-      if (items.length) {
-        try {
-          await this.orderItemRepo.save(items);
-        } catch (error) {
-          this.handleDbError(error);
-        }
-      }
-      order.product_quantity = items.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
+      order.product_quantity = await this.replaceOrderItems(order.id, dto.items);
     }
+
+    // Prevent TypeORM cascade on stale one-to-many relation from nulling order_id.
+    delete (order as Partial<Order> & { items?: OrderItem[] }).items;
 
     try {
       await this.orderRepo.save(order);
