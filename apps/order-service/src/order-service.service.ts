@@ -365,6 +365,9 @@ export class OrderServiceService {
       order.product_quantity = await this.replaceOrderItems(order.id, dto.items);
     }
 
+    // Prevent TypeORM cascade on stale one-to-many relation from nulling order_id.
+    delete (order as Partial<Order> & { items?: OrderItem[] }).items;
+
     try {
       await this.orderRepo.save(order);
     } catch (error) {
