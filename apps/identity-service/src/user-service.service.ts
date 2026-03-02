@@ -332,9 +332,23 @@ export class UserServiceService implements OnModuleInit {
           .pipe(timeout(5000)),
       );
 
+      const customerOrders = orders?.data ?? [];
+      const latestAddressOrder = customerOrders.find(
+        (order: { address?: string | null }) => Boolean(order?.address),
+      ) as
+        | {
+            address?: string | null;
+            district_id?: string | null;
+            region_id?: string | null;
+          }
+        | undefined;
+
       return successRes({
         ...safeUser,
-        orders: orders?.data ?? [],
+        address: latestAddressOrder?.address ?? null,
+        district_id: latestAddressOrder?.district_id ?? null,
+        region_id: latestAddressOrder?.region_id ?? null,
+        orders: customerOrders,
       });
     } catch {
       throw new RpcException(
