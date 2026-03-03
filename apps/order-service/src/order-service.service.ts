@@ -329,7 +329,7 @@ export class OrderServiceService {
           AND customer.role = $2
           AND customer.is_deleted = false
          LEFT JOIN logistics_schema.districts district
-           ON district.id::text = COALESCE(customer.district_id::text, "order".district_id::text)
+           ON district.id::text = "order".district_id::text
          WHERE "order".id::text = ANY($1)
            AND "order".deleted = false
            AND "order".status = $3
