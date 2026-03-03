@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  ArrayNotEmpty,
   IsArray,
   IsEnum,
   IsNotEmpty,
@@ -262,4 +263,15 @@ export class UpdateOrderByIdRequestDto {
   @IsOptional()
   @IsString()
   qr_code_token?: string | null;
+}
+
+export class OrdersArrayDto {
+  @ApiProperty({
+    type: [String],
+    example: ['6b1f3f2a-8c1d-4e2b-9f4a-1234567890ab', '7c2e4d3b-9d2e-5f3c-0a5b-abcdefabcdef'],
+  })
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsString({ each: true })
+  order_ids!: string[];
 }

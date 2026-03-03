@@ -25,9 +25,12 @@ import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import {
   CreateOrderRequestDto,
+  OrdersArrayDto,
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
-import { Order_status, Where_deliver } from '@app/common';
+import { Order_status, Roles as RoleEnum, Where_deliver } from '@app/common';
+import { Roles } from './auth/roles.decorator';
+import { RolesGuard } from './auth/roles.guard';
 
 @ApiTags('Orders')
 @Controller('orders')
@@ -102,6 +105,32 @@ export class OrderGatewayController {
     return firstValueFrom(
       this.orderClient
         .send({ cmd: 'order.create' }, { dto: { ...orderDto, customer_id: finalCustomerId } })
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  @Post('receive')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Receive new orders' })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiBody({ type: OrdersArrayDto })
+  receiveNewOrders(@Body() dto: OrdersArrayDto, @Query('search') search?: string) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.receive' },
+          {
+            order_ids: dto.order_ids,
+            search,
+          },
+        )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {

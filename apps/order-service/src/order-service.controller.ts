@@ -112,6 +112,16 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.receive' })
+  receive(
+    @Payload() data: { order_ids: string[]; search?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.receiveNewOrders(data.order_ids, data.search),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.update' })
   update(
     @Payload()
