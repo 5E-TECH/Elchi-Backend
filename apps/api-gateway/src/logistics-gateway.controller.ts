@@ -7,6 +7,8 @@ import {
   Param,
   Patch,
   Post,
+  Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
@@ -25,11 +27,20 @@ import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
   CreateRegionRequestDto,
+  CreatePostRequestDto,
   CreateDistrictRequestDto,
+  PostIdRequestDto,
+  ReceivePostRequestDto,
+  SendPostRequestDto,
   UpdateRegionRequestDto,
   UpdateDistrictNameRequestDto,
   UpdateDistrictRequestDto,
 } from './dto/logistics.swagger.dto';
+
+interface JwtUser {
+  sub: string;
+  roles?: string[];
+}
 
 @ApiTags('Logistics')
 @Controller()
@@ -40,6 +51,254 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Logistics service health check' })
   health() {
     return this.logisticsClient.send({ cmd: 'logistics.health' }, {});
+  }
+
+  // ---------- Post ----------
+  @Get('post')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List all posts (with pagination)' })
+  getAllPosts(@Query('page') page?: string, @Query('limit') limit?: string) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.find_all' },
+      { query: { page: page ? Number(page) : 1, limit: limit ? Number(limit) : 8 } },
+    );
+  }
+
+  @Get('post/new')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List new posts' })
+  getNewPosts() {
+    return this.logisticsClient.send({ cmd: 'logistics.post.new' }, {});
+  }
+
+  @Get('post/rejected')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List rejected posts' })
+  getRejectedPosts() {
+    return this.logisticsClient.send({ cmd: 'logistics.post.rejected' }, {});
+  }
+
+  @Get('post/on-the-road')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Courier on-the-road posts' })
+  getOnTheRoadPosts(@Req() req: { user: JwtUser }) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.on_the_road' },
+      { requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+    );
+  }
+
+  @Get('post/courier/old-posts')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Courier old posts' })
+  getOldPostsForCourier(
+    @Query('page') page = '1',
+    @Query('limit') limit = '8',
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.old_for_courier' },
+      {
+        page: Number(page),
+        limit: Number(limit),
+        requester: { id: req.user.sub, roles: req.user.roles ?? [] },
+      },
+    );
+  }
+
+  @Get('post/courier/rejected')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Courier rejected posts' })
+  getRejectedPostsForCourier(@Req() req: { user: JwtUser }) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.rejected_for_courier' },
+      { requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+    );
+  }
+
+  @Get('post/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get post by id' })
+  @ApiParam({ name: 'id', description: 'Post ID (id)' })
+  getPostById(@Param('id') id: string) {
+    return this.logisticsClient.send({ cmd: 'logistics.post.find_by_id' }, { id });
+  }
+
+  @Patch('post/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Send post (assign orders to post)' })
+  @ApiParam({ name: 'id', description: 'Post ID (id)' })
+  @ApiBody({ type: SendPostRequestDto })
+  sendPost(@Param('id') id: string, @Body() dto: SendPostRequestDto) {
+    return this.logisticsClient.send({ cmd: 'logistics.post.update' }, { id, dto });
+  }
+
+  @Get('post/scan/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get post by scanner' })
+  @ApiParam({ name: 'id', description: 'Post QR token' })
+  getPostByScan(@Param('id') id: string) {
+    return this.logisticsClient.send({ cmd: 'logistics.post.find_by_scan' }, { id });
+  }
+
+  @Post('post/courier/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get couriers by post id' })
+  @ApiParam({ name: 'id', description: 'Post ID (id)' })
+  getCouriersByPost(@Param('id') id: string) {
+    return this.logisticsClient.send({ cmd: 'logistics.post.couriers_by_post' }, { id });
+  }
+
+  @Get('post/orders/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get all orders by post id' })
+  @ApiParam({ name: 'id', description: 'Post ID (id)' })
+  getOrdersByPost(@Param('id') id: string, @Req() req: { user: JwtUser }) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.orders_by_post' },
+      { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+    );
+  }
+
+  @Get('post/orders/rejected/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get rejected orders by post id' })
+  @ApiParam({ name: 'id', description: 'Post ID (id)' })
+  getRejectedOrdersByPost(@Param('id') id: string) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.rejected_orders_by_post' },
+      { id },
+    );
+  }
+
+  @Post('post/check/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Check post order exists by qr token' })
+  @ApiParam({ name: 'id', description: 'Order QR token' })
+  @ApiBody({ type: PostIdRequestDto })
+  checkPost(@Param('id') id: string, @Body() dto: PostIdRequestDto) {
+    return this.logisticsClient.send({ cmd: 'logistics.post.check' }, { id, dto });
+  }
+
+  @Post('post/check/cancel/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Check canceled post order exists by qr token' })
+  @ApiParam({ name: 'id', description: 'Order QR token' })
+  @ApiBody({ type: PostIdRequestDto })
+  checkCancelPost(@Param('id') id: string, @Body() dto: PostIdRequestDto) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.check_cancel' },
+      { id, dto },
+    );
+  }
+
+  @Patch('post/receive/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Receive post (courier)' })
+  @ApiParam({ name: 'id', description: 'Post ID (id)' })
+  @ApiBody({ type: ReceivePostRequestDto })
+  receivePost(
+    @Param('id') id: string,
+    @Body() dto: ReceivePostRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.receive' },
+      { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+    );
+  }
+
+  @Patch('post/receive/scan/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Receive post with scanner (courier)' })
+  @ApiParam({ name: 'id', description: 'Post QR token' })
+  receivePostWithScan(@Param('id') id: string, @Req() req: { user: JwtUser }) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.receive_scan' },
+      { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+    );
+  }
+
+  @Patch('post/receive/order/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Receive order (courier)' })
+  @ApiParam({ name: 'id', description: 'Order ID (id)' })
+  receiveOrder(@Param('id') id: string, @Req() req: { user: JwtUser }) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.receive_order' },
+      { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+    );
+  }
+
+  @Post('post/cancel')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Create canceled post (courier)' })
+  @ApiBody({ type: ReceivePostRequestDto })
+  createCanceledPost(@Body() dto: ReceivePostRequestDto, @Req() req: { user: JwtUser }) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.cancel.create' },
+      { dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+    );
+  }
+
+  @Post('post/cancel/receive/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Receive canceled post (admin)' })
+  @ApiParam({ name: 'id', description: 'Post ID (id)' })
+  @ApiBody({ type: ReceivePostRequestDto })
+  receiveCanceledPost(@Param('id') id: string, @Body() dto: ReceivePostRequestDto) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.cancel.receive' },
+      { id, dto },
+    );
+  }
+
+  @Post('post')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Create post manually' })
+  @ApiBody({ type: CreatePostRequestDto })
+  createPost(@Body() dto: CreatePostRequestDto) {
+    return this.logisticsClient.send({ cmd: 'logistics.post.create' }, { dto });
   }
 
   // ---------- Region ----------

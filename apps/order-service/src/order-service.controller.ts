@@ -65,6 +65,8 @@ export class OrderServiceController {
       query: {
         market_id?: string;
         customer_id?: string;
+        post_id?: string;
+        qr_code_token?: string;
         status?: Order_status;
         start_day?: string;
         end_day?: string;

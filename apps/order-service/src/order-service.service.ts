@@ -145,6 +145,8 @@ export class OrderServiceService {
   async findAll(query: {
     market_id?: string;
     customer_id?: string;
+    post_id?: string;
+    qr_code_token?: string;
     status?: Order_status;
     start_day?: string;
     end_day?: string;
@@ -156,6 +158,8 @@ export class OrderServiceService {
     const {
       market_id,
       customer_id,
+      post_id,
+      qr_code_token,
       status,
       start_day,
       end_day,
@@ -175,6 +179,12 @@ export class OrderServiceService {
     }
     if (customer_id) {
       qb.andWhere('order.customer_id = :customer_id', { customer_id });
+    }
+    if (post_id) {
+      qb.andWhere('order.post_id = :post_id', { post_id });
+    }
+    if (qr_code_token) {
+      qb.andWhere('order.qr_code_token = :qr_code_token', { qr_code_token });
     }
     if (status) {
       qb.andWhere('order.status = :status', { status });

@@ -50,3 +50,46 @@ export class UpdateRegionRequestDto {
   @IsString()
   sato_code?: string;
 }
+
+export class CreatePostRequestDto {
+  @ApiProperty({ example: '1' })
+  @IsNotEmpty()
+  @IsNumberString()
+  courier_id!: string;
+
+  @ApiProperty({ example: 'QR123TOKEN456', required: false })
+  @IsOptional()
+  @IsString()
+  qr_code_token?: string;
+
+  @ApiProperty({ example: ['1', '2'], required: false, type: [String] })
+  @IsOptional()
+  @IsString({ each: true })
+  orderIDs?: string[];
+}
+
+export class SendPostRequestDto {
+  @ApiProperty({ type: [String], example: ['1', '2'] })
+  @IsNotEmpty()
+  @IsString({ each: true })
+  orderIds!: string[];
+
+  @ApiProperty({ example: '1' })
+  @IsNotEmpty()
+  @IsNumberString()
+  courierId!: string;
+}
+
+export class ReceivePostRequestDto {
+  @ApiProperty({ type: [String], example: ['1', '2'] })
+  @IsNotEmpty()
+  @IsString({ each: true })
+  order_ids!: string[];
+}
+
+export class PostIdRequestDto {
+  @ApiProperty({ example: '1' })
+  @IsNotEmpty()
+  @IsNumberString()
+  postId!: string;
+}
