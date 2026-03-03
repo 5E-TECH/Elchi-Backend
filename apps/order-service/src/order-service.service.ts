@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { RpcException } from '@nestjs/microservices';
-import { Brackets, QueryFailedError, Repository } from 'typeorm';
+import { Brackets, DataSource, QueryFailedError, Repository } from 'typeorm';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { Order_status, Post_status, Roles, Where_deliver } from '@app/common';
@@ -9,6 +9,7 @@ import { Order_status, Post_status, Roles, Where_deliver } from '@app/common';
 @Injectable()
 export class OrderServiceService {
   constructor(
+    private readonly dataSource: DataSource,
     @InjectRepository(Order)
     private readonly orderRepo: Repository<Order>,
     @InjectRepository(OrderItem)
@@ -302,7 +303,7 @@ export class OrderServiceService {
       this.badRequest('order_ids is required');
     }
 
-    const queryRunner = this.orderRepo.manager.connection.createQueryRunner();
+    const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
 
@@ -452,7 +453,20 @@ export class OrderServiceService {
       return { statusCode: 200, message: 'Orders received', data: {} };
     } catch (error) {
       await queryRunner.rollbackTransaction();
-      this.handleDbError(error);
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      try {
+        this.handleDbError(error);
+      } catch (mappedError) {
+        if (mappedError instanceof RpcException) {
+          throw mappedError;
+        }
+      }
+      throw new RpcException({
+        statusCode: 500,
+        message: error instanceof Error ? error.message : 'Internal server error',
+      });
     } finally {
       await queryRunner.release();
     }
