@@ -4,7 +4,7 @@ import { RpcException } from '@nestjs/microservices';
 import { Brackets, QueryFailedError, Repository } from 'typeorm';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
-import { Order_status, Where_deliver } from '@app/common';
+import { Order_status, Post_status, Roles, Where_deliver } from '@app/common';
 
 @Injectable()
 export class OrderServiceService {
@@ -17,6 +17,10 @@ export class OrderServiceService {
 
   private notFound(message: string): never {
     throw new RpcException({ statusCode: 404, message });
+  }
+
+  private badRequest(message: string): never {
+    throw new RpcException({ statusCode: 400, message });
   }
 
   private handleDbError(error: unknown): never {
@@ -281,6 +285,177 @@ export class OrderServiceService {
 
   async findNewOrdersByMarket(market_id: string, page = 1, limit = 20) {
     return this.findAll({ market_id, status: Order_status.NEW, page, limit });
+  }
+
+  private generateCustomToken(length = 24): string {
+    const chars = 'abcdef0123456789';
+    let token = '';
+    for (let i = 0; i < length; i += 1) {
+      token += chars[Math.floor(Math.random() * chars.length)];
+    }
+    return token;
+  }
+
+  async receiveNewOrders(orderIds: string[], search?: string) {
+    const uniqueOrderIds = Array.from(new Set((orderIds ?? []).filter(Boolean)));
+    if (!uniqueOrderIds.length) {
+      this.badRequest('order_ids is required');
+    }
+
+    const queryRunner = this.orderRepo.manager.connection.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const qb = queryRunner.manager
+        .createQueryBuilder(Order, 'order')
+        .leftJoin(
+          'identity_schema.admins',
+          'customer',
+          'customer.id::text = order.customer_id::text AND customer.role = :customerRole AND customer.is_deleted = false',
+          { customerRole: Roles.CUSTOMER },
+        )
+        .leftJoin(
+          'logistics_schema.districts',
+          'district',
+          'district.id::text = COALESCE(customer.district_id::text, order.district_id::text)',
+        )
+        .where('order.id IN (:...orderIds)', { orderIds: uniqueOrderIds })
+        .andWhere('order.deleted = :deleted', { deleted: false })
+        .andWhere('order.status = :status', { status: Order_status.NEW })
+        .select('order.id', 'order_id')
+        .addSelect('order.total_price', 'order_total_price')
+        .addSelect('order.customer_id', 'order_customer_id')
+        .addSelect('district.assigned_region', 'assigned_region')
+        .addSelect('customer.id', 'customer_id')
+        .addSelect('customer.name', 'customer_name')
+        .addSelect('customer.phone_number', 'customer_phone');
+
+      if (search?.trim()) {
+        const searchValue = `%${search.trim()}%`;
+        qb.andWhere(
+          new Brackets((q) => {
+            q.where('customer.name ILIKE :search', { search: searchValue }).orWhere(
+              'customer.phone_number ILIKE :search',
+              { search: searchValue },
+            );
+          }),
+        );
+      }
+
+      const rows = await qb.getRawMany<{
+        order_id: string;
+        order_total_price: string;
+        order_customer_id: string | null;
+        assigned_region: string | null;
+        customer_id: string | null;
+      }>();
+
+      if (!rows.length) {
+        this.notFound('No orders found!');
+      }
+
+      if (rows.length !== uniqueOrderIds.length) {
+        this.badRequest('Some orders are not found or not in NEW status');
+      }
+
+      const regionIds = Array.from(
+        new Set(
+          rows.map((row) => row.assigned_region).filter((regionId): regionId is string => Boolean(regionId)),
+        ),
+      );
+
+      for (const row of rows) {
+        if (!row.customer_id) {
+          this.notFound(`Customer not found for order #${row.order_id}`);
+        }
+        if (!row.assigned_region) {
+          this.notFound(`District/assigned region not found for order #${row.order_id}`);
+        }
+      }
+
+      const postsByRegion = new Map<string, { id: string }>();
+
+      if (regionIds.length) {
+        const existingPosts = await queryRunner.manager.query(
+          `SELECT id::text AS id, region_id::text AS region_id
+           FROM logistics_schema.posts
+           WHERE status = $1 AND region_id::text = ANY($2)
+           FOR UPDATE`,
+          [Post_status.NEW, regionIds],
+        );
+
+        for (const post of existingPosts as Array<{ id: string; region_id: string }>) {
+          if (!postsByRegion.has(post.region_id)) {
+            postsByRegion.set(post.region_id, { id: post.id });
+          }
+        }
+      }
+
+      for (const regionId of regionIds) {
+        if (postsByRegion.has(regionId)) {
+          continue;
+        }
+
+        const createdPostRows = await queryRunner.manager.query(
+          `INSERT INTO logistics_schema.posts
+             ("createdAt", "updatedAt", courier_id, post_total_price, order_quantity, qr_code_token, region_id, status)
+           VALUES
+             (NOW(), NOW(), $1, 0, 0, $2, $3, $4)
+           RETURNING id::text AS id, region_id::text AS region_id`,
+          ['0', this.generateCustomToken(), regionId, Post_status.NEW],
+        );
+
+        const createdPost = createdPostRows?.[0] as { id: string; region_id: string } | undefined;
+        if (!createdPost) {
+          throw new RpcException({ statusCode: 500, message: 'Post create failed' });
+        }
+        postsByRegion.set(regionId, { id: createdPost.id });
+      }
+
+      const postAggregates = new Map<string, { totalPrice: number; quantity: number }>();
+
+      for (const row of rows) {
+        const post = postsByRegion.get(row.assigned_region!);
+        if (!post) {
+          throw new RpcException({ statusCode: 500, message: 'Post not resolved' });
+        }
+
+        await queryRunner.manager
+          .createQueryBuilder()
+          .update(Order)
+          .set({
+            status: Order_status.RECEIVED,
+            post_id: post.id,
+          })
+          .where('id = :id', { id: row.order_id })
+          .execute();
+
+        const agg = postAggregates.get(post.id) ?? { totalPrice: 0, quantity: 0 };
+        agg.totalPrice += Number(row.order_total_price ?? 0);
+        agg.quantity += 1;
+        postAggregates.set(post.id, agg);
+      }
+
+      for (const [postId, agg] of postAggregates.entries()) {
+        await queryRunner.manager.query(
+          `UPDATE logistics_schema.posts
+           SET post_total_price = post_total_price + $1,
+               order_quantity = order_quantity + $2,
+               "updatedAt" = NOW()
+           WHERE id::text = $3`,
+          [agg.totalPrice, agg.quantity, postId],
+        );
+      }
+
+      await queryRunner.commitTransaction();
+      return { statusCode: 200, message: 'Orders received', data: {} };
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.handleDbError(error);
+    } finally {
+      await queryRunner.release();
+    }
   }
 
   async findById(id: string) {
