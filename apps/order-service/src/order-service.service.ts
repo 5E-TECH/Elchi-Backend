@@ -308,49 +308,40 @@ export class OrderServiceService {
     await queryRunner.startTransaction();
 
     try {
-      const qb = queryRunner.manager
-        .createQueryBuilder(Order, 'order')
-        .leftJoin(
-          'identity_schema.admins',
-          'customer',
-          'customer.id::text = order.customer_id::text AND customer.role = :customerRole AND customer.is_deleted = false',
-          { customerRole: Roles.CUSTOMER },
-        )
-        .leftJoin(
-          'logistics_schema.districts',
-          'district',
-          'district.id::text = COALESCE(customer.district_id::text, order.district_id::text)',
-        )
-        .where('order.id IN (:...orderIds)', { orderIds: uniqueOrderIds })
-        .andWhere('order.deleted = :deleted', { deleted: false })
-        .andWhere('order.status = :status', { status: Order_status.NEW })
-        .select('order.id', 'order_id')
-        .addSelect('order.total_price', 'order_total_price')
-        .addSelect('order.customer_id', 'order_customer_id')
-        .addSelect('district.assigned_region', 'assigned_region')
-        .addSelect('customer.id', 'customer_id')
-        .addSelect('customer.name', 'customer_name')
-        .addSelect('customer.phone_number', 'customer_phone');
+      const params: unknown[] = [uniqueOrderIds, Roles.CUSTOMER, Order_status.NEW];
+      const searchClause = search?.trim()
+        ? (() => {
+            params.push(`%${search.trim()}%`);
+            return ` AND (customer.name ILIKE $4 OR customer.phone_number ILIKE $4)`;
+          })()
+        : '';
 
-      if (search?.trim()) {
-        const searchValue = `%${search.trim()}%`;
-        qb.andWhere(
-          new Brackets((q) => {
-            q.where('customer.name ILIKE :search', { search: searchValue }).orWhere(
-              'customer.phone_number ILIKE :search',
-              { search: searchValue },
-            );
-          }),
-        );
-      }
-
-      const rows = await qb.getRawMany<{
+      const rows = await queryRunner.manager.query(
+        `SELECT
+           "order".id::text AS order_id,
+           "order".total_price::text AS order_total_price,
+           "order".customer_id::text AS order_customer_id,
+           district.assigned_region::text AS assigned_region,
+           customer.id::text AS customer_id
+         FROM order_schema.orders "order"
+         LEFT JOIN identity_schema.admins customer
+           ON customer.id::text = "order".customer_id::text
+          AND customer.role = $2
+          AND customer.is_deleted = false
+         LEFT JOIN logistics_schema.districts district
+           ON district.id::text = COALESCE(customer.district_id::text, "order".district_id::text)
+         WHERE "order".id::text = ANY($1)
+           AND "order".deleted = false
+           AND "order".status = $3
+         ${searchClause}`,
+        params,
+      ) as Array<{
         order_id: string;
         order_total_price: string;
         order_customer_id: string | null;
         assigned_region: string | null;
         customer_id: string | null;
-      }>();
+      }>;
 
       if (!rows.length) {
         this.notFound('No orders found!');
