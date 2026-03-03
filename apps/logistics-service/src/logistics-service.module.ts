@@ -16,6 +16,8 @@ import { District } from './entities/district.entity';
       validationSchema: logisticsValidationSchema,
     }),
     RmqModule,
+    RmqModule.register({ name: 'ORDER' }),
+    RmqModule.register({ name: 'IDENTITY' }),
     DatabaseModule,
     TypeOrmModule.forFeature([Post, Region, District]),
   ],

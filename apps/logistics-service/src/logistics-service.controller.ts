@@ -8,6 +8,10 @@ import { UpdateDistrictNameDto } from './dto/update-district-name.dto';
 import { CreateRegionDto } from './dto/create-region.dto';
 import { UpdateRegionDto } from './dto/update-region.dto';
 import { successRes } from '../../../libs/common/helpers/response';
+import { CreatePostDto } from './dto/create-post.dto';
+import { SendPostDto } from './dto/send-post.dto';
+import { ReceivePostDto } from './dto/receive-post.dto';
+import { PostIdDto } from './dto/post-id.dto';
 
 @Controller()
 export class LogisticsServiceController {
@@ -44,31 +48,168 @@ export class LogisticsServiceController {
 
   // --- Post ---
   @MessagePattern({ cmd: 'logistics.post.create' })
-  createPost(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => {
-      // TODO: implement
-      return successRes({ message: 'not implemented' }, 200, 'success');
-    });
+  createPost(@Payload() data: { dto: CreatePostDto }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.logisticsService.createPost(data.dto));
   }
 
   @MessagePattern({ cmd: 'logistics.post.find_all' })
-  findAllPosts(@Payload() data: any, @Ctx() context: RmqContext) {
+  findAllPosts(
+    @Payload() data: { query: { page?: number; limit?: number } },
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      successRes({ message: 'not implemented' }, 200, 'success'),
+      this.logisticsService.findAllPosts(data?.query?.page, data?.query?.limit),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.new' })
+  newPosts(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.logisticsService.newPosts());
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.rejected' })
+  rejectedPosts(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.logisticsService.rejectedPosts());
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.on_the_road' })
+  onTheRoadPosts(
+    @Payload() data: { requester: { id: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.onTheRoadPosts(data.requester),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.old_for_courier' })
+  oldPostsForCourier(
+    @Payload() data: { page?: number; limit?: number; requester: { id: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.oldPostsForCourier(data.page ?? 1, data.limit ?? 8, data.requester),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.rejected_for_courier' })
+  rejectedPostsForCourier(
+    @Payload() data: { requester: { id: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.rejectedPostsForCourier(data.requester),
     );
   }
 
   @MessagePattern({ cmd: 'logistics.post.find_by_id' })
-  findPostById(@Payload() data: any, @Ctx() context: RmqContext) {
+  findPostById(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.logisticsService.findPostById(data.id));
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.find_by_scan' })
+  findPostByScan(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.logisticsService.findPostWithQr(data.id));
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.couriers_by_post' })
+  couriersByPost(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      successRes({ message: 'not implemented' }, 200, 'success'),
+      this.logisticsService.findAllCouriersByPostId(data.id),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.orders_by_post' })
+  ordersByPost(
+    @Payload() data: { id: string; requester: { id: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.getPostOrders(data.id, data.requester),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.rejected_orders_by_post' })
+  rejectedOrdersByPost(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.getRejectedPostOrders(data.id),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.check' })
+  checkPost(@Payload() data: { id: string; dto: PostIdDto }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.checkPost(data.id, data.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.check_cancel' })
+  checkCanceledPost(
+    @Payload() data: { id: string; dto: PostIdDto },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.checkCancelPost(data.id, data.dto),
     );
   }
 
   @MessagePattern({ cmd: 'logistics.post.update' })
-  updatePost(@Payload() data: any, @Ctx() context: RmqContext) {
+  updatePost(
+    @Payload() data: { id: string; dto: SendPostDto },
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      successRes({ message: 'not implemented' }, 200, 'success'),
+      this.logisticsService.sendPost(data.id, data.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.receive' })
+  receivePost(
+    @Payload() data: { id: string; dto: ReceivePostDto; requester: { id: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.receivePost(data.requester, data.id, data.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.receive_scan' })
+  receivePostScan(
+    @Payload() data: { id: string; requester: { id: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.receivePostWithScanner(data.requester, data.id),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.receive_order' })
+  receiveOrder(
+    @Payload() data: { id: string; requester: { id: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.receiveOrderWithScannerCourier(data.requester, data.id),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.cancel.create' })
+  createCanceledPost(
+    @Payload() data: { dto: ReceivePostDto; requester: { id: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.createCanceledPost(data.requester, data.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.cancel.receive' })
+  receiveCanceledPost(
+    @Payload() data: { id: string; dto: ReceivePostDto },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.receiveCanceledPost(data.id, data.dto),
     );
   }
 
