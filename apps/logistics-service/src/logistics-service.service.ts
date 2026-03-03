@@ -96,7 +96,11 @@ export class LogisticsServiceService implements OnModuleInit {
           .pipe(timeout(5000)),
       );
 
-      return res?.data ?? [];
+      // Support both payload shapes:
+      // 1) { data: OrderRow[] }
+      // 2) { statusCode, message, data: { data: OrderRow[], ... } }
+      const rows = res?.data?.data ?? res?.data ?? [];
+      return Array.isArray(rows) ? rows : [];
     } catch {
       return [];
     }
