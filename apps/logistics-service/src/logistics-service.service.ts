@@ -281,6 +281,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const allPosts = await this.postRepo.find({
       where: { status: Post_status.NEW },
+      relations: ['region'],
       order: { createdAt: 'DESC' },
     });
 
