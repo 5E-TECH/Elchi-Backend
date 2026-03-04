@@ -69,6 +69,16 @@ export class OrderGatewayController {
     return payload;
   }
 
+  private stripRegionDistricts<T>(region: T): T {
+    if (!region || typeof region !== 'object') {
+      return region;
+    }
+
+    const { districts, ...rest } = region as Record<string, unknown>;
+    void districts;
+    return rest as T;
+  }
+
   @Post()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -300,11 +310,15 @@ export class OrderGatewayController {
             ? {
                 ...(customerMap.get(row.customer_id) ?? null),
                 district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
-                region: row.region_id ? regionMap.get(row.region_id) ?? null : null,
+                region: row.region_id
+                  ? this.stripRegionDistricts(regionMap.get(row.region_id) ?? null)
+                  : null,
               }
             : null,
           district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
-          region: row.region_id ? regionMap.get(row.region_id) ?? null : null,
+          region: row.region_id
+            ? this.stripRegionDistricts(regionMap.get(row.region_id) ?? null)
+            : null,
           items: (row.items ?? []).map((item) => ({
             ...item,
             product: item.product_id ? productMap.get(item.product_id) ?? null : null,
