@@ -207,3 +207,5 @@ export class CatalogGatewayController {
     );
   }
 }
+console.log();
+
