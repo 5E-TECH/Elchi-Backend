@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { Roles as RoleEnum } from '@app/common';
+import { firstValueFrom, timeout } from 'rxjs';
 import {
   ApiCreatedResponse,
   ApiBearerAuth,
@@ -45,7 +46,10 @@ interface JwtUser {
 @ApiTags('Logistics')
 @Controller()
 export class LogisticsGatewayController {
-  constructor(@Inject('LOGISTICS') private readonly logisticsClient: ClientProxy) {}
+  constructor(
+    @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
+    @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+  ) {}
 
   @Get('health')
   @ApiOperation({ summary: 'Logistics service health check' })
@@ -176,9 +180,114 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Get all orders by post id' })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   getOrdersByPost(@Param('id') id: string, @Req() req: { user: JwtUser }) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.orders_by_post' },
-      { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+    return firstValueFrom(
+      this.logisticsClient
+        .send(
+          { cmd: 'logistics.post.orders_by_post' },
+          { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+        )
+        .pipe(timeout(8000)),
+    ).then(
+      async (response: {
+        data?: {
+          allOrdersByPostId?: Array<{
+            market_id?: string;
+            customer_id?: string;
+            district_id?: string | null;
+            region_id?: string | null;
+          }>;
+          [key: string]: unknown;
+        };
+        [key: string]: unknown;
+      }) => {
+        const rows = response?.data?.allOrdersByPostId ?? [];
+        const marketIds = Array.from(new Set(rows.map((row) => row.market_id).filter(Boolean) as string[]));
+        const customerIds = Array.from(new Set(rows.map((row) => row.customer_id).filter(Boolean) as string[]));
+        const districtIds = Array.from(
+          new Set(rows.map((row) => row.district_id).filter(Boolean) as string[]),
+        );
+        const regionIds = Array.from(new Set(rows.map((row) => row.region_id).filter(Boolean) as string[]));
+
+        const [markets, customers, districts, regions] = await Promise.all([
+          Promise.all(
+            marketIds.map(async (itemId) => {
+              try {
+                const res = await firstValueFrom(
+                  this.identityClient
+                    .send({ cmd: 'identity.market.find_by_id' }, { id: itemId })
+                    .pipe(timeout(8000)),
+                );
+                return [itemId, res?.data ?? res ?? null] as const;
+              } catch {
+                return [itemId, null] as const;
+              }
+            }),
+          ),
+          Promise.all(
+            customerIds.map(async (itemId) => {
+              try {
+                const res = await firstValueFrom(
+                  this.identityClient
+                    .send({ cmd: 'identity.customer.find_by_id' }, { id: itemId })
+                    .pipe(timeout(8000)),
+                );
+                return [itemId, res?.data ?? res ?? null] as const;
+              } catch {
+                return [itemId, null] as const;
+              }
+            }),
+          ),
+          Promise.all(
+            districtIds.map(async (itemId) => {
+              try {
+                const res = await firstValueFrom(
+                  this.logisticsClient
+                    .send({ cmd: 'logistics.district.find_by_id' }, { id: itemId })
+                    .pipe(timeout(8000)),
+                );
+                return [itemId, res?.data ?? res ?? null] as const;
+              } catch {
+                return [itemId, null] as const;
+              }
+            }),
+          ),
+          Promise.all(
+            regionIds.map(async (itemId) => {
+              try {
+                const res = await firstValueFrom(
+                  this.logisticsClient
+                    .send({ cmd: 'logistics.region.find_by_id' }, { id: itemId })
+                    .pipe(timeout(8000)),
+                );
+                return [itemId, res?.data ?? res ?? null] as const;
+              } catch {
+                return [itemId, null] as const;
+              }
+            }),
+          ),
+        ]);
+
+        const marketMap = new Map(markets);
+        const customerMap = new Map(customers);
+        const districtMap = new Map(districts);
+        const regionMap = new Map(regions);
+
+        const enrichedRows = rows.map((row) => ({
+          ...row,
+          market: row.market_id ? marketMap.get(row.market_id) ?? null : null,
+          customer: row.customer_id ? customerMap.get(row.customer_id) ?? null : null,
+          district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
+          region: row.region_id ? regionMap.get(row.region_id) ?? null : null,
+        }));
+
+        return {
+          ...response,
+          data: {
+            ...(response?.data ?? {}),
+            allOrdersByPostId: enrichedRows,
+          },
+        };
+      },
     );
   }
 
