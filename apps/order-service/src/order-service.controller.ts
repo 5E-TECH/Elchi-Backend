@@ -89,11 +89,6 @@ export class OrderServiceController {
     return this.executeAndAck(context, () => this.orderService.findById(data.id));
   }
 
-  @MessagePattern({ cmd: 'order.find_today_markets' })
-  findTodayMarkets(@Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.orderService.findTodayMarkets());
-  }
-
   @MessagePattern({ cmd: 'order.find_new_markets' })
   findNewMarkets(@Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.orderService.findNewMarkets());
