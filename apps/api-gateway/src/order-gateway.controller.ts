@@ -349,7 +349,7 @@ export class OrderGatewayController {
   @Get('markets/today')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Today's markets with orders" })
+  @ApiOperation({ summary: 'Markets with orders' })
   async findTodayMarkets() {
     const rows = await firstValueFrom(
       this.orderClient.send({ cmd: 'order.find_today_markets' }, {}).pipe(timeout(8000)),

@@ -236,21 +236,12 @@ export class OrderServiceService {
   }
 
   async findTodayMarkets() {
-    const localTz = 'Asia/Tashkent';
     const qb = this.orderRepo
       .createQueryBuilder('order')
       .select('order.market_id', 'market_id')
       .addSelect('COUNT(order.id)', 'orders_count')
       .addSelect('COALESCE(SUM(order.total_price), 0)', 'total_price_sum')
       .where('order.deleted = :deleted', { deleted: false })
-      // Keep showing old NEW orders until they are received/cancelled.
-      .andWhere(
-        new Brackets((q) => {
-          q.where(`DATE(order."createdAt" AT TIME ZONE :tz) = DATE(NOW() AT TIME ZONE :tz)`, {
-            tz: localTz,
-          }).orWhere('order.status = :newStatus', { newStatus: Order_status.NEW });
-        }),
-      )
       .groupBy('order.market_id')
       .orderBy('orders_count', 'DESC');
 
