@@ -124,12 +124,14 @@ export class ApiGatewayController {
   @ApiOperation({ summary: 'List couriers with filtering and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
+  @ApiQuery({ name: 'region_id', required: false, type: String })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({ description: 'Courier list' })
   getCouriers(
     @Query('search') search?: string,
     @Query('status') status?: string,
+    @Query('region_id') region_id?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
@@ -138,6 +140,36 @@ export class ApiGatewayController {
       {
         query: {
           search,
+          status,
+          region_id,
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+        },
+      },
+    );
+  }
+
+  @Get('couriers/region/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List couriers by region id' })
+  @ApiParam({ name: 'id', description: 'Region ID' })
+  @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiOkResponse({ description: 'Courier list by region' })
+  getCouriersByRegion(
+    @Param('id') id: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.identityClient.send(
+      { cmd: 'identity.courier.find_all' },
+      {
+        query: {
+          region_id: id,
           status,
           page: page ? Number(page) : undefined,
           limit: limit ? Number(limit) : undefined,

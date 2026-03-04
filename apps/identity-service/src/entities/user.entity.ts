@@ -45,6 +45,9 @@ export class UserAdminEntity {
   @Column({ type: 'int', nullable: true })
   payment_day: number;
 
+  @Column({ type: 'bigint', nullable: true })
+  region_id: string | null;
+
   @CreateDateColumn({ type: 'timestamp with time zone' })
   createdAt: Date;
 

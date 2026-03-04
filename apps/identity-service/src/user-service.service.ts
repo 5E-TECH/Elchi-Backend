@@ -99,6 +99,7 @@ export class UserServiceService implements OnModuleInit {
       search: query.search?.trim(),
       role: query.role?.trim(),
       status: query.status?.trim(),
+      region_id: query.region_id?.trim(),
       page,
       limit,
       skip: (page - 1) * limit,
@@ -418,7 +419,7 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async findAllCouriers(query: UserFilterQuery = {}) {
-    const { search, status, page, limit, skip } = this.normalizeQuery(query);
+    const { search, status, region_id, page, limit, skip } = this.normalizeQuery(query);
 
     const qb = this.users
       .createQueryBuilder('courier')
@@ -438,6 +439,10 @@ export class UserServiceService implements OnModuleInit {
 
     if (status) {
       qb.andWhere('courier.status = :status', { status });
+    }
+
+    if (region_id) {
+      qb.andWhere('courier.region_id = :region_id', { region_id });
     }
 
     const [rows, total] = await qb
@@ -496,6 +501,7 @@ export class UserServiceService implements OnModuleInit {
       password: hashedPassword,
       salary: 0,
       payment_day: undefined,
+      region_id: dto.region_id,
       role: Roles.COURIER,
       status: Status.ACTIVE,
       tariff_home: dto.tariff_home,
