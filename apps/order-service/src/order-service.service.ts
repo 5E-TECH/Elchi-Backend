@@ -235,34 +235,6 @@ export class OrderServiceService {
     return { data, total, page, limit };
   }
 
-  async findTodayMarkets() {
-    const qb = this.orderRepo
-      .createQueryBuilder('order')
-      .select('order.market_id', 'market_id')
-      .addSelect('COUNT(order.id)', 'orders_count')
-      .addSelect('COALESCE(SUM(order.total_price), 0)', 'total_price_sum')
-      .where('order.deleted = :deleted', { deleted: false })
-      .groupBy('order.market_id')
-      .orderBy('orders_count', 'DESC');
-
-    let rows: Array<{
-      market_id: string;
-      orders_count: string;
-      total_price_sum: string;
-    }>;
-    try {
-      rows = await qb.getRawMany();
-    } catch (error) {
-      this.handleDbError(error);
-    }
-
-    return rows.map((row) => ({
-      market_id: row.market_id,
-      orders_count: Number(row.orders_count),
-      total_price_sum: Number(row.total_price_sum),
-    }));
-  }
-
   async findNewMarkets() {
     const qb = this.orderRepo
       .createQueryBuilder('order')
