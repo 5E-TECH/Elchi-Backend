@@ -203,9 +203,11 @@ export class LogisticsGatewayController {
         const rows = response?.data?.allOrdersByPostId ?? [];
         const marketIds = Array.from(new Set(rows.map((row) => row.market_id).filter(Boolean) as string[]));
         const customerIds = Array.from(new Set(rows.map((row) => row.customer_id).filter(Boolean) as string[]));
-        const regionIds = Array.from(new Set(rows.map((row) => row.region_id).filter(Boolean) as string[]));
+        const districtIds = Array.from(
+          new Set(rows.map((row) => row.district_id).filter(Boolean) as string[]),
+        );
 
-        const [markets, customers, regions] = await Promise.all([
+        const [markets, customers, districts] = await Promise.all([
           Promise.all(
             marketIds.map(async (itemId) => {
               try {
@@ -235,11 +237,11 @@ export class LogisticsGatewayController {
             }),
           ),
           Promise.all(
-            regionIds.map(async (itemId) => {
+            districtIds.map(async (itemId) => {
               try {
                 const res = await firstValueFrom(
                   this.logisticsClient
-                    .send({ cmd: 'logistics.region.find_by_id' }, { id: itemId })
+                    .send({ cmd: 'logistics.district.find_by_id' }, { id: itemId })
                     .pipe(timeout(8000)),
                 );
                 return [itemId, res?.data ?? res ?? null] as const;
@@ -252,29 +254,14 @@ export class LogisticsGatewayController {
 
         const marketMap = new Map(markets);
         const customerMap = new Map(customers);
-        const regionMap = new Map(regions);
+        const districtMap = new Map(districts);
 
-        const enrichedRows = rows.map((row) => {
-          const rawRegion = row.region_id ? (regionMap.get(row.region_id) ?? null) : null;
-          const filteredRegion =
-            rawRegion && row.district_id
-              ? {
-                  ...rawRegion,
-                  districts: Array.isArray((rawRegion as { districts?: unknown }).districts)
-                    ? (rawRegion as { districts: Array<{ id?: string }> }).districts.filter(
-                        (district) => district?.id === row.district_id,
-                      )
-                    : [],
-                }
-              : rawRegion;
-
-          return {
-            ...row,
-            market: row.market_id ? marketMap.get(row.market_id) ?? null : null,
-            customer: row.customer_id ? customerMap.get(row.customer_id) ?? null : null,
-            region: filteredRegion,
-          };
-        });
+        const enrichedRows = rows.map((row) => ({
+          ...row,
+          market: row.market_id ? marketMap.get(row.market_id) ?? null : null,
+          customer: row.customer_id ? customerMap.get(row.customer_id) ?? null : null,
+          district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
+        }));
 
         return {
           ...response,
