@@ -1,6 +1,7 @@
-import { Column, Entity, Index } from 'typeorm';
+import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
 import { BaseEntity } from '@app/common';
 import { Post_status } from '@app/common';
+import { Region } from './region.entity';
 
 @Entity({ name: 'posts' })
 @Index('IDX_POST_STATUS', ['status'])
@@ -21,6 +22,10 @@ export class Post extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   region_id!: string | null;
+
+  @ManyToOne(() => Region, { nullable: true })
+  @JoinColumn({ name: 'region_id' })
+  region!: Region | null;
 
   @Column({ type: 'enum', enum: Post_status, default: Post_status.NEW })
   status!: Post_status;
