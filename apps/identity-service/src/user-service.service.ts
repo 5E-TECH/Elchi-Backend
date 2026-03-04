@@ -24,6 +24,7 @@ export class UserServiceService implements OnModuleInit {
     private readonly users: Repository<UserAdminEntity>,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
+    @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     private readonly bcryptEncryption: BcryptEncryption,
     private readonly configService: ConfigService,
   ) {}
@@ -123,6 +124,22 @@ export class UserServiceService implements OnModuleInit {
 
     if (found && found.id !== exceptId) {
       this.conflict('Bu username allaqachon mavjud');
+    }
+  }
+
+  private async validateRegionExists(regionId: string): Promise<void> {
+    try {
+      const res = await lastValueFrom(
+        this.logisticsClient
+          .send({ cmd: 'logistics.region.find_by_id' }, { id: regionId })
+          .pipe(timeout(5000)),
+      );
+      const region = res?.data ?? res ?? null;
+      if (!region) {
+        this.badRequest('Region not found');
+      }
+    } catch {
+      this.badRequest('Region not found');
     }
   }
 
@@ -489,6 +506,7 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async createCourier(dto: CreateCourierDto) {
+    await this.validateRegionExists(dto.region_id);
     await this.ensurePhoneUnique(dto.phone_number);
     await this.ensureUsernameUnique(dto.phone_number);
 

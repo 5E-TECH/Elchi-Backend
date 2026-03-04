@@ -29,6 +29,7 @@ export const identityValidationSchema = Joi.object({
   REFRESH_TOKEN_TIME: Joi.string().default('7d'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
+  RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
   SUPERADMIN_NAME: Joi.string().default('superadmin'),
   SUPERADMIN_PHONE_NUMBER: Joi.string().default('+998905234382'),
   SUPERADMIN_PASSWORD: Joi.string().default('0990'),
