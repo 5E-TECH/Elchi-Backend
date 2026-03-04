@@ -41,6 +41,7 @@ export interface UserFilterQuery {
   search?: string;
   role?: string;
   status?: string;
+  region_id?: string;
   page?: number;
   limit?: number;
 }
