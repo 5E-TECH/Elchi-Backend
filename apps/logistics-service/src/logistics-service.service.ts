@@ -1,7 +1,7 @@
 import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
 import { Post } from './entities/post.entity';
 import { Region } from './entities/region.entity';
@@ -285,7 +285,26 @@ export class LogisticsServiceService implements OnModuleInit {
       order: { createdAt: 'DESC' },
     });
 
-    return successRes(allPosts, 200, 'All new posts');
+    const regionIds = Array.from(
+      new Set(allPosts.map((post) => post.region_id).filter((id): id is string => Boolean(id))),
+    );
+
+    const regionsById = new Map<string, Region>();
+    if (regionIds.length) {
+      const linkedRegions = await this.regionRepo.find({
+        where: { id: In(regionIds) },
+      });
+      for (const region of linkedRegions) {
+        regionsById.set(region.id, region);
+      }
+    }
+
+    const postsWithRegion = allPosts.map((post) => ({
+      ...post,
+      region: post.region_id ? regionsById.get(post.region_id) ?? null : null,
+    }));
+
+    return successRes(postsWithRegion, 200, 'All new posts');
   }
 
   async rejectedPosts() {
