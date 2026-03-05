@@ -357,6 +357,30 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(rows, 200, 'All rejected posts for courier');
   }
 
+  async myPostsForCourier(page: number, limit: number, requester: RequesterContext) {
+    const take = limit > 100 ? 100 : Math.max(1, limit);
+    const skip = (Math.max(1, page) - 1) * take;
+
+    const [data, total] = await this.postRepo.findAndCount({
+      where: { courier_id: requester.id },
+      order: { createdAt: 'DESC' },
+      skip,
+      take,
+    });
+
+    return successRes(
+      {
+        data,
+        total,
+        page: Math.max(1, page),
+        totalPages: Math.max(1, Math.ceil(total / take)),
+        limit: take,
+      },
+      200,
+      'All my posts',
+    );
+  }
+
   async findPostById(id: string) {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) {
