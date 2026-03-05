@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
-import { QueryFailedError, Repository } from 'typeorm';
+import { In, QueryFailedError, Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
 
 interface MarketInfo {
@@ -278,6 +278,16 @@ export class CatalogServiceService {
     await this.productRepo.save(product);
     void this.removeProductFromSearch(id);
     return { message: `Product #${id} o'chirildi` };
+  }
+
+  async findByIds(ids: string[]) {
+    if (!ids.length) {
+      return { data: [] };
+    }
+    const products = await this.productRepo.find({
+      where: { id: In(ids), isDeleted: false },
+    });
+    return { data: products };
   }
 
   async removeByMarket(userId: string) {

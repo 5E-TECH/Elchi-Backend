@@ -26,7 +26,4 @@ export class SearchDocument extends BaseEntity {
 
   @Column({ type: 'jsonb', nullable: true })
   metadata!: Record<string, unknown> | null;
-
-  @Column({ type: 'boolean', default: false })
-  isDeleted!: boolean;
 }

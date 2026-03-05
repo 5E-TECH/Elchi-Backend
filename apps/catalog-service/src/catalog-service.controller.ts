@@ -91,4 +91,14 @@ export class CatalogServiceController {
       this.catalogService.removeByMarket(data.user_id),
     );
   }
+
+  @MessagePattern({ cmd: 'catalog.product.find_by_ids' })
+  findByIds(
+    @Payload() data: { ids: string[] },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.catalogService.findByIds(data.ids ?? []),
+    );
+  }
 }

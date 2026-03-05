@@ -6,7 +6,7 @@ import { RmqModule, DatabaseModule, identityValidationSchema } from '@app/common
 import { IdentityController } from './identity.controller';
 import { UserServiceService } from './user-service.service';
 import { AuthService } from './auth/auth.service';
-import { UserAdminEntity } from './entities/user.entity';
+import { User } from './entities/user.entity';
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import type { StringValue } from 'ms';
 
@@ -23,7 +23,7 @@ import type { StringValue } from 'ms';
     RmqModule.register({ name: 'ORDER' }),
     RmqModule.register({ name: 'LOGISTICS' }),
     DatabaseModule,
-    TypeOrmModule.forFeature([UserAdminEntity]),
+    TypeOrmModule.forFeature([User]),
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({

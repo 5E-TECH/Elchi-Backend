@@ -14,7 +14,4 @@ export class Product extends BaseEntity {
 
   @Column({ type: 'varchar', nullable: true })
   image_url!: string | null;
-
-  @Column({ type: 'boolean', default: false })
-  isDeleted!: boolean;
 }

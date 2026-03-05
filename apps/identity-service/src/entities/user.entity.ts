@@ -1,17 +1,8 @@
-import {
-  Entity,
-  Column,
-  PrimaryGeneratedColumn,
-  CreateDateColumn,
-  UpdateDateColumn,
-} from 'typeorm';
-import { Roles, Status, Where_deliver } from '@app/common';
+import { Entity, Column } from 'typeorm';
+import { BaseEntity, Roles, Status, Where_deliver } from '@app/common';
 
-@Entity({ name: 'admins', schema: 'identity_schema' }) // Schema nomini o'zingizga moslang
-export class UserAdminEntity {
-  @PrimaryGeneratedColumn({ type: 'bigint' })
-  id: string;
-
+@Entity({ name: 'admins', schema: 'identity_schema' })
+export class User extends BaseEntity {
   @Column({ type: 'varchar', length: 100 })
   name: string;
 
@@ -24,7 +15,7 @@ export class UserAdminEntity {
   @Column({ type: 'varchar', length: 60, unique: true, nullable: true })
   username: string | null;
 
-  @Column({ type: 'varchar', length: 255 }) // Bcrypt hash uchun uzunlik yetarli bo'lishi kerak
+  @Column({ type: 'varchar', length: 255 })
   password: string;
 
   @Column({ type: 'varchar', length: 512, nullable: true })
@@ -47,15 +38,6 @@ export class UserAdminEntity {
 
   @Column({ type: 'bigint', nullable: true })
   region_id: string | null;
-
-  @CreateDateColumn({ type: 'timestamp with time zone' })
-  createdAt: Date;
-
-  @UpdateDateColumn({ type: 'timestamp with time zone' })
-  updatedAt: Date;
-
-  @Column({ type: 'boolean', default: false })
-  is_deleted: boolean;
 
   @Column({ type: 'enum', enum: Roles, default: Roles.ADMIN })
   role: Roles;

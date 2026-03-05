@@ -187,4 +187,54 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () => this.orderService.remove(data.id));
   }
+
+  // ==================== Enriched Endpoints ====================
+
+  @MessagePattern({ cmd: 'order.find_all_enriched' })
+  findAllEnriched(
+    @Payload() data: { query: Record<string, unknown> },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findAllEnriched(data.query as any),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.find_by_id_enriched' })
+  findByIdEnriched(
+    @Payload() data: { id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findByIdEnriched(data.id),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.find_new_markets_enriched' })
+  findNewMarketsEnriched(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findNewMarketsEnriched(),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.find_new_by_market_enriched' })
+  findNewByMarketEnriched(
+    @Payload() data: { market_id: string; page?: number; limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findNewByMarketEnriched(data.market_id, data.page, data.limit),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.update_normalized' })
+  updateNormalized(
+    @Payload() data: { id: string; dto: Record<string, any> },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => {
+      const normalized = this.orderService.normalizeUpdatePayload(data.dto);
+      return this.orderService.updateFull(data.id, normalized as any);
+    });
+  }
 }
