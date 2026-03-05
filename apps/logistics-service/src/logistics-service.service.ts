@@ -44,6 +44,7 @@ export class LogisticsServiceService implements OnModuleInit {
     @InjectRepository(District) private readonly districtRepo: Repository<District>,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    @Inject('SEARCH') private readonly searchClient: ClientProxy,
   ) {}
 
   private notFound(message: string): never {
@@ -60,6 +61,136 @@ export class LogisticsServiceService implements OnModuleInit {
 
   private generateToken(): string {
     return `POST-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+  }
+
+  private async syncPostToSearch(post: Post): Promise<void> {
+    try {
+      await lastValueFrom(
+        this.searchClient
+          .send(
+            { cmd: 'search.index.upsert' },
+            {
+              source: 'logistics',
+              type: 'post',
+              sourceId: post.id,
+              title: `Post #${post.id}`,
+              content: [post.qr_code_token, post.region_id, post.courier_id, post.status]
+                .filter(Boolean)
+                .join(' '),
+              tags: ['logistics', 'post', post.status].filter(Boolean),
+              metadata: {
+                region_id: post.region_id,
+                courier_id: post.courier_id,
+                order_quantity: post.order_quantity,
+                post_total_price: post.post_total_price,
+                status: post.status,
+              },
+            },
+          )
+          .pipe(timeout(1500)),
+      );
+    } catch {
+      // Search sync should not block logistics flows.
+    }
+  }
+
+  private async removePostFromSearch(post: Post): Promise<void> {
+    try {
+      await lastValueFrom(
+        this.searchClient
+          .send(
+            { cmd: 'search.index.remove' },
+            { source: 'logistics', type: 'post', sourceId: post.id },
+          )
+          .pipe(timeout(1500)),
+      );
+    } catch {
+      // Search sync should not block logistics flows.
+    }
+  }
+
+  private async syncRegionToSearch(region: Region): Promise<void> {
+    try {
+      await lastValueFrom(
+        this.searchClient
+          .send(
+            { cmd: 'search.index.upsert' },
+            {
+              source: 'logistics',
+              type: 'region',
+              sourceId: region.id,
+              title: region.name,
+              content: region.sato_code,
+              tags: ['logistics', 'region'],
+              metadata: {
+                sato_code: region.sato_code,
+              },
+            },
+          )
+          .pipe(timeout(1500)),
+      );
+    } catch {
+      // Search sync should not block logistics flows.
+    }
+  }
+
+  private async removeRegionFromSearch(region: Region): Promise<void> {
+    try {
+      await lastValueFrom(
+        this.searchClient
+          .send(
+            { cmd: 'search.index.remove' },
+            { source: 'logistics', type: 'region', sourceId: region.id },
+          )
+          .pipe(timeout(1500)),
+      );
+    } catch {
+      // Search sync should not block logistics flows.
+    }
+  }
+
+  private async syncDistrictToSearch(district: District): Promise<void> {
+    try {
+      await lastValueFrom(
+        this.searchClient
+          .send(
+            { cmd: 'search.index.upsert' },
+            {
+              source: 'logistics',
+              type: 'district',
+              sourceId: district.id,
+              title: district.name,
+              content: [district.sato_code, district.region_id, district.assigned_region]
+                .filter(Boolean)
+                .join(' '),
+              tags: ['logistics', 'district'],
+              metadata: {
+                sato_code: district.sato_code,
+                region_id: district.region_id,
+                assigned_region: district.assigned_region,
+              },
+            },
+          )
+          .pipe(timeout(1500)),
+      );
+    } catch {
+      // Search sync should not block logistics flows.
+    }
+  }
+
+  private async removeDistrictFromSearch(district: District): Promise<void> {
+    try {
+      await lastValueFrom(
+        this.searchClient
+          .send(
+            { cmd: 'search.index.remove' },
+            { source: 'logistics', type: 'district', sourceId: district.id },
+          )
+          .pipe(timeout(1500)),
+      );
+    } catch {
+      // Search sync should not block logistics flows.
+    }
   }
 
   private async findOrderById(id: string): Promise<OrderRow> {
@@ -153,6 +284,7 @@ export class LogisticsServiceService implements OnModuleInit {
             sato_code: satoCode,
           }),
         );
+        void this.syncRegionToSearch(regionEntity);
       }
 
       for (const [districtIndex, districtNameRaw] of regionData.districts.entries()) {
@@ -171,7 +303,8 @@ export class LogisticsServiceService implements OnModuleInit {
           region_id: regionEntity.id,
           assigned_region: regionEntity.id,
         });
-        await this.districtRepo.save(district);
+        const savedDistrict = await this.districtRepo.save(district);
+        void this.syncDistrictToSearch(savedDistrict);
       }
     }
   }
@@ -203,6 +336,7 @@ export class LogisticsServiceService implements OnModuleInit {
     });
 
     const savedPost = await this.postRepo.save(post);
+    void this.syncPostToSearch(savedPost);
 
     for (const orderId of uniqueOrderIds) {
       await this.updateOrder(orderId, {
@@ -268,6 +402,7 @@ export class LogisticsServiceService implements OnModuleInit {
             order_quantity: 0,
           }),
         );
+        void this.syncPostToSearch(post);
       }
 
       for (const orderId of payload.ids) {
@@ -276,7 +411,8 @@ export class LogisticsServiceService implements OnModuleInit {
 
       post.order_quantity = Number(post.order_quantity ?? 0) + payload.ids.length;
       post.post_total_price = Number(post.post_total_price ?? 0) + payload.total;
-      await this.postRepo.save(post);
+      const savedPost = await this.postRepo.save(post);
+      void this.syncPostToSearch(savedPost);
     }
 
     const allPosts = await this.postRepo.find({
@@ -543,6 +679,7 @@ export class LogisticsServiceService implements OnModuleInit {
     post.region_id = regionId;
 
     const updatedPost = await this.postRepo.save(post);
+    void this.syncPostToSearch(updatedPost);
     return successRes({ updatedPost }, 200, 'Post sent successfully');
   }
 
@@ -589,6 +726,7 @@ export class LogisticsServiceService implements OnModuleInit {
             qr_code_token: this.generateToken(),
           }),
         );
+        void this.syncPostToSearch(newPost);
       }
 
       let addedTotal = 0;
@@ -602,11 +740,13 @@ export class LogisticsServiceService implements OnModuleInit {
 
       newPost.order_quantity = Number(newPost.order_quantity ?? 0) + remaining.length;
       newPost.post_total_price = Number(newPost.post_total_price ?? 0) + addedTotal;
-      await this.postRepo.save(newPost);
+      const savedNewPost = await this.postRepo.save(newPost);
+      void this.syncPostToSearch(savedNewPost);
     }
 
     post.status = Post_status.RECEIVED;
-    await this.postRepo.save(post);
+    const savedPost = await this.postRepo.save(post);
+    void this.syncPostToSearch(savedPost);
 
     const waitingOrders = waitingOrderIds.length
       ? await Promise.all(waitingOrderIds.map((orderId) => this.findOrderById(orderId)))
@@ -640,7 +780,8 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     post.status = Post_status.RECEIVED;
-    await this.postRepo.save(post);
+    const savedPost = await this.postRepo.save(post);
+    void this.syncPostToSearch(savedPost);
 
     return successRes({}, 200, 'Post received successfully');
   }
@@ -667,7 +808,8 @@ export class LogisticsServiceService implements OnModuleInit {
 
     if (!remaining.length) {
       post.status = Post_status.RECEIVED;
-      await this.postRepo.save(post);
+      const savedPost = await this.postRepo.save(post);
+      void this.syncPostToSearch(savedPost);
     }
 
     return successRes({}, 200, 'Order received');
@@ -703,6 +845,7 @@ export class LogisticsServiceService implements OnModuleInit {
           status: Post_status.CANCELED,
         }),
       );
+      void this.syncPostToSearch(canceledPost);
     }
 
     let addedTotal = 0;
@@ -716,7 +859,8 @@ export class LogisticsServiceService implements OnModuleInit {
 
     canceledPost.order_quantity = Number(canceledPost.order_quantity ?? 0) + orders.length;
     canceledPost.post_total_price = Number(canceledPost.post_total_price ?? 0) + addedTotal;
-    await this.postRepo.save(canceledPost);
+    const savedCanceledPost = await this.postRepo.save(canceledPost);
+    void this.syncPostToSearch(savedCanceledPost);
 
     return successRes(
       { post_id: canceledPost.id, order_ids: orderIds },
@@ -762,7 +906,8 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     post.status = Post_status.CANCELED_RECEIVED;
-    await this.postRepo.save(post);
+    const savedPost = await this.postRepo.save(post);
+    void this.syncPostToSearch(savedPost);
 
     return successRes({}, 200, 'Post received successfully');
   }
@@ -787,6 +932,7 @@ export class LogisticsServiceService implements OnModuleInit {
       assigned_region: dto.region_id,
     });
     const saved = await this.districtRepo.save(district);
+    void this.syncDistrictToSearch(saved);
     return successRes(saved, 201, 'New district added');
   }
 
@@ -830,6 +976,7 @@ export class LogisticsServiceService implements OnModuleInit {
     district.assignedToRegion = assigningRegion;
 
     const saved = await this.districtRepo.save(district);
+    void this.syncDistrictToSearch(saved);
     return successRes(saved, 200, 'District assigned to new region');
   }
 
@@ -852,7 +999,8 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     district.name = trimmedName;
-    await this.districtRepo.save(district);
+    const savedDistrict = await this.districtRepo.save(district);
+    void this.syncDistrictToSearch(savedDistrict);
     return successRes({}, 200, 'District name updated');
   }
 
@@ -863,6 +1011,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     await this.districtRepo.remove(district);
+    void this.removeDistrictFromSearch(district);
     return successRes({ id }, 200, 'District deleted');
   }
 
@@ -888,6 +1037,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const region = this.regionRepo.create({ name, sato_code: satoCode });
     const saved = await this.regionRepo.save(region);
+    void this.syncRegionToSearch(saved);
     return successRes(saved, 201, 'Region created');
   }
 
@@ -943,6 +1093,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     const saved = await this.regionRepo.save(region);
+    void this.syncRegionToSearch(saved);
     return successRes(saved, 200, 'Region updated');
   }
 
@@ -953,6 +1104,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     await this.regionRepo.remove(region);
+    void this.removeRegionFromSearch(region);
     return successRes({ id }, 200, 'Region deleted');
   }
 }
