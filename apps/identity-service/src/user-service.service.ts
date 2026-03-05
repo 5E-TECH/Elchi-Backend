@@ -143,6 +143,56 @@ export class UserServiceService implements OnModuleInit {
     }
   }
 
+  private async getRegionsByIds(regionIds: string[]): Promise<Map<string, unknown>> {
+    if (!regionIds.length) {
+      return new Map();
+    }
+
+    const resolved = await Promise.all(
+      regionIds.map(async (id) => {
+        try {
+          const res = await lastValueFrom(
+            this.logisticsClient
+              .send({ cmd: 'logistics.region.find_by_id' }, { id })
+              .pipe(timeout(5000)),
+          );
+          const region = this.stripRegionDistricts(res?.data ?? res ?? null);
+          return [id, region] as const;
+        } catch {
+          return [id, null] as const;
+        }
+      }),
+    );
+
+    return new Map(resolved);
+  }
+
+  private async getRegionById(regionId?: string | null): Promise<unknown | null> {
+    if (!regionId) {
+      return null;
+    }
+
+    try {
+      const res = await lastValueFrom(
+        this.logisticsClient
+          .send({ cmd: 'logistics.region.find_by_id' }, { id: regionId })
+          .pipe(timeout(5000)),
+      );
+      return this.stripRegionDistricts(res?.data ?? res ?? null);
+    } catch {
+      return null;
+    }
+  }
+
+  private stripRegionDistricts<T>(region: T): T {
+    if (!region || typeof region !== 'object') {
+      return region;
+    }
+
+    const { districts, ...rest } = region as Record<string, unknown>;
+    return rest as T;
+  }
+
   async onModuleInit() {
     const config = {
       ADMIN_NAME: this.configService.get<string>('SUPERADMIN_NAME'),
@@ -329,9 +379,13 @@ export class UserServiceService implements OnModuleInit {
     }
 
     const safeUser = this.sanitize(user);
+    const profileRegion = await this.getRegionById(safeUser.region_id);
 
     if (safeUser.role !== Roles.CUSTOMER) {
-      return successRes(safeUser);
+      return successRes({
+        ...safeUser,
+        region: profileRegion,
+      });
     }
 
     try {
@@ -366,6 +420,9 @@ export class UserServiceService implements OnModuleInit {
         address: latestAddressOrder?.address ?? null,
         district_id: latestAddressOrder?.district_id ?? null,
         region_id: latestAddressOrder?.region_id ?? null,
+        region: latestAddressOrder?.region_id
+          ? (await this.getRegionById(latestAddressOrder.region_id))
+          : profileRegion,
         orders: customerOrders,
       });
     } catch {
@@ -468,8 +525,20 @@ export class UserServiceService implements OnModuleInit {
       .take(limit)
       .getManyAndCount();
 
+    const regionIds = Array.from(
+      new Set(
+        rows
+          .map((row) => row.region_id)
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+    const regionsById = await this.getRegionsByIds(regionIds);
+
     return successRes({
-      items: rows.map((row) => this.sanitize(row)),
+      items: rows.map((row) => ({
+        ...this.sanitize(row),
+        region: row.region_id ? regionsById.get(row.region_id) ?? null : null,
+      })),
       meta: {
         page,
         limit,
