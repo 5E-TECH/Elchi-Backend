@@ -132,6 +132,26 @@ export class LogisticsGatewayController {
     );
   }
 
+  @Get('post/courier/my')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Courier all own posts (paginated)' })
+  getMyPostsForCourier(
+    @Query('page') page = '1',
+    @Query('limit') limit = '8',
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.my_for_courier' },
+      {
+        page: Number(page),
+        limit: Number(limit),
+        requester: { id: req.user.sub, roles: req.user.roles ?? [] },
+      },
+    );
+  }
+
   @Get('post/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)

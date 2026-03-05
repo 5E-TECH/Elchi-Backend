@@ -102,6 +102,16 @@ export class LogisticsServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'logistics.post.my_for_courier' })
+  myPostsForCourier(
+    @Payload() data: { page?: number; limit?: number; requester: { id: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.myPostsForCourier(data.page ?? 1, data.limit ?? 8, data.requester),
+    );
+  }
+
   @MessagePattern({ cmd: 'logistics.post.find_by_id' })
   findPostById(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.logisticsService.findPostById(data.id));
