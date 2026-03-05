@@ -40,6 +40,10 @@ export const orderValidationSchema = Joi.object({
   DB_SCHEMA: Joi.string().default('order_schema'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_ORDER_QUEUE: Joi.string().required(),
+  RABBITMQ_SEARCH_QUEUE: Joi.string().required(),
+  RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
+  RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
+  RABBITMQ_CATALOG_QUEUE: Joi.string().required(),
 });
 
 export const catalogValidationSchema = Joi.object({
@@ -55,6 +59,9 @@ export const logisticsValidationSchema = Joi.object({
   DB_SCHEMA: Joi.string().default('logistics_schema'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
+  RABBITMQ_ORDER_QUEUE: Joi.string().required(),
+  RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
+  RABBITMQ_SEARCH_QUEUE: Joi.string().required(),
 });
 
 export const financeValidationSchema = Joi.object({

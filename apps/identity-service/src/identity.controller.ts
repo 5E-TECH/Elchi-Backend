@@ -202,4 +202,26 @@ export class IdentityController {
   getMarkets(@Payload() payload: FindAllMarketsPayload, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.userService.findAllMarkets(payload?.query));
   }
+
+  // ==================== Batch Endpoints ====================
+
+  @MessagePattern({ cmd: 'identity.customer.find_by_ids' })
+  getCustomersByIds(
+    @Payload() payload: { ids: string[] },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.findCustomersByIds(payload.ids ?? []),
+    );
+  }
+
+  @MessagePattern({ cmd: 'identity.customer.search' })
+  searchCustomers(
+    @Payload() payload: { search: string; limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.searchCustomers(payload.search, payload.limit),
+    );
+  }
 }

@@ -955,6 +955,17 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(district);
   }
 
+  async findDistrictsByIds(ids: string[]) {
+    if (!ids.length) {
+      return successRes([]);
+    }
+    const districts = await this.districtRepo.find({
+      where: { id: In(ids) },
+      relations: ['region', 'assignedToRegion'],
+    });
+    return successRes(districts);
+  }
+
   async updateDistrict(id: string, dto: UpdateDistrictDto) {
     const district = await this.districtRepo.findOne({ where: { id } });
     if (!district) {
@@ -1058,6 +1069,65 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Region not found');
     }
     return successRes(region);
+  }
+
+  async receiveOrdersIntoPosts(
+    orders: Array<{ order_id: string; assigned_region: string; total_price: number }>,
+  ) {
+    if (!orders.length) {
+      return successRes([]);
+    }
+
+    const byRegion = new Map<string, Array<{ order_id: string; total_price: number }>>();
+    for (const order of orders) {
+      const group = byRegion.get(order.assigned_region) ?? [];
+      group.push({ order_id: order.order_id, total_price: order.total_price });
+      byRegion.set(order.assigned_region, group);
+    }
+
+    const assignments: Array<{ order_id: string; post_id: string }> = [];
+
+    for (const [regionId, regionOrders] of byRegion.entries()) {
+      let post = await this.postRepo.findOne({
+        where: { region_id: regionId, status: Post_status.NEW },
+      });
+
+      if (!post) {
+        post = this.postRepo.create({
+          courier_id: '0',
+          qr_code_token: this.generateToken(),
+          region_id: regionId,
+          status: Post_status.NEW,
+          post_total_price: 0,
+          order_quantity: 0,
+        });
+        post = await this.postRepo.save(post);
+        void this.syncPostToSearch(post);
+      }
+
+      let addedTotal = 0;
+      for (const ro of regionOrders) {
+        assignments.push({ order_id: ro.order_id, post_id: post.id });
+        addedTotal += Number(ro.total_price ?? 0);
+      }
+
+      post.order_quantity = Number(post.order_quantity ?? 0) + regionOrders.length;
+      post.post_total_price = Number(post.post_total_price ?? 0) + addedTotal;
+      const saved = await this.postRepo.save(post);
+      void this.syncPostToSearch(saved);
+    }
+
+    return successRes(assignments, 200, 'Posts assigned');
+  }
+
+  async findRegionsByIds(ids: string[]) {
+    if (!ids.length) {
+      return successRes([]);
+    }
+    const regions = await this.regionRepo.find({
+      where: { id: In(ids) },
+    });
+    return successRes(regions);
   }
 
   async updateRegion(id: string, dto: UpdateRegionDto) {

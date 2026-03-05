@@ -308,4 +308,36 @@ export class LogisticsServiceController {
       this.logisticsService.deleteDistrict(payload.id),
     );
   }
+
+  @MessagePattern({ cmd: 'logistics.post.receive_orders' })
+  receiveOrdersIntoPosts(
+    @Payload() data: { orders: Array<{ order_id: string; assigned_region: string; total_price: number }> },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.receiveOrdersIntoPosts(data.orders ?? []),
+    );
+  }
+
+  // --- Batch Endpoints ---
+
+  @MessagePattern({ cmd: 'logistics.district.find_by_ids' })
+  findDistrictsByIds(
+    @Payload() payload: { ids: string[] },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.findDistrictsByIds(payload.ids ?? []),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.region.find_by_ids' })
+  findRegionsByIds(
+    @Payload() payload: { ids: string[] },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.findRegionsByIds(payload.ids ?? []),
+    );
+  }
 }

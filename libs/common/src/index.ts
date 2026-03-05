@@ -6,6 +6,7 @@ export * from './config';
 
 export * from './rmq/rmq.service';
 export * from './rmq/rmq.module';
+export * from './rmq/rmq-client.helper';
 
 export * from './database/database.module';
 export * from './enums';

@@ -5,7 +5,7 @@ import { Brackets, In, Repository } from 'typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { lastValueFrom, timeout } from 'rxjs';
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
-import { UserAdminEntity } from './entities/user.entity';
+import { User } from './entities/user.entity';
 import { CreateAdminDto } from './dto/create-admin.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { CreateMarketDto } from './dto/create-market.dto';
@@ -20,8 +20,8 @@ import { RequesterContext } from './contracts/user.payloads';
 @Injectable()
 export class UserServiceService implements OnModuleInit {
   constructor(
-    @InjectRepository(UserAdminEntity)
-    private readonly users: Repository<UserAdminEntity>,
+    @InjectRepository(User)
+    private readonly users: Repository<User>,
     @Inject('SEARCH') private readonly searchClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
@@ -30,7 +30,7 @@ export class UserServiceService implements OnModuleInit {
     private readonly configService: ConfigService,
   ) {}
 
-  private sanitize(user: UserAdminEntity) {
+  private sanitize(user: User) {
     const { password, refresh_token, ...safeUser } = user;
     return safeUser;
   }
@@ -110,7 +110,7 @@ export class UserServiceService implements OnModuleInit {
 
   private async ensurePhoneUnique(phone: string, exceptId?: string) {
     const found = await this.users.findOne({
-      where: { phone_number: phone, is_deleted: false },
+      where: { phone_number: phone, isDeleted: false },
     });
 
     if (found && found.id !== exceptId) {
@@ -120,7 +120,7 @@ export class UserServiceService implements OnModuleInit {
 
   private async ensureUsernameUnique(username: string, exceptId?: string) {
     const found = await this.users.findOne({
-      where: { username, is_deleted: false },
+      where: { username, isDeleted: false },
     });
 
     if (found && found.id !== exceptId) {
@@ -194,9 +194,9 @@ export class UserServiceService implements OnModuleInit {
     return rest as T;
   }
 
-  private async syncUserToSearch(user: UserAdminEntity): Promise<void> {
+  private async syncUserToSearch(user: User): Promise<void> {
     try {
-      const safe = this.sanitize(user) as UserAdminEntity;
+      const safe = this.sanitize(user) as User;
       await lastValueFrom(
         this.searchClient
           .send(
@@ -214,7 +214,7 @@ export class UserServiceService implements OnModuleInit {
                 phone_number: safe.phone_number,
                 username: safe.username,
                 region_id: safe.region_id,
-                is_deleted: safe.is_deleted,
+                isDeleted: safe.isDeleted,
               },
             },
           )
@@ -225,7 +225,7 @@ export class UserServiceService implements OnModuleInit {
     }
   }
 
-  private async removeUserFromSearch(user: UserAdminEntity): Promise<void> {
+  private async removeUserFromSearch(user: User): Promise<void> {
     try {
       await lastValueFrom(
         this.searchClient
@@ -258,7 +258,7 @@ export class UserServiceService implements OnModuleInit {
 
     try {
       const isSuperAdmin = await this.users.findOne({
-        where: { role: Roles.SUPERADMIN, is_deleted: false },
+        where: { role: Roles.SUPERADMIN, isDeleted: false },
       });
 
       if (!isSuperAdmin) {
@@ -272,7 +272,7 @@ export class UserServiceService implements OnModuleInit {
           password: hashedPassword,
           role: Roles.SUPERADMIN,
           status: Status.ACTIVE,
-          is_deleted: false,
+          isDeleted: false,
         });
         const savedSuperAdmin = await this.users.save(superAdminThis);
         void this.syncUserToSearch(savedSuperAdmin);
@@ -299,7 +299,7 @@ export class UserServiceService implements OnModuleInit {
       payment_day: dto.payment_day ?? new Date().getDate(),
       role: Roles.ADMIN,
       status: Status.ACTIVE,
-      is_deleted: false,
+      isDeleted: false,
     });
 
     const saved = await this.users.save(admin);
@@ -313,7 +313,7 @@ export class UserServiceService implements OnModuleInit {
 
   async updateUser(id: string, dto: UpdateUserDto, requester?: RequesterContext) {
     const admin = await this.users.findOne({
-      where: { id, is_deleted: false },
+      where: { id, isDeleted: false },
     });
 
     if (!admin) {
@@ -378,7 +378,7 @@ export class UserServiceService implements OnModuleInit {
 
   async deleteUser(id: string, requester?: RequesterContext) {
     const admin = await this.users.findOne({
-      where: { id, is_deleted: false },
+      where: { id, isDeleted: false },
     });
     if (!admin) {
       this.notFound('User topilmadi');
@@ -410,7 +410,7 @@ export class UserServiceService implements OnModuleInit {
         ? `${admin.username}#del#${ts % 100000}`.slice(0, 60)
         : null;
 
-    admin.is_deleted = true;
+    admin.isDeleted = true;
     admin.status = Status.INACTIVE;
     admin.username = deletedUsername;
     admin.phone_number = deletedPhone;
@@ -423,7 +423,7 @@ export class UserServiceService implements OnModuleInit {
 
   async findUserById(id: string) {
     const user = await this.users.findOne({
-      where: { id, is_deleted: false },
+      where: { id, isDeleted: false },
     });
     if (!user) {
       this.notFound('User topilmadi');
@@ -485,7 +485,7 @@ export class UserServiceService implements OnModuleInit {
 
   async findCustomerById(id: string) {
     const user = await this.users.findOne({
-      where: { id, role: Roles.CUSTOMER, is_deleted: false },
+      where: { id, role: Roles.CUSTOMER, isDeleted: false },
     });
     if (!user) {
       this.notFound('Customer topilmadi');
@@ -503,7 +503,7 @@ export class UserServiceService implements OnModuleInit {
 
     const qb = this.users
       .createQueryBuilder('admin')
-      .where('admin.is_deleted = :isDeleted', { isDeleted: false })
+      .where('admin.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('admin.role != :superadminRole', { superadminRole: Roles.SUPERADMIN })
       .andWhere('admin.role != :customerRole', { customerRole: Roles.CUSTOMER });
 
@@ -548,7 +548,7 @@ export class UserServiceService implements OnModuleInit {
 
     const qb = this.users
       .createQueryBuilder('courier')
-      .where('courier.is_deleted = :isDeleted', { isDeleted: false })
+      .where('courier.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('courier.role = :role', { role: Roles.COURIER });
 
     if (search) {
@@ -618,7 +618,7 @@ export class UserServiceService implements OnModuleInit {
       tariff_center: dto.tariff_center,
       add_order: dto.add_order ?? false,
       default_tariff: dto.default_tariff,
-      is_deleted: false,
+      isDeleted: false,
     });
 
     const saved = await this.users.save(market);
@@ -647,7 +647,7 @@ export class UserServiceService implements OnModuleInit {
       tariff_center: dto.tariff_center,
       add_order: false,
       default_tariff: null,
-      is_deleted: false,
+      isDeleted: false,
     });
 
     const saved = await this.users.save(courier);
@@ -657,7 +657,7 @@ export class UserServiceService implements OnModuleInit {
 
   async createCustomer(dto: CreateCustomerDto) {
     const existing = await this.users.findOne({
-      where: { phone_number: dto.phone_number, is_deleted: false },
+      where: { phone_number: dto.phone_number, isDeleted: false },
     });
 
     if (existing) {
@@ -683,7 +683,7 @@ export class UserServiceService implements OnModuleInit {
       tariff_center: null,
       add_order: false,
       default_tariff: null,
-      is_deleted: false,
+      isDeleted: false,
     });
 
     const saved = await this.users.save(customer);
@@ -693,7 +693,7 @@ export class UserServiceService implements OnModuleInit {
 
   async updateMarket(id: string, dto: UpdateMarketDto) {
     const market = await this.users.findOne({
-      where: { id, role: Roles.MARKET, is_deleted: false },
+      where: { id, role: Roles.MARKET, isDeleted: false },
     });
 
     if (!market) {
@@ -740,7 +740,7 @@ export class UserServiceService implements OnModuleInit {
 
   async deleteMarket(id: string) {
     const market = await this.users.findOne({
-      where: { id, role: Roles.MARKET, is_deleted: false },
+      where: { id, role: Roles.MARKET, isDeleted: false },
     });
     if (!market) {
       this.notFound('Market topilmadi');
@@ -765,7 +765,7 @@ export class UserServiceService implements OnModuleInit {
         ? `${market.username}#del#${ts % 100000}`.slice(0, 60)
         : null;
 
-    market.is_deleted = true;
+    market.isDeleted = true;
     market.status = Status.INACTIVE;
     market.username = deletedUsername;
     market.phone_number = deletedPhone;
@@ -778,7 +778,7 @@ export class UserServiceService implements OnModuleInit {
 
   async findMarketById(id: string) {
     const market = await this.users.findOne({
-      where: { id, role: Roles.MARKET, is_deleted: false },
+      where: { id, role: Roles.MARKET, isDeleted: false },
     });
     if (!market) {
       this.notFound('Market topilmadi yoki faol emas');
@@ -799,7 +799,7 @@ export class UserServiceService implements OnModuleInit {
       where: {
         id: In(ids),
         role: Roles.MARKET,
-        is_deleted: false,
+        isDeleted: false,
       },
     });
 
@@ -814,7 +814,7 @@ export class UserServiceService implements OnModuleInit {
 
     const qb = this.users
       .createQueryBuilder('market')
-      .where('market.is_deleted = :isDeleted', { isDeleted: false })
+      .where('market.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('market.role = :role', { role: Roles.MARKET });
 
     if (search) {
@@ -855,7 +855,7 @@ export class UserServiceService implements OnModuleInit {
     requester?: RequesterContext,
   ) {
     const user = await this.users.findOne({
-      where: { id, is_deleted: false },
+      where: { id, isDeleted: false },
     });
 
     if (!user) {
@@ -870,21 +870,66 @@ export class UserServiceService implements OnModuleInit {
     return successRes(this.sanitize(saved), 200, 'User status yangilandi');
   }
 
+  async findCustomersByIds(ids: string[]) {
+    if (!ids.length) {
+      return { success: true, data: [] };
+    }
+
+    const customers = await this.users.find({
+      where: {
+        id: In(ids),
+        role: Roles.CUSTOMER,
+        isDeleted: false,
+      },
+    });
+
+    return {
+      success: true,
+      data: customers.map((c) => this.sanitize(c)),
+    };
+  }
+
+  async searchCustomers(search: string, limit = 1000) {
+    if (!search?.trim()) {
+      return { success: true, data: [] };
+    }
+
+    const qb = this.users
+      .createQueryBuilder('u')
+      .where('u.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('u.role = :role', { role: Roles.CUSTOMER })
+      .andWhere(
+        new Brackets((q) => {
+          q.where('u.name ILIKE :s', { s: `%${search.trim()}%` }).orWhere(
+            'u.phone_number ILIKE :s',
+            { s: `%${search.trim()}%` },
+          );
+        }),
+      )
+      .take(limit);
+
+    const rows = await qb.getMany();
+    return {
+      success: true,
+      data: rows.map((r) => this.sanitize(r)),
+    };
+  }
+
   async findByUsernameForAuth(username: string) {
     return this.users.findOne({
-      where: { username, is_deleted: false, status: Status.ACTIVE },
+      where: { username, isDeleted: false, status: Status.ACTIVE },
     });
   }
 
   async findByPhoneForAuth(phone_number: string) {
     return this.users.findOne({
-      where: { phone_number, is_deleted: false, status: Status.ACTIVE },
+      where: { phone_number, isDeleted: false, status: Status.ACTIVE },
     });
   }
 
   async findByIdForAuth(id: string) {
     return this.users.findOne({
-      where: { id, is_deleted: false, status: Status.ACTIVE },
+      where: { id, isDeleted: false, status: Status.ACTIVE },
     });
   }
 
@@ -901,7 +946,7 @@ export class UserServiceService implements OnModuleInit {
       payment_day: undefined,
       role: Roles.CUSTOMER,
       status: Status.ACTIVE,
-      is_deleted: false,
+      isDeleted: false,
     });
 
     const saved = await this.users.save(user);

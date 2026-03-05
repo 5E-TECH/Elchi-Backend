@@ -5,7 +5,7 @@ import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import type { StringValue } from 'ms';
-import { UserAdminEntity } from '../entities/user.entity';
+import { User } from '../entities/user.entity';
 import { BcryptEncryption } from '../../../../libs/common/helpers/bcrypt';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
@@ -15,8 +15,8 @@ import { errorRes, successRes } from '../../../../libs/common/helpers/response';
 @Injectable()
 export class AuthService {
   constructor(
-    @InjectRepository(UserAdminEntity)
-    private readonly users: Repository<UserAdminEntity>,
+    @InjectRepository(User)
+    private readonly users: Repository<User>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly bcryptEncryption: BcryptEncryption,
@@ -24,7 +24,7 @@ export class AuthService {
 
   async login(dto: LoginDto) {
     const user = await this.users.findOne({
-      where: { phone_number: dto.phone_number, is_deleted: false },
+      where: { phone_number: dto.phone_number, isDeleted: false },
     });
     if (!user) {
       throw new RpcException(errorRes('Invalid credentials', 401));
@@ -50,7 +50,7 @@ export class AuthService {
 
   async validateUser(userId: string) {
     const user = await this.users.findOne({
-      where: { id: userId, is_deleted: false },
+      where: { id: userId, isDeleted: false },
     });
     if (!user) {
       throw new RpcException(errorRes('User not found', 401));
@@ -83,7 +83,7 @@ export class AuthService {
     }
 
     const user = await this.users.findOne({
-      where: { id: payload.sub, is_deleted: false },
+      where: { id: payload.sub, isDeleted: false },
     });
     if (!user || user.username !== payload.username || user.status !== Status.ACTIVE) {
       throw new RpcException(errorRes('Invalid refresh token', 401));
@@ -105,7 +105,7 @@ export class AuthService {
 
   async logout(userId: string) {
     const user = await this.users.findOne({
-      where: { id: userId, is_deleted: false },
+      where: { id: userId, isDeleted: false },
     });
 
     if (!user) {
@@ -122,7 +122,7 @@ export class AuthService {
     await this.users.update({ id: userId }, { refresh_token: refreshToken });
   }
 
-  private async issueTokens(user: UserAdminEntity) {
+  private async issueTokens(user: User) {
     const payload: Record<string, unknown> = {
       sub: user.id,
       username: user.username,
@@ -139,7 +139,7 @@ export class AuthService {
     return { accessToken, refreshToken };
   }
 
-  private sanitize(user: UserAdminEntity) {
+  private sanitize(user: User) {
     return {
       id: user.id,
       username: user.username,
