@@ -399,12 +399,11 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!post) {
       this.notFound('Post not found');
     }
+    if (post.status !== Post_status.NEW) {
+      this.notFound('Only new post orders are available');
+    }
 
     let orders = await this.findOrders({ post_id: id, page: 1, limit: 1000 });
-
-    if (post.status === Post_status.SENT && requester.roles?.includes(Roles.COURIER)) {
-      orders = orders.filter((o) => o.status === Order_status.ON_THE_ROAD);
-    }
 
     let homeOrders = 0;
     let centerOrders = 0;
