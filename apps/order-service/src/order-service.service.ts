@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { RpcException } from '@nestjs/microservices';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { Brackets, DataSource, QueryFailedError, Repository } from 'typeorm';
+import { lastValueFrom, timeout } from 'rxjs';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { Order_status, Post_status, Roles, Where_deliver } from '@app/common';
@@ -14,7 +15,57 @@ export class OrderServiceService {
     private readonly orderRepo: Repository<Order>,
     @InjectRepository(OrderItem)
     private readonly orderItemRepo: Repository<OrderItem>,
+    @Inject('SEARCH') private readonly searchClient: ClientProxy,
   ) {}
+
+  private async syncOrderToSearch(order: Order): Promise<void> {
+    try {
+      await lastValueFrom(
+        this.searchClient
+          .send(
+            { cmd: 'search.index.upsert' },
+            {
+              source: 'order',
+              type: 'order',
+              sourceId: order.id,
+              title: `Order #${order.id}`,
+              content: [order.status, order.address, order.comment, order.market_id, order.customer_id]
+                .filter(Boolean)
+                .join(' '),
+              tags: ['order', order.status, order.where_deliver].filter(Boolean),
+              metadata: {
+                status: order.status,
+                market_id: order.market_id,
+                customer_id: order.customer_id,
+                post_id: order.post_id,
+                region_id: order.region_id,
+                district_id: order.district_id,
+                total_price: order.total_price,
+                deleted: order.deleted,
+              },
+            },
+          )
+          .pipe(timeout(1500)),
+      );
+    } catch {
+      // Search sync should not block order flows.
+    }
+  }
+
+  private async removeOrderFromSearch(orderId: string): Promise<void> {
+    try {
+      await lastValueFrom(
+        this.searchClient
+          .send(
+            { cmd: 'search.index.remove' },
+            { source: 'order', type: 'order', sourceId: orderId },
+          )
+          .pipe(timeout(1500)),
+      );
+    } catch {
+      // Search sync should not block order flows.
+    }
+  }
 
   private notFound(message: string): never {
     throw new RpcException({ statusCode: 404, message });
@@ -140,7 +191,9 @@ export class OrderServiceService {
       this.handleDbError(error);
     }
 
-    return this.findById(saved.id);
+    const fullOrder = await this.findById(saved.id);
+    void this.syncOrderToSearch(fullOrder);
+    return fullOrder;
   }
 
   async findAll(query: {
@@ -421,6 +474,16 @@ export class OrderServiceService {
       }
 
       await queryRunner.commitTransaction();
+      await Promise.all(
+        rows.map(async (row) => {
+          try {
+            const order = await this.findById(row.order_id);
+            await this.syncOrderToSearch(order);
+          } catch {
+            // Search sync should not block receive flow.
+          }
+        }),
+      );
       return { statusCode: 200, message: 'Orders received', data: {} };
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -534,13 +597,16 @@ export class OrderServiceService {
       this.handleDbError(error);
     }
 
-    return this.findById(order.id);
+    const updated = await this.findById(order.id);
+    void this.syncOrderToSearch(updated);
+    return updated;
   }
 
   async remove(id: string) {
     const order = await this.findById(id);
     order.deleted = true;
     await this.orderRepo.save(order);
+    void this.removeOrderFromSearch(id);
     return { message: `Order #${id} o'chirildi` };
   }
 }

@@ -15,6 +15,7 @@ import { OrderItem } from './entities/order-item.entity';
       validationSchema: orderValidationSchema,
     }),
     RmqModule,
+    RmqModule.register({ name: 'SEARCH' }),
     DatabaseModule,
     TypeOrmModule.forFeature([Order, OrderItem]),
   ],

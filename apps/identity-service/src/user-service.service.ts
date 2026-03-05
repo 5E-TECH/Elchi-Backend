@@ -22,6 +22,7 @@ export class UserServiceService implements OnModuleInit {
   constructor(
     @InjectRepository(UserAdminEntity)
     private readonly users: Repository<UserAdminEntity>,
+    @Inject('SEARCH') private readonly searchClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
@@ -193,6 +194,52 @@ export class UserServiceService implements OnModuleInit {
     return rest as T;
   }
 
+  private async syncUserToSearch(user: UserAdminEntity): Promise<void> {
+    try {
+      const safe = this.sanitize(user) as UserAdminEntity;
+      await lastValueFrom(
+        this.searchClient
+          .send(
+            { cmd: 'search.index.upsert' },
+            {
+              source: 'identity',
+              type: safe.role,
+              sourceId: safe.id,
+              title: safe.name,
+              content: [safe.phone_number, safe.username].filter(Boolean).join(' '),
+              tags: ['identity', safe.role, safe.status].filter(Boolean),
+              metadata: {
+                role: safe.role,
+                status: safe.status,
+                phone_number: safe.phone_number,
+                username: safe.username,
+                region_id: safe.region_id,
+                is_deleted: safe.is_deleted,
+              },
+            },
+          )
+          .pipe(timeout(1500)),
+      );
+    } catch {
+      // Search sync should not block identity flows.
+    }
+  }
+
+  private async removeUserFromSearch(user: UserAdminEntity): Promise<void> {
+    try {
+      await lastValueFrom(
+        this.searchClient
+          .send(
+            { cmd: 'search.index.remove' },
+            { source: 'identity', type: user.role, sourceId: user.id },
+          )
+          .pipe(timeout(1500)),
+      );
+    } catch {
+      // Search sync should not block identity flows.
+    }
+  }
+
   async onModuleInit() {
     const config = {
       ADMIN_NAME: this.configService.get<string>('SUPERADMIN_NAME'),
@@ -227,7 +274,8 @@ export class UserServiceService implements OnModuleInit {
           status: Status.ACTIVE,
           is_deleted: false,
         });
-        await this.users.save(superAdminThis);
+        const savedSuperAdmin = await this.users.save(superAdminThis);
+        void this.syncUserToSearch(savedSuperAdmin);
       }
     } catch (error) {
       return catchError(error);
@@ -255,6 +303,7 @@ export class UserServiceService implements OnModuleInit {
     });
 
     const saved = await this.users.save(admin);
+    void this.syncUserToSearch(saved);
     return successRes(this.sanitize(saved), 201, 'Admin yaratildi');
   }
 
@@ -319,6 +368,7 @@ export class UserServiceService implements OnModuleInit {
     }
 
     const saved = await this.users.save(admin);
+    void this.syncUserToSearch(saved);
     return successRes(this.sanitize(saved), 200, 'User yangilandi');
   }
 
@@ -365,7 +415,8 @@ export class UserServiceService implements OnModuleInit {
     admin.username = deletedUsername;
     admin.phone_number = deletedPhone;
 
-    await this.users.save(admin);
+    const saved = await this.users.save(admin);
+    void this.removeUserFromSearch(saved);
 
     return successRes({ id }, 200, 'User o‘chirildi');
   }
@@ -571,6 +622,7 @@ export class UserServiceService implements OnModuleInit {
     });
 
     const saved = await this.users.save(market);
+    void this.syncUserToSearch(saved);
     return successRes(this.sanitize(saved), 201, 'Market yaratildi');
   }
 
@@ -599,6 +651,7 @@ export class UserServiceService implements OnModuleInit {
     });
 
     const saved = await this.users.save(courier);
+    void this.syncUserToSearch(saved);
     return successRes(this.sanitize(saved), 201, 'Courier yaratildi');
   }
 
@@ -634,6 +687,7 @@ export class UserServiceService implements OnModuleInit {
     });
 
     const saved = await this.users.save(customer);
+    void this.syncUserToSearch(saved);
     return successRes(this.sanitize(saved), 201, 'Customer yaratildi');
   }
 
@@ -680,6 +734,7 @@ export class UserServiceService implements OnModuleInit {
     }
 
     const saved = await this.users.save(market);
+    void this.syncUserToSearch(saved);
     return successRes(this.sanitize(saved), 200, 'Market yangilandi');
   }
 
@@ -715,7 +770,8 @@ export class UserServiceService implements OnModuleInit {
     market.username = deletedUsername;
     market.phone_number = deletedPhone;
 
-    await this.users.save(market);
+    const saved = await this.users.save(market);
+    void this.removeUserFromSearch(saved);
 
     return successRes({ id }, 200, 'Market o‘chirildi');
   }
@@ -809,6 +865,7 @@ export class UserServiceService implements OnModuleInit {
 
     user.status = status;
     const saved = await this.users.save(user);
+    void this.syncUserToSearch(saved);
 
     return successRes(this.sanitize(saved), 200, 'User status yangilandi');
   }
@@ -847,6 +904,8 @@ export class UserServiceService implements OnModuleInit {
       is_deleted: false,
     });
 
-    return this.users.save(user);
+    const saved = await this.users.save(user);
+    void this.syncUserToSearch(saved);
+    return saved;
   }
 }
