@@ -66,6 +66,41 @@ export class OrderGatewayController {
     }
   }
 
+  private async sendIdentityWithTimeout(pattern: { cmd: string }, payload: object) {
+    return firstValueFrom(this.identityClient.send(pattern, payload).pipe(timeout(8000))).catch(
+      (error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Identity service response timeout');
+        }
+        throw error;
+      },
+    );
+  }
+
+  private async enrichMarketRows(rows: Array<Record<string, any>>) {
+    const marketIds = Array.from(
+      new Set(rows.map((row) => String(row?.market_id ?? '')).filter(Boolean)),
+    );
+
+    if (!marketIds.length) {
+      return rows;
+    }
+
+    const marketsResponse = await this.sendIdentityWithTimeout(
+      { cmd: 'identity.market.find_by_ids' },
+      { ids: marketIds },
+    );
+    const markets = marketsResponse?.data ?? [];
+    const marketMap = new Map(
+      markets.map((market: Record<string, any>) => [String(market.id), market]),
+    );
+
+    return rows.map((row) => ({
+      ...row,
+      market: marketMap.get(String(row.market_id)) ?? null,
+    }));
+  }
+
   @Post()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -190,11 +225,17 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Markets with NEW orders' })
   async findNewMarkets() {
-    return this.sendOrderWithFallback(
+    const result = await this.sendOrderWithFallback(
       { cmd: 'order.find_new_markets_enriched' },
       { cmd: 'order.find_new_markets' },
       {},
     );
+
+    if (!Array.isArray(result)) {
+      return result;
+    }
+
+    return this.enrichMarketRows(result);
   }
 
   @Get('markets/:marketId/new')
