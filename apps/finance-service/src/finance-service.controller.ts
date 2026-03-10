@@ -56,6 +56,33 @@ export class FinanceServiceController {
     return this.executeAndAck(context, () => this.financeService.findCashboxByUser(data));
   }
 
+  @MessagePattern({ cmd: 'finance.cashbox.main' })
+  getMainCashbox(
+    @Payload() data: { fromDate?: string; toDate?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.getMainCashbox({ fromDate: data?.fromDate, toDate: data?.toDate }),
+    );
+  }
+
+  @MessagePattern({ cmd: 'finance.cashbox.user_by_id' })
+  getCashboxByUserId(
+    @Payload()
+    data: { id: string; fromDate?: string; toDate?: string; cashbox_type?: any },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.financeService.getCashboxByUserId(data));
+  }
+
+  @MessagePattern({ cmd: 'finance.cashbox.my' })
+  myCashbox(
+    @Payload() data: { user_id: string; roles?: string[]; fromDate?: string; toDate?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.financeService.myCashbox(data));
+  }
+
   @MessagePattern({ cmd: 'finance.cashbox.update_balance' })
   updateBalance(
     @Payload() data: UpdateCashboxBalanceDto,
@@ -70,6 +97,80 @@ export class FinanceServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () => this.financeService.findAllHistory(data));
+  }
+
+  @MessagePattern({ cmd: 'finance.cashbox.payment_courier' })
+  paymentFromCourier(
+    @Payload()
+    data: {
+      courier_id: string;
+      amount: number;
+      payment_method: any;
+      payment_date?: string;
+      comment?: string;
+      market_id?: string;
+      created_by?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.financeService.paymentsFromCourier(data));
+  }
+
+  @MessagePattern({ cmd: 'finance.cashbox.payment_market' })
+  paymentToMarket(
+    @Payload()
+    data: {
+      market_id: string;
+      amount: number;
+      payment_method: any;
+      payment_date?: string;
+      comment?: string;
+      created_by?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.financeService.paymentsToMarket(data));
+  }
+
+  @MessagePattern({ cmd: 'finance.cashbox.all_info' })
+  allCashboxesInfo(
+    @Payload()
+    data: {
+      operationType?: any;
+      sourceType?: any;
+      createdBy?: string;
+      cashboxType?: any;
+      fromDate?: string;
+      toDate?: string;
+      page?: number;
+      limit?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.financeService.allCashboxesTotal(data));
+  }
+
+  @MessagePattern({ cmd: 'finance.cashbox.financial_balance' })
+  financialBalance(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.financeService.financialBalance());
+  }
+
+  @MessagePattern({ cmd: 'finance.cashbox.spend' })
+  spendMoney(
+    @Payload()
+    data: { user_id: string; amount: number; type?: any; comment?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.financeService.spendMoney(data));
+  }
+
+  @MessagePattern({ cmd: 'finance.cashbox.fill' })
+  fillCashbox(
+    @Payload()
+    data: { user_id: string; amount: number; type?: any; comment?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.financeService.fillTheCashbox(data));
   }
 
   @MessagePattern({ cmd: 'finance.shift.open' })

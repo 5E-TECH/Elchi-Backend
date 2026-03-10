@@ -17,6 +17,7 @@ import { UserSalary } from './entities/user-salary.entity';
       validationSchema: financeValidationSchema,
     }),
     RmqModule,
+    RmqModule.register({ name: 'ORDER' }),
     DatabaseModule,
     TypeOrmModule.forFeature([Cashbox, CashboxHistory, Shift, UserSalary]),
   ],
