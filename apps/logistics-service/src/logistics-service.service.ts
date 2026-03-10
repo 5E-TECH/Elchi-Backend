@@ -603,6 +603,45 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
+  async getCourierSentPostOrders(id: string, requester: RequesterContext) {
+    const post = await this.postRepo.findOne({
+      where: { id, courier_id: requester.id },
+    });
+    if (!post) {
+      this.notFound('Post not found');
+    }
+    if (post.status !== Post_status.SENT) {
+      this.badRequest('Only sent posts are available for courier');
+    }
+
+    const orders = await this.findOrders({ post_id: id, page: 1, limit: 1000 });
+
+    let homeOrders = 0;
+    let centerOrders = 0;
+    let homeOrdersTotalPrice = 0;
+    let centerOrdersTotalPrice = 0;
+
+    for (const order of orders) {
+      if (order.where_deliver === Where_deliver.ADDRESS) {
+        homeOrders += 1;
+        homeOrdersTotalPrice += Number(order.total_price ?? 0);
+      } else {
+        centerOrders += 1;
+        centerOrdersTotalPrice += Number(order.total_price ?? 0);
+      }
+    }
+
+    return successRes(
+      {
+        allOrdersByPostId: orders,
+        homeOrders: { homeOrders, homeOrdersTotalPrice },
+        centerOrders: { centerOrders, centerOrdersTotalPrice },
+      },
+      200,
+      'Courier sent post orders',
+    );
+  }
+
   async getRejectedPostOrders(id: string) {
     const orders = await this.findOrders({
       post_id: id,

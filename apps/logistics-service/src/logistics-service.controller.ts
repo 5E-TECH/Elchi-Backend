@@ -146,6 +146,16 @@ export class LogisticsServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'logistics.post.courier_orders_by_post' })
+  courierOrdersByPost(
+    @Payload() data: { id: string; requester: { id: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.getCourierSentPostOrders(data.id, data.requester),
+    );
+  }
+
   @MessagePattern({ cmd: 'logistics.post.rejected_orders_by_post' })
   rejectedOrdersByPost(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
