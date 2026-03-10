@@ -62,6 +62,7 @@ export class FinanceGatewayController {
       },
     );
   }
+  
 
   @Get('health')
   @ApiOperation({ summary: 'Finance service health check' })
