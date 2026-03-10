@@ -40,6 +40,67 @@ export class OrderGatewayController {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
   ) {}
 
+  private async sendOrderWithTimeout(pattern: { cmd: string }, payload: object) {
+    return firstValueFrom(this.orderClient.send(pattern, payload).pipe(timeout(8000))).catch(
+      (error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Order service response timeout');
+        }
+        throw error;
+      },
+    );
+  }
+
+  private async sendOrderWithFallback(
+    primary: { cmd: string },
+    fallback: { cmd: string },
+    payload: object,
+  ) {
+    try {
+      return await this.sendOrderWithTimeout(primary, payload);
+    } catch (error) {
+      if (error instanceof GatewayTimeoutException) {
+        throw error;
+      }
+      return this.sendOrderWithTimeout(fallback, payload);
+    }
+  }
+
+  private async sendIdentityWithTimeout(pattern: { cmd: string }, payload: object) {
+    return firstValueFrom(this.identityClient.send(pattern, payload).pipe(timeout(8000))).catch(
+      (error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Identity service response timeout');
+        }
+        throw error;
+      },
+    );
+  }
+
+  private async enrichMarketRows(rows: Array<Record<string, any>>) {
+    const marketIds = Array.from(
+      new Set(rows.map((row) => String(row?.market_id ?? '')).filter(Boolean)),
+    );
+
+    if (!marketIds.length) {
+      return rows;
+    }
+
+    const marketsResponse = await this.sendIdentityWithTimeout(
+      { cmd: 'identity.market.find_by_ids' },
+      { ids: marketIds },
+    );
+    const markets = marketsResponse?.data ?? [];
+    const marketMap = new Map(
+      markets.map((market: Record<string, any>) => [String(market.id), market]),
+    );
+
+    return rows.map((row) => ({
+      ...row,
+      market: marketMap.get(String(row.market_id)) ?? null,
+    }));
+  }
+
   @Post()
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -137,32 +198,26 @@ export class OrderGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return firstValueFrom(
-      this.orderClient
-        .send(
-          { cmd: 'order.find_all_enriched' },
-          {
-            query: {
-              market_id,
-              customer_id,
-              status,
-              search,
-              start_day,
-              end_day,
-              courier,
-              region_id,
-              page: page ? Number(page) : 1,
-              limit: limit ? Number(limit) : 10,
-            },
-          },
-        )
-        .pipe(timeout(8000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
-      }
-      throw error;
-    });
+    const payload = {
+      query: {
+        market_id,
+        customer_id,
+        status,
+        search,
+        start_day,
+        end_day,
+        courier,
+        region_id,
+        page: page ? Number(page) : 1,
+        limit: limit ? Number(limit) : 10,
+      },
+    };
+
+    return this.sendOrderWithFallback(
+      { cmd: 'order.find_all_enriched' },
+      { cmd: 'order.find_all' },
+      payload,
+    );
   }
 
   @Get('markets/new')
@@ -170,16 +225,17 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Markets with NEW orders' })
   async findNewMarkets() {
-    return firstValueFrom(
-      this.orderClient
-        .send({ cmd: 'order.find_new_markets_enriched' }, {})
-        .pipe(timeout(8000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
-      }
-      throw error;
-    });
+    const result = await this.sendOrderWithFallback(
+      { cmd: 'order.find_new_markets_enriched' },
+      { cmd: 'order.find_new_markets' },
+      {},
+    );
+
+    if (!Array.isArray(result)) {
+      return result;
+    }
+
+    return this.enrichMarketRows(result);
   }
 
   @Get('markets/:marketId/new')
@@ -194,23 +250,17 @@ export class OrderGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return firstValueFrom(
-      this.orderClient
-        .send(
-          { cmd: 'order.find_new_by_market_enriched' },
-          {
-            market_id: marketId,
-            page: page ? Number(page) : undefined,
-            limit: limit ? Number(limit) : undefined,
-          },
-        )
-        .pipe(timeout(8000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
-      }
-      throw error;
-    });
+    const payload = {
+      market_id: marketId,
+      page: page ? Number(page) : undefined,
+      limit: limit ? Number(limit) : undefined,
+    };
+
+    return this.sendOrderWithFallback(
+      { cmd: 'order.find_new_by_market_enriched' },
+      { cmd: 'order.find_new_by_market' },
+      payload,
+    );
   }
 
   @Get(':id')
@@ -219,16 +269,11 @@ export class OrderGatewayController {
   @ApiOperation({ summary: 'Get order by ID' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
   async findById(@Param('id') id: string) {
-    return firstValueFrom(
-      this.orderClient
-        .send({ cmd: 'order.find_by_id_enriched' }, { id })
-        .pipe(timeout(8000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
-      }
-      throw error;
-    });
+    return this.sendOrderWithFallback(
+      { cmd: 'order.find_by_id_enriched' },
+      { cmd: 'order.find_by_id' },
+      { id },
+    );
   }
 
   @Patch(':id')
