@@ -51,6 +51,90 @@ export class LogisticsGatewayController {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
   ) {}
 
+  private async enrichOrdersByPostResponse(response: {
+    data?: {
+      allOrdersByPostId?: Array<{
+        market_id?: string;
+        customer_id?: string;
+        district_id?: string | null;
+        region_id?: string | null;
+      }>;
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  }) {
+    const rows = response?.data?.allOrdersByPostId ?? [];
+    const marketIds = Array.from(new Set(rows.map((row) => row.market_id).filter(Boolean) as string[]));
+    const customerIds = Array.from(new Set(rows.map((row) => row.customer_id).filter(Boolean) as string[]));
+    const districtIds = Array.from(
+      new Set(rows.map((row) => row.district_id).filter(Boolean) as string[]),
+    );
+
+    const [markets, customers, districts] = await Promise.all([
+      Promise.all(
+        marketIds.map(async (itemId) => {
+          try {
+            const res = await firstValueFrom(
+              this.identityClient
+                .send({ cmd: 'identity.market.find_by_id' }, { id: itemId })
+                .pipe(timeout(8000)),
+            );
+            return [itemId, res?.data ?? res ?? null] as const;
+          } catch {
+            return [itemId, null] as const;
+          }
+        }),
+      ),
+      Promise.all(
+        customerIds.map(async (itemId) => {
+          try {
+            const res = await firstValueFrom(
+              this.identityClient
+                .send({ cmd: 'identity.customer.find_by_id' }, { id: itemId })
+                .pipe(timeout(8000)),
+            );
+            return [itemId, res?.data ?? res ?? null] as const;
+          } catch {
+            return [itemId, null] as const;
+          }
+        }),
+      ),
+      Promise.all(
+        districtIds.map(async (itemId) => {
+          try {
+            const res = await firstValueFrom(
+              this.logisticsClient
+                .send({ cmd: 'logistics.district.find_by_id' }, { id: itemId })
+                .pipe(timeout(8000)),
+            );
+            return [itemId, res?.data ?? res ?? null] as const;
+          } catch {
+            return [itemId, null] as const;
+          }
+        }),
+      ),
+    ]);
+
+    const marketMap = new Map(markets);
+    const customerMap = new Map(customers);
+    const districtMap = new Map(districts);
+
+    const enrichedRows = rows.map((row) => ({
+      ...row,
+      market: row.market_id ? marketMap.get(row.market_id) ?? null : null,
+      customer: row.customer_id ? customerMap.get(row.customer_id) ?? null : null,
+      district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
+    }));
+
+    return {
+      ...response,
+      data: {
+        ...(response?.data ?? {}),
+        allOrdersByPostId: enrichedRows,
+      },
+    };
+  }
+
   @Get('health')
   @ApiOperation({ summary: 'Logistics service health check' })
   health() {
@@ -207,91 +291,24 @@ export class LogisticsGatewayController {
           { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
         )
         .pipe(timeout(8000)),
-    ).then(
-      async (response: {
-        data?: {
-          allOrdersByPostId?: Array<{
-            market_id?: string;
-            customer_id?: string;
-            district_id?: string | null;
-            region_id?: string | null;
-          }>;
-          [key: string]: unknown;
-        };
-        [key: string]: unknown;
-      }) => {
-        const rows = response?.data?.allOrdersByPostId ?? [];
-        const marketIds = Array.from(new Set(rows.map((row) => row.market_id).filter(Boolean) as string[]));
-        const customerIds = Array.from(new Set(rows.map((row) => row.customer_id).filter(Boolean) as string[]));
-        const districtIds = Array.from(
-          new Set(rows.map((row) => row.district_id).filter(Boolean) as string[]),
-        );
+    ).then((response) => this.enrichOrdersByPostResponse(response));
+  }
 
-        const [markets, customers, districts] = await Promise.all([
-          Promise.all(
-            marketIds.map(async (itemId) => {
-              try {
-                const res = await firstValueFrom(
-                  this.identityClient
-                    .send({ cmd: 'identity.market.find_by_id' }, { id: itemId })
-                    .pipe(timeout(8000)),
-                );
-                return [itemId, res?.data ?? res ?? null] as const;
-              } catch {
-                return [itemId, null] as const;
-              }
-            }),
-          ),
-          Promise.all(
-            customerIds.map(async (itemId) => {
-              try {
-                const res = await firstValueFrom(
-                  this.identityClient
-                    .send({ cmd: 'identity.customer.find_by_id' }, { id: itemId })
-                    .pipe(timeout(8000)),
-                );
-                return [itemId, res?.data ?? res ?? null] as const;
-              } catch {
-                return [itemId, null] as const;
-              }
-            }),
-          ),
-          Promise.all(
-            districtIds.map(async (itemId) => {
-              try {
-                const res = await firstValueFrom(
-                  this.logisticsClient
-                    .send({ cmd: 'logistics.district.find_by_id' }, { id: itemId })
-                    .pipe(timeout(8000)),
-                );
-                return [itemId, res?.data ?? res ?? null] as const;
-              } catch {
-                return [itemId, null] as const;
-              }
-            }),
-          ),
-        ]);
-
-        const marketMap = new Map(markets);
-        const customerMap = new Map(customers);
-        const districtMap = new Map(districts);
-
-        const enrichedRows = rows.map((row) => ({
-          ...row,
-          market: row.market_id ? marketMap.get(row.market_id) ?? null : null,
-          customer: row.customer_id ? customerMap.get(row.customer_id) ?? null : null,
-          district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
-        }));
-
-        return {
-          ...response,
-          data: {
-            ...(response?.data ?? {}),
-            allOrdersByPostId: enrichedRows,
-          },
-        };
-      },
-    );
+  @Get('post/courier/orders/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Courier sent post orders by post id' })
+  @ApiParam({ name: 'id', description: 'Post ID (id)' })
+  getCourierSentOrdersByPost(@Param('id') id: string, @Req() req: { user: JwtUser }) {
+    return firstValueFrom(
+      this.logisticsClient
+        .send(
+          { cmd: 'logistics.post.courier_orders_by_post' },
+          { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+        )
+        .pipe(timeout(8000)),
+    ).then((response) => this.enrichOrdersByPostResponse(response));
   }
 
   @Get('post/orders/rejected/:id')
