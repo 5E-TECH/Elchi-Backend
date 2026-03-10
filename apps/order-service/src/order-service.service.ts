@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { Brackets, DataSource, In, QueryFailedError, Repository } from 'typeorm';
+import { Between, Brackets, DataSource, In, QueryFailedError, Repository } from 'typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
@@ -113,6 +113,61 @@ export class OrderServiceService {
       }
     }
     throw error;
+  }
+
+  private analyticsDateRange(startDate?: string, endDate?: string) {
+    const now = new Date();
+    const start = startDate ? new Date(startDate) : new Date(now);
+    const end = endDate ? new Date(endDate) : new Date(now);
+
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      throw new RpcException({ statusCode: 400, message: 'Sana formati noto‘g‘ri' });
+    }
+
+    if (!startDate) {
+      start.setHours(0, 0, 0, 0);
+    }
+    if (!endDate) {
+      end.setHours(23, 59, 59, 999);
+    } else if (!endDate.includes('T')) {
+      end.setHours(23, 59, 59, 999);
+    }
+
+    return { start, end };
+  }
+
+  private soldStatuses() {
+    return [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID];
+  }
+
+  private async getPostsByIds(ids: string[]) {
+    if (!ids.length) return [];
+    const response = await rmqSend<{ data?: Array<{ id: string; courier_id?: string | null }> }>(
+      this.logisticsClient,
+      { cmd: 'logistics.post.find_by_ids' },
+      { ids },
+    ).catch(() => ({ data: [] }));
+    return response?.data ?? [];
+  }
+
+  private async getMarketsByIds(ids: string[]) {
+    if (!ids.length) return [];
+    const response = await rmqSend<{ data?: Array<{ id: string; name?: string; tariff_home?: number; tariff_center?: number }> }>(
+      this.identityClient,
+      { cmd: 'identity.market.find_by_ids' },
+      { ids },
+    ).catch(() => ({ data: [] }));
+    return response?.data ?? [];
+  }
+
+  private async getCouriersByIds(ids: string[]) {
+    if (!ids.length) return [];
+    const response = await rmqSend<{ data?: Array<{ id: string; name?: string; tariff_home?: number; tariff_center?: number }> }>(
+      this.identityClient,
+      { cmd: 'identity.courier.find_by_ids' },
+      { ids },
+    ).catch(() => ({ data: [] }));
+    return response?.data ?? [];
   }
 
   private async replaceOrderItems(
@@ -737,6 +792,317 @@ export class OrderServiceService {
     const result = await this.findAll({ market_id, status: Order_status.NEW, page, limit });
     const enriched = await this.enrichOrders(result.data);
     return { data: enriched, total: result.total, page: result.page, limit: result.limit };
+  }
+
+  async getOverviewStats(startDate?: string, endDate?: string) {
+    const { start, end } = this.analyticsDateRange(startDate, endDate);
+    const soldStatuses = this.soldStatuses();
+
+    const [acceptedCount, cancelled, soldAndPaid, soldOrders] = await Promise.all([
+      this.orderRepo.count({
+        where: {
+          isDeleted: false,
+          createdAt: Between(start, end),
+        },
+      }),
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+        .andWhere('o.status = :status', { status: Order_status.CANCELLED })
+        .getCount(),
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+        .getCount(),
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+        .getMany(),
+    ]);
+
+    const marketIds = [...new Set(soldOrders.map((o) => o.market_id).filter(Boolean))];
+    const postIds = [...new Set(soldOrders.map((o) => o.post_id).filter(Boolean) as string[])];
+    const [markets, posts] = await Promise.all([
+      this.getMarketsByIds(marketIds),
+      this.getPostsByIds(postIds),
+    ]);
+    const courierIds = [...new Set(posts.map((p) => p.courier_id).filter(Boolean) as string[])];
+    const couriers = await this.getCouriersByIds(courierIds);
+
+    const marketMap = new Map(markets.map((m) => [String(m.id), m]));
+    const postMap = new Map(posts.map((p) => [String(p.id), p]));
+    const courierMap = new Map(couriers.map((c) => [String(c.id), c]));
+
+    let profit = 0;
+    for (const order of soldOrders) {
+      const market = marketMap.get(String(order.market_id));
+      const courierId = order.post_id ? postMap.get(String(order.post_id))?.courier_id : null;
+      const courier = courierId ? courierMap.get(String(courierId)) : null;
+      if (order.where_deliver === Where_deliver.ADDRESS) {
+        profit += Number(market?.tariff_home ?? 0) - Number(courier?.tariff_home ?? 0);
+      } else {
+        profit += Number(market?.tariff_center ?? 0) - Number(courier?.tariff_center ?? 0);
+      }
+    }
+
+    return {
+      acceptedCount,
+      cancelled,
+      soldAndPaid,
+      profit,
+      from: start.toISOString(),
+      to: end.toISOString(),
+    };
+  }
+
+  async getMarketStats(startDate?: string, endDate?: string) {
+    const { start, end } = this.analyticsDateRange(startDate, endDate);
+    const soldStatuses = this.soldStatuses();
+
+    const totalsRaw = await this.orderRepo
+      .createQueryBuilder('o')
+      .select('o.market_id', 'market_id')
+      .addSelect('COUNT(*)', 'total')
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('o.createdAt BETWEEN :start AND :end', { start, end })
+      .andWhere('o.market_id IS NOT NULL')
+      .groupBy('o.market_id')
+      .getRawMany<{ market_id: string; total: string }>();
+
+    const soldsRaw = await this.orderRepo
+      .createQueryBuilder('o')
+      .select('o.market_id', 'market_id')
+      .addSelect('COUNT(*)', 'sold')
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('o.createdAt BETWEEN :start AND :end', { start, end })
+      .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+      .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+      .andWhere('o.market_id IS NOT NULL')
+      .groupBy('o.market_id')
+      .getRawMany<{ market_id: string; sold: string }>();
+
+    const totalsMap = new Map(totalsRaw.map((r) => [String(r.market_id), Number(r.total)]));
+    const soldsMap = new Map(soldsRaw.map((r) => [String(r.market_id), Number(r.sold)]));
+    const marketIds = Array.from(new Set([...totalsMap.keys(), ...soldsMap.keys()]));
+    const markets = await this.getMarketsByIds(marketIds);
+
+    const result = markets.map((market) => {
+      const totalOrders = totalsMap.get(String(market.id)) ?? 0;
+      const soldOrders = soldsMap.get(String(market.id)) ?? 0;
+      const sellingRate = totalOrders > 0 ? Number(((soldOrders * 100) / totalOrders).toFixed(2)) : 0;
+      return { market, totalOrders, soldOrders, sellingRate };
+    });
+
+    result.sort((a, b) => b.sellingRate - a.sellingRate);
+    return result;
+  }
+
+  async getCourierStats(startDate?: string, endDate?: string) {
+    const { start, end } = this.analyticsDateRange(startDate, endDate);
+    const soldStatuses = this.soldStatuses();
+
+    const orders = await this.orderRepo
+      .createQueryBuilder('o')
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+      .andWhere('o.post_id IS NOT NULL')
+      .select(['o.id', 'o.status', 'o.post_id'])
+      .getMany();
+
+    const posts = await this.getPostsByIds([
+      ...new Set(orders.map((o) => o.post_id).filter(Boolean) as string[]),
+    ]);
+    const postMap = new Map(posts.map((p) => [String(p.id), p]));
+    const courierIds = [...new Set(posts.map((p) => p.courier_id).filter(Boolean) as string[])];
+    const couriers = await this.getCouriersByIds(courierIds);
+
+    const statsByCourier = new Map<string, { total: number; sold: number }>();
+    for (const order of orders) {
+      const courierId = order.post_id ? postMap.get(String(order.post_id))?.courier_id : null;
+      if (!courierId) continue;
+      const current = statsByCourier.get(String(courierId)) ?? { total: 0, sold: 0 };
+      current.total += 1;
+      if (soldStatuses.includes(order.status)) {
+        current.sold += 1;
+      }
+      statsByCourier.set(String(courierId), current);
+    }
+
+    const result = couriers.map((courier) => {
+      const stats = statsByCourier.get(String(courier.id)) ?? { total: 0, sold: 0 };
+      const successRate = stats.total > 0 ? Number(((stats.sold * 100) / stats.total).toFixed(2)) : 0;
+      return {
+        courier,
+        totalOrders: stats.total,
+        soldOrders: stats.sold,
+        successRate,
+      };
+    });
+
+    result.sort((a, b) => b.successRate - a.successRate);
+    return result;
+  }
+
+  async getTopMarkets(limit = 10) {
+    const soldStatuses = this.soldStatuses();
+    const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const totalsRaw = await this.orderRepo
+      .createQueryBuilder('o')
+      .select('o.market_id', 'market_id')
+      .addSelect('COUNT(*)', 'total_orders')
+      .addSelect(
+        `SUM(CASE WHEN o.status IN (:...statuses) THEN 1 ELSE 0 END)`,
+        'successful_orders',
+      )
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('o.createdAt >= :lastMonth', { lastMonth })
+      .andWhere('o.market_id IS NOT NULL')
+      .setParameter('statuses', soldStatuses)
+      .groupBy('o.market_id')
+      .getRawMany<{ market_id: string; total_orders: string; successful_orders: string }>();
+
+    const markets = await this.getMarketsByIds(totalsRaw.map((r) => String(r.market_id)));
+    const marketMap = new Map(markets.map((m) => [String(m.id), m]));
+
+    const result = totalsRaw
+      .map((row) => {
+        const totalOrders = Number(row.total_orders);
+        const successfulOrders = Number(row.successful_orders);
+        const successRate = totalOrders > 0 ? Number(((successfulOrders * 100) / totalOrders).toFixed(2)) : 0;
+        const market = marketMap.get(String(row.market_id));
+        return {
+          market_id: row.market_id,
+          market_name: market?.name ?? null,
+          total_orders: totalOrders,
+          successful_orders: successfulOrders,
+          success_rate: successRate,
+        };
+      })
+      .sort((a, b) => b.success_rate - a.success_rate)
+      .slice(0, limit);
+
+    return result;
+  }
+
+  async getTopCouriers(limit = 10) {
+    const soldStatuses = this.soldStatuses();
+    const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const orders = await this.orderRepo
+      .createQueryBuilder('o')
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('o.createdAt >= :lastMonth', { lastMonth })
+      .andWhere('o.post_id IS NOT NULL')
+      .select(['o.post_id', 'o.status'])
+      .getMany();
+
+    const posts = await this.getPostsByIds([
+      ...new Set(orders.map((o) => o.post_id).filter(Boolean) as string[]),
+    ]);
+    const postMap = new Map(posts.map((p) => [String(p.id), p]));
+    const courierIds = [...new Set(posts.map((p) => p.courier_id).filter(Boolean) as string[])];
+    const couriers = await this.getCouriersByIds(courierIds);
+    const courierMap = new Map(couriers.map((c) => [String(c.id), c]));
+
+    const stats = new Map<string, { total: number; successful: number }>();
+    for (const order of orders) {
+      const courierId = order.post_id ? postMap.get(String(order.post_id))?.courier_id : null;
+      if (!courierId) continue;
+      const current = stats.get(String(courierId)) ?? { total: 0, successful: 0 };
+      current.total += 1;
+      if (soldStatuses.includes(order.status)) {
+        current.successful += 1;
+      }
+      stats.set(String(courierId), current);
+    }
+
+    return Array.from(stats.entries())
+      .map(([courierId, current]) => {
+        const courier = courierMap.get(courierId);
+        const successRate = current.total > 0 ? Number(((current.successful * 100) / current.total).toFixed(2)) : 0;
+        return {
+          courier_id: courierId,
+          courier_name: courier?.name ?? null,
+          total_orders: current.total,
+          successful_orders: current.successful,
+          success_rate: successRate,
+        };
+      })
+      .sort((a, b) => b.success_rate - a.success_rate)
+      .slice(0, limit);
+  }
+
+  async getCourierStat(courierId: string, startDate?: string, endDate?: string) {
+    const { start, end } = this.analyticsDateRange(startDate, endDate);
+    const soldStatuses = this.soldStatuses();
+
+    const orders = await this.orderRepo
+      .createQueryBuilder('o')
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+      .andWhere('o.post_id IS NOT NULL')
+      .getMany();
+
+    const posts = await this.getPostsByIds([
+      ...new Set(orders.map((o) => o.post_id).filter(Boolean) as string[]),
+    ]);
+    const allowedPostIds = new Set(
+      posts.filter((p) => String(p.courier_id) === String(courierId)).map((p) => String(p.id)),
+    );
+
+    const myOrders = orders.filter((order) => order.post_id && allowedPostIds.has(String(order.post_id)));
+    const soldOrders = myOrders.filter((order) => soldStatuses.includes(order.status));
+    const canceledOrders = myOrders.filter((order) => order.status === Order_status.CANCELLED).length;
+    const couriers = await this.getCouriersByIds([courierId]);
+    const courier = couriers[0];
+
+    let profit = 0;
+    for (const order of soldOrders) {
+      profit += order.where_deliver === Where_deliver.ADDRESS
+        ? Number(courier?.tariff_home ?? 0)
+        : Number(courier?.tariff_center ?? 0);
+    }
+
+    const successRate = myOrders.length > 0 ? Number(((soldOrders.length * 100) / myOrders.length).toFixed(2)) : 0;
+
+    return {
+      totalOrders: myOrders.length,
+      soldOrders: soldOrders.length,
+      canceledOrders,
+      profit,
+      successRate,
+    };
+  }
+
+  async getMarketStat(marketId: string, startDate?: string, endDate?: string) {
+    const { start, end } = this.analyticsDateRange(startDate, endDate);
+    const soldStatuses = this.soldStatuses();
+
+    const allOrders = await this.orderRepo
+      .createQueryBuilder('o')
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('o.createdAt BETWEEN :start AND :end', { start, end })
+      .andWhere('o.market_id = :marketId', { marketId })
+      .getMany();
+
+    const soldOrders = allOrders.filter((order) => soldStatuses.includes(order.status) && order.updatedAt >= start && order.updatedAt <= end);
+    const canceledOrders = allOrders.filter((order) => order.status === Order_status.CANCELLED && order.updatedAt >= start && order.updatedAt <= end).length;
+    const profit = soldOrders.reduce((sum, order) => sum + Number(order.to_be_paid ?? 0), 0);
+    const successRate = allOrders.length > 0 ? Number(((soldOrders.length * 100) / allOrders.length).toFixed(2)) : 0;
+
+    return {
+      totalOrders: allOrders.length,
+      soldOrders: soldOrders.length,
+      canceledOrders,
+      profit,
+      successRate,
+    };
   }
 
   normalizeUpdatePayload(dto: Record<string, any>): Record<string, any> {

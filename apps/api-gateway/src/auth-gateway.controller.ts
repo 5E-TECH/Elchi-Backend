@@ -71,6 +71,6 @@ export class AuthGatewayController {
   @ApiOkResponse({ description: 'Current user profile' })
   @ApiUnauthorizedResponse({ description: 'Unauthorized' })
   myProfile(@Req() req: { user: JwtUser }) {
-    return this.identityClient.send({ cmd: 'identity.validate' }, { userId: req.user.sub });
+    return this.identityClient.send({ cmd: 'identity.user.find_by_id' }, { id: req.user.sub });
   }
 }

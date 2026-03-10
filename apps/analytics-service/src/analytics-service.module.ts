@@ -12,6 +12,7 @@ import { RmqModule, analyticsValidationSchema } from '@app/common';
       validationSchema: analyticsValidationSchema,
     }),
     RmqModule,
+    RmqModule.register({ name: 'ORDER' }),
     // Note: Analytics service may connect to read-replica or other data sources
     // DatabaseModule can be added when needed
   ],

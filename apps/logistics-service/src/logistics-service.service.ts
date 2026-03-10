@@ -525,6 +525,18 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(post, 200, 'Post found');
   }
 
+  async findPostsByIds(ids: string[]) {
+    if (!ids.length) {
+      return successRes([], 200, 'Posts found');
+    }
+
+    const posts = await this.postRepo.find({
+      where: { id: In(ids) },
+    });
+
+    return successRes(posts, 200, 'Posts found');
+  }
+
   async findPostWithQr(token: string) {
     const post = await this.postRepo.findOne({ where: { qr_code_token: token } });
     if (!post) {

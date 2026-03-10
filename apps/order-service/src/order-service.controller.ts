@@ -237,4 +237,74 @@ export class OrderServiceController {
       return this.orderService.updateFull(data.id, normalized as any);
     });
   }
+
+  @MessagePattern({ cmd: 'order.analytics.overview' })
+  analyticsOverview(
+    @Payload() data: { startDate?: string; endDate?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getOverviewStats(data.startDate, data.endDate),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.analytics.market_stats' })
+  analyticsMarketStats(
+    @Payload() data: { startDate?: string; endDate?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getMarketStats(data.startDate, data.endDate),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.analytics.courier_stats' })
+  analyticsCourierStats(
+    @Payload() data: { startDate?: string; endDate?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getCourierStats(data.startDate, data.endDate),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.analytics.top_markets' })
+  analyticsTopMarkets(
+    @Payload() data: { limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getTopMarkets(data.limit),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.analytics.top_couriers' })
+  analyticsTopCouriers(
+    @Payload() data: { limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getTopCouriers(data.limit),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.analytics.courier_stat' })
+  analyticsCourierStat(
+    @Payload() data: { requester: { id: string }; startDate?: string; endDate?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getCourierStat(data.requester.id, data.startDate, data.endDate),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.analytics.market_stat' })
+  analyticsMarketStat(
+    @Payload() data: { requester: { id: string }; startDate?: string; endDate?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getMarketStat(data.requester.id, data.startDate, data.endDate),
+    );
+  }
 }

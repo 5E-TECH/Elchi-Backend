@@ -9,6 +9,7 @@ import type {
   CreateUserPayload,
   DeleteUserPayload,
   FindAllUsersPayload,
+  FindCouriersByIdsPayload,
   FindUserByIdPayload,
   UpdateUserStatusPayload,
   UpdateUserPayload,
@@ -212,6 +213,16 @@ export class IdentityController {
   ) {
     return this.executeAndAck(context, () =>
       this.userService.findCustomersByIds(payload.ids ?? []),
+    );
+  }
+
+  @MessagePattern({ cmd: 'identity.courier.find_by_ids' })
+  getCouriersByIds(
+    @Payload() payload: FindCouriersByIdsPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.findCouriersByIds(payload.ids ?? []),
     );
   }
 

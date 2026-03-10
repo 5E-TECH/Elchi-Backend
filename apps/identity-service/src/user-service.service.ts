@@ -889,6 +889,25 @@ export class UserServiceService implements OnModuleInit {
     };
   }
 
+  async findCouriersByIds(ids: string[]) {
+    if (!ids.length) {
+      return { success: true, data: [] };
+    }
+
+    const couriers = await this.users.find({
+      where: {
+        id: In(ids),
+        role: Roles.COURIER,
+        isDeleted: false,
+      },
+    });
+
+    return {
+      success: true,
+      data: couriers.map((c) => this.sanitize(c)),
+    };
+  }
+
   async searchCustomers(search: string, limit = 1000) {
     if (!search?.trim()) {
       return { success: true, data: [] };

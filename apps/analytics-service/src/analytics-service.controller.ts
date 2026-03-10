@@ -32,7 +32,9 @@ export class AnalyticsServiceController {
 
   @MessagePattern({ cmd: 'analytics.dashboard' })
   getDashboard(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.analyticsService.getDashboard(data?.requester, data?.filter ?? {}),
+    );
   }
 
   @MessagePattern({ cmd: 'analytics.kpi' })

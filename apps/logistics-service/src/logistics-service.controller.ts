@@ -117,6 +117,13 @@ export class LogisticsServiceController {
     return this.executeAndAck(context, () => this.logisticsService.findPostById(data.id));
   }
 
+  @MessagePattern({ cmd: 'logistics.post.find_by_ids' })
+  findPostsByIds(@Payload() data: { ids: string[] }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.findPostsByIds(data.ids ?? []),
+    );
+  }
+
   @MessagePattern({ cmd: 'logistics.post.find_by_scan' })
   findPostByScan(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.logisticsService.findPostWithQr(data.id));

@@ -1,10 +1,148 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
+import { ClientProxy } from '@nestjs/microservices';
+import { Roles, rmqSend } from '@app/common';
+import { successRes } from '../../../libs/common/helpers/response';
+
+interface RequesterContext {
+  id: string;
+  roles?: string[];
+}
 
 @Injectable()
 export class AnalyticsServiceService {
-  // TODO: Dashboard statistics (order counts, revenue, etc.)
-  // TODO: KPI calculations
-  // TODO: Report generation
-  // Note: Analytics service reads data from other services via RMQ
-  // or uses read-replicas / materialized views
+  constructor(@Inject('ORDER') private readonly orderClient: ClientProxy) {}
+
+  private unwrap<T>(response: T | { data?: T }) {
+    if (
+      response &&
+      typeof response === 'object' &&
+      'data' in response
+    ) {
+      return (response as { data?: T }).data ?? response;
+    }
+    return response;
+  }
+
+  private normalizeDateRange(filter: { startDate?: string; endDate?: string }) {
+    const { startDate, endDate } = filter;
+
+    if (!startDate || !endDate) {
+      const now = new Date();
+      const start = new Date(now);
+      start.setHours(0, 0, 0, 0);
+      const end = new Date(now);
+      end.setHours(23, 59, 59, 999);
+      return {
+        startDate: start.toISOString(),
+        endDate: end.toISOString(),
+      };
+    }
+
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+
+    if (!startDate.includes('T')) {
+      start.setHours(0, 0, 0, 0);
+    }
+    if (!endDate.includes('T')) {
+      end.setHours(23, 59, 59, 999);
+    }
+
+    return {
+      startDate: start.toISOString(),
+      endDate: end.toISOString(),
+    };
+  }
+
+  private roleSet(requester?: RequesterContext) {
+    return new Set((requester?.roles ?? []).map((role) => String(role).toLowerCase()));
+  }
+
+  async getDashboard(
+    requester: RequesterContext | undefined,
+    filter: { startDate?: string; endDate?: string },
+  ) {
+    const normalized = this.normalizeDateRange(filter);
+    const roles = this.roleSet(requester);
+
+    if (roles.has(Roles.COURIER)) {
+      const [myStat, couriers, topCouriers] = await Promise.all([
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.courier_stat' },
+          { requester, ...normalized },
+        ),
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.courier_stats' },
+          normalized,
+        ),
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.top_couriers' },
+          {},
+        ),
+      ]);
+
+      return successRes(
+        {
+          myStat: this.unwrap(myStat),
+          couriers: this.unwrap(couriers),
+          topCouriers: this.unwrap(topCouriers),
+        },
+        200,
+        'Dashboard infos',
+      );
+    }
+
+    if (roles.has(Roles.MARKET)) {
+      const [myStat, markets, topMarkets] = await Promise.all([
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.market_stat' },
+          { requester, ...normalized },
+        ),
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.market_stats' },
+          normalized,
+        ),
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.top_markets' },
+          {},
+        ),
+      ]);
+
+      return successRes(
+        {
+          myStat: this.unwrap(myStat),
+          markets: this.unwrap(markets),
+          topMarkets: this.unwrap(topMarkets),
+        },
+        200,
+        'Dashboard infos',
+      );
+    }
+
+    const [orders, markets, couriers, topMarkets, topCouriers] = await Promise.all([
+      rmqSend(this.orderClient, { cmd: 'order.analytics.overview' }, normalized),
+      rmqSend(this.orderClient, { cmd: 'order.analytics.market_stats' }, normalized),
+      rmqSend(this.orderClient, { cmd: 'order.analytics.courier_stats' }, normalized),
+      rmqSend(this.orderClient, { cmd: 'order.analytics.top_markets' }, {}),
+      rmqSend(this.orderClient, { cmd: 'order.analytics.top_couriers' }, {}),
+    ]);
+
+    return successRes(
+      {
+        orders: this.unwrap(orders),
+        markets: this.unwrap(markets),
+        couriers: this.unwrap(couriers),
+        topMarkets: this.unwrap(topMarkets),
+        topCouriers: this.unwrap(topCouriers),
+      },
+      200,
+      'Dashboard infos',
+    );
+  }
 }
