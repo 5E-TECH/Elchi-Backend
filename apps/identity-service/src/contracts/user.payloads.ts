@@ -22,6 +22,10 @@ export interface CreateCustomerPayload {
   dto: CreateCustomerDto;
 }
 
+export interface FindCouriersByIdsPayload {
+  ids: string[];
+}
+
 export interface UpdateUserPayload {
   id: string;
   dto: UpdateUserDto;

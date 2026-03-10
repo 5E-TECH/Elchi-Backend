@@ -18,6 +18,7 @@ import { SearchGatewayController } from './search-gateway.controller';
 import { LogisticsGatewayController } from './logistics-gateway.controller';
 import { OrderGatewayController } from './order-gateway.controller';
 import { FinanceGatewayController } from './finance-gateway.controller';
+import { AnalyticsGatewayController } from './analytics-gateway.controller';
 import type { StringValue } from 'ms';
 
 @Module({
@@ -65,6 +66,7 @@ import type { StringValue } from 'ms';
     LogisticsGatewayController,
     SearchGatewayController,
     FinanceGatewayController,
+    AnalyticsGatewayController,
     HealthController,
     // TODO: Qolgan gateway controllerlarni qo'shish
     // FinanceGatewayController,
