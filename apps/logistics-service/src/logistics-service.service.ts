@@ -1,7 +1,7 @@
 import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { In, Repository } from 'typeorm';
+import { In, Not, Repository } from 'typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
 import { Post } from './entities/post.entity';
 import { Region } from './entities/region.entity';
@@ -29,11 +29,18 @@ interface OrderRow {
   total_price?: number;
   status?: Order_status;
   post_id?: string | null;
+  canceled_post_id?: string | null;
   region_id?: string | null;
   district_id?: string | null;
   customer_id?: string;
   where_deliver?: Where_deliver;
   qr_code_token?: string | null;
+}
+
+interface CourierRow {
+  id: string;
+  region_id?: string | null;
+  role?: string;
 }
 
 @Injectable()
@@ -205,6 +212,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
   private async findOrders(query: {
     post_id?: string;
+    canceled_post_id?: string;
     status?: Order_status;
     customer_id?: string;
     qr_code_token?: string;
@@ -258,6 +266,38 @@ export class LogisticsServiceService implements OnModuleInit {
       return res?.data?.items ?? [];
     } catch {
       return [];
+    }
+  }
+
+  private async listCouriersByRegion(regionId: string): Promise<Array<Record<string, unknown>>> {
+    try {
+      const res = await lastValueFrom(
+        this.identityClient
+          .send(
+            { cmd: 'identity.courier.find_all' },
+            { query: { region_id: regionId, page: 1, limit: 1000 } },
+          )
+          .pipe(timeout(5000)),
+      );
+
+      return res?.data?.items ?? [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async findCourierById(id: string): Promise<CourierRow | null> {
+    try {
+      const res = await lastValueFrom(
+        this.identityClient
+          .send({ cmd: 'identity.courier.find_by_ids' }, { ids: [id] })
+          .pipe(timeout(5000)),
+      );
+
+      const rows = res?.data ?? [];
+      return Array.isArray(rows) && rows.length ? (rows[0] as CourierRow) : null;
+    } catch {
+      return null;
     }
   }
 
@@ -353,7 +393,8 @@ export class LogisticsServiceService implements OnModuleInit {
     const skip = (Math.max(1, page) - 1) * take;
 
     const [data, total] = await this.postRepo.findAndCount({
-      where: { status: Post_status.SENT },
+      where: { status: Not(Post_status.NEW) },
+      relations: ['region'],
       order: { createdAt: 'DESC' },
       skip,
       take,
@@ -446,6 +487,7 @@ export class LogisticsServiceService implements OnModuleInit {
   async rejectedPosts() {
     const allPosts = await this.postRepo.find({
       where: { status: Post_status.CANCELED },
+      relations: ['region'],
       order: { createdAt: 'DESC' },
     });
     return successRes(allPosts, 200, 'All rejected posts');
@@ -454,6 +496,7 @@ export class LogisticsServiceService implements OnModuleInit {
   async onTheRoadPosts(requester: RequesterContext) {
     const allPosts = await this.postRepo.find({
       where: { status: Post_status.SENT, courier_id: requester.id },
+      relations: ['region'],
       order: { createdAt: 'DESC' },
     });
     return successRes(allPosts, 200, 'All on-the-road posts');
@@ -488,6 +531,7 @@ export class LogisticsServiceService implements OnModuleInit {
   async rejectedPostsForCourier(requester: RequesterContext) {
     const rows = await this.postRepo.find({
       where: { status: Post_status.CANCELED, courier_id: requester.id },
+      relations: ['region'],
       order: { createdAt: 'DESC' },
     });
     return successRes(rows, 200, 'All rejected posts for courier');
@@ -499,6 +543,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const [data, total] = await this.postRepo.findAndCount({
       where: { courier_id: requester.id },
+      relations: ['region'],
       order: { createdAt: 'DESC' },
       skip,
       take,
@@ -551,9 +596,11 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Post not found');
     }
 
-    const couriers = await this.listCouriers();
+    const couriers = post.region_id
+      ? await this.listCouriersByRegion(post.region_id)
+      : await this.listCouriers();
     if (!couriers.length) {
-      this.notFound('There are not any couriers');
+      this.notFound('There are not any couriers for this region');
     }
 
     return successRes(
@@ -571,11 +618,13 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!post) {
       this.notFound('Post not found');
     }
-    if (post.status !== Post_status.NEW) {
-      this.notFound('Only new post orders are available');
-    }
 
     let orders = await this.findOrders({ post_id: id, page: 1, limit: 1000 });
+    const isCourier = Boolean(requester.roles?.includes(Roles.COURIER));
+
+    if (post.status === Post_status.SENT && isCourier) {
+      orders = orders.filter((order) => order.status === Order_status.ON_THE_ROAD);
+    }
 
     let homeOrders = 0;
     let centerOrders = 0;
@@ -604,9 +653,7 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   async getCourierSentPostOrders(id: string, requester: RequesterContext) {
-    const post = await this.postRepo.findOne({
-      where: { id, courier_id: requester.id },
-    });
+    const post = await this.postRepo.findOne({ where: { id, courier_id: requester.id } });
     if (!post) {
       this.notFound('Post not found');
     }
@@ -614,37 +661,12 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest('Only sent posts are available for courier');
     }
 
-    const orders = await this.findOrders({ post_id: id, page: 1, limit: 1000 });
-
-    let homeOrders = 0;
-    let centerOrders = 0;
-    let homeOrdersTotalPrice = 0;
-    let centerOrdersTotalPrice = 0;
-
-    for (const order of orders) {
-      if (order.where_deliver === Where_deliver.ADDRESS) {
-        homeOrders += 1;
-        homeOrdersTotalPrice += Number(order.total_price ?? 0);
-      } else {
-        centerOrders += 1;
-        centerOrdersTotalPrice += Number(order.total_price ?? 0);
-      }
-    }
-
-    return successRes(
-      {
-        allOrdersByPostId: orders,
-        homeOrders: { homeOrders, homeOrdersTotalPrice },
-        centerOrders: { centerOrders, centerOrdersTotalPrice },
-      },
-      200,
-      'Courier sent post orders',
-    );
+    return this.getPostOrders(id, requester);
   }
 
   async getRejectedPostOrders(id: string) {
     const orders = await this.findOrders({
-      post_id: id,
+      canceled_post_id: id,
       status: Order_status.CANCELLED_SENT,
       page: 1,
       limit: 1000,
@@ -678,7 +700,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     const orders = await this.findOrders({
-      post_id: dto.postId,
+      canceled_post_id: dto.postId,
       status: Order_status.CANCELLED_SENT,
       qr_code_token: qrToken,
       page: 1,
@@ -698,6 +720,11 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Post not found');
     }
 
+    const courier = await this.findCourierById(dto.courierId);
+    if (!courier) {
+      this.notFound('Courier not found');
+    }
+
     if (!dto.orderIds?.length) {
       this.badRequest('You can not send an empty post');
     }
@@ -708,14 +735,16 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const removedIds = currentIds.filter((orderId) => !newIds.includes(orderId));
     for (const orderId of removedIds) {
-      await this.updateOrder(orderId, { post_id: null, status: Order_status.RECEIVED });
+      await this.updateOrder(orderId, { post_id: null });
     }
 
     let total = 0;
     let regionId = post.region_id;
+    const newOrders: OrderRow[] = [];
 
     for (const orderId of newIds) {
       const order = await this.findOrderById(orderId);
+      newOrders.push(order);
       total += Number(order.total_price ?? 0);
       if (!regionId && order.region_id) {
         regionId = String(order.region_id);
@@ -731,7 +760,18 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const updatedPost = await this.postRepo.save(post);
     void this.syncPostToSearch(updatedPost);
-    return successRes({ updatedPost }, 200, 'Post sent successfully');
+    return successRes(
+      {
+        updatedPost,
+        newOrders,
+        postTotalInfo: {
+          total: newIds.length,
+          sum: total,
+        },
+      },
+      200,
+      'Post sent successfully',
+    );
   }
 
   async receivePost(requester: RequesterContext, id: string, dto: ReceivePostDto) {
@@ -902,7 +942,7 @@ export class LogisticsServiceService implements OnModuleInit {
     let addedTotal = 0;
     for (const order of orders) {
       await this.updateOrder(order.id, {
-        post_id: canceledPost.id,
+        canceled_post_id: canceledPost.id,
         status: Order_status.CANCELLED_SENT,
       });
       addedTotal += Number(order.total_price ?? 0);
@@ -930,7 +970,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     const allOrders = await this.findOrders({
-      post_id: id,
+      canceled_post_id: id,
       status: Order_status.CANCELLED_SENT,
       page: 1,
       limit: 1000,
@@ -952,7 +992,7 @@ export class LogisticsServiceService implements OnModuleInit {
     for (const orderId of remainingOrderIds) {
       await this.updateOrder(orderId, {
         status: Order_status.CANCELLED,
-        post_id: null,
+        canceled_post_id: null,
       });
     }
 

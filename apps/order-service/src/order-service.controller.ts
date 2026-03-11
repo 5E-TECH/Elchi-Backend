@@ -66,6 +66,7 @@ export class OrderServiceController {
         market_id?: string;
         customer_id?: string;
         post_id?: string;
+        canceled_post_id?: string;
         qr_code_token?: string;
         status?: Order_status;
         start_day?: string;
@@ -135,6 +136,7 @@ export class OrderServiceController {
         comment?: string | null;
         operator?: string | null;
         post_id?: string | null;
+        canceled_post_id?: string | null;
         district_id?: string | null;
         region_id?: string | null;
         address?: string | null;
@@ -166,6 +168,7 @@ export class OrderServiceController {
         comment?: string | null;
         operator?: string | null;
         post_id?: string | null;
+        canceled_post_id?: string | null;
         district_id?: string | null;
         region_id?: string | null;
         address?: string | null;

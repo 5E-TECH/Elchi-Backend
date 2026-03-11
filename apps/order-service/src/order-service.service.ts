@@ -41,6 +41,7 @@ export class OrderServiceService {
                 market_id: order.market_id,
                 customer_id: order.customer_id,
                 post_id: order.post_id,
+                canceled_post_id: order.canceled_post_id,
                 region_id: order.region_id,
                 district_id: order.district_id,
                 total_price: order.total_price,
@@ -211,6 +212,7 @@ export class OrderServiceService {
     comment?: string | null;
     operator?: string | null;
     post_id?: string | null;
+    canceled_post_id?: string | null;
     district_id?: string | null;
     region_id?: string | null;
     address?: string | null;
@@ -228,6 +230,7 @@ export class OrderServiceService {
       comment: dto.comment ?? null,
       operator: dto.operator ?? null,
       post_id: dto.post_id ?? null,
+      canceled_post_id: dto.canceled_post_id ?? null,
       district_id: dto.district_id ?? null,
       region_id: dto.region_id ?? null,
       address: dto.address ?? null,
@@ -259,6 +262,7 @@ export class OrderServiceService {
     customer_id?: string;
     customer_ids?: string[];
     post_id?: string;
+    canceled_post_id?: string;
     qr_code_token?: string;
     status?: Order_status;
     start_day?: string;
@@ -273,6 +277,7 @@ export class OrderServiceService {
       customer_id,
       customer_ids,
       post_id,
+      canceled_post_id,
       qr_code_token,
       status,
       start_day,
@@ -298,6 +303,9 @@ export class OrderServiceService {
     }
     if (post_id) {
       qb.andWhere('order.post_id = :post_id', { post_id });
+    }
+    if (canceled_post_id) {
+      qb.andWhere('order.canceled_post_id = :canceled_post_id', { canceled_post_id });
     }
     if (qr_code_token) {
       qb.andWhere('order.qr_code_token = :qr_code_token', { qr_code_token });
@@ -573,6 +581,7 @@ export class OrderServiceService {
       comment?: string | null;
       operator?: string | null;
       post_id?: string | null;
+      canceled_post_id?: string | null;
       district_id?: string | null;
       region_id?: string | null;
       address?: string | null;
@@ -596,6 +605,7 @@ export class OrderServiceService {
       comment?: string | null;
       operator?: string | null;
       post_id?: string | null;
+      canceled_post_id?: string | null;
       district_id?: string | null;
       region_id?: string | null;
       address?: string | null;
@@ -616,6 +626,10 @@ export class OrderServiceService {
       comment: dto.comment ?? order.comment,
       operator: dto.operator ?? order.operator,
       post_id: dto.post_id ?? order.post_id,
+      canceled_post_id:
+        typeof dto.canceled_post_id !== 'undefined'
+          ? dto.canceled_post_id
+          : order.canceled_post_id,
       district_id: dto.district_id ?? order.district_id,
       region_id: dto.region_id ?? order.region_id,
       address: dto.address ?? order.address,

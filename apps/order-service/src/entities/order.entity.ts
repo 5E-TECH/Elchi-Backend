@@ -39,6 +39,9 @@ export class Order extends BaseEntity {
   post_id!: string | null;
 
   @Column({ type: 'bigint', nullable: true })
+  canceled_post_id!: string | null;
+
+  @Column({ type: 'bigint', nullable: true })
   district_id!: string | null;
 
   @Column({ type: 'bigint', nullable: true })

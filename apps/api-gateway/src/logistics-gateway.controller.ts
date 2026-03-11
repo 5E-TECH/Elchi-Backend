@@ -28,7 +28,6 @@ import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
   CreateRegionRequestDto,
-  CreatePostRequestDto,
   CreateDistrictRequestDto,
   PostIdRequestDto,
   ReceivePostRequestDto,
@@ -216,26 +215,6 @@ export class LogisticsGatewayController {
     );
   }
 
-  @Get('post/courier/my')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.COURIER)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Courier all own posts (paginated)' })
-  getMyPostsForCourier(
-    @Query('page') page = '1',
-    @Query('limit') limit = '8',
-    @Req() req: { user: JwtUser },
-  ) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.my_for_courier' },
-      {
-        page: Number(page),
-        limit: Number(limit),
-        requester: { id: req.user.sub, roles: req.user.roles ?? [] },
-      },
-    );
-  }
-
   @Get('post/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
@@ -288,23 +267,6 @@ export class LogisticsGatewayController {
       this.logisticsClient
         .send(
           { cmd: 'logistics.post.orders_by_post' },
-          { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-        )
-        .pipe(timeout(8000)),
-    ).then((response) => this.enrichOrdersByPostResponse(response));
-  }
-
-  @Get('post/courier/orders/:id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.COURIER)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Courier sent post orders by post id' })
-  @ApiParam({ name: 'id', description: 'Post ID (id)' })
-  getCourierSentOrdersByPost(@Param('id') id: string, @Req() req: { user: JwtUser }) {
-    return firstValueFrom(
-      this.logisticsClient
-        .send(
-          { cmd: 'logistics.post.courier_orders_by_post' },
           { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
         )
         .pipe(timeout(8000)),
@@ -418,16 +380,6 @@ export class LogisticsGatewayController {
       { cmd: 'logistics.post.cancel.receive' },
       { id, dto },
     );
-  }
-
-  @Post('post')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Create post manually' })
-  @ApiBody({ type: CreatePostRequestDto })
-  createPost(@Body() dto: CreatePostRequestDto) {
-    return this.logisticsClient.send({ cmd: 'logistics.post.create' }, { dto });
   }
 
   // ---------- Region ----------
