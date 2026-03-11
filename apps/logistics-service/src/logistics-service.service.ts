@@ -506,14 +506,16 @@ export class LogisticsServiceService implements OnModuleInit {
     const take = limit > 100 ? 100 : Math.max(1, limit);
     const skip = (Math.max(1, page) - 1) * take;
 
-    const [data, total] = await this.postRepo
-      .createQueryBuilder('post')
-      .where('post.courier_id = :courierId', { courierId: requester.id })
-      .andWhere('post.status NOT IN (:...statuses)', { statuses: [Post_status.SENT, Post_status.NEW] })
-      .orderBy('post.createdAt', 'DESC')
-      .skip(skip)
-      .take(take)
-      .getManyAndCount();
+    const [data, total] = await this.postRepo.findAndCount({
+      where: {
+        courier_id: requester.id,
+        status: Not(In([Post_status.SENT, Post_status.NEW])),
+      },
+      relations: ['region'],
+      order: { createdAt: 'DESC' },
+      skip,
+      take,
+    });
 
     return successRes(
       {
@@ -667,7 +669,6 @@ export class LogisticsServiceService implements OnModuleInit {
   async getRejectedPostOrders(id: string) {
     const orders = await this.findOrders({
       canceled_post_id: id,
-      status: Order_status.CANCELLED_SENT,
       page: 1,
       limit: 1000,
     });
