@@ -10,6 +10,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
@@ -29,8 +30,15 @@ import {
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
 import { Order_status, Roles as RoleEnum } from '@app/common';
+import { successRes } from '../../../libs/common/helpers/response';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
+
+interface JwtUser {
+  sub: string;
+  username: string;
+  roles: string[];
+}
 
 @ApiTags('Orders')
 @Controller('orders')
@@ -38,7 +46,32 @@ export class OrderGatewayController {
   constructor(
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
   ) {}
+
+  private toSnakeCaseKey(value: string) {
+    return value
+      .replace(/([a-z0-9])([A-Z])/g, '$1_$2')
+      .replace(/-/g, '_')
+      .toLowerCase();
+  }
+
+  private toLegacyShape<T>(value: T): T {
+    if (Array.isArray(value)) {
+      return value.map((item) => this.toLegacyShape(item)) as T;
+    }
+
+    if (value && typeof value === 'object') {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>).map(([key, nestedValue]) => [
+          this.toSnakeCaseKey(key),
+          this.toLegacyShape(nestedValue),
+        ]),
+      ) as T;
+    }
+
+    return value;
+  }
 
   private async sendOrderWithTimeout(pattern: { cmd: string }, payload: object) {
     return firstValueFrom(this.orderClient.send(pattern, payload).pipe(timeout(8000))).catch(
@@ -75,6 +108,26 @@ export class OrderGatewayController {
         throw error;
       },
     );
+  }
+
+  private async sendLogisticsWithTimeout(pattern: { cmd: string }, payload: object) {
+    return firstValueFrom(this.logisticsClient.send(pattern, payload).pipe(timeout(8000))).catch(
+      (error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Logistics service response timeout');
+        }
+        throw error;
+      },
+    );
+  }
+
+  private normalizeLegacyOrderRow(row: Record<string, unknown>) {
+    const normalized = { ...row };
+    if ('is_deleted' in normalized) {
+      normalized.deleted = normalized.is_deleted;
+      delete normalized.is_deleted;
+    }
+    return normalized;
   }
 
   private async enrichMarketRows(rows: Array<Record<string, any>>) {
@@ -217,6 +270,93 @@ export class OrderGatewayController {
       { cmd: 'order.find_all_enriched' },
       { cmd: 'order.find_all' },
       payload,
+    );
+  }
+
+  @Get('courier/orders')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Legacy courier orders list endpoint' })
+  @ApiQuery({ name: 'status', required: false, enum: Order_status })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'startDate', required: false, type: String, description: 'Legacy start date (YYYY-MM-DD or ISO)' })
+  @ApiQuery({ name: 'endDate', required: false, type: String, description: 'Legacy end date (YYYY-MM-DD or ISO)' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  async findCourierOrdersLegacy(
+    @Query('status') status?: Order_status,
+    @Query('search') search?: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Req() req?: { user: JwtUser },
+  ) {
+    const courierPostsResponse = await this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.post.my_for_courier' },
+      {
+        page: 1,
+        limit: 1000,
+        requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
+      },
+    );
+
+    const courierPosts = (courierPostsResponse?.data?.data ??
+      courierPostsResponse?.data ??
+      []) as Array<Record<string, unknown>>;
+    const courierPostIds = Array.from(
+      new Set(courierPosts.map((post) => String(post?.id ?? '')).filter(Boolean)),
+    );
+
+    if (!courierPostIds.length) {
+      return successRes(
+        {
+          data: [],
+          total: 0,
+          page: page ? Number(page) : 1,
+          limit: limit ? Number(limit) : 10,
+          totalPages: 0,
+        },
+        200,
+        'All my orders',
+      );
+    }
+
+    const payload = {
+      query: {
+        post_ids: courierPostIds,
+        status,
+        search,
+        start_day: startDate,
+        end_day: endDate,
+        page: page ? Number(page) : 1,
+        limit: limit ? Number(limit) : 10,
+      },
+    };
+
+    const result = await this.sendOrderWithFallback(
+      { cmd: 'order.find_all_enriched' },
+      { cmd: 'order.find_all' },
+      payload,
+    );
+
+    const legacyData = (this.toLegacyShape(result?.data ?? result ?? []) as Array<Record<string, unknown>>)
+      .map((row) => this.normalizeLegacyOrderRow(row));
+    const total = Number(result?.total ?? 0);
+    const currentPage = Number(result?.page ?? (page ? Number(page) : 1));
+    const currentLimit = Number(result?.limit ?? (limit ? Number(limit) : 10));
+    const totalPages = currentLimit > 0 ? Math.ceil(total / currentLimit) : 0;
+
+    return successRes(
+      {
+        data: legacyData,
+        total,
+        page: currentPage,
+        limit: currentLimit,
+        totalPages,
+      },
+      200,
+      'All my orders',
     );
   }
 

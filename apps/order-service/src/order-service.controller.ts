@@ -66,6 +66,7 @@ export class OrderServiceController {
         market_id?: string;
         customer_id?: string;
         post_id?: string;
+        post_ids?: string[];
         canceled_post_id?: string;
         qr_code_token?: string;
         status?: Order_status;

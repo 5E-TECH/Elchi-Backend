@@ -262,6 +262,7 @@ export class OrderServiceService {
     customer_id?: string;
     customer_ids?: string[];
     post_id?: string;
+    post_ids?: string[];
     canceled_post_id?: string;
     qr_code_token?: string;
     status?: Order_status;
@@ -277,6 +278,7 @@ export class OrderServiceService {
       customer_id,
       customer_ids,
       post_id,
+      post_ids,
       canceled_post_id,
       qr_code_token,
       status,
@@ -303,6 +305,9 @@ export class OrderServiceService {
     }
     if (post_id) {
       qb.andWhere('order.post_id = :post_id', { post_id });
+    }
+    if (post_ids?.length) {
+      qb.andWhere('order.post_id IN (:...post_ids)', { post_ids });
     }
     if (canceled_post_id) {
       qb.andWhere('order.canceled_post_id = :canceled_post_id', { canceled_post_id });
@@ -739,6 +744,7 @@ export class OrderServiceService {
   async findAllEnriched(query: {
     market_id?: string;
     customer_id?: string;
+    post_ids?: string[];
     status?: Order_status;
     search?: string;
     start_day?: string;
