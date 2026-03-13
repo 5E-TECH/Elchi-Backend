@@ -784,18 +784,20 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest('Cannot receive post with this status');
     }
 
-    const waitingOrderIds = [...new Set(dto.order_ids ?? [])];
+    const waitingOrderIds = [...new Set((dto.order_ids ?? []).map((orderId) => String(orderId)))];
+    const waitingOrderIdSet = new Set(waitingOrderIds);
     const allOrders = await this.findOrders({ post_id: id, page: 1, limit: 1000 });
+    const orderById = new Map(allOrders.map((order) => [String(order.id), order]));
 
     for (const orderId of waitingOrderIds) {
-      const target = allOrders.find((o) => o.id === orderId);
+      const target = orderById.get(orderId);
       if (target?.status === Order_status.ON_THE_ROAD) {
         await this.updateOrder(orderId, { status: Order_status.WAITING });
       }
     }
 
     const remaining = allOrders.filter(
-      (o) => o.status === Order_status.ON_THE_ROAD && !waitingOrderIds.includes(o.id),
+      (o) => o.status === Order_status.ON_THE_ROAD && !waitingOrderIdSet.has(String(o.id)),
     );
 
     if (remaining.length) {

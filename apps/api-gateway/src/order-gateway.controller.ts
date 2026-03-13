@@ -130,6 +130,19 @@ export class OrderGatewayController {
     return normalized;
   }
 
+  private extractRows(payload: unknown): Array<Record<string, unknown>> {
+    if (Array.isArray(payload)) {
+      return payload as Array<Record<string, unknown>>;
+    }
+    if (payload && typeof payload === 'object') {
+      const obj = payload as Record<string, unknown>;
+      if (Array.isArray(obj.data)) {
+        return obj.data as Array<Record<string, unknown>>;
+      }
+    }
+    return [];
+  }
+
   private async enrichMarketRows(rows: Array<Record<string, any>>) {
     const marketIds = Array.from(
       new Set(rows.map((row) => String(row?.market_id ?? '')).filter(Boolean)),
@@ -293,17 +306,11 @@ export class OrderGatewayController {
     @Req() req?: { user: JwtUser },
   ) {
     const courierPostsResponse = await this.sendLogisticsWithTimeout(
-      { cmd: 'logistics.post.my_for_courier' },
-      {
-        page: 1,
-        limit: 1000,
-        requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
-      },
+      { cmd: 'logistics.post.on_the_road' },
+      { requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] } },
     );
 
-    const courierPosts = (courierPostsResponse?.data?.data ??
-      courierPostsResponse?.data ??
-      []) as Array<Record<string, unknown>>;
+    const courierPosts = this.extractRows(courierPostsResponse?.data ?? courierPostsResponse);
     const courierPostIds = Array.from(
       new Set(courierPosts.map((post) => String(post?.id ?? '')).filter(Boolean)),
     );
@@ -340,9 +347,13 @@ export class OrderGatewayController {
       payload,
     );
 
-    const legacyData = (this.toLegacyShape(result?.data ?? result ?? []) as Array<Record<string, unknown>>)
+    const resultRows = this.extractRows(result?.data ?? result);
+    const filteredRows = resultRows.filter((row) =>
+      courierPostIds.includes(String(row?.post_id ?? row?.postId ?? '')),
+    );
+    const legacyData = (this.toLegacyShape(filteredRows) as Array<Record<string, unknown>>)
       .map((row) => this.normalizeLegacyOrderRow(row));
-    const total = Number(result?.total ?? 0);
+    const total = legacyData.length;
     const currentPage = Number(result?.page ?? (page ? Number(page) : 1));
     const currentLimit = Number(result?.limit ?? (limit ? Number(limit) : 10));
     const totalPages = currentLimit > 0 ? Math.ceil(total / currentLimit) : 0;
