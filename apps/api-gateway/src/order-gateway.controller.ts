@@ -27,6 +27,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import {
   CreateOrderRequestDto,
   OrdersArrayDto,
+  SellOrderRequestDto,
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
 import { Order_status, Roles as RoleEnum } from '@app/common';
@@ -306,8 +307,12 @@ export class OrderGatewayController {
     @Req() req?: { user: JwtUser },
   ) {
     const courierPostsResponse = await this.sendLogisticsWithTimeout(
-      { cmd: 'logistics.post.on_the_road' },
-      { requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] } },
+      { cmd: 'logistics.post.my_for_courier' },
+      {
+        page: 1,
+        limit: 1000,
+        requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
+      },
     );
 
     const courierPosts = this.extractRows(courierPostsResponse?.data ?? courierPostsResponse);
@@ -333,6 +338,14 @@ export class OrderGatewayController {
       query: {
         post_ids: courierPostIds,
         status,
+        exclude_statuses: status
+          ? undefined
+          : [
+              Order_status.CREATED,
+              Order_status.NEW,
+              Order_status.RECEIVED,
+              Order_status.ON_THE_ROAD,
+            ],
         search,
         start_day: startDate,
         end_day: endDate,
@@ -353,7 +366,7 @@ export class OrderGatewayController {
     );
     const legacyData = (this.toLegacyShape(filteredRows) as Array<Record<string, unknown>>)
       .map((row) => this.normalizeLegacyOrderRow(row));
-    const total = legacyData.length;
+    const total = Number(result?.total ?? legacyData.length);
     const currentPage = Number(result?.page ?? (page ? Number(page) : 1));
     const currentLimit = Number(result?.limit ?? (limit ? Number(limit) : 10));
     const totalPages = currentLimit > 0 ? Math.ceil(total / currentLimit) : 0;
@@ -425,6 +438,33 @@ export class OrderGatewayController {
       { cmd: 'order.find_by_id' },
       { id },
     );
+  }
+
+  @Post('sell/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Sell order (courier)' })
+  @ApiParam({ name: 'id', description: 'Order ID (id)' })
+  @ApiBody({ type: SellOrderRequestDto })
+  sellOrder(
+    @Param('id') id: string,
+    @Body() dto: SellOrderRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.sell' },
+          { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
   }
 
   @Patch(':id')
