@@ -275,3 +275,15 @@ export class OrdersArrayDto {
   @IsString({ each: true })
   order_ids!: string[];
 }
+
+export class SellOrderRequestDto {
+  @ApiPropertyOptional({ example: 'Customer accepted with discount' })
+  @IsOptional()
+  @IsString()
+  comment?: string;
+
+  @ApiPropertyOptional({ example: 5000, minimum: 0 })
+  @IsOptional()
+  @IsNumber()
+  extraCost?: number;
+}

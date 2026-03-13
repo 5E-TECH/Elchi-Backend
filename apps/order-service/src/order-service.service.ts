@@ -263,6 +263,7 @@ export class OrderServiceService {
     customer_ids?: string[];
     post_id?: string;
     post_ids?: string[];
+    exclude_statuses?: Order_status[];
     canceled_post_id?: string;
     qr_code_token?: string;
     status?: Order_status;
@@ -279,6 +280,7 @@ export class OrderServiceService {
       customer_ids,
       post_id,
       post_ids,
+      exclude_statuses,
       canceled_post_id,
       qr_code_token,
       status,
@@ -317,6 +319,8 @@ export class OrderServiceService {
     }
     if (status) {
       qb.andWhere('order.status = :status', { status });
+    } else if (exclude_statuses?.length) {
+      qb.andWhere('order.status NOT IN (:...exclude_statuses)', { exclude_statuses });
     }
     if (region_id) {
       qb.andWhere('order.region_id = :region_id', { region_id });
@@ -557,6 +561,68 @@ export class OrderServiceService {
     return { statusCode: 200, message: 'Orders received', data: {} };
   }
 
+  async sellOrder(
+    requester: { id: string; roles?: string[] },
+    id: string,
+    dto: { comment?: string; extraCost?: number },
+  ) {
+    const order = await this.findById(id);
+    if (order.status !== Order_status.WAITING) {
+      this.badRequest('Order not found or not in waiting status');
+    }
+    if (!order.post_id) {
+      this.badRequest('Order has no post');
+    }
+
+    const postRes = await rmqSend<{ data?: { id: string; courier_id?: string | null } }>(
+      this.logisticsClient,
+      { cmd: 'logistics.post.find_by_id' },
+      { id: String(order.post_id) },
+    ).catch(() => ({ data: undefined }));
+    const post = postRes?.data;
+    if (!post || String(post.courier_id ?? '') !== String(requester.id)) {
+      this.badRequest('Order is not assigned to this courier');
+    }
+
+    const [market] = await this.getMarketsByIds([String(order.market_id)]);
+    if (!market) {
+      this.notFound('Market not found');
+    }
+
+    const marketTariff =
+      order.where_deliver === Where_deliver.CENTER
+        ? Number(market.tariff_center ?? 0)
+        : Number(market.tariff_home ?? 0);
+    const totalPrice = Number(order.total_price ?? 0);
+    const toBePaid = Math.max(totalPrice - marketTariff, 0);
+    const currentPaid = Math.min(Math.max(Number(order.paid_amount ?? 0), 0), toBePaid);
+    const remaining = toBePaid - currentPaid;
+    const nextStatus =
+      remaining === 0 && currentPaid > 0
+        ? Order_status.PAID
+        : currentPaid > 0
+          ? Order_status.PARTLY_PAID
+          : Order_status.SOLD;
+
+    const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
+    const mergedComment = [
+      order.comment?.trim() || '',
+      dto?.comment?.trim() || '',
+      extraCost > 0 ? `extra_cost=${extraCost}` : '',
+    ]
+      .filter(Boolean)
+      .join(' | ');
+
+    await this.updateFull(id, {
+      status: nextStatus,
+      to_be_paid: toBePaid,
+      paid_amount: currentPaid,
+      comment: mergedComment || null,
+    });
+
+    return { statusCode: 200, message: 'Order sold', data: {} };
+  }
+
   async findById(id: string) {
     let order: Order | null;
     try {
@@ -745,6 +811,7 @@ export class OrderServiceService {
     market_id?: string;
     customer_id?: string;
     post_ids?: string[];
+    exclude_statuses?: Order_status[];
     status?: Order_status;
     search?: string;
     start_day?: string;

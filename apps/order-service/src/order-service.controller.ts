@@ -67,6 +67,7 @@ export class OrderServiceController {
         customer_id?: string;
         post_id?: string;
         post_ids?: string[];
+        exclude_statuses?: Order_status[];
         canceled_post_id?: string;
         qr_code_token?: string;
         status?: Order_status;
@@ -118,6 +119,21 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.receiveNewOrders(data.order_ids, data.search),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.sell' })
+  sell(
+    @Payload()
+    data: {
+      id: string;
+      dto: { comment?: string; extraCost?: number };
+      requester: { id: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.sellOrder(data.requester, data.id, data.dto ?? {}),
     );
   }
 
