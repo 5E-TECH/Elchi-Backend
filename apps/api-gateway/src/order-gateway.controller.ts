@@ -27,6 +27,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import {
   CreateOrderRequestDto,
   OrdersArrayDto,
+  PartlySellOrderRequestDto,
   SellOrderRequestDto,
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
@@ -456,6 +457,33 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.sell' },
+          { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  @Post('partly-sell/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Partly sell order (courier)' })
+  @ApiParam({ name: 'id', description: 'Order ID (id)' })
+  @ApiBody({ type: PartlySellOrderRequestDto })
+  partlySellOrder(
+    @Param('id') id: string,
+    @Body() dto: PartlySellOrderRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.partly_sell' },
           { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
         )
         .pipe(timeout(8000)),

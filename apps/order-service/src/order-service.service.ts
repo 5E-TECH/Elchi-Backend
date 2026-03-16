@@ -5,7 +5,18 @@ import { Between, Brackets, DataSource, In, QueryFailedError, Repository } from 
 import { lastValueFrom, timeout } from 'rxjs';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
-import { Order_status, Post_status, Roles, Where_deliver, rmqSend, RMQ_SERVICE_TIMEOUT } from '@app/common';
+import {
+  Cashbox_type,
+  Operation_type,
+  Order_status,
+  PaymentMethod,
+  Post_status,
+  Roles,
+  Source_type,
+  Where_deliver,
+  rmqSend,
+  RMQ_SERVICE_TIMEOUT,
+} from '@app/common';
 
 @Injectable()
 export class OrderServiceService {
@@ -19,6 +30,7 @@ export class OrderServiceService {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
+    @Inject('FINANCE') private readonly financeClient: ClientProxy,
   ) {}
 
   private async syncOrderToSearch(order: Order): Promise<void> {
@@ -141,6 +153,27 @@ export class OrderServiceService {
     return [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID];
   }
 
+  private generateSaleComment(
+    orderComment?: string | null,
+    dtoComment?: string | null,
+    extraCost?: number,
+    notes: string[] = [],
+  ) {
+    const parts: string[] = [];
+
+    if (orderComment?.trim()) parts.push(orderComment.trim());
+    if (dtoComment?.trim()) parts.push(dtoComment.trim());
+    if ((extraCost ?? 0) > 0) {
+      parts.push(`!!! Bu buyurtmadan qo'shimcha ${extraCost} miqdorda pul ushlab qolingan`);
+    }
+
+    for (const note of notes) {
+      if (note?.trim()) parts.push(`!!! ${note.trim()}`);
+    }
+
+    return parts.join('\n');
+  }
+
   private async getPostsByIds(ids: string[]) {
     if (!ids.length) return [];
     const response = await rmqSend<{ data?: Array<{ id: string; courier_id?: string | null }> }>(
@@ -169,6 +202,41 @@ export class OrderServiceService {
       { ids },
     ).catch(() => ({ data: [] }));
     return response?.data ?? [];
+  }
+
+  private async getCashboxByUser(userId: string, cashboxType: Cashbox_type) {
+    const response = await rmqSend<{ data?: { id: string; balance?: number } }>(
+      this.financeClient,
+      { cmd: 'finance.cashbox.find_by_user' },
+      { user_id: userId, cashbox_type: cashboxType },
+    ).catch(() => ({ data: undefined }));
+
+    return response?.data;
+  }
+
+  private async updateCashboxBalance(data: {
+    user_id: string;
+    cashbox_type: Cashbox_type;
+    amount: number;
+    operation_type: Operation_type;
+    source_type: Source_type;
+    source_id?: string;
+    source_user_id?: string;
+    comment?: string;
+    created_by?: string;
+  }) {
+    if (data.amount <= 0) {
+      return;
+    }
+
+    await rmqSend(
+      this.financeClient,
+      { cmd: 'finance.cashbox.update_balance' },
+      {
+        ...data,
+        payment_method: PaymentMethod.CASH,
+      },
+    );
   }
 
   private async replaceOrderItems(
@@ -564,7 +632,7 @@ export class OrderServiceService {
   async sellOrder(
     requester: { id: string; roles?: string[] },
     id: string,
-    dto: { comment?: string; extraCost?: number },
+    dto: { comment?: string; extraCost?: number; paidAmount?: number },
   ) {
     const order = await this.findById(id);
     if (order.status !== Order_status.WAITING) {
@@ -584,43 +652,484 @@ export class OrderServiceService {
       this.badRequest('Order is not assigned to this courier');
     }
 
-    const [market] = await this.getMarketsByIds([String(order.market_id)]);
+    const [market, courier] = await Promise.all([
+      this.getMarketsByIds([String(order.market_id)]).then((rows) => rows[0]),
+      this.getCouriersByIds([String(requester.id)]).then((rows) => rows[0]),
+    ]);
     if (!market) {
       this.notFound('Market not found');
     }
+    if (!courier) {
+      this.notFound('Courier not found');
+    }
 
+    const [marketCashbox, courierCashbox] = await Promise.all([
+      this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
+      this.getCashboxByUser(String(requester.id), Cashbox_type.FOR_COURIER),
+    ]);
+    if (!marketCashbox) {
+      this.notFound('Market cashbox not found');
+    }
+    if (!courierCashbox) {
+      this.notFound('Courier cashbox not found');
+    }
+
+    const marketBalanceBefore = Number(marketCashbox.balance ?? 0);
+
+      const marketTariff =
+      order.where_deliver === Where_deliver.CENTER
+        ? Number(market.tariff_center ?? 0)
+        : Number(market.tariff_home ?? 0);
+    const courierTariff =
+      order.where_deliver === Where_deliver.CENTER
+        ? Number(courier.tariff_center ?? 0)
+        : Number(courier.tariff_home ?? 0);
+
+    const totalPrice = Number(order.total_price ?? 0);
+    const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
+    const finalComment = this.generateSaleComment(
+      order.comment,
+      dto?.comment,
+      extraCost,
+    );
+
+    let toBePaid = 0;
+    let courierToBePaid = 0;
+
+    if (totalPrice === 0) {
+      await Promise.all([
+        this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: marketTariff,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: "0 so'mlik mahsulot sotuvi",
+        }),
+        this.updateCashboxBalance({
+          user_id: String(requester.id),
+          cashbox_type: Cashbox_type.FOR_COURIER,
+          amount: courierTariff,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: "0 so'mlik mahsulot sotuvi",
+        }),
+      ]);
+    } else if (totalPrice < courierTariff) {
+      await Promise.all([
+        this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Math.max(marketTariff - totalPrice, 0),
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: `${totalPrice} so'mlik mahsulot sotuvi`,
+        }),
+        this.updateCashboxBalance({
+          user_id: String(requester.id),
+          cashbox_type: Cashbox_type.FOR_COURIER,
+          amount: Math.max(courierTariff - totalPrice, 0),
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: `${totalPrice} so'mlik mahsulot sotuvi`,
+        }),
+      ]);
+    } else if (totalPrice < marketTariff) {
+      courierToBePaid = totalPrice - courierTariff;
+      await Promise.all([
+        this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Math.max(marketTariff - totalPrice, 0),
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: `${totalPrice} so'mlik mahsulot sotuvi`,
+        }),
+        this.updateCashboxBalance({
+          user_id: String(requester.id),
+          cashbox_type: Cashbox_type.FOR_COURIER,
+          amount: Math.max(courierToBePaid, 0),
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: `${totalPrice} so'mlik mahsulot sotuvi`,
+        }),
+      ]);
+    } else {
+      toBePaid = totalPrice - marketTariff;
+      courierToBePaid = totalPrice - courierTariff;
+
+      await Promise.all([
+        this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Math.max(toBePaid, 0),
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: finalComment,
+        }),
+        this.updateCashboxBalance({
+          user_id: String(requester.id),
+          cashbox_type: Cashbox_type.FOR_COURIER,
+          amount: Math.max(courierToBePaid, 0),
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: finalComment,
+        }),
+      ]);
+    }
+
+    const netToBePaid = Math.max(Number(toBePaid) || 0, 0);
+    const requestedPaidAmount = Number(dto?.paidAmount ?? order.paid_amount ?? 0);
+    if (!Number.isFinite(requestedPaidAmount) || requestedPaidAmount < 0) {
+      this.badRequest('paidAmount must be a non-negative number');
+    }
+    const currentPaid = Math.min(Math.max(requestedPaidAmount, 0), netToBePaid);
+    const remainingBeforeDebt = netToBePaid - currentPaid;
+    const debtBeforeSale = marketBalanceBefore < 0 ? Math.abs(marketBalanceBefore) : 0;
+    const autoPay = Math.min(remainingBeforeDebt, debtBeforeSale);
+    const paidAfter = Math.min(netToBePaid, currentPaid + autoPay);
+    const remaining = Math.max(netToBePaid - paidAfter, 0);
+    const nextStatus =
+      remaining === 0 && paidAfter > 0
+        ? Order_status.PAID
+        : paidAfter > 0
+          ? Order_status.PARTLY_PAID
+          : Order_status.SOLD;
+
+    if (extraCost > 0) {
+      await Promise.all([
+        this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: extraCost,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.EXTRA_COST,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: finalComment,
+        }),
+        this.updateCashboxBalance({
+          user_id: String(requester.id),
+          cashbox_type: Cashbox_type.FOR_COURIER,
+          amount: extraCost,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.EXTRA_COST,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: finalComment,
+        }),
+      ]);
+    }
+
+    await this.updateFull(id, {
+      status: nextStatus,
+      to_be_paid: netToBePaid,
+      paid_amount: paidAfter,
+      comment: finalComment || null,
+    });
+
+    return { statusCode: 200, message: 'Order sold', data: {} };
+  }
+
+  async partlySellOrder(
+    requester: { id: string; roles?: string[] },
+    id: string,
+    dto: {
+      order_item_info: Array<{ product_id: string; quantity: number }>;
+      totalPrice: number;
+      extraCost?: number;
+      comment?: string;
+    },
+  ) {
+    const order = await this.findById(id);
+    if (order.status !== Order_status.WAITING) {
+      this.badRequest('Order not found or not in waiting status');
+    }
+    if (!order.post_id) {
+      this.badRequest('Order has no post');
+    }
+
+    const postRes = await rmqSend<{ data?: { id: string; courier_id?: string | null } }>(
+      this.logisticsClient,
+      { cmd: 'logistics.post.find_by_id' },
+      { id: String(order.post_id) },
+    ).catch(() => ({ data: undefined }));
+    const post = postRes?.data;
+    if (!post || String(post.courier_id ?? '') !== String(requester.id)) {
+      this.badRequest('Order is not assigned to this courier');
+    }
+
+    if (!dto?.order_item_info?.length) {
+      this.badRequest('order_item_info is required');
+    }
+
+    const price = Number(dto.totalPrice ?? 0);
+    if (!Number.isFinite(price) || price < 0) {
+      this.badRequest('totalPrice must be a non-negative number');
+    }
+
+    const [market, courier] = await Promise.all([
+      this.getMarketsByIds([String(order.market_id)]).then((rows) => rows[0]),
+      this.getCouriersByIds([String(requester.id)]).then((rows) => rows[0]),
+    ]);
+    if (!market) {
+      this.notFound('Market not found');
+    }
+    if (!courier) {
+      this.notFound('Courier not found');
+    }
+
+    const [marketCashbox, courierCashbox] = await Promise.all([
+      this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
+      this.getCashboxByUser(String(requester.id), Cashbox_type.FOR_COURIER),
+    ]);
+    if (!marketCashbox) {
+      this.notFound('Market cashbox not found');
+    }
+    if (!courierCashbox) {
+      this.notFound('Courier cashbox not found');
+    }
+
+    const marketBalanceBefore = Number(marketCashbox.balance ?? 0);
     const marketTariff =
       order.where_deliver === Where_deliver.CENTER
         ? Number(market.tariff_center ?? 0)
         : Number(market.tariff_home ?? 0);
-    const totalPrice = Number(order.total_price ?? 0);
-    const toBePaid = Math.max(totalPrice - marketTariff, 0);
-    const currentPaid = Math.min(Math.max(Number(order.paid_amount ?? 0), 0), toBePaid);
-    const remaining = toBePaid - currentPaid;
-    const nextStatus =
-      remaining === 0 && currentPaid > 0
-        ? Order_status.PAID
-        : currentPaid > 0
-          ? Order_status.PARTLY_PAID
-          : Order_status.SOLD;
+    const courierTariff =
+      order.where_deliver === Where_deliver.CENTER
+        ? Number(courier.tariff_center ?? 0)
+        : Number(courier.tariff_home ?? 0);
 
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
-    const mergedComment = [
-      order.comment?.trim() || '',
-      dto?.comment?.trim() || '',
-      extraCost > 0 ? `extra_cost=${extraCost}` : '',
-    ]
-      .filter(Boolean)
-      .join(' | ');
+    const finalComment = this.generateSaleComment(
+      order.comment,
+      dto?.comment,
+      extraCost,
+      ["Buyurtma arzonroqqa sotildi!"],
+    );
 
-    await this.updateFull(id, {
-      status: nextStatus,
-      to_be_paid: toBePaid,
-      paid_amount: currentPaid,
-      comment: mergedComment || null,
+    const existingItems = await this.orderItemRepo.find({
+      where: { order_id: String(order.id) },
+      order: { createdAt: 'ASC' },
     });
 
-    return { statusCode: 200, message: 'Order sold', data: {} };
+    const oldQty = existingItems.reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
+    const newQty = dto.order_item_info.reduce((sum, item) => {
+      const qty = Number(item.quantity ?? 0);
+      if (!Number.isFinite(qty) || qty < 0) {
+        this.badRequest('Item quantity must be a non-negative number');
+      }
+      return sum + qty;
+    }, 0);
+
+    if (newQty >= oldQty) {
+      this.badRequest('Partly sell requires reduced item quantity');
+    }
+
+    for (const existingItem of existingItems) {
+      const dtoItem = dto.order_item_info.find(
+        (item) => String(item.product_id) === String(existingItem.product_id),
+      );
+      if (!dtoItem) {
+        this.notFound(`Product not found in request: ${existingItem.product_id}`);
+      }
+      if (Number(dtoItem.quantity) > Number(existingItem.quantity)) {
+        this.badRequest(`Quantity cannot exceed original amount for product ${existingItem.product_id}`);
+      }
+    }
+
+    for (const dtoItem of dto.order_item_info) {
+      const existingItem = existingItems.find(
+        (item) => String(item.product_id) === String(dtoItem.product_id),
+      );
+      if (!existingItem) {
+        this.notFound(`Product not found in order: ${dtoItem.product_id}`);
+      }
+    }
+
+    for (const existingItem of existingItems) {
+      const dtoItem = dto.order_item_info.find(
+        (item) => String(item.product_id) === String(existingItem.product_id),
+      );
+      if (!dtoItem) continue;
+
+      const nextQty = Number(dtoItem.quantity);
+      if (nextQty < Number(existingItem.quantity)) {
+        existingItem.quantity = nextQty;
+        await this.orderItemRepo.save(existingItem);
+      }
+    }
+
+    let toBePaid = 0;
+    let courierToBePaid = 0;
+
+    if (price === 0) {
+      await Promise.all([
+        this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: marketTariff,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: "0 so'mlik mahsulot qisman sotuvi",
+        }),
+        this.updateCashboxBalance({
+          user_id: String(requester.id),
+          cashbox_type: Cashbox_type.FOR_COURIER,
+          amount: courierTariff,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: "0 so'mlik mahsulot qisman sotuvi",
+        }),
+      ]);
+    } else if (price < courierTariff) {
+      await Promise.all([
+        this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Math.max(marketTariff - price, 0),
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: `${price} so'mlik mahsulot qisman sotuvi`,
+        }),
+        this.updateCashboxBalance({
+          user_id: String(requester.id),
+          cashbox_type: Cashbox_type.FOR_COURIER,
+          amount: Math.max(courierTariff - price, 0),
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: `${price} so'mlik mahsulot qisman sotuvi`,
+        }),
+      ]);
+    } else if (price < marketTariff) {
+      courierToBePaid = price - courierTariff;
+      await Promise.all([
+        this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Math.max(marketTariff - price, 0),
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: `${price} so'mlik mahsulot qisman sotuvi`,
+        }),
+        this.updateCashboxBalance({
+          user_id: String(requester.id),
+          cashbox_type: Cashbox_type.FOR_COURIER,
+          amount: Math.max(courierToBePaid, 0),
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: `${price} so'mlik mahsulot qisman sotuvi`,
+        }),
+      ]);
+    } else {
+      toBePaid = price - marketTariff;
+      courierToBePaid = price - courierTariff;
+      await Promise.all([
+        this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Math.max(toBePaid, 0),
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: finalComment,
+        }),
+        this.updateCashboxBalance({
+          user_id: String(requester.id),
+          cashbox_type: Cashbox_type.FOR_COURIER,
+          amount: Math.max(courierToBePaid, 0),
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: finalComment,
+        }),
+      ]);
+    }
+
+    const netToBePaid = Math.max(Number(toBePaid) || 0, 0);
+    const currentPaid = Math.min(
+      Math.max(Number(order.paid_amount ?? 0), 0),
+      netToBePaid,
+    );
+    const remainingBeforeDebt = netToBePaid - currentPaid;
+    const debtBeforeSale = marketBalanceBefore < 0 ? Math.abs(marketBalanceBefore) : 0;
+    const autoPay = Math.min(remainingBeforeDebt, debtBeforeSale);
+    const paidAfter = Math.min(netToBePaid, currentPaid + autoPay);
+    const remainingAfter = netToBePaid - paidAfter;
+
+    if (extraCost > 0) {
+      await Promise.all([
+        this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: extraCost,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.EXTRA_COST,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: finalComment,
+        }),
+        this.updateCashboxBalance({
+          user_id: String(requester.id),
+          cashbox_type: Cashbox_type.FOR_COURIER,
+          amount: extraCost,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.EXTRA_COST,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: finalComment,
+        }),
+      ]);
+    }
+
+    await this.updateFull(id, {
+      status:
+        remainingAfter === 0 && paidAfter > 0
+          ? Order_status.PAID
+          : paidAfter > 0
+            ? Order_status.PARTLY_PAID
+            : Order_status.SOLD,
+      to_be_paid: netToBePaid,
+      paid_amount: paidAfter,
+      total_price: price,
+      comment: finalComment || null,
+    });
+
+    const refreshedOrder = await this.findById(id);
+    refreshedOrder.product_quantity = newQty;
+    await this.orderRepo.save(refreshedOrder);
+
+    return { statusCode: 200, message: 'Order partly sold', data: {} };
   }
 
   async findById(id: string) {

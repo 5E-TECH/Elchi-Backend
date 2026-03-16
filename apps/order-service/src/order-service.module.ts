@@ -19,6 +19,7 @@ import { OrderItem } from './entities/order-item.entity';
     RmqModule.register({ name: 'IDENTITY' }),
     RmqModule.register({ name: 'LOGISTICS' }),
     RmqModule.register({ name: 'CATALOG' }),
+    RmqModule.register({ name: 'FINANCE' }),
     DatabaseModule,
     TypeOrmModule.forFeature([Order, OrderItem]),
   ],

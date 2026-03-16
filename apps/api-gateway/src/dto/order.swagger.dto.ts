@@ -286,4 +286,43 @@ export class SellOrderRequestDto {
   @IsOptional()
   @IsNumber()
   extraCost?: number;
+
+  @ApiPropertyOptional({ example: 20000, minimum: 0 })
+  @IsOptional()
+  @IsNumber()
+  paidAmount?: number;
+}
+
+export class PartlySoldItemDto {
+  @ApiProperty({ example: '1' })
+  @IsNotEmpty()
+  @IsString()
+  product_id!: string;
+
+  @ApiProperty({ example: 1, minimum: 0 })
+  @IsNumber()
+  quantity!: number;
+}
+
+export class PartlySellOrderRequestDto {
+  @ApiProperty({ type: [PartlySoldItemDto] })
+  @IsArray()
+  @ArrayNotEmpty()
+  @ValidateNested({ each: true })
+  @Type(() => PartlySoldItemDto)
+  order_item_info!: PartlySoldItemDto[];
+
+  @ApiProperty({ example: 15000, minimum: 0 })
+  @IsNumber()
+  totalPrice!: number;
+
+  @ApiPropertyOptional({ example: 2000, minimum: 0 })
+  @IsOptional()
+  @IsNumber()
+  extraCost?: number;
+
+  @ApiPropertyOptional({ example: 'Customer bought only 1 unit' })
+  @IsOptional()
+  @IsString()
+  comment?: string;
 }
