@@ -127,13 +127,33 @@ export class OrderServiceController {
     @Payload()
     data: {
       id: string;
-      dto: { comment?: string; extraCost?: number };
+      dto: { comment?: string; extraCost?: number; paidAmount?: number };
       requester: { id: string; roles?: string[] };
     },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.sellOrder(data.requester, data.id, data.dto ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.partly_sell' })
+  partlySell(
+    @Payload()
+    data: {
+      id: string;
+      dto: {
+        order_item_info: Array<{ product_id: string; quantity: number }>;
+        totalPrice: number;
+        extraCost?: number;
+        comment?: string;
+      };
+      requester: { id: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.partlySellOrder(data.requester, data.id, data.dto),
     );
   }
 
