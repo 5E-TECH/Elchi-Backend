@@ -858,6 +858,7 @@ export class OrderServiceService {
     },
   ) {
     const order = await this.findById(id);
+    const oldTotalPrice = Number(order.total_price ?? 0);
     if (order.status !== Order_status.WAITING) {
       this.badRequest('Order not found or not in waiting status');
     }
@@ -962,6 +963,20 @@ export class OrderServiceService {
         this.notFound(`Product not found in order: ${dtoItem.product_id}`);
       }
     }
+
+    const cancelledItems = existingItems
+      .map((existingItem) => {
+        const dtoItem = dto.order_item_info.find(
+          (item) => String(item.product_id) === String(existingItem.product_id),
+        );
+        if (!dtoItem) return null;
+
+        const diff = Number(existingItem.quantity) - Number(dtoItem.quantity);
+        return diff > 0
+          ? { product_id: String(existingItem.product_id), quantity: diff }
+          : null;
+      })
+      .filter((item): item is { product_id: string; quantity: number } => item !== null);
 
     for (const existingItem of existingItems) {
       const dtoItem = dto.order_item_info.find(
@@ -1128,6 +1143,32 @@ export class OrderServiceService {
     const refreshedOrder = await this.findById(id);
     refreshedOrder.product_quantity = newQty;
     await this.orderRepo.save(refreshedOrder);
+
+    if (cancelledItems.length > 0) {
+      const cancelledQty = cancelledItems.reduce((sum, item) => sum + item.quantity, 0);
+      const cancelledTotalPrice = Math.max(oldTotalPrice - price, 0);
+
+      await this.create({
+        market_id: String(order.market_id),
+        customer_id: String(order.customer_id),
+        where_deliver: order.where_deliver,
+        total_price: cancelledTotalPrice,
+        to_be_paid: 0,
+        paid_amount: 0,
+        status: Order_status.CANCELLED,
+        comment: "Qisman bekor qilingan mahsulotlar",
+        operator: order.operator ?? null,
+        post_id: order.post_id ?? null,
+        canceled_post_id: order.canceled_post_id ?? null,
+        district_id: order.district_id ?? null,
+        region_id: order.region_id ?? null,
+        address: order.address ?? null,
+        qr_code_token: null,
+        items: cancelledItems,
+      });
+
+      refreshedOrder.product_quantity = newQty;
+    }
 
     return { statusCode: 200, message: 'Order partly sold', data: {} };
   }
