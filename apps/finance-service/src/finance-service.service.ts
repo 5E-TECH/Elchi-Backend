@@ -35,6 +35,8 @@ import { UpdateSalaryDto } from './dto/salary/update-salary.dto';
 import { FindSalaryByUserDto } from './dto/salary/find-salary-by-user.dto';
 @Injectable()
 export class FinanceServiceService implements OnModuleInit {
+  private static readonly MAIN_CASHBOX_USER_ID = '0';
+
   constructor(
     @InjectRepository(Cashbox) private readonly cashboxRepo: Repository<Cashbox>,
     @InjectRepository(CashboxHistory)
@@ -54,6 +56,7 @@ export class FinanceServiceService implements OnModuleInit {
 
     if (!main) {
       const entity = this.cashboxRepo.create({
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
         cashbox_type: Cashbox_type.MAIN,
         balance: 0,
         balance_cash: 0,
@@ -126,6 +129,7 @@ export class FinanceServiceService implements OnModuleInit {
     });
     if (!main) {
       const created = this.cashboxRepo.create({
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
         cashbox_type: Cashbox_type.MAIN,
         balance: 0,
         balance_cash: 0,
