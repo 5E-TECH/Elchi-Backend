@@ -657,7 +657,10 @@ export class UserServiceService implements OnModuleInit {
 
   async createCustomer(dto: CreateCustomerDto) {
     const existing = await this.users.findOne({
-      where: { phone_number: dto.phone_number, isDeleted: false },
+      where: [
+        { phone_number: dto.phone_number, isDeleted: false },
+        { username: dto.phone_number, isDeleted: false },
+      ],
     });
 
     if (existing) {
