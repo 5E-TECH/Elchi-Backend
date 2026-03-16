@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
@@ -34,7 +34,7 @@ import { CreateSalaryDto } from './dto/salary/create-salary.dto';
 import { UpdateSalaryDto } from './dto/salary/update-salary.dto';
 import { FindSalaryByUserDto } from './dto/salary/find-salary-by-user.dto';
 @Injectable()
-export class FinanceServiceService {
+export class FinanceServiceService implements OnModuleInit {
   constructor(
     @InjectRepository(Cashbox) private readonly cashboxRepo: Repository<Cashbox>,
     @InjectRepository(CashboxHistory)
@@ -45,6 +45,23 @@ export class FinanceServiceService {
     private readonly dataSource: DataSource,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
   ) {}
+
+  async onModuleInit() {
+    const main = await this.cashboxRepo.findOne({
+      where: { cashbox_type: Cashbox_type.MAIN },
+      order: { createdAt: 'ASC' },
+    });
+
+    if (!main) {
+      const entity = this.cashboxRepo.create({
+        cashbox_type: Cashbox_type.MAIN,
+        balance: 0,
+        balance_cash: 0,
+        balance_card: 0,
+      });
+      await this.cashboxRepo.save(entity);
+    }
+  }
 
   private successRes(data: any, code = 200, message = 'success') {
     return {
@@ -108,7 +125,13 @@ export class FinanceServiceService {
       order: { createdAt: 'ASC' },
     });
     if (!main) {
-      throw new NotFoundException('Main cashbox not found');
+      const created = this.cashboxRepo.create({
+        cashbox_type: Cashbox_type.MAIN,
+        balance: 0,
+        balance_cash: 0,
+        balance_card: 0,
+      });
+      return this.cashboxRepo.save(created);
     }
     return main;
   }

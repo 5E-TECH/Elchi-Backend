@@ -13,7 +13,7 @@ import { UpdateMarketDto } from './dto/update-market.dto';
 import { CreateCourierDto } from './dto/create-courier.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { UserFilterQuery } from './contracts/user.payloads';
-import { Roles, Status } from '@app/common';
+import { Cashbox_type, Roles, Status, rmqSend } from '@app/common';
 import { catchError, errorRes, successRes } from '../../../libs/common/helpers/response';
 import { RequesterContext } from './contracts/user.payloads';
 
@@ -26,6 +26,7 @@ export class UserServiceService implements OnModuleInit {
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
+    @Inject('FINANCE') private readonly financeClient: ClientProxy,
     private readonly bcryptEncryption: BcryptEncryption,
     private readonly configService: ConfigService,
   ) {}
@@ -237,6 +238,31 @@ export class UserServiceService implements OnModuleInit {
       );
     } catch {
       // Search sync should not block identity flows.
+    }
+  }
+
+  private async ensureUserCashbox(userId: string, cashboxType: Cashbox_type) {
+    try {
+      await rmqSend(
+        this.financeClient,
+        { cmd: 'finance.cashbox.create' },
+        {
+          user_id: userId,
+          cashbox_type: cashboxType,
+          balance_cash: 0,
+          balance_card: 0,
+        },
+      );
+    } catch (error) {
+      if (error instanceof RpcException) {
+        const payload = (error as any).error;
+        const message =
+          typeof payload === 'object' && payload?.message ? String(payload.message) : error.message;
+        if (message.includes('Cashbox already exists')) {
+          return;
+        }
+      }
+      throw error;
     }
   }
 
@@ -622,6 +648,7 @@ export class UserServiceService implements OnModuleInit {
     });
 
     const saved = await this.users.save(market);
+    await this.ensureUserCashbox(saved.id, Cashbox_type.FOR_MARKET);
     void this.syncUserToSearch(saved);
     return successRes(this.sanitize(saved), 201, 'Market yaratildi');
   }
@@ -651,6 +678,7 @@ export class UserServiceService implements OnModuleInit {
     });
 
     const saved = await this.users.save(courier);
+    await this.ensureUserCashbox(saved.id, Cashbox_type.FOR_COURIER);
     void this.syncUserToSearch(saved);
     return successRes(this.sanitize(saved), 201, 'Courier yaratildi');
   }
