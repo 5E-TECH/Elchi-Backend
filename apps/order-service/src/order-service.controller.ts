@@ -376,4 +376,14 @@ export class OrderServiceController {
       this.orderService.getMarketStat(data.requester.id, data.startDate, data.endDate),
     );
   }
+
+  @MessagePattern({ cmd: 'order.analytics.revenue' })
+  analyticsRevenue(
+    @Payload() data: { startDate?: string; endDate?: string; period?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getRevenueStats(data.startDate, data.endDate, data.period),
+    );
+  }
 }

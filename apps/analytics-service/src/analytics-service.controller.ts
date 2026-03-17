@@ -37,6 +37,13 @@ export class AnalyticsServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'analytics.revenue' })
+  getRevenue(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.analyticsService.getRevenueStats(data?.requester, data?.filter ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'analytics.kpi' })
   getKpi(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => ({ message: 'not implemented' }));
