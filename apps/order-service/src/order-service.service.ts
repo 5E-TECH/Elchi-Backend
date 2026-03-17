@@ -239,6 +239,399 @@ export class OrderServiceService {
     );
   }
 
+  private hasRole(requester: { roles?: string[] } | undefined, role: Roles) {
+    return (requester?.roles ?? []).some(
+      (item) => String(item).toLowerCase() === String(role).toLowerCase(),
+    );
+  }
+
+  private async findLatestHistoryBySource(data: {
+    user_id: string;
+    source_type: Source_type;
+    source_id: string;
+  }) {
+    const response = await rmqSend<{
+      data?: { items?: Array<{ amount?: number; createdAt?: string }> };
+    }>(
+      this.financeClient,
+      { cmd: 'finance.history.find_all' },
+      {
+        user_id: data.user_id,
+        source_type: data.source_type,
+        source_id: data.source_id,
+        page: 1,
+        limit: 1,
+      },
+    ).catch(() => ({ data: { items: [] } }));
+
+    return response?.data?.items?.[0];
+  }
+
+  private isNearInTime(
+    left?: string | Date | null,
+    right?: string | Date | null,
+    maxDiffMs = 5000,
+  ) {
+    if (!left || !right) {
+      return false;
+    }
+
+    const leftTime = new Date(left).getTime();
+    const rightTime = new Date(right).getTime();
+
+    if (Number.isNaN(leftTime) || Number.isNaN(rightTime)) {
+      return false;
+    }
+
+    return Math.abs(leftTime - rightTime) <= maxDiffMs;
+  }
+
+  async rollbackOrderToWaiting(
+    requester: { id: string; roles?: string[] },
+    id: string,
+  ) {
+    const order = await this.findById(id);
+    const originalStatus = order.status;
+    const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
+    const isCourier = this.hasRole(requester, Roles.COURIER);
+
+    if (
+      isCourier &&
+      ![Order_status.SOLD, Order_status.CANCELLED].includes(order.status)
+    ) {
+      this.badRequest(`Rollback mumkin emas (status: ${order.status})`);
+    }
+
+    if (
+      isSuperAdmin &&
+      ![
+        Order_status.SOLD,
+        Order_status.CANCELLED,
+        Order_status.CLOSED,
+        Order_status.PAID,
+        Order_status.PARTLY_PAID,
+      ].includes(order.status)
+    ) {
+      this.badRequest(`Rollback mumkin emas (status: ${order.status})`);
+    }
+
+    if (!isCourier && !isSuperAdmin) {
+      this.badRequest('Rollback uchun ruxsat yo‘q');
+    }
+
+    if (!order.post_id) {
+      this.badRequest('Order has no post');
+    }
+
+    const postRes = await rmqSend<{ data?: { id: string; courier_id?: string | null } }>(
+      this.logisticsClient,
+      { cmd: 'logistics.post.find_by_id' },
+      { id: String(order.post_id) },
+    ).catch(() => ({ data: undefined }));
+    const post = postRes?.data;
+    if (!post) {
+      this.notFound('Post not found');
+    }
+
+    if (isCourier && !isSuperAdmin && String(post.courier_id ?? '') !== String(requester.id)) {
+      this.badRequest('Order is not assigned to this courier');
+    }
+
+    const courierId = String(post.courier_id ?? '');
+    if (!courierId) {
+      this.notFound('Courier not found');
+    }
+
+    const [market, courier] = await Promise.all([
+      this.getMarketsByIds([String(order.market_id)]).then((rows) => rows[0]),
+      this.getCouriersByIds([courierId]).then((rows) => rows[0]),
+    ]);
+    if (!market) {
+      this.notFound('Market not found');
+    }
+    if (!courier) {
+      this.notFound('Courier not found');
+    }
+
+    const [marketCashbox, courierCashbox] = await Promise.all([
+      this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
+      this.getCashboxByUser(courierId, Cashbox_type.FOR_COURIER),
+    ]);
+    if (!marketCashbox) {
+      this.notFound('Market cashbox not found');
+    }
+    if (!courierCashbox) {
+      this.notFound('Courier cashbox not found');
+    }
+
+    const marketTariff =
+      order.where_deliver === Where_deliver.CENTER
+        ? Number(market.tariff_center ?? 0)
+        : Number(market.tariff_home ?? 0);
+    const courierTariff =
+      order.where_deliver === Where_deliver.CENTER
+        ? Number(courier.tariff_center ?? 0)
+        : Number(courier.tariff_home ?? 0);
+    const rollbackComment = `[ROLLBACK] ${order.comment || ''}`.trim();
+    const totalPrice = Number(order.total_price ?? 0);
+    const [marketExtraCost, courierExtraCost] = await Promise.all([
+      this.findLatestHistoryBySource({
+        user_id: String(order.market_id),
+        source_type: Source_type.EXTRA_COST,
+        source_id: String(order.id),
+      }),
+      this.findLatestHistoryBySource({
+        user_id: courierId,
+        source_type: Source_type.EXTRA_COST,
+        source_id: String(order.id),
+      }),
+    ]);
+
+    const soldAt = order.sold_at ? Number(order.sold_at) : NaN;
+    const orderUpdatedAt = order.updatedAt ? new Date(order.updatedAt) : null;
+    const marketExtraCostCreatedAt = marketExtraCost?.createdAt ?? null;
+    const courierExtraCostCreatedAt = courierExtraCost?.createdAt ?? null;
+    const shouldRollbackMarketExtraCost =
+      !!marketExtraCost &&
+      Number(marketExtraCost.amount ?? 0) > 0 &&
+      (
+        [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID].includes(originalStatus)
+          ? Number.isFinite(soldAt) &&
+            this.isNearInTime(new Date(soldAt), marketExtraCostCreatedAt)
+          : [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
+            ? this.isNearInTime(orderUpdatedAt, marketExtraCostCreatedAt)
+            : false
+      );
+    const shouldRollbackCourierExtraCost =
+      !!courierExtraCost &&
+      Number(courierExtraCost.amount ?? 0) > 0 &&
+      (
+        [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID].includes(originalStatus)
+          ? Number.isFinite(soldAt) &&
+            this.isNearInTime(new Date(soldAt), courierExtraCostCreatedAt)
+          : [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
+            ? this.isNearInTime(orderUpdatedAt, courierExtraCostCreatedAt)
+            : false
+      );
+
+    if (
+      [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID].includes(originalStatus)
+    ) {
+      if (shouldRollbackMarketExtraCost) {
+        await this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Number(marketExtraCost?.amount ?? 0),
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.CORRECTION,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: "Qo'shimcha xarajat orqaga qaytarildi",
+        });
+      }
+
+      if (shouldRollbackCourierExtraCost) {
+        await this.updateCashboxBalance({
+          user_id: courierId,
+          cashbox_type: Cashbox_type.FOR_COURIER,
+          amount: Number(courierExtraCost?.amount ?? 0),
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.CORRECTION,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: "Qo'shimcha xarajat orqaga qaytarildi",
+        });
+      }
+    }
+
+    if ([Order_status.SOLD, Order_status.PAID].includes(order.status)) {
+      if (totalPrice === 0) {
+        await Promise.all([
+          this.updateCashboxBalance({
+            user_id: String(order.market_id),
+            cashbox_type: Cashbox_type.FOR_MARKET,
+            amount: marketTariff,
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: rollbackComment,
+          }),
+          this.updateCashboxBalance({
+            user_id: courierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: courierTariff,
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: rollbackComment,
+          }),
+        ]);
+      } else if (totalPrice < courierTariff) {
+        await Promise.all([
+          this.updateCashboxBalance({
+            user_id: String(order.market_id),
+            cashbox_type: Cashbox_type.FOR_MARKET,
+            amount: Math.max(marketTariff - totalPrice, 0),
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: rollbackComment,
+          }),
+          this.updateCashboxBalance({
+            user_id: courierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: Math.max(courierTariff - totalPrice, 0),
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: rollbackComment,
+          }),
+        ]);
+      } else if (totalPrice < marketTariff) {
+        const courierToBePaid = totalPrice - courierTariff;
+        await Promise.all([
+          this.updateCashboxBalance({
+            user_id: String(order.market_id),
+            cashbox_type: Cashbox_type.FOR_MARKET,
+            amount: Math.max(marketTariff - totalPrice, 0),
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: rollbackComment,
+          }),
+          this.updateCashboxBalance({
+            user_id: courierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: Math.max(courierToBePaid, 0),
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: rollbackComment,
+          }),
+        ]);
+      } else {
+        const toBePaid =
+          originalStatus === Order_status.PAID
+            ? Number(order.paid_amount ?? 0)
+            : totalPrice - marketTariff;
+        const courierToBePaid = totalPrice - courierTariff;
+        await Promise.all([
+          this.updateCashboxBalance({
+            user_id: String(order.market_id),
+            cashbox_type: Cashbox_type.FOR_MARKET,
+            amount: Math.max(toBePaid, 0),
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: rollbackComment,
+          }),
+          this.updateCashboxBalance({
+            user_id: courierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: Math.max(courierToBePaid, 0),
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: rollbackComment,
+          }),
+        ]);
+      }
+    }
+
+    if (order.status === Order_status.PARTLY_PAID && isSuperAdmin) {
+      const marketDiff = Number(order.paid_amount ?? 0);
+      const courierDiff = Math.max(totalPrice - courierTariff, 0);
+
+      await Promise.all([
+        this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: marketDiff,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.CORRECTION,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: rollbackComment,
+        }),
+        this.updateCashboxBalance({
+          user_id: courierId,
+          cashbox_type: Cashbox_type.FOR_COURIER,
+          amount: courierDiff,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.CORRECTION,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: rollbackComment,
+        }),
+      ]);
+    }
+
+    if (
+      shouldRollbackMarketExtraCost &&
+      [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
+    ) {
+      await this.updateCashboxBalance({
+        user_id: String(order.market_id),
+        cashbox_type: Cashbox_type.FOR_MARKET,
+        amount: Number(marketExtraCost.amount),
+        operation_type: Operation_type.INCOME,
+        source_type: Source_type.CORRECTION,
+        source_id: String(order.id),
+        created_by: String(requester.id),
+        comment:
+          [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
+            ? "Bekor qilingan buyurtmaga yozilgan qo'shimcha xarajat orqaga qaytarildi"
+            : "Qo'shimcha xarajat orqaga qaytarildi",
+      });
+    }
+
+    if (
+      shouldRollbackCourierExtraCost &&
+      [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
+    ) {
+      await this.updateCashboxBalance({
+        user_id: courierId,
+        cashbox_type: Cashbox_type.FOR_COURIER,
+        amount: Number(courierExtraCost.amount),
+        operation_type: Operation_type.INCOME,
+        source_type: Source_type.CORRECTION,
+        source_id: String(order.id),
+        created_by: String(requester.id),
+        comment:
+          [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
+            ? "Bekor qilingan buyurtmaga yozilgan qo'shimcha xarajat orqaga qaytarildi"
+            : "Qo'shimcha xarajat orqaga qaytarildi",
+      });
+    }
+
+    if (
+      isSuperAdmin &&
+      [Order_status.PAID, Order_status.PARTLY_PAID].includes(originalStatus)
+    ) {
+      await this.updateFull(id, {
+        status: Order_status.WAITING,
+        paid_amount: 0,
+        sold_at: null,
+      });
+    } else {
+      await this.updateFull(id, {
+        status: Order_status.WAITING,
+        to_be_paid: 0,
+        sold_at: null,
+      });
+    }
+
+    return { statusCode: 200, message: 'Order WAITING holatiga qaytarildi', data: {} };
+  }
+
   private async replaceOrderItems(
     orderId: string,
     items?: Array<{ product_id: string; quantity?: number }>,
@@ -281,6 +674,7 @@ export class OrderServiceService {
     operator?: string | null;
     post_id?: string | null;
     canceled_post_id?: string | null;
+    sold_at?: string | null;
     district_id?: string | null;
     region_id?: string | null;
     address?: string | null;
@@ -299,6 +693,7 @@ export class OrderServiceService {
       operator: dto.operator ?? null,
       post_id: dto.post_id ?? null,
       canceled_post_id: dto.canceled_post_id ?? null,
+      sold_at: dto.sold_at ?? null,
       district_id: dto.district_id ?? null,
       region_id: dto.region_id ?? null,
       address: dto.address ?? null,
@@ -841,10 +1236,86 @@ export class OrderServiceService {
       status: nextStatus,
       to_be_paid: netToBePaid,
       paid_amount: paidAfter,
+      sold_at: String(Date.now()),
       comment: finalComment || null,
     });
 
     return { statusCode: 200, message: 'Order sold', data: {} };
+  }
+
+  async cancelOrder(
+    requester: { id: string; roles?: string[] },
+    id: string,
+    dto: { comment?: string; extraCost?: number },
+  ) {
+    const order = await this.findById(id);
+    if (order.status !== Order_status.WAITING) {
+      this.badRequest('Order not found or not in waiting status');
+    }
+    if (!order.post_id) {
+      this.badRequest('Order has no post');
+    }
+
+    const postRes = await rmqSend<{ data?: { id: string; courier_id?: string | null } }>(
+      this.logisticsClient,
+      { cmd: 'logistics.post.find_by_id' },
+      { id: String(order.post_id) },
+    ).catch(() => ({ data: undefined }));
+    const post = postRes?.data;
+    if (!post || String(post.courier_id ?? '') !== String(requester.id)) {
+      this.badRequest('Order is not assigned to this courier');
+    }
+
+    const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
+    const finalComment = this.generateSaleComment(
+      order.comment,
+      dto?.comment,
+      extraCost,
+    );
+
+    if (extraCost > 0) {
+      const [marketCashbox, courierCashbox] = await Promise.all([
+        this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
+        this.getCashboxByUser(String(requester.id), Cashbox_type.FOR_COURIER),
+      ]);
+      if (!marketCashbox) {
+        this.notFound('Market cashbox not found');
+      }
+      if (!courierCashbox) {
+        this.notFound('Courier cashbox not found');
+      }
+
+      await Promise.all([
+        this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: extraCost,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.EXTRA_COST,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: finalComment,
+        }),
+        this.updateCashboxBalance({
+          user_id: String(requester.id),
+          cashbox_type: Cashbox_type.FOR_COURIER,
+          amount: extraCost,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.EXTRA_COST,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: finalComment,
+        }),
+      ]);
+    }
+
+    await this.updateFull(id, {
+      status: Order_status.CANCELLED,
+      comment: finalComment || null,
+      sold_at: null,
+    });
+
+    return { statusCode: 200, message: 'Order canceled', data: { id } };
   }
 
   async partlySellOrder(
@@ -1136,6 +1607,7 @@ export class OrderServiceService {
             : Order_status.SOLD,
       to_be_paid: netToBePaid,
       paid_amount: paidAfter,
+      sold_at: String(Date.now()),
       total_price: price,
       comment: finalComment || null,
     });
@@ -1203,6 +1675,7 @@ export class OrderServiceService {
       operator?: string | null;
       post_id?: string | null;
       canceled_post_id?: string | null;
+      sold_at?: string | null;
       district_id?: string | null;
       region_id?: string | null;
       address?: string | null;
@@ -1227,6 +1700,7 @@ export class OrderServiceService {
       operator?: string | null;
       post_id?: string | null;
       canceled_post_id?: string | null;
+      sold_at?: string | null;
       district_id?: string | null;
       region_id?: string | null;
       address?: string | null;
@@ -1251,6 +1725,10 @@ export class OrderServiceService {
         typeof dto.canceled_post_id !== 'undefined'
           ? dto.canceled_post_id
           : order.canceled_post_id,
+      sold_at:
+        typeof dto.sold_at !== 'undefined'
+          ? dto.sold_at
+          : order.sold_at,
       district_id: dto.district_id ?? order.district_id,
       region_id: dto.region_id ?? order.region_id,
       address: dto.address ?? order.address,

@@ -23,6 +23,11 @@ export class FindHistoryDto {
   @IsOptional()
   @IsString()
   @Matches(/^\d+$/)
+  source_id?: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
   created_by?: string;
 
   @IsOptional()

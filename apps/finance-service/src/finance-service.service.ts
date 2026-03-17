@@ -277,16 +277,19 @@ export class FinanceServiceService implements OnModuleInit {
     method: PaymentMethod,
   ) {
     const sign = operation === Operation_type.INCOME ? 1 : -1;
+    const allowNegativeBalance =
+      cashbox.cashbox_type === Cashbox_type.FOR_MARKET ||
+      cashbox.cashbox_type === Cashbox_type.FOR_COURIER;
 
     if (method === PaymentMethod.CASH) {
       const nextCash = Number(cashbox.balance_cash) + sign * amount;
-      if (nextCash < 0) {
+      if (!allowNegativeBalance && nextCash < 0) {
         throw new BadRequestException('Insufficient cash balance');
       }
       cashbox.balance_cash = nextCash;
     } else {
       const nextCard = Number(cashbox.balance_card) + sign * amount;
-      if (nextCard < 0) {
+      if (!allowNegativeBalance && nextCard < 0) {
         throw new BadRequestException('Insufficient card balance');
       }
       cashbox.balance_card = nextCard;
@@ -458,6 +461,10 @@ export class FinanceServiceService implements OnModuleInit {
       if (dto.source_type) {
         where.source_type = dto.source_type;
       }
+      if (dto.source_id) {
+        this.assertBigIntId(dto.source_id, 'source_id');
+        where.source_id = dto.source_id;
+      }
       if (dto.created_by) {
         this.assertBigIntId(dto.created_by, 'created_by');
         where.created_by = dto.created_by;
@@ -497,7 +504,7 @@ export class FinanceServiceService implements OnModuleInit {
           );
         }
 
-        where.cashbox_id = userCashboxes.map((c) => c.id as any) as any;
+        where.cashbox_id = In(userCashboxes.map((c) => c.id));
       }
 
       const [items, total] = await this.historyRepo.findAndCount({

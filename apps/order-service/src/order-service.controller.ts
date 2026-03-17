@@ -137,6 +137,21 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.cancel' })
+  cancel(
+    @Payload()
+    data: {
+      id: string;
+      dto: { comment?: string; extraCost?: number };
+      requester: { id: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.cancelOrder(data.requester, data.id, data.dto ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.partly_sell' })
   partlySell(
     @Payload()
@@ -154,6 +169,20 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.partlySellOrder(data.requester, data.id, data.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.rollback_waiting' })
+  rollbackToWaiting(
+    @Payload()
+    data: {
+      id: string;
+      requester: { id: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.rollbackOrderToWaiting(data.requester, data.id),
     );
   }
 

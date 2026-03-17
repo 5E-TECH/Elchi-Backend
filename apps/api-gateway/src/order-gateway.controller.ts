@@ -468,6 +468,33 @@ export class OrderGatewayController {
     });
   }
 
+  @Post('cancel/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Cancel order (courier)' })
+  @ApiParam({ name: 'id', description: 'Order ID (id)' })
+  @ApiBody({ type: SellOrderRequestDto })
+  cancelOrder(
+    @Param('id') id: string,
+    @Body() dto: SellOrderRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.cancel' },
+          { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
   @Post('partly-sell/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER)
@@ -485,6 +512,31 @@ export class OrderGatewayController {
         .send(
           { cmd: 'order.partly_sell' },
           { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  @Post('rollback/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER, RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Rollback sold/cancelled order to waiting' })
+  @ApiParam({ name: 'id', description: 'Order ID (id)' })
+  rollbackOrder(
+    @Param('id') id: string,
+    @Req() req: { user: JwtUser },
+  ) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.rollback_waiting' },
+          { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
