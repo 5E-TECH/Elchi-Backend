@@ -153,6 +153,23 @@ export class OrderServiceService {
     return [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID];
   }
 
+  private dateKey(date: Date) {
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Tashkent',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(date);
+  }
+
+  private dateLabel(date: Date) {
+    return new Intl.DateTimeFormat('en-GB', {
+      timeZone: 'Asia/Tashkent',
+      day: '2-digit',
+      month: '2-digit',
+    }).format(date).replace('/', '.').replace('/', '.');
+  }
+
   private generateSaleComment(
     orderComment?: string | null,
     dtoComment?: string | null,
@@ -182,6 +199,32 @@ export class OrderServiceService {
       { ids },
     ).catch(() => ({ data: [] }));
     return response?.data ?? [];
+  }
+
+  private async getAllPostsForAnalytics() {
+    const limit = 100;
+    let page = 1;
+    let totalPages = 1;
+    const rows: Array<{ id: string; courier_id?: string | null; updatedAt?: string | Date | null }> = [];
+
+    while (page <= totalPages) {
+      const response = await rmqSend<{
+        data?: {
+          data?: Array<{ id: string; courier_id?: string | null; updatedAt?: string | Date | null }>;
+          totalPages?: number;
+        };
+      }>(
+        this.logisticsClient,
+        { cmd: 'logistics.post.find_all' },
+        { query: { page, limit } },
+      ).catch(() => ({ data: { data: [], totalPages: 1 } }));
+
+      rows.push(...(response?.data?.data ?? []));
+      totalPages = Math.max(1, Number(response?.data?.totalPages ?? 1));
+      page += 1;
+    }
+
+    return rows;
   }
 
   private async getMarketsByIds(ids: string[]) {
@@ -1912,6 +1955,8 @@ export class OrderServiceService {
   async getOverviewStats(startDate?: string, endDate?: string) {
     const { start, end } = this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
+    const startMs = String(start.getTime());
+    const endMs = String(end.getTime());
 
     const [acceptedCount, cancelled, soldAndPaid, soldOrders] = await Promise.all([
       this.orderRepo.count({
@@ -1929,13 +1974,13 @@ export class OrderServiceService {
       this.orderRepo
         .createQueryBuilder('o')
         .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
         .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
         .getCount(),
       this.orderRepo
         .createQueryBuilder('o')
         .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
         .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
         .getMany(),
     ]);
@@ -1970,14 +2015,16 @@ export class OrderServiceService {
       cancelled,
       soldAndPaid,
       profit,
-      from: start.toISOString(),
-      to: end.toISOString(),
+      from: start.getTime(),
+      to: end.getTime(),
     };
   }
 
   async getMarketStats(startDate?: string, endDate?: string) {
     const { start, end } = this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
+    const startMs = String(start.getTime());
+    const endMs = String(end.getTime());
 
     const totalsRaw = await this.orderRepo
       .createQueryBuilder('o')
@@ -1995,7 +2042,7 @@ export class OrderServiceService {
       .addSelect('COUNT(*)', 'sold')
       .where('o.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('o.createdAt BETWEEN :start AND :end', { start, end })
-      .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+      .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
       .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
       .andWhere('o.market_id IS NOT NULL')
       .groupBy('o.market_id')
@@ -2020,20 +2067,32 @@ export class OrderServiceService {
   async getCourierStats(startDate?: string, endDate?: string) {
     const { start, end } = this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
+    const startMs = start.getTime();
+    const endMs = end.getTime();
+    const recentThreshold = endMs - 30 * 24 * 60 * 60 * 1000;
+    const recentPosts = (await this.getAllPostsForAnalytics()).filter((post) => {
+      const updatedAt = post.updatedAt ? new Date(post.updatedAt).getTime() : 0;
+      return updatedAt > recentThreshold;
+    });
+
+    if (!recentPosts.length) {
+      return [];
+    }
 
     const orders = await this.orderRepo
       .createQueryBuilder('o')
       .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('o.post_id IN (:...postIds)', {
+        postIds: recentPosts.map((post) => post.id),
+      })
       .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-      .andWhere('o.post_id IS NOT NULL')
-      .select(['o.id', 'o.status', 'o.post_id'])
+      .select(['o.id', 'o.status', 'o.post_id', 'o.sold_at'])
       .getMany();
 
-    const posts = await this.getPostsByIds([
-      ...new Set(orders.map((o) => o.post_id).filter(Boolean) as string[]),
-    ]);
-    const postMap = new Map(posts.map((p) => [String(p.id), p]));
-    const courierIds = [...new Set(posts.map((p) => p.courier_id).filter(Boolean) as string[])];
+    const postMap = new Map<string, { id: string; courier_id?: string | null }>(
+      recentPosts.map((post) => [String(post.id), post]),
+    );
+    const courierIds = [...new Set(recentPosts.map((post) => post.courier_id).filter(Boolean) as string[])];
     const couriers = await this.getCouriersByIds(courierIds);
 
     const statsByCourier = new Map<string, { total: number; sold: number }>();
@@ -2042,7 +2101,8 @@ export class OrderServiceService {
       if (!courierId) continue;
       const current = statsByCourier.get(String(courierId)) ?? { total: 0, sold: 0 };
       current.total += 1;
-      if (soldStatuses.includes(order.status)) {
+      const soldAt = order.sold_at ? Number(order.sold_at) : null;
+      if (soldStatuses.includes(order.status) && soldAt && soldAt >= startMs && soldAt <= endMs) {
         current.sold += 1;
       }
       statsByCourier.set(String(courierId), current);
@@ -2156,39 +2216,70 @@ export class OrderServiceService {
   async getCourierStat(courierId: string, startDate?: string, endDate?: string) {
     const { start, end } = this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
+    const startMs = String(start.getTime());
+    const endMs = String(end.getTime());
+    const recentThreshold = end.getTime() - 30 * 24 * 60 * 60 * 1000;
+    const courierPosts = (await this.getAllPostsForAnalytics()).filter((post) => {
+      const updatedAt = post.updatedAt ? new Date(post.updatedAt).getTime() : 0;
+      return String(post.courier_id) === String(courierId) && updatedAt > recentThreshold;
+    });
 
-    const orders = await this.orderRepo
-      .createQueryBuilder('o')
-      .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-      .andWhere('o.post_id IS NOT NULL')
-      .getMany();
+    const postIds = courierPosts.map((post) => post.id);
+    if (!postIds.length) {
+      return {
+        totalOrders: 0,
+        soldOrders: 0,
+        canceledOrders: 0,
+        profit: 0,
+        successRate: 0,
+      };
+    }
 
-    const posts = await this.getPostsByIds([
-      ...new Set(orders.map((o) => o.post_id).filter(Boolean) as string[]),
+    const [totalOrders, soldOrders, canceledOrders, soldOrderEntities] = await Promise.all([
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.post_id IN (:...postIds)', { postIds })
+        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+        .getCount(),
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.post_id IN (:...postIds)', { postIds })
+        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
+        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+        .getCount(),
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.post_id IN (:...postIds)', { postIds })
+        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+        .andWhere('o.status = :status', { status: Order_status.CANCELLED })
+        .getCount(),
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.post_id IN (:...postIds)', { postIds })
+        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
+        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+        .getMany(),
     ]);
-    const allowedPostIds = new Set(
-      posts.filter((p) => String(p.courier_id) === String(courierId)).map((p) => String(p.id)),
-    );
 
-    const myOrders = orders.filter((order) => order.post_id && allowedPostIds.has(String(order.post_id)));
-    const soldOrders = myOrders.filter((order) => soldStatuses.includes(order.status));
-    const canceledOrders = myOrders.filter((order) => order.status === Order_status.CANCELLED).length;
     const couriers = await this.getCouriersByIds([courierId]);
     const courier = couriers[0];
 
     let profit = 0;
-    for (const order of soldOrders) {
+    for (const order of soldOrderEntities) {
       profit += order.where_deliver === Where_deliver.ADDRESS
         ? Number(courier?.tariff_home ?? 0)
         : Number(courier?.tariff_center ?? 0);
     }
 
-    const successRate = myOrders.length > 0 ? Number(((soldOrders.length * 100) / myOrders.length).toFixed(2)) : 0;
+    const successRate = totalOrders > 0 ? Number(((soldOrders * 100) / totalOrders).toFixed(2)) : 0;
 
     return {
-      totalOrders: myOrders.length,
-      soldOrders: soldOrders.length,
+      totalOrders,
+      soldOrders,
       canceledOrders,
       profit,
       successRate,
@@ -2198,6 +2289,8 @@ export class OrderServiceService {
   async getMarketStat(marketId: string, startDate?: string, endDate?: string) {
     const { start, end } = this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
+    const startMs = String(start.getTime());
+    const endMs = String(end.getTime());
 
     const allOrders = await this.orderRepo
       .createQueryBuilder('o')
@@ -2206,17 +2299,111 @@ export class OrderServiceService {
       .andWhere('o.market_id = :marketId', { marketId })
       .getMany();
 
-    const soldOrders = allOrders.filter((order) => soldStatuses.includes(order.status) && order.updatedAt >= start && order.updatedAt <= end);
-    const canceledOrders = allOrders.filter((order) => order.status === Order_status.CANCELLED && order.updatedAt >= start && order.updatedAt <= end).length;
-    const profit = soldOrders.reduce((sum, order) => sum + Number(order.to_be_paid ?? 0), 0);
-    const successRate = allOrders.length > 0 ? Number(((soldOrders.length * 100) / allOrders.length).toFixed(2)) : 0;
+    if (!allOrders.length) {
+      return {
+        totalOrders: 0,
+        soldOrders: 0,
+        canceledOrders: 0,
+        profit: 0,
+        successRate: 0,
+      };
+    }
+
+    const orderIds = allOrders.map((order) => order.id);
+
+    const [soldOrders, canceledOrders, soldOrderEntities] = await Promise.all([
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.id IN (:...orderIds)', { orderIds })
+        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
+        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+        .getCount(),
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.id IN (:...orderIds)', { orderIds })
+        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+        .andWhere('o.status = :status', { status: Order_status.CANCELLED })
+        .getCount(),
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.id IN (:...orderIds)', { orderIds })
+        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
+        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+        .getMany(),
+    ]);
+
+    const profit = soldOrderEntities.reduce((sum, order) => sum + Number(order.to_be_paid ?? 0), 0);
+    const successRate = allOrders.length > 0 ? Number(((soldOrders * 100) / allOrders.length).toFixed(2)) : 0;
 
     return {
       totalOrders: allOrders.length,
-      soldOrders: soldOrders.length,
+      soldOrders,
       canceledOrders,
       profit,
       successRate,
+    };
+  }
+
+  async getRevenueStats(startDate?: string, endDate?: string, period = 'daily') {
+    if (period !== 'daily') {
+      throw new RpcException({ statusCode: 400, message: 'Only daily period is supported' });
+    }
+
+    const { start, end } = this.analyticsDateRange(startDate, endDate);
+    const soldStatuses = this.soldStatuses();
+    const startMs = String(start.getTime());
+    const endMs = String(end.getTime());
+
+    const soldOrders = await this.orderRepo
+      .createQueryBuilder('o')
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
+      .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+      .select(['o.id', 'o.total_price', 'o.sold_at'])
+      .getMany();
+
+    const buckets = new Map<string, { period: string; label: string; ordersCount: number; revenue: number }>();
+    const cursor = new Date(start);
+    cursor.setHours(0, 0, 0, 0);
+    const endCursor = new Date(end);
+    endCursor.setHours(0, 0, 0, 0);
+
+    while (cursor <= endCursor) {
+      const key = this.dateKey(cursor);
+      buckets.set(key, {
+        period: key,
+        label: this.dateLabel(cursor),
+        ordersCount: 0,
+        revenue: 0,
+      });
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    for (const order of soldOrders) {
+      if (!order.sold_at) continue;
+      const soldDate = new Date(Number(order.sold_at));
+      const key = this.dateKey(soldDate);
+      const bucket = buckets.get(key);
+      if (!bucket) continue;
+      bucket.ordersCount += 1;
+      bucket.revenue += Number(order.total_price ?? 0);
+    }
+
+    const data = Array.from(buckets.values());
+    const totalRevenue = data.reduce((sum, row) => sum + row.revenue, 0);
+    const totalOrders = data.reduce((sum, row) => sum + row.ordersCount, 0);
+    const avgRevenue = data.length ? Math.round(totalRevenue / data.length) : 0;
+
+    return {
+      data,
+      summary: {
+        totalRevenue,
+        totalOrders,
+        avgRevenue,
+      },
     };
   }
 

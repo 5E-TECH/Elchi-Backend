@@ -8,6 +8,12 @@ interface RequesterContext {
   roles?: string[];
 }
 
+interface RevenueFilter {
+  startDate?: string;
+  endDate?: string;
+  period?: string;
+}
+
 @Injectable()
 export class AnalyticsServiceService {
   constructor(@Inject('ORDER') private readonly orderClient: ClientProxy) {}
@@ -143,6 +149,26 @@ export class AnalyticsServiceService {
       },
       200,
       'Dashboard infos',
+    );
+  }
+
+  async getRevenueStats(
+    _requester: RequesterContext | undefined,
+    filter: RevenueFilter,
+  ) {
+    const normalized = this.normalizeDateRange(filter);
+    const period = filter.period === 'daily' || !filter.period ? 'daily' : filter.period;
+
+    const revenue = await rmqSend(
+      this.orderClient,
+      { cmd: 'order.analytics.revenue' },
+      { ...normalized, period },
+    );
+
+    return successRes(
+      revenue,
+      200,
+      `Revenue stats (${period})`,
     );
   }
 }

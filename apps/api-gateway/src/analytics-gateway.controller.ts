@@ -50,4 +50,30 @@ export class AnalyticsGatewayController {
         .pipe(timeout(8000)),
     );
   }
+
+  @Get('revenue')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Revenue stats by period' })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  @ApiQuery({ name: 'period', required: false, enum: ['daily'] })
+  getRevenue(
+    @Req() req: { user: JwtUser },
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('period') period = 'daily',
+  ) {
+    return firstValueFrom(
+      this.analyticsClient
+        .send(
+          { cmd: 'analytics.revenue' },
+          {
+            requester: this.toRequester(req),
+            filter: { startDate, endDate, period },
+          },
+        )
+        .pipe(timeout(8000)),
+    );
+  }
 }
