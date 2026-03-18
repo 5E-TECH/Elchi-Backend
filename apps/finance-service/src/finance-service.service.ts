@@ -533,6 +533,25 @@ export class FinanceServiceService implements OnModuleInit {
     }
   }
 
+  async findHistoryById(id: string) {
+    try {
+      this.assertBigIntId(id, 'id');
+
+      const history = await this.historyRepo.findOne({
+        where: { id },
+        relations: ['cashbox'],
+      });
+
+      if (!history) {
+        throw new NotFoundException('Cashbox history not found');
+      }
+
+      return this.successRes(history, 200, 'Cashbox history detail');
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
   async openShift(dto: OpenShiftDto) {
     try {
       this.assertBigIntId(dto.opened_by, 'opened_by');

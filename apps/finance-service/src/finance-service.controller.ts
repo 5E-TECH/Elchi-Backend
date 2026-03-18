@@ -99,6 +99,14 @@ export class FinanceServiceController {
     return this.executeAndAck(context, () => this.financeService.findAllHistory(data));
   }
 
+  @MessagePattern({ cmd: 'finance.history.find_by_id' })
+  findHistoryById(
+    @Payload() data: { id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.financeService.findHistoryById(data.id));
+  }
+
   @MessagePattern({ cmd: 'finance.cashbox.payment_courier' })
   paymentFromCourier(
     @Payload()
