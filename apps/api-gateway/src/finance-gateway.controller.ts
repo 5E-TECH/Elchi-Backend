@@ -238,6 +238,16 @@ export class FinanceGatewayController {
     return this.send({ cmd: 'finance.history.find_all' }, query);
   }
 
+  @Get('history/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Find cashbox history detail by id' })
+  @ApiParam({ name: 'id', description: 'History id (bigint string)' })
+  findHistoryById(@Param('id') id: string) {
+    return this.send({ cmd: 'finance.history.find_by_id' }, { id });
+  }
+
   @Post('shift/open')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.OPERATOR)
