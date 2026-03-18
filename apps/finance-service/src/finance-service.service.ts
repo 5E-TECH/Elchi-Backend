@@ -546,7 +546,33 @@ export class FinanceServiceService implements OnModuleInit {
         throw new NotFoundException('Cashbox history not found');
       }
 
-      return this.successRes(history, 200, 'Cashbox history detail');
+      const sourceTypesWithOrder = new Set<Source_type>([
+        Source_type.SELL,
+        Source_type.CANCEL,
+        Source_type.EXTRA_COST,
+        Source_type.CORRECTION,
+      ]);
+
+      let order: any = null;
+
+      if (history.source_id && sourceTypesWithOrder.has(history.source_type)) {
+        const orderResponse = await rmqSend<any>(
+          this.orderClient,
+          { cmd: 'order.find_by_id_enriched' },
+          { id: history.source_id },
+        ).catch(() => null);
+
+        order = orderResponse?.data ?? orderResponse ?? null;
+      }
+
+      return this.successRes(
+        {
+          ...history,
+          order,
+        },
+        200,
+        'Cashbox history detail',
+      );
     } catch (error) {
       this.toRpcError(error);
     }
