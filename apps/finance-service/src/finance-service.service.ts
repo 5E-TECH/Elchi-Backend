@@ -554,7 +554,6 @@ export class FinanceServiceService implements OnModuleInit {
       ]);
 
       let order: any = null;
-      let customer: any = null;
 
       if (history.source_id && sourceTypesWithOrder.has(history.source_type)) {
         const orderResponse = await rmqSend<any>(
@@ -564,14 +563,12 @@ export class FinanceServiceService implements OnModuleInit {
         ).catch(() => null);
 
         order = orderResponse?.data ?? orderResponse ?? null;
-        customer = order?.customer ?? null;
       }
 
       return this.successRes(
         {
           ...history,
           order,
-          customer,
         },
         200,
         'Cashbox history detail',
