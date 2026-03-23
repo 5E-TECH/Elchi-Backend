@@ -51,45 +51,6 @@ export class LogisticsGatewayController {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
   ) {}
 
-  private async enrichPostsWithCourier<T extends { courier_id?: string | null }>(
-    response: { data?: T[]; [key: string]: unknown },
-  ) {
-    const rows = Array.isArray(response?.data) ? response.data : [];
-    const courierIds = Array.from(
-      new Set(rows.map((row) => row.courier_id).filter(Boolean) as string[]),
-    );
-
-    if (!courierIds.length) {
-      return response;
-    }
-
-    let couriers: Array<Record<string, unknown>> = [];
-    try {
-      const res = await firstValueFrom(
-        this.identityClient
-          .send({ cmd: 'identity.courier.find_by_ids' }, { ids: courierIds })
-          .pipe(timeout(8000)),
-      );
-      couriers = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
-    } catch {
-      couriers = [];
-    }
-
-    const courierMap = new Map(
-      couriers
-        .filter((item) => item && typeof item === 'object' && 'id' in item)
-        .map((item) => [String((item as { id: string }).id), item]),
-    );
-
-    return {
-      ...response,
-      data: rows.map((row) => ({
-        ...row,
-        courier: row.courier_id ? courierMap.get(row.courier_id) ?? null : null,
-      })),
-    };
-  }
-
   private async enrichOrdersByPostResponse(response: {
     data?: {
       allOrdersByPostId?: Array<{
@@ -207,11 +168,8 @@ export class LogisticsGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List rejected posts' })
-  async getRejectedPosts() {
-    const response = await firstValueFrom(
-      this.logisticsClient.send({ cmd: 'logistics.post.rejected' }, {}).pipe(timeout(8000)),
-    );
-    return this.enrichPostsWithCourier(response);
+  getRejectedPosts() {
+    return this.logisticsClient.send({ cmd: 'logistics.post.rejected' }, {});
   }
 
   @Get('post/on-the-road')
@@ -251,14 +209,11 @@ export class LogisticsGatewayController {
   @Roles(RoleEnum.COURIER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Courier rejected posts' })
-  async getRejectedPostsForCourier(@Req() req: { user: JwtUser }) {
-    const response = await firstValueFrom(
-      this.logisticsClient.send(
-        { cmd: 'logistics.post.rejected_for_courier' },
-        { requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-      ).pipe(timeout(8000)),
+  getRejectedPostsForCourier(@Req() req: { user: JwtUser }) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.rejected_for_courier' },
+      { requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
     );
-    return this.enrichPostsWithCourier(response);
   }
 
   @Get('post/:id')

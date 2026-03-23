@@ -303,6 +303,30 @@ export class LogisticsServiceService implements OnModuleInit {
     }
   }
 
+  private async findCouriersByIds(ids: string[]): Promise<Map<string, Record<string, unknown>>> {
+    const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
+    if (!uniqueIds.length) {
+      return new Map();
+    }
+
+    try {
+      const res = await lastValueFrom(
+        this.identityClient
+          .send({ cmd: 'identity.courier.find_by_ids' }, { ids: uniqueIds })
+          .pipe(timeout(5000)),
+      );
+
+      const rows = Array.isArray(res?.data) ? res.data : [];
+      return new Map(
+        rows
+          .filter((item) => item && typeof item === 'object' && 'id' in item)
+          .map((item) => [String((item as { id: string }).id), item as Record<string, unknown>]),
+      );
+    } catch {
+      return new Map();
+    }
+  }
+
   async onModuleInit() {
     for (const [regionIndex, regionData] of regions.entries()) {
       const regionName = regionData.name.trim();
@@ -492,7 +516,14 @@ export class LogisticsServiceService implements OnModuleInit {
       relations: ['region'],
       order: { createdAt: 'DESC' },
     });
-    return successRes(allPosts, 200, 'All rejected posts');
+    const courierMap = await this.findCouriersByIds(
+      allPosts.map((post) => post.courier_id).filter(Boolean) as string[],
+    );
+    const enrichedPosts = allPosts.map((post) => ({
+      ...post,
+      courier: post.courier_id ? courierMap.get(post.courier_id) ?? null : null,
+    }));
+    return successRes(enrichedPosts, 200, 'All rejected posts');
   }
 
   async onTheRoadPosts(requester: RequesterContext) {
@@ -538,7 +569,14 @@ export class LogisticsServiceService implements OnModuleInit {
       relations: ['region'],
       order: { createdAt: 'DESC' },
     });
-    return successRes(rows, 200, 'All rejected posts for courier');
+    const courierMap = await this.findCouriersByIds(
+      rows.map((post) => post.courier_id).filter(Boolean) as string[],
+    );
+    const enrichedRows = rows.map((post) => ({
+      ...post,
+      courier: post.courier_id ? courierMap.get(post.courier_id) ?? null : null,
+    }));
+    return successRes(enrichedRows, 200, 'All rejected posts for courier');
   }
 
   async myPostsForCourier(page: number, limit: number, requester: RequesterContext) {
