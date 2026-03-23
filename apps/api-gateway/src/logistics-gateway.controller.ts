@@ -35,6 +35,7 @@ import {
   UpdateRegionRequestDto,
   UpdateDistrictNameRequestDto,
   UpdateDistrictRequestDto,
+  UpdateDistrictSatoCodeRequestDto,
 } from './dto/logistics.swagger.dto';
 
 interface JwtUser {
@@ -477,6 +478,22 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send({ cmd: 'logistics.district.create' }, { dto });
   }
 
+  @Get('district/sato/:satoCode')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.ADMIN,
+    RoleEnum.SUPERADMIN,
+    RoleEnum.COURIER,
+    RoleEnum.MARKET,
+    RoleEnum.OPERATOR,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get district by sato_code' })
+  @ApiParam({ name: 'satoCode', description: 'District SATO code' })
+  getDistrictBySato(@Param('satoCode') satoCode: string) {
+    return this.logisticsClient.send({ cmd: 'logistics.district.find_by_sato' }, { sato_code: satoCode });
+  }
+
   @Get('district/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -516,6 +533,41 @@ export class LogisticsGatewayController {
       { cmd: 'logistics.district.update_name' },
       { id, dto },
     );
+  }
+
+  @Patch('district/sato/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update district sato_code' })
+  @ApiParam({ name: 'id', description: 'District ID (id)' })
+  @ApiBody({ type: UpdateDistrictSatoCodeRequestDto })
+  updateDistrictSato(
+    @Param('id') id: string,
+    @Body() dto: UpdateDistrictSatoCodeRequestDto,
+  ) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.district.update_sato' },
+      { id, dto },
+    );
+  }
+
+  @Get('district/sato-match/preview')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Preview district sato_code matching' })
+  previewDistrictSatoMatch() {
+    return this.logisticsClient.send({ cmd: 'logistics.district.sato_match_preview' }, {});
+  }
+
+  @Post('district/sato-match/apply')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Apply matched district sato_codes' })
+  applyDistrictSatoMatch() {
+    return this.logisticsClient.send({ cmd: 'logistics.district.sato_match_apply' }, {});
   }
 
   @Delete('district/:id')

@@ -1,5 +1,5 @@
 import { ApiProperty } from '@nestjs/swagger';
-import { IsNotEmpty, IsNumberString, IsOptional, IsString } from 'class-validator';
+import { IsNotEmpty, IsNumberString, IsOptional, IsString, Matches } from 'class-validator';
 
 export class CreateDistrictRequestDto {
   @ApiProperty({ example: 'Yangi Namangan' })
@@ -11,6 +11,12 @@ export class CreateDistrictRequestDto {
   @IsNotEmpty()
   @IsNumberString()
   region_id!: string;
+
+  @ApiProperty({ example: '1712234', required: false })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  sato_code?: string;
 }
 
 export class UpdateDistrictRequestDto {
@@ -25,6 +31,14 @@ export class UpdateDistrictNameRequestDto {
   @IsNotEmpty()
   @IsString()
   name!: string;
+}
+
+export class UpdateDistrictSatoCodeRequestDto {
+  @ApiProperty({ example: '1712234' })
+  @IsNotEmpty()
+  @IsString()
+  @Matches(/^\d+$/)
+  sato_code!: string;
 }
 
 export class CreateRegionRequestDto {
