@@ -10,6 +10,7 @@ import { regions } from './data/regions-districts.data';
 import { CreateDistrictDto } from './dto/create-district.dto';
 import { UpdateDistrictDto } from './dto/update-district.dto';
 import { UpdateDistrictNameDto } from './dto/update-district-name.dto';
+import { UpdateDistrictSatoCodeDto } from './dto/update-district-sato-code.dto';
 import { CreateRegionDto } from './dto/create-region.dto';
 import { UpdateRegionDto } from './dto/update-region.dto';
 import { CreatePostDto } from './dto/create-post.dto';
@@ -17,6 +18,7 @@ import { ReceivePostDto } from './dto/receive-post.dto';
 import { SendPostDto } from './dto/send-post.dto';
 import { PostIdDto } from './dto/post-id.dto';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
+import { matchDistricts } from './utils/sato-matcher';
 import { Order_status, Post_status, Roles, Where_deliver } from '@app/common';
 
 interface RequesterContext {
@@ -1012,16 +1014,28 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Region not found');
     }
 
+    const trimmedName = dto.name.trim();
+    const satoCode = dto.sato_code?.trim() ?? '';
+
     const exists = await this.districtRepo.findOne({
-      where: { name: dto.name.trim(), region_id: dto.region_id },
+      where: { name: trimmedName, region_id: dto.region_id },
     });
     if (exists) {
       this.conflict('District already exists in this region');
     }
 
+    if (satoCode) {
+      const existingBySato = await this.districtRepo.findOne({
+        where: { sato_code: satoCode },
+      });
+      if (existingBySato) {
+        this.conflict('District sato_code already exists');
+      }
+    }
+
     const district = this.districtRepo.create({
-      name: dto.name.trim(),
-      sato_code: '',
+      name: trimmedName,
+      sato_code: satoCode,
       region_id: dto.region_id,
       assigned_region: dto.region_id,
     });
@@ -1107,6 +1121,95 @@ export class LogisticsServiceService implements OnModuleInit {
     const savedDistrict = await this.districtRepo.save(district);
     void this.syncDistrictToSearch(savedDistrict);
     return successRes({}, 200, 'District name updated');
+  }
+
+  async updateDistrictSatoCode(id: string, dto: UpdateDistrictSatoCodeDto) {
+    const district = await this.districtRepo.findOne({ where: { id } });
+    if (!district) {
+      this.notFound('District not found');
+    }
+
+    const satoCode = dto.sato_code.trim();
+    if (!satoCode) {
+      this.badRequest('District sato_code is required');
+    }
+
+    const existingWithCode = await this.districtRepo.findOne({
+      where: { sato_code: satoCode },
+    });
+    if (existingWithCode && existingWithCode.id !== id) {
+      this.conflict('District sato_code already exists');
+    }
+
+    district.sato_code = satoCode;
+    const savedDistrict = await this.districtRepo.save(district);
+    void this.syncDistrictToSearch(savedDistrict);
+    return successRes(savedDistrict, 200, 'District sato_code updated');
+  }
+
+  async findDistrictBySatoCode(satoCode: string) {
+    const district = await this.districtRepo.findOne({
+      where: { sato_code: satoCode },
+      relations: ['region', 'assignedToRegion'],
+    });
+    if (!district) {
+      this.notFound('District not found');
+    }
+    return successRes(district);
+  }
+
+  async matchDistrictSatoCodes() {
+    const dbDistricts = await this.districtRepo.find({
+      relations: ['region'],
+    });
+
+    return successRes(matchDistricts(dbDistricts), 200, 'SATO matching natijasi');
+  }
+
+  async applyDistrictSatoCodes() {
+    const dbDistricts = await this.districtRepo.find({
+      relations: ['region'],
+    });
+    const matchResult = matchDistricts(dbDistricts);
+
+    let appliedCount = 0;
+    const applied: Array<{ id: string; name: string; sato_code: string }> = [];
+
+    for (const match of matchResult.matched) {
+      if (match.satoName !== '(allaqachon mavjud)') {
+        await this.districtRepo.update(match.dbId, {
+          sato_code: match.satoCode,
+        });
+        applied.push({
+          id: match.dbId,
+          name: match.dbName,
+          sato_code: match.satoCode,
+        });
+        appliedCount++;
+      }
+    }
+
+    const updatedIds = applied.map((item) => item.id);
+    if (updatedIds.length) {
+      const updatedDistricts = await this.districtRepo.find({
+        where: { id: In(updatedIds) },
+      });
+      updatedDistricts.forEach((district) => {
+        void this.syncDistrictToSearch(district);
+      });
+    }
+
+    return successRes(
+      {
+        applied,
+        appliedCount,
+        unmatched: matchResult.unmatched,
+        duplicates: matchResult.duplicates,
+        stats: matchResult.stats,
+      },
+      200,
+      appliedCount + " ta tumanga SATO code qo'shildi",
+    );
   }
 
   async deleteDistrict(id: string) {

@@ -35,6 +35,7 @@ import {
   UpdateRegionRequestDto,
   UpdateDistrictNameRequestDto,
   UpdateDistrictRequestDto,
+  UpdateDistrictSatoCodeRequestDto,
 } from './dto/logistics.swagger.dto';
 
 interface JwtUser {
@@ -49,6 +50,45 @@ export class LogisticsGatewayController {
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
   ) {}
+
+  private async enrichPostsWithCourier<T extends { courier_id?: string | null }>(
+    response: { data?: T[]; [key: string]: unknown },
+  ) {
+    const rows = Array.isArray(response?.data) ? response.data : [];
+    const courierIds = Array.from(
+      new Set(rows.map((row) => row.courier_id).filter(Boolean) as string[]),
+    );
+
+    if (!courierIds.length) {
+      return response;
+    }
+
+    let couriers: Array<Record<string, unknown>> = [];
+    try {
+      const res = await firstValueFrom(
+        this.identityClient
+          .send({ cmd: 'identity.courier.find_by_ids' }, { ids: courierIds })
+          .pipe(timeout(8000)),
+      );
+      couriers = Array.isArray(res?.data) ? res.data : Array.isArray(res) ? res : [];
+    } catch {
+      couriers = [];
+    }
+
+    const courierMap = new Map(
+      couriers
+        .filter((item) => item && typeof item === 'object' && 'id' in item)
+        .map((item) => [String((item as { id: string }).id), item]),
+    );
+
+    return {
+      ...response,
+      data: rows.map((row) => ({
+        ...row,
+        courier: row.courier_id ? courierMap.get(row.courier_id) ?? null : null,
+      })),
+    };
+  }
 
   private async enrichOrdersByPostResponse(response: {
     data?: {
@@ -167,8 +207,11 @@ export class LogisticsGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List rejected posts' })
-  getRejectedPosts() {
-    return this.logisticsClient.send({ cmd: 'logistics.post.rejected' }, {});
+  async getRejectedPosts() {
+    const response = await firstValueFrom(
+      this.logisticsClient.send({ cmd: 'logistics.post.rejected' }, {}).pipe(timeout(8000)),
+    );
+    return this.enrichPostsWithCourier(response);
   }
 
   @Get('post/on-the-road')
@@ -208,11 +251,14 @@ export class LogisticsGatewayController {
   @Roles(RoleEnum.COURIER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Courier rejected posts' })
-  getRejectedPostsForCourier(@Req() req: { user: JwtUser }) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.rejected_for_courier' },
-      { requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+  async getRejectedPostsForCourier(@Req() req: { user: JwtUser }) {
+    const response = await firstValueFrom(
+      this.logisticsClient.send(
+        { cmd: 'logistics.post.rejected_for_courier' },
+        { requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+      ).pipe(timeout(8000)),
     );
+    return this.enrichPostsWithCourier(response);
   }
 
   @Get('post/:id')
@@ -477,6 +523,22 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send({ cmd: 'logistics.district.create' }, { dto });
   }
 
+  @Get('district/sato/:satoCode')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.ADMIN,
+    RoleEnum.SUPERADMIN,
+    RoleEnum.COURIER,
+    RoleEnum.MARKET,
+    RoleEnum.OPERATOR,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get district by sato_code' })
+  @ApiParam({ name: 'satoCode', description: 'District SATO code' })
+  getDistrictBySato(@Param('satoCode') satoCode: string) {
+    return this.logisticsClient.send({ cmd: 'logistics.district.find_by_sato' }, { sato_code: satoCode });
+  }
+
   @Get('district/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -516,6 +578,41 @@ export class LogisticsGatewayController {
       { cmd: 'logistics.district.update_name' },
       { id, dto },
     );
+  }
+
+  @Patch('district/sato/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update district sato_code' })
+  @ApiParam({ name: 'id', description: 'District ID (id)' })
+  @ApiBody({ type: UpdateDistrictSatoCodeRequestDto })
+  updateDistrictSato(
+    @Param('id') id: string,
+    @Body() dto: UpdateDistrictSatoCodeRequestDto,
+  ) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.district.update_sato' },
+      { id, dto },
+    );
+  }
+
+  @Get('district/sato-match/preview')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Preview district sato_code matching' })
+  previewDistrictSatoMatch() {
+    return this.logisticsClient.send({ cmd: 'logistics.district.sato_match_preview' }, {});
+  }
+
+  @Post('district/sato-match/apply')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Apply matched district sato_codes' })
+  applyDistrictSatoMatch() {
+    return this.logisticsClient.send({ cmd: 'logistics.district.sato_match_apply' }, {});
   }
 
   @Delete('district/:id')

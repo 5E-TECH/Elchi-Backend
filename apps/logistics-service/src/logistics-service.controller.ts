@@ -5,6 +5,7 @@ import { LogisticsServiceService } from './logistics-service.service';
 import { CreateDistrictDto } from './dto/create-district.dto';
 import { UpdateDistrictDto } from './dto/update-district.dto';
 import { UpdateDistrictNameDto } from './dto/update-district-name.dto';
+import { UpdateDistrictSatoCodeDto } from './dto/update-district-sato-code.dto';
 import { CreateRegionDto } from './dto/create-region.dto';
 import { UpdateRegionDto } from './dto/update-region.dto';
 import { successRes } from '../../../libs/common/helpers/response';
@@ -299,6 +300,16 @@ export class LogisticsServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'logistics.district.find_by_sato' })
+  findDistrictBySatoCode(
+    @Payload() payload: { sato_code: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.findDistrictBySatoCode(payload.sato_code),
+    );
+  }
+
   @MessagePattern({ cmd: 'logistics.district.update' })
   updateDistrict(
     @Payload() payload: { id: string; dto: UpdateDistrictDto },
@@ -316,6 +327,30 @@ export class LogisticsServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.logisticsService.updateDistrictName(payload.id, payload.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.district.update_sato' })
+  updateDistrictSatoCode(
+    @Payload() payload: { id: string; dto: UpdateDistrictSatoCodeDto },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.updateDistrictSatoCode(payload.id, payload.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.district.sato_match_preview' })
+  matchDistrictSatoCodes(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.matchDistrictSatoCodes(),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.district.sato_match_apply' })
+  applyDistrictSatoCodes(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.applyDistrictSatoCodes(),
     );
   }
 
