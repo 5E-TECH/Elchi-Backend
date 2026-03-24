@@ -12,6 +12,9 @@ export class User extends BaseEntity {
   @Column({ type: 'varchar', length: 20, nullable: true })
   extra_number: string | null;
 
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  address: string | null;
+
   @Column({ type: 'varchar', length: 60, unique: true, nullable: true })
   username: string | null;
 
@@ -38,6 +41,21 @@ export class User extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   region_id: string | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  district_id: string | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  market_tg_token: string | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  market_id: string | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  telegram_id: string | null;
+
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  avatar_id: string | null;
 
   @Column({ type: 'enum', enum: Roles, default: Roles.ADMIN })
   role: Roles;

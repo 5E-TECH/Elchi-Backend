@@ -28,6 +28,11 @@ export class CreateMarketDto {
   @MinLength(3)
   username: string;
 
+  @ApiPropertyOptional({ example: 'Toshkent sh., Yunusobod tumani' })
+  @IsOptional()
+  @IsString()
+  address?: string;
+
   @ApiProperty({ example: 10000, minimum: 0 })
   @IsNotEmpty()
   @IsNumber()
