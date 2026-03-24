@@ -80,6 +80,16 @@ export class NotificationServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'notification.telegram.connect_by_token' })
+  connectByToken(
+    @Payload() data: { text: string; group_id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.notificationService.connectGroupByTokenText(data.text, data.group_id),
+    );
+  }
+
   @MessagePattern({ cmd: 'notification.telegram.delete' })
   deleteTelegramMarket(
     @Payload() data: { id?: string; market_id?: string; group_type?: Group_type },
