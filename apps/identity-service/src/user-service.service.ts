@@ -836,6 +836,30 @@ export class UserServiceService implements OnModuleInit {
     };
   }
 
+  async findMarketByTelegramToken(market_tg_token: string) {
+    const token = String(market_tg_token ?? '').trim();
+    if (!token) {
+      throw new RpcException(errorRes('market_tg_token is required', 400));
+    }
+
+    const market = await this.users.findOne({
+      where: {
+        market_tg_token: token,
+        role: Roles.MARKET,
+        isDeleted: false,
+      },
+    });
+
+    if (!market) {
+      this.notFound('Market topilmadi yoki token noto‘g‘ri');
+    }
+
+    return {
+      success: true,
+      data: this.sanitize(market),
+    };
+  }
+
   async findMarketsByIds(ids: string[]) {
     if (!ids.length) {
       return { success: true, data: [] };

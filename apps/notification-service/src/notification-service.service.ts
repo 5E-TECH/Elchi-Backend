@@ -128,11 +128,24 @@ export class NotificationServiceService {
     // Flexible mode:
     // Accept any `group_token-*` text and try to resolve market/group_type
     // from previously saved token mapping (compatible with old behavior).
+    const marketByTokenResponse = await rmqSend<any>(
+      this.identityClient,
+      { cmd: 'identity.market.find_by_tg_token' },
+      { market_tg_token: value },
+    ).catch(() => null);
+
+    const marketByToken = marketByTokenResponse?.data ?? marketByTokenResponse ?? null;
+    if (marketByToken?.id) {
+      return {
+        market_id: String(marketByToken.id),
+        group_type: Group_type.CREATE,
+      };
+    }
+
     const bySavedToken = await this.tgMarketRepo.findOne({
       where: { token: value, isDeleted: false },
       order: { createdAt: 'DESC' },
     });
-
     if (bySavedToken) {
       return {
         market_id: bySavedToken.market_id,

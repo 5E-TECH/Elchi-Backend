@@ -19,6 +19,7 @@ import type {
   DeleteMarketPayload,
   FindAllMarketsPayload,
   FindMarketByIdPayload,
+  FindMarketByTgTokenPayload,
   FindMarketsByIdsPayload,
   UpdateMarketPayload,
 } from './contracts/market.payloads';
@@ -202,6 +203,16 @@ export class IdentityController {
   @MessagePattern({ cmd: 'identity.market.find_all' })
   getMarkets(@Payload() payload: FindAllMarketsPayload, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.userService.findAllMarkets(payload?.query));
+  }
+
+  @MessagePattern({ cmd: 'identity.market.find_by_tg_token' })
+  getMarketByTgToken(
+    @Payload() payload: FindMarketByTgTokenPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.findMarketByTelegramToken(payload.market_tg_token),
+    );
   }
 
   // ==================== Batch Endpoints ====================

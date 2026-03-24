@@ -26,3 +26,7 @@ export interface FindMarketsByIdsPayload {
 export interface FindAllMarketsPayload {
   query?: UserFilterQuery;
 }
+
+export interface FindMarketByTgTokenPayload {
+  market_tg_token: string;
+}
