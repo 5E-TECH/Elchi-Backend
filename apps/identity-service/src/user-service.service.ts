@@ -266,6 +266,10 @@ export class UserServiceService implements OnModuleInit {
     }
   }
 
+  private generateGroupToken(): string {
+    return `group_token-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-6)}`;
+  }
+
   async onModuleInit() {
     const config = {
       ADMIN_NAME: this.configService.get<string>('SUPERADMIN_NAME'),
@@ -635,9 +639,14 @@ export class UserServiceService implements OnModuleInit {
       name: dto.name,
       phone_number: dto.phone_number,
       username: dto.username,
+      address: dto.address ?? null,
       password: hashedPassword,
       salary: 0,
       payment_day: undefined,
+      market_tg_token: this.generateGroupToken(),
+      market_id: null,
+      telegram_id: null,
+      avatar_id: null,
       role: Roles.MARKET,
       status: Status.ACTIVE,
       tariff_home: dto.tariff_home,
@@ -704,6 +713,8 @@ export class UserServiceService implements OnModuleInit {
       name: dto.name,
       phone_number: dto.phone_number,
       extra_number: dto.extra_number ?? null,
+      address: dto.address ?? null,
+      district_id: dto.district_id,
       username: dto.phone_number,
       password: await this.bcryptEncryption.encrypt(generatedPassword),
       salary: 0,
@@ -742,6 +753,10 @@ export class UserServiceService implements OnModuleInit {
 
     if (typeof dto.name !== 'undefined') {
       market.name = dto.name;
+    }
+
+    if (typeof dto.address !== 'undefined') {
+      market.address = dto.address;
     }
 
     if (typeof dto.status !== 'undefined') {

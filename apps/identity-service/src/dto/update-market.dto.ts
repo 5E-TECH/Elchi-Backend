@@ -20,6 +20,10 @@ export class UpdateMarketDto {
 
   @IsOptional()
   @IsString()
+  address?: string;
+
+  @IsOptional()
+  @IsString()
   @MinLength(4)
   password?: string;
 
