@@ -5,7 +5,7 @@ import {
 } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { FindOptionsWhere, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Group_type } from '@app/common';
 import { TelegramMarket } from './entities/telegram-market.entity';
@@ -144,7 +144,7 @@ export class NotificationServiceService {
       const page = query?.page && query.page > 0 ? query.page : 1;
       const limit = query?.limit && query.limit > 0 ? query.limit : 20;
 
-      const where: Partial<TelegramMarket> = { isDeleted: false };
+      const where: FindOptionsWhere<TelegramMarket> = { isDeleted: false };
 
       if (query?.market_id) {
         this.assertBigIntId(query.market_id, 'market_id');
@@ -289,7 +289,7 @@ export class NotificationServiceService {
       } else if (dto.market_id) {
         this.assertBigIntId(dto.market_id, 'market_id');
 
-        const where: Partial<TelegramMarket> = {
+        const where: FindOptionsWhere<TelegramMarket> = {
           market_id: dto.market_id,
           isDeleted: false,
         };
