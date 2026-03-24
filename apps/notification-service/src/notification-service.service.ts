@@ -1,13 +1,14 @@
 import {
   BadRequestException,
+  Inject,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { RpcException } from '@nestjs/microservices';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
-import { Group_type } from '@app/common';
+import { Group_type, rmqSend } from '@app/common';
 import { TelegramMarket } from './entities/telegram-market.entity';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { UpdateNotificationDto } from './dto/update-notification.dto';
@@ -19,6 +20,7 @@ export class NotificationServiceService {
     @InjectRepository(TelegramMarket)
     private readonly tgMarketRepo: Repository<TelegramMarket>,
     private readonly configService: ConfigService,
+    @Inject('IDENTITY') private readonly identityClient: ClientProxy,
   ) {}
 
   private successRes(data: unknown, code = 200, message = 'success') {
@@ -102,6 +104,83 @@ export class NotificationServiceService {
     }
 
     return token;
+  }
+
+  private parseGroupTokenText(text: string): { market_id: string; group_type: Group_type } {
+    const value = text.trim();
+    const withType = /^group_token-(\d+)-(create|cancel)$/i.exec(value);
+    if (withType) {
+      const [, marketId, groupTypeRaw] = withType;
+      const groupType =
+        groupTypeRaw.toLowerCase() === Group_type.CANCEL
+          ? Group_type.CANCEL
+          : Group_type.CREATE;
+      return { market_id: marketId, group_type: groupType };
+    }
+
+    const simple = /^group_token-(\d+)$/i.exec(value);
+    if (simple) {
+      return { market_id: simple[1], group_type: Group_type.CREATE };
+    }
+
+    throw new BadRequestException(
+      "Token format invalid. Use 'group_token-<marketId>' or 'group_token-<marketId>-<group_type>'",
+    );
+  }
+
+  async connectGroupByTokenText(text: string, groupId: string) {
+    try {
+      const parsed = this.parseGroupTokenText(text);
+      this.assertBigIntId(parsed.market_id, 'market_id');
+
+      const marketResponse = await rmqSend<any>(
+        this.identityClient,
+        { cmd: 'identity.market.find_by_id' },
+        { id: parsed.market_id },
+      ).catch(() => null);
+
+      const market = marketResponse?.data ?? marketResponse ?? null;
+      if (!market || !market.id) {
+        throw new NotFoundException('Market not found');
+      }
+
+      const existsByGroup = await this.tgMarketRepo.findOne({
+        where: { group_id: groupId, group_type: parsed.group_type, isDeleted: false },
+      });
+
+      if (existsByGroup) {
+        throw new BadRequestException('This group is already connected for this group type');
+      }
+
+      const existsByMarketType = await this.tgMarketRepo.findOne({
+        where: {
+          market_id: parsed.market_id,
+          group_type: parsed.group_type,
+          isDeleted: false,
+        },
+      });
+
+      if (existsByMarketType) {
+        existsByMarketType.group_id = groupId;
+        existsByMarketType.token = text;
+        const updated = await this.tgMarketRepo.save(existsByMarketType);
+        return this.successRes(updated, 200, `${market.name ?? 'Market'} uchun telegram group yangilandi`);
+      }
+
+      const created = this.tgMarketRepo.create({
+        market_id: parsed.market_id,
+        group_id: groupId,
+        group_type: parsed.group_type,
+        token: text,
+      });
+
+      const saved = await this.tgMarketRepo.save(created);
+      return this.successRes(saved, 201, `${market.name ?? 'Market'} uchun telegram group ulandi`);
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Noma’lum xatolik yuz berdi';
+      return { message };
+    }
   }
 
   async createTelegramMarket(dto: CreateNotificationDto) {
@@ -266,6 +345,24 @@ export class NotificationServiceService {
     }
 
     return body?.result ?? null;
+  }
+
+  async sendDirectToGroup(data: {
+    group_id: string;
+    message: string;
+    token?: string | null;
+    parse_mode?: string;
+    disable_web_page_preview?: boolean;
+  }) {
+    const resolvedToken = this.resolveBotToken(data.token);
+    await this.sendTelegramMessage({
+      token: resolvedToken,
+      group_id: data.group_id,
+      message: data.message,
+      parse_mode: data.parse_mode,
+      disable_web_page_preview: data.disable_web_page_preview,
+    });
+    return { success: true };
   }
 
   async sendNotification(dto: SendNotificationDto) {

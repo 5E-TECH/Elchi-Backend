@@ -76,6 +76,8 @@ export const notificationValidationSchema = Joi.object({
   DB_SCHEMA: Joi.string().default('notification_schema'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_NOTIFICATION_QUEUE: Joi.string().required(),
+  RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
+  TELEGRAM_BOT_TOKEN: Joi.string().optional(),
 });
 
 export const integrationValidationSchema = Joi.object({
