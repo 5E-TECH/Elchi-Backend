@@ -95,7 +95,7 @@ export class NotificationBotUpdateService implements OnModuleInit, OnModuleDestr
       await this.notificationService.sendDirectToGroup({
         group_id: groupId,
         message:
-          "Salom. Guruhni ulash uchun 'group_token-<marketId>' yoki 'group_token-<marketId>-<group_type>' yuboring.",
+          "Salom. Guruhni ulash uchun 'group_token-*' yuboring. Masalan: group_token-2 yoki group_token-2-create.",
       });
       return;
     }
@@ -103,7 +103,8 @@ export class NotificationBotUpdateService implements OnModuleInit, OnModuleDestr
     if (text === '/help') {
       await this.notificationService.sendDirectToGroup({
         group_id: groupId,
-        message: 'Mavjud komandalar: /start, /help va group_token-*',
+        message:
+          "Mavjud komandalar: /start, /help. Ulanish uchun: group_token-<marketId> yoki group_token-<marketId>-<group_type>.",
       });
       return;
     }

@@ -106,7 +106,9 @@ export class NotificationServiceService {
     return token;
   }
 
-  private parseGroupTokenText(text: string): { market_id: string; group_type: Group_type } {
+  private async parseGroupTokenText(
+    text: string,
+  ): Promise<{ market_id: string; group_type: Group_type }> {
     const value = text.trim();
     const withType = /^group_token-(\d+)-(create|cancel)$/i.exec(value);
     if (withType) {
@@ -123,14 +125,29 @@ export class NotificationServiceService {
       return { market_id: simple[1], group_type: Group_type.CREATE };
     }
 
+    // Flexible mode:
+    // Accept any `group_token-*` text and try to resolve market/group_type
+    // from previously saved token mapping (compatible with old behavior).
+    const bySavedToken = await this.tgMarketRepo.findOne({
+      where: { token: value, isDeleted: false },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (bySavedToken) {
+      return {
+        market_id: bySavedToken.market_id,
+        group_type: bySavedToken.group_type,
+      };
+    }
+
     throw new BadRequestException(
-      "Token format invalid. Use 'group_token-<marketId>' or 'group_token-<marketId>-<group_type>'",
+      "Token format invalid. Use 'group_token-<marketId>' or 'group_token-<marketId>-<group_type>' or previously saved token",
     );
   }
 
   async connectGroupByTokenText(text: string, groupId: string) {
     try {
-      const parsed = this.parseGroupTokenText(text);
+      const parsed = await this.parseGroupTokenText(text);
       this.assertBigIntId(parsed.market_id, 'market_id');
 
       const marketResponse = await rmqSend<any>(
