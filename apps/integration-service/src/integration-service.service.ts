@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Between, Repository } from 'typeorm';
 import { ExternalIntegration } from './entities/external-integration.entity';
 import { SyncQueue } from './entities/sync-queue.entity';
 import { SyncHistory } from './entities/sync-history.entity';
@@ -67,6 +67,16 @@ type StatusSyncConfig = {
   auth?: AuthConfig;
   external_search?: ExternalSearchConfig;
   external_update?: ExternalUpdateConfig;
+};
+
+type FindAllIntegrationsQuery = {
+  is_active?: boolean | string;
+  status?: string;
+  market_id?: string;
+  from_date?: string;
+  to_date?: string;
+  page?: number;
+  limit?: number;
 };
 
 @Injectable()
@@ -372,19 +382,78 @@ export class IntegrationServiceService {
     return successRes(saved, 201, 'integration created');
   }
 
-  async findAllIntegrations(query?: { is_active?: boolean; market_id?: string }) {
+  async findAllIntegrations(query?: FindAllIntegrationsQuery) {
     const where: Record<string, unknown> = { isDeleted: false };
-    if (typeof query?.is_active !== 'undefined') {
-      where.is_active = query.is_active;
+
+    const normalizedStatus = String(query?.status ?? '').toLowerCase();
+    if (normalizedStatus === 'active') {
+      where.is_active = true;
+    } else if (normalizedStatus === 'inactive') {
+      where.is_active = false;
+    } else if (typeof query?.is_active !== 'undefined') {
+      if (typeof query.is_active === 'boolean') {
+        where.is_active = query.is_active;
+      } else {
+        where.is_active = ['true', '1', 'yes'].includes(String(query.is_active).toLowerCase());
+      }
     }
+
     if (query?.market_id) {
       where.market_id = query.market_id;
     }
 
-    const rows = await this.integrationRepo.find({
+    const fromDate = query?.from_date ? new Date(query.from_date) : undefined;
+    const toDate = query?.to_date ? new Date(query.to_date) : undefined;
+    if (fromDate && Number.isNaN(fromDate.getTime())) {
+      this.badRequest('from_date is invalid');
+    }
+    if (toDate && Number.isNaN(toDate.getTime())) {
+      this.badRequest('to_date is invalid');
+    }
+    if (fromDate && toDate) {
+      if (fromDate > toDate) {
+        this.badRequest('from_date must be <= to_date');
+      }
+      where.createdAt = Between(fromDate, toDate);
+    } else if (fromDate) {
+      where.createdAt = Between(fromDate, new Date());
+    } else if (toDate) {
+      where.createdAt = Between(new Date(0), toDate);
+    }
+
+    const hasPagination = typeof query?.page !== 'undefined' || typeof query?.limit !== 'undefined';
+    const page = Math.max(1, Number(query?.page ?? 1));
+    const limit = Math.min(200, Math.max(1, Number(query?.limit ?? 10)));
+    if (!Number.isFinite(page) || !Number.isFinite(limit)) {
+      this.badRequest('page and limit must be numbers');
+    }
+
+    if (!hasPagination) {
+      const rows = await this.integrationRepo.find({
+        where,
+        order: { createdAt: 'DESC' },
+      });
+      return successRes(rows);
+    }
+
+    const [items, total] = await this.integrationRepo.findAndCount({
       where,
       order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
     });
+
+    const totalPages = Math.max(1, Math.ceil(total / limit));
+    const rows = {
+      items,
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages,
+      },
+    };
+
     return successRes(rows);
   }
 
