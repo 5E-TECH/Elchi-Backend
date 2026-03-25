@@ -12,7 +12,13 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { Roles as RoleEnum } from '@app/common';
-import { ApiBearerAuth, ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiBody,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import {
   IsBoolean,
   IsEnum,
@@ -212,10 +218,30 @@ export class IntegrationGatewayController {
   @Get()
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'List integrations' })
+  @ApiQuery({ name: 'is_active', required: false, type: String })
+  @ApiQuery({ name: 'status', required: false, enum: ['active', 'inactive'] })
+  @ApiQuery({ name: 'market_id', required: false, type: String })
+  @ApiQuery({ name: 'from_date', required: false, type: String, example: '2026-03-01' })
+  @ApiQuery({ name: 'to_date', required: false, type: String, example: '2026-03-31' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   findAll(
     @Query('is_active') is_active?: string,
+    @Query('status') status?: string,
     @Query('market_id') market_id?: string,
+    @Query('from_date') from_date?: string,
+    @Query('to_date') to_date?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
   ) {
+    const normalizedStatus = typeof status === 'string' ? status.toLowerCase() : undefined;
+    const statusToIsActive =
+      normalizedStatus === 'active'
+        ? true
+        : normalizedStatus === 'inactive'
+          ? false
+          : undefined;
+
     return this.integrationClient.send(
       { cmd: 'integration.find_all' },
       {
@@ -223,8 +249,13 @@ export class IntegrationGatewayController {
           is_active:
             typeof is_active === 'string'
               ? ['true', '1', 'yes'].includes(is_active.toLowerCase())
-              : undefined,
+              : statusToIsActive,
+          status: normalizedStatus,
           market_id,
+          from_date,
+          to_date,
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
         },
       },
     );
@@ -288,4 +319,3 @@ export class IntegrationGatewayController {
     );
   }
 }
-
