@@ -49,6 +49,7 @@ export class NotificationServiceController {
     data: {
       market_id?: string;
       group_type?: Group_type;
+      is_active?: boolean;
       page?: number;
       limit?: number;
     },
@@ -62,11 +63,28 @@ export class NotificationServiceController {
   // Backward compatibility for existing callers
   @MessagePattern({ cmd: 'notification.telegram.find_by_market' })
   findByMarket(
-    @Payload() data: { market_id?: string; group_type?: Group_type; page?: number; limit?: number },
+    @Payload()
+    data: {
+      market_id?: string;
+      group_type?: Group_type;
+      is_active?: boolean;
+      page?: number;
+      limit?: number;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
       this.notificationService.findAllTelegramMarkets(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'notification.telegram.find_one' })
+  findOneTelegramMarket(
+    @Payload() data: { id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.notificationService.findTelegramMarketById(data.id),
     );
   }
 

@@ -1,5 +1,5 @@
 import { Group_type } from '@app/common';
-import { IsEnum, IsOptional, IsString, Matches } from 'class-validator';
+import { IsBoolean, IsEnum, IsOptional, IsString, Matches } from 'class-validator';
 
 export class CreateNotificationDto {
   @IsString()
@@ -15,4 +15,8 @@ export class CreateNotificationDto {
   @IsOptional()
   @IsString()
   token?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  is_active?: boolean;
 }

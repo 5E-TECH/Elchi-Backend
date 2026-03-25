@@ -143,7 +143,7 @@ export class NotificationServiceService {
     }
 
     const bySavedToken = await this.tgMarketRepo.findOne({
-      where: { token: value, isDeleted: false },
+      where: { token: value, isDeleted: false, is_active: true },
       order: { createdAt: 'DESC' },
     });
     if (bySavedToken) {
@@ -193,6 +193,7 @@ export class NotificationServiceService {
       if (existsByMarketType) {
         existsByMarketType.group_id = groupId;
         existsByMarketType.token = text;
+        existsByMarketType.is_active = true;
         const updated = await this.tgMarketRepo.save(existsByMarketType);
         return this.successRes(updated, 200, `${market.name ?? 'Market'} uchun telegram group yangilandi`);
       }
@@ -202,6 +203,7 @@ export class NotificationServiceService {
         group_id: groupId,
         group_type: parsed.group_type,
         token: text,
+        is_active: true,
       });
 
       const saved = await this.tgMarketRepo.save(created);
@@ -234,6 +236,7 @@ export class NotificationServiceService {
         group_id: dto.group_id,
         group_type: dto.group_type,
         token: dto.token ?? null,
+        is_active: dto.is_active ?? true,
       });
 
       const saved = await this.tgMarketRepo.save(entity);
@@ -246,6 +249,7 @@ export class NotificationServiceService {
   async findAllTelegramMarkets(query?: {
     market_id?: string;
     group_type?: Group_type;
+    is_active?: boolean;
     page?: number;
     limit?: number;
   }) {
@@ -262,6 +266,10 @@ export class NotificationServiceService {
 
       if (query?.group_type) {
         where.group_type = query.group_type;
+      }
+
+      if (query?.is_active !== undefined) {
+        where.is_active = query.is_active;
       }
 
       const [items, total] = await this.tgMarketRepo.findAndCount({
@@ -284,6 +292,24 @@ export class NotificationServiceService {
         200,
         'Telegram markets',
       );
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
+  async findTelegramMarketById(id?: string) {
+    try {
+      this.assertBigIntId(id, 'id');
+
+      const item = await this.tgMarketRepo.findOne({
+        where: { id, isDeleted: false },
+      });
+
+      if (!item) {
+        throw new NotFoundException('Telegram market not found');
+      }
+
+      return this.successRes(item, 200, 'Telegram market');
     } catch (error) {
       this.toRpcError(error);
     }
@@ -312,6 +338,10 @@ export class NotificationServiceService {
 
       if (dto.token !== undefined) {
         target.token = dto.token || null;
+      }
+
+      if (dto.is_active !== undefined) {
+        target.is_active = dto.is_active;
       }
 
       const duplicate = await this.tgMarketRepo.findOne({
@@ -419,6 +449,7 @@ export class NotificationServiceService {
         const where: FindOptionsWhere<TelegramMarket> = {
           market_id: dto.market_id,
           isDeleted: false,
+          is_active: true,
         };
 
         if (dto.group_type) {
