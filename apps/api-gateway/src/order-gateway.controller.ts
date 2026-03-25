@@ -42,6 +42,11 @@ interface JwtUser {
   roles: string[];
 }
 
+class ReceiveExternalOrdersDto {
+  integration_id!: string;
+  orders!: any[];
+}
+
 @ApiTags('Orders')
 @Controller('orders')
 export class OrderGatewayController {
@@ -232,6 +237,25 @@ export class OrderGatewayController {
           },
         )
         .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  @Post('external/receive')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Receive orders from external integration payload' })
+  @ApiBody({ type: ReceiveExternalOrdersDto })
+  receiveExternalOrders(@Body() dto: ReceiveExternalOrdersDto) {
+    return firstValueFrom(
+      this.orderClient
+        .send({ cmd: 'order.receive_external' }, dto)
+        .pipe(timeout(15000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException('Order service response timeout');

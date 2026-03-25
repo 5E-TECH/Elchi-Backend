@@ -31,6 +31,7 @@ export class OrderServiceService {
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
+    @Inject('INTEGRATION') private readonly integrationClient: ClientProxy,
   ) {}
 
   private async syncOrderToSearch(order: Order): Promise<void> {
@@ -722,6 +723,7 @@ export class OrderServiceService {
     region_id?: string | null;
     address?: string | null;
     qr_code_token?: string | null;
+    external_id?: string | null;
     items?: Array<{ product_id: string; quantity?: number }>;
   }) {
     const order = this.orderRepo.create({
@@ -741,6 +743,7 @@ export class OrderServiceService {
       region_id: dto.region_id ?? null,
       address: dto.address ?? null,
       qr_code_token: dto.qr_code_token ?? null,
+      external_id: dto.external_id ?? null,
       isDeleted: false,
     });
 
@@ -915,6 +918,118 @@ export class OrderServiceService {
     return token;
   }
 
+  private getFieldValue(obj: any, fieldPath?: string | null): any {
+    if (!obj || !fieldPath) return undefined;
+    return fieldPath.split('.').reduce((acc, key) => acc?.[key], obj);
+  }
+
+  private async getIntegrationById(integrationId: string): Promise<Record<string, any>> {
+    const response = await rmqSend<{ data?: Record<string, any> }>(
+      this.integrationClient,
+      { cmd: 'integration.find_by_id' },
+      { id: integrationId },
+    ).catch(() => ({ data: undefined }));
+
+    const integration = response?.data;
+    if (!integration) {
+      this.notFound('Integration not found');
+    }
+    return integration;
+  }
+
+  private async getDefaultDistrictId(): Promise<string> {
+    const response = await rmqSend<{ data?: { items?: Array<{ id: string }> } | Array<{ id: string }> }>(
+      this.logisticsClient,
+      { cmd: 'logistics.district.find_all' },
+      { query: { page: 1, limit: 1 } },
+    ).catch(() => ({ data: [] }));
+
+    const rows = Array.isArray(response?.data)
+      ? response.data
+      : (response?.data as any)?.items ?? [];
+
+    const districtId = rows?.[0]?.id ? String(rows[0].id) : '';
+    if (!districtId) {
+      this.notFound('No district found for external order import');
+    }
+    return districtId;
+  }
+
+  private async resolveDistrictId(externalDistrictValue: unknown, fallbackDistrictId: string): Promise<string> {
+    const raw = externalDistrictValue == null ? '' : String(externalDistrictValue).trim();
+    if (!raw) return fallbackDistrictId;
+
+    const bySato = await rmqSend<{ data?: { id?: string } }>(
+      this.logisticsClient,
+      { cmd: 'logistics.district.find_by_sato' },
+      { satoCode: raw },
+    ).catch(() => ({ data: undefined }));
+    if (bySato?.data?.id) {
+      return String(bySato.data.id);
+    }
+
+    const byId = await rmqSend<{ data?: { id?: string } }>(
+      this.logisticsClient,
+      { cmd: 'logistics.district.find_by_id' },
+      { id: raw },
+    ).catch(() => ({ data: undefined }));
+    if (byId?.data?.id) {
+      return String(byId.data.id);
+    }
+
+    return fallbackDistrictId;
+  }
+
+  private async queueExternalStatusSync(order: Order, action: 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting', old_status: string, new_status: string) {
+    if (!order.external_id || !order.operator?.startsWith('external_')) {
+      return;
+    }
+
+    await rmqSend(
+      this.integrationClient,
+      { cmd: 'integration.sync.enqueue' },
+      {
+        order_id: order.id,
+        external_order_id: order.external_id,
+        operator: order.operator,
+        action,
+        old_status,
+        new_status,
+      },
+    ).catch(() => undefined);
+  }
+
+  private resolveSyncAction(oldStatus: string, newStatus: string): 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting' | null {
+    if (newStatus === Order_status.CANCELLED) {
+      return 'canceled';
+    }
+
+    if (newStatus === Order_status.PAID || newStatus === Order_status.PARTLY_PAID) {
+      return 'paid';
+    }
+
+    if (newStatus === Order_status.SOLD) {
+      return 'sold';
+    }
+
+    if (newStatus === Order_status.WAITING) {
+      if (
+        [
+          Order_status.CANCELLED,
+          Order_status.CLOSED,
+          Order_status.SOLD,
+          Order_status.PAID,
+          Order_status.PARTLY_PAID,
+        ].includes(oldStatus as Order_status)
+      ) {
+        return 'rollback';
+      }
+      return 'waiting';
+    }
+
+    return null;
+  }
+
   async receiveNewOrders(orderIds: string[], search?: string) {
     const uniqueOrderIds = Array.from(new Set((orderIds ?? []).filter(Boolean)));
     if (!uniqueOrderIds.length) {
@@ -1065,6 +1180,133 @@ export class OrderServiceService {
     );
 
     return { statusCode: 200, message: 'Orders received', data: {} };
+  }
+
+  async receiveExternalOrders(dto: { integration_id: string; orders: any[] }) {
+    const integration = await this.getIntegrationById(String(dto.integration_id));
+    if (integration?.is_active === false) {
+      this.badRequest('Integration is inactive');
+    }
+
+    const fieldMapping = (integration?.field_mapping ?? {}) as Record<string, string>;
+    const marketId = integration?.market_id ? String(integration.market_id) : '';
+    if (!marketId) {
+      this.badRequest('integration.market_id is required');
+    }
+
+    const items = Array.isArray(dto.orders) ? dto.orders : [];
+    if (!items.length) {
+      this.badRequest('orders is required');
+    }
+
+    const fallbackDistrictId = await this.getDefaultDistrictId();
+    const created: Array<{ id: string; external_id: string | null; status: Order_status }> = [];
+    const skipped: Array<{ external_id: string | null; reason: string }> = [];
+
+    for (const ext of items) {
+      const externalIdRaw = this.getFieldValue(ext, fieldMapping.id_field ?? 'id');
+      const externalId = externalIdRaw == null ? null : String(externalIdRaw);
+      const operator = `external_${integration.slug}`;
+
+      if (externalId) {
+        const existing = await this.orderRepo.findOne({
+          where: {
+            external_id: externalId,
+            operator,
+            isDeleted: false,
+          },
+        });
+        if (existing) {
+          skipped.push({ external_id: externalId, reason: 'already_exists' });
+          continue;
+        }
+      }
+
+      const customerName = String(
+        this.getFieldValue(ext, fieldMapping.customer_name_field ?? 'full_name') ?? 'External customer',
+      );
+      const phoneRaw = String(this.getFieldValue(ext, fieldMapping.phone_field ?? 'phone') ?? '');
+      const normalizedDigits = phoneRaw.replace(/\D/g, '');
+      const phone =
+        normalizedDigits.length === 12 && normalizedDigits.startsWith('998')
+          ? `+${normalizedDigits}`
+          : normalizedDigits.length === 9
+            ? `+998${normalizedDigits}`
+            : phoneRaw;
+      if (!phone?.trim()) {
+        skipped.push({ external_id: externalId, reason: 'phone_missing' });
+        continue;
+      }
+
+      const districtExternal = this.getFieldValue(ext, fieldMapping.district_code_field ?? 'district');
+      const districtId = await this.resolveDistrictId(districtExternal, fallbackDistrictId);
+      const regionExternal = this.getFieldValue(ext, fieldMapping.region_code_field ?? 'region');
+
+      const customerResponse = await rmqSend<{ data?: { id?: string } }>(
+        this.identityClient,
+        { cmd: 'identity.customer.create' },
+        {
+          dto: {
+            market_id: marketId,
+            name: customerName,
+            phone_number: phone,
+            district_id: districtId,
+            extra_number: this.getFieldValue(ext, fieldMapping.extra_phone_field ?? 'additional_phone') ?? undefined,
+            address: this.getFieldValue(ext, fieldMapping.address_field ?? 'address') ?? undefined,
+          },
+        },
+      );
+
+      const customerId = customerResponse?.data?.id ? String(customerResponse.data.id) : '';
+      if (!customerId) {
+        skipped.push({ external_id: externalId, reason: 'customer_create_failed' });
+        continue;
+      }
+
+      const totalPrice = Number(this.getFieldValue(ext, fieldMapping.total_price_field ?? 'total_price') ?? 0);
+      const deliveryPrice = Number(
+        this.getFieldValue(ext, fieldMapping.delivery_price_field ?? 'delivery_price') ?? 0,
+      );
+      const finalPrice = Math.max(totalPrice, 0) + Math.max(deliveryPrice, 0);
+      const qrCode = this.getFieldValue(ext, fieldMapping.qr_code_field ?? 'qr_code') ?? this.generateCustomToken();
+
+      const createdOrder = await this.create({
+        market_id: marketId,
+        customer_id: customerId,
+        where_deliver: Where_deliver.CENTER,
+        total_price: finalPrice,
+        to_be_paid: 0,
+        paid_amount: 0,
+        status: Order_status.RECEIVED,
+        comment: this.getFieldValue(ext, fieldMapping.comment_field ?? 'comment') ?? null,
+        operator,
+        district_id: districtId,
+        region_id: regionExternal == null ? null : String(regionExternal),
+        address: this.getFieldValue(ext, fieldMapping.address_field ?? 'address') ?? null,
+        qr_code_token: qrCode == null ? null : String(qrCode),
+        external_id: externalId,
+      });
+
+      created.push({
+        id: createdOrder.id,
+        external_id: createdOrder.external_id ?? null,
+        status: createdOrder.status,
+      });
+    }
+
+    return {
+      statusCode: 201,
+      message: `${created.length} ta external order qabul qilindi`,
+      data: {
+        integration: {
+          id: integration.id,
+          slug: integration.slug,
+          name: integration.name,
+        },
+        created,
+        skipped,
+      },
+    };
   }
 
   async sellOrder(
@@ -1723,6 +1965,7 @@ export class OrderServiceService {
       region_id?: string | null;
       address?: string | null;
       qr_code_token?: string | null;
+      external_id?: string | null;
       items?: Array<{ product_id: string; quantity?: number }>;
     },
   ) {
@@ -1748,10 +1991,12 @@ export class OrderServiceService {
       region_id?: string | null;
       address?: string | null;
       qr_code_token?: string | null;
+      external_id?: string | null;
       items?: Array<{ product_id: string; quantity?: number }>;
     },
   ) {
     const order = await this.findById(id);
+    const oldStatus = order.status;
 
     Object.assign(order, {
       market_id: dto.market_id ?? order.market_id,
@@ -1776,6 +2021,10 @@ export class OrderServiceService {
       region_id: dto.region_id ?? order.region_id,
       address: dto.address ?? order.address,
       qr_code_token: dto.qr_code_token ?? order.qr_code_token,
+      external_id:
+        typeof dto.external_id !== 'undefined'
+          ? dto.external_id
+          : order.external_id,
     });
 
     if (dto.items) {
@@ -1792,6 +2041,13 @@ export class OrderServiceService {
     }
 
     const updated = await this.findById(order.id);
+    const newStatus = updated.status;
+    if (oldStatus !== newStatus) {
+      const action = this.resolveSyncAction(oldStatus, newStatus);
+      if (action) {
+        void this.queueExternalStatusSync(updated, action, oldStatus, newStatus);
+      }
+    }
     void this.syncOrderToSearch(updated);
     return updated;
   }

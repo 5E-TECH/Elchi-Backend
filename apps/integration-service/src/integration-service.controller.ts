@@ -33,42 +33,82 @@ export class IntegrationServiceController {
   // --- ExternalIntegration ---
   @MessagePattern({ cmd: 'integration.create' })
   create(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.integrationService.createIntegration(data?.dto ?? data),
+    );
   }
 
   @MessagePattern({ cmd: 'integration.find_all' })
   findAll(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.integrationService.findAllIntegrations(data?.query ?? data),
+    );
   }
 
   @MessagePattern({ cmd: 'integration.find_by_id' })
   findById(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.integrationService.findIntegrationById(String(data?.id)),
+    );
   }
 
   @MessagePattern({ cmd: 'integration.update' })
   update(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.integrationService.updateIntegration(String(data?.id), data?.dto ?? {}),
+    );
   }
 
   @MessagePattern({ cmd: 'integration.delete' })
   remove(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.integrationService.deleteIntegration(String(data?.id)),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.external.request' })
+  externalRequest(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.externalRequest(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.external.search_by_qr' })
+  searchByQr(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.searchByQr(data),
+    );
   }
 
   // --- Sync ---
   @MessagePattern({ cmd: 'integration.sync.trigger' })
   triggerSync(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () => ({
+      message: 'sync trigger hook is reserved',
+    }));
   }
 
   @MessagePattern({ cmd: 'integration.sync.history' })
   syncHistory(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.integrationService.getSyncHistory(
+        Number(data?.limit ?? 50),
+        data?.integration_id,
+      ),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.sync.enqueue' })
+  enqueueSync(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.enqueueSync(data),
+    );
   }
 
   @MessagePattern({ cmd: 'integration.sync.queue_status' })
   queueStatus(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.integrationService.getQueueStatus(),
+    );
   }
 }

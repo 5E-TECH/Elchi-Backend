@@ -50,6 +50,7 @@ export class OrderServiceController {
         region_id?: string | null;
         address?: string | null;
         qr_code_token?: string | null;
+        external_id?: string | null;
         items?: Array<{ product_id: string; quantity?: number }>;
       };
     },
@@ -207,6 +208,7 @@ export class OrderServiceController {
         region_id?: string | null;
         address?: string | null;
         qr_code_token?: string | null;
+        external_id?: string | null;
         items?: Array<{ product_id: string; quantity?: number }>;
       };
     },
@@ -239,6 +241,7 @@ export class OrderServiceController {
         region_id?: string | null;
         address?: string | null;
         qr_code_token?: string | null;
+        external_id?: string | null;
         items?: Array<{ product_id: string; quantity?: number }>;
       };
     },
@@ -246,6 +249,16 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.updateFull(data.id, data.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.receive_external' })
+  receiveExternalOrders(
+    @Payload() data: { integration_id: string; orders: any[] },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.receiveExternalOrders(data),
     );
   }
 
