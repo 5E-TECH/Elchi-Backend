@@ -6,7 +6,8 @@
   "private": true,
   "license": "UNLICENSED",
   "scripts": {
-    "build": "nest build",
+    "build": "npm run build:all",
+    "build:all": "nest build api-gateway && nest build identity-service && nest build order-service && nest build catalog-service && nest build logistics-service && nest build finance-service && nest build notification-service && nest build integration-service && nest build analytics-service && nest build branch-service && nest build investor-service && nest build file-service && nest build c2c-service && nest build search-service",
     "format": "prettier --write \"apps/**/*.ts\" \"libs/**/*.ts\"",
     "start:gateway": "nest start api-gateway --watch",
     "start:identity": "nest start identity-service --watch",
