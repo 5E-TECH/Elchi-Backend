@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
   IsEnum,
@@ -29,6 +29,12 @@ export class CreateTelegramMarketRequestDto {
   @IsOptional()
   @IsString()
   token?: string;
+
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  is_active?: boolean;
 }
 
 export class FindTelegramMarketsQueryDto {
@@ -42,6 +48,18 @@ export class FindTelegramMarketsQueryDto {
   @IsOptional()
   @IsEnum(Group_type)
   group_type?: Group_type;
+
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @Transform(({ value }) =>
+    value === true || value === 'true'
+      ? true
+      : value === false || value === 'false'
+        ? false
+        : value,
+  )
+  @IsBoolean()
+  is_active?: boolean;
 
   @ApiPropertyOptional({ example: 1 })
   @IsOptional()
@@ -85,6 +103,12 @@ export class UpdateTelegramMarketRequestDto {
   @IsOptional()
   @IsString()
   token?: string;
+
+  @ApiPropertyOptional({ example: false })
+  @IsOptional()
+  @Type(() => Boolean)
+  @IsBoolean()
+  is_active?: boolean;
 }
 
 export class DeleteTelegramMarketRequestDto {

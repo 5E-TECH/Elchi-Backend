@@ -5,6 +5,7 @@ import {
   GatewayTimeoutException,
   Get,
   Inject,
+  Param,
   Patch,
   Post,
   Query,
@@ -75,6 +76,15 @@ export class NotificationGatewayController {
   @ApiQuery({ name: 'limit', required: false, type: Number })
   findAllTelegramMarkets(@Query() query: FindTelegramMarketsQueryDto) {
     return this.send({ cmd: 'notification.telegram.find_all' }, query);
+  }
+
+  @Get('telegram/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Find one telegram market config by id' })
+  findOneTelegramMarket(@Param('id') id: string) {
+    return this.send({ cmd: 'notification.telegram.find_one' }, { id });
   }
 
   @Patch('telegram')

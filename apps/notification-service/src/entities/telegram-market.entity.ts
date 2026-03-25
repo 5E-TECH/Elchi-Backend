@@ -18,4 +18,7 @@ export class TelegramMarket extends BaseEntity {
 
   @Column({ type: 'varchar', nullable: true })
   token!: string | null;
+
+  @Column({ type: 'boolean', default: true })
+  is_active!: boolean;
 }
