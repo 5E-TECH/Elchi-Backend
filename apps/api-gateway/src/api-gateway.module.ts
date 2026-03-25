@@ -21,6 +21,7 @@ import { FinanceGatewayController } from './finance-gateway.controller';
 import { AnalyticsGatewayController } from './analytics-gateway.controller';
 import { NotificationGatewayController } from './notification-gateway.controller';
 import { IntegrationGatewayController } from './integration-gateway.controller';
+import { InvestorGatewayController } from './investor-gateway.controller';
 import type { StringValue } from 'ms';
 
 @Module({
@@ -70,6 +71,7 @@ import type { StringValue } from 'ms';
     FinanceGatewayController,
     NotificationGatewayController,
     IntegrationGatewayController,
+    InvestorGatewayController,
     AnalyticsGatewayController,
     HealthController,
     // TODO: Qolgan gateway controllerlarni qo'shish

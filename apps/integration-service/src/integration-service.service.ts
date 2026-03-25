@@ -238,6 +238,48 @@ export class IntegrationServiceService {
     this.tokenCache.delete(integrationId);
   }
 
+  private async fetchMarketsByIds(marketIds: string[]): Promise<Record<string, any>> {
+    if (!marketIds.length) {
+      return {};
+    }
+
+    try {
+      const rows: any[] = await this.integrationRepo.manager.query(
+        `
+          SELECT *
+          FROM identity_schema.admins
+          WHERE id::text = ANY($1::text[])
+            AND "isDeleted" = false
+            AND role = 'market'
+        `,
+        [marketIds],
+      );
+
+      return rows.reduce<Record<string, any>>((acc, row) => {
+        acc[String(row.id)] = row;
+        return acc;
+      }, {});
+    } catch {
+      return {};
+    }
+  }
+
+  private async attachMarkets<T extends { market_id?: string | null }>(rows: T[]): Promise<Array<T & { market: any | null }>> {
+    const marketIds = Array.from(
+      new Set(
+        rows
+          .map((row) => (row.market_id ? String(row.market_id) : null))
+          .filter((id): id is string => Boolean(id)),
+      ),
+    );
+    const marketsById = await this.fetchMarketsByIds(marketIds);
+
+    return rows.map((row) => ({
+      ...row,
+      market: row.market_id ? marketsById[String(row.market_id)] ?? null : null,
+    }));
+  }
+
   private buildExternalUrl(baseUrl: string, endpoint?: string): string {
     if (!endpoint || !endpoint.trim()) {
       this.badRequest('External endpoint is required');
@@ -379,7 +421,8 @@ export class IntegrationServiceService {
     });
 
     const saved = await this.integrationRepo.save(entity);
-    return successRes(saved, 201, 'integration created');
+    const [enriched] = await this.attachMarkets([saved as any]);
+    return successRes(enriched, 201, 'integration created');
   }
 
   async findAllIntegrations(query?: FindAllIntegrationsQuery) {
@@ -441,7 +484,7 @@ export class IntegrationServiceService {
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
-    });
+    })
 
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const rows = {
@@ -462,7 +505,8 @@ export class IntegrationServiceService {
     if (!row) {
       this.notFound('integration not found');
     }
-    return successRes(row);
+    const [enriched] = await this.attachMarkets([row as any]);
+    return successRes(enriched);
   }
 
   async updateIntegration(id: string, dto: Partial<ExternalIntegration>) {
@@ -482,7 +526,8 @@ export class IntegrationServiceService {
 
     Object.assign(row, dto);
     const saved = await this.integrationRepo.save(row);
-    return successRes(saved, 200, 'integration updated');
+    const [enriched] = await this.attachMarkets([saved as any]);
+    return successRes(enriched, 200, 'integration updated');
   }
 
   async deleteIntegration(id: string) {
