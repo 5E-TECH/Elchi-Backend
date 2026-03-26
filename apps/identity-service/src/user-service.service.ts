@@ -4,6 +4,7 @@ import { ConfigService } from '@nestjs/config';
 import { Brackets, In, Repository } from 'typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { lastValueFrom, timeout } from 'rxjs';
+import { randomBytes } from 'crypto';
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import { User } from './entities/user.entity';
 import { CreateAdminDto } from './dto/create-admin.dto';
@@ -267,7 +268,7 @@ export class UserServiceService implements OnModuleInit {
   }
 
   private generateGroupToken(): string {
-    return `group_token-${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36).slice(-6)}`;
+    return `group_token-${randomBytes(16).toString('hex')}`;
   }
 
   async onModuleInit() {
@@ -842,6 +843,11 @@ export class UserServiceService implements OnModuleInit {
       throw new RpcException(errorRes('market_tg_token is required', 400));
     }
 
+    // Backward compatible, but still restricts to expected token-like shape.
+    if (!/^group_token-[a-z0-9]{14,64}$/i.test(token)) {
+      throw new RpcException(errorRes('market_tg_token format is invalid', 400));
+    }
+
     const market = await this.users.findOne({
       where: {
         market_tg_token: token,
@@ -858,6 +864,28 @@ export class UserServiceService implements OnModuleInit {
       success: true,
       data: this.sanitize(market),
     };
+  }
+
+  async rotateMarketTelegramToken(id: string) {
+    const market = await this.users.findOne({
+      where: { id, role: Roles.MARKET, isDeleted: false },
+    });
+
+    if (!market) {
+      this.notFound('Market topilmadi');
+    }
+
+    market.market_tg_token = this.generateGroupToken();
+    const saved = await this.users.save(market);
+
+    return successRes(
+      {
+        id: saved.id,
+        market_tg_token: saved.market_tg_token,
+      },
+      200,
+      'Market telegram token yangilandi',
+    );
   }
 
   async findMarketsByIds(ids: string[]) {
