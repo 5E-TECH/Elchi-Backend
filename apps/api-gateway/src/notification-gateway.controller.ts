@@ -15,6 +15,7 @@ import { ClientProxy } from '@nestjs/microservices';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiParam,
   ApiOperation,
   ApiQuery,
   ApiTags,
@@ -34,7 +35,7 @@ import {
 } from './dto/notification.swagger.dto';
 
 @ApiTags('Notification')
-@Controller('notification')
+@Controller(['notification', 'notifications'])
 export class NotificationGatewayController {
   constructor(@Inject('NOTIFICATION') private readonly notificationClient: ClientProxy) {}
 
@@ -53,6 +54,54 @@ export class NotificationGatewayController {
   @ApiOperation({ summary: 'Notification service health check' })
   health() {
     return this.send({ cmd: 'notification.health' }, {});
+  }
+
+  @Get()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'GET /notifications - ro‘yxat' })
+  @ApiQuery({ name: 'market_id', required: false })
+  @ApiQuery({ name: 'group_type', required: false })
+  @ApiQuery({ name: 'is_active', required: false, type: Boolean })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  listNotifications(@Query() query: FindTelegramMarketsQueryDto) {
+    return this.send({ cmd: 'notification.telegram.find_all' }, query);
+  }
+
+  @Post()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'POST /notifications - yaratish' })
+  @ApiBody({ type: CreateTelegramMarketRequestDto })
+  createNotification(@Body() dto: CreateTelegramMarketRequestDto) {
+    return this.send({ cmd: 'notification.telegram.create' }, dto);
+  }
+
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'PATCH /notifications/:id - yangilash' })
+  @ApiParam({ name: 'id', example: '10' })
+  @ApiBody({ type: UpdateTelegramMarketRequestDto })
+  updateNotificationById(
+    @Param('id') id: string,
+    @Body() dto: UpdateTelegramMarketRequestDto,
+  ) {
+    return this.send({ cmd: 'notification.telegram.update' }, { ...dto, id });
+  }
+
+  @Delete(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'DELETE /notifications/:id - o‘chirish' })
+  @ApiParam({ name: 'id', example: '10' })
+  deleteNotificationById(@Param('id') id: string) {
+    return this.send({ cmd: 'notification.telegram.delete' }, { id });
   }
 
   @Post('telegram')
