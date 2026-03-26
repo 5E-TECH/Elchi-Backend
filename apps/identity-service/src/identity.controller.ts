@@ -21,6 +21,7 @@ import type {
   FindMarketByIdPayload,
   FindMarketByTgTokenPayload,
   FindMarketsByIdsPayload,
+  RotateMarketTgTokenPayload,
   UpdateMarketPayload,
 } from './contracts/market.payloads';
 
@@ -212,6 +213,16 @@ export class IdentityController {
   ) {
     return this.executeAndAck(context, () =>
       this.userService.findMarketByTelegramToken(payload.market_tg_token),
+    );
+  }
+
+  @MessagePattern({ cmd: 'identity.market.rotate_tg_token' })
+  rotateMarketTgToken(
+    @Payload() payload: RotateMarketTgTokenPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.rotateMarketTelegramToken(payload.id),
     );
   }
 

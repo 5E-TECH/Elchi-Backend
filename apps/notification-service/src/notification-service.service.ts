@@ -128,9 +128,14 @@ export class NotificationServiceService {
       return { market_id: simple[1], group_type: Group_type.CREATE };
     }
 
-    // Flexible mode:
-    // Accept any `group_token-*` text and try to resolve market/group_type
-    // from previously saved token mapping (compatible with old behavior).
+    // Flexible mode (token-based): keep backward compatibility but only for
+    // expected token-like pattern, to avoid accepting arbitrary text.
+    if (!/^group_token-[a-z0-9]{14,64}$/i.test(value)) {
+      throw new BadRequestException(
+        "Token format invalid. Use 'group_token-<marketId>' or 'group_token-<marketId>-<group_type>' or valid saved token",
+      );
+    }
+
     const marketByTokenResponse = await rmqSend<any>(
       this.identityClient,
       { cmd: 'identity.market.find_by_tg_token' },
@@ -156,9 +161,23 @@ export class NotificationServiceService {
       };
     }
 
-    throw new BadRequestException(
-      "Token format invalid. Use 'group_token-<marketId>' or 'group_token-<marketId>-<group_type>' or previously saved token",
-    );
+    throw new BadRequestException('Token topilmadi yoki yaroqsiz');
+  }
+
+  private async rotateMarketTokenAfterConnect(marketId: string) {
+    try {
+      await rmqSend(
+        this.identityClient,
+        { cmd: 'identity.market.rotate_tg_token' },
+        { id: marketId },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `Connected, but token rotation failed for market_id=${marketId}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+    }
   }
 
   async connectGroupByTokenText(text: string, groupId: string) {
@@ -198,6 +217,7 @@ export class NotificationServiceService {
         existsByMarketType.token = text;
         existsByMarketType.is_active = true;
         const updated = await this.tgMarketRepo.save(existsByMarketType);
+        await this.rotateMarketTokenAfterConnect(parsed.market_id);
         return this.successRes(updated, 200, `${market.name ?? 'Market'} uchun telegram group yangilandi`);
       }
 
@@ -210,10 +230,12 @@ export class NotificationServiceService {
       });
 
       const saved = await this.tgMarketRepo.save(created);
+      await this.rotateMarketTokenAfterConnect(parsed.market_id);
       return this.successRes(saved, 201, `${market.name ?? 'Market'} uchun telegram group ulandi`);
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Noma’lum xatolik yuz berdi';
+      this.logger.warn(`connectGroupByTokenText failed: ${message}`);
       return { message };
     }
   }

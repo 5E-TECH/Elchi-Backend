@@ -30,3 +30,7 @@ export interface FindAllMarketsPayload {
 export interface FindMarketByTgTokenPayload {
   market_tg_token: string;
 }
+
+export interface RotateMarketTgTokenPayload {
+  id: string;
+}
