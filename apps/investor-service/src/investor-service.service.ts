@@ -67,6 +67,13 @@ export class InvestorServiceService {
     return parsed;
   }
 
+  private validateUzPhoneNumber(phone: string): void {
+    const normalized = String(phone).trim();
+    if (!/^\+998\d{9}$/.test(normalized)) {
+      this.badRequest("phone_number must be in '+998XXXXXXXXX' format");
+    }
+  }
+
   private async getInvestorOrThrow(id: string): Promise<Investor> {
     const investor = await this.investorRepo.findOne({
       where: { id: String(id), isDeleted: false },
@@ -94,11 +101,16 @@ export class InvestorServiceService {
       this.badRequest('email already exists');
     }
 
+    const phoneNumber = dto.phone_number ? String(dto.phone_number).trim() : null;
+    if (phoneNumber) {
+      this.validateUzPhoneNumber(phoneNumber);
+    }
+
     const investor = this.investorRepo.create({
       user_id: dto.user_id ? String(dto.user_id) : '0',
       name,
       email,
-      phone_number: dto.phone_number ? String(dto.phone_number).trim() : null,
+      phone_number: phoneNumber,
       status: (dto.status as Status) ?? Status.ACTIVE,
       description: dto.description ? String(dto.description).trim() : null,
     });
@@ -212,7 +224,11 @@ export class InvestorServiceService {
       investor.name = name;
     }
     if (dto.phone_number !== undefined) {
-      investor.phone_number = dto.phone_number ? String(dto.phone_number).trim() : null;
+      const phoneNumber = dto.phone_number ? String(dto.phone_number).trim() : null;
+      if (phoneNumber) {
+        this.validateUzPhoneNumber(phoneNumber);
+      }
+      investor.phone_number = phoneNumber;
     }
     if (dto.description !== undefined) {
       investor.description = dto.description ? String(dto.description).trim() : null;
