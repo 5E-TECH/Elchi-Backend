@@ -57,7 +57,7 @@ export class AnalyticsGatewayController {
   @ApiOperation({ summary: 'Revenue stats by period' })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
-  @ApiQuery({ name: 'period', required: false, enum: ['daily'] })
+  @ApiQuery({ name: 'period', required: false, enum: ['daily', 'weekly', 'monthly', 'yearly'] })
   getRevenue(
     @Req() req: { user: JwtUser },
     @Query('startDate') startDate?: string,

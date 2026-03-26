@@ -14,6 +14,8 @@ interface RevenueFilter {
   period?: string;
 }
 
+type RevenuePeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
+
 @Injectable()
 export class AnalyticsServiceService {
   constructor(@Inject('ORDER') private readonly orderClient: ClientProxy) {}
@@ -62,6 +64,14 @@ export class AnalyticsServiceService {
 
   private roleSet(requester?: RequesterContext) {
     return new Set((requester?.roles ?? []).map((role) => String(role).toLowerCase()));
+  }
+
+  private normalizeRevenuePeriod(period?: string): RevenuePeriod {
+    const normalized = String(period ?? 'daily').toLowerCase();
+    if (normalized === 'daily' || normalized === 'weekly' || normalized === 'monthly' || normalized === 'yearly') {
+      return normalized;
+    }
+    return 'daily';
   }
 
   async getDashboard(
@@ -157,7 +167,7 @@ export class AnalyticsServiceService {
     filter: RevenueFilter,
   ) {
     const normalized = this.normalizeDateRange(filter);
-    const period = filter.period === 'daily' || !filter.period ? 'daily' : filter.period;
+    const period = this.normalizeRevenuePeriod(filter.period);
 
     const revenue = await rmqSend(
       this.orderClient,

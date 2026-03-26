@@ -171,6 +171,80 @@ export class OrderServiceService {
     }).format(date).replace('/', '.').replace('/', '.');
   }
 
+  private normalizeRevenuePeriod(period?: string): 'daily' | 'weekly' | 'monthly' | 'yearly' {
+    const normalized = String(period ?? 'daily').toLowerCase();
+    if (normalized === 'daily' || normalized === 'weekly' || normalized === 'monthly' || normalized === 'yearly') {
+      return normalized;
+    }
+    throw new RpcException({ statusCode: 400, message: 'period must be one of: daily, weekly, monthly, yearly' });
+  }
+
+  private periodStart(date: Date, period: 'daily' | 'weekly' | 'monthly' | 'yearly'): Date {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+
+    if (period === 'daily') return d;
+    if (period === 'monthly') {
+      d.setDate(1);
+      return d;
+    }
+    if (period === 'yearly') {
+      d.setMonth(0, 1);
+      return d;
+    }
+
+    // weekly (week starts on Monday)
+    const day = d.getDay(); // 0=Sun..6=Sat
+    const diffToMonday = day === 0 ? -6 : 1 - day;
+    d.setDate(d.getDate() + diffToMonday);
+    return d;
+  }
+
+  private nextPeriodStart(
+    date: Date,
+    period: 'daily' | 'weekly' | 'monthly' | 'yearly',
+  ): Date {
+    const d = new Date(date);
+    if (period === 'daily') d.setDate(d.getDate() + 1);
+    else if (period === 'weekly') d.setDate(d.getDate() + 7);
+    else if (period === 'monthly') d.setMonth(d.getMonth() + 1);
+    else d.setFullYear(d.getFullYear() + 1);
+    return d;
+  }
+
+  private periodKey(date: Date, period: 'daily' | 'weekly' | 'monthly' | 'yearly'): string {
+    const d = this.periodStart(date, period);
+    if (period === 'daily') {
+      return this.dateKey(d);
+    }
+    if (period === 'weekly') {
+      return `W:${this.dateKey(d)}`;
+    }
+    if (period === 'monthly') {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      return `M:${y}-${m}`;
+    }
+    return `Y:${d.getFullYear()}`;
+  }
+
+  private periodLabel(date: Date, period: 'daily' | 'weekly' | 'monthly' | 'yearly'): string {
+    const d = this.periodStart(date, period);
+    if (period === 'daily') {
+      return this.dateLabel(d);
+    }
+    if (period === 'weekly') {
+      const end = new Date(d);
+      end.setDate(end.getDate() + 6);
+      return `${this.dateLabel(d)}-${this.dateLabel(end)}`;
+    }
+    if (period === 'monthly') {
+      const m = String(d.getMonth() + 1).padStart(2, '0');
+      return `${m}.${d.getFullYear()}`;
+    }
+    return String(d.getFullYear());
+  }
+
   private generateSaleComment(
     orderComment?: string | null,
     dtoComment?: string | null,
@@ -2604,10 +2678,7 @@ export class OrderServiceService {
   }
 
   async getRevenueStats(startDate?: string, endDate?: string, period = 'daily') {
-    if (period !== 'daily') {
-      throw new RpcException({ statusCode: 400, message: 'Only daily period is supported' });
-    }
-
+    const normalizedPeriod = this.normalizeRevenuePeriod(period);
     const { start, end } = this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
     const startMs = String(start.getTime());
@@ -2622,26 +2693,24 @@ export class OrderServiceService {
       .getMany();
 
     const buckets = new Map<string, { period: string; label: string; ordersCount: number; revenue: number }>();
-    const cursor = new Date(start);
-    cursor.setHours(0, 0, 0, 0);
-    const endCursor = new Date(end);
-    endCursor.setHours(0, 0, 0, 0);
+    let cursor = this.periodStart(start, normalizedPeriod);
+    const endCursor = this.periodStart(end, normalizedPeriod);
 
     while (cursor <= endCursor) {
-      const key = this.dateKey(cursor);
+      const key = this.periodKey(cursor, normalizedPeriod);
       buckets.set(key, {
         period: key,
-        label: this.dateLabel(cursor),
+        label: this.periodLabel(cursor, normalizedPeriod),
         ordersCount: 0,
         revenue: 0,
       });
-      cursor.setDate(cursor.getDate() + 1);
+      cursor = this.nextPeriodStart(cursor, normalizedPeriod);
     }
 
     for (const order of soldOrders) {
       if (!order.sold_at) continue;
       const soldDate = new Date(Number(order.sold_at));
-      const key = this.dateKey(soldDate);
+      const key = this.periodKey(soldDate, normalizedPeriod);
       const bucket = buckets.get(key);
       if (!bucket) continue;
       bucket.ordersCount += 1;
