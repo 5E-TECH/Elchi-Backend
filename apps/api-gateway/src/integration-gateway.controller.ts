@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
@@ -216,7 +217,7 @@ export class IntegrationGatewayController {
   constructor(@Inject('INTEGRATION') private readonly integrationClient: ClientProxy) {}
 
   @Get()
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET)
   @ApiOperation({ summary: 'List integrations' })
   @ApiQuery({ name: 'is_active', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, enum: ['active', 'inactive'] })
@@ -226,6 +227,7 @@ export class IntegrationGatewayController {
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   findAll(
+    @Req() req: { user: { sub: string; roles?: string[] } },
     @Query('is_active') is_active?: string,
     @Query('status') status?: string,
     @Query('market_id') market_id?: string,
@@ -234,6 +236,8 @@ export class IntegrationGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
+    const roles = req.user.roles ?? [];
+    const isMarket = roles.includes(RoleEnum.MARKET);
     const normalizedStatus = typeof status === 'string' ? status.toLowerCase() : undefined;
     const statusToIsActive =
       normalizedStatus === 'active'
@@ -251,7 +255,7 @@ export class IntegrationGatewayController {
               ? ['true', '1', 'yes'].includes(is_active.toLowerCase())
               : statusToIsActive,
           status: normalizedStatus,
-          market_id,
+          market_id: isMarket ? req.user.sub : market_id,
           from_date,
           to_date,
           page: page ? Number(page) : undefined,

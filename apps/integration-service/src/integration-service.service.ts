@@ -246,11 +246,22 @@ export class IntegrationServiceService {
     try {
       const rows: any[] = await this.integrationRepo.manager.query(
         `
-          SELECT *
+          SELECT
+            a.id,
+            a.name,
+            a.phone_number,
+            a.status,
+            a.role,
+            COUNT(p.id)::int AS products_count
           FROM identity_schema.admins
-          WHERE id::text = ANY($1::text[])
-            AND "isDeleted" = false
-            AND role = 'market'
+          AS a
+          LEFT JOIN catalog_schema.products p
+            ON p.user_id::text = a.id::text
+           AND p."isDeleted" = false
+          WHERE a.id::text = ANY($1::text[])
+            AND a."isDeleted" = false
+            AND a.role = 'market'
+          GROUP BY a.id, a.name, a.phone_number, a.status, a.role
         `,
         [marketIds],
       );
@@ -278,6 +289,53 @@ export class IntegrationServiceService {
       ...row,
       market: row.market_id ? marketsById[String(row.market_id)] ?? null : null,
     }));
+  }
+
+  private sanitizeMarket(market: any | null): any | null {
+    if (!market || typeof market !== 'object') {
+      return null;
+    }
+
+    const safeMarket = { ...market };
+    delete safeMarket.password;
+    delete safeMarket.refresh_token;
+    delete safeMarket.market_tg_token;
+    return safeMarket;
+  }
+
+  private sanitizeIntegrationRow(row: any): any {
+    if (!row || typeof row !== 'object') {
+      return row;
+    }
+
+    const safe = { ...row };
+    delete safe.api_key;
+    delete safe.api_secret;
+    delete safe.password;
+
+    return {
+      ...safe,
+      market: this.sanitizeMarket(safe.market ?? null),
+    };
+  }
+
+  private sanitizeIntegrationRows(rows: any[]): any[] {
+    return rows.map((row) => this.sanitizeIntegrationRow(row));
+  }
+
+  private extractMarketFromItems(items: any[]): { items: any[]; market: any | null } {
+    if (!Array.isArray(items) || items.length === 0) {
+      return { items: [], market: null };
+    }
+
+    const market = items[0]?.market ?? null;
+    const itemsWithoutMarket = items.map((item) => {
+      const next = { ...item };
+      delete next.market;
+      return next;
+    });
+
+    return { items: itemsWithoutMarket, market };
   }
 
   private buildExternalUrl(baseUrl: string, endpoint?: string): string {
@@ -422,7 +480,7 @@ export class IntegrationServiceService {
 
     const saved = await this.integrationRepo.save(entity);
     const [enriched] = await this.attachMarkets([saved as any]);
-    return successRes(enriched, 201, 'integration created');
+    return successRes(this.sanitizeIntegrationRow(enriched), 201, 'integration created');
   }
 
   async findAllIntegrations(query?: FindAllIntegrationsQuery) {
@@ -476,7 +534,8 @@ export class IntegrationServiceService {
         where,
         order: { createdAt: 'DESC' },
       });
-      return successRes(rows);
+      const enriched = await this.attachMarkets(rows as any);
+      return successRes(this.sanitizeIntegrationRows(enriched as any[]));
     }
 
     const [items, total] = await this.integrationRepo.findAndCount({
@@ -484,11 +543,15 @@ export class IntegrationServiceService {
       order: { createdAt: 'DESC' },
       skip: (page - 1) * limit,
       take: limit,
-    })
+    });
+    const enriched = await this.attachMarkets(items as any);
+    const sanitizedItems = this.sanitizeIntegrationRows(enriched as any[]);
+    const { items: itemsWithoutMarket, market } = this.extractMarketFromItems(sanitizedItems);
 
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const rows = {
-      items,
+      items: itemsWithoutMarket,
+      market,
       meta: {
         page,
         limit,
@@ -506,7 +569,7 @@ export class IntegrationServiceService {
       this.notFound('integration not found');
     }
     const [enriched] = await this.attachMarkets([row as any]);
-    return successRes(enriched);
+    return successRes(this.sanitizeIntegrationRow(enriched));
   }
 
   async updateIntegration(id: string, dto: Partial<ExternalIntegration>) {
@@ -527,7 +590,7 @@ export class IntegrationServiceService {
     Object.assign(row, dto);
     const saved = await this.integrationRepo.save(row);
     const [enriched] = await this.attachMarkets([saved as any]);
-    return successRes(enriched, 200, 'integration updated');
+    return successRes(this.sanitizeIntegrationRow(enriched), 200, 'integration updated');
   }
 
   async deleteIntegration(id: string) {
