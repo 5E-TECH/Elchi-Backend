@@ -98,11 +98,19 @@ export class InvestorGatewayController {
   }
 
   @Post('investments')
+  @Post('investors/:investor_id/investments')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Create investment' })
+  @ApiParam({ name: 'investor_id', required: false })
   @ApiBody({ type: CreateInvestmentDto })
-  createInvestment(@Body() dto: CreateInvestmentDto) {
-    return this.investorClient.send({ cmd: 'investor.investment.create' }, { dto });
+  createInvestment(
+    @Body() dto: CreateInvestmentDto,
+    @Param('investor_id') investor_id?: string,
+  ) {
+    return this.investorClient.send(
+      { cmd: 'investor.investment.create' },
+      { dto: { ...dto, investor_id: investor_id ?? dto.investor_id } },
+    );
   }
 
   @Get('investments')
@@ -158,19 +166,35 @@ export class InvestorGatewayController {
   }
 
   @Post('profits')
+  @Post('investors/:investor_id/profits')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Create profit share manually' })
+  @ApiParam({ name: 'investor_id', required: false })
   @ApiBody({ type: CreateProfitShareDto })
-  createProfit(@Body() dto: CreateProfitShareDto) {
-    return this.investorClient.send({ cmd: 'investor.profit.create' }, { dto });
+  createProfit(
+    @Body() dto: CreateProfitShareDto,
+    @Param('investor_id') investor_id?: string,
+  ) {
+    return this.investorClient.send(
+      { cmd: 'investor.profit.create' },
+      { dto: { ...dto, investor_id: investor_id ?? dto.investor_id } },
+    );
   }
 
   @Post('profits/calculate')
+  @Post('investors/:investor_id/profits/calculate')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Calculate profit share by period and percentage' })
+  @ApiParam({ name: 'investor_id', required: false })
   @ApiBody({ type: CalculateProfitDto })
-  calculateProfit(@Body() dto: CalculateProfitDto) {
-    return this.investorClient.send({ cmd: 'investor.profit.calculate' }, { dto });
+  calculateProfit(
+    @Body() dto: CalculateProfitDto,
+    @Param('investor_id') investor_id?: string,
+  ) {
+    return this.investorClient.send(
+      { cmd: 'investor.profit.calculate' },
+      { dto: { ...dto, investor_id: investor_id ?? dto.investor_id } },
+    );
   }
 
   @Get('profits')

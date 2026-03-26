@@ -14,12 +14,9 @@ export class Investor extends BaseEntity {
   @Column({ type: 'varchar' })
   name!: string;
 
-  @Index('UQ_INVESTOR_EMAIL', { unique: true })
+  @Index('UQ_INVESTOR_PHONE', { unique: true })
   @Column({ type: 'varchar' })
-  email!: string;
-
-  @Column({ type: 'varchar', nullable: true })
-  phone_number!: string | null;
+  phone_number!: string;
 
   @Column({ type: 'enum', enum: Status, default: Status.ACTIVE })
   status!: Status;
