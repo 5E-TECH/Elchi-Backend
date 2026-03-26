@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
@@ -16,6 +17,8 @@ import { SendNotificationDto } from './dto/send-notification.dto';
 
 @Injectable()
 export class NotificationServiceService {
+  private readonly logger = new Logger(NotificationServiceService.name);
+
   constructor(
     @InjectRepository(TelegramMarket)
     private readonly tgMarketRepo: Repository<TelegramMarket>,
@@ -385,23 +388,33 @@ export class NotificationServiceService {
     parse_mode?: string;
     disable_web_page_preview?: boolean;
   }) {
-    const response = await fetch(`https://api.telegram.org/bot${data.token}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        chat_id: data.group_id,
-        text: data.message,
-        parse_mode: data.parse_mode,
-        disable_web_page_preview: data.disable_web_page_preview,
-      }),
-    });
+    let response: Response;
+    try {
+      response = await fetch(`https://api.telegram.org/bot${data.token}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          chat_id: data.group_id,
+          text: data.message,
+          parse_mode: data.parse_mode,
+          disable_web_page_preview: data.disable_web_page_preview,
+        }),
+      });
+    } catch (error) {
+      this.logger.error(
+        `Telegram HTTP request failed for chat_id=${data.group_id}: ${
+          error instanceof Error ? error.message : 'unknown error'
+        }`,
+      );
+      throw new BadRequestException('Telegram request failed');
+    }
 
     const body = await response.json().catch(() => null);
 
     if (!response.ok || (body && body.ok === false)) {
-      throw new BadRequestException(
-        body?.description || `Telegram API error (${response.status})`,
-      );
+      const description = body?.description || `Telegram API error (${response.status})`;
+      this.logger.error(`Telegram API sendMessage error for chat_id=${data.group_id}: ${description}`);
+      throw new BadRequestException(description);
     }
 
     return body?.result ?? null;
