@@ -252,16 +252,38 @@ export class IntegrationServiceService {
             a.phone_number,
             a.status,
             a.role,
-            COUNT(p.id)::int AS products_count
+            COUNT(p.id)::int AS products_count,
+            COALESCE(os.total_orders, 0)::int AS total_orders,
+            COALESCE(os.successful_orders, 0)::int AS successful_orders,
+            COALESCE(os.cancelled_orders, 0)::int AS cancelled_orders
           FROM identity_schema.admins
           AS a
           LEFT JOIN catalog_schema.products p
             ON p.user_id::text = a.id::text
            AND p."isDeleted" = false
+          LEFT JOIN (
+            SELECT
+              o.market_id::text AS market_id,
+              COUNT(*)::int AS total_orders,
+              SUM(CASE WHEN o.status IN ('sold', 'paid', 'partly_paid') THEN 1 ELSE 0 END)::int AS successful_orders,
+              SUM(CASE WHEN o.status = 'cancelled' THEN 1 ELSE 0 END)::int AS cancelled_orders
+            FROM order_schema.orders o
+            WHERE o."isDeleted" = false
+            GROUP BY o.market_id
+          ) os
+            ON os.market_id = a.id::text
           WHERE a.id::text = ANY($1::text[])
             AND a."isDeleted" = false
             AND a.role = 'market'
-          GROUP BY a.id, a.name, a.phone_number, a.status, a.role
+          GROUP BY
+            a.id,
+            a.name,
+            a.phone_number,
+            a.status,
+            a.role,
+            os.total_orders,
+            os.successful_orders,
+            os.cancelled_orders
         `,
         [marketIds],
       );
@@ -323,19 +345,26 @@ export class IntegrationServiceService {
     return rows.map((row) => this.sanitizeIntegrationRow(row));
   }
 
-  private extractMarketFromItems(items: any[]): { items: any[]; market: any | null } {
+  private extractMarketsFromItems(items: any[]): { items: any[]; market: any | null; markets: any[] } {
     if (!Array.isArray(items) || items.length === 0) {
-      return { items: [], market: null };
+      return { items: [], market: null, markets: [] };
     }
 
-    const market = items[0]?.market ?? null;
+    const marketsById = new Map<string, any>();
     const itemsWithoutMarket = items.map((item) => {
+      const market = item?.market ?? null;
+      if (market?.id) {
+        marketsById.set(String(market.id), market);
+      }
       const next = { ...item };
       delete next.market;
       return next;
     });
 
-    return { items: itemsWithoutMarket, market };
+    const markets = Array.from(marketsById.values());
+    const market = markets.length === 1 ? markets[0] : null;
+
+    return { items: itemsWithoutMarket, market, markets };
   }
 
   private buildExternalUrl(baseUrl: string, endpoint?: string): string {
@@ -546,12 +575,13 @@ export class IntegrationServiceService {
     });
     const enriched = await this.attachMarkets(items as any);
     const sanitizedItems = this.sanitizeIntegrationRows(enriched as any[]);
-    const { items: itemsWithoutMarket, market } = this.extractMarketFromItems(sanitizedItems);
+    const { items: itemsWithoutMarket, market, markets } = this.extractMarketsFromItems(sanitizedItems);
 
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const rows = {
       items: itemsWithoutMarket,
       market,
+      markets,
       meta: {
         page,
         limit,

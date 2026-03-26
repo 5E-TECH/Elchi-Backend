@@ -771,32 +771,90 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     const currentOrders = await this.findOrders({ post_id: id, page: 1, limit: 1000 });
-    const currentIds = currentOrders.map((o) => o.id);
-    const newIds = [...new Set(dto.orderIds.filter(Boolean))];
-
-    const removedIds = currentIds.filter((orderId) => !newIds.includes(orderId));
-    for (const orderId of removedIds) {
-      await this.updateOrder(orderId, { post_id: null });
+    if (!currentOrders.length) {
+      this.badRequest('Post has no orders');
     }
 
-    let total = 0;
-    let regionId = post.region_id;
-    const newOrders: OrderRow[] = [];
+    const currentIds = currentOrders.map((o) => o.id);
+    const selectedIds = [...new Set(dto.orderIds.filter(Boolean))];
+    const invalidIds = selectedIds.filter((orderId) => !currentIds.includes(orderId));
+    if (invalidIds.length) {
+      this.badRequest('Some selected orders are not inside this post');
+    }
+    const remainingIds = currentIds.filter((orderId) => !selectedIds.includes(orderId));
 
-    for (const orderId of newIds) {
+    let selectedTotal = 0;
+    let regionId = post.region_id;
+    const selectedOrders: OrderRow[] = [];
+    for (const orderId of selectedIds) {
       const order = await this.findOrderById(orderId);
-      newOrders.push(order);
-      total += Number(order.total_price ?? 0);
+      selectedOrders.push(order);
+      selectedTotal += Number(order.total_price ?? 0);
       if (!regionId && order.region_id) {
         regionId = String(order.region_id);
       }
+    }
+
+    // If we send a subset, keep remaining orders in old NEW post and create a fresh SENT post.
+    if (remainingIds.length > 0) {
+      let remainingTotal = 0;
+      for (const orderId of remainingIds) {
+        const order = currentOrders.find((item) => item.id === orderId);
+        remainingTotal += Number(order?.total_price ?? 0);
+        await this.updateOrder(orderId, { post_id: post.id, status: Order_status.RECEIVED });
+      }
+
+      const sentPost = await this.postRepo.save(
+        this.postRepo.create({
+          courier_id: dto.courierId,
+          qr_code_token: this.generateToken(),
+          region_id: regionId,
+          status: Post_status.SENT,
+          post_total_price: selectedTotal,
+          order_quantity: selectedIds.length,
+        }),
+      );
+
+      for (const orderId of selectedIds) {
+        await this.updateOrder(orderId, {
+          post_id: sentPost.id,
+          status: Order_status.ON_THE_ROAD,
+        });
+      }
+
+      post.courier_id = '0';
+      post.status = Post_status.NEW;
+      post.order_quantity = remainingIds.length;
+      post.post_total_price = remainingTotal;
+      post.region_id = regionId;
+      const sourcePost = await this.postRepo.save(post);
+
+      void this.syncPostToSearch(sourcePost);
+      void this.syncPostToSearch(sentPost);
+      return successRes(
+        {
+          updatedPost: sentPost,
+          sourcePost,
+          newOrders: selectedOrders,
+          postTotalInfo: {
+            total: selectedIds.length,
+            sum: selectedTotal,
+          },
+        },
+        200,
+        'Post sent successfully',
+      );
+    }
+
+    // If all orders selected, send current post as before.
+    for (const orderId of selectedIds) {
       await this.updateOrder(orderId, { post_id: id, status: Order_status.ON_THE_ROAD });
     }
 
     post.courier_id = dto.courierId;
     post.status = Post_status.SENT;
-    post.order_quantity = newIds.length;
-    post.post_total_price = total;
+    post.order_quantity = selectedIds.length;
+    post.post_total_price = selectedTotal;
     post.region_id = regionId;
 
     const updatedPost = await this.postRepo.save(post);
@@ -804,10 +862,10 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(
       {
         updatedPost,
-        newOrders,
+        newOrders: selectedOrders,
         postTotalInfo: {
-          total: newIds.length,
-          sum: total,
+          total: selectedIds.length,
+          sum: selectedTotal,
         },
       },
       200,
