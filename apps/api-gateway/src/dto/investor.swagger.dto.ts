@@ -6,6 +6,7 @@ import {
   IsEnum,
   IsNumber,
   IsOptional,
+  IsPhoneNumber,
   IsString,
   Max,
   Min,
@@ -22,7 +23,7 @@ export class CreateInvestorDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsString()
+  @IsPhoneNumber('UZ')
   phone_number?: string;
 
   @ApiPropertyOptional({ enum: Status, default: Status.ACTIVE })
@@ -49,7 +50,7 @@ export class UpdateInvestorDto {
 
   @ApiPropertyOptional()
   @IsOptional()
-  @IsString()
+  @IsPhoneNumber('UZ')
   phone_number?: string;
 
   @ApiPropertyOptional({ enum: Status })
