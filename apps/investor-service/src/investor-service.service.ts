@@ -86,30 +86,25 @@ export class InvestorServiceService {
 
   async createInvestor(dto: Partial<Investor>) {
     const name = String(dto.name ?? '').trim();
-    const email = String(dto.email ?? '').trim().toLowerCase();
+    const phoneNumber = String(dto.phone_number ?? '').trim();
     if (!name) {
       this.badRequest('name is required');
     }
-    if (!email) {
-      this.badRequest('email is required');
+    if (!phoneNumber) {
+      this.badRequest('phone_number is required');
     }
+    this.validateUzPhoneNumber(phoneNumber);
 
     const exists = await this.investorRepo.findOne({
-      where: { email, isDeleted: false },
+      where: { phone_number: phoneNumber, isDeleted: false },
     });
     if (exists) {
-      this.badRequest('email already exists');
-    }
-
-    const phoneNumber = dto.phone_number ? String(dto.phone_number).trim() : null;
-    if (phoneNumber) {
-      this.validateUzPhoneNumber(phoneNumber);
+      this.badRequest('phone_number already exists');
     }
 
     const investor = this.investorRepo.create({
       user_id: dto.user_id ? String(dto.user_id) : '0',
       name,
-      email,
       phone_number: phoneNumber,
       status: (dto.status as Status) ?? Status.ACTIVE,
       description: dto.description ? String(dto.description).trim() : null,
@@ -141,7 +136,6 @@ export class InvestorServiceService {
       where: search?.trim()
         ? [
             { ...where, name: ILike(`%${search.trim()}%`) },
-            { ...where, email: ILike(`%${search.trim()}%`) },
             { ...where, phone_number: ILike(`%${search.trim()}%`) },
           ]
         : where,
@@ -206,16 +200,6 @@ export class InvestorServiceService {
   async updateInvestor(id: string, dto: Partial<Investor>) {
     const investor = await this.getInvestorOrThrow(id);
 
-    if (dto.email && dto.email.trim().toLowerCase() !== investor.email) {
-      const exists = await this.investorRepo.findOne({
-        where: { email: dto.email.trim().toLowerCase(), isDeleted: false },
-      });
-      if (exists) {
-        this.badRequest('email already exists');
-      }
-      investor.email = dto.email.trim().toLowerCase();
-    }
-
     if (dto.name !== undefined) {
       const name = String(dto.name).trim();
       if (!name) {
@@ -224,9 +208,19 @@ export class InvestorServiceService {
       investor.name = name;
     }
     if (dto.phone_number !== undefined) {
-      const phoneNumber = dto.phone_number ? String(dto.phone_number).trim() : null;
-      if (phoneNumber) {
-        this.validateUzPhoneNumber(phoneNumber);
+      const phoneNumber = String(dto.phone_number ?? '').trim();
+      if (!phoneNumber) {
+        this.badRequest('phone_number cannot be empty');
+      }
+      this.validateUzPhoneNumber(phoneNumber);
+
+      if (phoneNumber !== investor.phone_number) {
+        const exists = await this.investorRepo.findOne({
+          where: { phone_number: phoneNumber, isDeleted: false },
+        });
+        if (exists) {
+          this.badRequest('phone_number already exists');
+        }
       }
       investor.phone_number = phoneNumber;
     }

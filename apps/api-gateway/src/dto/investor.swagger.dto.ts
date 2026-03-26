@@ -2,7 +2,6 @@ import { Status } from '@app/common';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsDateString,
-  IsEmail,
   IsEnum,
   IsNumber,
   IsOptional,
@@ -17,14 +16,9 @@ export class CreateInvestorDto {
   @IsString()
   name!: string;
 
-  @ApiProperty()
-  @IsEmail()
-  email!: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
+  @ApiProperty({ example: '+998901234567' })
   @IsPhoneNumber('UZ')
-  phone_number?: string;
+  phone_number!: string;
 
   @ApiPropertyOptional({ enum: Status, default: Status.ACTIVE })
   @IsOptional()
@@ -42,11 +36,6 @@ export class UpdateInvestorDto {
   @IsOptional()
   @IsString()
   name?: string;
-
-  @ApiPropertyOptional()
-  @IsOptional()
-  @IsEmail()
-  email?: string;
 
   @ApiPropertyOptional()
   @IsOptional()
