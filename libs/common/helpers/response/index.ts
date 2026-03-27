@@ -1,14 +1,28 @@
 import { HttpException, InternalServerErrorException } from '@nestjs/common';
 
 export const catchError = (error: any) => {
-  if (error?.response) {
-    throw new HttpException(
-      error?.response?.message,
-      error?.response?.statusCode,
-    );
-  } else {
-    throw new InternalServerErrorException(error.message);
+  if (error instanceof HttpException) {
+    throw error;
   }
+
+  if (error?.response) {
+    const statusCode =
+      error?.response?.statusCode || error?.response?.status || 500;
+    const message =
+      error?.response?.message || error?.message || 'Internal server error';
+    throw new HttpException(
+      message,
+      statusCode,
+    );
+  }
+
+  if (typeof error === 'string') {
+    throw new InternalServerErrorException(error);
+  }
+
+  throw new InternalServerErrorException(
+    error?.message || 'Internal server error',
+  );
 };
 
 export const errorRes = (message?: string, code?: number, data?: any) => {
