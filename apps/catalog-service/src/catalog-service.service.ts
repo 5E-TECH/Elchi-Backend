@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
 import { In, QueryFailedError, Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
+import { successRes } from '../../../libs/common/helpers/response';
 
 interface MarketInfo {
   id: string;
@@ -277,7 +278,7 @@ export class CatalogServiceService {
     product.isDeleted = true;
     await this.productRepo.save(product);
     void this.removeProductFromSearch(id);
-    return { message: `Product #${id} o'chirildi` };
+    return successRes({}, 200, `Product #${id} o'chirildi`);
   }
 
   async findByIds(ids: string[]) {
@@ -302,7 +303,7 @@ export class CatalogServiceService {
     }
 
     if (products.length === 0) {
-      return { message: 'No products to delete', count: 0 };
+      return successRes({ count: 0 }, 200, 'No products to delete');
     }
 
     const ids = products.map((p) => p.id);
@@ -323,6 +324,6 @@ export class CatalogServiceService {
       void this.removeProductFromSearch(id);
     }
 
-    return { message: 'Products deleted', count: ids.length };
+    return successRes({ count: ids.length }, 200, 'Products deleted');
   }
 }

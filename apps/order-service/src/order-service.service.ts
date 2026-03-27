@@ -17,6 +17,7 @@ import {
   rmqSend,
   RMQ_SERVICE_TIMEOUT,
 } from '@app/common';
+import { successRes } from '../../../libs/common/helpers/response';
 
 @Injectable()
 export class OrderServiceService {
@@ -747,7 +748,7 @@ export class OrderServiceService {
       });
     }
 
-    return { statusCode: 200, message: 'Order WAITING holatiga qaytarildi', data: {} };
+    return successRes({}, 200, 'Order WAITING holatiga qaytarildi');
   }
 
   private async replaceOrderItems(
@@ -1253,7 +1254,7 @@ export class OrderServiceService {
       }),
     );
 
-    return { statusCode: 200, message: 'Orders received', data: {} };
+    return successRes({}, 200, 'Orders received');
   }
 
   async receiveExternalOrders(dto: { integration_id: string; orders: any[] }) {
@@ -1599,7 +1600,7 @@ export class OrderServiceService {
       comment: finalComment || null,
     });
 
-    return { statusCode: 200, message: 'Order sold', data: {} };
+    return successRes({}, 200, 'Order sold');
   }
 
   async cancelOrder(
@@ -1674,7 +1675,7 @@ export class OrderServiceService {
       sold_at: null,
     });
 
-    return { statusCode: 200, message: 'Order canceled', data: { id } };
+    return successRes({ id }, 200, 'Order canceled');
   }
 
   async partlySellOrder(
@@ -2001,7 +2002,7 @@ export class OrderServiceService {
       refreshedOrder.product_quantity = newQty;
     }
 
-    return { statusCode: 200, message: 'Order partly sold', data: {} };
+    return successRes({}, 200, 'Order partly sold');
   }
 
   async findById(id: string) {
@@ -2131,7 +2132,7 @@ export class OrderServiceService {
     order.isDeleted = true;
     await this.orderRepo.save(order);
     void this.removeOrderFromSearch(id);
-    return { message: `Order #${id} o'chirildi` };
+    return successRes({}, 200, `Order #${id} o'chirildi`);
   }
 
   // ==================== Enrichment Helpers ====================

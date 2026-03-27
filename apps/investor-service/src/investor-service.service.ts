@@ -460,16 +460,29 @@ export class InvestorServiceService {
           where: { isDeleted: false, status: Status.ACTIVE },
         });
 
+    const investorIds = investors.map((investor) => investor.id);
+    const totalsRaw = investorIds.length
+      ? await this.investmentRepo
+          .createQueryBuilder('investment')
+          .select('investment.investor_id', 'investor_id')
+          .addSelect('COALESCE(SUM(investment.amount), 0)', 'total_amount')
+          .where('investment.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('investment.invested_at BETWEEN :from AND :to', {
+            from: new Date(0),
+            to: period_end,
+          })
+          .andWhere('investment.investor_id IN (:...investorIds)', { investorIds })
+          .groupBy('investment.investor_id')
+          .getRawMany<{ investor_id: string; total_amount: string }>()
+      : [];
+
+    const totalsMap = new Map(
+      totalsRaw.map((row) => [String(row.investor_id), Number(row.total_amount)]),
+    );
+
     const result: ProfitShare[] = [];
     for (const investor of investors) {
-      const investments = await this.investmentRepo.find({
-        where: {
-          isDeleted: false,
-          investor_id: investor.id,
-          invested_at: Between(new Date(0), period_end),
-        },
-      });
-      const totalInvestment = investments.reduce((acc, item) => acc + Number(item.amount), 0);
+      const totalInvestment = totalsMap.get(String(investor.id)) ?? 0;
       const amount = Number(((totalInvestment * percentage) / 100).toFixed(2));
 
       const row = this.profitShareRepo.create({
