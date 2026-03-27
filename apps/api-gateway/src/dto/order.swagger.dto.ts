@@ -57,10 +57,13 @@ export class CreateOrderCustomerDto {
 }
 
 export class CreateOrderRequestDto {
-  @ApiProperty({ example: '1', description: 'Market ID (as string/bigint)' })
-  @IsNotEmpty()
+  @ApiPropertyOptional({
+    example: '1',
+    description: 'Market ID (admin/superadmin/reg uchun majburiy, market rolida token’dan olinadi)',
+  })
+  @IsOptional()
   @IsString()
-  market_id!: string;
+  market_id?: string;
 
   @ApiPropertyOptional({ example: '1', description: 'Customer ID (as string/bigint)' })
   @IsOptional()
