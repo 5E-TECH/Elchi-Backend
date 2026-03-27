@@ -84,6 +84,16 @@ export class InvestorServiceService {
     return investor;
   }
 
+  private async getInvestmentOrThrow(id: string): Promise<Investment> {
+    const investment = await this.investmentRepo.findOne({
+      where: { id: String(id), isDeleted: false },
+    });
+    if (!investment) {
+      this.notFound('investment not found');
+    }
+    return investment;
+  }
+
   async createInvestor(dto: Partial<Investor>) {
     const name = String(dto.name ?? '').trim();
     const phoneNumber = String(dto.phone_number ?? '').trim();
@@ -324,6 +334,56 @@ export class InvestorServiceService {
       page: query?.page,
       limit: query?.limit,
     });
+  }
+
+  async updateInvestment(id: string, dto: Partial<Investment>) {
+    const investment = await this.getInvestmentOrThrow(id);
+
+    if (dto.investor_id !== undefined) {
+      const investorId = String(dto.investor_id ?? '').trim();
+      if (!investorId) {
+        this.badRequest('investor_id cannot be empty');
+      }
+      await this.getInvestorOrThrow(investorId);
+      investment.investor_id = investorId;
+    }
+
+    if (dto.branch_id !== undefined) {
+      investment.branch_id = dto.branch_id ? String(dto.branch_id).trim() : null;
+    }
+
+    if (dto.amount !== undefined) {
+      const amount = Number(dto.amount);
+      if (!(amount > 0)) {
+        this.badRequest('amount must be greater than 0');
+      }
+      investment.amount = amount;
+    }
+
+    if (dto.invested_at !== undefined) {
+      const investedAt = this.parseDate(
+        dto.invested_at ? new Date(dto.invested_at).toISOString() : undefined,
+        'invested_at',
+      );
+      if (!investedAt) {
+        this.badRequest('invested_at is required');
+      }
+      investment.invested_at = investedAt;
+    }
+
+    if (dto.description !== undefined) {
+      investment.description = dto.description ? String(dto.description).trim() : null;
+    }
+
+    const saved = await this.investmentRepo.save(investment);
+    return successRes(saved, 200, 'investment updated');
+  }
+
+  async deleteInvestment(id: string) {
+    const investment = await this.getInvestmentOrThrow(id);
+    investment.isDeleted = true;
+    await this.investmentRepo.save(investment);
+    return successRes({ id: investment.id }, 200, 'investment deleted');
   }
 
   async createProfitShare(dto: Partial<ProfitShare>) {

@@ -295,7 +295,7 @@ export class ApiGatewayController {
 
   @Get('markets')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List markets with filtering and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String })

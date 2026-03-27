@@ -78,6 +78,34 @@ export class CreateInvestmentDto {
   description?: string;
 }
 
+export class UpdateInvestmentDto {
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  investor_id?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  branch_id?: string;
+
+  @ApiPropertyOptional({ minimum: 0.01 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0.01)
+  amount?: number;
+
+  @ApiPropertyOptional({ example: '2026-03-25T00:00:00.000Z' })
+  @IsOptional()
+  @IsDateString()
+  invested_at?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  description?: string;
+}
+
 export class CreateProfitShareDto {
   @ApiProperty()
   @IsString()
