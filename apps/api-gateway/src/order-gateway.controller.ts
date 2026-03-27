@@ -306,10 +306,21 @@ export class OrderGatewayController {
     @Query('region_id') region_id?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Req() req?: { user: JwtUser },
   ) {
+    const roles = req?.user?.roles ?? [];
+    const isMarket = roles.includes(RoleEnum.MARKET);
+    const requesterId = req?.user?.sub;
+
+    if (isMarket && market_id && requesterId && String(market_id) !== String(requesterId)) {
+      throw new BadRequestException('market role cannot query other market_id');
+    }
+
+    const resolvedMarketId = isMarket && requesterId ? requesterId : market_id;
+
     const payload = {
       query: {
-        market_id,
+        market_id: resolvedMarketId,
         customer_id,
         status,
         search,
