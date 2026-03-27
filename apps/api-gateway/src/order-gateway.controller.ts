@@ -175,13 +175,27 @@ export class OrderGatewayController {
   }
 
   @Post()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN, RoleEnum.REGISTRATOR, RoleEnum.MARKET)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create order' })
   @ApiBody({ type: CreateOrderRequestDto })
-  async create(@Body() dto: CreateOrderRequestDto) {
+  async create(@Body() dto: CreateOrderRequestDto, @Req() req: { user: JwtUser }) {
     const { customer, ...orderDto } = dto;
     let customerId = dto.customer_id;
+    const roles = req.user.roles ?? [];
+
+    let resolvedMarketId = orderDto.market_id;
+    if (roles.includes(RoleEnum.MARKET)) {
+      resolvedMarketId = req.user.sub;
+    } else if (
+      (roles.includes(RoleEnum.ADMIN) ||
+        roles.includes(RoleEnum.SUPERADMIN) ||
+        roles.includes(RoleEnum.REGISTRATOR)) &&
+      !resolvedMarketId
+    ) {
+      throw new BadRequestException('market_id is required');
+    }
 
     if (!customerId) {
       if (!customer) {
@@ -209,7 +223,10 @@ export class OrderGatewayController {
 
     return firstValueFrom(
       this.orderClient
-        .send({ cmd: 'order.create' }, { dto: { ...orderDto, customer_id: finalCustomerId } })
+        .send(
+          { cmd: 'order.create' },
+          { dto: { ...orderDto, market_id: resolvedMarketId, customer_id: finalCustomerId } },
+        )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {

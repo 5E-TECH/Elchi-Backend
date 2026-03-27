@@ -1,7 +1,9 @@
-import { Injectable } from '@nestjs/common';
-import { RpcException } from '@nestjs/microservices';
+import { Inject, Injectable } from '@nestjs/common';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, Repository } from 'typeorm';
+import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
+import { Order_status } from '@app/common';
 import { ExternalIntegration } from './entities/external-integration.entity';
 import { SyncQueue } from './entities/sync-queue.entity';
 import { SyncHistory } from './entities/sync-history.entity';
@@ -87,6 +89,9 @@ export class IntegrationServiceService {
     @InjectRepository(ExternalIntegration) private readonly integrationRepo: Repository<ExternalIntegration>,
     @InjectRepository(SyncQueue) private readonly syncQueueRepo: Repository<SyncQueue>,
     @InjectRepository(SyncHistory) private readonly syncHistoryRepo: Repository<SyncHistory>,
+    @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    @Inject('CATALOG') private readonly catalogClient: ClientProxy,
+    @Inject('ORDER') private readonly orderClient: ClientProxy,
   ) {}
 
   private badRequest(message: string): never {
@@ -238,63 +243,112 @@ export class IntegrationServiceService {
     this.tokenCache.delete(integrationId);
   }
 
+  private async rmqRequest<T>(
+    client: ClientProxy,
+    pattern: { cmd: string },
+    payload: Record<string, any>,
+    ttlMs = 5000,
+  ): Promise<T | null> {
+    try {
+      return await firstValueFrom(client.send(pattern, payload).pipe(timeout(ttlMs)));
+    } catch (error) {
+      if (error instanceof TimeoutError) {
+        return null;
+      }
+      return null;
+    }
+  }
+
+  private toSafeInt(value: unknown): number {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed < 0) {
+      return 0;
+    }
+    return Math.trunc(parsed);
+  }
+
+  private async getProductsCountByMarket(marketId: string): Promise<number> {
+    const response = await this.rmqRequest<{ total?: number }>(
+      this.catalogClient,
+      { cmd: 'catalog.product.find_all' },
+      { query: { user_id: marketId, page: 1, limit: 1 } },
+    );
+    return this.toSafeInt(response?.total);
+  }
+
+  private async getOrderCountByMarket(marketId: string, status?: Order_status): Promise<number> {
+    const query: Record<string, any> = { market_id: marketId, page: 1, limit: 1 };
+    if (status) {
+      query.status = status;
+    }
+
+    const response = await this.rmqRequest<{ total?: number }>(
+      this.orderClient,
+      { cmd: 'order.find_all' },
+      { query },
+    );
+    return this.toSafeInt(response?.total);
+  }
+
+  private async getOrderStatsByMarket(
+    marketId: string,
+  ): Promise<{ total_orders: number; successful_orders: number; cancelled_orders: number }> {
+    const [total, cancelled, sold, paid, partlyPaid] = await Promise.all([
+      this.getOrderCountByMarket(marketId),
+      this.getOrderCountByMarket(marketId, Order_status.CANCELLED),
+      this.getOrderCountByMarket(marketId, Order_status.SOLD),
+      this.getOrderCountByMarket(marketId, Order_status.PAID),
+      this.getOrderCountByMarket(marketId, Order_status.PARTLY_PAID),
+    ]);
+
+    return {
+      total_orders: total,
+      successful_orders: sold + paid + partlyPaid,
+      cancelled_orders: cancelled,
+    };
+  }
+
   private async fetchMarketsByIds(marketIds: string[]): Promise<Record<string, any>> {
     if (!marketIds.length) {
       return {};
     }
 
-    try {
-      const rows: any[] = await this.integrationRepo.manager.query(
-        `
-          SELECT
-            a.id,
-            a.name,
-            a.phone_number,
-            a.status,
-            a.role,
-            COUNT(p.id)::int AS products_count,
-            COALESCE(os.total_orders, 0)::int AS total_orders,
-            COALESCE(os.successful_orders, 0)::int AS successful_orders,
-            COALESCE(os.cancelled_orders, 0)::int AS cancelled_orders
-          FROM identity_schema.admins
-          AS a
-          LEFT JOIN catalog_schema.products p
-            ON p.user_id::text = a.id::text
-           AND p."isDeleted" = false
-          LEFT JOIN (
-            SELECT
-              o.market_id::text AS market_id,
-              COUNT(*)::int AS total_orders,
-              SUM(CASE WHEN o.status IN ('sold', 'paid', 'partly_paid') THEN 1 ELSE 0 END)::int AS successful_orders,
-              SUM(CASE WHEN o.status = 'cancelled' THEN 1 ELSE 0 END)::int AS cancelled_orders
-            FROM order_schema.orders o
-            WHERE o."isDeleted" = false
-            GROUP BY o.market_id
-          ) os
-            ON os.market_id = a.id::text
-          WHERE a.id::text = ANY($1::text[])
-            AND a."isDeleted" = false
-            AND a.role = 'market'
-          GROUP BY
-            a.id,
-            a.name,
-            a.phone_number,
-            a.status,
-            a.role,
-            os.total_orders,
-            os.successful_orders,
-            os.cancelled_orders
-        `,
-        [marketIds],
-      );
-
-      return rows.reduce<Record<string, any>>((acc, row) => {
-        acc[String(row.id)] = row;
-        return acc;
-      }, {});
-    } catch {
+    const identityResponse = await this.rmqRequest<{ data?: any[] }>(
+      this.identityClient,
+      { cmd: 'identity.market.find_by_ids' },
+      { ids: marketIds },
+    );
+    const markets = Array.isArray(identityResponse?.data) ? identityResponse.data : [];
+    if (!markets.length) {
       return {};
     }
+
+    const rows = await Promise.all(
+      markets.map(async (market) => {
+        const marketId = String(market.id);
+        const [productsCount, orderStats] = await Promise.all([
+          this.getProductsCountByMarket(marketId),
+          this.getOrderStatsByMarket(marketId),
+        ]);
+
+        return {
+          id: marketId,
+          name: market.name ?? null,
+          phone_number: market.phone_number ?? null,
+          status: market.status ?? null,
+          role: market.role ?? null,
+          products_count: productsCount,
+          total_orders: orderStats.total_orders,
+          successful_orders: orderStats.successful_orders,
+          cancelled_orders: orderStats.cancelled_orders,
+        };
+      }),
+    );
+
+    return rows.reduce<Record<string, any>>((acc, row) => {
+      acc[String(row.id)] = row;
+      return acc;
+    }, {});
   }
 
   private async attachMarkets<T extends { market_id?: string | null }>(rows: T[]): Promise<Array<T & { market: any | null }>> {
