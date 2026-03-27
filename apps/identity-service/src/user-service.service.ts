@@ -432,6 +432,7 @@ export class UserServiceService implements OnModuleInit {
           errorRes('Marketga tegishli productlarni o‘chirishda xatolik', 502),
         );
       }
+      
     }
 
     const ts = Date.now();
