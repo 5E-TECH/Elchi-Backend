@@ -28,6 +28,7 @@ import {
   CreateInvestmentDto,
   CreateInvestorDto,
   CreateProfitShareDto,
+  UpdateInvestmentDto,
   UpdateInvestorDto,
 } from './dto/investor.swagger.dto';
 
@@ -163,6 +164,34 @@ export class InvestorGatewayController {
         },
       },
     );
+  }
+
+  @Patch('investments/:id')
+  @Patch('investors/:investor_id/investments/:id')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Update investment' })
+  @ApiParam({ name: 'id' })
+  @ApiParam({ name: 'investor_id', required: false })
+  @ApiBody({ type: UpdateInvestmentDto })
+  updateInvestment(
+    @Param('id') id: string,
+    @Body() dto: UpdateInvestmentDto,
+    @Param('investor_id') investor_id?: string,
+  ) {
+    return this.investorClient.send(
+      { cmd: 'investor.investment.update' },
+      { id, dto: { ...dto, investor_id: investor_id ?? dto.investor_id } },
+    );
+  }
+
+  @Delete('investments/:id')
+  @Delete('investors/:investor_id/investments/:id')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Delete investment (soft delete)' })
+  @ApiParam({ name: 'id' })
+  @ApiParam({ name: 'investor_id', required: false })
+  deleteInvestment(@Param('id') id: string) {
+    return this.investorClient.send({ cmd: 'investor.investment.delete' }, { id });
   }
 
   @Post('profits')

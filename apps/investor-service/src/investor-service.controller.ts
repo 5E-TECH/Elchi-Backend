@@ -91,6 +91,20 @@ export class InvestorServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'investor.investment.update' })
+  updateInvestment(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.investorService.updateInvestment(String(data?.id), data?.dto ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'investor.investment.delete' })
+  deleteInvestment(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.investorService.deleteInvestment(String(data?.id)),
+    );
+  }
+
   // --- ProfitShare ---
   @MessagePattern({ cmd: 'investor.profit.create' })
   createProfit(@Payload() data: any, @Ctx() context: RmqContext) {
