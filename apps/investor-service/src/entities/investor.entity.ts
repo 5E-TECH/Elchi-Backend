@@ -7,6 +7,10 @@ import { ProfitShare } from './profit-share.entity';
 @Entity({ name: 'investors' })
 @Index('IDX_INVESTOR_USER', ['user_id'])
 @Index('IDX_INVESTOR_STATUS', ['status'])
+@Index('UQ_INVESTOR_PHONE_ACTIVE', ['phone_number'], {
+  unique: true,
+  where: '"isDeleted" = false',
+})
 export class Investor extends BaseEntity {
   @Column({ type: 'bigint' })
   user_id!: string;
@@ -14,7 +18,6 @@ export class Investor extends BaseEntity {
   @Column({ type: 'varchar' })
   name!: string;
 
-  @Index('UQ_INVESTOR_PHONE', { unique: true })
   @Column({ type: 'varchar' })
   phone_number!: string;
 
