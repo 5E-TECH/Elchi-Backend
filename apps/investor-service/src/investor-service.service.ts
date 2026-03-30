@@ -535,6 +535,30 @@ export class InvestorServiceService {
       take: limit,
     });
 
+    const [paidRaw, unpaidRaw] = await Promise.all([
+      this.profitShareRepo
+        .createQueryBuilder('profit')
+        .select('COALESCE(SUM(profit.amount), 0)', 'total')
+        .where('profit.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere(query?.investor_id ? 'profit.investor_id = :investor_id' : '1=1', {
+          investor_id: query?.investor_id ? String(query.investor_id) : undefined,
+        })
+        .andWhere('profit.is_paid = :is_paid', { is_paid: true })
+        .getRawOne<{ total: string }>(),
+      this.profitShareRepo
+        .createQueryBuilder('profit')
+        .select('COALESCE(SUM(profit.amount), 0)', 'total')
+        .where('profit.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere(query?.investor_id ? 'profit.investor_id = :investor_id' : '1=1', {
+          investor_id: query?.investor_id ? String(query.investor_id) : undefined,
+        })
+        .andWhere('profit.is_paid = :is_paid', { is_paid: false })
+        .getRawOne<{ total: string }>(),
+    ]);
+
+    const totalPaid = Number(paidRaw?.total ?? 0);
+    const totalUnpaid = Number(unpaidRaw?.total ?? 0);
+
     return successRes({
       items,
       meta: {
@@ -542,6 +566,10 @@ export class InvestorServiceService {
         limit,
         total,
         totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+      summary: {
+        total_paid_amount: Number.isFinite(totalPaid) ? totalPaid : 0,
+        total_unpaid_amount: Number.isFinite(totalUnpaid) ? totalUnpaid : 0,
       },
     });
   }
