@@ -225,15 +225,19 @@ export class ApiGatewayController {
     const userData = userResponse?.data ?? null;
     const role = String(userData?.role ?? '').toLowerCase();
 
-    if (role !== RoleEnum.MARKET) {
+    const isMarket = role === RoleEnum.MARKET;
+    const isCourier = role === RoleEnum.COURIER;
+
+    if (!isMarket && !isCourier) {
       return userResponse;
     }
 
     try {
+      const cashboxType = isMarket ? 'markets' : 'couriers';
       const cashboxResponse = await firstValueFrom(
         this.financeClient.send(
           { cmd: 'finance.cashbox.user_by_id' },
-          { id, cashbox_type: 'markets', fromDate, toDate },
+          { id, cashbox_type: cashboxType, fromDate, toDate },
         ),
       );
 
