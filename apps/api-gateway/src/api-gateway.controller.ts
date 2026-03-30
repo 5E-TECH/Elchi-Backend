@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { Roles as RoleEnum } from '@app/common';
+import { firstValueFrom } from 'rxjs';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -45,7 +46,10 @@ interface JwtUser {
 @ApiTags('Identity')
 @Controller()
 export class ApiGatewayController {
-  constructor(@Inject('IDENTITY') private readonly identityClient: ClientProxy) {}
+  constructor(
+    @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    @Inject('FINANCE') private readonly financeClient: ClientProxy,
+  ) {}
 
   private toRequester(req: { user: JwtUser }) {
     return {
@@ -205,10 +209,51 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get user by id (all roles)' })
   @ApiParam({ name: 'id', description: 'User ID' })
+  @ApiQuery({ name: 'fromDate', required: false, type: String, example: '2026-03-01' })
+  @ApiQuery({ name: 'toDate', required: false, type: String, example: '2026-03-30' })
   @ApiOkResponse({ description: 'User by id' })
   @ApiNotFoundResponse({ description: 'Not found' })
-  getUserById(@Param('id') id: string) {
-    return this.identityClient.send({ cmd: 'identity.user.find_by_id' }, { id });
+  async getUserById(
+    @Param('id') id: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+  ) {
+    const userResponse = await firstValueFrom(
+      this.identityClient.send({ cmd: 'identity.user.find_by_id' }, { id }),
+    );
+
+    const userData = userResponse?.data ?? null;
+    const role = String(userData?.role ?? '').toLowerCase();
+
+    if (role !== RoleEnum.MARKET) {
+      return userResponse;
+    }
+
+    try {
+      const cashboxResponse = await firstValueFrom(
+        this.financeClient.send(
+          { cmd: 'finance.cashbox.user_by_id' },
+          { id, cashbox_type: 'markets', fromDate, toDate },
+        ),
+      );
+
+      if (cashboxResponse?.statusCode !== 200 || !cashboxResponse?.data?.cashbox) {
+        return userResponse;
+      }
+
+      return {
+        ...cashboxResponse,
+        data: {
+          ...cashboxResponse.data,
+          cashbox: {
+            ...cashboxResponse.data.cashbox,
+            user: userData,
+          },
+        },
+      };
+    } catch {
+      return userResponse;
+    }
   }
 
   @Patch('users/:id')
