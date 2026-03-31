@@ -105,6 +105,27 @@ export class IntegrationServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'integration.sync.queue' })
+  queueSync(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.enqueueSync(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.sync.process' })
+  processSync(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.enqueueSync(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.sync.retry' })
+  retrySync(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.enqueueSync(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'integration.sync.queue_status' })
   queueStatus(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
