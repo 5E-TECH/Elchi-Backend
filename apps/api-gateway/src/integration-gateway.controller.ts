@@ -26,6 +26,7 @@ import { RolesGuard } from './auth/roles.guard';
 import {
   CreateIntegrationRequestDto,
   ExternalRequestDto,
+  IntegrationHealthcheckRequestDto,
   QrSearchRequestDto,
   UpdateIntegrationRequestDto,
 } from './dto/integration.swagger.dto';
@@ -114,6 +115,23 @@ export class IntegrationGatewayController {
   @ApiOperation({ summary: 'Delete integration' })
   remove(@Param('id') id: string) {
     return this.integrationClient.send({ cmd: 'integration.delete' }, { id });
+  }
+
+  @Post(':id/healthcheck')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Integration connection test (ping/healthcheck)' })
+  @ApiBody({ type: IntegrationHealthcheckRequestDto, required: false })
+  healthcheck(
+    @Param('id') id: string,
+    @Body() dto: IntegrationHealthcheckRequestDto = {},
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.healthcheck' },
+      {
+        id,
+        ...dto,
+      },
+    );
   }
 
   @Post(':slug/search-by-qr')

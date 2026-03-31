@@ -3,6 +3,7 @@ import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, Repository } from 'typeorm';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
 import { Order_status } from '@app/common';
 import { ExternalIntegration } from './entities/external-integration.entity';
 import { SyncQueue } from './entities/sync-queue.entity';
@@ -84,6 +85,7 @@ type FindAllIntegrationsQuery = {
 @Injectable()
 export class IntegrationServiceService {
   private readonly tokenCache = new Map<string, { token: string; expiresAt: number }>();
+  private readonly credentialSecret = process.env.INTEGRATION_CREDENTIAL_SECRET || 'elchi-integration-secret';
 
   constructor(
     @InjectRepository(ExternalIntegration) private readonly integrationRepo: Repository<ExternalIntegration>,
@@ -180,7 +182,8 @@ export class IntegrationServiceService {
   }
 
   private async loginAndGetToken(integration: ExternalIntegration): Promise<string> {
-    if (!integration.auth_url || !integration.username || !integration.password) {
+    const decryptedPassword = this.decryptCredential(integration.password);
+    if (!integration.auth_url || !integration.username || !decryptedPassword) {
       this.badRequest('Integration login config is incomplete');
     }
 
@@ -189,12 +192,12 @@ export class IntegrationServiceService {
     const method = (authConfig.login_method ?? 'POST').toUpperCase() as HttpMethod;
     const context = {
       username: integration.username,
-      password: integration.password,
+      password: decryptedPassword,
     };
     const payload =
       authConfig.login_payload_template && Object.keys(authConfig.login_payload_template).length
         ? this.interpolate(authConfig.login_payload_template, context)
-        : { username: integration.username, password: integration.password };
+        : { username: integration.username, password: decryptedPassword };
 
     try {
       const response = await fetch(integration.auth_url, {
@@ -228,7 +231,7 @@ export class IntegrationServiceService {
 
   private async getValidToken(integration: ExternalIntegration): Promise<string | null> {
     if (integration.auth_type === 'api_key') {
-      return integration.api_key ?? null;
+      return this.decryptCredential(integration.api_key) ?? null;
     }
 
     const cached = this.tokenCache.get(integration.id);
@@ -265,6 +268,49 @@ export class IntegrationServiceService {
       return 0;
     }
     return Math.trunc(parsed);
+  }
+
+  private getCredentialKey(): Buffer {
+    return createHash('sha256').update(this.credentialSecret).digest();
+  }
+
+  private encryptCredential(value?: string | null): string | null {
+    if (!value) {
+      return null;
+    }
+
+    if (value.startsWith('enc:')) {
+      return value;
+    }
+
+    const iv = randomBytes(16);
+    const cipher = createCipheriv('aes-256-cbc', this.getCredentialKey(), iv);
+    const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+    return `enc:${iv.toString('hex')}:${encrypted.toString('hex')}`;
+  }
+
+  private decryptCredential(value?: string | null): string | null {
+    if (!value) {
+      return null;
+    }
+
+    if (!value.startsWith('enc:')) {
+      return value;
+    }
+
+    try {
+      const [, ivHex, encryptedHex] = value.split(':');
+      if (!ivHex || !encryptedHex) {
+        return value;
+      }
+      const iv = Buffer.from(ivHex, 'hex');
+      const encrypted = Buffer.from(encryptedHex, 'hex');
+      const decipher = createDecipheriv('aes-256-cbc', this.getCredentialKey(), iv);
+      const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+      return decrypted.toString('utf8');
+    } catch {
+      return value;
+    }
   }
 
   private async getProductsCountByMarket(marketId: string): Promise<number> {
@@ -546,12 +592,12 @@ export class IntegrationServiceService {
       name: dto.name ?? slug,
       slug,
       api_url: dto.api_url,
-      api_key: dto.api_key ?? null,
-      api_secret: dto.api_secret ?? null,
+      api_key: this.encryptCredential(dto.api_key ?? null),
+      api_secret: this.encryptCredential(dto.api_secret ?? null),
       auth_type: dto.auth_type ?? 'api_key',
       auth_url: dto.auth_url ?? null,
       username: dto.username ?? null,
-      password: dto.password ?? null,
+      password: this.encryptCredential(dto.password ?? null),
       market_id: dto.market_id ?? null,
       is_active: dto.is_active ?? true,
       field_mapping: dto.field_mapping ?? null,
@@ -672,6 +718,15 @@ export class IntegrationServiceService {
     }
 
     Object.assign(row, dto);
+    if (typeof dto.api_key !== 'undefined') {
+      row.api_key = this.encryptCredential(dto.api_key ?? null);
+    }
+    if (typeof dto.api_secret !== 'undefined') {
+      row.api_secret = this.encryptCredential(dto.api_secret ?? null);
+    }
+    if (typeof dto.password !== 'undefined') {
+      row.password = this.encryptCredential(dto.password ?? null);
+    }
     const saved = await this.integrationRepo.save(row);
     const [enriched] = await this.attachMarkets([saved as any]);
     return successRes(this.sanitizeIntegrationRow(enriched), 200, 'integration updated');
@@ -683,11 +738,98 @@ export class IntegrationServiceService {
       this.notFound('integration not found');
     }
 
+    if (row.is_active) {
+      this.badRequest('integration must be inactive before delete');
+    }
+
     row.isDeleted = true;
     row.is_active = false;
     const saved = await this.integrationRepo.save(row);
     this.clearTokenCache(saved.id);
     return successRes({ id: saved.id }, 200, 'integration deleted');
+  }
+
+  async healthcheckIntegration(input: {
+    id?: string;
+    slug?: string;
+    endpoint?: string;
+    method?: HttpMethod;
+    use_auth?: boolean;
+    timeout_ms?: number;
+  }) {
+    const id = String(input?.id ?? '').trim();
+    const slug = String(input?.slug ?? '').trim();
+
+    let integration: ExternalIntegration | null = null;
+    if (id) {
+      integration = await this.integrationRepo.findOne({ where: { id, isDeleted: false } });
+    } else if (slug) {
+      integration = await this.integrationRepo.findOne({ where: { slug, isDeleted: false } });
+    }
+
+    if (!integration) {
+      this.notFound('integration not found');
+    }
+
+    const method = (input?.method ?? 'GET').toUpperCase() as HttpMethod;
+    const endpoint = input?.endpoint ?? '/';
+    const url = this.buildExternalUrl(integration.api_url, endpoint);
+    const useAuth = input?.use_auth ?? true;
+
+    const headers: Record<string, string> = {};
+    const syncConfig = this.toSyncConfig(integration);
+    const headerPrefix = syncConfig.auth?.header_prefix ?? 'Bearer';
+
+    if (useAuth) {
+      const token = await this.getValidToken(integration);
+      if (token) {
+        headers.Authorization = `${headerPrefix} ${token}`;
+      }
+    }
+
+    const startedAt = Date.now();
+    try {
+      const response = await fetch(url, {
+        method,
+        headers,
+        signal: AbortSignal.timeout(Math.max(1000, input?.timeout_ms ?? 8000)),
+      });
+
+      return successRes(
+        {
+          ok: response.ok,
+          status: response.status,
+          response_time_ms: Date.now() - startedAt,
+          method,
+          url,
+          integration: {
+            id: integration.id,
+            slug: integration.slug,
+            name: integration.name,
+            is_active: integration.is_active,
+          },
+        },
+        200,
+        'integration healthcheck completed',
+      );
+    } catch (error: any) {
+      return errorRes(
+        error?.message ? String(error.message) : 'integration healthcheck failed',
+        502,
+        {
+          ok: false,
+          response_time_ms: Date.now() - startedAt,
+          method,
+          url,
+          integration: {
+            id: integration.id,
+            slug: integration.slug,
+            name: integration.name,
+            is_active: integration.is_active,
+          },
+        },
+      );
+    }
   }
 
   async externalRequest(input: ExternalRequestInput) {

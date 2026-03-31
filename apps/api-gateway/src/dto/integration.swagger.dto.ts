@@ -2,11 +2,13 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
   IsEnum,
+  IsInt,
   IsNotEmpty,
   IsObject,
   IsOptional,
   IsString,
   IsUrl,
+  Min,
   ValidateIf,
 } from 'class-validator';
 
@@ -223,6 +225,29 @@ export class ExternalRequestDto {
   @IsOptional()
   @IsString()
   note?: string;
+}
+
+export class IntegrationHealthcheckRequestDto {
+  @ApiPropertyOptional({ example: '/' })
+  @IsOptional()
+  @IsString()
+  endpoint?: string;
+
+  @ApiPropertyOptional({ example: 'GET', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] })
+  @IsOptional()
+  @IsEnum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
+  method?: HttpMethod;
+
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  use_auth?: boolean;
+
+  @ApiPropertyOptional({ example: 8000 })
+  @IsOptional()
+  @IsInt()
+  @Min(500)
+  timeout_ms?: number;
 }
 
 export class CreateSyncQueueRequestDto {

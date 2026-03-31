@@ -73,6 +73,13 @@ export class IntegrationServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'integration.healthcheck' })
+  healthcheck(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.healthcheckIntegration(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'integration.external.search_by_qr' })
   searchByQr(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
