@@ -19,6 +19,7 @@ import { SyncHistory } from './entities/sync-history.entity';
     RmqModule.register({ name: 'IDENTITY' }),
     RmqModule.register({ name: 'CATALOG' }),
     RmqModule.register({ name: 'ORDER' }),
+    RmqModule.register({ name: 'NOTIFICATION' }),
     DatabaseModule,
     TypeOrmModule.forFeature([ExternalIntegration, SyncQueue, SyncHistory]),
   ],

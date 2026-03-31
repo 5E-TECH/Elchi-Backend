@@ -98,10 +98,7 @@ export class IntegrationServiceController {
   @MessagePattern({ cmd: 'integration.sync.history' })
   syncHistory(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.integrationService.getSyncHistory(
-        Number(data?.limit ?? 50),
-        data?.integration_id,
-      ),
+      this.integrationService.getSyncHistory(data?.query ?? data),
     );
   }
 
@@ -122,14 +119,20 @@ export class IntegrationServiceController {
   @MessagePattern({ cmd: 'integration.sync.process' })
   processSync(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.integrationService.enqueueSync(data),
+      this.integrationService.processPendingSyncQueue(
+        Number(data?.limit ?? 20),
+        data?.integration_id ? String(data.integration_id) : undefined,
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'integration.sync.retry' })
   retrySync(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.integrationService.enqueueSync(data),
+      this.integrationService.retrySyncQueue(
+        data?.queue_id ? String(data.queue_id) : undefined,
+        data?.integration_id ? String(data.integration_id) : undefined,
+      ),
     );
   }
 

@@ -3,7 +3,13 @@ import { BaseEntity } from '@app/common';
 import { ExternalIntegration } from './external-integration.entity';
 
 export type SyncAction = 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting';
-export type SyncStatus = 'pending' | 'processing' | 'success' | 'failed';
+export type SyncStatus =
+  | 'pending'
+  | 'processing'
+  | 'completed'
+  | 'success'
+  | 'failed'
+  | 'permanently_failed';
 
 @Entity({ name: 'sync_queue' })
 @Index('IDX_SYNC_QUEUE_STATUS', ['status'])
@@ -37,6 +43,9 @@ export class SyncQueue extends BaseEntity {
 
   @Column({ type: 'int', default: 0 })
   attempts!: number;
+
+  @Column({ type: 'int', default: 0 })
+  retry_count!: number;
 
   @Column({ type: 'int', default: 3 })
   max_attempts!: number;

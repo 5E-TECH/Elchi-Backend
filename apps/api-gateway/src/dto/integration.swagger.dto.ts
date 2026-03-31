@@ -295,10 +295,37 @@ export class FilterSyncHistoryQueryDto {
   @ApiPropertyOptional({ example: '2026-03-01' })
   @IsOptional()
   @IsString()
-  fromDate?: string;
+  from_date?: string;
 
   @ApiPropertyOptional({ example: '2026-03-31' })
   @IsOptional()
   @IsString()
-  toDate?: string;
+  to_date?: string;
+
+  @ApiPropertyOptional({ example: 1 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  page?: number;
+
+  @ApiPropertyOptional({ example: 20 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  limit?: number;
+}
+
+export class StartSyncRequestDto {
+  @ApiPropertyOptional({ example: 20 })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  limit?: number;
+}
+
+export class RetrySyncRequestDto {
+  @ApiPropertyOptional({ example: '123' })
+  @IsOptional()
+  @IsString()
+  queue_id?: string;
 }

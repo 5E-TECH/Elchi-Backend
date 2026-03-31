@@ -26,8 +26,11 @@ import { RolesGuard } from './auth/roles.guard';
 import {
   CreateIntegrationRequestDto,
   ExternalRequestDto,
+  FilterSyncHistoryQueryDto,
   IntegrationHealthcheckRequestDto,
   QrSearchRequestDto,
+  RetrySyncRequestDto,
+  StartSyncRequestDto,
   UpdateIntegrationRequestDto,
 } from './dto/integration.swagger.dto';
 
@@ -87,6 +90,16 @@ export class IntegrationGatewayController {
     );
   }
 
+  @Get('sync/history')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Sync history list (pagination/filter/success rate)' })
+  syncHistory(@Query() query: FilterSyncHistoryQueryDto) {
+    return this.integrationClient.send(
+      { cmd: 'integration.sync.history' },
+      { query },
+    );
+  }
+
   @Post()
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Create integration' })
@@ -134,6 +147,64 @@ export class IntegrationGatewayController {
     );
   }
 
+  @Post(':id/test')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Integration connection test alias endpoint' })
+  @ApiBody({ type: IntegrationHealthcheckRequestDto, required: false })
+  testConnection(
+    @Param('id') id: string,
+    @Body() dto: IntegrationHealthcheckRequestDto = {},
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.healthcheck' },
+      {
+        id,
+        ...dto,
+      },
+    );
+  }
+
+  @Get(':id/sync-history')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Sync history by integration id' })
+  syncHistoryByIntegration(
+    @Param('id') id: string,
+    @Query() query: FilterSyncHistoryQueryDto,
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.sync.history' },
+      { query: { ...query, integration_id: id } },
+    );
+  }
+
+  @Post(':id/sync')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Start sync processing for integration' })
+  @ApiBody({ type: StartSyncRequestDto, required: false })
+  startSync(
+    @Param('id') id: string,
+    @Body() dto: StartSyncRequestDto = {},
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.sync.process' },
+      { integration_id: id, limit: dto.limit ?? 20 },
+    );
+  }
+
+  @Post(':id/retry')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Retry failed sync jobs for integration' })
+  @ApiBody({ type: RetrySyncRequestDto, required: false })
+  retrySync(
+    @Param('id') id: string,
+    @Body() dto: RetrySyncRequestDto = {},
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.sync.retry' },
+      { integration_id: id, queue_id: dto.queue_id },
+    );
+  }
+
   @Post(':slug/search-by-qr')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiOperation({ summary: 'Universal QR search via integration config' })
@@ -161,4 +232,5 @@ export class IntegrationGatewayController {
       },
     );
   }
+
 }
