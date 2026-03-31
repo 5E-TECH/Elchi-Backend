@@ -33,27 +33,29 @@ export class BranchServiceController {
   // --- Branch ---
   @MessagePattern({ cmd: 'branch.create' })
   create(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () => this.branchService.createBranch(data?.dto ?? data));
   }
 
   @MessagePattern({ cmd: 'branch.find_all' })
   findAll(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () => this.branchService.findAllBranches(data?.query ?? data));
   }
 
   @MessagePattern({ cmd: 'branch.find_by_id' })
   findById(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () => this.branchService.findBranchById(data?.id));
   }
 
   @MessagePattern({ cmd: 'branch.update' })
   update(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.branchService.updateBranch(data?.id, data?.dto ?? data),
+    );
   }
 
   @MessagePattern({ cmd: 'branch.delete' })
   remove(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () => this.branchService.deleteBranch(data?.id));
   }
 
   // --- BranchUser ---
