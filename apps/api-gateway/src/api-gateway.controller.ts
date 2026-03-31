@@ -205,9 +205,9 @@ export class ApiGatewayController {
 
   @Get('users/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get user by id (all roles)' })
+  @ApiOperation({ summary: 'Get user by id (admin/superadmin)' })
   @ApiParam({ name: 'id', description: 'User ID' })
   @ApiQuery({ name: 'fromDate', required: false, type: String, example: '2026-03-01' })
   @ApiQuery({ name: 'toDate', required: false, type: String, example: '2026-03-30' })
