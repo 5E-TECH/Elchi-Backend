@@ -1,0 +1,78 @@
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { IsEnum, IsNumberString, IsOptional, IsString, MinLength } from 'class-validator';
+
+export class CreateBranchRequestDto {
+  @ApiProperty({ example: 'Namangan filial' })
+  @IsString()
+  @MinLength(2)
+  name!: string;
+
+  @ApiPropertyOptional({ example: "Namangan shahar, Bobur ko'chasi 12" })
+  @IsOptional()
+  @IsString()
+  address?: string;
+
+  @ApiPropertyOptional({ example: '+998901234567' })
+  @IsOptional()
+  @IsString()
+  phone_number?: string;
+
+  @ApiPropertyOptional({ example: '5', description: 'Region ID (bigint string)' })
+  @IsOptional()
+  @IsNumberString()
+  region_id?: string;
+
+  @ApiPropertyOptional({ example: '60', description: 'District ID (bigint string)' })
+  @IsOptional()
+  @IsNumberString()
+  district_id?: string;
+
+  @ApiPropertyOptional({ example: 'active', enum: ['active', 'inactive'] })
+  @IsOptional()
+  @IsEnum(['active', 'inactive'])
+  status?: string;
+
+  @ApiPropertyOptional({ example: '12', description: 'Manager user ID (bigint string)' })
+  @IsOptional()
+  @IsNumberString()
+  manager_id?: string;
+}
+
+export class UpdateBranchRequestDto {
+  @ApiPropertyOptional({ example: 'Namangan filial 2' })
+  @IsOptional()
+  @IsString()
+  @MinLength(2)
+  name?: string;
+
+  @ApiPropertyOptional({ example: "Namangan shahar, Alisher Navoiy ko'chasi 20" })
+  @IsOptional()
+  @IsString()
+  address?: string;
+
+  @ApiPropertyOptional({ example: '+998901234568' })
+  @IsOptional()
+  @IsString()
+  phone_number?: string;
+
+  @ApiPropertyOptional({ example: '5', description: 'Region ID (bigint string)' })
+  @IsOptional()
+  @IsNumberString()
+  region_id?: string;
+
+  @ApiPropertyOptional({ example: '60', description: 'District ID (bigint string)' })
+  @IsOptional()
+  @IsNumberString()
+  district_id?: string;
+
+  @ApiPropertyOptional({ example: 'active', enum: ['active', 'inactive'] })
+  @IsOptional()
+  @IsEnum(['active', 'inactive'])
+  status?: string;
+
+  @ApiPropertyOptional({ example: '12', description: 'Manager user ID (bigint string)' })
+  @IsOptional()
+  @IsNumberString()
+  manager_id?: string;
+}
+
