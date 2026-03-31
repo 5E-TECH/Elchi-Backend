@@ -4,6 +4,7 @@ import {
   IsNotEmpty,
   IsNumber,
   IsOptional,
+  IsPhoneNumber,
   IsString,
   Min,
   MinLength,
@@ -19,7 +20,7 @@ export class CreateMarketDto {
 
   @ApiProperty({ example: '+998901234567' })
   @IsNotEmpty()
-  @IsString()
+  @IsPhoneNumber('UZ')
   phone_number: string;
 
   @ApiProperty({ example: 'market_01' })

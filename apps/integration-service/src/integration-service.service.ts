@@ -1,8 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, Repository } from 'typeorm';
+import { Between, IsNull, LessThanOrEqual, Repository } from 'typeorm';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
+import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
 import { Order_status } from '@app/common';
 import { ExternalIntegration } from './entities/external-integration.entity';
 import { SyncQueue } from './entities/sync-queue.entity';
@@ -81,9 +82,20 @@ type FindAllIntegrationsQuery = {
   limit?: number;
 };
 
+type SyncHistoryQuery = {
+  integration_id?: string;
+  status?: 'success' | 'failed' | string;
+  from_date?: string;
+  to_date?: string;
+  page?: number;
+  limit?: number;
+};
+
 @Injectable()
 export class IntegrationServiceService {
   private readonly tokenCache = new Map<string, { token: string; expiresAt: number }>();
+  private readonly credentialSecret = process.env.INTEGRATION_CREDENTIAL_SECRET || 'elchi-integration-secret';
+  private queueProcessing = false;
 
   constructor(
     @InjectRepository(ExternalIntegration) private readonly integrationRepo: Repository<ExternalIntegration>,
@@ -92,6 +104,7 @@ export class IntegrationServiceService {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
+    @Inject('NOTIFICATION') private readonly notificationClient: ClientProxy,
   ) {}
 
   private badRequest(message: string): never {
@@ -180,7 +193,8 @@ export class IntegrationServiceService {
   }
 
   private async loginAndGetToken(integration: ExternalIntegration): Promise<string> {
-    if (!integration.auth_url || !integration.username || !integration.password) {
+    const decryptedPassword = this.decryptCredential(integration.password);
+    if (!integration.auth_url || !integration.username || !decryptedPassword) {
       this.badRequest('Integration login config is incomplete');
     }
 
@@ -189,12 +203,12 @@ export class IntegrationServiceService {
     const method = (authConfig.login_method ?? 'POST').toUpperCase() as HttpMethod;
     const context = {
       username: integration.username,
-      password: integration.password,
+      password: decryptedPassword,
     };
     const payload =
       authConfig.login_payload_template && Object.keys(authConfig.login_payload_template).length
         ? this.interpolate(authConfig.login_payload_template, context)
-        : { username: integration.username, password: integration.password };
+        : { username: integration.username, password: decryptedPassword };
 
     try {
       const response = await fetch(integration.auth_url, {
@@ -228,7 +242,7 @@ export class IntegrationServiceService {
 
   private async getValidToken(integration: ExternalIntegration): Promise<string | null> {
     if (integration.auth_type === 'api_key') {
-      return integration.api_key ?? null;
+      return this.decryptCredential(integration.api_key) ?? null;
     }
 
     const cached = this.tokenCache.get(integration.id);
@@ -259,12 +273,100 @@ export class IntegrationServiceService {
     }
   }
 
+  private getRetryDelayMs(attempt: number): number {
+    // Exponential-like backoff requested for retries: 1m, 5m, 15m
+    const retryDelays = [60_000, 5 * 60_000, 15 * 60_000];
+    const index = Math.max(0, Math.min(retryDelays.length - 1, attempt - 1));
+    return retryDelays[index];
+  }
+
+  private async notifyAdminsAboutPermanentFailure(
+    queue: SyncQueue,
+    integration: ExternalIntegration | null,
+    errorMessage: string,
+  ): Promise<void> {
+    const adminGroupId =
+      process.env.NOTIFICATION_ADMIN_GROUP_ID ||
+      process.env.TELEGRAM_ADMIN_GROUP_ID ||
+      '';
+
+    if (!adminGroupId) {
+      return;
+    }
+
+    const message =
+      `Integration retry permanently failed\n` +
+      `integration_id: ${queue.integration_id}\n` +
+      `integration_slug: ${integration?.slug ?? 'unknown'}\n` +
+      `order_id: ${queue.order_id}\n` +
+      `attempts: ${queue.attempts}\n` +
+      `error: ${errorMessage}`;
+
+    try {
+      await this.rmqRequest(
+        this.notificationClient,
+        { cmd: 'notification.send' },
+        {
+          group_id: adminGroupId,
+          message,
+          token: process.env.TELEGRAM_BOT_TOKEN || undefined,
+        },
+        5000,
+      );
+    } catch {
+      // Best-effort notification only; queue processing must continue.
+    }
+  }
+
   private toSafeInt(value: unknown): number {
     const parsed = Number(value);
     if (!Number.isFinite(parsed) || parsed < 0) {
       return 0;
     }
     return Math.trunc(parsed);
+  }
+
+  private getCredentialKey(): Buffer {
+    return createHash('sha256').update(this.credentialSecret).digest();
+  }
+
+  private encryptCredential(value?: string | null): string | null {
+    if (!value) {
+      return null;
+    }
+
+    if (value.startsWith('enc:')) {
+      return value;
+    }
+
+    const iv = randomBytes(16);
+    const cipher = createCipheriv('aes-256-cbc', this.getCredentialKey(), iv);
+    const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+    return `enc:${iv.toString('hex')}:${encrypted.toString('hex')}`;
+  }
+
+  private decryptCredential(value?: string | null): string | null {
+    if (!value) {
+      return null;
+    }
+
+    if (!value.startsWith('enc:')) {
+      return value;
+    }
+
+    try {
+      const [, ivHex, encryptedHex] = value.split(':');
+      if (!ivHex || !encryptedHex) {
+        return value;
+      }
+      const iv = Buffer.from(ivHex, 'hex');
+      const encrypted = Buffer.from(encryptedHex, 'hex');
+      const decipher = createDecipheriv('aes-256-cbc', this.getCredentialKey(), iv);
+      const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+      return decrypted.toString('utf8');
+    } catch {
+      return value;
+    }
   }
 
   private async getProductsCountByMarket(marketId: string): Promise<number> {
@@ -546,12 +648,12 @@ export class IntegrationServiceService {
       name: dto.name ?? slug,
       slug,
       api_url: dto.api_url,
-      api_key: dto.api_key ?? null,
-      api_secret: dto.api_secret ?? null,
+      api_key: this.encryptCredential(dto.api_key ?? null),
+      api_secret: this.encryptCredential(dto.api_secret ?? null),
       auth_type: dto.auth_type ?? 'api_key',
       auth_url: dto.auth_url ?? null,
       username: dto.username ?? null,
-      password: dto.password ?? null,
+      password: this.encryptCredential(dto.password ?? null),
       market_id: dto.market_id ?? null,
       is_active: dto.is_active ?? true,
       field_mapping: dto.field_mapping ?? null,
@@ -672,6 +774,15 @@ export class IntegrationServiceService {
     }
 
     Object.assign(row, dto);
+    if (typeof dto.api_key !== 'undefined') {
+      row.api_key = this.encryptCredential(dto.api_key ?? null);
+    }
+    if (typeof dto.api_secret !== 'undefined') {
+      row.api_secret = this.encryptCredential(dto.api_secret ?? null);
+    }
+    if (typeof dto.password !== 'undefined') {
+      row.password = this.encryptCredential(dto.password ?? null);
+    }
     const saved = await this.integrationRepo.save(row);
     const [enriched] = await this.attachMarkets([saved as any]);
     return successRes(this.sanitizeIntegrationRow(enriched), 200, 'integration updated');
@@ -683,11 +794,98 @@ export class IntegrationServiceService {
       this.notFound('integration not found');
     }
 
+    if (row.is_active) {
+      this.badRequest('integration must be inactive before delete');
+    }
+
     row.isDeleted = true;
     row.is_active = false;
     const saved = await this.integrationRepo.save(row);
     this.clearTokenCache(saved.id);
     return successRes({ id: saved.id }, 200, 'integration deleted');
+  }
+
+  async healthcheckIntegration(input: {
+    id?: string;
+    slug?: string;
+    endpoint?: string;
+    method?: HttpMethod;
+    use_auth?: boolean;
+    timeout_ms?: number;
+  }) {
+    const id = String(input?.id ?? '').trim();
+    const slug = String(input?.slug ?? '').trim();
+
+    let integration: ExternalIntegration | null = null;
+    if (id) {
+      integration = await this.integrationRepo.findOne({ where: { id, isDeleted: false } });
+    } else if (slug) {
+      integration = await this.integrationRepo.findOne({ where: { slug, isDeleted: false } });
+    }
+
+    if (!integration) {
+      this.notFound('integration not found');
+    }
+
+    const method = (input?.method ?? 'GET').toUpperCase() as HttpMethod;
+    const endpoint = input?.endpoint ?? '/';
+    const url = this.buildExternalUrl(integration.api_url, endpoint);
+    const useAuth = input?.use_auth ?? true;
+
+    const headers: Record<string, string> = {};
+    const syncConfig = this.toSyncConfig(integration);
+    const headerPrefix = syncConfig.auth?.header_prefix ?? 'Bearer';
+
+    if (useAuth) {
+      const token = await this.getValidToken(integration);
+      if (token) {
+        headers.Authorization = `${headerPrefix} ${token}`;
+      }
+    }
+
+    const startedAt = Date.now();
+    try {
+      const response = await fetch(url, {
+        method,
+        headers,
+        signal: AbortSignal.timeout(Math.max(1000, input?.timeout_ms ?? 8000)),
+      });
+
+      return successRes(
+        {
+          ok: response.ok,
+          status: response.status,
+          response_time_ms: Date.now() - startedAt,
+          method,
+          url,
+          integration: {
+            id: integration.id,
+            slug: integration.slug,
+            name: integration.name,
+            is_active: integration.is_active,
+          },
+        },
+        200,
+        'integration healthcheck completed',
+      );
+    } catch (error: any) {
+      return errorRes(
+        error?.message ? String(error.message) : 'integration healthcheck failed',
+        502,
+        {
+          ok: false,
+          response_time_ms: Date.now() - startedAt,
+          method,
+          url,
+          integration: {
+            id: integration.id,
+            slug: integration.slug,
+            name: integration.name,
+            is_active: integration.is_active,
+          },
+        },
+      );
+    }
   }
 
   async externalRequest(input: ExternalRequestInput) {
@@ -730,27 +928,112 @@ export class IntegrationServiceService {
   }
 
   async getQueueStatus() {
-    const [pending, processing, success, failed] = await Promise.all([
+    const [pending, processing, completed, failed, permanentlyFailed, legacySuccess] = await Promise.all([
       this.syncQueueRepo.count({ where: { status: 'pending' } }),
       this.syncQueueRepo.count({ where: { status: 'processing' } }),
-      this.syncQueueRepo.count({ where: { status: 'success' } }),
+      this.syncQueueRepo.count({ where: { status: 'completed' as any } }),
       this.syncQueueRepo.count({ where: { status: 'failed' } }),
+      this.syncQueueRepo.count({ where: { status: 'permanently_failed' as any } }),
+      this.syncQueueRepo.count({ where: { status: 'success' as any } }),
     ]);
 
-    return successRes({ pending, processing, success, failed });
+    return successRes({
+      pending,
+      processing,
+      completed: completed + legacySuccess,
+      failed,
+      permanently_failed: permanentlyFailed,
+    });
   }
 
-  async getSyncHistory(limit = 50, integration_id?: string) {
+  async getSyncHistory(query?: SyncHistoryQuery) {
     const where: Record<string, unknown> = {};
-    if (integration_id) {
-      where.integration_id = integration_id;
+
+    if (query?.integration_id) {
+      where.integration_id = query.integration_id;
     }
-    const rows = await this.syncHistoryRepo.find({
+
+    const normalizedStatus = String(query?.status ?? '').toLowerCase();
+    if (normalizedStatus === 'success' || normalizedStatus === 'failed') {
+      where.status = normalizedStatus;
+    }
+
+    const fromDate = query?.from_date ? new Date(query.from_date) : undefined;
+    const toDate = query?.to_date ? new Date(query.to_date) : undefined;
+    if (fromDate && Number.isNaN(fromDate.getTime())) {
+      this.badRequest('from_date is invalid');
+    }
+    if (toDate && Number.isNaN(toDate.getTime())) {
+      this.badRequest('to_date is invalid');
+    }
+    if (fromDate && toDate) {
+      if (fromDate > toDate) {
+        this.badRequest('from_date must be <= to_date');
+      }
+      where.sync_date = Between(fromDate.getTime(), toDate.getTime());
+    } else if (fromDate) {
+      where.sync_date = Between(fromDate.getTime(), Date.now());
+    } else if (toDate) {
+      where.sync_date = Between(0, toDate.getTime());
+    }
+
+    const page = Math.max(1, Number(query?.page ?? 1));
+    const limit = Math.min(200, Math.max(1, Number(query?.limit ?? 20)));
+    if (!Number.isFinite(page) || !Number.isFinite(limit)) {
+      this.badRequest('page and limit must be numbers');
+    }
+
+    const [items, total] = await this.syncHistoryRepo.findAndCount({
       where,
       order: { sync_date: 'DESC' },
-      take: Math.max(1, Math.min(limit, 200)),
+      skip: (page - 1) * limit,
+      take: limit,
     });
-    return successRes(rows);
+
+    const successCount = await this.syncHistoryRepo.count({
+      where: { ...where, status: 'success' as any },
+    });
+    const failedCount = await this.syncHistoryRepo.count({
+      where: { ...where, status: 'failed' as any },
+    });
+    const totalAttempts = successCount + failedCount;
+    const success_rate = totalAttempts > 0 ? Number(((successCount * 100) / totalAttempts).toFixed(2)) : 0;
+
+    return successRes({
+      items,
+      summary: {
+        total_attempts: totalAttempts,
+        success_count: successCount,
+        failed_count: failedCount,
+        success_rate,
+      },
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    });
+  }
+
+  private async writeSyncHistoryAttempt(params: {
+    queue: SyncQueue;
+    integration_name?: string | null;
+    status: 'success' | 'failed';
+    result?: Record<string, any> | null;
+  }) {
+    await this.syncHistoryRepo.save(
+      this.syncHistoryRepo.create({
+        sync_queue_id: params.queue.id,
+        integration_id: params.queue.integration_id,
+        integration_name: params.integration_name ?? 'unknown',
+        synced_orders: params.status === 'success' ? 1 : 0,
+        status: params.status,
+        result: params.result ?? null,
+        sync_date: Date.now(),
+        attempted_at: new Date(),
+      }),
+    );
   }
 
   private resolveExternalStatus(integration: ExternalIntegration, action: string, newStatus?: string): string {
@@ -832,9 +1115,11 @@ export class IntegrationServiceService {
       new_status: input.new_status ?? null,
       external_status: externalStatus,
       payload: context,
-      status: 'processing',
-      attempts: 1,
-      max_attempts: 3,
+      status: 'pending',
+      attempts: 0,
+      retry_count: 0,
+      // initial attempt + max 3 retries
+      max_attempts: 4,
       external_order_id: input.external_order_id ? String(input.external_order_id) : null,
       last_error: null,
       last_response: null,
@@ -843,28 +1128,74 @@ export class IntegrationServiceService {
     });
     const savedQueue = await this.syncQueueRepo.save(queue);
 
+    await this.processPendingSyncQueue(1);
+    const updated = await this.syncQueueRepo.findOne({ where: { id: savedQueue.id } });
+    return successRes(updated ?? savedQueue, 201, 'sync enqueued');
+  }
+
+  private async processQueueItem(queue: SyncQueue): Promise<SyncQueue> {
+    queue.status = 'processing';
+    queue.attempts = Number(queue.attempts ?? 0) + 1;
+    queue.retry_count = Math.min(
+      Math.max(0, Number(queue.max_attempts ?? 4) - 1),
+      Math.max(0, Number(queue.attempts ?? 0) - 1),
+    );
+    queue.last_error = null;
+    await this.syncQueueRepo.save(queue);
+
+    const integration = await this.integrationRepo.findOne({
+      where: { id: String(queue.integration_id), isDeleted: false },
+    });
+
+    if (!integration) {
+      queue.status = 'failed';
+      queue.last_error = 'integration not found for queue item';
+      queue.next_retry_at = null;
+      await this.syncQueueRepo.save(queue);
+      await this.writeSyncHistoryAttempt({
+        queue,
+        integration_name: null,
+        status: 'failed',
+        result: { error: queue.last_error },
+      });
+      return queue;
+    }
+
+    const syncConfig = this.toSyncConfig(integration);
+    const updateConfig = syncConfig.external_update ?? {};
     const endpoint = updateConfig.endpoint;
+
     if (!endpoint) {
-      savedQueue.status = 'failed';
-      savedQueue.last_error = 'status_sync_config.external_update.endpoint is required';
-      savedQueue.next_retry_at = null;
-      await this.syncQueueRepo.save(savedQueue);
-      return errorRes(savedQueue.last_error, 400, savedQueue);
+      queue.status = 'failed';
+      queue.last_error = 'status_sync_config.external_update.endpoint is required';
+      queue.next_retry_at = null;
+      await this.syncQueueRepo.save(queue);
+      await this.writeSyncHistoryAttempt({
+        queue,
+        integration_name: integration.name,
+        status: 'failed',
+        result: { error: queue.last_error },
+      });
+      return queue;
     }
 
     const method = (updateConfig.method ?? 'POST').toUpperCase() as HttpMethod;
     const orderIdField = updateConfig.order_id_field ?? 'id';
     const statusField = updateConfig.status_field ?? 'status';
+    const payload = (queue.payload ?? {}) as Record<string, string>;
     const queryFromTemplate =
-      (this.interpolate(updateConfig.query_template ?? {}, context) as Record<string, unknown>) ?? {};
+      (this.interpolate(updateConfig.query_template ?? {}, payload) as Record<string, unknown>) ?? {};
     const bodyFromTemplate =
-      (this.interpolate(updateConfig.body_template ?? {}, context) as Record<string, unknown>) ?? {};
+      (this.interpolate(updateConfig.body_template ?? {}, payload) as Record<string, unknown>) ?? {};
+
+    const externalOrderId = queue.external_order_id ?? queue.order_id;
+    const externalStatus = queue.external_status ?? queue.new_status ?? queue.action;
 
     const params =
       method === 'GET'
         ? {
             ...queryFromTemplate,
-            [orderIdField]: input.external_order_id ?? input.order_id,
+            [orderIdField]: externalOrderId,
             [statusField]: externalStatus,
           }
         : queryFromTemplate;
@@ -873,7 +1204,7 @@ export class IntegrationServiceService {
         ? undefined
         : {
             ...bodyFromTemplate,
-            [orderIdField]: input.external_order_id ?? input.order_id,
+            [orderIdField]: externalOrderId,
             [statusField]: externalStatus,
           };
 
@@ -886,31 +1217,29 @@ export class IntegrationServiceService {
         body,
         headers: updateConfig.headers ?? undefined,
         use_auth: updateConfig.use_auth ?? true,
-        timeout_ms: updateConfig.timeout_ms,
+        timeout_ms: 30000,
         response_path: updateConfig.response_path,
       });
 
-      savedQueue.status = 'success';
-      savedQueue.last_error = null;
-      savedQueue.last_response = requestResult as Record<string, unknown>;
-      savedQueue.synced_at = new Date();
-      savedQueue.next_retry_at = null;
-      await this.syncQueueRepo.save(savedQueue);
+      queue.status = 'completed' as any;
+      queue.last_error = null;
+      queue.last_response = requestResult as Record<string, unknown>;
+      queue.synced_at = new Date();
+      queue.next_retry_at = null;
+      await this.syncQueueRepo.save(queue);
 
       integration.last_sync_at = new Date();
       integration.total_synced_orders = Number(integration.total_synced_orders ?? 0) + 1;
       await this.integrationRepo.save(integration);
 
-      await this.syncHistoryRepo.save(
-        this.syncHistoryRepo.create({
-          integration_id: integration.id,
-          integration_name: integration.name,
-          synced_orders: 1,
-          sync_date: Date.now(),
-        }),
-      );
+      await this.writeSyncHistoryAttempt({
+        queue,
+        integration_name: integration.name,
+        status: 'success',
+        result: requestResult as Record<string, any>,
+      });
 
-      return successRes(savedQueue, 201, 'sync enqueued and processed');
+      return queue;
     } catch (error: any) {
       const message = (() => {
         if (error?.response?.message) return String(error.response.message);
@@ -918,13 +1247,134 @@ export class IntegrationServiceService {
         return 'external status sync failed';
       })();
 
-      savedQueue.status = 'failed';
-      savedQueue.last_error = message;
-      savedQueue.last_response = error?.response ?? null;
-      savedQueue.next_retry_at = null;
-      await this.syncQueueRepo.save(savedQueue);
-
-      return errorRes(message, 502, savedQueue);
+      queue.last_error = message;
+      queue.last_response = error?.response ?? null;
+      if (Number(queue.attempts) < Number(queue.max_attempts ?? 4)) {
+        queue.status = 'pending';
+        queue.retry_count = Math.min(
+          Math.max(0, Number(queue.max_attempts ?? 4) - 1),
+          Math.max(0, Number(queue.attempts ?? 0)),
+        );
+        queue.next_retry_at = new Date(Date.now() + this.getRetryDelayMs(Number(queue.attempts)));
+      } else {
+        queue.status = 'permanently_failed' as any;
+        queue.retry_count = Math.max(0, Number(queue.max_attempts ?? 4) - 1);
+        queue.next_retry_at = null;
+        await this.notifyAdminsAboutPermanentFailure(queue, integration, message);
+      }
+      await this.syncQueueRepo.save(queue);
+      await this.writeSyncHistoryAttempt({
+        queue,
+        integration_name: integration.name,
+        status: 'failed',
+        result: {
+          error: message,
+          response: error?.response ?? null,
+        },
+      });
+      return queue;
     }
+  }
+
+  async processPendingSyncQueue(limit = 20, integration_id?: string) {
+    if (this.queueProcessing) {
+      return successRes({ message: 'queue processor is already running' });
+    }
+
+    this.queueProcessing = true;
+    let processed = 0;
+    let completed = 0;
+    let failed = 0;
+
+    try {
+      while (processed < Math.max(1, limit)) {
+        const now = new Date();
+        const pendingWhere = integration_id
+          ? [
+              { status: 'pending', next_retry_at: IsNull(), integration_id },
+              { status: 'pending', next_retry_at: LessThanOrEqual(now), integration_id },
+            ]
+          : [
+              { status: 'pending', next_retry_at: IsNull() },
+              { status: 'pending', next_retry_at: LessThanOrEqual(now) },
+            ];
+
+        const queue = await this.syncQueueRepo.findOne({
+          where: pendingWhere as any,
+          order: { createdAt: 'ASC' },
+        });
+
+        if (!queue) {
+          break;
+        }
+
+        const result = await this.processQueueItem(queue);
+        processed += 1;
+        if (result.status === ('completed' as any) || result.status === ('success' as any)) {
+          completed += 1;
+        } else if (result.status === 'failed' || result.status === ('permanently_failed' as any)) {
+          failed += 1;
+        }
+      }
+
+      return successRes(
+        {
+          processed,
+          completed,
+          failed,
+        },
+        200,
+        'sync queue processed',
+      );
+    } finally {
+      this.queueProcessing = false;
+    }
+  }
+
+  async retrySyncQueue(queue_id?: string, integration_id?: string) {
+    if (queue_id) {
+      const row = await this.syncQueueRepo.findOne({
+        where: integration_id
+          ? [
+              { id: String(queue_id), integration_id, status: 'failed' as any },
+              { id: String(queue_id), integration_id, status: 'permanently_failed' as any },
+            ]
+          : [
+              { id: String(queue_id), status: 'failed' as any },
+              { id: String(queue_id), status: 'permanently_failed' as any },
+            ],
+      });
+      if (!row) {
+        this.notFound('failed/permanently_failed sync queue item not found');
+      }
+      row.status = 'pending';
+      row.retry_count = 0;
+      row.next_retry_at = null;
+      await this.syncQueueRepo.save(row);
+      return this.processPendingSyncQueue(1, integration_id);
+    }
+
+    const rows = await this.syncQueueRepo.find({
+      where: integration_id
+        ? [
+            { integration_id, status: 'failed' as any },
+            { integration_id, status: 'permanently_failed' as any },
+          ]
+        : [
+            { status: 'failed' as any },
+            { status: 'permanently_failed' as any },
+          ],
+      take: 20,
+      order: { createdAt: 'ASC' },
+    });
+
+    for (const row of rows) {
+      row.status = 'pending';
+      row.retry_count = 0;
+      row.next_retry_at = null;
+      await this.syncQueueRepo.save(row);
+    }
+
+    return this.processPendingSyncQueue(Math.max(1, rows.length), integration_id);
   }
 }

@@ -20,194 +20,19 @@ import {
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
-import {
-  IsBoolean,
-  IsEnum,
-  IsNotEmpty,
-  IsObject,
-  IsOptional,
-  IsString,
-  IsUrl,
-  ValidateIf,
-} from 'class-validator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
-
-type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
-
-class CreateIntegrationRequestDto {
-  @IsString()
-  @IsNotEmpty()
-  name!: string;
-
-  @IsString()
-  @IsNotEmpty()
-  slug!: string;
-
-  @IsString()
-  @IsUrl()
-  api_url!: string;
-
-  @IsOptional()
-  @IsString()
-  auth_type?: 'api_key' | 'login';
-
-  @IsOptional()
-  @IsString()
-  api_key?: string;
-
-  @IsOptional()
-  @IsString()
-  api_secret?: string;
-
-  @IsOptional()
-  @IsString()
-  auth_url?: string;
-
-  @IsOptional()
-  @IsString()
-  username?: string;
-
-  @IsOptional()
-  @IsString()
-  password?: string;
-
-  @IsOptional()
-  @IsString()
-  market_id?: string;
-
-  @IsOptional()
-  @IsBoolean()
-  is_active?: boolean;
-
-  @IsOptional()
-  @IsObject()
-  field_mapping?: Record<string, unknown>;
-
-  @IsOptional()
-  @IsObject()
-  status_mapping?: Record<string, unknown>;
-
-  @IsOptional()
-  @IsObject()
-  status_sync_config?: Record<string, unknown>;
-}
-
-class UpdateIntegrationRequestDto {
-  @IsOptional()
-  @IsString()
-  name?: string;
-
-  @IsOptional()
-  @IsString()
-  slug?: string;
-
-  @IsOptional()
-  @IsString()
-  @IsUrl()
-  api_url?: string;
-
-  @IsOptional()
-  @IsString()
-  auth_type?: 'api_key' | 'login';
-
-  @IsOptional()
-  @IsString()
-  api_key?: string;
-
-  @IsOptional()
-  @IsString()
-  api_secret?: string;
-
-  @IsOptional()
-  @IsString()
-  auth_url?: string;
-
-  @IsOptional()
-  @IsString()
-  username?: string;
-
-  @IsOptional()
-  @IsString()
-  password?: string;
-
-  @IsOptional()
-  @IsString()
-  market_id?: string;
-
-  @IsOptional()
-  @IsBoolean()
-  is_active?: boolean;
-
-  @IsOptional()
-  @IsObject()
-  field_mapping?: Record<string, unknown>;
-
-  @IsOptional()
-  @IsObject()
-  status_mapping?: Record<string, unknown>;
-
-  @IsOptional()
-  @IsObject()
-  status_sync_config?: Record<string, unknown>;
-}
-
-class QrSearchRequestDto {
-  @IsString()
-  @IsNotEmpty()
-  qr_code!: string;
-
-  @IsOptional()
-  @IsString()
-  endpoint?: string;
-
-  @IsOptional()
-  @IsEnum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
-  method?: HttpMethod;
-
-  @IsOptional()
-  @IsString()
-  qr_field?: string;
-
-  @IsOptional()
-  @IsString()
-  response_path?: string;
-}
-
-class ExternalRequestDto {
-  @IsOptional()
-  @IsString()
-  endpoint?: string;
-
-  @IsOptional()
-  @IsEnum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
-  method?: HttpMethod;
-
-  @IsOptional()
-  @IsObject()
-  params?: Record<string, unknown>;
-
-  @IsOptional()
-  body?: unknown;
-
-  @IsOptional()
-  @IsObject()
-  headers?: Record<string, string>;
-
-  @IsOptional()
-  @IsBoolean()
-  use_auth?: boolean;
-
-  @IsOptional()
-  @IsString()
-  response_path?: string;
-
-  @ValidateIf((dto: ExternalRequestDto) => !dto.endpoint)
-  @IsOptional()
-  @IsString()
-  note?: string;
-}
+import {
+  CreateIntegrationRequestDto,
+  ExternalRequestDto,
+  FilterSyncHistoryQueryDto,
+  IntegrationHealthcheckRequestDto,
+  QrSearchRequestDto,
+  RetrySyncRequestDto,
+  StartSyncRequestDto,
+  UpdateIntegrationRequestDto,
+} from './dto/integration.swagger.dto';
 
 @ApiTags('Integrations')
 @ApiBearerAuth()
@@ -265,6 +90,16 @@ export class IntegrationGatewayController {
     );
   }
 
+  @Get('sync/history')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Sync history list (pagination/filter/success rate)' })
+  syncHistory(@Query() query: FilterSyncHistoryQueryDto) {
+    return this.integrationClient.send(
+      { cmd: 'integration.sync.history' },
+      { query },
+    );
+  }
+
   @Post()
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Create integration' })
@@ -295,6 +130,81 @@ export class IntegrationGatewayController {
     return this.integrationClient.send({ cmd: 'integration.delete' }, { id });
   }
 
+  @Post(':id/healthcheck')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Integration connection test (ping/healthcheck)' })
+  @ApiBody({ type: IntegrationHealthcheckRequestDto, required: false })
+  healthcheck(
+    @Param('id') id: string,
+    @Body() dto: IntegrationHealthcheckRequestDto = {},
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.healthcheck' },
+      {
+        id,
+        ...dto,
+      },
+    );
+  }
+
+  @Post(':id/test')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Integration connection test alias endpoint' })
+  @ApiBody({ type: IntegrationHealthcheckRequestDto, required: false })
+  testConnection(
+    @Param('id') id: string,
+    @Body() dto: IntegrationHealthcheckRequestDto = {},
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.healthcheck' },
+      {
+        id,
+        ...dto,
+      },
+    );
+  }
+
+  @Get(':id/sync-history')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Sync history by integration id' })
+  syncHistoryByIntegration(
+    @Param('id') id: string,
+    @Query() query: FilterSyncHistoryQueryDto,
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.sync.history' },
+      { query: { ...query, integration_id: id } },
+    );
+  }
+
+  @Post(':id/sync')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Start sync processing for integration' })
+  @ApiBody({ type: StartSyncRequestDto, required: false })
+  startSync(
+    @Param('id') id: string,
+    @Body() dto: StartSyncRequestDto = {},
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.sync.process' },
+      { integration_id: id, limit: dto.limit ?? 20 },
+    );
+  }
+
+  @Post(':id/retry')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Retry failed sync jobs for integration' })
+  @ApiBody({ type: RetrySyncRequestDto, required: false })
+  retrySync(
+    @Param('id') id: string,
+    @Body() dto: RetrySyncRequestDto = {},
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.sync.retry' },
+      { integration_id: id, queue_id: dto.queue_id },
+    );
+  }
+
   @Post(':slug/search-by-qr')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiOperation({ summary: 'Universal QR search via integration config' })
@@ -322,4 +232,5 @@ export class IntegrationGatewayController {
       },
     );
   }
+
 }
