@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Inject,
   Param,
@@ -48,7 +49,6 @@ interface JwtUser {
 export class ApiGatewayController {
   constructor(
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
-    @Inject('FINANCE') private readonly financeClient: ClientProxy,
   ) {}
 
   private toRequester(req: { user: JwtUser }) {
@@ -209,55 +209,24 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get user by id (all roles)' })
   @ApiParam({ name: 'id', description: 'User ID' })
-  @ApiQuery({ name: 'fromDate', required: false, type: String, example: '2026-03-01' })
-  @ApiQuery({ name: 'toDate', required: false, type: String, example: '2026-03-30' })
   @ApiOkResponse({ description: 'User by id' })
   @ApiNotFoundResponse({ description: 'Not found' })
   async getUserById(
     @Param('id') id: string,
-    @Query('fromDate') fromDate?: string,
-    @Query('toDate') toDate?: string,
+    @Req() req?: { user?: JwtUser },
   ) {
-    const userResponse = await firstValueFrom(
+    const requesterRoles = (req?.user?.roles ?? []).map((r) => String(r).toLowerCase());
+    const requesterIsPrivileged =
+      requesterRoles.includes(RoleEnum.SUPERADMIN) || requesterRoles.includes(RoleEnum.ADMIN);
+    const requesterIsMarket = requesterRoles.includes(RoleEnum.MARKET);
+
+    if (requesterIsMarket && !requesterIsPrivileged && req?.user?.sub !== id) {
+      throw new ForbiddenException('Market faqat o‘z profilini ko‘ra oladi');
+    }
+
+    return firstValueFrom(
       this.identityClient.send({ cmd: 'identity.user.find_by_id' }, { id }),
     );
-
-    const userData = userResponse?.data ?? null;
-    const role = String(userData?.role ?? '').toLowerCase();
-
-    const isMarket = role === RoleEnum.MARKET;
-    const isCourier = role === RoleEnum.COURIER;
-
-    if (!isMarket && !isCourier) {
-      return userResponse;
-    }
-
-    try {
-      const cashboxType = isMarket ? 'markets' : 'couriers';
-      const cashboxResponse = await firstValueFrom(
-        this.financeClient.send(
-          { cmd: 'finance.cashbox.user_by_id' },
-          { id, cashbox_type: cashboxType, fromDate, toDate },
-        ),
-      );
-
-      if (cashboxResponse?.statusCode !== 200 || !cashboxResponse?.data?.cashbox) {
-        return userResponse;
-      }
-
-      return {
-        ...cashboxResponse,
-        data: {
-          ...cashboxResponse.data,
-          cashbox: {
-            ...cashboxResponse.data.cashbox,
-            user: userData,
-          },
-        },
-      };
-    } catch {
-      return userResponse;
-    }
   }
 
   @Patch('users/:id')
