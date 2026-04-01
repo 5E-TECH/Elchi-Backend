@@ -16,6 +16,7 @@ import { BranchConfig } from './entities/branch-config.entity';
       validationSchema: branchValidationSchema,
     }),
     RmqModule,
+    RmqModule.register({ name: 'IDENTITY' }),
     DatabaseModule,
     TypeOrmModule.forFeature([Branch, BranchUser, BranchConfig]),
   ],

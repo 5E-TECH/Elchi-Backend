@@ -32,42 +32,42 @@ export class BranchServiceController {
 
   // --- Branch ---
   @MessagePattern({ cmd: 'branch.create' })
-  create(@Payload() data: any, @Ctx() context: RmqContext) {
+  create(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.branchService.createBranch(data?.dto ?? data));
   }
 
   @MessagePattern({ cmd: 'branch.find_all' })
-  findAll(@Payload() data: any, @Ctx() context: RmqContext) {
+  findAll(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.branchService.findAllBranches(data?.query ?? data));
   }
 
   @MessagePattern({ cmd: 'branch.find_by_id' })
-  findById(@Payload() data: any, @Ctx() context: RmqContext) {
+  findById(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.branchService.findBranchById(data?.id));
   }
 
   @MessagePattern({ cmd: 'branch.update' })
-  update(@Payload() data: any, @Ctx() context: RmqContext) {
+  update(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.branchService.updateBranch(data?.id, data?.dto ?? data),
     );
   }
 
   @MessagePattern({ cmd: 'branch.delete' })
-  remove(@Payload() data: any, @Ctx() context: RmqContext) {
+  remove(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.branchService.deleteBranch(data?.id));
   }
 
   // --- BranchUser ---
   @MessagePattern({ cmd: 'branch.user.assign' })
-  assignUser(@Payload() data: any, @Ctx() context: RmqContext) {
+  assignUser(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.branchService.assignUserToBranch(data?.dto ?? data),
     );
   }
 
   @MessagePattern({ cmd: 'branch.user.remove' })
-  removeUser(@Payload() data: any, @Ctx() context: RmqContext) {
+  removeUser(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.branchService.removeUserFromBranch({
         branch_id: data?.branch_id ?? data?.id,
@@ -77,7 +77,7 @@ export class BranchServiceController {
   }
 
   @MessagePattern({ cmd: 'branch.user.find_by_branch' })
-  findUsersByBranch(@Payload() data: any, @Ctx() context: RmqContext) {
+  findUsersByBranch(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.branchService.findUsersByBranch(data?.branch_id ?? data?.id),
     );
@@ -85,7 +85,7 @@ export class BranchServiceController {
 
   // --- BranchConfig ---
   @MessagePattern({ cmd: 'branch.config.set' })
-  setConfig(@Payload() data: any, @Ctx() context: RmqContext) {
+  setConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.branchService.setBranchConfig({
         branch_id: data?.branch_id ?? data?.id,
@@ -96,7 +96,7 @@ export class BranchServiceController {
   }
 
   @MessagePattern({ cmd: 'branch.config.get' })
-  getConfig(@Payload() data: any, @Ctx() context: RmqContext) {
+  getConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.branchService.getBranchConfig(data?.branch_id ?? data?.id),
     );
