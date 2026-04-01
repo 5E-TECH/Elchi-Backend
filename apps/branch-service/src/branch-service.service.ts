@@ -411,4 +411,84 @@ export class BranchServiceService {
 
     return successRes(items, 200, 'Branch config list');
   }
+
+  async getBranchConfigByKey(data: { branch_id?: string; config_key?: string }) {
+    const branchId = String(data?.branch_id ?? '').trim();
+    const configKey = String(data?.config_key ?? '').trim();
+
+    if (!branchId) {
+      this.badRequest('branch_id is required');
+    }
+    if (!configKey) {
+      this.badRequest('config_key is required');
+    }
+
+    await this.getBranchOrThrow(branchId);
+
+    const item = await this.branchConfigRepo.findOne({
+      where: { branch_id: branchId, config_key: configKey, isDeleted: false },
+    });
+
+    if (!item) {
+      this.notFound('Branch config not found');
+    }
+
+    return successRes(item, 200, 'Branch config found');
+  }
+
+  async updateBranchConfig(data: {
+    branch_id?: string;
+    config_key?: string;
+    config_value?: Record<string, unknown> | null;
+  }) {
+    const branchId = String(data?.branch_id ?? '').trim();
+    const configKey = String(data?.config_key ?? '').trim();
+
+    if (!branchId) {
+      this.badRequest('branch_id is required');
+    }
+    if (!configKey) {
+      this.badRequest('config_key is required');
+    }
+
+    await this.getBranchOrThrow(branchId);
+
+    const item = await this.branchConfigRepo.findOne({
+      where: { branch_id: branchId, config_key: configKey, isDeleted: false },
+    });
+    if (!item) {
+      this.notFound('Branch config not found');
+    }
+
+    item.config_value = typeof data?.config_value === 'undefined' ? null : (data.config_value ?? null);
+    const saved = await this.branchConfigRepo.save(item);
+
+    return successRes(saved, 200, 'Branch config updated');
+  }
+
+  async deleteBranchConfig(data: { branch_id?: string; config_key?: string }) {
+    const branchId = String(data?.branch_id ?? '').trim();
+    const configKey = String(data?.config_key ?? '').trim();
+
+    if (!branchId) {
+      this.badRequest('branch_id is required');
+    }
+    if (!configKey) {
+      this.badRequest('config_key is required');
+    }
+
+    await this.getBranchOrThrow(branchId);
+
+    const item = await this.branchConfigRepo.findOne({
+      where: { branch_id: branchId, config_key: configKey, isDeleted: false },
+    });
+    if (!item) {
+      this.notFound('Branch config not found');
+    }
+
+    item.isDeleted = true;
+    await this.branchConfigRepo.save(item);
+
+    return successRes({ branch_id: branchId, config_key: configKey }, 200, 'Branch config deleted');
+  }
 }
