@@ -687,7 +687,6 @@ export class UserServiceService implements OnModuleInit {
       default_tariff: null,
       isDeleted: false,
     });
-    console.log();
     
 
     const saved = await this.users.save(courier);
