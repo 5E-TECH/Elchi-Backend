@@ -221,6 +221,141 @@ export class BranchServiceService {
     return successRes({ id }, 200, 'Branch deleted');
   }
 
-  // TODO: BranchUser assign/remove
-  // TODO: BranchConfig CRUD
+  async assignUserToBranch(data: { branch_id?: string; user_id?: string; role?: string }) {
+    const branchId = String(data?.branch_id ?? '').trim();
+    const userId = String(data?.user_id ?? '').trim();
+    const role = data?.role ? String(data.role).trim() : null;
+
+    if (!branchId) {
+      this.badRequest('branch_id is required');
+    }
+    if (!userId) {
+      this.badRequest('user_id is required');
+    }
+
+    await this.getBranchOrThrow(branchId);
+
+    const existing = await this.branchUserRepo.findOne({
+      where: { branch_id: branchId, user_id: userId },
+    });
+
+    if (existing && !existing.isDeleted) {
+      this.conflict('User already assigned to branch');
+    }
+
+    if (existing) {
+      existing.isDeleted = false;
+      existing.role = role;
+      const revived = await this.branchUserRepo.save(existing);
+      return successRes(revived, 200, 'Branch user assigned');
+    }
+
+    const saved = await this.branchUserRepo.save(
+      this.branchUserRepo.create({
+        branch_id: branchId,
+        user_id: userId,
+        role,
+      }),
+    );
+
+    return successRes(saved, 201, 'Branch user assigned');
+  }
+
+  async removeUserFromBranch(data: { branch_id?: string; user_id?: string }) {
+    const branchId = String(data?.branch_id ?? '').trim();
+    const userId = String(data?.user_id ?? '').trim();
+
+    if (!branchId) {
+      this.badRequest('branch_id is required');
+    }
+    if (!userId) {
+      this.badRequest('user_id is required');
+    }
+
+    const row = await this.branchUserRepo.findOne({
+      where: { branch_id: branchId, user_id: userId, isDeleted: false },
+    });
+    if (!row) {
+      this.notFound('Branch user relation not found');
+    }
+
+    row.isDeleted = true;
+    await this.branchUserRepo.save(row);
+
+    return successRes({ branch_id: branchId, user_id: userId }, 200, 'Branch user removed');
+  }
+
+  async findUsersByBranch(branch_id: string) {
+    const branchId = String(branch_id ?? '').trim();
+    if (!branchId) {
+      this.badRequest('branch_id is required');
+    }
+
+    await this.getBranchOrThrow(branchId);
+
+    const users = await this.branchUserRepo.find({
+      where: { branch_id: branchId, isDeleted: false },
+      order: { createdAt: 'DESC' },
+    });
+
+    return successRes(users, 200, 'Branch users');
+  }
+
+  async setBranchConfig(data: {
+    branch_id?: string;
+    config_key?: string;
+    config_value?: Record<string, unknown> | null;
+  }) {
+    const branchId = String(data?.branch_id ?? '').trim();
+    const configKey = String(data?.config_key ?? '').trim();
+
+    if (!branchId) {
+      this.badRequest('branch_id is required');
+    }
+    if (!configKey) {
+      this.badRequest('config_key is required');
+    }
+
+    await this.getBranchOrThrow(branchId);
+
+    const existing = await this.branchConfigRepo.findOne({
+      where: { branch_id: branchId, config_key: configKey },
+    });
+
+    const configValue =
+      typeof data?.config_value === 'undefined' ? null : (data.config_value ?? null);
+
+    if (existing) {
+      existing.isDeleted = false;
+      existing.config_value = configValue;
+      const saved = await this.branchConfigRepo.save(existing);
+      return successRes(saved, 200, 'Branch config saved');
+    }
+
+    const saved = await this.branchConfigRepo.save(
+      this.branchConfigRepo.create({
+        branch_id: branchId,
+        config_key: configKey,
+        config_value: configValue,
+      }),
+    );
+
+    return successRes(saved, 201, 'Branch config saved');
+  }
+
+  async getBranchConfig(branch_id: string) {
+    const branchId = String(branch_id ?? '').trim();
+    if (!branchId) {
+      this.badRequest('branch_id is required');
+    }
+
+    await this.getBranchOrThrow(branchId);
+
+    const items = await this.branchConfigRepo.find({
+      where: { branch_id: branchId, isDeleted: false },
+      order: { createdAt: 'DESC' },
+    });
+
+    return successRes(items, 200, 'Branch config list');
+  }
 }

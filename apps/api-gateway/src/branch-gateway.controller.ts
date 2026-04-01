@@ -23,7 +23,12 @@ import {
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
-import { CreateBranchRequestDto, UpdateBranchRequestDto } from './dto/branch.swagger.dto';
+import {
+  AssignBranchUserRequestDto,
+  CreateBranchRequestDto,
+  SetBranchConfigRequestDto,
+  UpdateBranchRequestDto,
+} from './dto/branch.swagger.dto';
 
 @ApiTags('Branch')
 @ApiBearerAuth()
@@ -90,5 +95,51 @@ export class BranchGatewayController {
   deleteBranch(@Param('id') id: string) {
     return this.branchClient.send({ cmd: 'branch.delete' }, { id });
   }
-}
 
+  @Post('branches/:id/users')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Assign user to branch' })
+  @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
+  @ApiBody({ type: AssignBranchUserRequestDto })
+  assignUserToBranch(
+    @Param('id') id: string,
+    @Body() dto: AssignBranchUserRequestDto,
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.user.assign' },
+      { dto: { branch_id: id, ...dto } },
+    );
+  }
+
+  @Delete('branches/:id/users/:userId')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Remove user from branch' })
+  @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
+  @ApiParam({ name: 'userId', description: 'User ID (bigint string)' })
+  removeUserFromBranch(@Param('id') id: string, @Param('userId') userId: string) {
+    return this.branchClient.send(
+      { cmd: 'branch.user.remove' },
+      { branch_id: id, user_id: userId },
+    );
+  }
+
+  @Get('branches/:id/config')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Get branch config list' })
+  @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
+  getBranchConfig(@Param('id') id: string) {
+    return this.branchClient.send({ cmd: 'branch.config.get' }, { branch_id: id });
+  }
+
+  @Post('branches/:id/config')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Set branch config' })
+  @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
+  @ApiBody({ type: SetBranchConfigRequestDto })
+  setBranchConfig(@Param('id') id: string, @Body() dto: SetBranchConfigRequestDto) {
+    return this.branchClient.send(
+      { cmd: 'branch.config.set' },
+      { dto: { branch_id: id, ...dto } },
+    );
+  }
+}
