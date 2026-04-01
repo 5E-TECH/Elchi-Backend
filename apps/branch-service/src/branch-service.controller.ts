@@ -101,4 +101,35 @@ export class BranchServiceController {
       this.branchService.getBranchConfig(data?.branch_id ?? data?.id),
     );
   }
+
+  @MessagePattern({ cmd: 'branch.config.find_one' })
+  getConfigByKey(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.getBranchConfigByKey({
+        branch_id: data?.branch_id ?? data?.id,
+        config_key: data?.config_key ?? data?.key,
+      }),
+    );
+  }
+
+  @MessagePattern({ cmd: 'branch.config.update' })
+  updateConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.updateBranchConfig({
+        branch_id: data?.branch_id ?? data?.id,
+        config_key: data?.config_key ?? data?.key,
+        config_value: data?.dto?.config_value ?? data?.config_value,
+      }),
+    );
+  }
+
+  @MessagePattern({ cmd: 'branch.config.delete' })
+  deleteConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.deleteBranchConfig({
+        branch_id: data?.branch_id ?? data?.id,
+        config_key: data?.config_key ?? data?.key,
+      }),
+    );
+  }
 }

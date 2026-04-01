@@ -101,3 +101,13 @@ export class SetBranchConfigRequestDto {
   @IsOptional()
   config_value?: Record<string, unknown> | null;
 }
+
+export class UpdateBranchConfigRequestDto {
+  @ApiPropertyOptional({
+    example: { start: '10:00', end: '19:00', timezone: 'Asia/Tashkent' },
+    type: 'object',
+    additionalProperties: true,
+  })
+  @IsOptional()
+  config_value?: Record<string, unknown> | null;
+}

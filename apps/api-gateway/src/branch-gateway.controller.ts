@@ -27,6 +27,7 @@ import {
   AssignBranchUserRequestDto,
   CreateBranchRequestDto,
   SetBranchConfigRequestDto,
+  UpdateBranchConfigRequestDto,
   UpdateBranchRequestDto,
 } from './dto/branch.swagger.dto';
 
@@ -140,6 +141,47 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.config.set' },
       { dto: { branch_id: id, ...dto } },
+    );
+  }
+
+  @Get('branches/:id/config/:key')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Get single branch config by key' })
+  @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
+  @ApiParam({ name: 'key', description: 'Config key' })
+  getBranchConfigByKey(@Param('id') id: string, @Param('key') key: string) {
+    return this.branchClient.send(
+      { cmd: 'branch.config.find_one' },
+      { branch_id: id, config_key: key },
+    );
+  }
+
+  @Patch('branches/:id/config/:key')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Update branch config by key' })
+  @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
+  @ApiParam({ name: 'key', description: 'Config key' })
+  @ApiBody({ type: UpdateBranchConfigRequestDto })
+  updateBranchConfigByKey(
+    @Param('id') id: string,
+    @Param('key') key: string,
+    @Body() dto: UpdateBranchConfigRequestDto,
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.config.update' },
+      { dto: { branch_id: id, config_key: key, ...dto } },
+    );
+  }
+
+  @Delete('branches/:id/config/:key')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Delete branch config by key (soft delete)' })
+  @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
+  @ApiParam({ name: 'key', description: 'Config key' })
+  deleteBranchConfigByKey(@Param('id') id: string, @Param('key') key: string) {
+    return this.branchClient.send(
+      { cmd: 'branch.config.delete' },
+      { branch_id: id, config_key: key },
     );
   }
 }
