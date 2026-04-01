@@ -687,6 +687,8 @@ export class UserServiceService implements OnModuleInit {
       default_tariff: null,
       isDeleted: false,
     });
+    console.log(name);
+    
 
     const saved = await this.users.save(courier);
     await this.ensureUserCashbox(saved.id, Cashbox_type.FOR_COURIER);
