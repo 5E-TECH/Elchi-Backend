@@ -1,5 +1,6 @@
-import { Injectable } from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
+import { ClientProxy } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Status } from '@app/common';
@@ -7,6 +8,7 @@ import { Branch } from './entities/branch.entity';
 import { BranchUser } from './entities/branch-user.entity';
 import { BranchConfig } from './entities/branch-config.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
+import { lastValueFrom, timeout } from 'rxjs';
 
 @Injectable()
 export class BranchServiceService {
@@ -14,6 +16,7 @@ export class BranchServiceService {
     @InjectRepository(Branch) private readonly branchRepo: Repository<Branch>,
     @InjectRepository(BranchUser) private readonly branchUserRepo: Repository<BranchUser>,
     @InjectRepository(BranchConfig) private readonly branchConfigRepo: Repository<BranchConfig>,
+    @Inject('IDENTITY') private readonly identityClient: ClientProxy,
   ) {}
 
   private notFound(message: string): never {
@@ -67,6 +70,45 @@ export class BranchServiceService {
     }
 
     return branch;
+  }
+
+  private async ensureUserExists(userId: string): Promise<void> {
+    try {
+      const res = await lastValueFrom(
+        this.identityClient
+          .send<{ data?: { id?: string } }>({ cmd: 'identity.user.find_by_id' }, { id: userId })
+          .pipe(timeout(5000)),
+      );
+      if (!res?.data?.id) {
+        this.notFound('User not found');
+      }
+    } catch (error) {
+      if (error instanceof RpcException) {
+        const err = error.getError() as
+          | string
+          | {
+              statusCode?: number;
+              message?: string;
+            };
+        const statusCode =
+          typeof err === 'object' && err
+            ? Number(err.statusCode ?? 500)
+            : 500;
+        if (statusCode === 404) {
+          this.notFound('User not found');
+        }
+        throw error;
+      }
+      if (
+        typeof error === 'object' &&
+        error &&
+        'statusCode' in error &&
+        Number((error as { statusCode?: number }).statusCode) === 404
+      ) {
+        this.notFound('User not found');
+      }
+      throw new RpcException(errorRes('Identity service unavailable', 502));
+    }
   }
 
   async createBranch(dto: {
@@ -234,6 +276,17 @@ export class BranchServiceService {
     }
 
     await this.getBranchOrThrow(branchId);
+    await this.ensureUserExists(userId);
+
+    const anotherBranch = await this.branchUserRepo.findOne({
+      where: {
+        user_id: userId,
+        isDeleted: false,
+      },
+    });
+    if (anotherBranch && anotherBranch.branch_id !== branchId) {
+      this.conflict('User already assigned to another branch');
+    }
 
     const existing = await this.branchUserRepo.findOne({
       where: { branch_id: branchId, user_id: userId },
