@@ -35,6 +35,7 @@ import {
   CreateCourierRequestDto,
   CreateMarketRequestDto,
   UpdateAdminRequestDto,
+  UpdateMarketAddOrderRequestDto,
   UpdateUserStatusRequestDto,
 } from './dto/identity.swagger.dto';
 
@@ -335,6 +336,30 @@ export class ApiGatewayController {
           status,
           page: page ? Number(page) : undefined,
           limit: limit ? Number(limit) : undefined,
+        },
+      },
+    );
+  }
+
+  @Patch('markets/:id/add-order')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update market add_order (true/false)' })
+  @ApiParam({ name: 'id', description: 'Market user ID' })
+  @ApiBody({ type: UpdateMarketAddOrderRequestDto })
+  @ApiOkResponse({ description: 'Market add_order updated' })
+  @ApiNotFoundResponse({ description: 'Market not found' })
+  updateMarketAddOrder(
+    @Param('id') id: string,
+    @Body() dto: UpdateMarketAddOrderRequestDto,
+  ) {
+    return this.identityClient.send(
+      { cmd: 'identity.market.update' },
+      {
+        id,
+        dto: {
+          add_order: dto.add_order,
         },
       },
     );
