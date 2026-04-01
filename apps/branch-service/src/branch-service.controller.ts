@@ -61,27 +61,44 @@ export class BranchServiceController {
   // --- BranchUser ---
   @MessagePattern({ cmd: 'branch.user.assign' })
   assignUser(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.branchService.assignUserToBranch(data?.dto ?? data),
+    );
   }
 
   @MessagePattern({ cmd: 'branch.user.remove' })
   removeUser(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.branchService.removeUserFromBranch({
+        branch_id: data?.branch_id ?? data?.id,
+        user_id: data?.user_id,
+      }),
+    );
   }
 
   @MessagePattern({ cmd: 'branch.user.find_by_branch' })
   findUsersByBranch(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.branchService.findUsersByBranch(data?.branch_id ?? data?.id),
+    );
   }
 
   // --- BranchConfig ---
   @MessagePattern({ cmd: 'branch.config.set' })
   setConfig(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.branchService.setBranchConfig({
+        branch_id: data?.branch_id ?? data?.id,
+        config_key: data?.dto?.config_key ?? data?.config_key,
+        config_value: data?.dto?.config_value ?? data?.config_value,
+      }),
+    );
   }
 
   @MessagePattern({ cmd: 'branch.config.get' })
   getConfig(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.branchService.getBranchConfig(data?.branch_id ?? data?.id),
+    );
   }
 }

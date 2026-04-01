@@ -76,3 +76,28 @@ export class UpdateBranchRequestDto {
   manager_id?: string;
 }
 
+export class AssignBranchUserRequestDto {
+  @ApiProperty({ example: '12', description: 'User ID (bigint string)' })
+  @IsNumberString()
+  user_id!: string;
+
+  @ApiPropertyOptional({ example: 'operator' })
+  @IsOptional()
+  @IsString()
+  role?: string;
+}
+
+export class SetBranchConfigRequestDto {
+  @ApiProperty({ example: 'working_hours' })
+  @IsString()
+  @MinLength(1)
+  config_key!: string;
+
+  @ApiPropertyOptional({
+    example: { start: '09:00', end: '18:00', timezone: 'Asia/Tashkent' },
+    type: 'object',
+    additionalProperties: true,
+  })
+  @IsOptional()
+  config_value?: Record<string, unknown> | null;
+}
