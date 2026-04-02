@@ -109,6 +109,14 @@ export const investorValidationSchema = Joi.object({
 export const fileValidationSchema = Joi.object({
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_FILE_QUEUE: Joi.string().required(),
+  MINIO_ENDPOINT: Joi.string().required(),
+  MINIO_PORT: Joi.number().default(9000),
+  MINIO_USE_SSL: Joi.boolean().truthy('true').falsy('false').default(false),
+  MINIO_ACCESS_KEY: Joi.string().required(),
+  MINIO_SECRET_KEY: Joi.string().required(),
+  MINIO_BUCKET: Joi.string().default('elchi-files'),
+  FILE_SIGNED_URL_EXPIRES: Joi.number().default(3600),
+  FILE_MAX_SIZE_MB: Joi.number().default(10),
 });
 
 export const c2cValidationSchema = Joi.object({

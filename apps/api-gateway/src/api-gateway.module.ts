@@ -23,6 +23,7 @@ import { NotificationGatewayController } from './notification-gateway.controller
 import { IntegrationGatewayController } from './integration-gateway.controller';
 import { InvestorGatewayController } from './investor-gateway.controller';
 import { BranchGatewayController } from './branch-gateway.controller';
+import { FileGatewayController } from './file-gateway.controller';
 import type { StringValue } from 'ms';
 
 @Module({
@@ -74,6 +75,7 @@ import type { StringValue } from 'ms';
     IntegrationGatewayController,
     InvestorGatewayController,
     BranchGatewayController,
+    FileGatewayController,
     AnalyticsGatewayController,
     HealthController,
     // TODO: Qolgan gateway controllerlarni qo'shish
