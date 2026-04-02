@@ -46,21 +46,29 @@ export class AnalyticsServiceController {
 
   @MessagePattern({ cmd: 'analytics.kpi' })
   getKpi(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.analyticsService.getKpiStats(data?.requester, data?.filter ?? {}),
+    );
   }
 
   @MessagePattern({ cmd: 'analytics.report.orders' })
   orderReport(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.analyticsService.getOrderReport(data?.requester, data?.filter ?? {}),
+    );
   }
 
   @MessagePattern({ cmd: 'analytics.report.finance' })
   financeReport(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.analyticsService.getFinanceReport(data?.requester, data?.filter ?? {}),
+    );
   }
 
   @MessagePattern({ cmd: 'analytics.report.couriers' })
   courierReport(@Payload() data: any, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => ({ message: 'not implemented' }));
+    return this.executeAndAck(context, () =>
+      this.analyticsService.getCourierReport(data?.requester, data?.filter ?? {}),
+    );
   }
 }
