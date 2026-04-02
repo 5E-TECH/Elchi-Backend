@@ -3,6 +3,7 @@ import { BaseEntity } from '@app/common';
 import { ExternalIntegration } from './external-integration.entity';
 
 export type SyncAction = 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting';
+export type GenericSyncAction = 'create' | 'update' | 'delete';
 export type SyncStatus =
   | 'pending'
   | 'processing'
@@ -17,14 +18,20 @@ export type SyncStatus =
 @Index('IDX_SYNC_QUEUE_ORDER', ['order_id'])
 @Index('IDX_SYNC_QUEUE_RETRY', ['status', 'next_retry_at'])
 export class SyncQueue extends BaseEntity {
-  @Column({ type: 'bigint' })
-  order_id!: string;
+  @Column({ type: 'bigint', nullable: true })
+  order_id!: string | null;
 
   @Column({ type: 'bigint' })
   integration_id!: string;
 
   @Column({ type: 'varchar' })
-  action!: SyncAction;
+  action!: SyncAction | GenericSyncAction;
+
+  @Column({ type: 'varchar', nullable: true })
+  entity_type!: string | null;
+
+  @Column({ type: 'varchar', nullable: true })
+  entity_id!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
   old_status!: string | null;

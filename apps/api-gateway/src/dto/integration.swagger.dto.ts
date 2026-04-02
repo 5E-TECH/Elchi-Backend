@@ -13,6 +13,8 @@ import {
 } from 'class-validator';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
+type IntegrationType = 'api' | 'webhook' | 'ftp';
+type IntegrationStatus = 'active' | 'inactive';
 
 export class CreateIntegrationRequestDto {
   @ApiProperty({ example: 'Ozar' })
@@ -20,16 +22,29 @@ export class CreateIntegrationRequestDto {
   @IsNotEmpty()
   name!: string;
 
-  @ApiProperty({ example: 'ozar' })
+  @ApiPropertyOptional({ example: 'ozar' })
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
-  slug!: string;
+  slug?: string;
+
+  @ApiProperty({ example: 'api', enum: ['api', 'webhook', 'ftp'] })
+  @IsEnum(['api', 'webhook', 'ftp'])
+  type!: IntegrationType;
 
   @ApiProperty({ example: 'https://api.ozar.uz' })
   @IsString()
   @IsUrl()
-  api_url!: string;
+  base_url!: string;
 
+  @ApiProperty({ type: Object, example: { api_key: 'token_here', auth_type: 'api_key' } })
+  @IsObject()
+  credentials!: Record<string, unknown>;
+
+  @ApiProperty({ example: 'active', enum: ['active', 'inactive'] })
+  @IsEnum(['active', 'inactive'])
+  status!: IntegrationStatus;
+
+  // legacy compatibility fields (can be omitted)
   @ApiPropertyOptional({ example: 'api_key', enum: ['api_key', 'login'] })
   @IsOptional()
   @IsString()
@@ -84,6 +99,12 @@ export class CreateIntegrationRequestDto {
   @IsOptional()
   @IsObject()
   status_sync_config?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ example: 'https://api.ozar.uz' })
+  @IsOptional()
+  @IsString()
+  @IsUrl()
+  api_url?: string;
 }
 
 export class UpdateIntegrationRequestDto {
@@ -97,6 +118,28 @@ export class UpdateIntegrationRequestDto {
   @IsString()
   slug?: string;
 
+  @ApiPropertyOptional({ example: 'api', enum: ['api', 'webhook', 'ftp'] })
+  @IsOptional()
+  @IsEnum(['api', 'webhook', 'ftp'])
+  type?: IntegrationType;
+
+  @ApiPropertyOptional({ example: 'https://api.ozar.uz' })
+  @IsOptional()
+  @IsString()
+  @IsUrl()
+  base_url?: string;
+
+  @ApiPropertyOptional({ type: Object })
+  @IsOptional()
+  @IsObject()
+  credentials?: Record<string, unknown>;
+
+  @ApiPropertyOptional({ example: 'active', enum: ['active', 'inactive'] })
+  @IsOptional()
+  @IsEnum(['active', 'inactive'])
+  status?: IntegrationStatus;
+
+  // legacy compatibility fields (can be omitted)
   @ApiPropertyOptional({ example: 'https://api.ozar.uz' })
   @IsOptional()
   @IsString()
@@ -269,11 +312,6 @@ export class CreateSyncQueueRequestDto {
   @ApiProperty({ example: 'create', enum: ['create', 'update', 'delete'] })
   @IsEnum(['create', 'update', 'delete'])
   action!: 'create' | 'update' | 'delete';
-
-  @ApiPropertyOptional({ example: '1' })
-  @IsOptional()
-  @IsString()
-  order_id?: string;
 
   @ApiPropertyOptional({ type: Object })
   @IsOptional()

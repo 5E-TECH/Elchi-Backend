@@ -2,17 +2,32 @@ import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '@app/common';
 
 export type AuthType = 'api_key' | 'login';
+export type IntegrationType = 'api' | 'webhook' | 'ftp';
+export type IntegrationStatus = 'active' | 'inactive';
 
 @Entity({ name: 'external_integrations' })
 @Index('IDX_INTEGRATION_SLUG', ['slug'], { unique: true })
 @Index('IDX_INTEGRATION_ACTIVE', ['is_active'])
 @Index('IDX_INTEGRATION_MARKET', ['market_id'])
+@Index('IDX_INTEGRATION_STATUS', ['status'])
 export class ExternalIntegration extends BaseEntity {
   @Column({ type: 'varchar' })
   name!: string;
 
   @Column({ type: 'varchar', unique: true })
   slug!: string;
+
+  @Column({ type: 'varchar', default: 'api' })
+  type!: IntegrationType;
+
+  @Column({ type: 'varchar', nullable: true })
+  base_url!: string | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  credentials!: Record<string, unknown> | null;
+
+  @Column({ type: 'varchar', default: 'active' })
+  status!: IntegrationStatus;
 
   @Column({ type: 'varchar' })
   api_url!: string;
