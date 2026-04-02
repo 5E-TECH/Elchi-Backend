@@ -95,8 +95,31 @@ export class BranchServiceController {
     );
   }
 
+  // Alias for compatibility with older/newer callers
+  @MessagePattern({ cmd: 'branch.config.create' })
+  createConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.setBranchConfig({
+        branch_id: data?.branch_id ?? data?.id,
+        config_key: data?.dto?.config_key ?? data?.config_key,
+        config_value: data?.dto?.config_value ?? data?.config_value,
+      }),
+    );
+  }
+
   @MessagePattern({ cmd: 'branch.config.get' })
   getConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.getBranchConfig(data?.branch_id ?? data?.id),
+    );
+  }
+
+  // Alias for compatibility with older/newer callers
+  @MessagePattern({ cmd: 'branch.config.find_by_branch' })
+  findConfigByBranch(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.branchService.getBranchConfig(data?.branch_id ?? data?.id),
     );
