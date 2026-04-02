@@ -329,3 +329,10 @@ export class PartlySellOrderRequestDto {
   @IsString()
   comment?: string;
 }
+
+export class CreateExternalOrderRequestDto extends CreateOrderRequestDto {
+  @ApiPropertyOptional({ example: 'EXT-ORDER-1001' })
+  @IsOptional()
+  @IsString()
+  external_id?: string | null;
+}

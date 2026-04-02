@@ -2,6 +2,12 @@ import { Controller } from '@nestjs/common';
 import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
 import { RmqService } from '@app/common';
 import { InvestorServiceService } from './investor-service.service';
+import { CreateInvestorDto } from './dto/create-investor.dto';
+import { UpdateInvestorDto } from './dto/update-investor.dto';
+import { CreateInvestmentDto } from './dto/create-investment.dto';
+import { UpdateInvestmentDto } from './dto/update-investment.dto';
+import { CreateProfitShareDto } from './dto/create-profit-share.dto';
+import { CalculateProfitDto } from './dto/calculate-profit.dto';
 
 @Controller()
 export class InvestorServiceController {
@@ -21,6 +27,13 @@ export class InvestorServiceController {
     }
   }
 
+  private unwrapDto<T>(payload: T | { dto: T }): T {
+    if (payload && typeof payload === 'object' && 'dto' in (payload as { dto?: T })) {
+      return (payload as { dto: T }).dto;
+    }
+    return payload as T;
+  }
+
   @MessagePattern({ cmd: 'investor.health' })
   health(@Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => ({
@@ -32,9 +45,9 @@ export class InvestorServiceController {
 
   // --- Investor ---
   @MessagePattern({ cmd: 'investor.create' })
-  create(@Payload() data: any, @Ctx() context: RmqContext) {
+  create(@Payload() data: { dto: CreateInvestorDto } | CreateInvestorDto, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.investorService.createInvestor(data?.dto ?? data),
+      this.investorService.createInvestor(this.unwrapDto(data)),
     );
   }
 
@@ -53,7 +66,7 @@ export class InvestorServiceController {
   }
 
   @MessagePattern({ cmd: 'investor.update' })
-  update(@Payload() data: any, @Ctx() context: RmqContext) {
+  update(@Payload() data: { id: string; dto: UpdateInvestorDto }, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.investorService.updateInvestor(String(data?.id), data?.dto ?? {}),
     );
@@ -68,9 +81,12 @@ export class InvestorServiceController {
 
   // --- Investment ---
   @MessagePattern({ cmd: 'investor.investment.create' })
-  createInvestment(@Payload() data: any, @Ctx() context: RmqContext) {
+  createInvestment(
+    @Payload() data: { dto: CreateInvestmentDto } | CreateInvestmentDto,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.investorService.createInvestment(data?.dto ?? data),
+      this.investorService.createInvestment(this.unwrapDto(data)),
     );
   }
 
@@ -91,8 +107,18 @@ export class InvestorServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'investor.investment.find_by_id' })
+  findInvestmentById(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.investorService.findInvestmentById(String(data?.id)),
+    );
+  }
+
   @MessagePattern({ cmd: 'investor.investment.update' })
-  updateInvestment(@Payload() data: any, @Ctx() context: RmqContext) {
+  updateInvestment(
+    @Payload() data: { id: string; dto: UpdateInvestmentDto },
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.investorService.updateInvestment(String(data?.id), data?.dto ?? {}),
     );
@@ -107,16 +133,22 @@ export class InvestorServiceController {
 
   // --- ProfitShare ---
   @MessagePattern({ cmd: 'investor.profit.create' })
-  createProfit(@Payload() data: any, @Ctx() context: RmqContext) {
+  createProfit(
+    @Payload() data: { dto: CreateProfitShareDto } | CreateProfitShareDto,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.investorService.createProfitShare(data?.dto ?? data),
+      this.investorService.createProfitShare(this.unwrapDto(data)),
     );
   }
 
   @MessagePattern({ cmd: 'investor.profit.calculate' })
-  calculateProfit(@Payload() data: any, @Ctx() context: RmqContext) {
+  calculateProfit(
+    @Payload() data: { dto: CalculateProfitDto } | CalculateProfitDto,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.investorService.calculateProfit(data?.dto ?? data),
+      this.investorService.calculateProfit(this.unwrapDto(data)),
     );
   }
 
