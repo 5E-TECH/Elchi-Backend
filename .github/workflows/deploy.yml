@@ -3,12 +3,30 @@ name: CI/CD Deploy
 on:
   push:
     branches:
-      - main  # Faqat main branchga kod push bo'lganda ishlaydi
+      - main
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm run test:ci
+
   deploy:
     runs-on: ubuntu-latest
-
+    needs: test
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -20,15 +38,8 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
-            # Serverdagi loyiha papkasiga o'tamiz
-            cd /home/ubuntu/Elchi-Backend  
-            
-            # Yangi kodlarni tortib olamiz
+            set -e
+            cd /home/ubuntu/Elchi-Backend
             git pull origin main
-            
-            # Docker containerlarni yangilaymiz
-            # --build bayrog'i o'zgarishlarni qayta yig'adi
-            docker-compose up -d --build
-            
-            # Keraksiz eski imagelarni o'chirib yuboramiz (serverda joy tejash uchun)
+            docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
             docker image prune -f

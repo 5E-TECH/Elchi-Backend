@@ -10,7 +10,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
         url: configService.get<string>('POSTGRES_URI'),
         schema: configService.get<string>('DB_SCHEMA') || 'public',
         autoLoadEntities: true,
-        synchronize: configService.get<string>('NODE_ENV') !== 'production',
+        synchronize: false,
         logging: configService.get<string>('NODE_ENV') !== 'production',
       }),
       inject: [ConfigService],

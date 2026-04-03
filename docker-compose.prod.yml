@@ -1,0 +1,262 @@
+services:
+  rabbitmq:
+    image: rabbitmq:3-management
+    container_name: elchi-rabbitmq
+    ports:
+      - '5672:5672'
+      - '15672:15672'
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ['CMD', 'rabbitmq-diagnostics', '-q', 'ping']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  postgres:
+    image: postgres:15
+    container_name: elchi-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB}
+    ports:
+      - '${POSTGRES_PORT:-5432}:5432'
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init-schemas.sql:/docker-entrypoint-initdb.d/init-schemas.sql
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: elchi-minio
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY}
+      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY}
+    ports:
+      - '9000:9000'
+      - '9001:9001'
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ['CMD', 'curl', '-f', 'http://localhost:9000/minio/health/live']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  migration-runner:
+    image: node:20-alpine
+    container_name: elchi-migration-runner
+    working_dir: /app
+    env_file: .env.production
+    volumes:
+      - ./:/app
+    command: sh -c "npm ci && npm run migration:run"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: 'no'
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: apps/api-gateway/Dockerfile
+    env_file: .env.production
+    ports:
+      - '${PORT:-3004}:3004'
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  identity-service:
+    build:
+      context: .
+      dockerfile: apps/identity-service/Dockerfile
+    env_file: .env.production
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  order-service:
+    build:
+      context: .
+      dockerfile: apps/order-service/Dockerfile
+    env_file: .env.production
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  catalog-service:
+    build:
+      context: .
+      dockerfile: apps/catalog-service/Dockerfile
+    env_file: .env.production
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  logistics-service:
+    build:
+      context: .
+      dockerfile: apps/logistics-service/Dockerfile
+    env_file: .env.production
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  finance-service:
+    build:
+      context: .
+      dockerfile: apps/finance-service/Dockerfile
+    env_file: .env.production
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  notification-service:
+    build:
+      context: .
+      dockerfile: apps/notification-service/Dockerfile
+    env_file: .env.production
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  integration-service:
+    build:
+      context: .
+      dockerfile: apps/integration-service/Dockerfile
+    env_file: .env.production
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  analytics-service:
+    build:
+      context: .
+      dockerfile: apps/analytics-service/Dockerfile
+    env_file: .env.production
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  branch-service:
+    build:
+      context: .
+      dockerfile: apps/branch-service/Dockerfile
+    env_file: .env.production
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  investor-service:
+    build:
+      context: .
+      dockerfile: apps/investor-service/Dockerfile
+    env_file: .env.production
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  file-service:
+    build:
+      context: .
+      dockerfile: apps/file-service/Dockerfile
+    env_file: .env.production
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  c2c-service:
+    build:
+      context: .
+      dockerfile: apps/c2c-service/Dockerfile
+    env_file: .env.production
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  search-service:
+    build:
+      context: .
+      dockerfile: apps/search-service/Dockerfile
+    env_file: .env.production
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  rabbitmq_data:
+  postgres_data:
+  minio_data:
