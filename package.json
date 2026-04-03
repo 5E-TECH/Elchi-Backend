@@ -43,11 +43,15 @@
     "test:watch": "jest --watch",
     "test:cov": "jest --coverage",
     "test:e2e": "jest --config ./apps/api-gateway/test/jest-e2e.json",
+    "test:ci": "jest --runInBand --ci",
     "migration:generate": "npx typeorm-ts-node-commonjs migration:generate -d typeorm.config.ts",
+    "migration:generate:init": "npx typeorm-ts-node-commonjs migration:generate migrations/InitSchema -d typeorm.config.ts",
     "migration:run": "npx typeorm-ts-node-commonjs migration:run -d typeorm.config.ts",
     "migration:revert": "npx typeorm-ts-node-commonjs migration:revert -d typeorm.config.ts",
     "infra:up": "docker compose up rabbitmq postgres -d",
-    "infra:down": "docker compose down"
+    "infra:down": "docker compose down",
+    "infra:up:prod": "docker compose --env-file .env.production -f docker-compose.prod.yml up -d",
+    "infra:down:prod": "docker compose -f docker-compose.prod.yml down"
   },
   "dependencies": {
     "@nestjs/common": "^11.0.1",
