@@ -5,6 +5,7 @@ import { Between, Brackets, DataSource, In, QueryFailedError, Repository } from 
 import { lastValueFrom, timeout } from 'rxjs';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
+import { Order_source } from './entities/order.entity';
 import {
   Cashbox_type,
   Operation_type,
@@ -799,6 +800,7 @@ export class OrderServiceService {
     address?: string | null;
     qr_code_token?: string | null;
     external_id?: string | null;
+    source?: Order_source;
     items?: Array<{ product_id: string; quantity?: number }>;
   }) {
     const order = this.orderRepo.create({
@@ -819,6 +821,7 @@ export class OrderServiceService {
       address: dto.address ?? null,
       qr_code_token: dto.qr_code_token ?? null,
       external_id: dto.external_id ?? null,
+      source: dto.source ?? Order_source.INTERNAL,
       isDeleted: false,
     });
 
@@ -855,6 +858,7 @@ export class OrderServiceService {
     end_day?: string;
     courier?: string;
     region_id?: string;
+    source?: Order_source | 'internal' | 'external';
     page?: number;
     limit?: number;
   }) {
@@ -872,6 +876,7 @@ export class OrderServiceService {
       end_day,
       courier,
       region_id,
+      source,
       page = 1,
       limit = 10,
     } = query;
@@ -908,6 +913,15 @@ export class OrderServiceService {
     }
     if (region_id) {
       qb.andWhere('order.region_id = :region_id', { region_id });
+    }
+    if (source === Order_source.EXTERNAL) {
+      qb.andWhere('(order.source = :source OR order.external_id IS NOT NULL)', {
+        source: Order_source.EXTERNAL,
+      });
+    } else if (source === Order_source.INTERNAL) {
+      qb.andWhere('(order.source = :source OR order.external_id IS NULL)', {
+        source: Order_source.INTERNAL,
+      });
     }
     if (courier) {
       qb.andWhere(
@@ -982,6 +996,46 @@ export class OrderServiceService {
 
   async findNewOrdersByMarket(market_id: string, page = 1, limit = 20) {
     return this.findAll({ market_id, status: Order_status.NEW, page, limit });
+  }
+
+  async findAllExternal(query: {
+    market_id?: string;
+    status?: Order_status;
+    start_day?: string;
+    end_day?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    return this.findAll({
+      ...query,
+      source: Order_source.EXTERNAL,
+    });
+  }
+
+  async createExternalOrder(dto: {
+    market_id: string;
+    customer_id: string;
+    where_deliver?: Where_deliver;
+    total_price?: number;
+    to_be_paid?: number;
+    paid_amount?: number;
+    status?: Order_status;
+    comment?: string | null;
+    operator?: string | null;
+    post_id?: string | null;
+    district_id?: string | null;
+    region_id?: string | null;
+    address?: string | null;
+    qr_code_token?: string | null;
+    external_id?: string | null;
+    items?: Array<{ product_id: string; quantity?: number }>;
+  }) {
+    return this.create({
+      ...dto,
+      source: Order_source.EXTERNAL,
+      operator: dto.operator ?? 'external_manual',
+      status: dto.status ?? Order_status.NEW,
+    });
   }
 
   private generateCustomToken(length = 24): string {
@@ -1360,6 +1414,7 @@ export class OrderServiceService {
         address: this.getFieldValue(ext, fieldMapping.address_field ?? 'address') ?? null,
         qr_code_token: qrCode == null ? null : String(qrCode),
         external_id: externalId,
+        source: Order_source.EXTERNAL,
       });
 
       created.push({
@@ -2041,6 +2096,7 @@ export class OrderServiceService {
       address?: string | null;
       qr_code_token?: string | null;
       external_id?: string | null;
+      source?: Order_source;
       items?: Array<{ product_id: string; quantity?: number }>;
     },
   ) {
@@ -2067,6 +2123,7 @@ export class OrderServiceService {
       address?: string | null;
       qr_code_token?: string | null;
       external_id?: string | null;
+      source?: Order_source;
       items?: Array<{ product_id: string; quantity?: number }>;
     },
   ) {
@@ -2100,6 +2157,7 @@ export class OrderServiceService {
         typeof dto.external_id !== 'undefined'
           ? dto.external_id
           : order.external_id,
+      source: dto.source ?? order.source ?? Order_source.INTERNAL,
     });
 
     if (dto.items) {

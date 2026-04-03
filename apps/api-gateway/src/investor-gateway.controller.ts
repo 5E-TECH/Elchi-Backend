@@ -166,6 +166,14 @@ export class InvestorGatewayController {
     );
   }
 
+  @Get('investments/:id')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Find investment by id' })
+  @ApiParam({ name: 'id' })
+  findInvestmentById(@Param('id') id: string) {
+    return this.investorClient.send({ cmd: 'investor.investment.find_by_id' }, { id });
+  }
+
   @Patch('investments/:id')
   @Patch('investors/:investor_id/investments/:id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)

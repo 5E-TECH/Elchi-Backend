@@ -25,6 +25,7 @@ import {
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import {
+  CreateExternalOrderRequestDto,
   CreateOrderRequestDto,
   OrdersArrayDto,
   PartlySellOrderRequestDto,
@@ -273,6 +274,137 @@ export class OrderGatewayController {
       this.orderClient
         .send({ cmd: 'order.receive_external' }, dto)
         .pipe(timeout(15000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  @Get('external')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.MARKET)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List external orders with filters' })
+  @ApiQuery({ name: 'market_id', required: false, type: String })
+  @ApiQuery({ name: 'status', required: false, enum: Order_status })
+  @ApiQuery({ name: 'date', required: false, type: String, description: 'Single day filter (YYYY-MM-DD)' })
+  @ApiQuery({ name: 'start_day', required: false, type: String })
+  @ApiQuery({ name: 'end_day', required: false, type: String })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  findAllExternal(
+    @Query('market_id') market_id?: string,
+    @Query('status') status?: Order_status,
+    @Query('date') date?: string,
+    @Query('start_day') start_day?: string,
+    @Query('end_day') end_day?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Req() req?: { user: JwtUser },
+  ) {
+    const roles = req?.user?.roles ?? [];
+    const isMarket = roles.includes(RoleEnum.MARKET);
+    const requesterId = req?.user?.sub;
+
+    if (isMarket && market_id && requesterId && String(market_id) !== String(requesterId)) {
+      throw new BadRequestException('market role cannot query other market_id');
+    }
+
+    const resolvedMarketId = isMarket && requesterId ? requesterId : market_id;
+    const resolvedStartDay = start_day ?? date;
+    const resolvedEndDay = end_day ?? date;
+
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.external.find_all' },
+          {
+            query: {
+              market_id: resolvedMarketId,
+              status,
+              start_day: resolvedStartDay,
+              end_day: resolvedEndDay,
+              page: page ? Number(page) : 1,
+              limit: limit ? Number(limit) : 10,
+            },
+          },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  @Post('external')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN, RoleEnum.REGISTRATOR, RoleEnum.MARKET)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Create external order' })
+  @ApiBody({ type: CreateExternalOrderRequestDto })
+  async createExternal(@Body() dto: CreateExternalOrderRequestDto, @Req() req: { user: JwtUser }) {
+    const { customer, external_id, ...orderDto } = dto;
+    let customerId = dto.customer_id;
+    const roles = req.user.roles ?? [];
+
+    let resolvedMarketId = orderDto.market_id;
+    if (roles.includes(RoleEnum.MARKET)) {
+      resolvedMarketId = req.user.sub;
+    } else if (
+      (roles.includes(RoleEnum.ADMIN) ||
+        roles.includes(RoleEnum.SUPERADMIN) ||
+        roles.includes(RoleEnum.REGISTRATOR)) &&
+      !resolvedMarketId
+    ) {
+      throw new BadRequestException('market_id is required');
+    }
+
+    if (!customerId) {
+      if (!customer) {
+        throw new BadRequestException('customer_id yoki customer obyekt yuborilishi shart');
+      }
+
+      const customerPayload = {
+        ...customer,
+        market_id: customer.market_id ?? resolvedMarketId,
+      };
+
+      const customerResponse = await firstValueFrom(
+        this.identityClient
+          .send({ cmd: 'identity.customer.create' }, { dto: customerPayload })
+          .pipe(timeout(8000)),
+      ).catch((error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Identity service response timeout');
+        }
+        throw error;
+      });
+
+      const createdCustomer = customerResponse?.data ?? customerResponse;
+      customerId = createdCustomer?.id;
+      if (!customerId) {
+        throw new BadRequestException('Customer yaratildi, lekin id qaytmadi');
+      }
+    }
+
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.external.create' },
+          {
+            dto: {
+              ...orderDto,
+              external_id: external_id ?? null,
+              market_id: resolvedMarketId,
+              customer_id: customerId,
+            },
+          },
+        )
+        .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException('Order service response timeout');

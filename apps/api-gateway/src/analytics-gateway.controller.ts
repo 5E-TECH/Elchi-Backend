@@ -76,4 +76,104 @@ export class AnalyticsGatewayController {
         .pipe(timeout(8000)),
     );
   }
+
+  @Get('kpi')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'KPI stats report' })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  getKpi(
+    @Req() req: { user: JwtUser },
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return firstValueFrom(
+      this.analyticsClient
+        .send(
+          { cmd: 'analytics.kpi' },
+          {
+            requester: this.toRequester(req),
+            filter: { startDate, endDate },
+          },
+        )
+        .pipe(timeout(10000)),
+    );
+  }
+
+  @Get('reports/orders')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Order report' })
+  @ApiQuery({ name: 'fromDate', required: false, type: String })
+  @ApiQuery({ name: 'toDate', required: false, type: String })
+  getOrderReport(
+    @Req() req: { user: JwtUser },
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+  ) {
+    return firstValueFrom(
+      this.analyticsClient
+        .send(
+          { cmd: 'analytics.report.orders' },
+          {
+            requester: this.toRequester(req),
+            filter: { fromDate, toDate },
+          },
+        )
+        .pipe(timeout(12000)),
+    );
+  }
+
+  @Get('reports/finance')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Finance report' })
+  @ApiQuery({ name: 'fromDate', required: false, type: String })
+  @ApiQuery({ name: 'toDate', required: false, type: String })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  getFinanceReport(
+    @Req() req: { user: JwtUser },
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('page') page?: number,
+    @Query('limit') limit?: number,
+  ) {
+    return firstValueFrom(
+      this.analyticsClient
+        .send(
+          { cmd: 'analytics.report.finance' },
+          {
+            requester: this.toRequester(req),
+            filter: { fromDate, toDate, page, limit },
+          },
+        )
+        .pipe(timeout(12000)),
+    );
+  }
+
+  @Get('reports/couriers')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Courier report' })
+  @ApiQuery({ name: 'fromDate', required: false, type: String })
+  @ApiQuery({ name: 'toDate', required: false, type: String })
+  getCourierReport(
+    @Req() req: { user: JwtUser },
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+  ) {
+    return firstValueFrom(
+      this.analyticsClient
+        .send(
+          { cmd: 'analytics.report.couriers' },
+          {
+            requester: this.toRequester(req),
+            filter: { fromDate, toDate },
+          },
+        )
+        .pipe(timeout(12000)),
+    );
+  }
 }

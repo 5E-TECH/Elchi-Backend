@@ -326,6 +326,58 @@ export class IntegrationServiceService {
     return Math.trunc(parsed);
   }
 
+  private slugify(value: string): string {
+    return value
+      .toLowerCase()
+      .trim()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '');
+  }
+
+  private normalizeStatus(value: unknown): 'active' | 'inactive' {
+    const normalized = String(value ?? 'active').toLowerCase();
+    return normalized === 'inactive' ? 'inactive' : 'active';
+  }
+
+  private normalizeType(value: unknown): 'api' | 'webhook' | 'ftp' {
+    const normalized = String(value ?? 'api').toLowerCase();
+    if (normalized === 'webhook' || normalized === 'ftp') {
+      return normalized;
+    }
+    return 'api';
+  }
+
+  private maskCredentials(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object') {
+      return null;
+    }
+
+    const masked = { ...(value as Record<string, unknown>) };
+    const sensitiveKeys = ['api_key', 'api_secret', 'password', 'token', 'access_token'];
+    for (const key of sensitiveKeys) {
+      if (typeof masked[key] !== 'undefined' && masked[key] !== null && String(masked[key]).length > 0) {
+        masked[key] = '***';
+      }
+    }
+    return masked;
+  }
+
+  private normalizeCredentialsForStorage(value: unknown): Record<string, unknown> | null {
+    if (!value || typeof value !== 'object') {
+      return null;
+    }
+
+    const raw = { ...(value as Record<string, unknown>) };
+    const encryptKeys = ['api_key', 'api_secret', 'password', 'token', 'access_token'];
+    for (const key of encryptKeys) {
+      const val = raw[key];
+      if (typeof val === 'string' && val.length > 0) {
+        raw[key] = this.encryptCredential(val);
+      }
+    }
+    return raw;
+  }
+
   private getCredentialKey(): Buffer {
     return createHash('sha256').update(this.credentialSecret).digest();
   }
@@ -490,6 +542,7 @@ export class IntegrationServiceService {
     delete safe.api_key;
     delete safe.api_secret;
     delete safe.password;
+    safe.credentials = this.maskCredentials(safe.credentials);
 
     return {
       ...safe,
@@ -628,7 +681,8 @@ export class IntegrationServiceService {
   }
 
   async createIntegration(dto: Partial<ExternalIntegration>) {
-    const slug = String(dto.slug ?? '').trim();
+    const name = String(dto.name ?? '').trim();
+    const slug = String(dto.slug ?? this.slugify(name)).trim();
     if (!slug) {
       this.badRequest('slug is required');
     }
@@ -640,22 +694,58 @@ export class IntegrationServiceService {
       this.badRequest('integration slug already exists');
     }
 
-    if (!dto.api_url) {
-      this.badRequest('api_url is required');
+    const baseUrl = String((dto as any).base_url ?? dto.api_url ?? '').trim();
+    if (!baseUrl) {
+      this.badRequest('base_url is required');
     }
 
+    const status = this.normalizeStatus((dto as any).status ?? (dto.is_active === false ? 'inactive' : 'active'));
+    const integrationType = this.normalizeType((dto as any).type);
+
+    const credentialsInput =
+      ((dto as any).credentials && typeof (dto as any).credentials === 'object'
+        ? ((dto as any).credentials as Record<string, unknown>)
+        : null) ?? {};
+    const authType = (String(
+      dto.auth_type ??
+        (credentialsInput.auth_type as string | undefined) ??
+        (credentialsInput.api_key ? 'api_key' : 'login'),
+    ).toLowerCase() === 'login'
+      ? 'login'
+      : 'api_key') as 'api_key' | 'login';
+    const apiKey = (dto.api_key ?? (credentialsInput.api_key as string | undefined) ?? null) as string | null;
+    const apiSecret = (dto.api_secret ?? (credentialsInput.api_secret as string | undefined) ?? null) as
+      | string
+      | null;
+    const username = (dto.username ?? (credentialsInput.username as string | undefined) ?? null) as string | null;
+    const password = (dto.password ?? (credentialsInput.password as string | undefined) ?? null) as string | null;
+    const authUrl = (dto.auth_url ?? (credentialsInput.auth_url as string | undefined) ?? null) as string | null;
+    const mergedCredentials = {
+      ...credentialsInput,
+      ...(apiKey ? { api_key: apiKey } : {}),
+      ...(apiSecret ? { api_secret: apiSecret } : {}),
+      ...(username ? { username } : {}),
+      ...(password ? { password } : {}),
+      ...(authUrl ? { auth_url: authUrl } : {}),
+      auth_type: authType,
+    };
+
     const entity = this.integrationRepo.create({
-      name: dto.name ?? slug,
+      name: name || slug,
       slug,
-      api_url: dto.api_url,
-      api_key: this.encryptCredential(dto.api_key ?? null),
-      api_secret: this.encryptCredential(dto.api_secret ?? null),
-      auth_type: dto.auth_type ?? 'api_key',
-      auth_url: dto.auth_url ?? null,
-      username: dto.username ?? null,
-      password: this.encryptCredential(dto.password ?? null),
+      type: integrationType,
+      base_url: baseUrl,
+      credentials: this.normalizeCredentialsForStorage(mergedCredentials),
+      status,
+      api_url: baseUrl,
+      api_key: this.encryptCredential(apiKey),
+      api_secret: this.encryptCredential(apiSecret),
+      auth_type: authType,
+      auth_url: authUrl,
+      username,
+      password: this.encryptCredential(password),
       market_id: dto.market_id ?? null,
-      is_active: dto.is_active ?? true,
+      is_active: status === 'active',
       field_mapping: dto.field_mapping ?? null,
       status_mapping: dto.status_mapping ?? null,
       status_sync_config: dto.status_sync_config ?? null,
@@ -774,6 +864,55 @@ export class IntegrationServiceService {
     }
 
     Object.assign(row, dto);
+    if (typeof (dto as any).type !== 'undefined') {
+      row.type = this.normalizeType((dto as any).type);
+    }
+    if (typeof (dto as any).base_url !== 'undefined') {
+      const baseUrl = String((dto as any).base_url ?? '').trim();
+      if (!baseUrl) {
+        this.badRequest('base_url cannot be empty');
+      }
+      row.base_url = baseUrl;
+      row.api_url = baseUrl;
+    } else if (typeof dto.api_url !== 'undefined') {
+      const apiUrl = String(dto.api_url ?? '').trim();
+      if (!apiUrl) {
+        this.badRequest('api_url cannot be empty');
+      }
+      row.api_url = apiUrl;
+      row.base_url = apiUrl;
+    }
+    if (typeof (dto as any).status !== 'undefined') {
+      row.status = this.normalizeStatus((dto as any).status);
+      row.is_active = row.status === 'active';
+    } else if (typeof dto.is_active !== 'undefined') {
+      row.status = dto.is_active ? 'active' : 'inactive';
+      row.is_active = Boolean(dto.is_active);
+    }
+    if (typeof (dto as any).credentials !== 'undefined') {
+      const credentialsInput = ((dto as any).credentials ?? null) as Record<string, unknown> | null;
+      row.credentials = this.normalizeCredentialsForStorage(credentialsInput);
+      if (credentialsInput && typeof credentialsInput === 'object') {
+        if (typeof credentialsInput.auth_type === 'string') {
+          row.auth_type = credentialsInput.auth_type === 'login' ? 'login' : 'api_key';
+        }
+        if (typeof credentialsInput.api_key === 'string') {
+          row.api_key = this.encryptCredential(credentialsInput.api_key);
+        }
+        if (typeof credentialsInput.api_secret === 'string') {
+          row.api_secret = this.encryptCredential(credentialsInput.api_secret);
+        }
+        if (typeof credentialsInput.username === 'string') {
+          row.username = credentialsInput.username;
+        }
+        if (typeof credentialsInput.password === 'string') {
+          row.password = this.encryptCredential(credentialsInput.password);
+        }
+        if (typeof credentialsInput.auth_url === 'string') {
+          row.auth_url = credentialsInput.auth_url;
+        }
+      }
+    }
     if (typeof dto.api_key !== 'undefined') {
       row.api_key = this.encryptCredential(dto.api_key ?? null);
     }
@@ -782,6 +921,9 @@ export class IntegrationServiceService {
     }
     if (typeof dto.password !== 'undefined') {
       row.password = this.encryptCredential(dto.password ?? null);
+    }
+    if (typeof dto.auth_type !== 'undefined') {
+      row.auth_type = dto.auth_type === 'login' ? 'login' : 'api_key';
     }
     const saved = await this.integrationRepo.save(row);
     const [enriched] = await this.attachMarkets([saved as any]);
@@ -800,6 +942,7 @@ export class IntegrationServiceService {
 
     row.isDeleted = true;
     row.is_active = false;
+    row.status = 'inactive';
     const saved = await this.integrationRepo.save(row);
     this.clearTokenCache(saved.id);
     return successRes({ id: saved.id }, 200, 'integration deleted');
@@ -1058,16 +1201,32 @@ export class IntegrationServiceService {
   }
 
   async enqueueSync(input: {
-    order_id: string;
+    order_id?: string;
     external_order_id?: string;
     operator?: string;
     integration_id?: string;
-    action: 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting';
+    action: 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting' | 'create' | 'update' | 'delete';
+    entity_type?: string;
+    entity_id?: string;
+    payload?: Record<string, unknown>;
     old_status?: string;
     new_status?: string;
   }) {
-    if (!input?.order_id) {
+    const action = String(input?.action ?? '').toLowerCase();
+    const isGenericAction = ['create', 'update', 'delete'].includes(action);
+    if (!isGenericAction && !input?.order_id) {
       this.badRequest('order_id is required');
+    }
+    if (isGenericAction) {
+      if (!input?.integration_id) {
+        this.badRequest('integration_id is required');
+      }
+      if (!input?.entity_type?.trim()) {
+        this.badRequest('entity_type is required');
+      }
+      if (!input?.entity_id?.trim()) {
+        this.badRequest('entity_id is required');
+      }
     }
 
     const operator = String(input?.operator ?? '').trim();
@@ -1090,11 +1249,9 @@ export class IntegrationServiceService {
       });
     }
 
-    const externalStatus = this.resolveExternalStatus(
-      integration,
-      input.action,
-      input.new_status,
-    );
+    const externalStatus = isGenericAction
+      ? null
+      : this.resolveExternalStatus(integration, input.action, input.new_status);
     const syncConfig = this.toSyncConfig(integration);
     const updateConfig = syncConfig.external_update ?? {};
 
@@ -1108,19 +1265,22 @@ export class IntegrationServiceService {
     };
 
     const queue = this.syncQueueRepo.create({
-      order_id: String(input.order_id),
+      order_id: input.order_id ? String(input.order_id) : null,
       integration_id: String(integration.id),
       action: input.action,
+      entity_type: isGenericAction ? String(input.entity_type) : null,
+      entity_id: isGenericAction ? String(input.entity_id) : null,
       old_status: input.old_status ?? null,
       new_status: input.new_status ?? null,
       external_status: externalStatus,
-      payload: context,
+      payload: (input.payload as Record<string, string> | undefined) ?? context,
       status: 'pending',
       attempts: 0,
       retry_count: 0,
       // initial attempt + max 3 retries
       max_attempts: 4,
-      external_order_id: input.external_order_id ? String(input.external_order_id) : null,
+      external_order_id:
+        !isGenericAction && input.external_order_id ? String(input.external_order_id) : null,
       last_error: null,
       last_response: null,
       synced_at: null,
@@ -1182,31 +1342,47 @@ export class IntegrationServiceService {
     const method = (updateConfig.method ?? 'POST').toUpperCase() as HttpMethod;
     const orderIdField = updateConfig.order_id_field ?? 'id';
     const statusField = updateConfig.status_field ?? 'status';
+    const isGenericAction = ['create', 'update', 'delete'].includes(String(queue.action));
     const payload = (queue.payload ?? {}) as Record<string, string>;
     const queryFromTemplate =
       (this.interpolate(updateConfig.query_template ?? {}, payload) as Record<string, unknown>) ?? {};
     const bodyFromTemplate =
       (this.interpolate(updateConfig.body_template ?? {}, payload) as Record<string, unknown>) ?? {};
 
-    const externalOrderId = queue.external_order_id ?? queue.order_id;
+    const externalOrderId = queue.external_order_id ?? queue.order_id ?? queue.entity_id;
     const externalStatus = queue.external_status ?? queue.new_status ?? queue.action;
 
     const params =
       method === 'GET'
-        ? {
-            ...queryFromTemplate,
-            [orderIdField]: externalOrderId,
-            [statusField]: externalStatus,
-          }
+        ? isGenericAction
+          ? {
+              ...queryFromTemplate,
+              entity_type: queue.entity_type,
+              entity_id: queue.entity_id,
+              action: queue.action,
+            }
+          : {
+              ...queryFromTemplate,
+              [orderIdField]: externalOrderId,
+              [statusField]: externalStatus,
+            }
         : queryFromTemplate;
     const body =
       method === 'GET'
         ? undefined
-        : {
-            ...bodyFromTemplate,
-            [orderIdField]: externalOrderId,
-            [statusField]: externalStatus,
-          };
+        : isGenericAction
+          ? {
+              ...bodyFromTemplate,
+              entity_type: queue.entity_type,
+              entity_id: queue.entity_id,
+              action: queue.action,
+              ...(queue.payload ?? {}),
+            }
+          : {
+              ...bodyFromTemplate,
+              [orderIdField]: externalOrderId,
+              [statusField]: externalStatus,
+            };
 
     try {
       const requestResult = await this.executeExternalRequest({

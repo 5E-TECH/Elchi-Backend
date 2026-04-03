@@ -7,6 +7,12 @@ import { Investor } from './entities/investor.entity';
 import { Investment } from './entities/investment.entity';
 import { ProfitShare } from './entities/profit-share.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
+import { CreateInvestorDto } from './dto/create-investor.dto';
+import { UpdateInvestorDto } from './dto/update-investor.dto';
+import { CreateInvestmentDto } from './dto/create-investment.dto';
+import { UpdateInvestmentDto } from './dto/update-investment.dto';
+import { CreateProfitShareDto } from './dto/create-profit-share.dto';
+import { CalculateProfitDto } from './dto/calculate-profit.dto';
 
 type InvestorQuery = {
   search?: string;
@@ -94,7 +100,7 @@ export class InvestorServiceService {
     return investment;
   }
 
-  async createInvestor(dto: Partial<Investor>) {
+  async createInvestor(dto: CreateInvestorDto) {
     const name = String(dto.name ?? '').trim();
     const phoneNumber = String(dto.phone_number ?? '').trim();
     if (!name) {
@@ -207,7 +213,7 @@ export class InvestorServiceService {
     });
   }
 
-  async updateInvestor(id: string, dto: Partial<Investor>) {
+  async updateInvestor(id: string, dto: UpdateInvestorDto) {
     const investor = await this.getInvestorOrThrow(id);
 
     if (dto.name !== undefined) {
@@ -256,7 +262,7 @@ export class InvestorServiceService {
     return successRes({ id }, 200, 'investor deleted');
   }
 
-  async createInvestment(dto: Partial<Investment>) {
+  async createInvestment(dto: CreateInvestmentDto) {
     const investor_id = String(dto.investor_id ?? '').trim();
     if (!investor_id) {
       this.badRequest('investor_id is required');
@@ -316,6 +322,15 @@ export class InvestorServiceService {
       take: limit,
     });
 
+    const totalAmountRaw = await this.investmentRepo
+      .createQueryBuilder('investment')
+      .select('COALESCE(SUM(investment.amount), 0)', 'total')
+      .where('investment.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere(query?.investor_id ? 'investment.investor_id = :investor_id' : '1=1', {
+        investor_id: query?.investor_id ? String(query.investor_id) : undefined,
+      })
+      .getRawOne<{ total: string }>();
+
     return successRes({
       items,
       meta: {
@@ -323,6 +338,9 @@ export class InvestorServiceService {
         limit,
         total,
         totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+      summary: {
+        total_amount: Number(totalAmountRaw?.total ?? 0),
       },
     });
   }
@@ -336,7 +354,12 @@ export class InvestorServiceService {
     });
   }
 
-  async updateInvestment(id: string, dto: Partial<Investment>) {
+  async findInvestmentById(id: string) {
+    const investment = await this.getInvestmentOrThrow(id);
+    return successRes(investment);
+  }
+
+  async updateInvestment(id: string, dto: UpdateInvestmentDto) {
     const investment = await this.getInvestmentOrThrow(id);
 
     if (dto.investor_id !== undefined) {
@@ -386,7 +409,7 @@ export class InvestorServiceService {
     return successRes({ id: investment.id }, 200, 'investment deleted');
   }
 
-  async createProfitShare(dto: Partial<ProfitShare>) {
+  async createProfitShare(dto: CreateProfitShareDto) {
     const investor_id = String(dto.investor_id ?? '').trim();
     if (!investor_id) {
       this.badRequest('investor_id is required');
@@ -433,13 +456,7 @@ export class InvestorServiceService {
     return successRes(saved, 201, 'profit share created');
   }
 
-  async calculateProfit(input: {
-    investor_id?: string;
-    period_start: string;
-    period_end: string;
-    percentage: number;
-    description?: string;
-  }) {
+  async calculateProfit(input: CalculateProfitDto) {
     const period_start = this.parseDate(input?.period_start, 'period_start');
     const period_end = this.parseDate(input?.period_end, 'period_end');
     if (!period_start || !period_end) {

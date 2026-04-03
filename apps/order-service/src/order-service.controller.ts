@@ -3,6 +3,7 @@ import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices'
 import { RmqService } from '@app/common';
 import { Order_status, Where_deliver } from '@app/common';
 import { OrderServiceService } from './order-service.service';
+import { Order_source } from './entities/order.entity';
 
 @Controller()
 export class OrderServiceController {
@@ -76,6 +77,7 @@ export class OrderServiceController {
         end_day?: string;
         courier?: string;
         region_id?: string;
+        source?: Order_source | 'internal' | 'external';
         page?: number;
         limit?: number;
       };
@@ -209,6 +211,7 @@ export class OrderServiceController {
         address?: string | null;
         qr_code_token?: string | null;
         external_id?: string | null;
+        source?: Order_source;
         items?: Array<{ product_id: string; quantity?: number }>;
       };
     },
@@ -242,6 +245,7 @@ export class OrderServiceController {
         address?: string | null;
         qr_code_token?: string | null;
         external_id?: string | null;
+        source?: Order_source;
         items?: Array<{ product_id: string; quantity?: number }>;
       };
     },
@@ -259,6 +263,56 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.receiveExternalOrders(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.external.find_all' })
+  findAllExternal(
+    @Payload()
+    data: {
+      query: {
+        market_id?: string;
+        status?: Order_status;
+        start_day?: string;
+        end_day?: string;
+        page?: number;
+        limit?: number;
+      };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findAllExternal(data.query ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.external.create' })
+  createExternal(
+    @Payload()
+    data: {
+      dto: {
+        market_id: string;
+        customer_id: string;
+        where_deliver?: Where_deliver;
+        total_price?: number;
+        to_be_paid?: number;
+        paid_amount?: number;
+        status?: Order_status;
+        comment?: string | null;
+        operator?: string | null;
+        post_id?: string | null;
+        district_id?: string | null;
+        region_id?: string | null;
+        address?: string | null;
+        qr_code_token?: string | null;
+        external_id?: string | null;
+        items?: Array<{ product_id: string; quantity?: number }>;
+      };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.createExternalOrder(data.dto),
     );
   }
 

@@ -3,6 +3,11 @@ import { BaseEntity } from '@app/common';
 import { Order_status, Where_deliver } from '@app/common';
 import { OrderItem } from './order-item.entity';
 
+export enum Order_source {
+  INTERNAL = 'internal',
+  EXTERNAL = 'external',
+}
+
 @Entity({ name: 'orders' })
 export class Order extends BaseEntity {
   @Column({ type: 'bigint' })
@@ -58,6 +63,9 @@ export class Order extends BaseEntity {
 
   @Column({ type: 'varchar', nullable: true })
   external_id!: string | null;
+
+  @Column({ type: 'enum', enum: Order_source, default: Order_source.INTERNAL })
+  source!: Order_source;
 
   @OneToMany(() => OrderItem, (item) => item.order, { cascade: true })
   items!: OrderItem[];
