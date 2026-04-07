@@ -15,8 +15,8 @@ import { ClientProxy } from '@nestjs/microservices';
 import {
   ApiBearerAuth,
   ApiBody,
-  ApiParam,
   ApiOperation,
+  ApiParam,
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
@@ -28,18 +28,23 @@ import { Roles as RoleEnum } from '@app/common';
 import {
   ConnectTelegramByTokenRequestDto,
   CreateTelegramMarketRequestDto,
-  DeleteTelegramMarketRequestDto,
   FindTelegramMarketsQueryDto,
   SendNotificationRequestDto,
   UpdateTelegramMarketRequestDto,
 } from './dto/notification.swagger.dto';
 
 @ApiTags('Notification')
-@Controller(['notification', 'notifications'])
+@Controller('notifications')
 export class NotificationGatewayController {
-  constructor(@Inject('NOTIFICATION') private readonly notificationClient: ClientProxy) {}
+  constructor(
+    @Inject('NOTIFICATION') private readonly notificationClient: ClientProxy,
+  ) {}
 
-  private async send<T = any>(pattern: object, payload: object, timeoutMs = 8000): Promise<T> {
+  private async send<T = any>(
+    pattern: object,
+    payload: object,
+    timeoutMs = 8000,
+  ): Promise<T> {
     return firstValueFrom(
       this.notificationClient.send(pattern, payload).pipe(timeout(timeoutMs)),
     ).catch((error: unknown) => {
@@ -60,7 +65,7 @@ export class NotificationGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'GET /notifications - ro‘yxat' })
+  @ApiOperation({ summary: 'Get notification configs' })
   @ApiQuery({ name: 'market_id', required: false })
   @ApiQuery({ name: 'group_type', required: false })
   @ApiQuery({ name: 'is_active', required: false, type: Boolean })
@@ -70,11 +75,21 @@ export class NotificationGatewayController {
     return this.send({ cmd: 'notification.telegram.find_all' }, query);
   }
 
+  @Get(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get one notification config by id' })
+  @ApiParam({ name: 'id', example: '10' })
+  findOneNotification(@Param('id') id: string) {
+    return this.send({ cmd: 'notification.telegram.find_one' }, { id });
+  }
+
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'POST /notifications - yaratish' })
+  @ApiOperation({ summary: 'Create notification config' })
   @ApiBody({ type: CreateTelegramMarketRequestDto })
   createNotification(@Body() dto: CreateTelegramMarketRequestDto) {
     return this.send({ cmd: 'notification.telegram.create' }, dto);
@@ -84,10 +99,10 @@ export class NotificationGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'PATCH /notifications/:id - yangilash' })
+  @ApiOperation({ summary: 'Update notification config' })
   @ApiParam({ name: 'id', example: '10' })
   @ApiBody({ type: UpdateTelegramMarketRequestDto })
-  updateNotificationById(
+  updateNotification(
     @Param('id') id: string,
     @Body() dto: UpdateTelegramMarketRequestDto,
   ) {
@@ -98,72 +113,20 @@ export class NotificationGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'DELETE /notifications/:id - o‘chirish' })
+  @ApiOperation({ summary: 'Delete notification config' })
   @ApiParam({ name: 'id', example: '10' })
-  deleteNotificationById(@Param('id') id: string) {
+  deleteNotification(@Param('id') id: string) {
     return this.send({ cmd: 'notification.telegram.delete' }, { id });
   }
 
-  @Post('telegram')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Create telegram market config' })
-  @ApiBody({ type: CreateTelegramMarketRequestDto })
-  createTelegramMarket(@Body() dto: CreateTelegramMarketRequestDto) {
-    return this.send({ cmd: 'notification.telegram.create' }, dto);
-  }
-
-  @Get('telegram')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Find telegram market configs' })
-  @ApiQuery({ name: 'market_id', required: false })
-  @ApiQuery({ name: 'group_type', required: false })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  findAllTelegramMarkets(@Query() query: FindTelegramMarketsQueryDto) {
-    return this.send({ cmd: 'notification.telegram.find_all' }, query);
-  }
-
-  @Get('telegram/:id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Find one telegram market config by id' })
-  findOneTelegramMarket(@Param('id') id: string) {
-    return this.send({ cmd: 'notification.telegram.find_one' }, { id });
-  }
-
-  @Patch('telegram')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Update telegram market config' })
-  @ApiBody({ type: UpdateTelegramMarketRequestDto })
-  updateTelegramMarket(@Body() dto: UpdateTelegramMarketRequestDto) {
-    return this.send({ cmd: 'notification.telegram.update' }, dto);
-  }
-
-  @Post('telegram/connect-by-token')
+  @Post('connect-by-token')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.OPERATOR)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Connect telegram group by group_token text' })
+  @ApiOperation({ summary: 'Connect telegram group by group token' })
   @ApiBody({ type: ConnectTelegramByTokenRequestDto })
   connectByToken(@Body() dto: ConnectTelegramByTokenRequestDto) {
     return this.send({ cmd: 'notification.telegram.connect_by_token' }, dto);
-  }
-
-  @Delete('telegram')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Delete telegram market config' })
-  @ApiBody({ type: DeleteTelegramMarketRequestDto })
-  deleteTelegramMarket(@Body() dto: DeleteTelegramMarketRequestDto) {
-    return this.send({ cmd: 'notification.telegram.delete' }, dto);
   }
 
   @Post('send')
