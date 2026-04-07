@@ -17,6 +17,7 @@ export class BranchServiceService {
     @InjectRepository(BranchUser) private readonly branchUserRepo: Repository<BranchUser>,
     @InjectRepository(BranchConfig) private readonly branchConfigRepo: Repository<BranchConfig>,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
   ) {}
 
   private notFound(message: string): never {
@@ -111,6 +112,35 @@ export class BranchServiceService {
     }
   }
 
+  private async getRegionsByIds(regionIds: string[]): Promise<Map<string, unknown>> {
+    if (!regionIds.length) {
+      return new Map();
+    }
+
+    try {
+      const res = await lastValueFrom(
+        this.logisticsClient
+          .send<{ data?: Array<Record<string, unknown>> }>(
+            { cmd: 'logistics.region.find_by_ids' },
+            { ids: regionIds },
+          )
+          .pipe(timeout(5000)),
+      );
+
+      const items = Array.isArray(res?.data) ? res.data : [];
+      const map = new Map<string, unknown>();
+      items.forEach((region) => {
+        const id = String(region?.id ?? '');
+        if (id) {
+          map.set(id, region);
+        }
+      });
+      return map;
+    } catch {
+      return new Map();
+    }
+  }
+
   async createBranch(dto: {
     name?: string;
     location?: string;
@@ -176,9 +206,23 @@ export class BranchServiceService {
 
     const [items, total] = await qb.skip(skip).take(limit).getManyAndCount();
 
+    const regionIds = Array.from(
+      new Set(
+        items
+          .map((item) => item.region_id)
+          .filter((regionId): regionId is string => Boolean(regionId)),
+      ),
+    );
+    const regionMap = await this.getRegionsByIds(regionIds);
+
+    const enrichedItems = items.map((item) => ({
+      ...item,
+      region: item.region_id ? (regionMap.get(item.region_id) ?? null) : null,
+    }));
+
     return successRes(
       {
-        items,
+        items: enrichedItems,
         meta: {
           page,
           limit,

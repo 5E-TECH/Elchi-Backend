@@ -80,11 +80,6 @@ export class AssignBranchUserRequestDto {
   @ApiProperty({ example: '12', description: 'User ID (bigint string)' })
   @IsNumberString()
   user_id!: string;
-
-  @ApiPropertyOptional({ example: 'operator' })
-  @IsOptional()
-  @IsString()
-  role?: string;
 }
 
 export class SetBranchConfigRequestDto {
