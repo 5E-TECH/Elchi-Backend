@@ -20,6 +20,7 @@ describe('BranchServiceService', () => {
   let branchUserRepo: any;
   let branchConfigRepo: any;
   let identityClient: any;
+  let logisticsClient: any;
 
   beforeEach(() => {
     branchRepo = {
@@ -41,8 +42,15 @@ describe('BranchServiceService', () => {
       find: jest.fn(),
     };
     identityClient = { send: jest.fn().mockReturnValue(of({ data: { id: 'u1' } })) };
+    logisticsClient = { send: jest.fn().mockReturnValue(of({ data: [] })) };
 
-    service = new BranchServiceService(branchRepo, branchUserRepo, branchConfigRepo, identityClient);
+    service = new BranchServiceService(
+      branchRepo,
+      branchUserRepo,
+      branchConfigRepo,
+      identityClient,
+      logisticsClient,
+    );
   });
 
   it('createBranch creates new branch', async () => {

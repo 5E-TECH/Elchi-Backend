@@ -124,6 +124,17 @@ export class BranchGatewayController {
     );
   }
 
+  @Get('branches/:id/users')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Get users assigned to branch' })
+  @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
+  getBranchUsers(@Param('id') id: string) {
+    return this.branchClient.send(
+      { cmd: 'branch.user.find_by_branch' },
+      { branch_id: id },
+    );
+  }
+
   @Get('branches/:id/config')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Get branch config list' })
