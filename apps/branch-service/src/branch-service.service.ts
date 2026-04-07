@@ -141,6 +141,32 @@ export class BranchServiceService {
     }
   }
 
+  private async getUsersByIds(userIds: string[]): Promise<Map<string, unknown>> {
+    if (!userIds.length) {
+      return new Map();
+    }
+
+    const results = await Promise.all(
+      userIds.map(async (id) => {
+        try {
+          const res = await lastValueFrom(
+            this.identityClient
+              .send<{ data?: Record<string, unknown> }>(
+                { cmd: 'identity.user.find_by_id' },
+                { id },
+              )
+              .pipe(timeout(5000)),
+          );
+          return [id, res?.data ?? null] as const;
+        } catch {
+          return [id, null] as const;
+        }
+      }),
+    );
+
+    return new Map(results);
+  }
+
   async createBranch(dto: {
     name?: string;
     location?: string;
@@ -395,7 +421,21 @@ export class BranchServiceService {
       order: { createdAt: 'DESC' },
     });
 
-    return successRes(users, 200, 'Branch users');
+    const userIds = Array.from(
+      new Set(
+        users
+          .map((item) => item.user_id)
+          .filter((userId): userId is string => Boolean(userId)),
+      ),
+    );
+    const userMap = await this.getUsersByIds(userIds);
+
+    const enrichedUsers = users.map((item) => ({
+      ...item,
+      user: userMap.get(item.user_id) ?? null,
+    }));
+
+    return successRes(enrichedUsers, 200, 'Branch users');
   }
 
   async setBranchConfig(data: {
