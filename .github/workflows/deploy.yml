@@ -48,7 +48,8 @@ jobs:
           script: |
             set -e
             cd ${{ secrets.SERVER_APP_PATH }}
-            git pull origin main
+            git fetch origin main
+            git reset --hard origin/main
             cp -f .env.production .env
             docker compose -f docker-compose.yml up -d --build
             docker image prune -f
