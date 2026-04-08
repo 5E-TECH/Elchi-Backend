@@ -132,21 +132,58 @@ export class OrderServiceService {
   }
 
   private analyticsDateRange(startDate?: string, endDate?: string) {
-    const now = new Date();
-    const start = startDate ? new Date(startDate) : new Date(now);
-    const end = endDate ? new Date(endDate) : new Date(now);
+    const UZB_OFFSET_MS = 5 * 60 * 60 * 1000;
+
+    const parseUzDate = (value: string, endOfDay: boolean): Date | null => {
+      const parts = value.split('-').map(Number);
+      if (parts.length !== 3 || parts.some((part) => !Number.isFinite(part))) {
+        return null;
+      }
+      const [year, month, day] = parts;
+      const utcMs = Date.UTC(
+        year,
+        month - 1,
+        day,
+        endOfDay ? 23 : 0,
+        endOfDay ? 59 : 0,
+        endOfDay ? 59 : 0,
+        endOfDay ? 999 : 0,
+      );
+      return new Date(utcMs - UZB_OFFSET_MS);
+    };
+
+    const parseDateInput = (value: string, endOfDay: boolean) => {
+      if (/^\d+$/.test(value)) {
+        return new Date(Number(value));
+      }
+      if (value.includes('T')) {
+        return new Date(value);
+      }
+      const parsedUz = parseUzDate(value, endOfDay);
+      return parsedUz ?? new Date(value);
+    };
+
+    const hasStart = Boolean(startDate && String(startDate).trim().length > 0);
+    const hasEnd = Boolean(endDate && String(endDate).trim().length > 0);
+
+    let start: Date;
+    let end: Date;
+
+    if (!hasStart || !hasEnd) {
+      const uzNow = new Date(Date.now() + UZB_OFFSET_MS);
+      const year = uzNow.getUTCFullYear();
+      const month = String(uzNow.getUTCMonth() + 1).padStart(2, '0');
+      const day = String(uzNow.getUTCDate()).padStart(2, '0');
+      const dateKey = `${year}-${month}-${day}`;
+      start = parseUzDate(dateKey, false)!;
+      end = parseUzDate(dateKey, true)!;
+    } else {
+      start = parseDateInput(String(startDate), false);
+      end = parseDateInput(String(endDate), true);
+    }
 
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
       throw new RpcException({ statusCode: 400, message: 'Sana formati noto‘g‘ri' });
-    }
-
-    if (!startDate) {
-      start.setHours(0, 0, 0, 0);
-    }
-    if (!endDate) {
-      end.setHours(23, 59, 59, 999);
-    } else if (!endDate.includes('T')) {
-      end.setHours(23, 59, 59, 999);
     }
 
     return { start, end };
@@ -322,6 +359,32 @@ export class OrderServiceService {
       { ids },
     ).catch(() => ({ data: [] }));
     return response?.data ?? [];
+  }
+
+  private async getAllOperatorUsers() {
+    const limit = 200;
+    let page = 1;
+    let totalPages = 1;
+    const items: Array<{ id?: string; name?: string; username?: string; market_id?: string }> = [];
+
+    while (page <= totalPages) {
+      const response = await rmqSend<any>(
+        this.identityClient,
+        { cmd: 'identity.user.find_all' },
+        { query: { role: Roles.OPERATOR, page, limit } },
+      ).catch(() => null);
+
+      const payload = response?.data ?? response ?? {};
+      const batch = Array.isArray(payload?.items) ? payload.items : [];
+      items.push(...batch);
+
+      const pages = Number(payload?.meta?.totalPages ?? 1);
+      totalPages = Number.isFinite(pages) && pages > 0 ? pages : 1;
+      page += 1;
+      if (page > 100) break;
+    }
+
+    return items;
   }
 
   private async getCashboxByUser(userId: string, cashboxType: Cashbox_type) {
@@ -792,6 +855,7 @@ export class OrderServiceService {
     status?: Order_status;
     comment?: string | null;
     operator?: string | null;
+    operator_id?: string | null;
     post_id?: string | null;
     canceled_post_id?: string | null;
     sold_at?: string | null;
@@ -802,7 +866,10 @@ export class OrderServiceService {
     external_id?: string | null;
     source?: Order_source;
     items?: Array<{ product_id: string; quantity?: number }>;
-  }) {
+  }, requester?: { id: string; roles?: string[] }) {
+    const roles = new Set((requester?.roles ?? []).map((role) => String(role).toLowerCase()));
+    const operatorId = dto.operator_id ?? (roles.has(Roles.OPERATOR) ? requester?.id ?? null : null);
+
     const order = this.orderRepo.create({
       market_id: dto.market_id,
       customer_id: dto.customer_id,
@@ -813,6 +880,7 @@ export class OrderServiceService {
       status: dto.status ?? Order_status.NEW,
       comment: dto.comment ?? null,
       operator: dto.operator ?? null,
+      operator_id: operatorId,
       post_id: dto.post_id ?? null,
       canceled_post_id: dto.canceled_post_id ?? null,
       sold_at: dto.sold_at ?? null,
@@ -2430,7 +2498,6 @@ export class OrderServiceService {
       .select('o.market_id', 'market_id')
       .addSelect('COUNT(*)', 'sold')
       .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.createdAt BETWEEN :start AND :end', { start, end })
       .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
       .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
       .andWhere('o.market_id IS NOT NULL')
@@ -2458,30 +2525,36 @@ export class OrderServiceService {
     const soldStatuses = this.soldStatuses();
     const startMs = start.getTime();
     const endMs = end.getTime();
-    const recentThreshold = endMs - 30 * 24 * 60 * 60 * 1000;
-    const recentPosts = (await this.getAllPostsForAnalytics()).filter((post) => {
-      const updatedAt = post.updatedAt ? new Date(post.updatedAt).getTime() : 0;
-      return updatedAt > recentThreshold;
-    });
+    const postRows = await this.orderRepo
+      .createQueryBuilder('o')
+      .select('o.post_id', 'post_id')
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+      .andWhere('o.post_id IS NOT NULL')
+      .groupBy('o.post_id')
+      .getRawMany<{ post_id: string }>();
+    const postIds = postRows.map((row) => String(row.post_id)).filter(Boolean);
 
-    if (!recentPosts.length) {
+    if (!postIds.length) {
       return [];
     }
+
+    const posts = await this.getPostsByIds(postIds);
 
     const orders = await this.orderRepo
       .createQueryBuilder('o')
       .where('o.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('o.post_id IN (:...postIds)', {
-        postIds: recentPosts.map((post) => post.id),
+        postIds,
       })
       .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
       .select(['o.id', 'o.status', 'o.post_id', 'o.sold_at'])
       .getMany();
 
     const postMap = new Map<string, { id: string; courier_id?: string | null }>(
-      recentPosts.map((post) => [String(post.id), post]),
+      posts.map((post) => [String(post.id), post]),
     );
-    const courierIds = [...new Set(recentPosts.map((post) => post.courier_id).filter(Boolean) as string[])];
+    const courierIds = [...new Set(posts.map((post) => post.courier_id).filter(Boolean) as string[])];
     const couriers = await this.getCouriersByIds(courierIds);
 
     const statsByCourier = new Map<string, { total: number; sold: number }>();
@@ -2535,6 +2608,7 @@ export class OrderServiceService {
     const marketMap = new Map(markets.map((m) => [String(m.id), m]));
 
     const result = totalsRaw
+      .filter((row) => Number(row.total_orders) >= 30)
       .map((row) => {
         const totalOrders = Number(row.total_orders);
         const successfulOrders = Number(row.successful_orders);
@@ -2598,6 +2672,65 @@ export class OrderServiceService {
           success_rate: successRate,
         };
       })
+      .filter((row) => row.total_orders >= 30)
+      .sort((a, b) => b.success_rate - a.success_rate)
+      .slice(0, limit);
+  }
+
+  async getTopOperatorsByMarket(marketId: string, limit = 10) {
+    const soldStatuses = this.soldStatuses();
+    const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const rows = await this.orderRepo
+      .createQueryBuilder('o')
+      .select('o.operator_id', 'operator_id')
+      .addSelect('COUNT(*)', 'total_orders')
+      .addSelect(
+        `SUM(CASE WHEN o.status IN (:...statuses) THEN 1 ELSE 0 END)`,
+        'successful_orders',
+      )
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('o.market_id = :marketId', { marketId })
+      .andWhere('o.createdAt >= :lastMonth', { lastMonth })
+      .andWhere('o.operator_id IS NOT NULL')
+      .setParameter('statuses', soldStatuses)
+      .groupBy('o.operator_id')
+      .getRawMany<{ operator_id: string; total_orders: string; successful_orders: string }>();
+
+    if (!rows.length) {
+      return [];
+    }
+
+    const operators = await this.getAllOperatorUsers();
+    const byId = new Map<string, any>();
+
+    for (const operator of operators) {
+      if (marketId && String(operator?.market_id ?? '') !== String(marketId)) {
+        continue;
+      }
+      const idKey = String(operator?.id ?? '').trim();
+      if (idKey) byId.set(idKey, operator);
+    }
+
+    return rows
+      .map((row) => {
+        const totalOrders = Number(row.total_orders) || 0;
+        const successfulOrders = Number(row.successful_orders) || 0;
+        const successRate =
+          totalOrders > 0
+            ? Number(((successfulOrders * 100) / totalOrders).toFixed(2))
+            : 0;
+        const operatorId = String(row.operator_id ?? '').trim();
+        const matched = byId.get(operatorId) ?? null;
+
+        return {
+          operator_id: operatorId || null,
+          operator_name: matched?.name ?? matched?.username ?? null,
+          total_orders: totalOrders,
+          successful_orders: successfulOrders,
+          success_rate: successRate,
+        };
+      })
       .sort((a, b) => b.success_rate - a.success_rate)
       .slice(0, limit);
   }
@@ -2607,10 +2740,8 @@ export class OrderServiceService {
     const soldStatuses = this.soldStatuses();
     const startMs = String(start.getTime());
     const endMs = String(end.getTime());
-    const recentThreshold = end.getTime() - 30 * 24 * 60 * 60 * 1000;
     const courierPosts = (await this.getAllPostsForAnalytics()).filter((post) => {
-      const updatedAt = post.updatedAt ? new Date(post.updatedAt).getTime() : 0;
-      return String(post.courier_id) === String(courierId) && updatedAt > recentThreshold;
+      return String(post.courier_id) === String(courierId);
     });
 
     const postIds = courierPosts.map((post) => post.id);

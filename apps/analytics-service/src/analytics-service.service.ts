@@ -109,12 +109,6 @@ export class AnalyticsServiceService {
     return Number.isNaN(d.getTime()) ? null : d;
   }
 
-  private isInRange(date: Date | null, start: Date, end: Date) {
-    if (!date) return false;
-    const ms = date.getTime();
-    return ms >= start.getTime() && ms <= end.getTime();
-  }
-
   private async requestOrderPage(query: Record<string, any>) {
     const response = await rmqSend<any>(this.orderClient, { cmd: 'order.find_all' }, { query });
     if (response && typeof response === 'object' && Array.isArray(response.data)) {
@@ -190,22 +184,30 @@ export class AnalyticsServiceService {
     return { items, total, totalPages };
   }
 
-  private async collectIdentityUsers(cmd: string, query: Record<string, any> = {}) {
-    const limit = 200;
-    let page = 1;
-    let totalPages = 1;
-    const items: any[] = [];
-
-    while (page <= totalPages) {
-      const response = await rmqSend<any>(this.identityClient, { cmd }, { query: { ...query, page, limit } });
-      const normalized = this.normalizePagedResponse(response);
-      items.push(...normalized.items);
-      totalPages = normalized.totalPages;
-      page += 1;
-      if (page > 100) break;
+  private async resolveRequesterForMarket(
+    requester: RequesterContext | undefined,
+    roles: Set<string>,
+  ): Promise<RequesterContext | undefined> {
+    if (!requester || !roles.has(Roles.OPERATOR)) {
+      return requester;
     }
 
-    return items;
+    const operatorRes = await rmqSend<any>(
+      this.identityClient,
+      { cmd: 'identity.user.find_by_id' },
+      { id: requester.id },
+    ).catch(() => null);
+    const operatorData = this.unwrap<any>(operatorRes as any) as any;
+    const marketId = operatorData?.market_id;
+
+    if (!marketId) {
+      return requester;
+    }
+
+    return {
+      ...requester,
+      id: String(marketId),
+    };
   }
 
   async getDashboard(
@@ -245,12 +247,13 @@ export class AnalyticsServiceService {
       );
     }
 
-    if (roles.has(Roles.MARKET)) {
-      const [myStat, markets, topMarkets] = await Promise.all([
+    if (roles.has(Roles.MARKET) || roles.has(Roles.OPERATOR)) {
+      const marketRequester = await this.resolveRequesterForMarket(requester, roles);
+      const [myStat, markets, topMarkets, topOperators] = await Promise.all([
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.market_stat' },
-          { requester, ...normalized },
+          { requester: marketRequester, ...normalized },
         ),
         rmqSend(
           this.orderClient,
@@ -262,6 +265,11 @@ export class AnalyticsServiceService {
           { cmd: 'order.analytics.top_markets' },
           {},
         ),
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.top_operators_by_market' },
+          { requester: marketRequester },
+        ).catch(() => []),
       ]);
 
       return successRes(
@@ -269,30 +277,20 @@ export class AnalyticsServiceService {
           myStat: this.unwrap(myStat),
           markets: this.unwrap(markets),
           topMarkets: this.unwrap(topMarkets),
+          topOperators: this.unwrap(topOperators as any),
         },
         200,
         'Dashboard infos',
       );
     }
 
-    const [orders, markets, couriers, topMarkets, topCouriers, financialBalance, activeCouriersCount, allAdminUsers, allMarketsUsers] = await Promise.all([
+    const [orders, markets, couriers, topMarkets, topCouriers] = await Promise.all([
       rmqSend(this.orderClient, { cmd: 'order.analytics.overview' }, normalized),
       rmqSend(this.orderClient, { cmd: 'order.analytics.market_stats' }, normalized),
       rmqSend(this.orderClient, { cmd: 'order.analytics.courier_stats' }, normalized),
       rmqSend(this.orderClient, { cmd: 'order.analytics.top_markets' }, {}),
       rmqSend(this.orderClient, { cmd: 'order.analytics.top_couriers' }, {}),
-      rmqSend(this.financeClient, { cmd: 'finance.cashbox.financial_balance' }, {}).catch(() => null),
-      rmqSend(this.identityClient, { cmd: 'identity.courier.find_all' }, { query: { status: 'active', page: 1, limit: 1 } }).catch(() => null),
-      this.collectIdentityUsers('identity.user.find_all').catch(() => []),
-      this.collectIdentityUsers('identity.market.find_all').catch(() => []),
     ]);
-
-    const start = new Date(normalized.startDate);
-    const end = new Date(normalized.endDate);
-    const newUsersCount = [...allAdminUsers, ...allMarketsUsers]
-      .filter((user) => this.isInRange(this.parseDateValue(user?.createdAt), start, end))
-      .length;
-    const activeCouriers = this.normalizePagedResponse(activeCouriersCount).total;
 
     return successRes(
       {
@@ -301,9 +299,6 @@ export class AnalyticsServiceService {
         couriers: this.unwrap(couriers),
         topMarkets: this.unwrap(topMarkets),
         topCouriers: this.unwrap(topCouriers),
-        financialBalance: this.unwrap(financialBalance as any),
-        newUsersCount,
-        activeCouriers,
       },
       200,
       'Dashboard infos',

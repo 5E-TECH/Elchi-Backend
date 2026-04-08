@@ -177,7 +177,7 @@ export class OrderGatewayController {
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN, RoleEnum.REGISTRATOR, RoleEnum.MARKET)
+  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN, RoleEnum.REGISTRATOR, RoleEnum.MARKET, RoleEnum.OPERATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create order' })
   @ApiBody({ type: CreateOrderRequestDto })
@@ -189,6 +189,19 @@ export class OrderGatewayController {
     let resolvedMarketId = orderDto.market_id;
     if (roles.includes(RoleEnum.MARKET)) {
       resolvedMarketId = req.user.sub;
+    } else if (roles.includes(RoleEnum.OPERATOR)) {
+      const operatorResponse = await this.sendIdentityWithTimeout(
+        { cmd: 'identity.user.find_by_id' },
+        { id: req.user.sub },
+      );
+      const operatorUser = operatorResponse?.data ?? operatorResponse;
+      if (!operatorUser?.market_id) {
+        throw new BadRequestException('Operator uchun market aniqlanmadi');
+      }
+      resolvedMarketId = String(operatorUser.market_id);
+      if (!orderDto.operator) {
+        orderDto.operator = operatorUser.name ?? operatorUser.username ?? null;
+      }
     } else if (
       (roles.includes(RoleEnum.ADMIN) ||
         roles.includes(RoleEnum.SUPERADMIN) ||
@@ -226,7 +239,15 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.create' },
-          { dto: { ...orderDto, market_id: resolvedMarketId, customer_id: finalCustomerId } },
+          {
+            dto: {
+              ...orderDto,
+              market_id: resolvedMarketId,
+              customer_id: finalCustomerId,
+              operator_id: roles.includes(RoleEnum.OPERATOR) ? req.user.sub : null,
+            },
+            requester: { id: req.user.sub, roles },
+          },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {

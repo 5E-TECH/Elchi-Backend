@@ -17,6 +17,7 @@ jest.mock('@app/common', () => ({
   Roles: {
     COURIER: 'courier',
     MARKET: 'market',
+    OPERATOR: 'operator',
   },
   rmqSend: (...args: any[]) => rmqSendMock(...args),
 }));
@@ -45,17 +46,17 @@ describe('AnalyticsServiceService', () => {
     rmqSendMock
       .mockResolvedValueOnce({ data: { sold: 2 } })
       .mockResolvedValueOnce({ data: [{ id: 'm1' }] })
-      .mockResolvedValueOnce({ data: [{ id: 'tm1' }] });
+      .mockResolvedValueOnce({ data: [{ id: 'tm1' }] })
+      .mockResolvedValueOnce({ data: [{ id: 'op1' }] });
 
     const res = await service.getDashboard({ id: 'm1', roles: ['market'] }, {} as any);
 
     expect(res.statusCode).toBe(200);
     expect(res.data.myStat).toEqual({ sold: 2 });
+    expect(res.data.topOperators).toEqual([{ id: 'op1' }]);
   });
 
-  it('getDashboard general branch computes activeCouriers and newUsersCount', async () => {
-    const now = new Date().toISOString();
-
+  it('getDashboard general branch returns pcs-compatible payload', async () => {
     rmqSendMock.mockImplementation((_client: any, pattern: any) => {
       const cmd = pattern?.cmd;
       if (cmd === 'order.analytics.overview') return Promise.resolve({ data: { acceptedCount: 1 } });
@@ -63,18 +64,15 @@ describe('AnalyticsServiceService', () => {
       if (cmd === 'order.analytics.courier_stats') return Promise.resolve({ data: [] });
       if (cmd === 'order.analytics.top_markets') return Promise.resolve({ data: [] });
       if (cmd === 'order.analytics.top_couriers') return Promise.resolve({ data: [] });
-      if (cmd === 'finance.cashbox.financial_balance') return Promise.resolve({ data: { ok: true } });
-      if (cmd === 'identity.courier.find_all') return Promise.resolve({ data: { items: [], meta: { total: 5, totalPages: 1 } } });
-      if (cmd === 'identity.user.find_all') return Promise.resolve({ data: { items: [{ createdAt: now }], meta: { total: 1, totalPages: 1 } } });
-      if (cmd === 'identity.market.find_all') return Promise.resolve({ data: { items: [{ createdAt: now }], meta: { total: 1, totalPages: 1 } } });
       return Promise.resolve({ data: {} });
     });
 
     const res = await service.getDashboard({ id: 'admin', roles: ['superadmin'] }, {} as any);
 
     expect(res.statusCode).toBe(200);
-    expect(res.data.activeCouriers).toBe(5);
-    expect(res.data.newUsersCount).toBe(2);
+    expect(res.data.orders).toEqual({ acceptedCount: 1 });
+    expect(res.data).not.toHaveProperty('activeCouriers');
+    expect(res.data).not.toHaveProperty('newUsersCount');
   });
 
   it('getRevenueStats defaults invalid period to daily', async () => {
