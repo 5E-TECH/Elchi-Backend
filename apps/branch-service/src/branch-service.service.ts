@@ -263,7 +263,17 @@ export class BranchServiceService {
 
   async findBranchById(id: string) {
     const branch = await this.getBranchOrThrow(id);
-    return successRes(branch, 200, 'Branch found');
+    const regionMap = await this.getRegionsByIds(
+      branch.region_id ? [branch.region_id] : [],
+    );
+    return successRes(
+      {
+        ...branch,
+        region: branch.region_id ? (regionMap.get(branch.region_id) ?? null) : null,
+      },
+      200,
+      'Branch found',
+    );
   }
 
   async updateBranch(
@@ -430,10 +440,14 @@ export class BranchServiceService {
     );
     const userMap = await this.getUsersByIds(userIds);
 
-    const enrichedUsers = users.map((item) => ({
-      ...item,
-      user: userMap.get(item.user_id) ?? null,
-    }));
+    const enrichedUsers = users.map((item) => {
+      const user = userMap.get(item.user_id) as Record<string, unknown> | null;
+      return {
+        ...item,
+        role: item.role ?? (typeof user?.role === 'string' ? user.role : null),
+        user,
+      };
+    });
 
     return successRes(enrichedUsers, 200, 'Branch users');
   }

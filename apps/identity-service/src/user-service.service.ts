@@ -196,6 +196,16 @@ export class UserServiceService implements OnModuleInit {
     return rest as T;
   }
 
+  private roleToCashboxType(role: Roles): Cashbox_type | null {
+    if (role === Roles.MARKET) {
+      return Cashbox_type.FOR_MARKET;
+    }
+    if (role === Roles.COURIER) {
+      return Cashbox_type.FOR_COURIER;
+    }
+    return null;
+  }
+
   private async syncUserToSearch(user: User): Promise<void> {
     try {
       const safe = this.sanitize(user) as User;
@@ -463,6 +473,45 @@ export class UserServiceService implements OnModuleInit {
 
     const safeUser = this.sanitize(user);
     const profileRegion = await this.getRegionById(safeUser.region_id);
+
+    const cashboxType = this.roleToCashboxType(safeUser.role as Roles);
+    if (cashboxType) {
+      try {
+        const cashboxRes = await lastValueFrom(
+          this.financeClient
+            .send<{ data?: Record<string, any> }>(
+              { cmd: 'finance.cashbox.user_by_id' },
+              { id: safeUser.id, cashbox_type: cashboxType },
+            )
+            .pipe(timeout(5000)),
+        );
+
+        const payload = cashboxRes?.data ?? {};
+        const cashbox = payload?.cashbox
+          ? {
+              ...payload.cashbox,
+              user: {
+                ...safeUser,
+                region: profileRegion,
+              },
+            }
+          : null;
+
+        return successRes(
+          {
+            ...payload,
+            cashbox,
+          },
+          200,
+          'Cashbox details',
+        );
+      } catch {
+        return successRes({
+          ...safeUser,
+          region: profileRegion,
+        });
+      }
+    }
 
     if (safeUser.role !== Roles.CUSTOMER) {
       return successRes({
