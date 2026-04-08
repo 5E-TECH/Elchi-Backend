@@ -41,6 +41,9 @@ export class Order extends BaseEntity {
   operator!: string | null;
 
   @Column({ type: 'bigint', nullable: true })
+  operator_id!: string | null;
+
+  @Column({ type: 'bigint', nullable: true })
   post_id!: string | null;
 
   @Column({ type: 'bigint', nullable: true })

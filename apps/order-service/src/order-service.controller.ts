@@ -46,6 +46,7 @@ export class OrderServiceController {
         status?: Order_status;
         comment?: string | null;
         operator?: string | null;
+        operator_id?: string | null;
         post_id?: string | null;
         district_id?: string | null;
         region_id?: string | null;
@@ -54,10 +55,11 @@ export class OrderServiceController {
         external_id?: string | null;
         items?: Array<{ product_id: string; quantity?: number }>;
       };
+      requester?: { id: string; roles?: string[] };
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.orderService.create(data.dto));
+    return this.executeAndAck(context, () => this.orderService.create(data.dto, data.requester));
   }
 
   @MessagePattern({ cmd: 'order.find_all' })
@@ -421,6 +423,16 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.getTopCouriers(data.limit),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.analytics.top_operators_by_market' })
+  analyticsTopOperatorsByMarket(
+    @Payload() data: { requester: { id: string }; limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getTopOperatorsByMarket(data.requester.id, data.limit),
     );
   }
 
