@@ -137,6 +137,14 @@ export class IdentityController {
     return this.executeAndAck(context, () => this.userService.findUserById(payload.id));
   }
 
+  @MessagePattern({ cmd: 'identity.user.profile' })
+  getMyProfile(
+    @Payload() payload: FindUserByIdPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.userService.findOwnProfile(payload.id));
+  }
+
   @MessagePattern({ cmd: 'identity.customer.find_by_id' })
   getCustomerById(
     @Payload() payload: FindUserByIdPayload,

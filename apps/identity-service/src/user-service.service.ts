@@ -564,6 +564,23 @@ export class UserServiceService implements OnModuleInit {
     }
   }
 
+  async findOwnProfile(id: string) {
+    const user = await this.users.findOne({
+      where: { id, isDeleted: false },
+    });
+    if (!user) {
+      this.notFound('User topilmadi');
+    }
+
+    const safeUser = this.sanitize(user);
+    const profileRegion = await this.getRegionById(safeUser.region_id);
+
+    return successRes({
+      ...safeUser,
+      region: profileRegion,
+    });
+  }
+
   async findCustomerById(id: string) {
     const user = await this.users.findOne({
       where: { id, role: Roles.CUSTOMER, isDeleted: false },
