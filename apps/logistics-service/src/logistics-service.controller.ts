@@ -191,6 +191,16 @@ export class LogisticsServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'logistics.post.reassign' })
+  reassignPost(
+    @Payload() data: { id: string; dto: { courierId: string } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.reassignCourier(data.id, data.dto.courierId),
+    );
+  }
+
   @MessagePattern({ cmd: 'logistics.post.receive' })
   receivePost(
     @Payload() data: { id: string; dto: ReceivePostDto; requester: { id: string; roles?: string[] } },
@@ -238,6 +248,31 @@ export class LogisticsServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.logisticsService.receiveCanceledPost(data.id, data.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.return_requests' })
+  getReturnRequests(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.logisticsService.getReturnRequests());
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.return_requests.approve' })
+  approveReturnRequests(
+    @Payload() data: { dto: ReceivePostDto },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.approveReturnRequests(data.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.post.return_requests.reject' })
+  rejectReturnRequests(
+    @Payload() data: { dto: ReceivePostDto },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.rejectReturnRequests(data.dto),
     );
   }
 

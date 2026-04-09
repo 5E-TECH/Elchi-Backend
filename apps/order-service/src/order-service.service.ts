@@ -922,6 +922,7 @@ export class OrderServiceService {
     canceled_post_id?: string;
     qr_code_token?: string;
     status?: Order_status;
+    return_requested?: boolean;
     start_day?: string;
     end_day?: string;
     courier?: string;
@@ -940,6 +941,7 @@ export class OrderServiceService {
       canceled_post_id,
       qr_code_token,
       status,
+      return_requested,
       start_day,
       end_day,
       courier,
@@ -978,6 +980,9 @@ export class OrderServiceService {
       qb.andWhere('order.status = :status', { status });
     } else if (exclude_statuses?.length) {
       qb.andWhere('order.status NOT IN (:...exclude_statuses)', { exclude_statuses });
+    }
+    if (typeof return_requested === 'boolean') {
+      qb.andWhere('order.return_requested = :return_requested', { return_requested });
     }
     if (region_id) {
       qb.andWhere('order.region_id = :region_id', { region_id });
@@ -2154,6 +2159,7 @@ export class OrderServiceService {
       to_be_paid?: number;
       paid_amount?: number;
       status?: Order_status;
+      return_requested?: boolean;
       comment?: string | null;
       operator?: string | null;
       post_id?: string | null;
@@ -2181,6 +2187,7 @@ export class OrderServiceService {
       to_be_paid?: number;
       paid_amount?: number;
       status?: Order_status;
+      return_requested?: boolean;
       comment?: string | null;
       operator?: string | null;
       post_id?: string | null;
@@ -2206,6 +2213,10 @@ export class OrderServiceService {
       to_be_paid: dto.to_be_paid ?? order.to_be_paid,
       paid_amount: dto.paid_amount ?? order.paid_amount,
       status: dto.status ?? order.status,
+      return_requested:
+        typeof dto.return_requested !== 'undefined'
+          ? dto.return_requested
+          : order.return_requested,
       comment: dto.comment ?? order.comment,
       operator: dto.operator ?? order.operator,
       post_id: dto.post_id ?? order.post_id,

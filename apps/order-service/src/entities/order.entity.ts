@@ -49,6 +49,9 @@ export class Order extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   canceled_post_id!: string | null;
 
+  @Column({ type: 'boolean', default: false })
+  return_requested!: boolean;
+
   @Column({ type: 'bigint', nullable: true })
   sold_at!: string | null;
 
