@@ -30,6 +30,7 @@ interface OrderRow {
   id: string;
   total_price?: number;
   status?: Order_status;
+  return_requested?: boolean;
   post_id?: string | null;
   canceled_post_id?: string | null;
   region_id?: string | null;
@@ -216,6 +217,7 @@ export class LogisticsServiceService implements OnModuleInit {
     post_id?: string;
     canceled_post_id?: string;
     status?: Order_status;
+    return_requested?: boolean;
     customer_id?: string;
     qr_code_token?: string;
     page?: number;
@@ -890,7 +892,10 @@ export class LogisticsServiceService implements OnModuleInit {
     for (const orderId of waitingOrderIds) {
       const target = orderById.get(orderId);
       if (target?.status === Order_status.ON_THE_ROAD) {
-        await this.updateOrder(orderId, { status: Order_status.WAITING });
+        await this.updateOrder(orderId, {
+          status: Order_status.WAITING,
+          return_requested: false,
+        });
       }
     }
 
@@ -899,41 +904,12 @@ export class LogisticsServiceService implements OnModuleInit {
     );
 
     if (remaining.length) {
-      if (!post.region_id) {
-        this.badRequest('Post region is not set');
-      }
-
-      let newPost = await this.postRepo.findOne({
-        where: { region_id: post.region_id, status: Post_status.NEW },
-      });
-
-      if (!newPost) {
-        newPost = await this.postRepo.save(
-          this.postRepo.create({
-            courier_id: '0',
-            region_id: post.region_id,
-            order_quantity: 0,
-            post_total_price: 0,
-            status: Post_status.NEW,
-            qr_code_token: this.generateToken(),
-          }),
-        );
-        void this.syncPostToSearch(newPost);
-      }
-
-      let addedTotal = 0;
       for (const order of remaining) {
         await this.updateOrder(order.id, {
-          status: Order_status.RECEIVED,
-          post_id: newPost.id,
+          status: Order_status.WAITING,
+          return_requested: true,
         });
-        addedTotal += Number(order.total_price ?? 0);
       }
-
-      newPost.order_quantity = Number(newPost.order_quantity ?? 0) + remaining.length;
-      newPost.post_total_price = Number(newPost.post_total_price ?? 0) + addedTotal;
-      const savedNewPost = await this.postRepo.save(newPost);
-      void this.syncPostToSearch(savedNewPost);
     }
 
     post.status = Post_status.RECEIVED;
@@ -945,6 +921,202 @@ export class LogisticsServiceService implements OnModuleInit {
       : [];
 
     return successRes(waitingOrders, 200, 'Post received successfully');
+  }
+
+  async reassignCourier(postId: string, courierId: string) {
+    const post = await this.postRepo.findOne({ where: { id: postId } });
+    if (!post) {
+      this.notFound('Post not found');
+    }
+    if (post.status !== Post_status.SENT) {
+      this.badRequest("Only sent post can be reassigned");
+    }
+    if (post.courier_id === courierId) {
+      this.badRequest('Post already assigned to this courier');
+    }
+
+    const courier = await this.findCourierById(courierId);
+    if (!courier) {
+      this.notFound('Courier not found');
+    }
+
+    const oldCourierId = post.courier_id;
+    post.courier_id = courierId;
+    const updatedPost = await this.postRepo.save(post);
+    void this.syncPostToSearch(updatedPost);
+
+    return successRes(
+      {
+        post_id: updatedPost.id,
+        old_courier_id: oldCourierId,
+        new_courier_id: courierId,
+      },
+      200,
+      'Post reassigned successfully',
+    );
+  }
+
+  async getReturnRequests() {
+    const orders = await this.findOrders({
+      status: Order_status.WAITING,
+      return_requested: true,
+      page: 1,
+      limit: 1000,
+    });
+
+    const postIds = Array.from(
+      new Set(orders.map((order) => order.post_id).filter((id): id is string => Boolean(id))),
+    );
+    const posts = postIds.length
+      ? await this.postRepo.find({ where: { id: In(postIds) } })
+      : [];
+    const postMap = new Map(posts.map((post) => [post.id, post]));
+
+    const courierIds = Array.from(
+      new Set(posts.map((post) => post.courier_id).filter((id): id is string => Boolean(id))),
+    );
+    const courierMap = await this.findCouriersByIds(courierIds);
+
+    const groups = new Map<
+      string,
+      { courier: Record<string, unknown> | null; courier_id: string | null; orders: OrderRow[] }
+    >();
+
+    for (const order of orders) {
+      const post = order.post_id ? postMap.get(String(order.post_id)) : undefined;
+      const courierId = post?.courier_id ?? null;
+      const key = courierId ?? 'unknown';
+
+      if (!groups.has(key)) {
+        groups.set(key, {
+          courier: courierId ? courierMap.get(courierId) ?? null : null,
+          courier_id: courierId,
+          orders: [],
+        });
+      }
+      groups.get(key)!.orders.push(order);
+    }
+
+    return successRes(
+      { total: orders.length, groups: Array.from(groups.values()) },
+      200,
+      'Return requests',
+    );
+  }
+
+  async approveReturnRequests(dto: ReceivePostDto) {
+    const orderIds = [...new Set((dto.order_ids ?? []).map((id) => String(id)).filter(Boolean))];
+    if (!orderIds.length) {
+      this.badRequest('Order IDs required');
+    }
+
+    const eligibleOrders: OrderRow[] = [];
+    for (const orderId of orderIds) {
+      const order = await this.findOrderById(orderId);
+      if (
+        order.status === Order_status.WAITING &&
+        order.return_requested === true
+      ) {
+        eligibleOrders.push(order);
+      }
+    }
+
+    if (!eligibleOrders.length) {
+      this.notFound('No return-requested orders found');
+    }
+
+    const postIds = Array.from(
+      new Set(
+        eligibleOrders
+          .map((order) => order.post_id)
+          .filter((postId): postId is string => Boolean(postId)),
+      ),
+    );
+    const currentPosts = postIds.length
+      ? await this.postRepo.find({ where: { id: In(postIds) } })
+      : [];
+    const currentPostMap = new Map(currentPosts.map((post) => [post.id, post]));
+
+    const ordersByRegion = new Map<string, OrderRow[]>();
+    for (const order of eligibleOrders) {
+      const fallbackRegion = order.post_id ? currentPostMap.get(order.post_id)?.region_id : null;
+      const regionId = String(order.region_id ?? fallbackRegion ?? '');
+      if (!regionId) {
+        this.badRequest(`Order #${order.id} has no region`);
+      }
+      const bucket = ordersByRegion.get(regionId) ?? [];
+      bucket.push(order);
+      ordersByRegion.set(regionId, bucket);
+    }
+
+    for (const [regionId, regionOrders] of ordersByRegion.entries()) {
+      let newPost = await this.postRepo.findOne({
+        where: { region_id: regionId, status: Post_status.NEW },
+      });
+
+      if (!newPost) {
+        newPost = await this.postRepo.save(
+          this.postRepo.create({
+            courier_id: '0',
+            region_id: regionId,
+            order_quantity: 0,
+            post_total_price: 0,
+            status: Post_status.NEW,
+            qr_code_token: this.generateToken(),
+          }),
+        );
+      }
+
+      let addedTotal = 0;
+      for (const order of regionOrders) {
+        await this.updateOrder(order.id, {
+          status: Order_status.RECEIVED,
+          return_requested: false,
+          post_id: newPost.id,
+        });
+        addedTotal += Number(order.total_price ?? 0);
+      }
+
+      newPost.order_quantity = Number(newPost.order_quantity ?? 0) + regionOrders.length;
+      newPost.post_total_price = Number(newPost.post_total_price ?? 0) + addedTotal;
+      const savedNewPost = await this.postRepo.save(newPost);
+      void this.syncPostToSearch(savedNewPost);
+    }
+
+    return successRes(
+      { approved: eligibleOrders.length },
+      200,
+      'Return requests approved',
+    );
+  }
+
+  async rejectReturnRequests(dto: ReceivePostDto) {
+    const orderIds = [...new Set((dto.order_ids ?? []).map((id) => String(id)).filter(Boolean))];
+    if (!orderIds.length) {
+      this.badRequest('Order IDs required');
+    }
+
+    let rejected = 0;
+    for (const orderId of orderIds) {
+      const order = await this.findOrderById(orderId);
+      if (
+        order.status === Order_status.WAITING &&
+        order.return_requested === true
+      ) {
+        await this.updateOrder(order.id, { return_requested: false });
+        rejected += 1;
+      }
+    }
+
+    if (!rejected) {
+      this.notFound('No return-requested orders found');
+    }
+
+    return successRes(
+      { rejected },
+      200,
+      'Return requests rejected',
+    );
   }
 
   async receivePostWithScanner(requester: RequesterContext, token: string) {

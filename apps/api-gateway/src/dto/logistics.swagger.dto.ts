@@ -94,7 +94,21 @@ export class SendPostRequestDto {
   courierId!: string;
 }
 
+export class ReassignPostRequestDto {
+  @ApiProperty({ example: '1' })
+  @IsNotEmpty()
+  @IsNumberString()
+  courierId!: string;
+}
+
 export class ReceivePostRequestDto {
+  @ApiProperty({ type: [String], example: ['1', '2'] })
+  @IsNotEmpty()
+  @IsString({ each: true })
+  order_ids!: string[];
+}
+
+export class ReturnRequestsActionRequestDto {
   @ApiProperty({ type: [String], example: ['1', '2'] })
   @IsNotEmpty()
   @IsString({ each: true })

@@ -75,6 +75,7 @@ export class OrderServiceController {
         canceled_post_id?: string;
         qr_code_token?: string;
         status?: Order_status;
+        return_requested?: boolean;
         start_day?: string;
         end_day?: string;
         courier?: string;
@@ -204,6 +205,7 @@ export class OrderServiceController {
         to_be_paid?: number;
         paid_amount?: number;
         status?: Order_status;
+        return_requested?: boolean;
         comment?: string | null;
         operator?: string | null;
         post_id?: string | null;
@@ -238,6 +240,7 @@ export class OrderServiceController {
         to_be_paid?: number;
         paid_amount?: number;
         status?: Order_status;
+        return_requested?: boolean;
         comment?: string | null;
         operator?: string | null;
         post_id?: string | null;

@@ -29,8 +29,10 @@ import { RolesGuard } from './auth/roles.guard';
 import {
   CreateRegionRequestDto,
   CreateDistrictRequestDto,
+  ReassignPostRequestDto,
   PostIdRequestDto,
   ReceivePostRequestDto,
+  ReturnRequestsActionRequestDto,
   SendPostRequestDto,
   UpdateRegionRequestDto,
   UpdateDistrictNameRequestDto,
@@ -237,6 +239,17 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send({ cmd: 'logistics.post.update' }, { id, dto });
   }
 
+  @Patch('post/reassign/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Reassign sent post to another courier' })
+  @ApiParam({ name: 'id', description: 'Post ID (id)' })
+  @ApiBody({ type: ReassignPostRequestDto })
+  reassignPost(@Param('id') id: string, @Body() dto: ReassignPostRequestDto) {
+    return this.logisticsClient.send({ cmd: 'logistics.post.reassign' }, { id, dto });
+  }
+
   @Get('post/scan/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
@@ -380,6 +393,41 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.cancel.receive' },
       { id, dto },
+    );
+  }
+
+  @Get('post/return-requests/list')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List return requests grouped by courier' })
+  getReturnRequests() {
+    return this.logisticsClient.send({ cmd: 'logistics.post.return_requests' }, {});
+  }
+
+  @Post('post/return-requests/approve')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Approve return requests' })
+  @ApiBody({ type: ReturnRequestsActionRequestDto })
+  approveReturnRequests(@Body() dto: ReturnRequestsActionRequestDto) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.return_requests.approve' },
+      { dto },
+    );
+  }
+
+  @Post('post/return-requests/reject')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Reject return requests' })
+  @ApiBody({ type: ReturnRequestsActionRequestDto })
+  rejectReturnRequests(@Body() dto: ReturnRequestsActionRequestDto) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.return_requests.reject' },
+      { dto },
     );
   }
 
