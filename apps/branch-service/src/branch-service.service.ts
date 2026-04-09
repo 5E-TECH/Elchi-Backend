@@ -141,6 +141,35 @@ export class BranchServiceService {
     }
   }
 
+  private async getDistrictsByIds(districtIds: string[]): Promise<Map<string, unknown>> {
+    if (!districtIds.length) {
+      return new Map();
+    }
+
+    try {
+      const res = await lastValueFrom(
+        this.logisticsClient
+          .send<{ data?: Array<Record<string, unknown>> }>(
+            { cmd: 'logistics.district.find_by_ids' },
+            { ids: districtIds },
+          )
+          .pipe(timeout(5000)),
+      );
+
+      const items = Array.isArray(res?.data) ? res.data : [];
+      const map = new Map<string, unknown>();
+      items.forEach((district) => {
+        const id = String(district?.id ?? '');
+        if (id) {
+          map.set(id, district);
+        }
+      });
+      return map;
+    } catch {
+      return new Map();
+    }
+  }
+
   private async getUsersByIds(userIds: string[]): Promise<Map<string, unknown>> {
     if (!userIds.length) {
       return new Map();
@@ -239,11 +268,21 @@ export class BranchServiceService {
           .filter((regionId): regionId is string => Boolean(regionId)),
       ),
     );
+    const districtIds = Array.from(
+      new Set(
+        items
+          .map((item) => item.district_id)
+          .filter((districtId): districtId is string => Boolean(districtId)),
+      ),
+    );
+
     const regionMap = await this.getRegionsByIds(regionIds);
+    const districtMap = await this.getDistrictsByIds(districtIds);
 
     const enrichedItems = items.map((item) => ({
       ...item,
       region: item.region_id ? (regionMap.get(item.region_id) ?? null) : null,
+      district: item.district_id ? (districtMap.get(item.district_id) ?? null) : null,
     }));
 
     return successRes(
@@ -266,10 +305,15 @@ export class BranchServiceService {
     const regionMap = await this.getRegionsByIds(
       branch.region_id ? [branch.region_id] : [],
     );
+    const districtMap = await this.getDistrictsByIds(
+      branch.district_id ? [branch.district_id] : [],
+    );
+
     return successRes(
       {
         ...branch,
         region: branch.region_id ? (regionMap.get(branch.region_id) ?? null) : null,
+        district: branch.district_id ? (districtMap.get(branch.district_id) ?? null) : null,
       },
       200,
       'Branch found',
