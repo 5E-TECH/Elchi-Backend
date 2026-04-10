@@ -473,95 +473,10 @@ export class UserServiceService implements OnModuleInit {
 
     const safeUser = this.sanitize(user);
     const profileRegion = await this.getRegionById(safeUser.region_id);
-
-    const cashboxType = this.roleToCashboxType(safeUser.role as Roles);
-    if (cashboxType) {
-      try {
-        const cashboxRes = await lastValueFrom(
-          this.financeClient
-            .send<{ data?: Record<string, any> }>(
-              { cmd: 'finance.cashbox.user_by_id' },
-              { id: safeUser.id, cashbox_type: cashboxType },
-            )
-            .pipe(timeout(5000)),
-        );
-
-        const payload = cashboxRes?.data ?? {};
-        const cashbox = payload?.cashbox
-          ? {
-              ...payload.cashbox,
-              user: {
-                ...safeUser,
-                region: profileRegion,
-              },
-            }
-          : null;
-
-        return successRes(
-          {
-            ...payload,
-            cashbox,
-          },
-          200,
-          'Cashbox details',
-        );
-      } catch {
-        return successRes({
-          ...safeUser,
-          region: profileRegion,
-        });
-      }
-    }
-
-    if (safeUser.role !== Roles.CUSTOMER) {
-      return successRes({
-        ...safeUser,
-        region: profileRegion,
-      });
-    }
-
-    try {
-      const orders = await lastValueFrom(
-        this.orderClient
-          .send(
-            { cmd: 'order.find_all' },
-            {
-              query: {
-                customer_id: safeUser.id,
-                page: 1,
-                limit: 1000,
-              },
-            },
-          )
-          .pipe(timeout(5000)),
-      );
-
-      const customerOrders = orders?.data ?? [];
-      const latestAddressOrder = customerOrders.find(
-        (order: { address?: string | null }) => Boolean(order?.address),
-      ) as
-        | {
-            address?: string | null;
-            district_id?: string | null;
-            region_id?: string | null;
-          }
-        | undefined;
-
-      return successRes({
-        ...safeUser,
-        address: latestAddressOrder?.address ?? null,
-        district_id: latestAddressOrder?.district_id ?? null,
-        region_id: latestAddressOrder?.region_id ?? null,
-        region: latestAddressOrder?.region_id
-          ? (await this.getRegionById(latestAddressOrder.region_id))
-          : profileRegion,
-        orders: customerOrders,
-      });
-    } catch {
-      throw new RpcException(
-        errorRes('Customer orderlarini olishda xatolik', 502),
-      );
-    }
+    return successRes({
+      ...safeUser,
+      region: profileRegion,
+    });
   }
 
   async findOwnProfile(id: string) {
