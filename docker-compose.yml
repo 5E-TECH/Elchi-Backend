@@ -51,7 +51,7 @@ services:
       context: .
       dockerfile: apps/api-gateway/Dockerfile
     ports:
-      - '${PORT:-2004}:2004'
+      - '${PORT:-5002}:${PORT:-5002}'
     env_file: .env
     depends_on:
       rabbitmq:
