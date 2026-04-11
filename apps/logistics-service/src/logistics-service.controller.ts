@@ -118,6 +118,11 @@ export class LogisticsServiceController {
     return this.executeAndAck(context, () => this.logisticsService.findPostById(data.id));
   }
 
+  @MessagePattern({ cmd: 'logistics.post.delete' })
+  deletePost(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.logisticsService.deletePost(data.id));
+  }
+
   @MessagePattern({ cmd: 'logistics.post.find_by_ids' })
   findPostsByIds(@Payload() data: { ids: string[] }, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>

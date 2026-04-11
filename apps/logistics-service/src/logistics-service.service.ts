@@ -614,6 +614,17 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(post, 200, 'Post found');
   }
 
+  async deletePost(id: string) {
+    const post = await this.postRepo.findOne({ where: { id } });
+    if (!post) {
+      this.notFound('Post not found');
+    }
+
+    await this.postRepo.remove(post);
+    void this.removePostFromSearch(post);
+    return successRes({ id }, 200, 'Post deleted');
+  }
+
   async findPostsByIds(ids: string[]) {
     if (!ids.length) {
       return successRes([], 200, 'Posts found');

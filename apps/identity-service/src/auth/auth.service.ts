@@ -45,6 +45,9 @@ export class AuthService {
       message: 'success',
       user: this.sanitize(user),
       ...tokens,
+      access_token_expires_at: tokens.accessTokenExpiresAt,
+      refresh_token_expires_at: tokens.refreshTokenExpiresAt,
+      refresh_token_warn_at: tokens.refreshTokenWarnAt,
     };
   }
 
@@ -100,6 +103,9 @@ export class AuthService {
       message: 'success',
       user: this.sanitize(user),
       ...tokens,
+      access_token_expires_at: tokens.accessTokenExpiresAt,
+      refresh_token_expires_at: tokens.refreshTokenExpiresAt,
+      refresh_token_warn_at: tokens.refreshTokenWarnAt,
     };
   }
 
@@ -136,7 +142,28 @@ export class AuthService {
         '7d') as StringValue,
     });
 
-    return { accessToken, refreshToken };
+    const accessTokenExpiresAt = this.extractExpMs(accessToken);
+    const refreshTokenExpiresAt = this.extractExpMs(refreshToken);
+    const refreshTokenWarnAt =
+      refreshTokenExpiresAt !== null
+        ? refreshTokenExpiresAt - 15 * 60 * 1000
+        : null;
+
+    return {
+      accessToken,
+      refreshToken,
+      accessTokenExpiresAt,
+      refreshTokenExpiresAt,
+      refreshTokenWarnAt,
+    };
+  }
+
+  private extractExpMs(token: string): number | null {
+    const decoded = this.jwtService.decode(token) as { exp?: number } | null;
+    if (!decoded || typeof decoded.exp !== 'number') {
+      return null;
+    }
+    return decoded.exp * 1000;
   }
 
   private sanitize(user: User) {
