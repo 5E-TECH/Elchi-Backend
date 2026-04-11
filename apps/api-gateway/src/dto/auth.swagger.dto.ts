@@ -54,6 +54,42 @@ export class AuthResponseDto {
 
   @ApiProperty({ example: 'eyJhbGciOiJIUzI1NiIs...' })
   refreshToken!: string;
+
+  @ApiPropertyOptional({
+    example: 1775865600000,
+    description: 'Access token expiration time (Unix ms timestamp)',
+  })
+  accessTokenExpiresAt?: number | null;
+
+  @ApiPropertyOptional({
+    example: 1776470400000,
+    description: 'Refresh token expiration time (Unix ms timestamp)',
+  })
+  refreshTokenExpiresAt?: number | null;
+
+  @ApiPropertyOptional({
+    example: 1776469500000,
+    description: 'Warning time (15 minutes before refresh token expiration, Unix ms)',
+  })
+  refreshTokenWarnAt?: number | null;
+
+  @ApiPropertyOptional({
+    example: 1775865600000,
+    description: 'Snake-case alias of accessTokenExpiresAt',
+  })
+  access_token_expires_at?: number | null;
+
+  @ApiPropertyOptional({
+    example: 1776470400000,
+    description: 'Snake-case alias of refreshTokenExpiresAt',
+  })
+  refresh_token_expires_at?: number | null;
+
+  @ApiPropertyOptional({
+    example: 1776469500000,
+    description: 'Snake-case alias of refreshTokenWarnAt',
+  })
+  refresh_token_warn_at?: number | null;
 }
 
 export class ValidateResponseDto {

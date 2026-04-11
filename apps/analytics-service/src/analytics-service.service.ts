@@ -22,6 +22,8 @@ type RevenuePeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 @Injectable()
 export class AnalyticsServiceService {
+  private static readonly TASHKENT_OFFSET_MINUTES = 5 * 60;
+
   constructor(
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
@@ -44,30 +46,80 @@ export class AnalyticsServiceService {
 
     if (!startDate || !endDate) {
       const now = new Date();
-      const start = new Date(now);
-      start.setHours(0, 0, 0, 0);
-      const end = new Date(now);
-      end.setHours(23, 59, 59, 999);
+      const start = this.startOfTashkentDay(now);
+      const end = this.endOfTashkentDay(now);
       return {
         startDate: start.toISOString(),
         endDate: end.toISOString(),
       };
     }
 
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    const startOnly = this.parseDateOnly(startDate);
+    const endOnly = this.parseDateOnly(endDate);
 
-    if (!startDate.includes('T')) {
-      start.setHours(0, 0, 0, 0);
-    }
-    if (!endDate.includes('T')) {
-      end.setHours(23, 59, 59, 999);
+    const start = startOnly
+      ? this.startOfTashkentDay(startOnly)
+      : new Date(startDate);
+    const end = endOnly
+      ? this.endOfTashkentDay(endOnly)
+      : new Date(endDate);
+
+    if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
+      const now = new Date();
+      return {
+        startDate: this.startOfTashkentDay(now).toISOString(),
+        endDate: this.endOfTashkentDay(now).toISOString(),
+      };
     }
 
     return {
       startDate: start.toISOString(),
       endDate: end.toISOString(),
     };
+  }
+
+  private parseDateOnly(value?: string): Date | null {
+    if (!value) return null;
+    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+    if (!match) return null;
+
+    const year = Number(match[1]);
+    const month = Number(match[2]);
+    const day = Number(match[3]);
+    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+      return null;
+    }
+
+    return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
+  }
+
+  private startOfTashkentDay(date: Date): Date {
+    return this.tashkentBoundaryToUtc(date, false);
+  }
+
+  private endOfTashkentDay(date: Date): Date {
+    return this.tashkentBoundaryToUtc(date, true);
+  }
+
+  private tashkentBoundaryToUtc(date: Date, isEnd: boolean): Date {
+    const offsetMs = AnalyticsServiceService.TASHKENT_OFFSET_MINUTES * 60 * 1000;
+    const shifted = new Date(date.getTime() + offsetMs);
+
+    const y = shifted.getUTCFullYear();
+    const m = shifted.getUTCMonth();
+    const d = shifted.getUTCDate();
+
+    const utcMs = Date.UTC(
+      y,
+      m,
+      d,
+      isEnd ? 23 : 0,
+      isEnd ? 59 : 0,
+      isEnd ? 59 : 0,
+      isEnd ? 999 : 0,
+    ) - offsetMs;
+
+    return new Date(utcMs);
   }
 
   private normalizeDateRangeAny(filter: RevenueFilter = {}) {

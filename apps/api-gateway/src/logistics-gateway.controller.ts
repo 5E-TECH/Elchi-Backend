@@ -228,6 +228,16 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send({ cmd: 'logistics.post.find_by_id' }, { id });
   }
 
+  @Delete('post/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Delete post by id (superadmin only)' })
+  @ApiParam({ name: 'id', description: 'Post ID (id)' })
+  deletePost(@Param('id') id: string) {
+    return this.logisticsClient.send({ cmd: 'logistics.post.delete' }, { id });
+  }
+
   @Patch('post/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
