@@ -130,6 +130,7 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
   @ApiQuery({ name: 'region_id', required: false, type: String })
+  @ApiQuery({ name: 'regionId', required: false, type: String, description: 'Alias for region_id' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({ description: 'Courier list' })
@@ -137,16 +138,18 @@ export class ApiGatewayController {
     @Query('search') search?: string,
     @Query('status') status?: string,
     @Query('region_id') region_id?: string,
+    @Query('regionId') regionId?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
+    const resolvedRegionId = region_id ?? regionId;
     return this.identityClient.send(
       { cmd: 'identity.courier.find_all' },
       {
         query: {
           search,
           status,
-          region_id,
+          region_id: resolvedRegionId,
           page: page ? Number(page) : undefined,
           limit: limit ? Number(limit) : undefined,
         },
@@ -180,6 +183,8 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'role', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
+  @ApiQuery({ name: 'region_id', required: false, type: String })
+  @ApiQuery({ name: 'regionId', required: false, type: String, description: 'Alias for region_id' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({ description: 'User list' })
@@ -187,9 +192,12 @@ export class ApiGatewayController {
     @Query('search') search?: string,
     @Query('role') role?: string,
     @Query('status') status?: string,
+    @Query('region_id') region_id?: string,
+    @Query('regionId') regionId?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
+    const resolvedRegionId = region_id ?? regionId;
     return this.identityClient.send(
       { cmd: 'identity.user.find_all' },
       {
@@ -197,6 +205,7 @@ export class ApiGatewayController {
           search,
           role,
           status,
+          region_id: resolvedRegionId,
           page: page ? Number(page) : undefined,
           limit: limit ? Number(limit) : undefined,
         },

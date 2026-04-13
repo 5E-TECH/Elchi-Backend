@@ -512,7 +512,7 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async findAllAdmins(query: UserFilterQuery = {}) {
-    const { search, role, status, page, limit, skip } = this.normalizeQuery(query);
+    const { search, role, status, region_id, page, limit, skip } = this.normalizeQuery(query);
 
     const qb = this.users
       .createQueryBuilder('admin')
@@ -537,6 +537,10 @@ export class UserServiceService implements OnModuleInit {
 
     if (status) {
       qb.andWhere('admin.status = :status', { status });
+    }
+
+    if (region_id) {
+      qb.andWhere('admin.region_id = :region_id', { region_id });
     }
 
     const [rows, total] = await qb
