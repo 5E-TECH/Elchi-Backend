@@ -6,6 +6,7 @@ import { lastValueFrom, timeout } from 'rxjs';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { Order_source } from './entities/order.entity';
+import { OrderTracking } from './entities/order-tracking.entity';
 import {
   Cashbox_type,
   Operation_type,
@@ -28,6 +29,8 @@ export class OrderServiceService {
     private readonly orderRepo: Repository<Order>,
     @InjectRepository(OrderItem)
     private readonly orderItemRepo: Repository<OrderItem>,
+    @InjectRepository(OrderTracking)
+    private readonly orderTrackingRepo: Repository<OrderTracking>,
     @Inject('SEARCH') private readonly searchClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
@@ -129,6 +132,78 @@ export class OrderServiceService {
       }
     }
     throw error;
+  }
+
+  private toTrackingRole(roles?: string[]): 'admin' | 'courier' | 'market' | 'system' {
+    const normalized = new Set((roles ?? []).map((role) => String(role).toLowerCase()));
+    if (normalized.has(Roles.SUPERADMIN) || normalized.has(Roles.ADMIN) || normalized.has(Roles.REGISTRATOR)) {
+      return 'admin';
+    }
+    if (normalized.has(Roles.COURIER)) {
+      return 'courier';
+    }
+    if (normalized.has(Roles.MARKET)) {
+      return 'market';
+    }
+    return 'system';
+  }
+
+  private mapInitialStatusForTracking(status: Order_status): Order_status {
+    return status === Order_status.NEW ? Order_status.CREATED : status;
+  }
+
+  private isValidStatusTransition(fromStatus: Order_status, toStatus: Order_status): boolean {
+    if (fromStatus === toStatus) return true;
+
+    const transitions: Record<Order_status, Order_status[]> = {
+      [Order_status.CREATED]: [Order_status.NEW, Order_status.RECEIVED, Order_status.CANCELLED],
+      [Order_status.NEW]: [Order_status.RECEIVED, Order_status.CANCELLED],
+      [Order_status.RECEIVED]: [Order_status.ON_THE_ROAD, Order_status.WAITING, Order_status.CANCELLED],
+      [Order_status.ON_THE_ROAD]: [Order_status.WAITING, Order_status.CANCELLED],
+      [Order_status.WAITING]: [
+        Order_status.SOLD,
+        Order_status.PARTLY_PAID,
+        Order_status.PAID,
+        Order_status.CANCELLED,
+        Order_status.CLOSED,
+      ],
+      [Order_status.SOLD]: [Order_status.PAID, Order_status.WAITING, Order_status.CLOSED],
+      [Order_status.PARTLY_PAID]: [Order_status.PAID, Order_status.WAITING, Order_status.CLOSED],
+      [Order_status.PAID]: [Order_status.WAITING, Order_status.CLOSED],
+      [Order_status.CANCELLED]: [Order_status.WAITING, Order_status.CLOSED],
+      [Order_status.CANCELLED_SENT]: [Order_status.CANCELLED, Order_status.CLOSED],
+      [Order_status.CLOSED]: [Order_status.WAITING],
+    };
+
+    return transitions[fromStatus]?.includes(toStatus) ?? false;
+  }
+
+  private async createTrackingEvent(
+    data: {
+      order_id: string;
+      from_status: Order_status | null;
+      to_status: Order_status;
+      changed_by: string;
+      changed_by_role: 'admin' | 'courier' | 'market' | 'system';
+      note?: string | null;
+    },
+    repository?: Repository<OrderTracking>,
+  ) {
+    const repo = repository ?? this.orderTrackingRepo;
+    const entity = repo.create({
+      order_id: data.order_id,
+      from_status: data.from_status,
+      to_status: data.to_status,
+      changed_by: data.changed_by,
+      changed_by_role: data.changed_by_role,
+      note: data.note ?? null,
+    });
+    await repo.save(entity);
+  }
+
+  private toUzIsoString(date: Date): string {
+    const uzOffsetMs = 5 * 60 * 60 * 1000;
+    return new Date(date.getTime() + uzOffsetMs).toISOString().replace('Z', '+05:00');
   }
 
   private analyticsDateRange(startDate?: string, endDate?: string) {
@@ -803,13 +878,13 @@ export class OrderServiceService {
         status: Order_status.WAITING,
         paid_amount: 0,
         sold_at: null,
-      });
+      }, { id: requester.id, roles: requester.roles, note: 'Rollback to waiting' });
     } else {
       await this.updateFull(id, {
         status: Order_status.WAITING,
         to_be_paid: 0,
         sold_at: null,
-      });
+      }, { id: requester.id, roles: requester.roles, note: 'Rollback to waiting' });
     }
 
     return successRes({}, 200, 'Order WAITING holatiga qaytarildi');
@@ -870,44 +945,77 @@ export class OrderServiceService {
     const roles = new Set((requester?.roles ?? []).map((role) => String(role).toLowerCase()));
     const operatorId = dto.operator_id ?? (roles.has(Roles.OPERATOR) ? requester?.id ?? null : null);
 
-    const order = this.orderRepo.create({
-      market_id: dto.market_id,
-      customer_id: dto.customer_id,
-      where_deliver: dto.where_deliver ?? Where_deliver.CENTER,
-      total_price: dto.total_price ?? 0,
-      to_be_paid: dto.to_be_paid ?? 0,
-      paid_amount: dto.paid_amount ?? 0,
-      status: dto.status ?? Order_status.NEW,
-      comment: dto.comment ?? null,
-      operator: dto.operator ?? null,
-      operator_id: operatorId,
-      post_id: dto.post_id ?? null,
-      canceled_post_id: dto.canceled_post_id ?? null,
-      sold_at: dto.sold_at ?? null,
-      district_id: dto.district_id ?? null,
-      region_id: dto.region_id ?? null,
-      address: dto.address ?? null,
-      qr_code_token: dto.qr_code_token ?? null,
-      external_id: dto.external_id ?? null,
-      source: dto.source ?? Order_source.INTERNAL,
-      isDeleted: false,
-    });
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
 
-    let saved: Order;
+    let savedId = '';
     try {
-      saved = await this.orderRepo.save(order);
+      const orderRepo = queryRunner.manager.getRepository(Order);
+      const orderItemRepo = queryRunner.manager.getRepository(OrderItem);
+      const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+
+      const order = orderRepo.create({
+        market_id: dto.market_id,
+        customer_id: dto.customer_id,
+        where_deliver: dto.where_deliver ?? Where_deliver.CENTER,
+        total_price: dto.total_price ?? 0,
+        to_be_paid: dto.to_be_paid ?? 0,
+        paid_amount: dto.paid_amount ?? 0,
+        status: dto.status ?? Order_status.NEW,
+        comment: dto.comment ?? null,
+        operator: dto.operator ?? null,
+        operator_id: operatorId,
+        post_id: dto.post_id ?? null,
+        canceled_post_id: dto.canceled_post_id ?? null,
+        sold_at: dto.sold_at ?? null,
+        district_id: dto.district_id ?? null,
+        region_id: dto.region_id ?? null,
+        address: dto.address ?? null,
+        qr_code_token: dto.qr_code_token ?? null,
+        external_id: dto.external_id ?? null,
+        source: dto.source ?? Order_source.INTERNAL,
+        isDeleted: false,
+      });
+
+      const saved = await orderRepo.save(order);
+      savedId = saved.id;
+
+      const normalizedItems = (dto.items ?? []).map((item) => ({
+        product_id: item.product_id,
+        quantity: item.quantity ?? 1,
+        order_id: saved.id,
+      }));
+      if (normalizedItems.length) {
+        await orderItemRepo.createQueryBuilder().insert().values(normalizedItems).execute();
+      }
+
+      const productQuantity = normalizedItems.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
+      if (saved.product_quantity !== productQuantity) {
+        await orderRepo.update({ id: saved.id }, { product_quantity: productQuantity });
+      }
+
+      await this.createTrackingEvent(
+        {
+          order_id: saved.id,
+          from_status: null,
+          to_status: this.mapInitialStatusForTracking(saved.status),
+          changed_by: String(requester?.id ?? 'system'),
+          changed_by_role: requester?.id ? this.toTrackingRole(requester.roles) : 'system',
+          note: 'Order created',
+        },
+        trackingRepo,
+      );
+
+      await queryRunner.commitTransaction();
     } catch (error) {
+      await queryRunner.rollbackTransaction();
       this.handleDbError(error);
+    } finally {
+      await queryRunner.release();
     }
 
-    saved.product_quantity = await this.replaceOrderItems(saved.id, dto.items);
-    try {
-      await this.orderRepo.save(saved);
-    } catch (error) {
-      this.handleDbError(error);
-    }
-
-    const fullOrder = await this.findById(saved.id);
+    const fullOrder = await this.findById(savedId);
     void this.syncOrderToSearch(fullOrder);
     return fullOrder;
   }
@@ -1336,17 +1444,34 @@ export class OrderServiceService {
     await queryRunner.connect();
     await queryRunner.startTransaction();
     try {
+      const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
       for (const order of orders) {
         const postId = assignmentMap.get(order.id);
+        const previousStatus = order.status;
+        const nextStatus = Order_status.RECEIVED;
         await queryRunner.manager
           .createQueryBuilder()
           .update(Order)
           .set({
-            status: Order_status.RECEIVED,
+            status: nextStatus,
             post_id: postId ?? null,
           })
           .where('id = :id', { id: order.id })
           .execute();
+
+        if (previousStatus !== nextStatus) {
+          await this.createTrackingEvent(
+            {
+              order_id: order.id,
+              from_status: previousStatus,
+              to_status: nextStatus,
+              changed_by: 'system',
+              changed_by_role: 'system',
+              note: 'Order assigned to post',
+            },
+            trackingRepo,
+          );
+        }
       }
       await queryRunner.commitTransaction();
     } catch (error) {
@@ -1726,7 +1851,7 @@ export class OrderServiceService {
       paid_amount: paidAfter,
       sold_at: String(Date.now()),
       comment: finalComment || null,
-    });
+    }, { id: requester.id, roles: requester.roles, note: 'Order sold' });
 
     return successRes({}, 200, 'Order sold');
   }
@@ -1801,7 +1926,7 @@ export class OrderServiceService {
       status: Order_status.CANCELLED,
       comment: finalComment || null,
       sold_at: null,
-    });
+    }, { id: requester.id, roles: requester.roles, note: 'Order canceled' });
 
     return successRes({ id }, 200, 'Order canceled');
   }
@@ -2098,7 +2223,7 @@ export class OrderServiceService {
       sold_at: String(Date.now()),
       total_price: price,
       comment: finalComment || null,
-    });
+    }, { id: requester.id, roles: requester.roles, note: 'Order partly sold' });
 
     const refreshedOrder = await this.findById(id);
     refreshedOrder.product_quantity = newQty;
@@ -2149,6 +2274,31 @@ export class OrderServiceService {
     return order;
   }
 
+  async getTrackingByOrderId(id: string) {
+    await this.findById(id);
+
+    let rows: OrderTracking[];
+    try {
+      rows = await this.orderTrackingRepo.find({
+        where: { order_id: id },
+        order: { created_at: 'ASC' },
+      });
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    return rows.map((row) => ({
+      id: row.id,
+      order_id: row.order_id,
+      from_status: row.from_status,
+      to_status: row.to_status,
+      changed_by: row.changed_by,
+      changed_by_role: row.changed_by_role,
+      note: row.note,
+      created_at: this.toUzIsoString(row.created_at),
+    }));
+  }
+
   async update(
     id: string,
     dto: {
@@ -2173,8 +2323,9 @@ export class OrderServiceService {
       source?: Order_source;
       items?: Array<{ product_id: string; quantity?: number }>;
     },
+    requester?: { id?: string; roles?: string[]; note?: string | null },
   ) {
-    return this.updateFull(id, dto);
+    return this.updateFull(id, dto, requester);
   }
 
   async updateFull(
@@ -2201,6 +2352,7 @@ export class OrderServiceService {
       source?: Order_source;
       items?: Array<{ product_id: string; quantity?: number }>;
     },
+    requester?: { id?: string; roles?: string[]; note?: string | null },
   ) {
     const order = await this.findById(id);
     const oldStatus = order.status;
@@ -2239,6 +2391,10 @@ export class OrderServiceService {
       source: dto.source ?? order.source ?? Order_source.INTERNAL,
     });
 
+    if (oldStatus !== order.status && !this.isValidStatusTransition(oldStatus, order.status)) {
+      this.badRequest(`Invalid status transition: ${oldStatus} -> ${order.status}`);
+    }
+
     if (dto.items) {
       order.product_quantity = await this.replaceOrderItems(order.id, dto.items);
     }
@@ -2246,10 +2402,35 @@ export class OrderServiceService {
     // Prevent TypeORM cascade on stale one-to-many relation from nulling order_id.
     delete (order as Partial<Order> & { items?: OrderItem[] }).items;
 
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
     try {
-      await this.orderRepo.save(order);
+      const orderRepo = queryRunner.manager.getRepository(Order);
+      const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+      await orderRepo.save(order);
+
+      if (oldStatus !== order.status) {
+        await this.createTrackingEvent(
+          {
+            order_id: order.id,
+            from_status: oldStatus,
+            to_status: order.status,
+            changed_by: String(requester?.id ?? 'system'),
+            changed_by_role: requester?.id ? this.toTrackingRole(requester.roles) : 'system',
+            note: requester?.note ?? null,
+          },
+          trackingRepo,
+        );
+      }
+
+      await queryRunner.commitTransaction();
     } catch (error) {
+      await queryRunner.rollbackTransaction();
       this.handleDbError(error);
+    } finally {
+      await queryRunner.release();
     }
 
     const updated = await this.findById(order.id);

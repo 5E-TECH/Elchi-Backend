@@ -98,6 +98,14 @@ export class OrderServiceController {
     return this.executeAndAck(context, () => this.orderService.findById(data.id));
   }
 
+  @MessagePattern({ cmd: 'order.tracking' })
+  tracking(
+    @Payload() data: { id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.orderService.getTrackingByOrderId(data.id));
+  }
+
   @MessagePattern({ cmd: 'order.find_new_markets' })
   findNewMarkets(@Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.orderService.findNewMarkets());
@@ -218,12 +226,13 @@ export class OrderServiceController {
         source?: Order_source;
         items?: Array<{ product_id: string; quantity?: number }>;
       };
+      requester?: { id?: string; roles?: string[]; note?: string | null };
     },
     @Ctx() context: RmqContext,
   ) {
     // Backward compatibility: old pattern now supports full update payload too.
     return this.executeAndAck(context, () =>
-      this.orderService.updateFull(data.id, data.dto),
+      this.orderService.updateFull(data.id, data.dto, data.requester),
     );
   }
 
@@ -253,11 +262,12 @@ export class OrderServiceController {
         source?: Order_source;
         items?: Array<{ product_id: string; quantity?: number }>;
       };
+      requester?: { id?: string; roles?: string[]; note?: string | null };
     },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.updateFull(data.id, data.dto),
+      this.orderService.updateFull(data.id, data.dto, data.requester),
     );
   }
 
@@ -370,12 +380,17 @@ export class OrderServiceController {
 
   @MessagePattern({ cmd: 'order.update_normalized' })
   updateNormalized(
-    @Payload() data: { id: string; dto: Record<string, any> },
+    @Payload()
+    data: {
+      id: string;
+      dto: Record<string, any>;
+      requester?: { id?: string; roles?: string[]; note?: string | null };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () => {
       const normalized = this.orderService.normalizeUpdatePayload(data.dto);
-      return this.orderService.updateFull(data.id, normalized as any);
+      return this.orderService.updateFull(data.id, normalized as any, data.requester);
     });
   }
 

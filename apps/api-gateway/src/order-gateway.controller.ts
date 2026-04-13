@@ -646,6 +646,24 @@ export class OrderGatewayController {
     );
   }
 
+  @Get(':id/tracking')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get order tracking history by ID' })
+  @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
+  getTracking(@Param('id') id: string) {
+    return firstValueFrom(
+      this.orderClient
+        .send({ cmd: 'order.tracking' }, { id })
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
   @Post('sell/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER)
@@ -758,10 +776,17 @@ export class OrderGatewayController {
   @ApiOperation({ summary: 'Update order (full fields, including items)' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
   @ApiBody({ type: UpdateOrderByIdRequestDto })
-  update(@Param('id') id: string, @Body() dto: UpdateOrderByIdRequestDto) {
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateOrderByIdRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
     return firstValueFrom(
       this.orderClient
-        .send({ cmd: 'order.update_normalized' }, { id, dto })
+        .send(
+          { cmd: 'order.update_normalized' },
+          { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+        )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
@@ -777,10 +802,17 @@ export class OrderGatewayController {
   @ApiOperation({ summary: 'Update order by id (full fields)' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
   @ApiBody({ type: UpdateOrderByIdRequestDto })
-  updateFull(@Param('id') id: string, @Body() dto: UpdateOrderByIdRequestDto) {
+  updateFull(
+    @Param('id') id: string,
+    @Body() dto: UpdateOrderByIdRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
     return firstValueFrom(
       this.orderClient
-        .send({ cmd: 'order.update_normalized' }, { id, dto })
+        .send(
+          { cmd: 'order.update_normalized' },
+          { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+        )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
