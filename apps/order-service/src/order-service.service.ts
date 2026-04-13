@@ -206,6 +206,30 @@ export class OrderServiceService {
     return new Date(date.getTime() + uzOffsetMs).toISOString().replace('Z', '+05:00');
   }
 
+  private normalizePagination(page?: number, limit?: number) {
+    const allowedLimits = [10, 25, 50, 100];
+    const parsedPage = Number(page ?? 1);
+    const parsedLimit = Number(limit ?? 10);
+
+    if (!Number.isFinite(parsedLimit) || !allowedLimits.includes(parsedLimit)) {
+      throw new RpcException({
+        statusCode: 400,
+        message: `limit faqat ${allowedLimits.join(', ')} qiymatlarda bo'lishi mumkin`,
+      });
+    }
+
+    const normalizedPage =
+      Number.isFinite(parsedPage) && parsedPage >= 1 ? Math.floor(parsedPage) : 1;
+
+    return {
+      page: normalizedPage,
+      limit: parsedLimit,
+      total_pages(total: number) {
+        return parsedLimit > 0 ? Math.ceil(total / parsedLimit) : 0;
+      },
+    };
+  }
+
   private analyticsDateRange(startDate?: string, endDate?: string) {
     const UZB_OFFSET_MS = 5 * 60 * 60 * 1000;
 
@@ -1055,9 +1079,11 @@ export class OrderServiceService {
       courier,
       region_id,
       source,
-      page = 1,
-      limit = 10,
+      page,
+      limit,
     } = query;
+
+    const pagination = this.normalizePagination(page, limit);
 
     const qb = this.orderRepo
       .createQueryBuilder('order')
@@ -1132,8 +1158,8 @@ export class OrderServiceService {
     }
 
     qb.orderBy('order.createdAt', 'DESC')
-      .skip((page - 1) * limit)
-      .take(limit);
+      .skip((pagination.page - 1) * pagination.limit)
+      .take(pagination.limit);
 
     let data: Order[];
     let total: number;
@@ -1143,7 +1169,14 @@ export class OrderServiceService {
       this.handleDbError(error);
     }
 
-    return { data, total, page, limit };
+    return {
+      data,
+      total,
+      page: pagination.page,
+      limit: pagination.limit,
+      total_pages: pagination.total_pages(total),
+      totalPages: pagination.total_pages(total),
+    };
   }
 
   async findNewMarkets() {
@@ -2554,7 +2587,15 @@ export class OrderServiceService {
 
       customer_ids = (searchRes?.data ?? []).map((c) => String(c.id));
       if (!customer_ids.length) {
-        return { data: [], total: 0, page: query.page ?? 1, limit: query.limit ?? 10 };
+        const pagination = this.normalizePagination(query.page, query.limit);
+        return {
+          data: [],
+          total: 0,
+          page: pagination.page,
+          limit: pagination.limit,
+          total_pages: 0,
+          totalPages: 0,
+        };
       }
     }
 
@@ -2566,6 +2607,8 @@ export class OrderServiceService {
       total: result.total,
       page: result.page,
       limit: result.limit,
+      total_pages: result.total_pages ?? 0,
+      totalPages: result.totalPages ?? result.total_pages ?? 0,
     };
   }
 
@@ -2595,10 +2638,17 @@ export class OrderServiceService {
     }));
   }
 
-  async findNewByMarketEnriched(market_id: string, page = 1, limit = 20) {
+  async findNewByMarketEnriched(market_id: string, page = 1, limit = 10) {
     const result = await this.findAll({ market_id, status: Order_status.NEW, page, limit });
     const enriched = await this.enrichOrders(result.data);
-    return { data: enriched, total: result.total, page: result.page, limit: result.limit };
+    return {
+      data: enriched,
+      total: result.total,
+      page: result.page,
+      limit: result.limit,
+      total_pages: result.total_pages ?? 0,
+      totalPages: result.totalPages ?? result.total_pages ?? 0,
+    };
   }
 
   async getOverviewStats(startDate?: string, endDate?: string) {

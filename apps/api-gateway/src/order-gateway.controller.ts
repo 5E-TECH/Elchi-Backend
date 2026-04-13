@@ -151,6 +151,42 @@ export class OrderGatewayController {
     return [];
   }
 
+  private parsePaginationQuery(page?: string, limit?: string) {
+    const allowedLimits = [10, 25, 50, 100];
+    const parsedLimit = Number(limit ?? 10);
+    if (!Number.isFinite(parsedLimit) || !allowedLimits.includes(parsedLimit)) {
+      throw new BadRequestException(`limit faqat ${allowedLimits.join(', ')} bo'lishi mumkin`);
+    }
+
+    const parsedPage = Number(page ?? 1);
+    const normalizedPage =
+      Number.isFinite(parsedPage) && parsedPage >= 1 ? Math.floor(parsedPage) : 1;
+
+    return { page: normalizedPage, limit: parsedLimit };
+  }
+
+  private withPaginationMeta(payload: unknown, fallback: { page: number; limit: number }) {
+    if (!payload || typeof payload !== 'object') {
+      return payload;
+    }
+    const body = payload as Record<string, unknown>;
+    const rows = this.extractRows(body);
+    const total = Number(body.total ?? rows.length ?? 0);
+    const page = Number(body.page ?? fallback.page);
+    const limit = Number(body.limit ?? fallback.limit);
+    const totalPages = limit > 0 ? Math.ceil(total / limit) : 0;
+
+    return {
+      ...body,
+      data: Array.isArray(body.data) ? body.data : rows,
+      total,
+      page,
+      limit,
+      total_pages: totalPages,
+      totalPages,
+    };
+  }
+
   private async enrichMarketRows(rows: Array<Record<string, any>>) {
     const marketIds = Array.from(
       new Set(rows.map((row) => String(row?.market_id ?? '')).filter(Boolean)),
@@ -313,8 +349,8 @@ export class OrderGatewayController {
   @ApiQuery({ name: 'date', required: false, type: String, description: 'Single day filter (YYYY-MM-DD)' })
   @ApiQuery({ name: 'start_day', required: false, type: String })
   @ApiQuery({ name: 'end_day', required: false, type: String })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
-  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1, schema: { default: 1, minimum: 1 } as any })
+  @ApiQuery({ name: 'limit', required: false, enum: [10, 25, 50, 100], schema: { default: 10 } as any })
   findAllExternal(
     @Query('market_id') market_id?: string,
     @Query('status') status?: Order_status,
@@ -337,6 +373,8 @@ export class OrderGatewayController {
     const resolvedStartDay = start_day ?? date;
     const resolvedEndDay = end_day ?? date;
 
+    const pagination = this.parsePaginationQuery(page, limit);
+
     return firstValueFrom(
       this.orderClient
         .send(
@@ -347,8 +385,8 @@ export class OrderGatewayController {
               status,
               start_day: resolvedStartDay,
               end_day: resolvedEndDay,
-              page: page ? Number(page) : 1,
-              limit: limit ? Number(limit) : 10,
+              page: pagination.page,
+              limit: pagination.limit,
             },
           },
         )
@@ -358,7 +396,7 @@ export class OrderGatewayController {
         throw new GatewayTimeoutException('Order service response timeout');
       }
       throw error;
-    });
+    }).then((response) => this.withPaginationMeta(response, pagination));
   }
 
   @Post('external')
@@ -446,8 +484,8 @@ export class OrderGatewayController {
   @ApiQuery({ name: 'end_day', required: false, type: String, description: 'End date (YYYY-MM-DD or ISO)' })
   @ApiQuery({ name: 'courier', required: false, type: String, description: 'Courier (operator text or post_id)' })
   @ApiQuery({ name: 'region_id', required: false, type: String })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
-  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1, schema: { default: 1, minimum: 1 } as any })
+  @ApiQuery({ name: 'limit', required: false, enum: [10, 25, 50, 100], schema: { default: 10 } as any })
   findAll(
     @Query('market_id') market_id?: string,
     @Query('customer_id') customer_id?: string,
@@ -471,6 +509,8 @@ export class OrderGatewayController {
 
     const resolvedMarketId = isMarket && requesterId ? requesterId : market_id;
 
+    const pagination = this.parsePaginationQuery(page, limit);
+
     const payload = {
       query: {
         market_id: resolvedMarketId,
@@ -481,8 +521,8 @@ export class OrderGatewayController {
         end_day,
         courier,
         region_id,
-        page: page ? Number(page) : 1,
-        limit: limit ? Number(limit) : 10,
+        page: pagination.page,
+        limit: pagination.limit,
       },
     };
 
@@ -490,7 +530,34 @@ export class OrderGatewayController {
       { cmd: 'order.find_all_enriched' },
       { cmd: 'order.find_all' },
       payload,
-    );
+    ).then((response) => this.withPaginationMeta(response, pagination));
+  }
+
+  @Get('market/:marketId')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List orders by market ID with pagination' })
+  @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1, schema: { default: 1, minimum: 1 } as any })
+  @ApiQuery({ name: 'limit', required: false, enum: [10, 25, 50, 100], schema: { default: 10 } as any })
+  findAllByMarket(
+    @Param('marketId') marketId: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    const pagination = this.parsePaginationQuery(page, limit);
+
+    return this.sendOrderWithFallback(
+      { cmd: 'order.find_all_enriched' },
+      { cmd: 'order.find_all' },
+      {
+        query: {
+          market_id: marketId,
+          page: pagination.page,
+          limit: pagination.limit,
+        },
+      },
+    ).then((response) => this.withPaginationMeta(response, pagination));
   }
 
   @Get('courier/orders')
@@ -501,8 +568,8 @@ export class OrderGatewayController {
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'startDate', required: false, type: String, description: 'Legacy start date (YYYY-MM-DD or ISO)' })
   @ApiQuery({ name: 'endDate', required: false, type: String, description: 'Legacy end date (YYYY-MM-DD or ISO)' })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
-  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1, schema: { default: 1, minimum: 1 } as any })
+  @ApiQuery({ name: 'limit', required: false, enum: [10, 25, 50, 100], schema: { default: 10 } as any })
   async findCourierOrdersLegacy(
     @Query('status') status?: Order_status,
     @Query('search') search?: string,
@@ -512,6 +579,8 @@ export class OrderGatewayController {
     @Query('limit') limit?: string,
     @Req() req?: { user: JwtUser },
   ) {
+    const pagination = this.parsePaginationQuery(page, limit);
+
     const courierPostsResponse = await this.sendLogisticsWithTimeout(
       { cmd: 'logistics.post.my_for_courier' },
       {
@@ -531,8 +600,9 @@ export class OrderGatewayController {
         {
           data: [],
           total: 0,
-          page: page ? Number(page) : 1,
-          limit: limit ? Number(limit) : 10,
+          page: pagination.page,
+          limit: pagination.limit,
+          total_pages: 0,
           totalPages: 0,
         },
         200,
@@ -555,8 +625,8 @@ export class OrderGatewayController {
         search,
         start_day: startDate,
         end_day: endDate,
-        page: page ? Number(page) : 1,
-        limit: limit ? Number(limit) : 10,
+        page: pagination.page,
+        limit: pagination.limit,
       },
     };
 
@@ -573,8 +643,8 @@ export class OrderGatewayController {
     const legacyData = (this.toLegacyShape(filteredRows) as Array<Record<string, unknown>>)
       .map((row) => this.normalizeLegacyOrderRow(row));
     const total = Number(result?.total ?? legacyData.length);
-    const currentPage = Number(result?.page ?? (page ? Number(page) : 1));
-    const currentLimit = Number(result?.limit ?? (limit ? Number(limit) : 10));
+    const currentPage = Number(result?.page ?? pagination.page);
+    const currentLimit = Number(result?.limit ?? pagination.limit);
     const totalPages = currentLimit > 0 ? Math.ceil(total / currentLimit) : 0;
 
     return successRes(
@@ -583,6 +653,7 @@ export class OrderGatewayController {
         total,
         page: currentPage,
         limit: currentLimit,
+        total_pages: totalPages,
         totalPages,
       },
       200,
@@ -613,24 +684,25 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'NEW orders by market id' })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
-  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1, schema: { default: 1, minimum: 1 } as any })
+  @ApiQuery({ name: 'limit', required: false, enum: [10, 25, 50, 100], schema: { default: 10 } as any })
   async findNewOrdersByMarket(
     @Param('marketId') marketId: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
+    const pagination = this.parsePaginationQuery(page, limit);
     const payload = {
       market_id: marketId,
-      page: page ? Number(page) : undefined,
-      limit: limit ? Number(limit) : undefined,
+      page: pagination.page,
+      limit: pagination.limit,
     };
 
     return this.sendOrderWithFallback(
       { cmd: 'order.find_new_by_market_enriched' },
       { cmd: 'order.find_new_by_market' },
       payload,
-    );
+    ).then((response) => this.withPaginationMeta(response, pagination));
   }
 
   @Get(':id')
