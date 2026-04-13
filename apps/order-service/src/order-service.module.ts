@@ -6,6 +6,7 @@ import { OrderServiceService } from './order-service.service';
 import { RmqModule, DatabaseModule, orderValidationSchema } from '@app/common';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
+import { OrderTracking } from './entities/order-tracking.entity';
 
 @Module({
   imports: [
@@ -22,7 +23,7 @@ import { OrderItem } from './entities/order-item.entity';
     RmqModule.register({ name: 'FINANCE' }),
     RmqModule.register({ name: 'INTEGRATION' }),
     DatabaseModule,
-    TypeOrmModule.forFeature([Order, OrderItem]),
+    TypeOrmModule.forFeature([Order, OrderItem, OrderTracking]),
   ],
   controllers: [OrderServiceController],
   providers: [OrderServiceService],
