@@ -1070,7 +1070,29 @@ export class FinanceServiceService implements OnModuleInit {
         await this.applyPaymentToOrders(data.market_id, Number(data.amount));
       }
 
-      return this.successRes({}, 201, "To'lov qabul qilindi !!! ");
+      return this.successRes(
+        {
+          courier_cashbox: {
+            id: courierCashbox.id,
+            user_id: courierCashbox.user_id,
+            cashbox_type: courierCashbox.cashbox_type,
+            balance: courierCashbox.balance,
+            balance_cash: courierCashbox.balance_cash,
+            balance_card: courierCashbox.balance_card,
+            updated_at: courierCashbox.updatedAt,
+          },
+          main_cashbox: {
+            id: mainCashbox.id,
+            cashbox_type: mainCashbox.cashbox_type,
+            balance: mainCashbox.balance,
+            balance_cash: mainCashbox.balance_cash,
+            balance_card: mainCashbox.balance_card,
+            updated_at: mainCashbox.updatedAt,
+          },
+        },
+        201,
+        "To'lov qabul qilindi !!! ",
+      );
     } catch (error) {
       await queryRunner.rollbackTransaction();
       this.toRpcError(error);
