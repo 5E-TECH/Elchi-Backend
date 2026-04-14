@@ -47,6 +47,7 @@
     "migration:generate": "npx typeorm-ts-node-commonjs migration:generate -d typeorm.config.ts",
     "migration:generate:init": "npx typeorm-ts-node-commonjs migration:generate migrations/InitSchema -d typeorm.config.ts",
     "migration:run": "npx typeorm-ts-node-commonjs migration:run -d typeorm.config.ts",
+    "db:prepare": "node -r ts-node/register -r tsconfig-paths/register scripts/db-prepare.ts",
     "migration:revert": "npx typeorm-ts-node-commonjs migration:revert -d typeorm.config.ts",
     "infra:up": "docker compose up rabbitmq postgres -d",
     "infra:down": "docker compose down",
