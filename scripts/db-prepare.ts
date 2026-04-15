@@ -28,13 +28,13 @@ const schemaConfigs: SchemaConfig[] = [
   { schema: 'search_schema', entities: ['apps/search-service/src/entities/*.entity.ts', 'dist/apps/search-service/**/*.entity.js'] },
 ];
 
-function makeBaseOptions(): Omit<DataSourceOptions, 'schema' | 'entities'> {
+function makeBaseOptions(): DataSourceOptions {
   return {
     type: 'postgres',
     url: postgresUri,
     synchronize: false,
     logging: false,
-  };
+  } as DataSourceOptions;
 }
 
 async function bootstrapSchema({ schema, entities }: SchemaConfig): Promise<void> {
