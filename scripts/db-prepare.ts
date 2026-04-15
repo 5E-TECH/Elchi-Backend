@@ -73,11 +73,52 @@ async function runOrderMigrations(): Promise<void> {
   }
 }
 
+async function verifyOrderRelations(): Promise<void> {
+  const ds = new DataSource({
+    ...makeBaseOptions(),
+    schema: 'order_schema',
+  } as DataSourceOptions);
+
+  await ds.initialize();
+  try {
+    const requiredConstraints = [
+      'FK_order_items_order_id',
+      'FK_order_tracking_order_id',
+    ];
+
+    const rows = (await ds.query(
+      `
+      SELECT c.conname
+      FROM pg_constraint c
+      JOIN pg_namespace n ON n.oid = c.connamespace
+      WHERE n.nspname = 'order_schema'
+        AND c.conname = ANY($1::text[])
+      `,
+      [requiredConstraints],
+    )) as Array<{ conname: string }>;
+
+    const existing = new Set(rows.map((row) => row.conname));
+    const missing = requiredConstraints.filter((name) => !existing.has(name));
+
+    if (missing.length > 0) {
+      throw new Error(
+        `[db-prepare] order_schema relation constraints missing: ${missing.join(', ')}`,
+      );
+    }
+
+    // eslint-disable-next-line no-console
+    console.log('[db-prepare] order relations verified');
+  } finally {
+    await ds.destroy();
+  }
+}
+
 async function main(): Promise<void> {
   for (const cfg of schemaConfigs) {
     await bootstrapSchema(cfg);
   }
   await runOrderMigrations();
+  await verifyOrderRelations();
 }
 
 main().catch((err) => {
