@@ -9,7 +9,7 @@ import { ProfitShare } from './profit-share.entity';
 @Index('IDX_INVESTOR_STATUS', ['status'])
 @Index('UQ_INVESTOR_PHONE_ACTIVE', ['phone_number'], {
   unique: true,
-  where: '"isDeleted" = false',
+  where: '"is_deleted" = false',
 })
 export class Investor extends BaseEntity {
   @Column({ type: 'bigint' })
