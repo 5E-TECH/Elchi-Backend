@@ -335,10 +335,12 @@ export class OrderServiceController {
 
   @MessagePattern({ cmd: 'order.delete' })
   remove(
-    @Payload() data: { id: string },
+    @Payload() data: { id: string; requester?: { id?: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.orderService.remove(data.id));
+    return this.executeAndAck(context, () =>
+      this.orderService.remove(data.id, data.requester),
+    );
   }
 
   // ==================== Enriched Endpoints ====================
