@@ -7,6 +7,10 @@ import { RpcExceptionFilter, AllExceptionsFilter } from '@app/common';
 
 async function bootstrap() {
   const app = await NestFactory.create(ApiGatewayModule);
+  const corsOrigins = (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((origin) => origin.trim())
+    .filter(Boolean);
 
   // Helmet-ni HTTP uchun moslaymiz
   app.use(
@@ -36,8 +40,27 @@ async function bootstrap() {
   );
 
   app.enableCors({
-    origin: true,
+    origin: (origin, callback) => {
+      // Non-browser clients (curl, server-to-server) may not send Origin.
+      if (!origin) {
+        callback(null, true);
+        return;
+      }
+
+      const isLocalhost =
+        /^http:\/\/localhost:\d+$/.test(origin) ||
+        /^http:\/\/127\.0\.0\.1:\d+$/.test(origin);
+
+      if (isLocalhost || corsOrigins.includes(origin)) {
+        callback(null, true);
+        return;
+      }
+
+      callback(new Error(`CORS blocked for origin: ${origin}`), false);
+    },
     credentials: true,
+    methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
   });
 
   app.useGlobalPipes(

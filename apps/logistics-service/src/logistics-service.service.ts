@@ -674,12 +674,32 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Post not found');
     }
 
-    const orders = await this.findOrders({
-      post_id: id,
-      status: Order_status.RECEIVED,
-      page: 1,
-      limit: 1000,
-    });
+    const [ordersByPostId, ordersByCanceledPostId] = await Promise.all([
+      this.findOrders({
+        post_id: id,
+        page: 1,
+        limit: 1000,
+      }),
+      this.findOrders({
+        canceled_post_id: id,
+        page: 1,
+        limit: 1000,
+      }),
+    ]);
+
+    const orderMap = new Map<string, OrderRow>();
+    for (const order of [...ordersByPostId, ...ordersByCanceledPostId]) {
+      orderMap.set(String(order.id), order);
+    }
+
+    let orders = Array.from(orderMap.values());
+
+    const isCourier = (requester.roles ?? []).some(
+      (role) => String(role).toLowerCase() === Roles.COURIER,
+    );
+    if (post.status === Post_status.SENT && isCourier) {
+      orders = orders.filter((order) => order.status === Order_status.ON_THE_ROAD);
+    }
 
     let homeOrders = 0;
     let centerOrders = 0;
