@@ -220,10 +220,19 @@ export class LogisticsServiceService implements OnModuleInit {
     return_requested?: boolean;
     customer_id?: string;
     qr_code_token?: string;
+    fetch_all?: boolean;
     page?: number;
     limit?: number;
   }): Promise<OrderRow[]> {
     try {
+      const requestedLimit = Number(query.limit ?? 100);
+      const allowedLimits = [10, 25, 50, 100];
+      const normalizedLimit = allowedLimits.includes(requestedLimit)
+        ? requestedLimit
+        : 100;
+
+      const useFetchAll = query.fetch_all === true || requestedLimit > 100;
+
       const res = await lastValueFrom(
         this.orderClient
           .send(
@@ -231,8 +240,9 @@ export class LogisticsServiceService implements OnModuleInit {
             {
               query: {
                 ...query,
+                fetch_all: useFetchAll,
                 page: query.page ?? 1,
-                limit: query.limit ?? 1000,
+                limit: normalizedLimit,
               },
             },
           )

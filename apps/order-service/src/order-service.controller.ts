@@ -81,6 +81,8 @@ export class OrderServiceController {
         courier?: string;
         region_id?: string;
         source?: Order_source | 'internal' | 'external';
+        fetch_all?: boolean | string;
+        fetchAll?: boolean | string;
         page?: number;
         limit?: number;
       };
