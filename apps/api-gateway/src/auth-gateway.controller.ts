@@ -82,8 +82,8 @@ export class AuthGatewayController {
 
     res.cookie(AuthGatewayController.REFRESH_COOKIE_NAME, refreshToken, {
       httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.COOKIE_SECURE === 'true',
+      secure: true,
+      sameSite: 'none',
       path: '/auth',
       maxAge,
     });
@@ -92,8 +92,8 @@ export class AuthGatewayController {
   private clearRefreshCookie(res: Response) {
     res.clearCookie(AuthGatewayController.REFRESH_COOKIE_NAME, {
       httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.COOKIE_SECURE === 'true',
+      secure: true,
+      sameSite: 'none',
       path: '/auth',
     });
   }
