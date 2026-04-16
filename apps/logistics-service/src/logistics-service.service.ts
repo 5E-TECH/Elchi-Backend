@@ -468,7 +468,7 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
-  async newPosts(query?: { region_id?: string; search?: string }) {
+  async newPosts(query?: { search?: string }) {
     const orphanOrders = await this.findOrders({ status: Order_status.RECEIVED, page: 1, limit: 1000 });
     const candidates = orphanOrders.filter((order) => !order.post_id && order.region_id);
 
@@ -536,14 +536,9 @@ export class LogisticsServiceService implements OnModuleInit {
       region: post.region_id ? regionsById.get(post.region_id) ?? null : null,
     }));
 
-    const regionFilter = query?.region_id?.trim();
     const searchFilter = query?.search?.trim().toLowerCase();
 
     const filteredPosts = postsWithRegion.filter((post) => {
-      if (regionFilter && String(post.region_id ?? '') !== regionFilter) {
-        return false;
-      }
-
       if (searchFilter) {
         const regionName = String(post.region?.name ?? '').toLowerCase();
         if (!regionName.includes(searchFilter)) {

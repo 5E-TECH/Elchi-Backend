@@ -162,17 +162,12 @@ export class LogisticsGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List new posts' })
-  @ApiQuery({ name: 'region_id', required: false, type: String })
   @ApiQuery({ name: 'search', required: false, type: String, description: 'Region name search' })
-  getNewPosts(
-    @Query('region_id') region_id?: string,
-    @Query('search') search?: string,
-  ) {
+  getNewPosts(@Query('search') search?: string) {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.new' },
       {
         query: {
-          region_id,
           search,
         },
       },
