@@ -21,6 +21,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -161,8 +162,21 @@ export class LogisticsGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List new posts' })
-  getNewPosts() {
-    return this.logisticsClient.send({ cmd: 'logistics.post.new' }, {});
+  @ApiQuery({ name: 'region_id', required: false, type: String })
+  @ApiQuery({ name: 'search', required: false, type: String, description: 'Region name search' })
+  getNewPosts(
+    @Query('region_id') region_id?: string,
+    @Query('search') search?: string,
+  ) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.new' },
+      {
+        query: {
+          region_id,
+          search,
+        },
+      },
+    );
   }
 
   @Get('post/rejected')

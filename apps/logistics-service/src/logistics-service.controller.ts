@@ -64,8 +64,13 @@ export class LogisticsServiceController {
   }
 
   @MessagePattern({ cmd: 'logistics.post.new' })
-  newPosts(@Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.logisticsService.newPosts());
+  newPosts(
+    @Payload() data: { query?: { region_id?: string; search?: string } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.newPosts(data?.query),
+    );
   }
 
   @MessagePattern({ cmd: 'logistics.post.rejected' })
