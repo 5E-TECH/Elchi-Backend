@@ -97,6 +97,10 @@ export class OrderServiceService {
     throw new RpcException({ statusCode: 400, message });
   }
 
+  private forbidden(message: string): never {
+    throw new RpcException({ statusCode: 403, message });
+  }
+
   private handleDbError(error: unknown): never {
     if (error instanceof QueryFailedError) {
       const pgError = error.driverError as {
@@ -206,26 +210,28 @@ export class OrderServiceService {
     return new Date(date.getTime() + uzOffsetMs).toISOString().replace('Z', '+05:00');
   }
 
-  private normalizePagination(page?: number, limit?: number) {
-    const allowedLimits = [10, 25, 50, 100];
+  private normalizePagination(page?: number, limit?: number, fetchAll?: boolean) {
+    const DEFAULT_LIMIT = 10;
+    const MAX_LIMIT = 100;
+    const MAX_FETCH_ALL = 5000;
     const parsedPage = Number(page ?? 1);
-    const parsedLimit = Number(limit ?? 10);
+    const parsedLimit = Number(limit ?? DEFAULT_LIMIT);
 
-    if (!Number.isFinite(parsedLimit) || !allowedLimits.includes(parsedLimit)) {
-      throw new RpcException({
-        statusCode: 400,
-        message: `limit faqat ${allowedLimits.join(', ')} qiymatlarda bo'lishi mumkin`,
-      });
-    }
+    const normalizedLimit =
+      fetchAll || parsedLimit === 0
+        ? MAX_FETCH_ALL
+        : !Number.isFinite(parsedLimit) || parsedLimit < 0
+          ? DEFAULT_LIMIT
+          : Math.min(parsedLimit, MAX_LIMIT);
 
     const normalizedPage =
       Number.isFinite(parsedPage) && parsedPage >= 1 ? Math.floor(parsedPage) : 1;
 
     return {
       page: normalizedPage,
-      limit: parsedLimit,
+      limit: normalizedLimit,
       total_pages(total: number) {
-        return parsedLimit > 0 ? Math.ceil(total / parsedLimit) : 0;
+        return normalizedLimit > 0 ? Math.ceil(total / normalizedLimit) : 0;
       },
     };
   }
@@ -1060,6 +1066,8 @@ export class OrderServiceService {
     courier?: string;
     region_id?: string;
     source?: Order_source | 'internal' | 'external';
+    fetch_all?: boolean | string;
+    fetchAll?: boolean | string;
     page?: number;
     limit?: number;
   }) {
@@ -1079,11 +1087,19 @@ export class OrderServiceService {
       courier,
       region_id,
       source,
+      fetch_all,
+      fetchAll,
       page,
       limit,
     } = query;
 
-    const pagination = this.normalizePagination(page, limit);
+    const useFetchAll =
+      fetch_all === true ||
+      fetchAll === true ||
+      String(fetch_all).toLowerCase() === 'true' ||
+      String(fetchAll).toLowerCase() === 'true';
+
+    const pagination = this.normalizePagination(page, limit, useFetchAll);
 
     const qb = this.orderRepo
       .createQueryBuilder('order')
@@ -2478,8 +2494,35 @@ export class OrderServiceService {
     return updated;
   }
 
-  async remove(id: string) {
+  async remove(id: string, requester?: { id?: string; roles?: string[] }) {
     const order = await this.findById(id);
+
+    const requesterId = String(requester?.id ?? '');
+    const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
+    const isAdmin = this.hasRole(requester, Roles.ADMIN);
+    const isRegistrator = this.hasRole(requester, Roles.REGISTRATOR);
+    const isMarket = this.hasRole(requester, Roles.MARKET);
+
+    if (order.status === Order_status.CREATED) {
+      const isOwnerMarket = isMarket && requesterId === String(order.market_id ?? '');
+      if (!isOwnerMarket) {
+        this.forbidden("Faqat order egasi bo'lgan market 'created' holatdagi buyurtmani o‘chira oladi");
+      }
+    } else if (order.status === Order_status.NEW) {
+      const canDeleteNew = isSuperAdmin || isAdmin || isRegistrator || isMarket;
+      if (!canDeleteNew) {
+        this.forbidden(
+          "Faqat superadmin/admin/registrator/market 'new' holatdagi buyurtmani o‘chira oladi",
+        );
+      }
+    } else if (order.status === Order_status.RECEIVED) {
+      if (!isSuperAdmin) {
+        this.forbidden("Faqat superadmin 'received' holatdagi buyurtmani o‘chira oladi");
+      }
+    } else {
+      this.badRequest("Faqat 'created', 'new' yoki 'received' holatdagi buyurtmani o‘chirish mumkin");
+    }
+
     order.isDeleted = true;
     await this.orderRepo.save(order);
     void this.removeOrderFromSearch(id);

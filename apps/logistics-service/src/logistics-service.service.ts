@@ -220,10 +220,19 @@ export class LogisticsServiceService implements OnModuleInit {
     return_requested?: boolean;
     customer_id?: string;
     qr_code_token?: string;
+    fetch_all?: boolean;
     page?: number;
     limit?: number;
   }): Promise<OrderRow[]> {
     try {
+      const requestedLimit = Number(query.limit ?? 100);
+      const allowedLimits = [10, 25, 50, 100];
+      const normalizedLimit = allowedLimits.includes(requestedLimit)
+        ? requestedLimit
+        : 100;
+
+      const useFetchAll = query.fetch_all === true || requestedLimit > 100;
+
       const res = await lastValueFrom(
         this.orderClient
           .send(
@@ -231,19 +240,37 @@ export class LogisticsServiceService implements OnModuleInit {
             {
               query: {
                 ...query,
+                fetch_all: useFetchAll,
                 page: query.page ?? 1,
-                limit: query.limit ?? 1000,
+                limit: normalizedLimit,
               },
             },
           )
           .pipe(timeout(5000)),
       );
 
-      // Support both payload shapes:
-      // 1) { data: OrderRow[] }
-      // 2) { statusCode, message, data: { data: OrderRow[], ... } }
-      const rows = res?.data?.data ?? res?.data ?? [];
-      return Array.isArray(rows) ? rows : [];
+      // Support multiple RMQ response shapes:
+      // 1) { statusCode, message, data: { data: OrderRow[], ... } }
+      // 2) { statusCode, message, data: OrderRow[] }
+      // 3) { data: { data: OrderRow[], ... } } or { data: OrderRow[] }
+      // 4) OrderRow[]
+      const candidates = [
+        res?.data?.data?.data,
+        res?.data?.data,
+        res?.data,
+        res,
+      ];
+
+      for (const candidate of candidates) {
+        if (Array.isArray(candidate)) {
+          return candidate;
+        }
+        if (candidate && Array.isArray((candidate as { data?: unknown }).data)) {
+          return (candidate as { data: OrderRow[] }).data;
+        }
+      }
+
+      return [];
     } catch {
       return [];
     }

@@ -895,11 +895,20 @@ export class OrderGatewayController {
   }
 
   @Delete(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MARKET,
+  )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Delete order (soft delete)' })
+  @ApiOperation({ summary: 'Delete order (status-based role rules)' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
-  remove(@Param('id') id: string) {
-    return this.orderClient.send({ cmd: 'order.delete' }, { id });
+  remove(@Param('id') id: string, @Req() req: { user: JwtUser }) {
+    return this.orderClient.send(
+      { cmd: 'order.delete' },
+      { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+    );
   }
 }
