@@ -97,6 +97,10 @@ export class OrderServiceService {
     throw new RpcException({ statusCode: 400, message });
   }
 
+  private forbidden(message: string): never {
+    throw new RpcException({ statusCode: 403, message });
+  }
+
   private handleDbError(error: unknown): never {
     if (error instanceof QueryFailedError) {
       const pgError = error.driverError as {
@@ -2490,8 +2494,35 @@ export class OrderServiceService {
     return updated;
   }
 
-  async remove(id: string) {
+  async remove(id: string, requester?: { id?: string; roles?: string[] }) {
     const order = await this.findById(id);
+
+    const requesterId = String(requester?.id ?? '');
+    const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
+    const isAdmin = this.hasRole(requester, Roles.ADMIN);
+    const isRegistrator = this.hasRole(requester, Roles.REGISTRATOR);
+    const isMarket = this.hasRole(requester, Roles.MARKET);
+
+    if (order.status === Order_status.CREATED) {
+      const isOwnerMarket = isMarket && requesterId === String(order.market_id ?? '');
+      if (!isOwnerMarket) {
+        this.forbidden("Faqat order egasi bo'lgan market 'created' holatdagi buyurtmani o‘chira oladi");
+      }
+    } else if (order.status === Order_status.NEW) {
+      const canDeleteNew = isSuperAdmin || isAdmin || isRegistrator || isMarket;
+      if (!canDeleteNew) {
+        this.forbidden(
+          "Faqat superadmin/admin/registrator/market 'new' holatdagi buyurtmani o‘chira oladi",
+        );
+      }
+    } else if (order.status === Order_status.RECEIVED) {
+      if (!isSuperAdmin) {
+        this.forbidden("Faqat superadmin 'received' holatdagi buyurtmani o‘chira oladi");
+      }
+    } else {
+      this.badRequest("Faqat 'created', 'new' yoki 'received' holatdagi buyurtmani o‘chirish mumkin");
+    }
+
     order.isDeleted = true;
     await this.orderRepo.save(order);
     void this.removeOrderFromSearch(id);
