@@ -239,11 +239,28 @@ export class LogisticsServiceService implements OnModuleInit {
           .pipe(timeout(5000)),
       );
 
-      // Support both payload shapes:
-      // 1) { data: OrderRow[] }
-      // 2) { statusCode, message, data: { data: OrderRow[], ... } }
-      const rows = res?.data?.data ?? res?.data ?? [];
-      return Array.isArray(rows) ? rows : [];
+      // Support multiple RMQ response shapes:
+      // 1) { statusCode, message, data: { data: OrderRow[], ... } }
+      // 2) { statusCode, message, data: OrderRow[] }
+      // 3) { data: { data: OrderRow[], ... } } or { data: OrderRow[] }
+      // 4) OrderRow[]
+      const candidates = [
+        res?.data?.data?.data,
+        res?.data?.data,
+        res?.data,
+        res,
+      ];
+
+      for (const candidate of candidates) {
+        if (Array.isArray(candidate)) {
+          return candidate;
+        }
+        if (candidate && Array.isArray((candidate as { data?: unknown }).data)) {
+          return (candidate as { data: OrderRow[] }).data;
+        }
+      }
+
+      return [];
     } catch {
       return [];
     }

@@ -24,6 +24,7 @@ import type { Request, Response } from 'express';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import {
   LoginRequestDto,
+  MinimalAuthResponseDto,
   RefreshRequestDto,
 } from './dto/auth.swagger.dto';
 
@@ -82,7 +83,7 @@ export class AuthGatewayController {
     res.cookie(AuthGatewayController.REFRESH_COOKIE_NAME, refreshToken, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
+      secure: process.env.COOKIE_SECURE === 'true',
       path: '/auth',
       maxAge,
     });
@@ -92,20 +93,29 @@ export class AuthGatewayController {
     res.clearCookie(AuthGatewayController.REFRESH_COOKIE_NAME, {
       httpOnly: true,
       sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
+      secure: process.env.COOKIE_SECURE === 'true',
       path: '/auth',
     });
   }
 
   private sanitizeAuthPayload(payload: Record<string, unknown>) {
-    const { refreshToken, ...rest } = payload;
-    return rest;
+    const accessToken =
+      typeof payload.accessToken === 'string' ? payload.accessToken : null;
+
+    if (!accessToken) {
+      throw new UnauthorizedException('Access token not found');
+    }
+
+    return { accessToken };
   }
 
   @Post('login')
   @ApiOperation({ summary: 'Login with phone number and password' })
   @ApiBody({ type: LoginRequestDto })
-  @ApiCreatedResponse({ description: 'Login successful' })
+  @ApiCreatedResponse({
+    description: 'Login successful',
+    type: MinimalAuthResponseDto,
+  })
   @ApiUnauthorizedResponse({ description: 'Invalid credentials' })
   async login(
     @Body() dto: { phone_number: string; password: string },
@@ -130,7 +140,10 @@ export class AuthGatewayController {
   @Post('refresh')
   @ApiOperation({ summary: 'Refresh access token' })
   @ApiBody({ type: RefreshRequestDto })
-  @ApiCreatedResponse({ description: 'Token refreshed' })
+  @ApiCreatedResponse({
+    description: 'Token refreshed',
+    type: MinimalAuthResponseDto,
+  })
   @ApiUnauthorizedResponse({ description: 'Invalid refresh token' })
   async refresh(
     @Req() req: Request,
