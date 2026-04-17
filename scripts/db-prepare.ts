@@ -35,7 +35,7 @@ function makeBaseOptions(): Omit<PostgresConnectionOptions, 'schema' | 'entities
     url: postgresUri,
     synchronize: false,
     logging: false,
-  };
+  } as DataSourceOptions;
 }
 
 async function bootstrapSchema({ schema, entities }: SchemaConfig): Promise<void> {

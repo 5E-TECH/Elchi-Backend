@@ -81,6 +81,8 @@ export class OrderServiceController {
         courier?: string;
         region_id?: string;
         source?: Order_source | 'internal' | 'external';
+        fetch_all?: boolean | string;
+        fetchAll?: boolean | string;
         page?: number;
         limit?: number;
       };
@@ -333,10 +335,12 @@ export class OrderServiceController {
 
   @MessagePattern({ cmd: 'order.delete' })
   remove(
-    @Payload() data: { id: string },
+    @Payload() data: { id: string; requester?: { id?: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.orderService.remove(data.id));
+    return this.executeAndAck(context, () =>
+      this.orderService.remove(data.id, data.requester),
+    );
   }
 
   // ==================== Enriched Endpoints ====================

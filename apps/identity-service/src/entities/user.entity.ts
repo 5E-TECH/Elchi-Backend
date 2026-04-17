@@ -37,9 +37,11 @@ export class User extends BaseEntity {
   @Column({ type: 'int', nullable: true })
   payment_day: number;
 
-  region_id?: string | null;
+  @Column({ type: 'bigint', nullable: true })
+  region_id: string | null;
 
-  district_id?: string | null;
+  @Column({ type: 'bigint', nullable: true })
+  district_id: string | null;
 
   market_tg_token?: string | null;
 

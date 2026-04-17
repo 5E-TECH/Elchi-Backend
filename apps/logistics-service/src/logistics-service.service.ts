@@ -220,10 +220,19 @@ export class LogisticsServiceService implements OnModuleInit {
     return_requested?: boolean;
     customer_id?: string;
     qr_code_token?: string;
+    fetch_all?: boolean;
     page?: number;
     limit?: number;
   }): Promise<OrderRow[]> {
     try {
+      const requestedLimit = Number(query.limit ?? 100);
+      const allowedLimits = [10, 25, 50, 100];
+      const normalizedLimit = allowedLimits.includes(requestedLimit)
+        ? requestedLimit
+        : 100;
+
+      const useFetchAll = query.fetch_all === true || requestedLimit > 100;
+
       const res = await lastValueFrom(
         this.orderClient
           .send(
@@ -231,19 +240,37 @@ export class LogisticsServiceService implements OnModuleInit {
             {
               query: {
                 ...query,
+                fetch_all: useFetchAll,
                 page: query.page ?? 1,
-                limit: query.limit ?? 1000,
+                limit: normalizedLimit,
               },
             },
           )
           .pipe(timeout(5000)),
       );
 
-      // Support both payload shapes:
-      // 1) { data: OrderRow[] }
-      // 2) { statusCode, message, data: { data: OrderRow[], ... } }
-      const rows = res?.data?.data ?? res?.data ?? [];
-      return Array.isArray(rows) ? rows : [];
+      // Support multiple RMQ response shapes:
+      // 1) { statusCode, message, data: { data: OrderRow[], ... } }
+      // 2) { statusCode, message, data: OrderRow[] }
+      // 3) { data: { data: OrderRow[], ... } } or { data: OrderRow[] }
+      // 4) OrderRow[]
+      const candidates = [
+        res?.data?.data?.data,
+        res?.data?.data,
+        res?.data,
+        res,
+      ];
+
+      for (const candidate of candidates) {
+        if (Array.isArray(candidate)) {
+          return candidate;
+        }
+        if (candidate && Array.isArray((candidate as { data?: unknown }).data)) {
+          return (candidate as { data: OrderRow[] }).data;
+        }
+      }
+
+      return [];
     } catch {
       return [];
     }
@@ -441,7 +468,7 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
-  async newPosts() {
+  async newPosts(query?: { search?: string }) {
     const orphanOrders = await this.findOrders({ status: Order_status.RECEIVED, page: 1, limit: 1000 });
     const candidates = orphanOrders.filter((order) => !order.post_id && order.region_id);
 
@@ -509,7 +536,20 @@ export class LogisticsServiceService implements OnModuleInit {
       region: post.region_id ? regionsById.get(post.region_id) ?? null : null,
     }));
 
-    return successRes(postsWithRegion, 200, 'All new posts');
+    const searchFilter = query?.search?.trim().toLowerCase();
+
+    const filteredPosts = postsWithRegion.filter((post) => {
+      if (searchFilter) {
+        const regionName = String(post.region?.name ?? '').toLowerCase();
+        if (!regionName.includes(searchFilter)) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+
+    return successRes(filteredPosts, 200, 'All new posts');
   }
 
   async rejectedPosts() {
@@ -674,12 +714,32 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Post not found');
     }
 
-    const orders = await this.findOrders({
-      post_id: id,
-      status: Order_status.RECEIVED,
-      page: 1,
-      limit: 1000,
-    });
+    const [ordersByPostId, ordersByCanceledPostId] = await Promise.all([
+      this.findOrders({
+        post_id: id,
+        page: 1,
+        limit: 1000,
+      }),
+      this.findOrders({
+        canceled_post_id: id,
+        page: 1,
+        limit: 1000,
+      }),
+    ]);
+
+    const orderMap = new Map<string, OrderRow>();
+    for (const order of [...ordersByPostId, ...ordersByCanceledPostId]) {
+      orderMap.set(String(order.id), order);
+    }
+
+    let orders = Array.from(orderMap.values());
+
+    const isCourier = (requester.roles ?? []).some(
+      (role) => String(role).toLowerCase() === Roles.COURIER,
+    );
+    if (post.status === Post_status.SENT && isCourier) {
+      orders = orders.filter((order) => order.status === Order_status.ON_THE_ROAD);
+    }
 
     let homeOrders = 0;
     let centerOrders = 0;
