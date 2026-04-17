@@ -1,9 +1,8 @@
-name: CI/CD Deploy
+name: Elchi CI/CD
 
 on:
   push:
-    branches:
-      - main
+    branches: [main]
   workflow_dispatch:
 
 concurrency:
@@ -13,11 +12,12 @@ concurrency:
 jobs:
   test:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Setup Node
+      - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 20
@@ -30,16 +30,23 @@ jobs:
       - name: Run unit tests
         run: npm run test:ci
 
+      - name: Build check
+        run: |
+          npx nest build api-gateway
+          npx nest build logistics-service
+          npx nest build order-service
+
   deploy:
     runs-on: ubuntu-latest
     needs: test
     environment: production
+    timeout-minutes: 30
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.0
         with:
           host: ${{ secrets.SERVER_IP }}
           port: ${{ secrets.SERVER_SSH_PORT || 22 }}
@@ -47,11 +54,20 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script_stop: true
           script: |
-            set -e
+            set -euo pipefail
             cd ${{ secrets.SERVER_APP_PATH }}
+            git config --global --add safe.directory ${{ secrets.SERVER_APP_PATH }} || true
             git fetch origin main
+            git checkout main
             git reset --hard origin/main
-            cp -f .env.production .env
-            docker compose -f docker-compose.yml build --pull
-            docker compose -f docker-compose.yml up -d --remove-orphans
-            docker image prune -f
+
+            if command -v docker-compose >/dev/null 2>&1; then
+              compose() { docker-compose "$@"; }
+            else
+              compose() { docker compose "$@"; }
+            fi
+
+            compose -f docker-compose.prod.yml pull || true
+            compose -f docker-compose.prod.yml down --remove-orphans
+            compose -f docker-compose.prod.yml up -d --build --remove-orphans
+            compose -f docker-compose.prod.yml ps
