@@ -1,5 +1,6 @@
 import * as dotenv from 'dotenv';
 import { DataSource, DataSourceOptions } from 'typeorm';
+import { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
 
 dotenv.config({ path: '.env.production' });
 dotenv.config();
@@ -28,7 +29,7 @@ const schemaConfigs: SchemaConfig[] = [
   { schema: 'search_schema', entities: ['apps/search-service/src/entities/*.entity.ts', 'dist/apps/search-service/**/*.entity.js'] },
 ];
 
-function makeBaseOptions(): DataSourceOptions {
+function makeBaseOptions(): Omit<PostgresConnectionOptions, 'schema' | 'entities' | 'migrations'> {
   return {
     type: 'postgres',
     url: postgresUri,
@@ -81,28 +82,51 @@ async function verifyOrderRelations(): Promise<void> {
 
   await ds.initialize();
   try {
-    const requiredConstraints = [
-      'FK_order_items_order_id',
-      'FK_order_tracking_order_id',
+    const requiredForeignKeys = [
+      { table_name: 'order_items', column_name: 'order_id' },
+      { table_name: 'order_tracking', column_name: 'order_id' },
     ];
 
     const rows = (await ds.query(
       `
-      SELECT c.conname
-      FROM pg_constraint c
-      JOIN pg_namespace n ON n.oid = c.connamespace
-      WHERE n.nspname = 'order_schema'
-        AND c.conname = ANY($1::text[])
+      SELECT
+        tc.table_name,
+        kcu.column_name,
+        ccu.table_name AS foreign_table_name,
+        ccu.column_name AS foreign_column_name,
+        tc.constraint_name
+      FROM information_schema.table_constraints tc
+      JOIN information_schema.key_column_usage kcu
+        ON tc.constraint_name = kcu.constraint_name
+       AND tc.table_schema = kcu.table_schema
+      JOIN information_schema.constraint_column_usage ccu
+        ON tc.constraint_name = ccu.constraint_name
+       AND tc.table_schema = ccu.table_schema
+      WHERE tc.constraint_type = 'FOREIGN KEY'
+        AND tc.table_schema = 'order_schema'
+        AND ccu.table_name = 'orders'
+        AND ccu.column_name = 'id'
       `,
-      [requiredConstraints],
-    )) as Array<{ conname: string }>;
+    )) as Array<{
+      table_name: string;
+      column_name: string;
+      foreign_table_name: string;
+      foreign_column_name: string;
+      constraint_name: string;
+    }>;
 
-    const existing = new Set(rows.map((row) => row.conname));
-    const missing = requiredConstraints.filter((name) => !existing.has(name));
+    const existing = new Set(
+      rows.map((row) => `${row.table_name}.${row.column_name}`),
+    );
+    const missing = requiredForeignKeys
+      .map((fk) => `${fk.table_name}.${fk.column_name}`)
+      .filter((key) => !existing.has(key));
 
     if (missing.length > 0) {
       throw new Error(
-        `[db-prepare] order_schema relation constraints missing: ${missing.join(', ')}`,
+        `[db-prepare] order_schema relation constraints missing for: ${missing.join(
+          ', ',
+        )}`,
       );
     }
 
