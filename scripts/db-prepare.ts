@@ -15,6 +15,11 @@ type SchemaConfig = {
   entities: string[];
 };
 
+type BasePostgresOptions = Omit<
+  PostgresConnectionOptions,
+  'schema' | 'entities' | 'migrations'
+>;
+
 const schemaConfigs: SchemaConfig[] = [
   { schema: 'identity_schema', entities: ['apps/identity-service/src/entities/*.entity.ts', 'dist/apps/identity-service/**/*.entity.js'] },
   { schema: 'order_schema', entities: ['apps/order-service/src/entities/*.entity.ts', 'dist/apps/order-service/**/*.entity.js'] },
@@ -29,13 +34,13 @@ const schemaConfigs: SchemaConfig[] = [
   { schema: 'search_schema', entities: ['apps/search-service/src/entities/*.entity.ts', 'dist/apps/search-service/**/*.entity.js'] },
 ];
 
-function makeBaseOptions(): Omit<PostgresConnectionOptions, 'schema' | 'entities' | 'migrations'> {
+function makeBaseOptions(): BasePostgresOptions {
   return {
     type: 'postgres',
     url: postgresUri,
     synchronize: false,
     logging: false,
-  } as DataSourceOptions;
+  };
 }
 
 async function bootstrapSchema({ schema, entities }: SchemaConfig): Promise<void> {
