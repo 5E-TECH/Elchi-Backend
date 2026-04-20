@@ -12,6 +12,17 @@ import {
 import { Transform, Type } from 'class-transformer';
 import { Order_status, Where_deliver } from '@app/common';
 
+const parseFormattedNumber = (value: unknown): number | unknown => {
+  if (value === undefined || value === null || value === '') {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const cleaned = value.replace(/[^\d.-]/g, '');
+    return cleaned ? Number(cleaned) : value;
+  }
+  return value;
+};
+
 export class OrderItemDto {
   @ApiProperty({ example: '1', description: 'Product ID (as string/bigint)' })
   @IsNotEmpty()
@@ -316,11 +327,13 @@ export class PartlySellOrderRequestDto {
   order_item_info!: PartlySoldItemDto[];
 
   @ApiProperty({ example: 15000, minimum: 0 })
+  @Transform(({ value }) => parseFormattedNumber(value))
   @IsNumber()
   totalPrice!: number;
 
   @ApiPropertyOptional({ example: 2000, minimum: 0 })
   @IsOptional()
+  @Transform(({ value }) => parseFormattedNumber(value))
   @IsNumber()
   extraCost?: number;
 
