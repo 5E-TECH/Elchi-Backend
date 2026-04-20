@@ -30,9 +30,9 @@ export const identityValidationSchema = Joi.object({
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
   RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
-  SUPERADMIN_NAME: Joi.string().default('superadmin'),
-  SUPERADMIN_PHONE_NUMBER: Joi.string().default('+998905234382'),
-  SUPERADMIN_PASSWORD: Joi.string().default('0990'),
+  SUPERADMIN_NAME: Joi.string().required(),
+  SUPERADMIN_PHONE_NUMBER: Joi.string().required(),
+  SUPERADMIN_PASSWORD: Joi.string().required(),
 });
 
 export const orderValidationSchema = Joi.object({
