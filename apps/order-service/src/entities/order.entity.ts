@@ -2,6 +2,7 @@ import { Column, Entity, OneToMany } from 'typeorm';
 import { BaseEntity } from '@app/common';
 import { Order_status, Where_deliver } from '@app/common';
 import { OrderItem } from './order-item.entity';
+import { OrderTracking } from './order-tracking.entity';
 
 export enum Order_source {
   INTERNAL = 'internal',
@@ -75,4 +76,7 @@ export class Order extends BaseEntity {
 
   @OneToMany(() => OrderItem, (item) => item.order, { cascade: true })
   items!: OrderItem[];
+
+  @OneToMany(() => OrderTracking, (tracking) => tracking.order)
+  tracking!: OrderTracking[];
 }
