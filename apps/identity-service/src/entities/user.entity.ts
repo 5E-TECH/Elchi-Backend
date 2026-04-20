@@ -40,17 +40,10 @@ export class User extends BaseEntity {
   payment_day: number;
 
   @Column({ type: 'bigint', nullable: true })
-<<<<<<< HEAD
-  region_id: string | null;
-
-  @Column({ type: 'bigint', nullable: true })
-  district_id: string | null;
-=======
   region_id?: string | null;
 
   @Column({ type: 'bigint', nullable: true })
   district_id?: string | null;
->>>>>>> e4e2069 (Fixed user errors and Added new endpoint which one order/qr-code/id)
 
   @Column({ type: 'varchar', length: 255, nullable: true })
   market_tg_token?: string | null;
