@@ -20,9 +20,12 @@ export class FileServiceController {
     handler: () => Promise<T> | T,
   ): Promise<T> {
     try {
-      return await handler();
-    } finally {
+      const result = await handler();
       this.rmqService.ack(context);
+      return result;
+    } catch (error) {
+      this.rmqService.nack(context);
+      throw error;
     }
   }
 

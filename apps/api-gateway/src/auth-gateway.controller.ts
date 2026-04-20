@@ -74,6 +74,7 @@ export class AuthGatewayController {
     refreshToken: string,
     expiresAtMs: number | null,
   ) {
+    const isProduction = process.env.NODE_ENV === 'production';
     const now = Date.now();
     const maxAge = Math.max(
       1,
@@ -82,18 +83,19 @@ export class AuthGatewayController {
 
     res.cookie(AuthGatewayController.REFRESH_COOKIE_NAME, refreshToken, {
       httpOnly: true,
-      secure: false,
-      sameSite: 'lax',
+      secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax',
       path: '/auth',
       maxAge,
     });
   }
 
   private clearRefreshCookie(res: Response) {
+    const isProduction = process.env.NODE_ENV === 'production';
     res.clearCookie(AuthGatewayController.REFRESH_COOKIE_NAME, {
       httpOnly: true,
-      secure: false,
-      sameSite: 'lax',
+      secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax',
       path: '/auth',
     });
   }
@@ -118,7 +120,7 @@ export class AuthGatewayController {
   })
   @ApiUnauthorizedResponse({ description: 'Invalid credentials' })
   async login(
-    @Body() dto: { phone_number: string; password: string },
+    @Body() dto: LoginRequestDto,
     @Res({ passthrough: true }) res: Response,
   ) {
     const response = (await firstValueFrom(
@@ -147,7 +149,7 @@ export class AuthGatewayController {
   @ApiUnauthorizedResponse({ description: 'Invalid refresh token' })
   async refresh(
     @Req() req: Request,
-    @Body() dto: { refreshToken?: string },
+    @Body() dto: RefreshRequestDto,
     @Res({ passthrough: true }) res: Response,
   ) {
     const refreshTokenFromCookie = this.readCookie(
