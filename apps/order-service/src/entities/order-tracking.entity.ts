@@ -1,5 +1,14 @@
-import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 'typeorm';
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  PrimaryGeneratedColumn,
+} from 'typeorm';
 import { Order_status } from '@app/common';
+import { Order } from './order.entity';
 
 @Entity({ name: 'order_tracking' })
 @Index('IDX_order_tracking_order_id_created_at', ['order_id', 'created_at'])
@@ -9,6 +18,10 @@ export class OrderTracking {
 
   @Column({ type: 'bigint' })
   order_id!: string;
+
+  @ManyToOne(() => Order, (order) => order.tracking, { onDelete: 'CASCADE' })
+  @JoinColumn({ name: 'order_id' })
+  order!: Order;
 
   @Column({ type: 'enum', enum: Order_status, nullable: true })
   from_status!: Order_status | null;
