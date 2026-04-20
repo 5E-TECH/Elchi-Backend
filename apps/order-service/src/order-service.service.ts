@@ -2042,13 +2042,17 @@ export class OrderServiceService {
 
     const marketBalanceBefore = Number(marketCashbox.balance ?? 0);
     const marketTariff =
-      order.where_deliver === Where_deliver.CENTER
-        ? Number(market.tariff_center ?? 0)
-        : Number(market.tariff_home ?? 0);
+      order.market_tariff != null
+        ? Number(order.market_tariff)
+        : order.where_deliver === Where_deliver.CENTER
+          ? Number(market.tariff_center ?? 0)
+          : Number(market.tariff_home ?? 0);
     const courierTariff =
-      order.where_deliver === Where_deliver.CENTER
-        ? Number(courier.tariff_center ?? 0)
-        : Number(courier.tariff_home ?? 0);
+      order.courier_tariff != null
+        ? Number(order.courier_tariff)
+        : order.where_deliver === Where_deliver.CENTER
+          ? Number(courier.tariff_center ?? 0)
+          : Number(courier.tariff_home ?? 0);
 
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
     const finalComment = this.generateSaleComment(
@@ -2072,8 +2076,8 @@ export class OrderServiceService {
       return sum + qty;
     }, 0);
 
-    if (newQty >= oldQty) {
-      this.badRequest('Partly sell requires reduced item quantity');
+    if (newQty > oldQty) {
+      this.badRequest('Partly sell quantity cannot exceed original quantity');
     }
 
     for (const existingItem of existingItems) {
@@ -2269,8 +2273,11 @@ export class OrderServiceService {
             : Order_status.SOLD,
       to_be_paid: netToBePaid,
       paid_amount: paidAfter,
-      sold_at: String(Date.now()),
+      sold_at: order.sold_at ?? String(Date.now()),
       total_price: price,
+      market_tariff: order.market_tariff ?? marketTariff,
+      courier_tariff: order.courier_tariff ?? courierTariff,
+      return_requested: false,
       comment: finalComment || null,
     }, { id: requester.id, roles: requester.roles, note: 'Order partly sold' });
 
@@ -2323,6 +2330,22 @@ export class OrderServiceService {
     return order;
   }
 
+  async findByQrCode(token: string) {
+    let order: Order | null;
+    try {
+      order = await this.orderRepo.findOne({
+        where: { qr_code_token: token, isDeleted: false },
+        relations: { items: true },
+      });
+    } catch (error) {
+      this.handleDbError(error);
+    }
+    if (!order) {
+      this.notFound('Order not found');
+    }
+    return successRes(order, 200, 'Order by QR code');
+  }
+
   async getTrackingByOrderId(id: string) {
     await this.findById(id);
 
@@ -2355,6 +2378,8 @@ export class OrderServiceService {
       customer_id?: string;
       where_deliver?: Where_deliver;
       total_price?: number;
+      market_tariff?: number | null;
+      courier_tariff?: number | null;
       to_be_paid?: number;
       paid_amount?: number;
       status?: Order_status;
@@ -2384,6 +2409,8 @@ export class OrderServiceService {
       customer_id?: string;
       where_deliver?: Where_deliver;
       total_price?: number;
+      market_tariff?: number | null;
+      courier_tariff?: number | null;
       to_be_paid?: number;
       paid_amount?: number;
       status?: Order_status;
@@ -2411,6 +2438,14 @@ export class OrderServiceService {
       customer_id: dto.customer_id ?? order.customer_id,
       where_deliver: dto.where_deliver ?? order.where_deliver,
       total_price: dto.total_price ?? order.total_price,
+      market_tariff:
+        typeof dto.market_tariff !== 'undefined'
+          ? dto.market_tariff
+          : order.market_tariff,
+      courier_tariff:
+        typeof dto.courier_tariff !== 'undefined'
+          ? dto.courier_tariff
+          : order.courier_tariff,
       to_be_paid: dto.to_be_paid ?? order.to_be_paid,
       paid_amount: dto.paid_amount ?? order.paid_amount,
       status: dto.status ?? order.status,

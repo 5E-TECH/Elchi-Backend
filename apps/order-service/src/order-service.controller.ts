@@ -100,6 +100,14 @@ export class OrderServiceController {
     return this.executeAndAck(context, () => this.orderService.findById(data.id));
   }
 
+  @MessagePattern({ cmd: 'order.find_by_qr' })
+  findByQr(
+    @Payload() data: { token: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.orderService.findByQrCode(data.token));
+  }
+
   @MessagePattern({ cmd: 'order.tracking' })
   tracking(
     @Payload() data: { id: string },

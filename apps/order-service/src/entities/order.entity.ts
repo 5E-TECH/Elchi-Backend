@@ -26,6 +26,12 @@ export class Order extends BaseEntity {
   @Column({ type: 'float', default: 0 })
   total_price!: number;
 
+  @Column({ type: 'float', nullable: true })
+  market_tariff!: number | null;
+
+  @Column({ type: 'float', nullable: true })
+  courier_tariff!: number | null;
+
   @Column({ type: 'int', default: 0 })
   to_be_paid!: number;
 

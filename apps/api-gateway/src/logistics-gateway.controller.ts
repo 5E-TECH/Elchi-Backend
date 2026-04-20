@@ -52,7 +52,6 @@ export class LogisticsGatewayController {
   constructor(
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
-    @Inject('ORDER') private readonly orderClient: ClientProxy,
   ) {}
 
   private async enrichOrdersByPostResponse(response: {
@@ -342,26 +341,6 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.check_cancel' },
       { id, dto },
-    );
-  }
-
-  @Get('order/qr-code/:id')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(
-    RoleEnum.SUPERADMIN,
-    RoleEnum.ADMIN,
-    RoleEnum.REGISTRATOR,
-    RoleEnum.COURIER,
-    RoleEnum.MARKET,
-    RoleEnum.OPERATOR,
-  )
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Get order by QR code token (Post control alias)' })
-  @ApiParam({ name: 'id', description: 'Order QR token' })
-  getOrderByQrCode(@Param('id') id: string) {
-    return this.orderClient.send(
-      { cmd: 'order.find_all' },
-      { query: { qr_code_token: id, page: 1, limit: 1 } },
     );
   }
 
