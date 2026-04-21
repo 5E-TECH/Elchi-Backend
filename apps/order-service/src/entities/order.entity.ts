@@ -74,6 +74,9 @@ export class Order extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   qr_code_token!: string | null;
 
+  @Column({ type: 'bigint', nullable: true })
+  parent_order_id!: string | null;
+
   @Column({ type: 'varchar', nullable: true })
   external_id!: string | null;
 

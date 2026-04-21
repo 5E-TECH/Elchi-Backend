@@ -731,16 +731,11 @@ export class OrderGatewayController {
   @ApiOperation({ summary: 'Get order by QR code (Post Control style)' })
   @ApiParam({ name: 'token', description: 'Order QR token' })
   findByQrCode(@Param('token') token: string) {
-    return firstValueFrom(
-      this.orderClient
-        .send({ cmd: 'order.find_by_qr' }, { token })
-        .pipe(timeout(8000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
-      }
-      throw error;
-    });
+    return this.sendOrderWithFallback(
+      { cmd: 'order.find_by_qr_enriched' },
+      { cmd: 'order.find_by_qr' },
+      { token },
+    );
   }
 
   @Get(':id/tracking')

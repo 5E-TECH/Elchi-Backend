@@ -968,6 +968,7 @@ export class OrderServiceService {
     region_id?: string | null;
     address?: string | null;
     qr_code_token?: string | null;
+    parent_order_id?: string | null;
     external_id?: string | null;
     source?: Order_source;
     items?: Array<{ product_id: string; quantity?: number }>;
@@ -1002,7 +1003,8 @@ export class OrderServiceService {
         district_id: dto.district_id ?? null,
         region_id: dto.region_id ?? null,
         address: dto.address ?? null,
-        qr_code_token: dto.qr_code_token ?? null,
+        qr_code_token: dto.qr_code_token ?? this.generateCustomToken(),
+        parent_order_id: dto.parent_order_id ?? null,
         external_id: dto.external_id ?? null,
         source: dto.source ?? Order_source.INTERNAL,
         isDeleted: false,
@@ -2304,14 +2306,15 @@ export class OrderServiceService {
         district_id: order.district_id ?? null,
         region_id: order.region_id ?? null,
         address: order.address ?? null,
-        qr_code_token: null,
+        qr_code_token: `CANCEL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+        parent_order_id: String(order.id),
         items: cancelledItems,
       });
 
       refreshedOrder.product_quantity = newQty;
     }
 
-    return successRes({}, 200, 'Order partly sold');
+    return successRes({}, 200, 'Order qisman sotildi');
   }
 
   async findById(id: string) {
@@ -2344,6 +2347,18 @@ export class OrderServiceService {
       this.notFound('Order not found');
     }
     return successRes(order, 200, 'Order by QR code');
+  }
+
+  async findByQrCodeEnriched(token: string) {
+    const result = await this.findByQrCode(token);
+    const order = (result as { data?: Order })?.data;
+
+    if (!order) {
+      return result;
+    }
+
+    const enriched = await this.enrichOrders([order]);
+    return successRes(enriched[0] ?? order, 200, 'Order by QR code');
   }
 
   async getTrackingByOrderId(id: string) {

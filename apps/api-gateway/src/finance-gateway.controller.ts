@@ -50,7 +50,10 @@ interface JwtUser {
 @ApiTags('Finance')
 @Controller('finance')
 export class FinanceGatewayController {
-  constructor(@Inject('FINANCE') private readonly financeClient: ClientProxy) {}
+  constructor(
+    @Inject('FINANCE') private readonly financeClient: ClientProxy,
+    @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+  ) {}
 
   private async send<T = any>(pattern: object, payload: object, timeoutMs = 8000): Promise<T> {
     return firstValueFrom(this.financeClient.send(pattern, payload).pipe(timeout(timeoutMs))).catch(
@@ -62,7 +65,58 @@ export class FinanceGatewayController {
       },
     );
   }
-  
+
+  private async sendIdentity<T = any>(
+    pattern: object,
+    payload: object,
+    timeoutMs = 8000,
+  ): Promise<T> {
+    return firstValueFrom(this.identityClient.send(pattern, payload).pipe(timeout(timeoutMs))).catch(
+      (error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Identity service response timeout');
+        }
+        throw error;
+      },
+    );
+  }
+
+  private async attachCreatedByUsersToHistory(response: any) {
+    const histories = response?.data?.cashboxHistory;
+    if (!Array.isArray(histories) || !histories.length) {
+      return response;
+    }
+
+    const createdByIds = Array.from(
+      new Set(histories.map((item: any) => String(item?.created_by ?? '')).filter(Boolean)),
+    );
+    if (!createdByIds.length) {
+      return response;
+    }
+
+    const users = await Promise.all(
+      createdByIds.map(async (id) => {
+        try {
+          const userResponse = await this.sendIdentity<{ data?: Record<string, any> }>(
+            { cmd: 'identity.user.find_by_id' },
+            { id },
+          );
+          const user = userResponse?.data ?? null;
+          return [id, user] as const;
+        } catch {
+          return [id, null] as const;
+        }
+      }),
+    );
+
+    const usersMap = new Map(users);
+    response.data.cashboxHistory = histories.map((item: any) => ({
+      ...item,
+      createdByUser: usersMap.get(String(item?.created_by ?? '')) ?? null,
+    }));
+
+    return response;
+  }
 
   @Get('health')
   @ApiOperation({ summary: 'Finance service health check' })
@@ -134,14 +188,16 @@ export class FinanceGatewayController {
   @Roles(RoleEnum.COURIER, RoleEnum.MARKET)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get my cashbox (courier/market)' })
-  myCashbox(
+  async myCashbox(
     @Req() req: { user: JwtUser },
     @Query() query: MainCashboxFilterQueryDto,
   ) {
-    return this.send(
+    const response = await this.send(
       { cmd: 'finance.cashbox.my' },
       { user_id: req.user.sub, roles: req.user.roles ?? [], ...query },
     );
+
+    return this.attachCreatedByUsersToHistory(response);
   }
 
   @Post('cashbox/payment/courier')
