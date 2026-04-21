@@ -78,7 +78,7 @@ export class OrderServiceController {
         exclude_statuses?: Order_status[];
         canceled_post_id?: string;
         qr_code_token?: string;
-        status?: Order_status;
+        status?: Order_status | Order_status[] | string | string[];
         return_requested?: boolean;
         start_day?: string;
         end_day?: string;
@@ -309,7 +309,7 @@ export class OrderServiceController {
     data: {
       query: {
         market_id?: string;
-        status?: Order_status;
+        status?: Order_status | Order_status[] | string | string[];
         start_day?: string;
         end_day?: string;
         page?: number;
