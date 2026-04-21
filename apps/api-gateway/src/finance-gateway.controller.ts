@@ -278,7 +278,7 @@ export class FinanceGatewayController {
 
   @Get('history')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.OPERATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Find cashbox history list' })
   @ApiQuery({ name: 'cashbox_id', required: false })
@@ -296,7 +296,13 @@ export class FinanceGatewayController {
 
   @Get('history/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.OPERATOR,
+    RoleEnum.COURIER,
+    RoleEnum.MARKET,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Find cashbox history detail by id' })
   @ApiParam({ name: 'id', description: 'History id (bigint string)' })
