@@ -39,7 +39,7 @@ lerna-debug.log*
 .env
 .env.development.local
 .env.test.local
-.env.production.local
+.env.production
 .env.local
 
 # temp directory
@@ -59,3 +59,5 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # local reports
 docs/*.md
 docs/*.pdf
+.env.production
+.env.production

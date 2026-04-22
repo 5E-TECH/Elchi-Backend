@@ -165,6 +165,32 @@ export class OrderGatewayController {
     return { page: normalizedPage, limit: parsedLimit };
   }
 
+  private parseStatusQuery(status?: string | string[]) {
+    if (status == null) {
+      return undefined;
+    }
+
+    const rawValues = Array.isArray(status) ? status : [status];
+    const flattened = rawValues
+      .flatMap((value) => String(value).split(','))
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (!flattened.length) {
+      return undefined;
+    }
+
+    const allowedStatuses = new Set(Object.values(Order_status));
+    const invalidValues = flattened.filter((value) => !allowedStatuses.has(value as Order_status));
+    if (invalidValues.length) {
+      throw new BadRequestException(
+        `Noto'g'ri status qiymati: ${invalidValues.join(', ')}`,
+      );
+    }
+
+    return Array.from(new Set(flattened)) as Order_status[];
+  }
+
   private withPaginationMeta(payload: unknown, fallback: { page: number; limit: number }) {
     if (!payload || typeof payload !== 'object') {
       return payload;
@@ -345,7 +371,7 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List external orders with filters' })
   @ApiQuery({ name: 'market_id', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, enum: Order_status })
+  @ApiQuery({ name: 'status', required: false, enum: Order_status, isArray: true })
   @ApiQuery({ name: 'date', required: false, type: String, description: 'Single day filter (YYYY-MM-DD)' })
   @ApiQuery({ name: 'start_day', required: false, type: String })
   @ApiQuery({ name: 'end_day', required: false, type: String })
@@ -353,7 +379,7 @@ export class OrderGatewayController {
   @ApiQuery({ name: 'limit', required: false, enum: [10, 25, 50, 100], schema: { default: 10 } as any })
   findAllExternal(
     @Query('market_id') market_id?: string,
-    @Query('status') status?: Order_status,
+    @Query('status') status?: string | string[],
     @Query('date') date?: string,
     @Query('start_day') start_day?: string,
     @Query('end_day') end_day?: string,
@@ -375,6 +401,8 @@ export class OrderGatewayController {
 
     const pagination = this.parsePaginationQuery(page, limit);
 
+    const statuses = this.parseStatusQuery(status);
+
     return firstValueFrom(
       this.orderClient
         .send(
@@ -382,7 +410,7 @@ export class OrderGatewayController {
           {
             query: {
               market_id: resolvedMarketId,
-              status,
+              status: statuses,
               start_day: resolvedStartDay,
               end_day: resolvedEndDay,
               page: pagination.page,
@@ -478,7 +506,7 @@ export class OrderGatewayController {
   @ApiOperation({ summary: 'List orders with filters' })
   @ApiQuery({ name: 'market_id', required: false, type: String })
   @ApiQuery({ name: 'customer_id', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, enum: Order_status })
+  @ApiQuery({ name: 'status', required: false, enum: Order_status, isArray: true })
   @ApiQuery({ name: 'search', required: false, type: String, description: 'Customer name/family/phone search' })
   @ApiQuery({ name: 'start_day', required: false, type: String, description: 'Start date (YYYY-MM-DD or ISO)' })
   @ApiQuery({ name: 'end_day', required: false, type: String, description: 'End date (YYYY-MM-DD or ISO)' })
@@ -489,7 +517,7 @@ export class OrderGatewayController {
   findAll(
     @Query('market_id') market_id?: string,
     @Query('customer_id') customer_id?: string,
-    @Query('status') status?: Order_status,
+    @Query('status') status?: string | string[],
     @Query('search') search?: string,
     @Query('start_day') start_day?: string,
     @Query('end_day') end_day?: string,
@@ -511,11 +539,13 @@ export class OrderGatewayController {
 
     const pagination = this.parsePaginationQuery(page, limit);
 
+    const statuses = this.parseStatusQuery(status);
+
     const payload = {
       query: {
         market_id: resolvedMarketId,
         customer_id,
-        status,
+        status: statuses,
         search,
         start_day,
         end_day,
@@ -564,14 +594,14 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Legacy courier orders list endpoint' })
-  @ApiQuery({ name: 'status', required: false, enum: Order_status })
+  @ApiQuery({ name: 'status', required: false, enum: Order_status, isArray: true })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'startDate', required: false, type: String, description: 'Legacy start date (YYYY-MM-DD or ISO)' })
   @ApiQuery({ name: 'endDate', required: false, type: String, description: 'Legacy end date (YYYY-MM-DD or ISO)' })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1, schema: { default: 1, minimum: 1 } as any })
   @ApiQuery({ name: 'limit', required: false, enum: [10, 25, 50, 100], schema: { default: 10 } as any })
   async findCourierOrdersLegacy(
-    @Query('status') status?: Order_status,
+    @Query('status') status?: string | string[],
     @Query('search') search?: string,
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
@@ -610,11 +640,13 @@ export class OrderGatewayController {
       );
     }
 
+    const statuses = this.parseStatusQuery(status);
+
     const payload = {
       query: {
         post_ids: courierPostIds,
-        status,
-        exclude_statuses: status
+        status: statuses,
+        exclude_statuses: statuses?.length
           ? undefined
           : [
               Order_status.CREATED,
@@ -731,16 +763,11 @@ export class OrderGatewayController {
   @ApiOperation({ summary: 'Get order by QR code (Post Control style)' })
   @ApiParam({ name: 'token', description: 'Order QR token' })
   findByQrCode(@Param('token') token: string) {
-    return firstValueFrom(
-      this.orderClient
-        .send({ cmd: 'order.find_by_qr' }, { token })
-        .pipe(timeout(8000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
-      }
-      throw error;
-    });
+    return this.sendOrderWithFallback(
+      { cmd: 'order.find_by_qr_enriched' },
+      { cmd: 'order.find_by_qr' },
+      { token },
+    );
   }
 
   @Get(':id/tracking')

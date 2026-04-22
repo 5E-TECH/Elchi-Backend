@@ -15,6 +15,12 @@ describe('ApiGatewayController', () => {
             send: jest.fn().mockReturnValue(of({ ok: true })),
           },
         },
+        {
+          provide: 'FINANCE',
+          useValue: {
+            send: jest.fn().mockReturnValue(of({ ok: true })),
+          },
+        },
       ],
     }).compile();
 

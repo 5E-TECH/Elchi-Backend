@@ -236,6 +236,32 @@ export class OrderServiceService {
     };
   }
 
+  private normalizeStatusFilter(
+    status?: Order_status | Order_status[] | string | string[],
+  ): Order_status[] | undefined {
+    if (status == null) {
+      return undefined;
+    }
+
+    const rawValues = Array.isArray(status) ? status : [status];
+    const flattened = rawValues
+      .flatMap((value) => String(value).split(','))
+      .map((value) => value.trim().toLowerCase())
+      .filter(Boolean);
+
+    if (!flattened.length) {
+      return undefined;
+    }
+
+    const allowedStatuses = new Set(Object.values(Order_status));
+    const invalidValues = flattened.filter((value) => !allowedStatuses.has(value as Order_status));
+    if (invalidValues.length) {
+      this.badRequest(`Invalid status value(s): ${invalidValues.join(', ')}`);
+    }
+
+    return Array.from(new Set(flattened)) as Order_status[];
+  }
+
   private analyticsDateRange(startDate?: string, endDate?: string) {
     const UZB_OFFSET_MS = 5 * 60 * 60 * 1000;
 
@@ -968,6 +994,7 @@ export class OrderServiceService {
     region_id?: string | null;
     address?: string | null;
     qr_code_token?: string | null;
+    parent_order_id?: string | null;
     external_id?: string | null;
     source?: Order_source;
     items?: Array<{ product_id: string; quantity?: number }>;
@@ -1002,7 +1029,8 @@ export class OrderServiceService {
         district_id: dto.district_id ?? null,
         region_id: dto.region_id ?? null,
         address: dto.address ?? null,
-        qr_code_token: dto.qr_code_token ?? null,
+        qr_code_token: dto.qr_code_token ?? this.generateCustomToken(),
+        parent_order_id: dto.parent_order_id ?? null,
         external_id: dto.external_id ?? null,
         source: dto.source ?? Order_source.INTERNAL,
         isDeleted: false,
@@ -1059,7 +1087,7 @@ export class OrderServiceService {
     exclude_statuses?: Order_status[];
     canceled_post_id?: string;
     qr_code_token?: string;
-    status?: Order_status;
+    status?: Order_status | Order_status[] | string | string[];
     return_requested?: boolean;
     start_day?: string;
     end_day?: string;
@@ -1100,6 +1128,7 @@ export class OrderServiceService {
       String(fetchAll).toLowerCase() === 'true';
 
     const pagination = this.normalizePagination(page, limit, useFetchAll);
+    const statusFilter = this.normalizeStatusFilter(status);
 
     const qb = this.orderRepo
       .createQueryBuilder('order')
@@ -1126,8 +1155,8 @@ export class OrderServiceService {
     if (qr_code_token) {
       qb.andWhere('order.qr_code_token = :qr_code_token', { qr_code_token });
     }
-    if (status) {
-      qb.andWhere('order.status = :status', { status });
+    if (statusFilter?.length) {
+      qb.andWhere('order.status IN (:...statuses)', { statuses: statusFilter });
     } else if (exclude_statuses?.length) {
       qb.andWhere('order.status NOT IN (:...exclude_statuses)', { exclude_statuses });
     }
@@ -1230,7 +1259,7 @@ export class OrderServiceService {
 
   async findAllExternal(query: {
     market_id?: string;
-    status?: Order_status;
+    status?: Order_status | Order_status[] | string | string[];
     start_day?: string;
     end_day?: string;
     page?: number;
@@ -2304,14 +2333,15 @@ export class OrderServiceService {
         district_id: order.district_id ?? null,
         region_id: order.region_id ?? null,
         address: order.address ?? null,
-        qr_code_token: null,
+        qr_code_token: `CANCEL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+        parent_order_id: String(order.id),
         items: cancelledItems,
       });
 
       refreshedOrder.product_quantity = newQty;
     }
 
-    return successRes({}, 200, 'Order partly sold');
+    return successRes({}, 200, 'Order qisman sotildi');
   }
 
   async findById(id: string) {
@@ -2344,6 +2374,18 @@ export class OrderServiceService {
       this.notFound('Order not found');
     }
     return successRes(order, 200, 'Order by QR code');
+  }
+
+  async findByQrCodeEnriched(token: string) {
+    const result = await this.findByQrCode(token);
+    const order = (result as { data?: Order })?.data;
+
+    if (!order) {
+      return result;
+    }
+
+    const enriched = await this.enrichOrders([order]);
+    return successRes(enriched[0] ?? order, 200, 'Order by QR code');
   }
 
   async getTrackingByOrderId(id: string) {
@@ -2643,7 +2685,7 @@ export class OrderServiceService {
     customer_id?: string;
     post_ids?: string[];
     exclude_statuses?: Order_status[];
-    status?: Order_status;
+    status?: Order_status | Order_status[] | string | string[];
     search?: string;
     start_day?: string;
     end_day?: string;

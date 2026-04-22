@@ -2,12 +2,11 @@ import * as dotenv from 'dotenv';
 import { DataSource, DataSourceOptions } from 'typeorm';
 import { PostgresConnectionOptions } from 'typeorm/driver/postgres/PostgresConnectionOptions';
 
-dotenv.config({ path: '.env.production' });
-dotenv.config();
+dotenv.config({ path: '.env.production', override: true });
 
 const postgresUri = process.env.POSTGRES_URI;
 if (!postgresUri) {
-  throw new Error('POSTGRES_URI is required for db-prepare');
+  throw new Error('POSTGRES_URI is required for db-prepare (.env.production)');
 }
 
 type SchemaConfig = {

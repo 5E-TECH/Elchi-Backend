@@ -4,6 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import {
   Between,
   DataSource,
+  EntityManager,
   FindOptionsWhere,
   In,
   LessThanOrEqual,
@@ -270,6 +271,46 @@ export class FinanceServiceService implements OnModuleInit {
     return byUserType;
   }
 
+  private async getCashboxBySelectorWithManager(
+    manager: EntityManager,
+    selector: {
+      cashbox_id?: string;
+      user_id?: string;
+      cashbox_type?: Cashbox_type;
+    },
+  ) {
+    if (selector.cashbox_id) {
+      this.assertBigIntId(selector.cashbox_id, 'cashbox_id');
+      const byId = await manager.findOne(Cashbox, {
+        where: { id: selector.cashbox_id },
+      });
+      if (!byId) {
+        throw new NotFoundException('Cashbox not found');
+      }
+      return byId;
+    }
+
+    if (!selector.user_id || !selector.cashbox_type) {
+      throw new BadRequestException(
+        'Either cashbox_id OR (user_id + cashbox_type) is required',
+      );
+    }
+
+    this.assertBigIntId(selector.user_id, 'user_id');
+    const byUserType = await manager.findOne(Cashbox, {
+      where: {
+        user_id: selector.user_id,
+        cashbox_type: selector.cashbox_type,
+      },
+    });
+
+    if (!byUserType) {
+      throw new NotFoundException('Cashbox not found');
+    }
+
+    return byUserType;
+  }
+
   private updateBalancesByMethod(
     cashbox: Cashbox,
     amount: number,
@@ -395,50 +436,61 @@ export class FinanceServiceService implements OnModuleInit {
   async updateBalance(dto: UpdateCashboxBalanceDto) {
     try {
       this.assertPositiveAmount(Number(dto.amount));
-
       const paymentMethod = dto.payment_method ?? PaymentMethod.CASH;
-      const cashbox = await this.getCashboxBySelector({
-        cashbox_id: dto.cashbox_id,
-        user_id: dto.user_id,
-        cashbox_type: dto.cashbox_type,
-      });
+      const queryRunner = this.dataSource.createQueryRunner();
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
 
-      this.updateBalancesByMethod(
-        cashbox,
-        Number(dto.amount),
-        dto.operation_type,
-        paymentMethod,
-      );
+      try {
+        const cashbox = await this.getCashboxBySelectorWithManager(queryRunner.manager, {
+          cashbox_id: dto.cashbox_id,
+          user_id: dto.user_id,
+          cashbox_type: dto.cashbox_type,
+        });
 
-      const savedCashbox = await this.cashboxRepo.save(cashbox);
+        this.updateBalancesByMethod(
+          cashbox,
+          Number(dto.amount),
+          dto.operation_type,
+          paymentMethod,
+        );
 
-      const history = this.historyRepo.create({
-        operation_type: dto.operation_type,
-        cashbox_id: savedCashbox.id,
-        source_type: dto.source_type,
-        source_id: dto.source_id ?? null,
-        source_user_id: dto.source_user_id ?? null,
-        amount: Number(dto.amount),
-        balance_after: savedCashbox.balance,
-        payment_method: paymentMethod,
-        comment: dto.comment ?? null,
-        created_by: dto.created_by ?? null,
-        payment_date:
-          dto.payment_date != null
-            ? this.parseDate(String(dto.payment_date)) ?? null
-            : null,
-      });
+        const savedCashbox = await queryRunner.manager.save(cashbox);
 
-      const savedHistory = await this.historyRepo.save(history);
+        const history = queryRunner.manager.create(CashboxHistory, {
+          operation_type: dto.operation_type,
+          cashbox_id: savedCashbox.id,
+          source_type: dto.source_type,
+          source_id: dto.source_id ?? null,
+          source_user_id: dto.source_user_id ?? null,
+          amount: Number(dto.amount),
+          balance_after: savedCashbox.balance,
+          payment_method: paymentMethod,
+          comment: dto.comment ?? null,
+          created_by: dto.created_by ?? null,
+          payment_date:
+            dto.payment_date != null
+              ? this.parseDate(String(dto.payment_date)) ?? null
+              : null,
+        });
 
-      return this.successRes(
-        {
-          cashbox: savedCashbox,
-          history: savedHistory,
-        },
-        200,
-        'Cashbox balance updated',
-      );
+        const savedHistory = await queryRunner.manager.save(history);
+        await queryRunner.commitTransaction();
+
+        return this.successRes(
+          {
+            cashbox: savedCashbox,
+            history: savedHistory,
+          },
+          200,
+          'Cashbox balance updated',
+        );
+      } catch (error) {
+        await queryRunner.rollbackTransaction();
+        throw error;
+      } finally {
+        await queryRunner.release();
+      }
     } catch (error) {
       this.toRpcError(error);
     }

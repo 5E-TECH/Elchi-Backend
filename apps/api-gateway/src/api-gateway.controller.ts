@@ -13,7 +13,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { Roles as RoleEnum } from '@app/common';
+import { Cashbox_type, Roles as RoleEnum } from '@app/common';
 import { firstValueFrom } from 'rxjs';
 import {
   ApiBearerAuth,
@@ -50,6 +50,7 @@ interface JwtUser {
 export class ApiGatewayController {
   constructor(
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    @Inject('FINANCE') private readonly financeClient: ClientProxy,
   ) {}
 
   private toRequester(req: { user: JwtUser }) {
@@ -57,6 +58,25 @@ export class ApiGatewayController {
       id: req.user.sub,
       roles: req.user.roles ?? [],
     };
+  }
+
+  private async findUserCashbox(userId: string, cashboxType: Cashbox_type) {
+    try {
+      const response = await firstValueFrom(
+        this.financeClient.send(
+          { cmd: 'finance.cashbox.find_by_user' },
+          { user_id: String(userId), cashbox_type: cashboxType },
+        ),
+      );
+
+      if (Array.isArray(response?.data)) {
+        return response.data.find((cashbox: any) => cashbox?.cashbox_type === cashboxType) ?? null;
+      }
+
+      return response?.data ?? null;
+    } catch {
+      return null;
+    }
   }
 
   @Get()
@@ -134,7 +154,7 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({ description: 'Courier list' })
-  getCouriers(
+  async getCouriers(
     @Query('search') search?: string,
     @Query('status') status?: string,
     @Query('region_id') region_id?: string,
@@ -143,18 +163,34 @@ export class ApiGatewayController {
     @Query('limit') limit?: string,
   ) {
     const resolvedRegionId = region_id ?? regionId;
-    return this.identityClient.send(
-      { cmd: 'identity.courier.find_all' },
-      {
-        query: {
-          search,
-          status,
-          region_id: resolvedRegionId,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
+    const response = await firstValueFrom(
+      this.identityClient.send(
+        { cmd: 'identity.courier.find_all' },
+        {
+          query: {
+            search,
+            status,
+            region_id: resolvedRegionId,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
         },
-      },
+      ),
     );
+
+    const items = Array.isArray(response?.data?.items) ? response.data.items : [];
+    if (!items.length) {
+      return response;
+    }
+
+    response.data.items = await Promise.all(
+      items.map(async (courier: any) => ({
+        ...courier,
+        cashbox: await this.findUserCashbox(String(courier?.id ?? ''), Cashbox_type.FOR_COURIER),
+      })),
+    );
+
+    return response;
   }
 
   @Get('couriers/region/:id')
@@ -331,23 +367,39 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({ description: 'Market list' })
-  getMarkets(
+  async getMarkets(
     @Query('search') search?: string,
     @Query('status') status?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.identityClient.send(
-      { cmd: 'identity.market.find_all' },
-      {
-        query: {
-          search,
-          status,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
+    const response = await firstValueFrom(
+      this.identityClient.send(
+        { cmd: 'identity.market.find_all' },
+        {
+          query: {
+            search,
+            status,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
         },
-      },
+      ),
     );
+
+    const items = Array.isArray(response?.data?.items) ? response.data.items : [];
+    if (!items.length) {
+      return response;
+    }
+
+    response.data.items = await Promise.all(
+      items.map(async (market: any) => ({
+        ...market,
+        cashbox: await this.findUserCashbox(String(market?.id ?? ''), Cashbox_type.FOR_MARKET),
+      })),
+    );
+
+    return response;
   }
 
   @Patch('markets/:id/add-order')
