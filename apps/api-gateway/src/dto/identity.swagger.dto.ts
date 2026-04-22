@@ -39,6 +39,8 @@ export class CreateAdminRequestDto {
   payment_day?: number;
 }
 
+export class CreateRegistratorRequestDto extends CreateAdminRequestDto {}
+
 export class UpdateAdminRequestDto {
   @ApiPropertyOptional({ example: 'Admin User Updated' })
   @IsOptional()

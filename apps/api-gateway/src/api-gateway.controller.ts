@@ -34,6 +34,7 @@ import {
   CreateAdminRequestDto,
   CreateCourierRequestDto,
   CreateMarketRequestDto,
+  CreateRegistratorRequestDto,
   UpdateAdminRequestDto,
   UpdateMarketAddOrderRequestDto,
   UpdateUserStatusRequestDto,
@@ -97,6 +98,54 @@ export class ApiGatewayController {
     return this.identityClient.send(
       { cmd: 'identity.user.create' },
       { dto, requester: this.toRequester(req) },
+    );
+  }
+
+  @Post('registrators')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Create registrator' })
+  @ApiBody({ type: CreateRegistratorRequestDto })
+  @ApiCreatedResponse({ description: 'Registrator created' })
+  @ApiConflictResponse({ description: 'Conflict' })
+  createRegistrator(
+    @Body() dto: CreateRegistratorRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.identityClient.send(
+      { cmd: 'identity.registrator.create' },
+      { dto, requester: this.toRequester(req) },
+    );
+  }
+
+  @Get('registrators')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List registrators with filtering and pagination' })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiOkResponse({ description: 'Registrator list' })
+  getRegistrators(
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.identityClient.send(
+      { cmd: 'identity.user.find_all' },
+      {
+        query: {
+          role: RoleEnum.REGISTRATOR,
+          search,
+          status,
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+        },
+      },
     );
   }
 

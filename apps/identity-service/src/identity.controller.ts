@@ -101,6 +101,13 @@ export class IdentityController {
     );
   }
 
+  @MessagePattern({ cmd: 'identity.registrator.create' })
+  createRegistrator(@Payload() payload: CreateUserPayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.userService.createRegistrator(payload.dto, payload.requester),
+    );
+  }
+
   @MessagePattern({ cmd: 'identity.courier.create' })
   createCourier(@Payload() payload: CreateCourierPayload, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.userService.createCourier(payload.dto));
