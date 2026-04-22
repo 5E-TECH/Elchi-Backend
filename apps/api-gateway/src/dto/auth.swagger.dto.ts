@@ -6,7 +6,7 @@ export class LoginRequestDto {
   @IsPhoneNumber('UZ')
   phone_number!: string;
 
-  @ApiProperty({ example: 'ShodiyorAdmin#2026' })
+  @ApiProperty({ example: '0990' })
   @IsString()
   @MinLength(4)
   password!: string;

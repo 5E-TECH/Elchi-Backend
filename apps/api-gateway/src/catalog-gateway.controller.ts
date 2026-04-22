@@ -12,10 +12,11 @@ import {
   Post,
   Query,
   Req,
+  UploadedFile,
   UseInterceptors,
   UseGuards,
 } from '@nestjs/common';
-import { AnyFilesInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { Roles as RoleEnum } from '@app/common';
@@ -29,6 +30,7 @@ import {
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
+import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
@@ -45,7 +47,50 @@ interface JwtUser {
 @ApiTags('Products')
 @Controller('product')
 export class CatalogGatewayController {
-  constructor(@Inject('CATALOG') private readonly catalogClient: ClientProxy) {}
+  private readonly allowedMime = new Set<string>([
+    'image/png',
+    'image/jpeg',
+    'image/jpg',
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ]);
+
+  constructor(
+    @Inject('CATALOG') private readonly catalogClient: ClientProxy,
+    @Inject('FILE') private readonly fileClient: ClientProxy,
+  ) {}
+
+  private async uploadImageAndResolveUrl(file: {
+    originalname: string;
+    mimetype: string;
+    buffer: Buffer;
+  }): Promise<string> {
+    if (!this.allowedMime.has(file.mimetype)) {
+      throw new BadRequestException('Unsupported file type');
+    }
+
+    const uploadResponse = await firstValueFrom(
+      this.fileClient
+        .send(
+          { cmd: 'file.upload' },
+          {
+            file_name: file.originalname,
+            mime_type: file.mimetype,
+            file_base64: file.buffer.toString('base64'),
+            folder: 'products',
+          },
+        )
+        .pipe(timeout(8000)),
+    );
+
+    const payload = uploadResponse?.data ?? uploadResponse;
+    const resolvedUrl = payload?.url;
+    if (!resolvedUrl || typeof resolvedUrl !== 'string') {
+      throw new BadRequestException('Image upload failed');
+    }
+
+    return resolvedUrl;
+  }
 
   @Get('health')
   @ApiOperation({ summary: 'Catalog service health check' })
@@ -61,8 +106,18 @@ export class CatalogGatewayController {
   @ApiCreatedResponse({ description: 'Product created successfully' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({ type: CreateProductRequestDto })
-  @UseInterceptors(AnyFilesInterceptor())
-  create(
+  @UseInterceptors(
+    FileInterceptor('image', {
+      storage: memoryStorage(),
+      limits: { fileSize: 10 * 1024 * 1024 },
+    }),
+  )
+  async create(
+    @UploadedFile() file: {
+      originalname: string;
+      mimetype: string;
+      buffer: Buffer;
+    } | undefined,
     @Body() dto: { name?: string; image_url?: string; market_id?: string },
     @Req() req: { user: JwtUser },
   ) {
@@ -83,11 +138,16 @@ export class CatalogGatewayController {
       throw new ForbiddenException('You are not allowed to create product');
     }
 
+    let imageUrl = dto.image_url;
+    if (file) {
+      imageUrl = await this.uploadImageAndResolveUrl(file);
+    }
+
     return firstValueFrom(
       this.catalogClient
         .send(
           { cmd: 'catalog.product.create' },
-          { dto: { name: dto.name, image_url: dto.image_url, user_id: marketId } },
+          { dto: { name: dto.name, image_url: imageUrl, user_id: marketId } },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -168,13 +228,34 @@ export class CatalogGatewayController {
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update product (admin/registrator)' })
+  @ApiConsumes('multipart/form-data')
   @ApiParam({ name: 'id', description: 'Product ID (id)' })
   @ApiBody({ type: UpdateProductRequestDto })
-  update(
+  @UseInterceptors(
+    FileInterceptor('image', {
+      storage: memoryStorage(),
+      limits: { fileSize: 10 * 1024 * 1024 },
+    }),
+  )
+  async update(
     @Param('id') id: string,
+    @UploadedFile() file: {
+      originalname: string;
+      mimetype: string;
+      buffer: Buffer;
+    } | undefined,
     @Body() dto: UpdateProductRequestDto,
   ) {
-    return this.catalogClient.send({ cmd: 'catalog.product.update' }, { id, dto });
+    let imageUrl = dto.image_url;
+    if (file) {
+      imageUrl = await this.uploadImageAndResolveUrl(file);
+    }
+    const { image: _ignoredImage, ...safeDto } = dto;
+
+    return this.catalogClient.send(
+      { cmd: 'catalog.product.update' },
+      { id, dto: { ...safeDto, image_url: imageUrl } },
+    );
   }
 
   @Delete(':id')
@@ -195,17 +276,34 @@ export class CatalogGatewayController {
   @Roles(RoleEnum.MARKET)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update own product (market)' })
+  @ApiConsumes('multipart/form-data')
   @ApiParam({ name: 'id', description: 'Product ID (id)' })
   @ApiBody({ type: UpdateProductRequestDto })
-  updateMyProduct(
+  @UseInterceptors(
+    FileInterceptor('image', {
+      storage: memoryStorage(),
+      limits: { fileSize: 10 * 1024 * 1024 },
+    }),
+  )
+  async updateMyProduct(
     @Param('id') id: string,
+    @UploadedFile() file: {
+      originalname: string;
+      mimetype: string;
+      buffer: Buffer;
+    } | undefined,
     @Body() dto: UpdateProductRequestDto,
     @Req() req: { user: JwtUser },
   ) {
+    let imageUrl = dto.image_url;
+    if (file) {
+      imageUrl = await this.uploadImageAndResolveUrl(file);
+    }
+    const { image: _ignoredImage, ...safeDto } = dto;
+
     return this.catalogClient.send(
       { cmd: 'catalog.product.update_own' },
-      { id, user_id: req.user.sub, dto },
+      { id, user_id: req.user.sub, dto: { ...safeDto, image_url: imageUrl } },
     );
   }
 }
-console.log();
