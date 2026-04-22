@@ -87,11 +87,21 @@ export class FinanceGatewayController {
       return response;
     }
 
+    response.data.cashboxHistory = await this.attachCreatedByUsers(histories);
+
+    return response;
+  }
+
+  private async attachCreatedByUsers(histories: any[]) {
+    if (!Array.isArray(histories) || !histories.length) {
+      return histories;
+    }
+
     const createdByIds = Array.from(
       new Set(histories.map((item: any) => String(item?.created_by ?? '')).filter(Boolean)),
     );
     if (!createdByIds.length) {
-      return response;
+      return histories;
     }
 
     const users = await Promise.all(
@@ -110,12 +120,25 @@ export class FinanceGatewayController {
     );
 
     const usersMap = new Map(users);
-    response.data.cashboxHistory = histories.map((item: any) => ({
+    return histories.map((item: any) => ({
       ...item,
       createdByUser: usersMap.get(String(item?.created_by ?? '')) ?? null,
     }));
+  }
 
-    return response;
+  private async loadCashboxHistory(
+    cashboxId: string,
+    query: { page?: number; limit?: number },
+  ): Promise<any[]> {
+    if (!cashboxId) {
+      return [];
+    }
+    const historyResponse = await this.send(
+      { cmd: 'finance.history.find_all' },
+      { cashbox_id: cashboxId, page: query.page, limit: query.limit },
+    );
+    const histories = historyResponse?.data?.items ?? [];
+    return this.attachCreatedByUsers(histories);
   }
 
   @Get('health')
@@ -144,11 +167,46 @@ export class FinanceGatewayController {
   @ApiQuery({ name: 'with_history', required: false, type: Boolean })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  findCashboxByUser(
+  async findCashboxByUser(
     @Param('user_id') user_id: string,
     @Query() query: FindCashboxByUserQueryDto,
   ) {
-    return this.send({ cmd: 'finance.cashbox.find_by_user' }, { user_id, ...query });
+    const response = await this.send(
+      { cmd: 'finance.cashbox.find_by_user' },
+      { user_id, ...query },
+    );
+
+    const withHistory = query.with_history ?? true;
+    if (!withHistory) {
+      return response;
+    }
+
+    if (Array.isArray(response?.data)) {
+      response.data = await Promise.all(
+        response.data.map(async (cashbox: any) => ({
+          ...cashbox,
+          cashboxHistory: await this.loadCashboxHistory(String(cashbox?.id ?? ''), query),
+        })),
+      );
+      return response;
+    }
+
+    if (response?.data?.cashbox && Array.isArray(response?.data?.history)) {
+      response.data.cashboxHistory = await this.attachCreatedByUsers(response.data.history);
+      return response;
+    }
+
+    if (Array.isArray(response?.data?.history)) {
+      response.data.cashboxHistory = await this.attachCreatedByUsers(response.data.history);
+      return response;
+    }
+
+    if (response?.data?.id) {
+      response.data.cashboxHistory = await this.loadCashboxHistory(String(response.data.id), query);
+      return response;
+    }
+
+    return response;
   }
 
   @Patch('cashbox/balance')

@@ -73,6 +73,18 @@ export class UserServiceService implements OnModuleInit {
     this.forbidden('Bu amal uchun ruxsat yoq');
   }
 
+  private assertRequesterCanCreateRegistrator(requester?: RequesterContext) {
+    if (!requester) {
+      return;
+    }
+
+    if (this.hasRole(requester, Roles.SUPERADMIN) || this.hasRole(requester, Roles.ADMIN)) {
+      return;
+    }
+
+    this.forbidden('Bu amal uchun ruxsat yoq');
+  }
+
   private assertRequesterCanMutateUser(
     requester: RequesterContext | undefined,
     targetRole: Roles,
@@ -346,6 +358,31 @@ export class UserServiceService implements OnModuleInit {
     const saved = await this.users.save(admin);
     void this.syncUserToSearch(saved);
     return successRes(this.sanitize(saved), 201, 'Admin yaratildi');
+  }
+
+  async createRegistrator(dto: CreateAdminDto, requester?: RequesterContext) {
+    this.assertRequesterCanCreateRegistrator(requester);
+
+    await this.ensurePhoneUnique(dto.phone_number);
+    await this.ensureUsernameUnique(dto.phone_number);
+
+    const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
+
+    const registrator = this.users.create({
+      name: dto.name,
+      phone_number: dto.phone_number,
+      username: dto.phone_number,
+      password: hashedPassword,
+      salary: dto.salary,
+      payment_day: dto.payment_day ?? new Date().getDate(),
+      role: Roles.REGISTRATOR,
+      status: Status.ACTIVE,
+      isDeleted: false,
+    });
+
+    const saved = await this.users.save(registrator);
+    void this.syncUserToSearch(saved);
+    return successRes(this.sanitize(saved), 201, "Ro'yxatchi yaratildi");
   }
 
   async updateAdmin(id: string, dto: UpdateUserDto) {
