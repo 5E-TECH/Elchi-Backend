@@ -234,6 +234,17 @@ export class FinanceServiceService implements OnModuleInit {
     }
   }
 
+  private async syncMarketPaymentsSafely(marketId: string, amount: number) {
+    try {
+      await this.applyPaymentToOrders(marketId, amount);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'unknown sync error';
+      console.warn(
+        `[finance] transfer committed, but order sync failed (market_id=${marketId}, amount=${amount}): ${message}`,
+      );
+    }
+  }
+
   private async getCashboxBySelector(selector: {
     cashbox_id?: string;
     user_id?: string;
@@ -956,6 +967,7 @@ export class FinanceServiceService implements OnModuleInit {
   }) {
     try {
       const update = await this.updateBalance({
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
         amount: data.amount,
         operation_type: Operation_type.EXPENSE,
         source_type: Source_type.MANUAL_EXPENSE,
@@ -978,6 +990,7 @@ export class FinanceServiceService implements OnModuleInit {
   }) {
     try {
       const update = await this.updateBalance({
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
         amount: data.amount,
         operation_type: Operation_type.INCOME,
         source_type: Source_type.MANUAL_INCOME,
@@ -1119,7 +1132,7 @@ export class FinanceServiceService implements OnModuleInit {
       await queryRunner.commitTransaction();
 
       if (data.payment_method === PaymentMethod.CLICK_TO_MARKET && data.market_id) {
-        await this.applyPaymentToOrders(data.market_id, Number(data.amount));
+        await this.syncMarketPaymentsSafely(data.market_id, Number(data.amount));
       }
 
       return this.successRes(
@@ -1223,7 +1236,7 @@ export class FinanceServiceService implements OnModuleInit {
       );
 
       await queryRunner.commitTransaction();
-      await this.applyPaymentToOrders(data.market_id, Number(data.amount));
+      await this.syncMarketPaymentsSafely(data.market_id, Number(data.amount));
 
       return this.successRes({}, 200, `Marketga ${data.amount} so'm to'landi`);
     } catch (error) {
