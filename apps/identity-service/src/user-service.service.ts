@@ -551,14 +551,14 @@ export class UserServiceService implements OnModuleInit {
   async findAllAdmins(query: UserFilterQuery = {}) {
     const { search, role, status, region_id, page, limit, skip } = this.normalizeQuery(query);
 
-    const qb = this.users
+    const baseQb = this.users
       .createQueryBuilder('admin')
       .where('admin.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('admin.role != :superadminRole', { superadminRole: Roles.SUPERADMIN })
       .andWhere('admin.role != :customerRole', { customerRole: Roles.CUSTOMER });
 
     if (search) {
-      qb.andWhere(
+      baseQb.andWhere(
         new Brackets((nested) => {
           nested
             .where('admin.name ILIKE :search', { search: `%${search}%` })
@@ -568,23 +568,41 @@ export class UserServiceService implements OnModuleInit {
       );
     }
 
-    if (role) {
-      qb.andWhere('admin.role = :role', { role });
-    }
-
     if (status) {
-      qb.andWhere('admin.status = :status', { status });
+      baseQb.andWhere('admin.status = :status', { status });
     }
 
     if (region_id) {
-      qb.andWhere('admin.region_id = :region_id', { region_id });
+      baseQb.andWhere('admin.region_id = :region_id', { region_id });
     }
 
-    const [rows, total] = await qb
+    const listQb = baseQb.clone();
+    if (role) {
+      listQb.andWhere('admin.role = :role', { role });
+    }
+
+    const [rows, total] = await listQb
+      .clone()
       .orderBy('admin.createdAt', 'DESC')
       .skip(skip)
       .take(limit)
       .getManyAndCount();
+
+    const [totalMarket, totalEmployees, totalUsers] = await Promise.all([
+      baseQb.clone().andWhere('admin.role = :marketRole', { marketRole: Roles.MARKET }).getCount(),
+      baseQb
+        .clone()
+        .andWhere('admin.role IN (:...employeeRoles)', {
+          employeeRoles: [
+            Roles.ADMIN,
+            Roles.REGISTRATOR,
+            Roles.OPERATOR,
+            Roles.COURIER,
+          ],
+        })
+        .getCount(),
+      baseQb.clone().getCount(),
+    ]);
 
     return successRes({
       items: rows.map((row) => this.sanitize(row)),
@@ -593,6 +611,9 @@ export class UserServiceService implements OnModuleInit {
         limit,
         total,
         totalPages: Math.max(1, Math.ceil(total / limit)),
+        totalMarket,
+        totalEmployees,
+        totalUsers,
       },
     });
   }
