@@ -967,6 +967,7 @@ export class FinanceServiceService implements OnModuleInit {
   }) {
     try {
       const update = await this.updateBalance({
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
         amount: data.amount,
         operation_type: Operation_type.EXPENSE,
         source_type: Source_type.MANUAL_EXPENSE,
@@ -989,6 +990,7 @@ export class FinanceServiceService implements OnModuleInit {
   }) {
     try {
       const update = await this.updateBalance({
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
         amount: data.amount,
         operation_type: Operation_type.INCOME,
         source_type: Source_type.MANUAL_INCOME,
