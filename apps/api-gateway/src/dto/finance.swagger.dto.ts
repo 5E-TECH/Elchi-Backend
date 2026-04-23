@@ -58,18 +58,18 @@ export class FindCashboxByUserQueryDto {
   @IsBoolean()
   with_history?: boolean;
 
-  @ApiPropertyOptional({ example: 1 })
+  @ApiPropertyOptional({ example: 1, description: '0 yuborilsa pagination o‘chadi va hamma history qaytadi' })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
-  @Min(1)
+  @Min(0)
   page?: number;
 
-  @ApiPropertyOptional({ example: 20 })
+  @ApiPropertyOptional({ example: 20, description: '0 yuborilsa pagination o‘chadi va hamma history qaytadi' })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
-  @Min(1)
+  @Min(0)
   limit?: number;
 }
 

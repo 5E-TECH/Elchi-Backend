@@ -509,8 +509,9 @@ export class FinanceServiceService implements OnModuleInit {
 
   async findAllHistory(dto: FindHistoryDto) {
     try {
-      const page = dto.page && dto.page > 0 ? dto.page : 1;
-      const limit = dto.limit && dto.limit > 0 ? dto.limit : 20;
+      const noPagination = dto.page === 0 || dto.limit === 0;
+      const page = noPagination ? 0 : dto.page && dto.page > 0 ? dto.page : 1;
+      const limit = noPagination ? 0 : dto.limit && dto.limit > 0 ? dto.limit : 20;
 
       const where: FindOptionsWhere<CashboxHistory> = {};
 
@@ -574,8 +575,12 @@ export class FinanceServiceService implements OnModuleInit {
         where,
         relations: ['cashbox'],
         order: { createdAt: 'DESC' },
-        skip: (page - 1) * limit,
-        take: limit,
+        ...(noPagination
+          ? {}
+          : {
+              skip: (page - 1) * limit,
+              take: limit,
+            }),
       });
 
       return this.successRes(
@@ -585,7 +590,7 @@ export class FinanceServiceService implements OnModuleInit {
             total,
             page,
             limit,
-            totalPages: Math.ceil(total / limit),
+            totalPages: noPagination ? (total > 0 ? 1 : 0) : Math.ceil(total / limit),
           },
         },
         200,

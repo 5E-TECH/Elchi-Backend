@@ -40,11 +40,11 @@ export class FindHistoryDto {
 
   @IsOptional()
   @IsNumber()
-  @Min(1)
+  @Min(0)
   page?: number;
 
   @IsOptional()
   @IsNumber()
-  @Min(1)
+  @Min(0)
   limit?: number;
 }
