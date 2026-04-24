@@ -18,6 +18,7 @@ import { UserSalary } from './entities/user-salary.entity';
     }),
     RmqModule,
     RmqModule.register({ name: 'ORDER' }),
+    RmqModule.register({ name: 'IDENTITY' }),
     DatabaseModule,
     TypeOrmModule.forFeature([Cashbox, CashboxHistory, Shift, UserSalary]),
   ],

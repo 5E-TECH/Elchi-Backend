@@ -151,6 +151,16 @@ export class FindHistoryQueryDto {
   @Matches(/^\d+$/)
   user_id?: string;
 
+  @ApiPropertyOptional({ enum: Cashbox_type, description: 'Snake_case filter' })
+  @IsOptional()
+  @IsEnum(Cashbox_type)
+  cashbox_type?: Cashbox_type;
+
+  @ApiPropertyOptional({ enum: Cashbox_type, description: 'CamelCase filter alias' })
+  @IsOptional()
+  @IsEnum(Cashbox_type)
+  cashboxType?: Cashbox_type;
+
   @ApiPropertyOptional({ enum: Operation_type })
   @IsOptional()
   @IsEnum(Operation_type)

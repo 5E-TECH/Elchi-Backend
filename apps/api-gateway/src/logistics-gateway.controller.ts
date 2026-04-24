@@ -254,8 +254,15 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Send post (assign orders to post)' })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   @ApiBody({ type: SendPostRequestDto })
-  sendPost(@Param('id') id: string, @Body() dto: SendPostRequestDto) {
-    return this.logisticsClient.send({ cmd: 'logistics.post.update' }, { id, dto });
+  sendPost(
+    @Param('id') id: string,
+    @Body() dto: SendPostRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.update' },
+      { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+    );
   }
 
   @Patch('post/reassign/:id')

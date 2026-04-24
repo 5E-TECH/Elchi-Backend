@@ -276,10 +276,16 @@ export class LogisticsServiceService implements OnModuleInit {
     }
   }
 
-  private async updateOrder(id: string, dto: Record<string, unknown>): Promise<void> {
+  private async updateOrder(
+    id: string,
+    dto: Record<string, unknown>,
+    requester?: { id: string; roles?: string[]; note?: string | null },
+  ): Promise<void> {
     try {
       await lastValueFrom(
-        this.orderClient.send({ cmd: 'order.update' }, { id, dto }).pipe(timeout(5000)),
+        this.orderClient
+          .send({ cmd: 'order.update' }, { id, dto, requester })
+          .pipe(timeout(5000)),
       );
     } catch {
       throw new RpcException(errorRes(`Order #${id} update failed`, 502));
@@ -828,7 +834,7 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes({ order: { id: orders[0].id } }, 200, "Order checked and it's exist");
   }
 
-  async sendPost(id: string, dto: SendPostDto) {
+  async sendPost(id: string, dto: SendPostDto, requester?: RequesterContext) {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) {
       this.notFound('Post not found');
@@ -855,6 +861,13 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest('Some selected orders are not inside this post');
     }
     const remainingIds = currentIds.filter((orderId) => !selectedIds.includes(orderId));
+    const trackingNote =
+      dto.description?.trim() ||
+      "Post jo'natildi: status received dan on_the_road ga o'tdi";
+    const trackingRequester =
+      requester && requester.id
+        ? { id: requester.id, roles: requester.roles ?? [], note: trackingNote }
+        : { id: 'system', roles: [], note: trackingNote };
 
     let selectedTotal = 0;
     let regionId = post.region_id;
@@ -892,7 +905,7 @@ export class LogisticsServiceService implements OnModuleInit {
         await this.updateOrder(orderId, {
           post_id: sentPost.id,
           status: Order_status.ON_THE_ROAD,
-        });
+        }, trackingRequester);
       }
 
       post.courier_id = '0';
@@ -921,7 +934,11 @@ export class LogisticsServiceService implements OnModuleInit {
 
     // If all orders selected, send current post as before.
     for (const orderId of selectedIds) {
-      await this.updateOrder(orderId, { post_id: id, status: Order_status.ON_THE_ROAD });
+      await this.updateOrder(
+        orderId,
+        { post_id: id, status: Order_status.ON_THE_ROAD },
+        trackingRequester,
+      );
     }
 
     post.courier_id = dto.courierId;

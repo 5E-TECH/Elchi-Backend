@@ -92,6 +92,11 @@ export class SendPostRequestDto {
   @IsNotEmpty()
   @IsNumberString()
   courierId!: string;
+
+  @ApiProperty({ example: "Post jo'natildi", required: false })
+  @IsOptional()
+  @IsString()
+  description?: string;
 }
 
 export class ReassignPostRequestDto {
