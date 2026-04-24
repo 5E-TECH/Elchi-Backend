@@ -196,11 +196,11 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.update' })
   updatePost(
-    @Payload() data: { id: string; dto: SendPostDto },
+    @Payload() data: { id: string; dto: SendPostDto; requester?: { id: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.logisticsService.sendPost(data.id, data.dto),
+      this.logisticsService.sendPost(data.id, data.dto, data.requester),
     );
   }
 

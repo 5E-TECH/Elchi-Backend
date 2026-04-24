@@ -341,6 +341,8 @@ export class FinanceGatewayController {
   @ApiOperation({ summary: 'Find cashbox history list' })
   @ApiQuery({ name: 'cashbox_id', required: false })
   @ApiQuery({ name: 'user_id', required: false })
+  @ApiQuery({ name: 'cashbox_type', required: false, enum: ['main', 'for_courier', 'for_market'] })
+  @ApiQuery({ name: 'cashboxType', required: false, enum: ['main', 'for_courier', 'for_market'] })
   @ApiQuery({ name: 'operation_type', required: false })
   @ApiQuery({ name: 'source_type', required: false })
   @ApiQuery({ name: 'created_by', required: false })

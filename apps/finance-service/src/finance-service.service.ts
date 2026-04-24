@@ -47,6 +47,7 @@ export class FinanceServiceService implements OnModuleInit {
     private readonly salaryRepo: Repository<UserSalary>,
     private readonly dataSource: DataSource,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
+    @Inject('IDENTITY') private readonly identityClient: ClientProxy,
   ) {}
 
   async onModuleInit() {
@@ -243,6 +244,81 @@ export class FinanceServiceService implements OnModuleInit {
         `[finance] transfer committed, but order sync failed (market_id=${marketId}, amount=${amount}): ${message}`,
       );
     }
+  }
+
+  private extractResponseData<T>(response: any): T | null {
+    if (response && typeof response === 'object' && 'data' in response) {
+      return (response.data ?? null) as T | null;
+    }
+    return (response ?? null) as T | null;
+  }
+
+  private async loadUsersByIds(ids: string[]) {
+    const uniqueIds = Array.from(
+      new Set(ids.map((id) => String(id ?? '').trim()).filter((id) => /^\d+$/.test(id))),
+    );
+
+    if (!uniqueIds.length) {
+      return new Map<string, any>();
+    }
+
+    const pairs = await Promise.all(
+      uniqueIds.map(async (id) => {
+        try {
+          const response = await rmqSend<any>(
+            this.identityClient,
+            { cmd: 'identity.user.find_by_id' },
+            { id },
+          );
+          return [id, this.extractResponseData<any>(response)] as const;
+        } catch {
+          return [id, null] as const;
+        }
+      }),
+    );
+
+    return new Map<string, any>(pairs);
+  }
+
+  private async enrichHistoryWithUsers(histories: CashboxHistory[]) {
+    if (!Array.isArray(histories) || !histories.length) {
+      return histories;
+    }
+
+    const ids: string[] = [];
+    for (const history of histories) {
+      if (history?.created_by) {
+        ids.push(String(history.created_by));
+      }
+      if (history?.cashbox?.user_id) {
+        ids.push(String(history.cashbox.user_id));
+      }
+    }
+
+    const usersMap = await this.loadUsersByIds(ids);
+
+    return histories.map((history) => {
+      const createdByUser =
+        history.created_by != null ? (usersMap.get(String(history.created_by)) ?? null) : null;
+
+      if (!history.cashbox) {
+        return {
+          ...history,
+          createdByUser,
+        };
+      }
+
+      const cashboxUser = usersMap.get(String(history.cashbox.user_id)) ?? null;
+
+      return {
+        ...history,
+        createdByUser,
+        cashbox: {
+          ...history.cashbox,
+          user: cashboxUser,
+        },
+      };
+    });
   }
 
   private async getCashboxBySelector(selector: {
@@ -512,6 +588,7 @@ export class FinanceServiceService implements OnModuleInit {
       const noPagination = dto.page === 0 || dto.limit === 0;
       const page = noPagination ? 0 : dto.page && dto.page > 0 ? dto.page : 1;
       const limit = noPagination ? 0 : dto.limit && dto.limit > 0 ? dto.limit : 20;
+      const historyCashboxType = dto.cashbox_type ?? dto.cashboxType;
 
       const where: FindOptionsWhere<CashboxHistory> = {};
 
@@ -533,6 +610,47 @@ export class FinanceServiceService implements OnModuleInit {
         this.assertBigIntId(dto.created_by, 'created_by');
         where.created_by = dto.created_by;
       }
+      if (historyCashboxType) {
+        const cashboxesByType = await this.cashboxRepo.find({
+          where: { cashbox_type: historyCashboxType },
+          select: ['id'],
+        });
+        if (!cashboxesByType.length) {
+          return this.successRes(
+            {
+              items: [],
+              pagination: {
+                total: 0,
+                page,
+                limit,
+                totalPages: 0,
+              },
+            },
+            200,
+            'Cashbox histories',
+          );
+        }
+        const typedIds = cashboxesByType.map((cashbox) => cashbox.id);
+        if (dto.cashbox_id) {
+          if (!typedIds.includes(dto.cashbox_id)) {
+            return this.successRes(
+              {
+                items: [],
+                pagination: {
+                  total: 0,
+                  page,
+                  limit,
+                  totalPages: 0,
+                },
+              },
+              200,
+              'Cashbox histories',
+            );
+          }
+        } else {
+          where.cashbox_id = In(typedIds);
+        }
+      }
 
       const from = this.parseDate(dto.from_date);
       const to = this.parseDate(dto.to_date);
@@ -548,7 +666,10 @@ export class FinanceServiceService implements OnModuleInit {
       if (dto.user_id) {
         this.assertBigIntId(dto.user_id, 'user_id');
         const userCashboxes = await this.cashboxRepo.find({
-          where: { user_id: dto.user_id },
+          where: {
+            user_id: dto.user_id,
+            ...(historyCashboxType ? { cashbox_type: historyCashboxType } : {}),
+          },
           select: ['id'],
         });
 
@@ -568,7 +689,26 @@ export class FinanceServiceService implements OnModuleInit {
           );
         }
 
-        where.cashbox_id = In(userCashboxes.map((c) => c.id));
+        const userCashboxIds = userCashboxes.map((cashbox) => cashbox.id);
+        if (dto.cashbox_id) {
+          if (!userCashboxIds.includes(dto.cashbox_id)) {
+            return this.successRes(
+              {
+                items: [],
+                pagination: {
+                  total: 0,
+                  page,
+                  limit,
+                  totalPages: 0,
+                },
+              },
+              200,
+              'Cashbox histories',
+            );
+          }
+        } else {
+          where.cashbox_id = In(userCashboxIds);
+        }
       }
 
       const [items, total] = await this.historyRepo.findAndCount({
@@ -582,10 +722,11 @@ export class FinanceServiceService implements OnModuleInit {
               take: limit,
             }),
       });
+      const enrichedItems = await this.enrichHistoryWithUsers(items);
 
       return this.successRes(
         {
-          items,
+          items: enrichedItems,
           pagination: {
             total,
             page,
@@ -632,10 +773,11 @@ export class FinanceServiceService implements OnModuleInit {
 
         order = orderResponse?.data ?? orderResponse ?? null;
       }
+      const [enrichedHistory] = await this.enrichHistoryWithUsers([history]);
 
       return this.successRes(
         {
-          ...history,
+          ...enrichedHistory,
           order,
         },
         200,

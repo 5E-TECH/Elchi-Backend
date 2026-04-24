@@ -69,6 +69,7 @@ export const financeValidationSchema = Joi.object({
   DB_SCHEMA: Joi.string().default('finance_schema'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_FINANCE_QUEUE: Joi.string().required(),
+  RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
 });
 
 export const notificationValidationSchema = Joi.object({

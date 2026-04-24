@@ -1,4 +1,4 @@
-import { IsArray, IsNotEmpty, IsString } from 'class-validator';
+import { IsArray, IsNotEmpty, IsOptional, IsString } from 'class-validator';
 
 export class SendPostDto {
   @IsNotEmpty()
@@ -9,4 +9,8 @@ export class SendPostDto {
   @IsNotEmpty()
   @IsString()
   courierId!: string;
+
+  @IsOptional()
+  @IsString()
+  description?: string;
 }
