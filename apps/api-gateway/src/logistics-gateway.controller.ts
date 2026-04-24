@@ -424,7 +424,7 @@ export class LogisticsGatewayController {
 
   @Get('post/return-requests/list')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List return requests grouped by courier' })
   getReturnRequests() {
@@ -433,27 +433,33 @@ export class LogisticsGatewayController {
 
   @Post('post/return-requests/approve')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Approve return requests' })
   @ApiBody({ type: ReturnRequestsActionRequestDto })
-  approveReturnRequests(@Body() dto: ReturnRequestsActionRequestDto) {
+  approveReturnRequests(
+    @Body() dto: ReturnRequestsActionRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.return_requests.approve' },
-      { dto },
+      { dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
     );
   }
 
   @Post('post/return-requests/reject')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Reject return requests' })
   @ApiBody({ type: ReturnRequestsActionRequestDto })
-  rejectReturnRequests(@Body() dto: ReturnRequestsActionRequestDto) {
+  rejectReturnRequests(
+    @Body() dto: ReturnRequestsActionRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.return_requests.reject' },
-      { dto },
+      { dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
     );
   }
 

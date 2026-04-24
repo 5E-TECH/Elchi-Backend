@@ -24,6 +24,7 @@ import { Order_status, Post_status, Roles, Where_deliver } from '@app/common';
 interface RequesterContext {
   id: string;
   roles?: string[];
+  note?: string | null;
 }
 
 interface OrderRow {
@@ -1092,7 +1093,7 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
-  async approveReturnRequests(dto: ReceivePostDto) {
+  async approveReturnRequests(dto: ReceivePostDto, requester?: RequesterContext) {
     const orderIds = [...new Set((dto.order_ids ?? []).map((id) => String(id)).filter(Boolean))];
     if (!orderIds.length) {
       this.badRequest('Order IDs required');
@@ -1161,6 +1162,10 @@ export class LogisticsServiceService implements OnModuleInit {
           status: Order_status.RECEIVED,
           return_requested: false,
           post_id: newPost.id,
+        }, {
+          id: requester?.id ?? 'system',
+          roles: requester?.roles ?? [],
+          note: requester?.note ?? "Qaytarish so'rovi tasdiqlandi — buyurtma pochtaga qaytarildi",
         });
         addedTotal += Number(order.total_price ?? 0);
       }
@@ -1178,7 +1183,7 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
-  async rejectReturnRequests(dto: ReceivePostDto) {
+  async rejectReturnRequests(dto: ReceivePostDto, requester?: RequesterContext) {
     const orderIds = [...new Set((dto.order_ids ?? []).map((id) => String(id)).filter(Boolean))];
     if (!orderIds.length) {
       this.badRequest('Order IDs required');
@@ -1191,7 +1196,15 @@ export class LogisticsServiceService implements OnModuleInit {
         order.status === Order_status.WAITING &&
         order.return_requested === true
       ) {
-        await this.updateOrder(order.id, { return_requested: false });
+        await this.updateOrder(
+          order.id,
+          { return_requested: false },
+          {
+            id: requester?.id ?? 'system',
+            roles: requester?.roles ?? [],
+            note: requester?.note ?? "Qaytarish so'rovi rad etildi — buyurtma kuryerda qoldi",
+          },
+        );
         rejected += 1;
       }
     }

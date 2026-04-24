@@ -271,21 +271,21 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.return_requests.approve' })
   approveReturnRequests(
-    @Payload() data: { dto: ReceivePostDto },
+    @Payload() data: { dto: ReceivePostDto; requester?: { id: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.logisticsService.approveReturnRequests(data.dto),
+      this.logisticsService.approveReturnRequests(data.dto, data.requester),
     );
   }
 
   @MessagePattern({ cmd: 'logistics.post.return_requests.reject' })
   rejectReturnRequests(
-    @Payload() data: { dto: ReceivePostDto },
+    @Payload() data: { dto: ReceivePostDto; requester?: { id: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.logisticsService.rejectReturnRequests(data.dto),
+      this.logisticsService.rejectReturnRequests(data.dto, data.requester),
     );
   }
 
