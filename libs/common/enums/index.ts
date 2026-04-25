@@ -15,6 +15,13 @@ export enum Status {
   INACTIVE = 'inactive',
 }
 
+export enum BranchType {
+  HQ = 'HQ',
+  CITY = 'CITY',
+  REGIONAL = 'REGIONAL',
+  DISTRICT = 'DISTRICT',
+}
+
 export enum PaymentMethod {
   CASH = 'cash',
   CLICK = 'click',

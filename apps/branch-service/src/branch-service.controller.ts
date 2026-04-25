@@ -49,6 +49,18 @@ export class BranchServiceController {
     return this.executeAndAck(context, () => this.branchService.findBranchById(data?.id));
   }
 
+  @MessagePattern({ cmd: 'branch.tree' })
+  findTree(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.branchService.findBranchTree());
+  }
+
+  @MessagePattern({ cmd: 'branch.descendants' })
+  findDescendants(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.findBranchDescendants(data?.id),
+    );
+  }
+
   @MessagePattern({ cmd: 'branch.update' })
   update(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>

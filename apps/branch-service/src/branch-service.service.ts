@@ -1,9 +1,9 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import { ClientProxy } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Status } from '@app/common';
+import { In, Repository } from 'typeorm';
+import { BranchType, Status } from '@app/common';
 import { Branch } from './entities/branch.entity';
 import { BranchUser } from './entities/branch-user.entity';
 import { BranchConfig } from './entities/branch-config.entity';
@@ -11,7 +11,9 @@ import { errorRes, successRes } from '../../../libs/common/helpers/response';
 import { lastValueFrom, timeout } from 'rxjs';
 
 @Injectable()
-export class BranchServiceService {
+export class BranchServiceService implements OnModuleInit {
+  private static readonly HQ_CODE = 'HQ-TSHKNT';
+
   constructor(
     @InjectRepository(Branch) private readonly branchRepo: Repository<Branch>,
     @InjectRepository(BranchUser) private readonly branchUserRepo: Repository<BranchUser>,
@@ -19,6 +21,10 @@ export class BranchServiceService {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
   ) {}
+
+  async onModuleInit() {
+    await this.ensureHqBranch();
+  }
 
   private notFound(message: string): never {
     throw new RpcException(errorRes(message, 404));
@@ -59,6 +65,151 @@ export class BranchServiceService {
       return null;
     }
     return String(value);
+  }
+
+  private parseBranchType(type?: string): BranchType {
+    const normalized = String(type ?? '').trim().toUpperCase();
+    if (!normalized || !Object.values(BranchType).includes(normalized as BranchType)) {
+      this.badRequest(`type must be one of: ${Object.values(BranchType).join(', ')}`);
+    }
+    return normalized as BranchType;
+  }
+
+  private normalizeBranchCode(code?: string | null): string {
+    const normalized = String(code ?? '').trim().toUpperCase();
+    if (!normalized) {
+      this.badRequest('code is required');
+    }
+    if (!/^[A-Z0-9-]{2,32}$/.test(normalized)) {
+      this.badRequest('code must match /^[A-Z0-9-]{2,32}$/');
+    }
+    return normalized;
+  }
+
+  private async ensureBranchCodeUnique(code: string, exceptId?: string): Promise<void> {
+    const exists = await this.branchRepo.findOne({
+      where: { code, isDeleted: false },
+    });
+    if (exists && exists.id !== exceptId) {
+      this.conflict('Branch with this code already exists');
+    }
+  }
+
+  private async getParentBranchOrThrow(parentId: string): Promise<Branch> {
+    const parent = await this.getBranchOrThrow(parentId);
+    if (parent.type === BranchType.DISTRICT) {
+      this.badRequest('DISTRICT branch cannot be a parent branch');
+    }
+    return parent;
+  }
+
+  private async ensureNotCyclicParent(branchId: string, parentId: string): Promise<void> {
+    if (branchId === parentId) {
+      this.badRequest('Branch cannot be parent of itself');
+    }
+
+    const visited = new Set<string>();
+    let currentId: string | null = parentId;
+
+    while (currentId) {
+      if (currentId === branchId) {
+        this.badRequest('Cyclic parent relation is not allowed');
+      }
+      if (visited.has(currentId)) {
+        this.badRequest('Cyclic parent relation is not allowed');
+      }
+      visited.add(currentId);
+      const current = await this.branchRepo.findOne({
+        where: { id: currentId, isDeleted: false },
+      });
+      if (!current) {
+        this.notFound('Parent branch not found');
+      }
+      currentId = current.parent_id ?? null;
+    }
+  }
+
+  private async hasActiveChildren(branchId: string): Promise<boolean> {
+    const childrenCount = await this.branchRepo.count({
+      where: { parent_id: branchId, isDeleted: false },
+    });
+    return childrenCount > 0;
+  }
+
+  private async rebalanceDescendantLevels(rootBranchId: string, rootLevel: number): Promise<void> {
+    const queue: Array<{ branchId: string; level: number }> = [{ branchId: rootBranchId, level: rootLevel }];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const children = await this.branchRepo.find({
+        where: { parent_id: current.branchId, isDeleted: false },
+      });
+
+      for (const child of children) {
+        const expectedLevel = current.level + 1;
+        if (child.level !== expectedLevel) {
+          child.level = expectedLevel;
+          await this.branchRepo.save(child);
+        }
+        queue.push({ branchId: child.id, level: expectedLevel });
+      }
+    }
+  }
+
+  private async getParentsByIds(ids: string[]): Promise<Map<string, Branch>> {
+    if (!ids.length) {
+      return new Map();
+    }
+
+    const parents = await this.branchRepo.find({
+      where: { id: In(ids), isDeleted: false },
+    });
+    return new Map(parents.map((parent) => [parent.id, parent]));
+  }
+
+  private async ensureHqBranch(): Promise<void> {
+    const hqByCode = await this.branchRepo.findOne({
+      where: { code: BranchServiceService.HQ_CODE, isDeleted: false },
+    });
+    if (hqByCode) {
+      if (hqByCode.type !== BranchType.HQ || hqByCode.level !== 0 || hqByCode.parent_id !== null) {
+        hqByCode.type = BranchType.HQ;
+        hqByCode.level = 0;
+        hqByCode.parent_id = null;
+        await this.branchRepo.save(hqByCode);
+      }
+      return;
+    }
+
+    const anyHq = await this.branchRepo.findOne({
+      where: { type: BranchType.HQ, isDeleted: false },
+    });
+    if (anyHq) {
+      if (!anyHq.code) {
+        anyHq.code = BranchServiceService.HQ_CODE;
+      }
+      if (anyHq.parent_id !== null || anyHq.level !== 0) {
+        anyHq.parent_id = null;
+        anyHq.level = 0;
+      }
+      await this.branchRepo.save(anyHq);
+      return;
+    }
+
+    await this.branchRepo.save(
+      this.branchRepo.create({
+        name: 'HQ Toshkent',
+        address: 'Toshkent',
+        phone_number: null,
+        region_id: null,
+        district_id: null,
+        parent_id: null,
+        type: BranchType.HQ,
+        level: 0,
+        code: BranchServiceService.HQ_CODE,
+        status: Status.ACTIVE,
+        manager_id: null,
+      }),
+    );
   }
 
   private async getBranchOrThrow(id: string): Promise<Branch> {
@@ -203,6 +354,9 @@ export class BranchServiceService {
     phone_number?: string;
     region_id?: string | null;
     district_id?: string | null;
+    parent_id?: string | null;
+    type?: BranchType | string;
+    code?: string;
     status?: string;
     manager_id?: string | null;
   }) {
@@ -218,6 +372,31 @@ export class BranchServiceService {
       this.conflict('Branch with this name already exists');
     }
 
+    const type = this.parseBranchType(dto?.type);
+    const code = this.normalizeBranchCode(dto?.code);
+    await this.ensureBranchCodeUnique(code);
+
+    const parentId = this.normalizeNullableBigint(dto?.parent_id);
+    let level = 0;
+
+    if (type === BranchType.HQ) {
+      if (parentId) {
+        this.badRequest('HQ branch cannot have parent_id');
+      }
+      const existingHq = await this.branchRepo.findOne({
+        where: { type: BranchType.HQ, isDeleted: false },
+      });
+      if (existingHq) {
+        this.conflict('Only one HQ branch is allowed');
+      }
+    } else {
+      if (!parentId) {
+        this.badRequest('parent_id is required for non-HQ branches');
+      }
+      const parent = await this.getParentBranchOrThrow(parentId);
+      level = Number(parent.level) + 1;
+    }
+
     const saved = await this.branchRepo.save(
       this.branchRepo.create({
         name,
@@ -225,6 +404,10 @@ export class BranchServiceService {
         phone_number: String(dto?.phone_number ?? '').trim() || null,
         region_id: this.normalizeNullableBigint(dto?.region_id),
         district_id: this.normalizeNullableBigint(dto?.district_id),
+        parent_id: parentId,
+        type,
+        level,
+        code,
         manager_id: this.normalizeNullableBigint(dto?.manager_id),
         status: this.parseStatus(dto?.status) ?? Status.ACTIVE,
       }),
@@ -254,7 +437,7 @@ export class BranchServiceService {
 
     if (search) {
       qb.andWhere(
-        '(branch.name ILIKE :search OR branch.address ILIKE :search OR branch.phone_number ILIKE :search)',
+        '(branch.name ILIKE :search OR branch.code ILIKE :search OR branch.address ILIKE :search OR branch.phone_number ILIKE :search)',
         { search: `%${search}%` },
       );
     }
@@ -275,14 +458,23 @@ export class BranchServiceService {
           .filter((districtId): districtId is string => Boolean(districtId)),
       ),
     );
+    const parentIds = Array.from(
+      new Set(
+        items
+          .map((item) => item.parent_id)
+          .filter((parentId): parentId is string => Boolean(parentId)),
+      ),
+    );
 
     const regionMap = await this.getRegionsByIds(regionIds);
     const districtMap = await this.getDistrictsByIds(districtIds);
+    const parentMap = await this.getParentsByIds(parentIds);
 
     const enrichedItems = items.map((item) => ({
       ...item,
       region: item.region_id ? (regionMap.get(item.region_id) ?? null) : null,
       district: item.district_id ? (districtMap.get(item.district_id) ?? null) : null,
+      parent: item.parent_id ? (parentMap.get(item.parent_id) ?? null) : null,
     }));
 
     return successRes(
@@ -308,16 +500,87 @@ export class BranchServiceService {
     const districtMap = await this.getDistrictsByIds(
       branch.district_id ? [branch.district_id] : [],
     );
+    const parentMap = await this.getParentsByIds(
+      branch.parent_id ? [branch.parent_id] : [],
+    );
 
     return successRes(
       {
         ...branch,
         region: branch.region_id ? (regionMap.get(branch.region_id) ?? null) : null,
         district: branch.district_id ? (districtMap.get(branch.district_id) ?? null) : null,
+        parent: branch.parent_id ? (parentMap.get(branch.parent_id) ?? null) : null,
       },
       200,
       'Branch found',
     );
+  }
+
+  async findBranchTree() {
+    const branches = await this.branchRepo.find({
+      where: { isDeleted: false },
+      order: { level: 'ASC', createdAt: 'ASC' },
+    });
+
+    type BranchTreeNode = Branch & { children: BranchTreeNode[] };
+    const nodeMap = new Map<string, BranchTreeNode>();
+    const roots: BranchTreeNode[] = [];
+
+    branches.forEach((branch) => {
+      nodeMap.set(branch.id, { ...branch, children: [] });
+    });
+
+    branches.forEach((branch) => {
+      const node = nodeMap.get(branch.id)!;
+      const parentId = branch.parent_id ?? null;
+      if (!parentId) {
+        roots.push(node);
+        return;
+      }
+
+      const parent = nodeMap.get(parentId);
+      if (!parent) {
+        // If parent is missing (deleted/inconsistent), treat as root.
+        roots.push(node);
+        return;
+      }
+
+      parent.children.push(node);
+    });
+
+    return successRes(roots, 200, 'Branch tree');
+  }
+
+  async findBranchDescendants(id: string) {
+    const root = await this.getBranchOrThrow(id);
+    const branches = await this.branchRepo.find({
+      where: { isDeleted: false },
+      order: { level: 'ASC', createdAt: 'ASC' },
+    });
+
+    const childrenByParent = new Map<string, Branch[]>();
+    branches.forEach((branch) => {
+      if (!branch.parent_id) {
+        return;
+      }
+      const current = childrenByParent.get(branch.parent_id) ?? [];
+      current.push(branch);
+      childrenByParent.set(branch.parent_id, current);
+    });
+
+    const descendants: Branch[] = [];
+    const queue: string[] = [root.id];
+
+    while (queue.length > 0) {
+      const currentId = queue.shift()!;
+      const children = childrenByParent.get(currentId) ?? [];
+      for (const child of children) {
+        descendants.push(child);
+        queue.push(child.id);
+      }
+    }
+
+    return successRes(descendants, 200, 'Branch descendants');
   }
 
   async updateBranch(
@@ -329,6 +592,9 @@ export class BranchServiceService {
       phone_number?: string;
       region_id?: string | null;
       district_id?: string | null;
+      parent_id?: string | null;
+      type?: BranchType | string;
+      code?: string;
       status?: string;
       manager_id?: string | null;
     },
@@ -367,6 +633,50 @@ export class BranchServiceService {
       branch.district_id = this.normalizeNullableBigint(dto.district_id);
     }
 
+    const nextType = typeof dto?.type !== 'undefined' ? this.parseBranchType(dto.type) : branch.type;
+    const nextParentId =
+      typeof dto?.parent_id !== 'undefined'
+        ? this.normalizeNullableBigint(dto.parent_id)
+        : branch.parent_id;
+
+    if (typeof dto?.code !== 'undefined') {
+      const nextCode = this.normalizeBranchCode(dto.code);
+      await this.ensureBranchCodeUnique(nextCode, branch.id);
+      branch.code = nextCode;
+    }
+
+    if (nextType === BranchType.HQ) {
+      if (nextParentId) {
+        this.badRequest('HQ branch cannot have parent_id');
+      }
+
+      const existingHq = await this.branchRepo.findOne({
+        where: { type: BranchType.HQ, isDeleted: false },
+      });
+      if (existingHq && existingHq.id !== branch.id) {
+        this.conflict('Only one HQ branch is allowed');
+      }
+
+      branch.parent_id = null;
+      branch.level = 0;
+    } else {
+      if (!nextParentId) {
+        this.badRequest('parent_id is required for non-HQ branches');
+      }
+
+      await this.ensureNotCyclicParent(branch.id, nextParentId);
+      const parent = await this.getParentBranchOrThrow(nextParentId);
+
+      branch.parent_id = parent.id;
+      branch.level = Number(parent.level) + 1;
+    }
+
+    if (nextType === BranchType.DISTRICT && (await this.hasActiveChildren(branch.id))) {
+      this.badRequest('DISTRICT branch cannot have child branches');
+    }
+
+    branch.type = nextType;
+
     if (typeof dto?.manager_id !== 'undefined') {
       branch.manager_id = this.normalizeNullableBigint(dto.manager_id);
     }
@@ -376,11 +686,15 @@ export class BranchServiceService {
     }
 
     const saved = await this.branchRepo.save(branch);
+    await this.rebalanceDescendantLevels(saved.id, saved.level);
     return successRes(saved, 200, 'Branch updated');
   }
 
   async deleteBranch(id: string) {
     const branch = await this.getBranchOrThrow(id);
+    if (await this.hasActiveChildren(branch.id)) {
+      this.badRequest('Cannot delete branch with child branches');
+    }
     branch.isDeleted = true;
     branch.status = Status.INACTIVE;
     await this.branchRepo.save(branch);

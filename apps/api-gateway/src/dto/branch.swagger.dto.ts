@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsEnum, IsNumberString, IsOptional, IsString, MinLength } from 'class-validator';
+import { BranchType } from '@app/common';
+import { IsEnum, IsNumberString, IsOptional, IsString, Matches, MinLength } from 'class-validator';
 
 export class CreateBranchRequestDto {
   @ApiProperty({ example: 'Namangan filial' })
@@ -26,6 +27,19 @@ export class CreateBranchRequestDto {
   @IsOptional()
   @IsNumberString()
   district_id?: string;
+
+  @ApiPropertyOptional({ example: '1', description: 'Parent branch ID (bigint string)' })
+  @IsOptional()
+  @IsNumberString()
+  parent_id?: string;
+
+  @ApiProperty({ example: 'REGIONAL', enum: BranchType })
+  @IsEnum(BranchType)
+  type!: BranchType;
+
+  @ApiProperty({ example: 'SAM' })
+  @Matches(/^[A-Z0-9-]{2,32}$/)
+  code!: string;
 
   @ApiPropertyOptional({ example: 'active', enum: ['active', 'inactive'] })
   @IsOptional()
@@ -64,6 +78,21 @@ export class UpdateBranchRequestDto {
   @IsOptional()
   @IsNumberString()
   district_id?: string;
+
+  @ApiPropertyOptional({ example: '1', description: 'Parent branch ID (bigint string)' })
+  @IsOptional()
+  @IsNumberString()
+  parent_id?: string;
+
+  @ApiPropertyOptional({ example: 'CITY', enum: BranchType })
+  @IsOptional()
+  @IsEnum(BranchType)
+  type?: BranchType;
+
+  @ApiPropertyOptional({ example: 'TSH-CHL' })
+  @IsOptional()
+  @Matches(/^[A-Z0-9-]{2,32}$/)
+  code?: string;
 
   @ApiPropertyOptional({ example: 'active', enum: ['active', 'inactive'] })
   @IsOptional()
