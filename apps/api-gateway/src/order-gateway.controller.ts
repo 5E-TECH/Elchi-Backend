@@ -43,6 +43,11 @@ interface JwtUser {
   roles: string[];
 }
 
+type BranchAssignment = {
+  branch_id?: string | null;
+  role?: string | null;
+};
+
 class ReceiveExternalOrdersDto {
   integration_id!: string;
   orders!: any[];
@@ -55,6 +60,7 @@ export class OrderGatewayController {
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
+    @Inject('BRANCH') private readonly branchClient: ClientProxy,
   ) {}
 
   private toSnakeCaseKey(value: string) {
@@ -127,6 +133,34 @@ export class OrderGatewayController {
         throw error;
       },
     );
+  }
+
+  private async sendBranchWithTimeout(pattern: { cmd: string }, payload: object) {
+    return firstValueFrom(this.branchClient.send(pattern, payload).pipe(timeout(8000))).catch(
+      (error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Branch service response timeout');
+        }
+        throw error;
+      },
+    );
+  }
+
+  private isBranchStaffAssignment(assignment?: BranchAssignment | null): boolean {
+    const role = String(assignment?.role ?? '').toUpperCase();
+    return role === 'MANAGER' || role === 'OPERATOR';
+  }
+
+  private async resolveBranchAssignment(reqUser: JwtUser): Promise<BranchAssignment | null> {
+    const response = await this.sendBranchWithTimeout(
+      { cmd: 'branch.user.find_by_user' },
+      {
+        user_id: reqUser.sub,
+        requester: { id: reqUser.sub, roles: reqUser.roles ?? [] },
+      },
+    );
+
+    return (response?.data ?? null) as BranchAssignment | null;
   }
 
   private normalizeLegacyOrderRow(row: Record<string, unknown>) {
@@ -239,7 +273,14 @@ export class OrderGatewayController {
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN, RoleEnum.REGISTRATOR, RoleEnum.MARKET, RoleEnum.OPERATOR)
+  @Roles(
+    RoleEnum.ADMIN,
+    RoleEnum.SUPERADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MARKET,
+    RoleEnum.OPERATOR,
+    RoleEnum.BRANCH,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create order' })
   @ApiBody({ type: CreateOrderRequestDto })
@@ -247,6 +288,31 @@ export class OrderGatewayController {
     const { customer, ...orderDto } = dto;
     let customerId = dto.customer_id;
     const roles = req.user.roles ?? [];
+    const shouldResolveBranchAssignment =
+      roles.includes(RoleEnum.BRANCH) || roles.includes(RoleEnum.OPERATOR);
+    const branchAssignment = shouldResolveBranchAssignment
+      ? await this.resolveBranchAssignment(req.user)
+      : null;
+    const isBranchStaff = this.isBranchStaffAssignment(branchAssignment);
+    const assignedBranchId = branchAssignment?.branch_id
+      ? String(branchAssignment.branch_id)
+      : null;
+
+    if (isBranchStaff && !assignedBranchId) {
+      throw new BadRequestException('Filial xodimi hech qaysi filialga biriktirilmagan');
+    }
+
+    if (isBranchStaff && orderDto.branch_id && String(orderDto.branch_id) !== assignedBranchId) {
+      throw new BadRequestException("Filial xodimi boshqa filial uchun order yarata olmaydi");
+    }
+
+    if (
+      isBranchStaff &&
+      typeof orderDto.source !== 'undefined' &&
+      String(orderDto.source).toLowerCase() !== 'branch'
+    ) {
+      throw new BadRequestException("Filial xodimi uchun source faqat 'branch' bo'lishi mumkin");
+    }
 
     let resolvedMarketId = orderDto.market_id;
     if (roles.includes(RoleEnum.MARKET)) {
@@ -307,6 +373,8 @@ export class OrderGatewayController {
               market_id: resolvedMarketId,
               customer_id: finalCustomerId,
               operator_id: roles.includes(RoleEnum.OPERATOR) ? req.user.sub : null,
+              branch_id: isBranchStaff ? assignedBranchId : (orderDto.branch_id ?? null),
+              source: isBranchStaff ? 'branch' : orderDto.source,
             },
             requester: { id: req.user.sub, roles },
           },

@@ -323,4 +323,35 @@ describe('BranchServiceService', () => {
       service.findBranchById('400', { id: '11', roles: ['branch'] }),
     ).rejects.toBeInstanceOf(RpcException);
   });
+
+  it('findUserBranch returns assignment for own requester', async () => {
+    branchUserRepo.find.mockResolvedValue([
+      { branch_id: '100', role: 'OPERATOR', isDeleted: false },
+    ]);
+    branchUserRepo.findOne.mockResolvedValue({
+      id: 'bu1',
+      branch_id: '100',
+      user_id: 'u1',
+      role: 'OPERATOR',
+      isDeleted: false,
+      createdAt: new Date(),
+    });
+    branchRepo.findOne.mockResolvedValue({
+      id: '100',
+      name: 'Samarkand',
+      isDeleted: false,
+    });
+
+    const res = await service.findUserBranch('u1', { id: 'u1', roles: ['operator'] });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data.branch_id).toBe('100');
+    expect(res.data.role).toBe('OPERATOR');
+  });
+
+  it('findUserBranch forbids requesting another user assignment for non-admin', async () => {
+    await expect(
+      service.findUserBranch('u2', { id: 'u1', roles: ['operator'] }),
+    ).rejects.toBeInstanceOf(RpcException);
+  });
 });

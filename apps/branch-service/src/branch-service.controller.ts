@@ -108,6 +108,16 @@ export class BranchServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'branch.user.find_by_user' })
+  findUserBranch(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.findUserBranch(
+        data?.user_id,
+        this.getRequester(data),
+      ),
+    );
+  }
+
   // --- BranchConfig ---
   @MessagePattern({ cmd: 'branch.config.set' })
   setConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
