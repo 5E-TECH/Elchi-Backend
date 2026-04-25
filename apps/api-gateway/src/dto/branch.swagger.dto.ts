@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { BranchType } from '@app/common';
 import { IsEnum, IsNumberString, IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import { BranchUserRole } from '@app/common';
 
 export class CreateBranchRequestDto {
   @ApiProperty({ example: 'Namangan filial' })
@@ -40,7 +41,6 @@ export class CreateBranchRequestDto {
   @ApiProperty({ example: 'SAM' })
   @Matches(/^[A-Z0-9-]{2,32}$/)
   code!: string;
-
   @ApiPropertyOptional({ example: 'active', enum: ['active', 'inactive'] })
   @IsOptional()
   @IsEnum(['active', 'inactive'])
@@ -93,7 +93,6 @@ export class UpdateBranchRequestDto {
   @IsOptional()
   @Matches(/^[A-Z0-9-]{2,32}$/)
   code?: string;
-
   @ApiPropertyOptional({ example: 'active', enum: ['active', 'inactive'] })
   @IsOptional()
   @IsEnum(['active', 'inactive'])
@@ -109,6 +108,11 @@ export class AssignBranchUserRequestDto {
   @ApiProperty({ example: '12', description: 'User ID (bigint string)' })
   @IsNumberString()
   user_id!: string;
+
+  @ApiPropertyOptional({ enum: BranchUserRole, example: BranchUserRole.OPERATOR })
+  @IsOptional()
+  @IsEnum(BranchUserRole)
+  role?: BranchUserRole;
 }
 
 export class SetBranchConfigRequestDto {

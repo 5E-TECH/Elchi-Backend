@@ -39,7 +39,6 @@ export class UpdateBranchDto {
   @IsString()
   @Matches(/^[A-Z0-9-]{2,32}$/)
   code?: string;
-
   @IsOptional()
   @IsEnum(['active', 'inactive'])
   status?: string;

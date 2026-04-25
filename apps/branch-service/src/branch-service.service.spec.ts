@@ -85,7 +85,9 @@ describe('BranchServiceService', () => {
 
   it('updateBranch throws 400 on invalid status', async () => {
     branchRepo.findOne.mockResolvedValue({ id: 'b1', name: 'A', status: 'active', isDeleted: false });
-    await expect(service.updateBranch('b1', { status: 'bad' } as any)).rejects.toBeInstanceOf(RpcException);
+    await expect(
+      service.updateBranch('b1', { status: 'bad' } as any, { id: '1', roles: ['admin'] }),
+    ).rejects.toBeInstanceOf(RpcException);
   });
 
   it('assignUserToBranch throws when branch_id is missing', async () => {
@@ -96,7 +98,12 @@ describe('BranchServiceService', () => {
     branchRepo.findOne.mockResolvedValue({ id: 'b1', isDeleted: false });
     branchUserRepo.findOne.mockResolvedValueOnce({ branch_id: 'b2', user_id: 'u1', isDeleted: false });
 
-    await expect(service.assignUserToBranch({ branch_id: 'b1', user_id: 'u1' } as any)).rejects.toBeInstanceOf(RpcException);
+    await expect(
+      service.assignUserToBranch(
+        { branch_id: 'b1', user_id: 'u1' } as any,
+        { id: '1', roles: ['admin'] },
+      ),
+    ).rejects.toBeInstanceOf(RpcException);
   });
 
   it('setBranchConfig creates config when absent', async () => {
@@ -104,7 +111,10 @@ describe('BranchServiceService', () => {
     branchConfigRepo.findOne.mockResolvedValue(null);
     branchConfigRepo.save.mockResolvedValue({ id: 'c1', branch_id: 'b1', config_key: 'working_hours' });
 
-    const res = await service.setBranchConfig({ branch_id: 'b1', config_key: 'working_hours', config_value: { a: 1 } } as any);
+    const res = await service.setBranchConfig(
+      { branch_id: 'b1', config_key: 'working_hours', config_value: { a: 1 } } as any,
+      { id: '1', roles: ['admin'] },
+    );
 
     expect(res.statusCode).toBe(201);
     expect(res.data.id).toBe('c1');
@@ -114,7 +124,7 @@ describe('BranchServiceService', () => {
     branchRepo.findOne.mockResolvedValue({ id: 'b1', status: 'active', isDeleted: false });
     branchRepo.save.mockResolvedValue({ id: 'b1', status: 'inactive', isDeleted: true });
 
-    const res = await service.deleteBranch('b1');
+    const res = await service.deleteBranch('b1', { id: '1', roles: ['admin'] });
 
     expect(res.statusCode).toBe(200);
     expect(res.data.id).toBe('b1');
@@ -140,9 +150,9 @@ describe('BranchServiceService', () => {
 
   it('createBranch blocks second HQ creation', async () => {
     branchRepo.findOne
-      .mockResolvedValueOnce(null) // name check
-      .mockResolvedValueOnce(null) // code check
-      .mockResolvedValueOnce({ id: 'existing-hq', type: 'HQ', isDeleted: false }); // existing HQ
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'existing-hq', type: 'HQ', isDeleted: false });
 
     await expect(
       service.createBranch({
@@ -155,8 +165,8 @@ describe('BranchServiceService', () => {
 
   it('createBranch blocks duplicate code', async () => {
     branchRepo.findOne
-      .mockResolvedValueOnce(null) // name check
-      .mockResolvedValueOnce({ id: 'b1', code: 'SAM', isDeleted: false }); // code check
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'b1', code: 'SAM', isDeleted: false });
 
     await expect(
       service.createBranch({
@@ -196,7 +206,7 @@ describe('BranchServiceService', () => {
         parent_id: 'hq',
         status: 'active',
         isDeleted: false,
-      }) // getBranchOrThrow(id)
+      })
       .mockResolvedValueOnce({
         id: 'child1',
         name: 'Child',
@@ -206,7 +216,7 @@ describe('BranchServiceService', () => {
         parent_id: 'b1',
         status: 'active',
         isDeleted: false,
-      }) // ensureNotCyclicParent: currentId=child1
+      })
       .mockResolvedValueOnce({
         id: 'b1',
         name: 'Root',
@@ -216,7 +226,7 @@ describe('BranchServiceService', () => {
         parent_id: 'hq',
         status: 'active',
         isDeleted: false,
-      }); // ensureNotCyclicParent: currentId=b1 -> cycle
+      });
 
     await expect(
       service.updateBranch('b1', { parent_id: 'child1', type: 'REGIONAL' } as any),
@@ -225,9 +235,9 @@ describe('BranchServiceService', () => {
 
   it('createBranch computes level automatically from parent', async () => {
     branchRepo.findOne
-      .mockResolvedValueOnce(null) // name check
-      .mockResolvedValueOnce(null) // code check
-      .mockResolvedValueOnce({ id: 'hq', level: 0, type: 'HQ', isDeleted: false }); // parent check
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'hq', level: 0, type: 'HQ', isDeleted: false });
     branchRepo.save.mockImplementation(async (payload: any) => payload);
 
     const res = await service.createBranch({
@@ -235,7 +245,7 @@ describe('BranchServiceService', () => {
       type: 'REGIONAL',
       code: 'SAM',
       parent_id: 'hq',
-      level: 99, // should be ignored
+      level: 99,
     } as any);
 
     expect(res.data.level).toBe(1);
@@ -278,5 +288,39 @@ describe('BranchServiceService', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.data.map((item: any) => item.id)).toEqual(['3', '4', '5']);
+  });
+
+  it('manager can read child branch but cannot write to child branch', async () => {
+    branchUserRepo.find.mockResolvedValue([
+      { branch_id: '100', role: 'MANAGER', isDeleted: false },
+    ]);
+    branchRepo.find
+      .mockResolvedValueOnce([{ id: '200' }])
+      .mockResolvedValue([]);
+    branchRepo.findOne.mockResolvedValue({
+      id: '200',
+      name: 'Child branch',
+      isDeleted: false,
+      region_id: null,
+      district_id: null,
+      parent_id: '100',
+    });
+
+    const readRes = await service.findBranchById('200', { id: '10', roles: ['branch'] });
+    expect(readRes.statusCode).toBe(200);
+
+    await expect(
+      service.updateBranch('200', { name: 'New child name' } as any, { id: '10', roles: ['branch'] }),
+    ).rejects.toBeInstanceOf(RpcException);
+  });
+
+  it('operator can read only own branch', async () => {
+    branchUserRepo.find.mockResolvedValue([
+      { branch_id: '300', role: 'OPERATOR', isDeleted: false },
+    ]);
+
+    await expect(
+      service.findBranchById('400', { id: '11', roles: ['branch'] }),
+    ).rejects.toBeInstanceOf(RpcException);
   });
 });

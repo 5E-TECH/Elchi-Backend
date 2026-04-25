@@ -1,5 +1,5 @@
 import { Column, Entity, Index, ManyToOne, JoinColumn } from 'typeorm';
-import { BaseEntity } from '@app/common';
+import { BaseEntity, BranchUserRole } from '@app/common';
 import { Branch } from './branch.entity';
 
 @Entity({ name: 'branch_users' })
@@ -13,8 +13,8 @@ export class BranchUser extends BaseEntity {
   @Column({ type: 'bigint' })
   user_id!: string;
 
-  @Column({ type: 'varchar', nullable: true })
-  role!: string | null;
+  @Column({ type: 'enum', enum: BranchUserRole, default: BranchUserRole.OPERATOR })
+  role!: BranchUserRole;
 
   @ManyToOne(() => Branch, { onDelete: 'CASCADE' })
   @JoinColumn({ name: 'branch_id' })
