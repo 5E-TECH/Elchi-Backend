@@ -3,12 +3,22 @@ import { RpcException } from '@nestjs/microservices';
 import { ClientProxy } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { BranchType, Status } from '@app/common';
+import { BranchType, BranchUserRole, Status } from '@app/common';
 import { Branch } from './entities/branch.entity';
 import { BranchUser } from './entities/branch-user.entity';
 import { BranchConfig } from './entities/branch-config.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 import { lastValueFrom, timeout } from 'rxjs';
+
+type RequesterContext = {
+  id?: string;
+  roles?: string[];
+};
+
+type BranchAccessScope = {
+  readableBranchIds: Set<string>;
+  writableBranchIds: Set<string>;
+};
 
 @Injectable()
 export class BranchServiceService implements OnModuleInit {
@@ -36,6 +46,117 @@ export class BranchServiceService implements OnModuleInit {
 
   private conflict(message: string): never {
     throw new RpcException(errorRes(message, 409));
+  }
+
+  private forbidden(message: string): never {
+    throw new RpcException(errorRes(message, 403));
+  }
+
+  private normalizeBranchUserRole(role?: string | null): BranchUserRole {
+    const normalized = String(role ?? BranchUserRole.OPERATOR).trim().toUpperCase();
+    if (normalized === BranchUserRole.MANAGER) {
+      return BranchUserRole.MANAGER;
+    }
+    if (normalized === BranchUserRole.OPERATOR) {
+      return BranchUserRole.OPERATOR;
+    }
+    if (normalized === BranchUserRole.COURIER) {
+      return BranchUserRole.COURIER;
+    }
+    this.badRequest('role faqat MANAGER, OPERATOR, COURIER bo‘lishi mumkin');
+  }
+
+  private isSystemPrivileged(requester?: RequesterContext): boolean {
+    const roles = (requester?.roles ?? []).map((role) => String(role).toLowerCase());
+    return roles.includes('superadmin') || roles.includes('admin');
+  }
+
+  private async collectDescendantBranchIds(rootBranchIds: string[]): Promise<Set<string>> {
+    const visited = new Set<string>(rootBranchIds.map((id) => String(id)));
+    let frontier = Array.from(visited);
+
+    while (frontier.length > 0) {
+      const children = await this.branchRepo.find({
+        where: {
+          parent_id: In(frontier),
+          isDeleted: false,
+        },
+        select: ['id'],
+      });
+
+      const next: string[] = [];
+      for (const child of children) {
+        const id = String(child.id);
+        if (!visited.has(id)) {
+          visited.add(id);
+          next.push(id);
+        }
+      }
+      frontier = next;
+    }
+
+    return visited;
+  }
+
+  private async resolveAccessScope(requester?: RequesterContext): Promise<BranchAccessScope> {
+    if (this.isSystemPrivileged(requester)) {
+      return {
+        readableBranchIds: new Set<string>(),
+        writableBranchIds: new Set<string>(),
+      };
+    }
+
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId) {
+      this.forbidden('Requester aniqlanmadi');
+    }
+
+    const assignments = await this.branchUserRepo.find({
+      where: {
+        user_id: requesterId,
+        isDeleted: false,
+      },
+      select: ['branch_id', 'role'],
+    });
+
+    const ownBranchIds = new Set(
+      assignments
+        .map((item) => String(item.branch_id))
+        .filter((id) => Boolean(id)),
+    );
+
+    const managerRoots = assignments
+      .filter((item) => this.normalizeBranchUserRole(item.role) === BranchUserRole.MANAGER)
+      .map((item) => String(item.branch_id));
+
+    const readableBranchIds = new Set<string>(ownBranchIds);
+    const managerTreeIds = await this.collectDescendantBranchIds(managerRoots);
+    managerTreeIds.forEach((id) => readableBranchIds.add(id));
+
+    return {
+      readableBranchIds,
+      writableBranchIds: new Set(managerRoots),
+    };
+  }
+
+  private async assertCanReadBranch(branchId: string, requester?: RequesterContext): Promise<void> {
+    if (this.isSystemPrivileged(requester)) {
+      return;
+    }
+    const scope = await this.resolveAccessScope(requester);
+    if (!scope.readableBranchIds.has(String(branchId))) {
+      this.forbidden('Bu filial ma’lumotini ko‘rishga ruxsat yo‘q');
+    }
+  }
+
+  private async assertCanWriteBranch(branchId: string, requester?: RequesterContext): Promise<void> {
+    if (this.isSystemPrivileged(requester)) {
+      return;
+    }
+    const scope = await this.resolveAccessScope(requester);
+    if (!scope.writableBranchIds.has(String(branchId))) {
+      this.forbidden('Bu filialga yozish/o‘zgartirish ruxsati yo‘q');
+    }
   }
 
   private normalizePagination(page?: number, limit?: number) {
@@ -421,7 +542,7 @@ export class BranchServiceService implements OnModuleInit {
     status?: string;
     page?: number;
     limit?: number;
-  }) {
+  }, requester?: RequesterContext) {
     const { page, limit, skip } = this.normalizePagination(query?.page, query?.limit);
     const status = this.parseStatus(query?.status);
     const search = String(query?.search ?? '').trim();
@@ -440,6 +561,27 @@ export class BranchServiceService implements OnModuleInit {
         '(branch.name ILIKE :search OR branch.code ILIKE :search OR branch.address ILIKE :search OR branch.phone_number ILIKE :search)',
         { search: `%${search}%` },
       );
+    }
+
+    if (!this.isSystemPrivileged(requester)) {
+      const scope = await this.resolveAccessScope(requester);
+      const allowedBranchIds = Array.from(scope.readableBranchIds);
+      if (!allowedBranchIds.length) {
+        return successRes(
+          {
+            items: [],
+            meta: {
+              page,
+              limit,
+              total: 0,
+              totalPages: 1,
+            },
+          },
+          200,
+          'Branches list',
+        );
+      }
+      qb.andWhere('branch.id IN (:...allowedBranchIds)', { allowedBranchIds });
     }
 
     const [items, total] = await qb.skip(skip).take(limit).getManyAndCount();
@@ -492,7 +634,8 @@ export class BranchServiceService implements OnModuleInit {
     );
   }
 
-  async findBranchById(id: string) {
+  async findBranchById(id: string, requester?: RequesterContext) {
+    await this.assertCanReadBranch(id, requester);
     const branch = await this.getBranchOrThrow(id);
     const regionMap = await this.getRegionsByIds(
       branch.region_id ? [branch.region_id] : [],
@@ -598,7 +741,9 @@ export class BranchServiceService implements OnModuleInit {
       status?: string;
       manager_id?: string | null;
     },
+    requester?: RequesterContext,
   ) {
+    await this.assertCanWriteBranch(id, requester);
     const branch = await this.getBranchOrThrow(id);
 
     if (typeof dto?.name !== 'undefined') {
@@ -676,7 +821,6 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     branch.type = nextType;
-
     if (typeof dto?.manager_id !== 'undefined') {
       branch.manager_id = this.normalizeNullableBigint(dto.manager_id);
     }
@@ -690,7 +834,8 @@ export class BranchServiceService implements OnModuleInit {
     return successRes(saved, 200, 'Branch updated');
   }
 
-  async deleteBranch(id: string) {
+  async deleteBranch(id: string, requester?: RequesterContext) {
+    await this.assertCanWriteBranch(id, requester);
     const branch = await this.getBranchOrThrow(id);
     if (await this.hasActiveChildren(branch.id)) {
       this.badRequest('Cannot delete branch with child branches');
@@ -701,10 +846,13 @@ export class BranchServiceService implements OnModuleInit {
     return successRes({ id }, 200, 'Branch deleted');
   }
 
-  async assignUserToBranch(data: { branch_id?: string; user_id?: string; role?: string }) {
+  async assignUserToBranch(
+    data: { branch_id?: string; user_id?: string; role?: string },
+    requester?: RequesterContext,
+  ) {
     const branchId = String(data?.branch_id ?? '').trim();
     const userId = String(data?.user_id ?? '').trim();
-    const role = data?.role ? String(data.role).trim() : null;
+    const role = this.normalizeBranchUserRole(data?.role);
 
     if (!branchId) {
       this.badRequest('branch_id is required');
@@ -712,6 +860,8 @@ export class BranchServiceService implements OnModuleInit {
     if (!userId) {
       this.badRequest('user_id is required');
     }
+
+    await this.assertCanWriteBranch(branchId, requester);
 
     await this.getBranchOrThrow(branchId);
     await this.ensureUserExists(userId);
@@ -752,7 +902,10 @@ export class BranchServiceService implements OnModuleInit {
     return successRes(saved, 201, 'Branch user assigned');
   }
 
-  async removeUserFromBranch(data: { branch_id?: string; user_id?: string }) {
+  async removeUserFromBranch(
+    data: { branch_id?: string; user_id?: string },
+    requester?: RequesterContext,
+  ) {
     const branchId = String(data?.branch_id ?? '').trim();
     const userId = String(data?.user_id ?? '').trim();
 
@@ -762,6 +915,8 @@ export class BranchServiceService implements OnModuleInit {
     if (!userId) {
       this.badRequest('user_id is required');
     }
+
+    await this.assertCanWriteBranch(branchId, requester);
 
     const row = await this.branchUserRepo.findOne({
       where: { branch_id: branchId, user_id: userId, isDeleted: false },
@@ -776,11 +931,13 @@ export class BranchServiceService implements OnModuleInit {
     return successRes({ branch_id: branchId, user_id: userId }, 200, 'Branch user removed');
   }
 
-  async findUsersByBranch(branch_id: string) {
+  async findUsersByBranch(branch_id: string, requester?: RequesterContext) {
     const branchId = String(branch_id ?? '').trim();
     if (!branchId) {
       this.badRequest('branch_id is required');
     }
+
+    await this.assertCanReadBranch(branchId, requester);
 
     await this.getBranchOrThrow(branchId);
 
@@ -814,7 +971,7 @@ export class BranchServiceService implements OnModuleInit {
     branch_id?: string;
     config_key?: string;
     config_value?: Record<string, unknown> | null;
-  }) {
+  }, requester?: RequesterContext) {
     const branchId = String(data?.branch_id ?? '').trim();
     const configKey = String(data?.config_key ?? '').trim();
 
@@ -824,6 +981,8 @@ export class BranchServiceService implements OnModuleInit {
     if (!configKey) {
       this.badRequest('config_key is required');
     }
+
+    await this.assertCanWriteBranch(branchId, requester);
 
     await this.getBranchOrThrow(branchId);
 
@@ -852,11 +1011,13 @@ export class BranchServiceService implements OnModuleInit {
     return successRes(saved, 201, 'Branch config saved');
   }
 
-  async getBranchConfig(branch_id: string) {
+  async getBranchConfig(branch_id: string, requester?: RequesterContext) {
     const branchId = String(branch_id ?? '').trim();
     if (!branchId) {
       this.badRequest('branch_id is required');
     }
+
+    await this.assertCanReadBranch(branchId, requester);
 
     await this.getBranchOrThrow(branchId);
 
@@ -868,7 +1029,10 @@ export class BranchServiceService implements OnModuleInit {
     return successRes(items, 200, 'Branch config list');
   }
 
-  async getBranchConfigByKey(data: { branch_id?: string; config_key?: string }) {
+  async getBranchConfigByKey(
+    data: { branch_id?: string; config_key?: string },
+    requester?: RequesterContext,
+  ) {
     const branchId = String(data?.branch_id ?? '').trim();
     const configKey = String(data?.config_key ?? '').trim();
 
@@ -878,6 +1042,8 @@ export class BranchServiceService implements OnModuleInit {
     if (!configKey) {
       this.badRequest('config_key is required');
     }
+
+    await this.assertCanReadBranch(branchId, requester);
 
     await this.getBranchOrThrow(branchId);
 
@@ -896,7 +1062,7 @@ export class BranchServiceService implements OnModuleInit {
     branch_id?: string;
     config_key?: string;
     config_value?: Record<string, unknown> | null;
-  }) {
+  }, requester?: RequesterContext) {
     const branchId = String(data?.branch_id ?? '').trim();
     const configKey = String(data?.config_key ?? '').trim();
 
@@ -906,6 +1072,8 @@ export class BranchServiceService implements OnModuleInit {
     if (!configKey) {
       this.badRequest('config_key is required');
     }
+
+    await this.assertCanWriteBranch(branchId, requester);
 
     await this.getBranchOrThrow(branchId);
 
@@ -922,7 +1090,10 @@ export class BranchServiceService implements OnModuleInit {
     return successRes(saved, 200, 'Branch config updated');
   }
 
-  async deleteBranchConfig(data: { branch_id?: string; config_key?: string }) {
+  async deleteBranchConfig(
+    data: { branch_id?: string; config_key?: string },
+    requester?: RequesterContext,
+  ) {
     const branchId = String(data?.branch_id ?? '').trim();
     const configKey = String(data?.config_key ?? '').trim();
 
@@ -932,6 +1103,8 @@ export class BranchServiceService implements OnModuleInit {
     if (!configKey) {
       this.badRequest('config_key is required');
     }
+
+    await this.assertCanWriteBranch(branchId, requester);
 
     await this.getBranchOrThrow(branchId);
 

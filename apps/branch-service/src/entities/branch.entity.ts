@@ -34,7 +34,6 @@ export class Branch extends BaseEntity {
 
   @Column({ type: 'varchar', nullable: true })
   code!: string | null;
-
   @Column({ type: 'enum', enum: Status, default: Status.ACTIVE })
   status!: Status;
 

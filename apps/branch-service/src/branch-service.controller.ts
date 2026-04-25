@@ -10,6 +10,10 @@ export class BranchServiceController {
     private readonly branchService: BranchServiceService,
   ) {}
 
+  private getRequester(data: Record<string, any>) {
+    return data?.requester;
+  }
+
   private async executeAndAck<T>(
     context: RmqContext,
     handler: () => Promise<T> | T,
@@ -41,12 +45,16 @@ export class BranchServiceController {
 
   @MessagePattern({ cmd: 'branch.find_all' })
   findAll(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.branchService.findAllBranches(data?.query ?? data));
+    return this.executeAndAck(context, () =>
+      this.branchService.findAllBranches(data?.query ?? data, this.getRequester(data)),
+    );
   }
 
   @MessagePattern({ cmd: 'branch.find_by_id' })
   findById(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.branchService.findBranchById(data?.id));
+    return this.executeAndAck(context, () =>
+      this.branchService.findBranchById(data?.id, this.getRequester(data)),
+    );
   }
 
   @MessagePattern({ cmd: 'branch.tree' })
@@ -64,20 +72,22 @@ export class BranchServiceController {
   @MessagePattern({ cmd: 'branch.update' })
   update(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.branchService.updateBranch(data?.id, data?.dto ?? data),
+      this.branchService.updateBranch(data?.id, data?.dto ?? data, this.getRequester(data)),
     );
   }
 
   @MessagePattern({ cmd: 'branch.delete' })
   remove(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.branchService.deleteBranch(data?.id));
+    return this.executeAndAck(context, () =>
+      this.branchService.deleteBranch(data?.id, this.getRequester(data)),
+    );
   }
 
   // --- BranchUser ---
   @MessagePattern({ cmd: 'branch.user.assign' })
   assignUser(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.branchService.assignUserToBranch(data?.dto ?? data),
+      this.branchService.assignUserToBranch(data?.dto ?? data, this.getRequester(data)),
     );
   }
 
@@ -87,14 +97,14 @@ export class BranchServiceController {
       this.branchService.removeUserFromBranch({
         branch_id: data?.branch_id ?? data?.id,
         user_id: data?.user_id,
-      }),
+      }, this.getRequester(data)),
     );
   }
 
   @MessagePattern({ cmd: 'branch.user.find_by_branch' })
   findUsersByBranch(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.branchService.findUsersByBranch(data?.branch_id ?? data?.id),
+      this.branchService.findUsersByBranch(data?.branch_id ?? data?.id, this.getRequester(data)),
     );
   }
 
@@ -106,7 +116,7 @@ export class BranchServiceController {
         branch_id: data?.branch_id ?? data?.id,
         config_key: data?.dto?.config_key ?? data?.config_key,
         config_value: data?.dto?.config_value ?? data?.config_value,
-      }),
+      }, this.getRequester(data)),
     );
   }
 
@@ -118,14 +128,14 @@ export class BranchServiceController {
         branch_id: data?.branch_id ?? data?.id,
         config_key: data?.dto?.config_key ?? data?.config_key,
         config_value: data?.dto?.config_value ?? data?.config_value,
-      }),
+      }, this.getRequester(data)),
     );
   }
 
   @MessagePattern({ cmd: 'branch.config.get' })
   getConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.branchService.getBranchConfig(data?.branch_id ?? data?.id),
+      this.branchService.getBranchConfig(data?.branch_id ?? data?.id, this.getRequester(data)),
     );
   }
 
@@ -136,7 +146,7 @@ export class BranchServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.branchService.getBranchConfig(data?.branch_id ?? data?.id),
+      this.branchService.getBranchConfig(data?.branch_id ?? data?.id, this.getRequester(data)),
     );
   }
 
@@ -146,7 +156,7 @@ export class BranchServiceController {
       this.branchService.getBranchConfigByKey({
         branch_id: data?.branch_id ?? data?.id,
         config_key: data?.config_key ?? data?.key,
-      }),
+      }, this.getRequester(data)),
     );
   }
 
@@ -157,7 +167,7 @@ export class BranchServiceController {
         branch_id: data?.branch_id ?? data?.id,
         config_key: data?.config_key ?? data?.key,
         config_value: data?.dto?.config_value ?? data?.config_value,
-      }),
+      }, this.getRequester(data)),
     );
   }
 
@@ -167,7 +177,7 @@ export class BranchServiceController {
       this.branchService.deleteBranchConfig({
         branch_id: data?.branch_id ?? data?.id,
         config_key: data?.config_key ?? data?.key,
-      }),
+      }, this.getRequester(data)),
     );
   }
 }

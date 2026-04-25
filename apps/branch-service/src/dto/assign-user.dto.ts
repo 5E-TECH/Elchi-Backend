@@ -1,4 +1,5 @@
-import { IsNumberString, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsNumberString, IsOptional } from 'class-validator';
+import { BranchUserRole } from '@app/common';
 
 export class AssignBranchUserDto {
   @IsNumberString()
@@ -8,7 +9,6 @@ export class AssignBranchUserDto {
   user_id!: string;
 
   @IsOptional()
-  @IsString()
-  role?: string;
+  @IsEnum(BranchUserRole)
+  role?: BranchUserRole;
 }
-

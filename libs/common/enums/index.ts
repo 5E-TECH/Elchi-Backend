@@ -88,3 +88,9 @@ export enum Group_type {
   CANCEL = 'cancel',
   CREATE = 'create',
 }
+
+export enum BranchUserRole {
+  MANAGER = 'MANAGER',
+  OPERATOR = 'OPERATOR',
+  COURIER = 'COURIER',
+}

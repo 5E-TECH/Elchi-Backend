@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
@@ -38,12 +39,22 @@ import {
 export class BranchGatewayController {
   constructor(@Inject('BRANCH') private readonly branchClient: ClientProxy) {}
 
+  private toRequester(req: { user?: { sub?: string; roles?: string[] } }) {
+    return {
+      id: String(req?.user?.sub ?? ''),
+      roles: req?.user?.roles ?? [],
+    };
+  }
+
   @Post('branches')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Create branch' })
   @ApiBody({ type: CreateBranchRequestDto })
-  createBranch(@Body() dto: CreateBranchRequestDto) {
-    return this.branchClient.send({ cmd: 'branch.create' }, { dto });
+  createBranch(
+    @Body() dto: CreateBranchRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send({ cmd: 'branch.create' }, { dto, requester: this.toRequester(req) });
   }
 
   @Get('branches')
@@ -58,10 +69,12 @@ export class BranchGatewayController {
     @Query('status') status?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Req() req?: { user?: { sub?: string; roles?: string[] } },
   ) {
     return this.branchClient.send(
       { cmd: 'branch.find_all' },
       {
+        requester: this.toRequester(req ?? {}),
         query: {
           search,
           status,
@@ -83,8 +96,11 @@ export class BranchGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Find branch by id' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
-  findBranchById(@Param('id') id: string) {
-    return this.branchClient.send({ cmd: 'branch.find_by_id' }, { id });
+  findBranchById(
+    @Param('id') id: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send({ cmd: 'branch.find_by_id' }, { id, requester: this.toRequester(req) });
   }
 
   @Get('branches/:id/descendants')
@@ -100,16 +116,23 @@ export class BranchGatewayController {
   @ApiOperation({ summary: 'Update branch' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   @ApiBody({ type: UpdateBranchRequestDto })
-  updateBranch(@Param('id') id: string, @Body() dto: UpdateBranchRequestDto) {
-    return this.branchClient.send({ cmd: 'branch.update' }, { id, dto });
+  updateBranch(
+    @Param('id') id: string,
+    @Body() dto: UpdateBranchRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send({ cmd: 'branch.update' }, { id, dto, requester: this.toRequester(req) });
   }
 
   @Delete('branches/:id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Delete branch (soft delete)' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
-  deleteBranch(@Param('id') id: string) {
-    return this.branchClient.send({ cmd: 'branch.delete' }, { id });
+  deleteBranch(
+    @Param('id') id: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send({ cmd: 'branch.delete' }, { id, requester: this.toRequester(req) });
   }
 
   @Post('branches/:id/users')
@@ -120,10 +143,11 @@ export class BranchGatewayController {
   assignUserToBranch(
     @Param('id') id: string,
     @Body() dto: AssignBranchUserRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return this.branchClient.send(
       { cmd: 'branch.user.assign' },
-      { dto: { branch_id: id, ...dto } },
+      { requester: this.toRequester(req), dto: { branch_id: id, ...dto } },
     );
   }
 
@@ -132,10 +156,14 @@ export class BranchGatewayController {
   @ApiOperation({ summary: 'Remove user from branch' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   @ApiParam({ name: 'userId', description: 'User ID (bigint string)' })
-  removeUserFromBranch(@Param('id') id: string, @Param('userId') userId: string) {
+  removeUserFromBranch(
+    @Param('id') id: string,
+    @Param('userId') userId: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
     return this.branchClient.send(
       { cmd: 'branch.user.remove' },
-      { branch_id: id, user_id: userId },
+      { branch_id: id, user_id: userId, requester: this.toRequester(req) },
     );
   }
 
@@ -143,10 +171,13 @@ export class BranchGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Get users assigned to branch' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
-  getBranchUsers(@Param('id') id: string) {
+  getBranchUsers(
+    @Param('id') id: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
     return this.branchClient.send(
       { cmd: 'branch.user.find_by_branch' },
-      { branch_id: id },
+      { branch_id: id, requester: this.toRequester(req) },
     );
   }
 
@@ -154,8 +185,11 @@ export class BranchGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Get branch config list' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
-  getBranchConfig(@Param('id') id: string) {
-    return this.branchClient.send({ cmd: 'branch.config.get' }, { branch_id: id });
+  getBranchConfig(
+    @Param('id') id: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send({ cmd: 'branch.config.get' }, { branch_id: id, requester: this.toRequester(req) });
   }
 
   @Post('branches/:id/config')
@@ -163,10 +197,14 @@ export class BranchGatewayController {
   @ApiOperation({ summary: 'Set branch config' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   @ApiBody({ type: SetBranchConfigRequestDto })
-  setBranchConfig(@Param('id') id: string, @Body() dto: SetBranchConfigRequestDto) {
+  setBranchConfig(
+    @Param('id') id: string,
+    @Body() dto: SetBranchConfigRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
     return this.branchClient.send(
       { cmd: 'branch.config.set' },
-      { dto: { branch_id: id, ...dto } },
+      { requester: this.toRequester(req), dto: { branch_id: id, ...dto } },
     );
   }
 
@@ -175,10 +213,14 @@ export class BranchGatewayController {
   @ApiOperation({ summary: 'Get single branch config by key' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   @ApiParam({ name: 'key', description: 'Config key' })
-  getBranchConfigByKey(@Param('id') id: string, @Param('key') key: string) {
+  getBranchConfigByKey(
+    @Param('id') id: string,
+    @Param('key') key: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
     return this.branchClient.send(
       { cmd: 'branch.config.find_one' },
-      { branch_id: id, config_key: key },
+      { branch_id: id, config_key: key, requester: this.toRequester(req) },
     );
   }
 
@@ -192,10 +234,11 @@ export class BranchGatewayController {
     @Param('id') id: string,
     @Param('key') key: string,
     @Body() dto: UpdateBranchConfigRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return this.branchClient.send(
       { cmd: 'branch.config.update' },
-      { dto: { branch_id: id, config_key: key, ...dto } },
+      { requester: this.toRequester(req), dto: { branch_id: id, config_key: key, ...dto } },
     );
   }
 
@@ -204,10 +247,14 @@ export class BranchGatewayController {
   @ApiOperation({ summary: 'Delete branch config by key (soft delete)' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   @ApiParam({ name: 'key', description: 'Config key' })
-  deleteBranchConfigByKey(@Param('id') id: string, @Param('key') key: string) {
+  deleteBranchConfigByKey(
+    @Param('id') id: string,
+    @Param('key') key: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
     return this.branchClient.send(
       { cmd: 'branch.config.delete' },
-      { branch_id: id, config_key: key },
+      { branch_id: id, config_key: key, requester: this.toRequester(req) },
     );
   }
 }
