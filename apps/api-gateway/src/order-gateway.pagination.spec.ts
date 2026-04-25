@@ -7,12 +7,14 @@ describe('OrderGatewayController pagination', () => {
     const orderClient = { send: jest.fn() };
     const identityClient = { send: jest.fn() };
     const logisticsClient = { send: jest.fn() };
+    const branchClient = { send: jest.fn() };
     const controller = new OrderGatewayController(
       orderClient as any,
       identityClient as any,
       logisticsClient as any,
+      branchClient as any,
     );
-    return { controller, orderClient };
+    return { controller, orderClient, branchClient };
   };
 
   it('default limit=10 and page=1 for list endpoint', async () => {
@@ -21,7 +23,9 @@ describe('OrderGatewayController pagination', () => {
       of({ data: [], total: 0, page: 1, limit: 10 }),
     );
 
-    const res = await controller.findAll(
+    const res: any = await controller.findAll(
+      undefined,
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -48,7 +52,9 @@ describe('OrderGatewayController pagination', () => {
       of({ data: [{ id: '1' }], total: 51, page: 1, limit: 25 }),
     );
 
-    const res = await controller.findAll(
+    const res: any = await controller.findAll(
+      undefined,
+      undefined,
       undefined,
       undefined,
       undefined,
@@ -71,6 +77,8 @@ describe('OrderGatewayController pagination', () => {
     const { controller } = makeController();
     expect(() =>
       controller.findAll(
+        undefined,
+        undefined,
         undefined,
         undefined,
         undefined,

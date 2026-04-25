@@ -967,6 +967,47 @@ export class BranchServiceService implements OnModuleInit {
     return successRes(enrichedUsers, 200, 'Branch users');
   }
 
+  async findUserBranch(user_id: string, requester?: RequesterContext) {
+    const userId = String(user_id ?? '').trim();
+    if (!userId) {
+      this.badRequest('user_id is required');
+    }
+
+    if (!this.isSystemPrivileged(requester)) {
+      const requesterId = String(requester?.id ?? '').trim();
+      if (!requesterId) {
+        this.forbidden('Requester aniqlanmadi');
+      }
+      if (requesterId !== userId) {
+        this.forbidden('Boshqa foydalanuvchining filialini ko‘rishga ruxsat yo‘q');
+      }
+    }
+
+    const assignment = await this.branchUserRepo.findOne({
+      where: { user_id: userId, isDeleted: false },
+      order: { createdAt: 'DESC' },
+    });
+
+    if (!assignment) {
+      return successRes(null, 200, 'User branch assignment');
+    }
+
+    await this.assertCanReadBranch(String(assignment.branch_id), requester);
+
+    const branch = await this.branchRepo.findOne({
+      where: { id: String(assignment.branch_id), isDeleted: false },
+    });
+
+    return successRes(
+      {
+        ...assignment,
+        branch: branch ?? null,
+      },
+      200,
+      'User branch assignment',
+    );
+  }
+
   async setBranchConfig(data: {
     branch_id?: string;
     config_key?: string;
