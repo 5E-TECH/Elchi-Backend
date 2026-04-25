@@ -3,6 +3,7 @@ import {
   ArrayNotEmpty,
   IsArray,
   IsEnum,
+  IsISO8601,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -11,6 +12,12 @@ import {
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
 import { Order_status, Where_deliver } from '@app/common';
+
+enum OrderSourceDto {
+  INTERNAL = 'internal',
+  EXTERNAL = 'external',
+  BRANCH = 'branch',
+}
 
 const parseFormattedNumber = (value: unknown): number | unknown => {
   if (value === undefined || value === null || value === '') {
@@ -129,10 +136,41 @@ export class CreateOrderRequestDto {
   @IsString()
   region_id?: string | null;
 
+  @ApiPropertyOptional({ type: String, example: '12', description: 'Branch ID (as string/bigint)' })
+  @IsOptional()
+  @IsString()
+  branch_id?: string | null;
+
+  @ApiPropertyOptional({ type: String, example: '1001', description: 'Current batch ID (as string/bigint)' })
+  @IsOptional()
+  @IsString()
+  current_batch_id?: string | null;
+
+  @ApiPropertyOptional({ type: String, example: '77', description: 'Courier ID (as string/bigint)' })
+  @IsOptional()
+  @IsString()
+  courier_id?: string | null;
+
+  @ApiPropertyOptional({ example: '2026-04-25T14:30:00+05:00' })
+  @IsOptional()
+  @IsISO8601()
+  assigned_at?: string | null;
+
+  @ApiPropertyOptional({ example: 'Mijoz uyda yo‘q edi' })
+  @IsOptional()
+  @IsString()
+  return_reason?: string | null;
+
   @ApiPropertyOptional({ example: 'Toshkent, Chilonzor' })
   @IsOptional()
   @IsString()
   address?: string | null;
+
+  @ApiPropertyOptional({ enum: OrderSourceDto, default: OrderSourceDto.INTERNAL })
+  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
+  @IsOptional()
+  @IsEnum(OrderSourceDto)
+  source?: OrderSourceDto;
 
   @ApiPropertyOptional({ type: [OrderItemDto] })
   @IsOptional()
@@ -184,6 +222,31 @@ export class UpdateOrderRequestDto {
   @IsOptional()
   @IsString()
   region_id?: string | null;
+
+  @ApiPropertyOptional({ type: String, example: '12', description: 'Branch ID (as string/bigint)' })
+  @IsOptional()
+  @IsString()
+  branch_id?: string | null;
+
+  @ApiPropertyOptional({ type: String, example: '1001', description: 'Current batch ID (as string/bigint)' })
+  @IsOptional()
+  @IsString()
+  current_batch_id?: string | null;
+
+  @ApiPropertyOptional({ type: String, example: '77', description: 'Courier ID (as string/bigint)' })
+  @IsOptional()
+  @IsString()
+  courier_id?: string | null;
+
+  @ApiPropertyOptional({ example: '2026-04-25T14:30:00+05:00' })
+  @IsOptional()
+  @IsISO8601()
+  assigned_at?: string | null;
+
+  @ApiPropertyOptional({ example: 'Mijoz uyda yo‘q edi' })
+  @IsOptional()
+  @IsString()
+  return_reason?: string | null;
 
   @ApiPropertyOptional({ example: 'Toshkent, Chilonzor' })
   @IsOptional()
@@ -277,6 +340,12 @@ export class UpdateOrderByIdRequestDto {
   @IsOptional()
   @IsString()
   qr_code_token?: string | null;
+
+  @ApiPropertyOptional({ enum: OrderSourceDto, default: OrderSourceDto.INTERNAL })
+  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
+  @IsOptional()
+  @IsEnum(OrderSourceDto)
+  source?: OrderSourceDto;
 }
 
 export class OrdersArrayDto {

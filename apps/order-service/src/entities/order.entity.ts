@@ -7,6 +7,7 @@ import { OrderTracking } from './order-tracking.entity';
 export enum Order_source {
   INTERNAL = 'internal',
   EXTERNAL = 'external',
+  BRANCH = 'branch',
 }
 
 @Entity({ name: 'orders' })
@@ -67,6 +68,21 @@ export class Order extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   region_id!: string | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  branch_id!: string | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  current_batch_id!: string | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  courier_id!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  assigned_at!: Date | null;
+
+  @Column({ type: 'text', nullable: true })
+  return_reason!: string | null;
 
   @Column({ type: 'varchar', nullable: true })
   address!: string | null;

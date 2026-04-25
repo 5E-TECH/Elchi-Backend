@@ -195,4 +195,51 @@ describe('Order tracking lifecycle', () => {
       }),
     );
   });
+
+  it('create supports BRANCH source with branch/courier fields', async () => {
+    const { service, orderRepo } = createService();
+
+    orderRepo.create.mockImplementation((payload: any) => payload);
+    orderRepo.save.mockImplementation(async (payload: any) => ({ ...payload, id: '404' }));
+    orderRepo.update.mockResolvedValue(undefined);
+    jest.spyOn(service, 'findById').mockResolvedValue({ id: '404', items: [] } as any);
+
+    await service.create(
+      {
+        market_id: '1',
+        customer_id: '2',
+        source: 'branch' as any,
+        branch_id: '22',
+        current_batch_id: '33',
+        courier_id: '44',
+        assigned_at: '2026-04-25T10:30:00+05:00',
+        return_reason: 'old return',
+      },
+      { id: '900', roles: ['admin'] },
+    );
+
+    expect(orderRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source: 'branch',
+        branch_id: '22',
+        current_batch_id: '33',
+        courier_id: '44',
+        return_reason: 'old return',
+      }),
+    );
+  });
+
+  it('normalizeUpdatePayload normalizes source and assigned_at', () => {
+    const { service } = createService();
+
+    const payload = service.normalizeUpdatePayload({
+      source: 'BRANCH',
+      status: 'WAITING_CUSTOMER',
+      assigned_at: '2026-04-25T10:30:00+05:00',
+    });
+
+    expect(payload.source).toBe('branch');
+    expect(payload.status).toBe('waiting_customer');
+    expect(payload.assigned_at).toBeInstanceOf(Date);
+  });
 });

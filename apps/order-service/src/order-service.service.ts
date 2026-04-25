@@ -56,10 +56,16 @@ export class OrderServiceService {
               tags: ['order', order.status, order.where_deliver].filter(Boolean),
               metadata: {
                 status: order.status,
+                source: order.source,
                 market_id: order.market_id,
                 customer_id: order.customer_id,
                 post_id: order.post_id,
                 canceled_post_id: order.canceled_post_id,
+                branch_id: order.branch_id,
+                current_batch_id: order.current_batch_id,
+                courier_id: order.courier_id,
+                assigned_at: order.assigned_at,
+                return_reason: order.return_reason,
                 region_id: order.region_id,
                 district_id: order.district_id,
                 total_price: order.total_price,
@@ -163,18 +169,30 @@ export class OrderServiceService {
       [Order_status.CREATED]: [Order_status.NEW, Order_status.RECEIVED, Order_status.CANCELLED],
       [Order_status.NEW]: [Order_status.RECEIVED, Order_status.CANCELLED],
       [Order_status.RECEIVED]: [Order_status.ON_THE_ROAD, Order_status.WAITING, Order_status.CANCELLED],
-      [Order_status.ON_THE_ROAD]: [Order_status.WAITING, Order_status.CANCELLED],
+      [Order_status.ON_THE_ROAD]: [
+        Order_status.WAITING,
+        Order_status.WAITING_CUSTOMER,
+        Order_status.CANCELLED,
+      ],
+      [Order_status.WAITING_CUSTOMER]: [
+        Order_status.ON_THE_ROAD,
+        Order_status.WAITING,
+        Order_status.RETURNED_TO_MARKET,
+        Order_status.CANCELLED,
+      ],
       [Order_status.WAITING]: [
         Order_status.SOLD,
         Order_status.PARTLY_PAID,
         Order_status.PAID,
         Order_status.CANCELLED,
+        Order_status.RETURNED_TO_MARKET,
         Order_status.CLOSED,
       ],
       [Order_status.SOLD]: [Order_status.PAID, Order_status.WAITING, Order_status.CLOSED],
       [Order_status.PARTLY_PAID]: [Order_status.PAID, Order_status.WAITING, Order_status.CLOSED],
       [Order_status.PAID]: [Order_status.WAITING, Order_status.CLOSED],
       [Order_status.CANCELLED]: [Order_status.WAITING, Order_status.CLOSED],
+      [Order_status.RETURNED_TO_MARKET]: [],
       [Order_status.CANCELLED_SENT]: [Order_status.CANCELLED, Order_status.CLOSED],
       [Order_status.CLOSED]: [Order_status.WAITING],
     };
@@ -260,6 +278,37 @@ export class OrderServiceService {
     }
 
     return Array.from(new Set(flattened)) as Order_status[];
+  }
+
+  private normalizeSourceFilter(
+    source?: Order_source | 'internal' | 'external' | 'branch' | string,
+  ): Order_source | undefined {
+    if (source == null) {
+      return undefined;
+    }
+
+    const normalized = String(source).trim().toLowerCase();
+    if (!normalized) {
+      return undefined;
+    }
+
+    if (!Object.values(Order_source).includes(normalized as Order_source)) {
+      this.badRequest(`Invalid source value: ${source}`);
+    }
+
+    return normalized as Order_source;
+  }
+
+  private normalizeDateTimeInput(value?: string | Date | null): Date | null {
+    if (value === undefined || value === null || value === '') {
+      return null;
+    }
+
+    const dateValue = value instanceof Date ? value : new Date(String(value));
+    if (Number.isNaN(dateValue.getTime())) {
+      this.badRequest("assigned_at noto'g'ri datetime formatida");
+    }
+    return dateValue;
   }
 
   private analyticsDateRange(startDate?: string, endDate?: string) {
@@ -990,6 +1039,11 @@ export class OrderServiceService {
     post_id?: string | null;
     canceled_post_id?: string | null;
     sold_at?: string | null;
+    branch_id?: string | null;
+    current_batch_id?: string | null;
+    courier_id?: string | null;
+    assigned_at?: string | Date | null;
+    return_reason?: string | null;
     district_id?: string | null;
     region_id?: string | null;
     address?: string | null;
@@ -1026,6 +1080,11 @@ export class OrderServiceService {
         post_id: dto.post_id ?? null,
         canceled_post_id: dto.canceled_post_id ?? null,
         sold_at: dto.sold_at ?? null,
+        branch_id: dto.branch_id ?? null,
+        current_batch_id: dto.current_batch_id ?? null,
+        courier_id: dto.courier_id ?? null,
+        assigned_at: this.normalizeDateTimeInput(dto.assigned_at),
+        return_reason: dto.return_reason ?? null,
         district_id: dto.district_id ?? null,
         region_id: dto.region_id ?? null,
         address: dto.address ?? null,
@@ -1093,7 +1152,8 @@ export class OrderServiceService {
     end_day?: string;
     courier?: string;
     region_id?: string;
-    source?: Order_source | 'internal' | 'external';
+    branch_id?: string;
+    source?: Order_source | 'internal' | 'external' | 'branch';
     fetch_all?: boolean | string;
     fetchAll?: boolean | string;
     page?: number;
@@ -1114,6 +1174,7 @@ export class OrderServiceService {
       end_day,
       courier,
       region_id,
+      branch_id,
       source,
       fetch_all,
       fetchAll,
@@ -1129,6 +1190,7 @@ export class OrderServiceService {
 
     const pagination = this.normalizePagination(page, limit, useFetchAll);
     const statusFilter = this.normalizeStatusFilter(status);
+    const sourceFilter = this.normalizeSourceFilter(source);
 
     const qb = this.orderRepo
       .createQueryBuilder('order')
@@ -1166,13 +1228,20 @@ export class OrderServiceService {
     if (region_id) {
       qb.andWhere('order.region_id = :region_id', { region_id });
     }
-    if (source === Order_source.EXTERNAL) {
+    if (branch_id) {
+      qb.andWhere('order.branch_id = :branch_id', { branch_id });
+    }
+    if (sourceFilter === Order_source.EXTERNAL) {
       qb.andWhere('(order.source = :source OR order.external_id IS NOT NULL)', {
         source: Order_source.EXTERNAL,
       });
-    } else if (source === Order_source.INTERNAL) {
+    } else if (sourceFilter === Order_source.INTERNAL) {
       qb.andWhere('(order.source = :source OR order.external_id IS NULL)', {
         source: Order_source.INTERNAL,
+      });
+    } else if (sourceFilter === Order_source.BRANCH) {
+      qb.andWhere('order.source = :source', {
+        source: Order_source.BRANCH,
       });
     }
     if (courier) {
@@ -2431,6 +2500,11 @@ export class OrderServiceService {
       post_id?: string | null;
       canceled_post_id?: string | null;
       sold_at?: string | null;
+      branch_id?: string | null;
+      current_batch_id?: string | null;
+      courier_id?: string | null;
+      assigned_at?: string | Date | null;
+      return_reason?: string | null;
       district_id?: string | null;
       region_id?: string | null;
       address?: string | null;
@@ -2462,6 +2536,11 @@ export class OrderServiceService {
       post_id?: string | null;
       canceled_post_id?: string | null;
       sold_at?: string | null;
+      branch_id?: string | null;
+      current_batch_id?: string | null;
+      courier_id?: string | null;
+      assigned_at?: string | Date | null;
+      return_reason?: string | null;
       district_id?: string | null;
       region_id?: string | null;
       address?: string | null;
@@ -2506,6 +2585,26 @@ export class OrderServiceService {
         typeof dto.sold_at !== 'undefined'
           ? dto.sold_at
           : order.sold_at,
+      branch_id:
+        typeof dto.branch_id !== 'undefined'
+          ? dto.branch_id
+          : order.branch_id,
+      current_batch_id:
+        typeof dto.current_batch_id !== 'undefined'
+          ? dto.current_batch_id
+          : order.current_batch_id,
+      courier_id:
+        typeof dto.courier_id !== 'undefined'
+          ? dto.courier_id
+          : order.courier_id,
+      assigned_at:
+        typeof dto.assigned_at !== 'undefined'
+          ? this.normalizeDateTimeInput(dto.assigned_at)
+          : order.assigned_at,
+      return_reason:
+        typeof dto.return_reason !== 'undefined'
+          ? dto.return_reason
+          : order.return_reason,
       district_id: dto.district_id ?? order.district_id,
       region_id: dto.region_id ?? order.region_id,
       address: dto.address ?? order.address,
@@ -3297,6 +3396,18 @@ export class OrderServiceService {
     if (typeof payload.status === 'string') {
       const normalized = payload.status.toLowerCase();
       payload.status = normalized === Order_status.CREATED ? Order_status.NEW : normalized;
+    }
+
+    if (typeof payload.source === 'string') {
+      payload.source = payload.source.toLowerCase();
+    }
+
+    if (typeof payload.assigned_at === 'string' && payload.assigned_at.trim()) {
+      const parsed = new Date(payload.assigned_at);
+      if (Number.isNaN(parsed.getTime())) {
+        this.badRequest("assigned_at noto'g'ri datetime formatida");
+      }
+      payload.assigned_at = parsed;
     }
 
     if (payload.items) {
