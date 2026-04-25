@@ -11,6 +11,12 @@ jest.mock('@app/common', () => {
       ACTIVE: 'active',
       INACTIVE: 'inactive',
     },
+    BranchType: {
+      HQ: 'HQ',
+      CITY: 'CITY',
+      REGIONAL: 'REGIONAL',
+      DISTRICT: 'DISTRICT',
+    },
   };
 });
 
@@ -25,6 +31,8 @@ describe('BranchServiceService', () => {
   beforeEach(() => {
     branchRepo = {
       findOne: jest.fn(),
+      count: jest.fn().mockResolvedValue(0),
+      find: jest.fn(),
       save: jest.fn(),
       create: jest.fn((v) => v),
       createQueryBuilder: jest.fn(),
@@ -54,10 +62,13 @@ describe('BranchServiceService', () => {
   });
 
   it('createBranch creates new branch', async () => {
-    branchRepo.findOne.mockResolvedValueOnce(null);
+    branchRepo.findOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 'hq', level: 0, type: 'HQ', isDeleted: false });
     branchRepo.save.mockResolvedValue({ id: 'b1', name: 'Main' });
 
-    const res = await service.createBranch({ name: 'Main' } as any);
+    const res = await service.createBranch({ name: 'Main', type: 'REGIONAL', code: 'SAM', parent_id: 'hq' } as any);
 
     expect(res.statusCode).toBe(201);
     expect(res.data.id).toBe('b1');
@@ -69,7 +80,7 @@ describe('BranchServiceService', () => {
 
   it('createBranch throws 409 on duplicate name', async () => {
     branchRepo.findOne.mockResolvedValue({ id: 'x' });
-    await expect(service.createBranch({ name: 'Main' } as any)).rejects.toBeInstanceOf(RpcException);
+    await expect(service.createBranch({ name: 'Main', type: 'HQ', code: 'HQ-TSHKNT' } as any)).rejects.toBeInstanceOf(RpcException);
   });
 
   it('updateBranch throws 400 on invalid status', async () => {
@@ -107,5 +118,165 @@ describe('BranchServiceService', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.data.id).toBe('b1');
+  });
+
+  it('onModuleInit auto-creates HQ with HQ-TSHKNT code', async () => {
+    branchRepo.findOne
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(null);
+    branchRepo.save.mockResolvedValue({ id: 'hq1' });
+
+    await service.onModuleInit();
+
+    expect(branchRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'HQ',
+        level: 0,
+        parent_id: null,
+        code: 'HQ-TSHKNT',
+      }),
+    );
+  });
+
+  it('createBranch blocks second HQ creation', async () => {
+    branchRepo.findOne
+      .mockResolvedValueOnce(null) // name check
+      .mockResolvedValueOnce(null) // code check
+      .mockResolvedValueOnce({ id: 'existing-hq', type: 'HQ', isDeleted: false }); // existing HQ
+
+    await expect(
+      service.createBranch({
+        name: 'HQ2',
+        type: 'HQ',
+        code: 'HQ-TSHKNT-2',
+      } as any),
+    ).rejects.toBeInstanceOf(RpcException);
+  });
+
+  it('createBranch blocks duplicate code', async () => {
+    branchRepo.findOne
+      .mockResolvedValueOnce(null) // name check
+      .mockResolvedValueOnce({ id: 'b1', code: 'SAM', isDeleted: false }); // code check
+
+    await expect(
+      service.createBranch({
+        name: 'Sam branch',
+        type: 'REGIONAL',
+        code: 'SAM',
+        parent_id: '1',
+      } as any),
+    ).rejects.toBeInstanceOf(RpcException);
+  });
+
+  it('updateBranch blocks self-parent to prevent cycle', async () => {
+    branchRepo.findOne.mockResolvedValue({
+      id: 'b1',
+      name: 'A',
+      code: 'A1',
+      type: 'REGIONAL',
+      level: 1,
+      parent_id: 'hq',
+      status: 'active',
+      isDeleted: false,
+    });
+
+    await expect(
+      service.updateBranch('b1', { parent_id: 'b1', type: 'REGIONAL' } as any),
+    ).rejects.toBeInstanceOf(RpcException);
+  });
+
+  it('updateBranch blocks parent assignment to own child', async () => {
+    branchRepo.findOne
+      .mockResolvedValueOnce({
+        id: 'b1',
+        name: 'Root',
+        code: 'ROOT',
+        type: 'REGIONAL',
+        level: 1,
+        parent_id: 'hq',
+        status: 'active',
+        isDeleted: false,
+      }) // getBranchOrThrow(id)
+      .mockResolvedValueOnce({
+        id: 'child1',
+        name: 'Child',
+        code: 'CH1',
+        type: 'DISTRICT',
+        level: 2,
+        parent_id: 'b1',
+        status: 'active',
+        isDeleted: false,
+      }) // ensureNotCyclicParent: currentId=child1
+      .mockResolvedValueOnce({
+        id: 'b1',
+        name: 'Root',
+        code: 'ROOT',
+        type: 'REGIONAL',
+        level: 1,
+        parent_id: 'hq',
+        status: 'active',
+        isDeleted: false,
+      }); // ensureNotCyclicParent: currentId=b1 -> cycle
+
+    await expect(
+      service.updateBranch('b1', { parent_id: 'child1', type: 'REGIONAL' } as any),
+    ).rejects.toBeInstanceOf(RpcException);
+  });
+
+  it('createBranch computes level automatically from parent', async () => {
+    branchRepo.findOne
+      .mockResolvedValueOnce(null) // name check
+      .mockResolvedValueOnce(null) // code check
+      .mockResolvedValueOnce({ id: 'hq', level: 0, type: 'HQ', isDeleted: false }); // parent check
+    branchRepo.save.mockImplementation(async (payload: any) => payload);
+
+    const res = await service.createBranch({
+      name: 'Sam branch',
+      type: 'REGIONAL',
+      code: 'SAM',
+      parent_id: 'hq',
+      level: 99, // should be ignored
+    } as any);
+
+    expect(res.data.level).toBe(1);
+  });
+
+  it('findBranchTree returns nested branch tree', async () => {
+    branchRepo.find.mockResolvedValue([
+      { id: '1', name: 'HQ', parent_id: null, level: 0, isDeleted: false },
+      { id: '2', name: 'Samarqand', parent_id: '1', level: 1, isDeleted: false },
+      { id: '3', name: "Kattaqo'rg'on", parent_id: '2', level: 2, isDeleted: false },
+      { id: '4', name: 'Urgut', parent_id: '2', level: 2, isDeleted: false },
+    ]);
+
+    const res = await service.findBranchTree();
+
+    expect(res.statusCode).toBe(200);
+    expect(Array.isArray(res.data)).toBe(true);
+    expect(res.data[0].id).toBe('1');
+    expect(res.data[0].children[0].id).toBe('2');
+    expect(res.data[0].children[0].children).toHaveLength(2);
+  });
+
+  it('findBranchDescendants returns flat descendants list', async () => {
+    branchRepo.findOne.mockResolvedValueOnce({
+      id: '2',
+      name: 'Samarqand',
+      parent_id: '1',
+      level: 1,
+      isDeleted: false,
+    });
+    branchRepo.find.mockResolvedValue([
+      { id: '1', name: 'HQ', parent_id: null, level: 0, isDeleted: false },
+      { id: '2', name: 'Samarqand', parent_id: '1', level: 1, isDeleted: false },
+      { id: '3', name: "Kattaqo'rg'on", parent_id: '2', level: 2, isDeleted: false },
+      { id: '4', name: 'Urgut', parent_id: '2', level: 2, isDeleted: false },
+      { id: '5', name: 'Inner', parent_id: '3', level: 3, isDeleted: false },
+    ]);
+
+    const res = await service.findBranchDescendants('2');
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data.map((item: any) => item.id)).toEqual(['3', '4', '5']);
   });
 });

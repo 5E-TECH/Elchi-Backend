@@ -1,4 +1,5 @@
-import { IsEnum, IsNumberString, IsOptional, IsString, MinLength } from 'class-validator';
+import { IsEnum, IsNumberString, IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import { BranchType } from '@app/common';
 
 export class CreateBranchDto {
   @IsString()
@@ -26,6 +27,17 @@ export class CreateBranchDto {
   district_id?: string;
 
   @IsOptional()
+  @IsNumberString()
+  parent_id?: string;
+
+  @IsEnum(BranchType)
+  type!: BranchType;
+
+  @IsString()
+  @Matches(/^[A-Z0-9-]{2,32}$/)
+  code!: string;
+
+  @IsOptional()
   @IsEnum(['active', 'inactive'])
   status?: string;
 
@@ -33,4 +45,3 @@ export class CreateBranchDto {
   @IsNumberString()
   manager_id?: string;
 }
-

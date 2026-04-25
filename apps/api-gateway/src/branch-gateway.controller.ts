@@ -72,12 +72,27 @@ export class BranchGatewayController {
     );
   }
 
+  @Get('branches/tree')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Get full branch tree (nested)' })
+  findBranchTree() {
+    return this.branchClient.send({ cmd: 'branch.tree' }, {});
+  }
+
   @Get('branches/:id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Find branch by id' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   findBranchById(@Param('id') id: string) {
     return this.branchClient.send({ cmd: 'branch.find_by_id' }, { id });
+  }
+
+  @Get('branches/:id/descendants')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Get all descendants of a branch (flat list)' })
+  @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
+  findBranchDescendants(@Param('id') id: string) {
+    return this.branchClient.send({ cmd: 'branch.descendants' }, { id });
   }
 
   @Patch('branches/:id')
