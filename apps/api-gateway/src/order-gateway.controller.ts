@@ -512,6 +512,8 @@ export class OrderGatewayController {
   @ApiQuery({ name: 'end_day', required: false, type: String, description: 'End date (YYYY-MM-DD or ISO)' })
   @ApiQuery({ name: 'courier', required: false, type: String, description: 'Courier (operator text or post_id)' })
   @ApiQuery({ name: 'region_id', required: false, type: String })
+  @ApiQuery({ name: 'branch_id', required: false, type: String })
+  @ApiQuery({ name: 'source', required: false, enum: ['internal', 'external', 'branch'] })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1, schema: { default: 1, minimum: 1 } as any })
   @ApiQuery({ name: 'limit', required: false, enum: [10, 25, 50, 100], schema: { default: 10 } as any })
   findAll(
@@ -523,6 +525,8 @@ export class OrderGatewayController {
     @Query('end_day') end_day?: string,
     @Query('courier') courier?: string,
     @Query('region_id') region_id?: string,
+    @Query('branch_id') branch_id?: string,
+    @Query('source') source?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Req() req?: { user: JwtUser },
@@ -551,6 +555,8 @@ export class OrderGatewayController {
         end_day,
         courier,
         region_id,
+        branch_id,
+        source,
         page: pagination.page,
         limit: pagination.limit,
       },
@@ -568,10 +574,14 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List orders by market ID with pagination' })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
+  @ApiQuery({ name: 'branch_id', required: false, type: String })
+  @ApiQuery({ name: 'source', required: false, enum: ['internal', 'external', 'branch'] })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1, schema: { default: 1, minimum: 1 } as any })
   @ApiQuery({ name: 'limit', required: false, enum: [10, 25, 50, 100], schema: { default: 10 } as any })
   findAllByMarket(
     @Param('marketId') marketId: string,
+    @Query('branch_id') branch_id?: string,
+    @Query('source') source?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
@@ -583,6 +593,8 @@ export class OrderGatewayController {
       {
         query: {
           market_id: marketId,
+          branch_id,
+          source,
           page: pagination.page,
           limit: pagination.limit,
         },
