@@ -27,6 +27,7 @@ describe('BranchServiceService', () => {
   let branchConfigRepo: any;
   let identityClient: any;
   let logisticsClient: any;
+  let orderClient: any;
 
   beforeEach(() => {
     branchRepo = {
@@ -39,6 +40,7 @@ describe('BranchServiceService', () => {
     };
     branchUserRepo = {
       findOne: jest.fn(),
+      count: jest.fn().mockResolvedValue(0),
       save: jest.fn(),
       create: jest.fn((v) => v),
       find: jest.fn(),
@@ -51,6 +53,7 @@ describe('BranchServiceService', () => {
     };
     identityClient = { send: jest.fn().mockReturnValue(of({ data: { id: 'u1' } })) };
     logisticsClient = { send: jest.fn().mockReturnValue(of({ data: [] })) };
+    orderClient = { send: jest.fn().mockReturnValue(of({ data: [] })) };
 
     service = new BranchServiceService(
       branchRepo,
@@ -58,6 +61,7 @@ describe('BranchServiceService', () => {
       branchConfigRepo,
       identityClient,
       logisticsClient,
+      orderClient,
     );
   });
 
@@ -353,5 +357,192 @@ describe('BranchServiceService', () => {
     await expect(
       service.findUserBranch('u2', { id: 'u1', roles: ['operator'] }),
     ).rejects.toBeInstanceOf(RpcException);
+  });
+
+  it('getBranchStats returns aggregated branch metrics', async () => {
+    const now = new Date();
+    branchRepo.findOne.mockResolvedValue({ id: '1', isDeleted: false });
+    branchRepo.find
+      .mockResolvedValueOnce([{ id: '2' }])
+      .mockResolvedValueOnce([]);
+    branchUserRepo.count.mockResolvedValue(3);
+    orderClient.send
+      .mockReturnValueOnce(
+        of({
+          data: [
+            {
+              id: 'o1',
+              branch_id: '1',
+              market_id: '10',
+              status: 'new',
+              total_price: 100000,
+              current_batch_id: 'b1',
+              createdAt: now.toISOString(),
+            },
+          ],
+        }),
+      )
+      .mockReturnValueOnce(
+        of({
+          data: [
+            {
+              id: 'o2',
+              branch_id: '2',
+              market_id: '11',
+              status: 'waiting',
+              total_price: 200000,
+              current_batch_id: 'b2',
+              createdAt: now.toISOString(),
+            },
+          ],
+        }),
+      );
+
+    const res = await service.getBranchStats('1', { id: '1', roles: ['admin'] });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data.today_orders_count).toBe(2);
+    expect(res.data.week_orders_count).toBe(2);
+    expect(res.data.active_batches_count).toBe(2);
+    expect(res.data.couriers_count).toBe(3);
+  });
+
+  it('getBranchMarketsAnalytics returns grouped market data', async () => {
+    branchRepo.findOne.mockResolvedValue({ id: '1', isDeleted: false });
+    branchRepo.find.mockResolvedValueOnce([]);
+    orderClient.send.mockReturnValueOnce(
+      of({
+        data: [
+          {
+            id: 'o1',
+            branch_id: '1',
+            market_id: '10',
+            status: 'waiting',
+            total_price: 100000,
+            createdAt: new Date().toISOString(),
+          },
+          {
+            id: 'o2',
+            branch_id: '1',
+            market_id: '10',
+            status: 'new',
+            total_price: 150000,
+            createdAt: new Date().toISOString(),
+          },
+        ],
+      }),
+    );
+
+    const res = await service.getBranchMarketsAnalytics('1', { id: '1', roles: ['admin'] });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data).toHaveLength(1);
+    expect(res.data[0]).toEqual(
+      expect.objectContaining({
+        market_id: '10',
+        orders_count: 2,
+        delivered_count: 1,
+        total_price: 250000,
+      }),
+    );
+    expect(res.data[0]).not.toHaveProperty('commission');
+    expect(res.data[0]).not.toHaveProperty('payment');
+    expect(res.data[0]).not.toHaveProperty('expense');
+    expect(res.data[0]).not.toHaveProperty('profit');
+  });
+
+  it('manager stats includes own branch and descendants', async () => {
+    branchRepo.findOne.mockResolvedValue({ id: '100', isDeleted: false });
+    branchUserRepo.find.mockResolvedValue([
+      { branch_id: '100', role: 'MANAGER', isDeleted: false },
+    ]);
+    branchRepo.find.mockResolvedValue([{ id: '200' }]);
+    branchUserRepo.count.mockResolvedValue(0);
+    orderClient.send
+      .mockReturnValueOnce(of({ data: [] }))
+      .mockReturnValueOnce(of({ data: [] }));
+
+    const res = await service.getBranchStats('100', { id: 'u-manager', roles: ['branch'] });
+
+    expect(res.statusCode).toBe(200);
+    expect(orderClient.send).toHaveBeenCalledTimes(2);
+    expect(orderClient.send).toHaveBeenNthCalledWith(
+      1,
+      { cmd: 'order.find_all' },
+      expect.objectContaining({ query: expect.objectContaining({ branch_id: '100' }) }),
+    );
+    expect(orderClient.send).toHaveBeenNthCalledWith(
+      2,
+      { cmd: 'order.find_all' },
+      expect.objectContaining({ query: expect.objectContaining({ branch_id: '200' }) }),
+    );
+  });
+
+  it('operator stats includes only own branch (no descendants)', async () => {
+    branchRepo.findOne.mockResolvedValue({ id: '300', isDeleted: false });
+    branchUserRepo.find.mockResolvedValue([
+      { branch_id: '300', role: 'OPERATOR', isDeleted: false },
+    ]);
+    branchUserRepo.count.mockResolvedValue(0);
+    orderClient.send.mockReturnValueOnce(of({ data: [] }));
+
+    const res = await service.getBranchStats('300', { id: 'u-operator', roles: ['operator'] });
+
+    expect(res.statusCode).toBe(200);
+    expect(orderClient.send).toHaveBeenCalledTimes(1);
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.find_all' },
+      expect.objectContaining({ query: expect.objectContaining({ branch_id: '300' }) }),
+    );
+  });
+
+  it('stats and markets analytics respond under 300ms in local unit run', async () => {
+    branchRepo.findOne.mockResolvedValue({ id: '1', isDeleted: false });
+    branchRepo.find.mockResolvedValueOnce([]);
+    branchRepo.find.mockResolvedValueOnce([]);
+    branchUserRepo.count.mockResolvedValue(1);
+    orderClient.send
+      .mockReturnValueOnce(
+        of({
+          data: [
+            {
+              id: 'o1',
+              branch_id: '1',
+              market_id: '11',
+              status: 'new',
+              total_price: 120000,
+              current_batch_id: 'b1',
+              createdAt: new Date().toISOString(),
+            },
+          ],
+        }),
+      )
+      .mockReturnValueOnce(
+        of({
+          data: [
+            {
+              id: 'o2',
+              branch_id: '1',
+              market_id: '11',
+              status: 'waiting',
+              total_price: 130000,
+              createdAt: new Date().toISOString(),
+            },
+          ],
+        }),
+      );
+
+    const statsStart = Date.now();
+    const statsRes = await service.getBranchStats('1', { id: '1', roles: ['admin'] });
+    const statsMs = Date.now() - statsStart;
+
+    const marketsStart = Date.now();
+    const marketsRes = await service.getBranchMarketsAnalytics('1', { id: '1', roles: ['admin'] });
+    const marketsMs = Date.now() - marketsStart;
+
+    expect(statsRes.statusCode).toBe(200);
+    expect(marketsRes.statusCode).toBe(200);
+    expect(statsMs).toBeLessThan(300);
+    expect(marketsMs).toBeLessThan(300);
   });
 });
