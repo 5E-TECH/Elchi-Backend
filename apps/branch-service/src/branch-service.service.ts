@@ -3,7 +3,7 @@ import { RpcException } from '@nestjs/microservices';
 import { ClientProxy } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { BranchType, BranchUserRole, Status } from '@app/common';
+import { BranchType, BranchUserRole, Order_status, Status } from '@app/common';
 import { Branch } from './entities/branch.entity';
 import { BranchUser } from './entities/branch-user.entity';
 import { BranchConfig } from './entities/branch-config.entity';
@@ -18,6 +18,17 @@ type RequesterContext = {
 type BranchAccessScope = {
   readableBranchIds: Set<string>;
   writableBranchIds: Set<string>;
+  managerReadableBranchIds: Set<string>;
+};
+
+type OrderAnalyticsRow = {
+  id: string;
+  branch_id: string | null;
+  market_id: string | null;
+  status: string | null;
+  total_price: number;
+  current_batch_id: string | null;
+  createdAt: Date | null;
 };
 
 @Injectable()
@@ -30,6 +41,7 @@ export class BranchServiceService implements OnModuleInit {
     @InjectRepository(BranchConfig) private readonly branchConfigRepo: Repository<BranchConfig>,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
+    @Inject('ORDER') private readonly orderClient: ClientProxy,
   ) {}
 
   async onModuleInit() {
@@ -103,6 +115,7 @@ export class BranchServiceService implements OnModuleInit {
       return {
         readableBranchIds: new Set<string>(),
         writableBranchIds: new Set<string>(),
+        managerReadableBranchIds: new Set<string>(),
       };
     }
 
@@ -136,6 +149,7 @@ export class BranchServiceService implements OnModuleInit {
     return {
       readableBranchIds,
       writableBranchIds: new Set(managerRoots),
+      managerReadableBranchIds: managerTreeIds,
     };
   }
 
@@ -468,6 +482,101 @@ export class BranchServiceService implements OnModuleInit {
     return new Map(results);
   }
 
+  private toTashkentStartOfDay(date: Date): Date {
+    const tzOffsetMs = 5 * 60 * 60 * 1000;
+    const shifted = new Date(date.getTime() + tzOffsetMs);
+    const year = shifted.getUTCFullYear();
+    const month = shifted.getUTCMonth();
+    const day = shifted.getUTCDate();
+    return new Date(Date.UTC(year, month, day) - tzOffsetMs);
+  }
+
+  private toTashkentStartOfWeek(date: Date): Date {
+    const dayStart = this.toTashkentStartOfDay(date);
+    const tzOffsetMs = 5 * 60 * 60 * 1000;
+    const shifted = new Date(dayStart.getTime() + tzOffsetMs);
+    const dayOfWeek = shifted.getUTCDay(); // 0=Sun ... 6=Sat
+    const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    return new Date(dayStart.getTime() - diffToMonday * 24 * 60 * 60 * 1000);
+  }
+
+  private extractOrderRows(payload: unknown): OrderAnalyticsRow[] {
+    const source = payload as any;
+    const candidates = [
+      source?.data?.data,
+      source?.data,
+      source,
+    ];
+
+    for (const candidate of candidates) {
+      if (!Array.isArray(candidate)) {
+        continue;
+      }
+      return candidate.map((row: any) => {
+        const createdValue = row?.createdAt ?? row?.created_at ?? null;
+        const createdAt = createdValue ? new Date(createdValue) : null;
+        return {
+          id: String(row?.id ?? ''),
+          branch_id: row?.branch_id ? String(row.branch_id) : null,
+          market_id: row?.market_id ? String(row.market_id) : null,
+          status: row?.status ? String(row.status) : null,
+          total_price: Number(row?.total_price ?? 0) || 0,
+          current_batch_id: row?.current_batch_id ? String(row.current_batch_id) : null,
+          createdAt: createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : null,
+        };
+      });
+    }
+
+    return [];
+  }
+
+  private async getOrdersByBranchIds(branchIds: string[]): Promise<OrderAnalyticsRow[]> {
+    const rows = await Promise.all(
+      branchIds.map(async (branchId) => {
+        try {
+          const response = await lastValueFrom(
+            this.orderClient
+              .send(
+                { cmd: 'order.find_all' },
+                {
+                  query: {
+                    branch_id: branchId,
+                    fetch_all: true,
+                    limit: 5000,
+                  },
+                },
+              )
+              .pipe(timeout(10000)),
+          );
+          return this.extractOrderRows(response);
+        } catch {
+          return [];
+        }
+      }),
+    );
+
+    return rows.flat();
+  }
+
+  private async resolveAnalyticsBranchIds(
+    branchId: string,
+    requester?: RequesterContext,
+  ): Promise<string[]> {
+    await this.getBranchOrThrow(branchId);
+    await this.assertCanReadBranch(branchId, requester);
+
+    if (this.isSystemPrivileged(requester)) {
+      return Array.from(await this.collectDescendantBranchIds([branchId]));
+    }
+
+    const scope = await this.resolveAccessScope(requester);
+    if (scope.managerReadableBranchIds.has(String(branchId))) {
+      return Array.from(await this.collectDescendantBranchIds([branchId]));
+    }
+
+    return [String(branchId)];
+  }
+
   async createBranch(dto: {
     name?: string;
     location?: string;
@@ -724,6 +833,110 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     return successRes(descendants, 200, 'Branch descendants');
+  }
+
+  async getBranchStats(id: string, requester?: RequesterContext) {
+    const targetBranchIds = await this.resolveAnalyticsBranchIds(id, requester);
+    const orders = await this.getOrdersByBranchIds(targetBranchIds);
+
+    const now = new Date();
+    const todayStart = this.toTashkentStartOfDay(now);
+    const weekStart = this.toTashkentStartOfWeek(now);
+
+    const todayOrdersCount = orders.filter(
+      (order) => order.createdAt && order.createdAt >= todayStart,
+    ).length;
+
+    const weekOrdersCount = orders.filter(
+      (order) => order.createdAt && order.createdAt >= weekStart,
+    ).length;
+
+    const activeBatchStatuses = new Set<string>([
+      Order_status.CREATED,
+      Order_status.NEW,
+      Order_status.RECEIVED,
+      Order_status.ON_THE_ROAD,
+      Order_status.WAITING,
+      Order_status.WAITING_CUSTOMER,
+      Order_status.PARTLY_PAID,
+    ]);
+
+    const activeBatchesCount = new Set(
+      orders
+        .filter(
+          (order) =>
+            order.current_batch_id &&
+            order.status &&
+            activeBatchStatuses.has(order.status),
+        )
+        .map((order) => String(order.current_batch_id)),
+    ).size;
+
+    const couriersCount = await this.branchUserRepo.count({
+      where: {
+        branch_id: In(targetBranchIds),
+        role: BranchUserRole.COURIER,
+        isDeleted: false,
+      },
+    });
+
+    return successRes(
+      {
+        today_orders_count: todayOrdersCount,
+        week_orders_count: weekOrdersCount,
+        active_batches_count: activeBatchesCount,
+        couriers_count: couriersCount,
+      },
+      200,
+      'Branch stats',
+    );
+  }
+
+  async getBranchMarketsAnalytics(id: string, requester?: RequesterContext) {
+    const targetBranchIds = await this.resolveAnalyticsBranchIds(id, requester);
+    const orders = await this.getOrdersByBranchIds(targetBranchIds);
+
+    const deliveredStatuses = new Set<string>([
+      Order_status.WAITING,
+      Order_status.SOLD,
+      Order_status.PAID,
+      Order_status.PARTLY_PAID,
+      Order_status.CLOSED,
+      Order_status.RETURNED_TO_MARKET,
+    ]);
+
+    const marketMap = new Map<
+      string,
+      { market_id: string; orders_count: number; delivered_count: number; total_price: number }
+    >();
+
+    for (const order of orders) {
+      const marketId = String(order.market_id ?? '').trim();
+      if (!marketId) {
+        continue;
+      }
+
+      const current = marketMap.get(marketId) ?? {
+        market_id: marketId,
+        orders_count: 0,
+        delivered_count: 0,
+        total_price: 0,
+      };
+
+      current.orders_count += 1;
+      current.total_price += Number(order.total_price ?? 0) || 0;
+      if (order.status && deliveredStatuses.has(order.status)) {
+        current.delivered_count += 1;
+      }
+
+      marketMap.set(marketId, current);
+    }
+
+    const items = Array.from(marketMap.values()).sort(
+      (left, right) => right.orders_count - left.orders_count,
+    );
+
+    return successRes(items, 200, 'Branch market analytics');
   }
 
   async updateBranch(

@@ -69,6 +69,20 @@ export class BranchServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'branch.stats' })
+  getStats(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.getBranchStats(data?.id, this.getRequester(data)),
+    );
+  }
+
+  @MessagePattern({ cmd: 'branch.analytics.markets' })
+  getMarketsAnalytics(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.getBranchMarketsAnalytics(data?.id, this.getRequester(data)),
+    );
+  }
+
   @MessagePattern({ cmd: 'branch.update' })
   update(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>

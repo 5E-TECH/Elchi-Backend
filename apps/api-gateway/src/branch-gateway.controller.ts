@@ -111,6 +111,34 @@ export class BranchGatewayController {
     return this.branchClient.send({ cmd: 'branch.descendants' }, { id });
   }
 
+  @Get('branches/:id/stats')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.OPERATOR)
+  @ApiOperation({ summary: 'Branch operational stats (today/week/orders/batches/couriers)' })
+  @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
+  findBranchStats(
+    @Param('id') id: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.stats' },
+      { id, requester: this.toRequester(req) },
+    );
+  }
+
+  @Get('branches/:id/analytics/markets')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.OPERATOR)
+  @ApiOperation({ summary: 'Branch market analytics (orders, delivered, total price)' })
+  @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
+  findBranchMarketsAnalytics(
+    @Param('id') id: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.analytics.markets' },
+      { id, requester: this.toRequester(req) },
+    );
+  }
+
   @Patch('branches/:id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Update branch' })
