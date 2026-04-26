@@ -96,3 +96,22 @@ export enum BranchUserRole {
   OPERATOR = 'OPERATOR',
   COURIER = 'COURIER',
 }
+
+export enum BranchTransferDirection {
+  FORWARD = 'FORWARD',
+  RETURN = 'RETURN',
+}
+
+export enum BranchTransferBatchStatus {
+  PENDING = 'PENDING',
+  SENT = 'SENT',
+  RECEIVED = 'RECEIVED',
+  CANCELLED = 'CANCELLED',
+}
+
+export enum BranchTransferBatchAction {
+  CREATED = 'CREATED',
+  SENT = 'SENT',
+  RECEIVED = 'RECEIVED',
+  CANCELLED = 'CANCELLED',
+}

@@ -7,6 +7,9 @@ import { RmqModule, DatabaseModule, orderValidationSchema } from '@app/common';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
+import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
+import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.entity';
+import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
 
 @Module({
   imports: [
@@ -23,7 +26,14 @@ import { OrderTracking } from './entities/order-tracking.entity';
     RmqModule.register({ name: 'FINANCE' }),
     RmqModule.register({ name: 'INTEGRATION' }),
     DatabaseModule,
-    TypeOrmModule.forFeature([Order, OrderItem, OrderTracking]),
+    TypeOrmModule.forFeature([
+      Order,
+      OrderItem,
+      OrderTracking,
+      BranchTransferBatch,
+      BranchTransferBatchItem,
+      BranchTransferBatchHistory,
+    ]),
   ],
   controllers: [OrderServiceController],
   providers: [OrderServiceService],
