@@ -1,5 +1,5 @@
 import { BaseEntity, BranchTransferBatchStatus, BranchTransferDirection } from '@app/common';
-import { Column, Entity, Index, OneToMany } from 'typeorm';
+import { Check, Column, Entity, Index, OneToMany } from 'typeorm';
 import { BranchTransferBatchHistory } from './branch-transfer-batch-history.entity';
 import { BranchTransferBatchItem } from './branch-transfer-batch-item.entity';
 
@@ -10,6 +10,17 @@ import { BranchTransferBatchItem } from './branch-transfer-batch-item.entity';
 @Index('IDX_BRANCH_TRANSFER_BATCHES_STATUS', ['status'])
 @Index('IDX_BRANCH_TRANSFER_BATCHES_DIRECTION', ['direction'])
 @Index('UQ_BRANCH_TRANSFER_BATCHES_QR_CODE_TOKEN', ['qr_code_token'], { unique: true })
+@Check(
+  'CHK_BRANCH_TRANSFER_BATCH_QR_TOKEN_DIRECTION',
+  `(
+    qr_code_token ~ '^(BTB|BTR)-[A-Za-z0-9]{6,64}$'
+    AND (
+      (direction = 'FORWARD' AND qr_code_token LIKE 'BTB-%')
+      OR
+      (direction = 'RETURN' AND qr_code_token LIKE 'BTR-%')
+    )
+  )`,
+)
 export class BranchTransferBatch extends BaseEntity {
   @Column({ type: 'varchar', length: 32, unique: true })
   qr_code_token!: string;
