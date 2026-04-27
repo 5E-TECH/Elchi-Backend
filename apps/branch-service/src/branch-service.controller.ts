@@ -83,6 +83,17 @@ export class BranchServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'branch.transfer_batches.create' })
+  createTransferBatches(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.createTransferBatches(
+        data?.id,
+        data?.dto ?? data,
+        this.getRequester(data),
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'branch.update' })
   update(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>

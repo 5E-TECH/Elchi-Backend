@@ -19,6 +19,7 @@ import { BranchConfig } from './entities/branch-config.entity';
     RmqModule.register({ name: 'IDENTITY' }),
     RmqModule.register({ name: 'LOGISTICS' }),
     RmqModule.register({ name: 'ORDER' }),
+    RmqModule.register({ name: 'FILE' }),
     DatabaseModule,
     TypeOrmModule.forFeature([Branch, BranchUser, BranchConfig]),
   ],

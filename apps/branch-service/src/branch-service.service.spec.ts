@@ -28,6 +28,7 @@ describe('BranchServiceService', () => {
   let identityClient: any;
   let logisticsClient: any;
   let orderClient: any;
+  let fileClient: any;
 
   beforeEach(() => {
     branchRepo = {
@@ -54,6 +55,7 @@ describe('BranchServiceService', () => {
     identityClient = { send: jest.fn().mockReturnValue(of({ data: { id: 'u1' } })) };
     logisticsClient = { send: jest.fn().mockReturnValue(of({ data: [] })) };
     orderClient = { send: jest.fn().mockReturnValue(of({ data: [] })) };
+    fileClient = { send: jest.fn().mockReturnValue(of({ data: { key: 'k1', url: 'u1' } })) };
 
     service = new BranchServiceService(
       branchRepo,
@@ -62,6 +64,7 @@ describe('BranchServiceService', () => {
       identityClient,
       logisticsClient,
       orderClient,
+      fileClient,
     );
   });
 
@@ -544,5 +547,100 @@ describe('BranchServiceService', () => {
     expect(marketsRes.statusCode).toBe(200);
     expect(statsMs).toBeLessThan(300);
     expect(marketsMs).toBeLessThan(300);
+  });
+
+  it('createTransferBatches creates batches and generates QR files', async () => {
+    branchRepo.findOne
+      .mockResolvedValueOnce({ id: '10', isDeleted: false })
+      .mockResolvedValueOnce({ id: '1', isDeleted: false });
+    branchUserRepo.find.mockResolvedValue([
+      { branch_id: '10', role: 'OPERATOR', isDeleted: false },
+    ]);
+    orderClient.send.mockReturnValueOnce(
+      of({
+        statusCode: 201,
+        data: {
+          idempotent: false,
+          batches: [
+            { id: '501', qr_code_token: 'BTB-abc123xy', target_region_id: '6' },
+          ],
+        },
+      }),
+    );
+    orderClient.send.mockReturnValueOnce(
+      of({
+        statusCode: 201,
+        data: { id: 'h-1' },
+      }),
+    );
+    fileClient.send.mockReturnValueOnce(
+      of({ data: { key: 'branch-transfer-batches-1.png', url: 'https://minio/u1' } }),
+    );
+
+    const res = await service.createTransferBatches(
+      '10',
+      {
+        destination_branch_id: '1',
+        direction: 'FORWARD',
+        request_key: 'req_create_batch_001',
+      },
+      { id: '77', roles: ['operator'] },
+    );
+
+    expect(res.statusCode).toBe(201);
+    expect(res.data.batches).toHaveLength(1);
+    expect(res.data.batches[0].qr_file).toEqual(
+      expect.objectContaining({ key: 'branch-transfer-batches-1.png' }),
+    );
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.transfer_batch.create' },
+      expect.objectContaining({ source_branch_id: '10', destination_branch_id: '1' }),
+    );
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.transfer_batch.history.add' },
+      expect.objectContaining({ batch_id: '501', notes: '[STEP] QR_GENERATED' }),
+    );
+  });
+
+  it('createTransferBatches rollbacks batches when QR generation fails', async () => {
+    branchRepo.findOne
+      .mockResolvedValueOnce({ id: '10', isDeleted: false })
+      .mockResolvedValueOnce({ id: '1', isDeleted: false });
+    branchUserRepo.find.mockResolvedValue([
+      { branch_id: '10', role: 'OPERATOR', isDeleted: false },
+    ]);
+    orderClient.send
+      .mockReturnValueOnce(
+        of({
+          statusCode: 201,
+          data: {
+            idempotent: false,
+            batches: [{ id: '601', qr_code_token: 'BTB-fail9988', target_region_id: '6' }],
+          },
+        }),
+      )
+      .mockReturnValueOnce(of({ statusCode: 201, data: { id: 'h-2' } }))
+      .mockReturnValueOnce(of({ statusCode: 200, data: { batch_ids: ['601'] } }));
+    fileClient.send.mockImplementation(() => {
+      throw new Error('file down');
+    });
+
+    await expect(
+      service.createTransferBatches(
+        '10',
+        {
+          destination_branch_id: '1',
+          direction: 'FORWARD',
+          request_key: 'req_create_batch_002',
+        },
+        { id: '77', roles: ['operator'] },
+      ),
+    ).rejects.toBeInstanceOf(RpcException);
+
+    expect(orderClient.send).toHaveBeenNthCalledWith(
+      2,
+      { cmd: 'order.transfer_batch.cancel_many' },
+      expect.objectContaining({ batch_ids: ['601'], remove_order_bindings: true }),
+    );
   });
 });

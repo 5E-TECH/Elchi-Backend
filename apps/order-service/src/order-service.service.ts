@@ -1,13 +1,19 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { Between, Brackets, DataSource, In, QueryFailedError, Repository } from 'typeorm';
+import { Between, Brackets, DataSource, In, IsNull, QueryFailedError, Repository } from 'typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { Order_source } from './entities/order.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
+import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
+import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.entity';
+import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
 import {
+  BranchTransferBatchAction,
+  BranchTransferBatchStatus,
+  BranchTransferDirection,
   Cashbox_type,
   Operation_type,
   Order_status,
@@ -31,6 +37,12 @@ export class OrderServiceService {
     private readonly orderItemRepo: Repository<OrderItem>,
     @InjectRepository(OrderTracking)
     private readonly orderTrackingRepo: Repository<OrderTracking>,
+    @InjectRepository(BranchTransferBatch)
+    private readonly transferBatchRepo: Repository<BranchTransferBatch>,
+    @InjectRepository(BranchTransferBatchItem)
+    private readonly transferBatchItemRepo: Repository<BranchTransferBatchItem>,
+    @InjectRepository(BranchTransferBatchHistory)
+    private readonly transferBatchHistoryRepo: Repository<BranchTransferBatchHistory>,
     @Inject('SEARCH') private readonly searchClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
@@ -3381,6 +3393,372 @@ export class OrderServiceService {
         avgRevenue,
       },
     };
+  }
+
+  private transferTokenPrefix(direction: BranchTransferDirection): 'BTB' | 'BTR' {
+    return direction === BranchTransferDirection.RETURN ? 'BTR' : 'BTB';
+  }
+
+  private normalizeTransferDirection(value?: string): BranchTransferDirection {
+    const normalized = String(value ?? '').trim().toUpperCase();
+    if (normalized !== BranchTransferDirection.FORWARD && normalized !== BranchTransferDirection.RETURN) {
+      this.badRequest(`direction must be one of: ${BranchTransferDirection.FORWARD}, ${BranchTransferDirection.RETURN}`);
+    }
+    return normalized as BranchTransferDirection;
+  }
+
+  private normalizeTransferRequestKey(value?: string): string {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+      this.badRequest('request_key is required');
+    }
+    if (!/^[A-Za-z0-9_-]{8,80}$/.test(normalized)) {
+      this.badRequest('request_key must match /^[A-Za-z0-9_-]{8,80}$/');
+    }
+    return normalized;
+  }
+
+  private async generateTransferQrToken(
+    repo: Repository<BranchTransferBatch>,
+    direction: BranchTransferDirection,
+  ): Promise<string> {
+    const prefix = this.transferTokenPrefix(direction);
+    for (let attempt = 0; attempt < 12; attempt += 1) {
+      const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`.toLowerCase();
+      const candidate = `${prefix}-${suffix}`;
+      const exists = await repo.findOne({
+        where: {
+          qr_code_token: candidate,
+          isDeleted: false,
+        },
+        select: ['id'],
+      });
+      if (!exists) {
+        return candidate;
+      }
+    }
+    throw new RpcException({ statusCode: 500, message: 'QR token generate failed' });
+  }
+
+  private async listBatchesWithItems(batchIds: string[]) {
+    if (!batchIds.length) {
+      return [];
+    }
+
+    const batches = await this.transferBatchRepo.find({
+      where: { id: In(batchIds), isDeleted: false },
+      order: { createdAt: 'ASC' },
+    });
+    const items = await this.transferBatchItemRepo.find({
+      where: { batch_id: In(batchIds), isDeleted: false },
+      order: { createdAt: 'ASC' },
+    });
+
+    const itemsByBatch = new Map<string, BranchTransferBatchItem[]>();
+    for (const item of items) {
+      const list = itemsByBatch.get(String(item.batch_id)) ?? [];
+      list.push(item);
+      itemsByBatch.set(String(item.batch_id), list);
+    }
+
+    return batches.map((batch) => ({
+      ...batch,
+      items: (itemsByBatch.get(String(batch.id)) ?? []).map((item) => ({
+        id: item.id,
+        order_id: item.order_id,
+        snapshot_price: item.snapshot_price,
+        snapshot_market_id: item.snapshot_market_id,
+      })),
+    }));
+  }
+
+  async createBranchTransferBatches(input: {
+    source_branch_id: string;
+    destination_branch_id: string;
+    direction?: BranchTransferDirection | string;
+    request_key?: string;
+    requester_id?: string;
+    vehicle_plate?: string | null;
+    driver_name?: string | null;
+    driver_phone?: string | null;
+    notes?: string | null;
+  }) {
+    const sourceBranchId = String(input?.source_branch_id ?? '').trim();
+    const destinationBranchId = String(input?.destination_branch_id ?? '').trim();
+    const requesterId = String(input?.requester_id ?? '').trim() || '0';
+    const direction = this.normalizeTransferDirection(input?.direction);
+    const requestKey = this.normalizeTransferRequestKey(input?.request_key);
+
+    if (!sourceBranchId || !destinationBranchId) {
+      this.badRequest('source_branch_id and destination_branch_id are required');
+    }
+
+    const existing = await this.transferBatchRepo.find({
+      where: {
+        source_branch_id: sourceBranchId,
+        request_key: requestKey,
+        status: In([
+          BranchTransferBatchStatus.PENDING,
+          BranchTransferBatchStatus.SENT,
+          BranchTransferBatchStatus.RECEIVED,
+        ]),
+        isDeleted: false,
+      },
+      order: { createdAt: 'ASC' },
+    });
+
+    if (existing.length) {
+      const existingList = await this.listBatchesWithItems(existing.map((batch) => String(batch.id)));
+      return successRes(
+        {
+          idempotent: true,
+          batches: existingList,
+        },
+        200,
+        'Branch transfer batches (idempotent)',
+      );
+    }
+
+    const unassignedOrders = await this.orderRepo.find({
+      where: {
+        branch_id: sourceBranchId,
+        current_batch_id: IsNull(),
+        isDeleted: false,
+      },
+      select: [
+        'id',
+        'region_id',
+        'market_id',
+        'total_price',
+      ],
+      order: { createdAt: 'ASC' },
+    });
+
+    const candidateOrders = unassignedOrders.filter((order) => Boolean(order.region_id));
+    if (!candidateOrders.length) {
+      this.badRequest('Unassigned orders for transfer not found');
+    }
+
+    const grouped = new Map<string, Order[]>();
+    for (const order of candidateOrders) {
+      const regionId = String(order.region_id);
+      const list = grouped.get(regionId) ?? [];
+      list.push(order);
+      grouped.set(regionId, list);
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
+      const batchItemRepo = queryRunner.manager.getRepository(BranchTransferBatchItem);
+      const batchHistoryRepo = queryRunner.manager.getRepository(BranchTransferBatchHistory);
+      const orderRepo = queryRunner.manager.getRepository(Order);
+
+      const batchEntities: BranchTransferBatch[] = [];
+      for (const [regionId, orders] of grouped.entries()) {
+        const totalPrice = orders.reduce(
+          (sum, order) => sum + Number(order.total_price ?? 0),
+          0,
+        );
+        const qrToken = await this.generateTransferQrToken(batchRepo, direction);
+        batchEntities.push(
+          batchRepo.create({
+            qr_code_token: qrToken,
+            request_key: requestKey,
+            source_branch_id: sourceBranchId,
+            destination_branch_id: destinationBranchId,
+            direction,
+            target_region_id: regionId,
+            status: BranchTransferBatchStatus.PENDING,
+            order_count: orders.length,
+            total_price: totalPrice,
+            vehicle_plate: input?.vehicle_plate?.trim() || null,
+            driver_name: input?.driver_name?.trim() || null,
+            driver_phone: input?.driver_phone?.trim() || null,
+            sent_at: null,
+            received_at: null,
+            cancelled_at: null,
+          }),
+        );
+      }
+
+      const savedBatches = await batchRepo.save(batchEntities);
+      const batchByRegion = new Map(savedBatches.map((batch) => [String(batch.target_region_id), batch]));
+
+      const itemEntities: BranchTransferBatchItem[] = [];
+      const historyEntities: BranchTransferBatchHistory[] = [];
+
+      for (const [regionId, orders] of grouped.entries()) {
+        const batch = batchByRegion.get(regionId);
+        if (!batch) {
+          throw new RpcException({ statusCode: 500, message: 'Batch create failed' });
+        }
+
+        const orderIds = orders.map((order) => String(order.id));
+        const updateResult = await orderRepo
+          .createQueryBuilder()
+          .update(Order)
+          .set({ current_batch_id: String(batch.id) })
+          .where('id IN (:...orderIds)', { orderIds })
+          .andWhere('"current_batch_id" IS NULL')
+          .andWhere('"is_deleted" = false')
+          .execute();
+
+        if (Number(updateResult.affected ?? 0) !== orderIds.length) {
+          throw new RpcException({
+            statusCode: 409,
+            message: 'Some orders are already assigned to another batch',
+          });
+        }
+
+        for (const order of orders) {
+          itemEntities.push(
+            batchItemRepo.create({
+              batch_id: String(batch.id),
+              order_id: String(order.id),
+              snapshot_price: Number(order.total_price ?? 0),
+              snapshot_market_id: String(order.market_id),
+            }),
+          );
+        }
+
+        historyEntities.push(
+          batchHistoryRepo.create({
+            batch_id: String(batch.id),
+            user_id: requesterId,
+            action: BranchTransferBatchAction.CREATED,
+            notes: `[STEP] BATCH_CREATED${input?.notes ? ` | ${String(input.notes).trim()}` : ''}`,
+          }),
+        );
+        historyEntities.push(
+          batchHistoryRepo.create({
+            batch_id: String(batch.id),
+            user_id: requesterId,
+            action: BranchTransferBatchAction.CREATED,
+            notes: '[STEP] ORDERS_ASSIGNED',
+          }),
+        );
+      }
+
+      await batchItemRepo.save(itemEntities);
+      await batchHistoryRepo.save(historyEntities);
+      await queryRunner.commitTransaction();
+
+      const batches = await this.listBatchesWithItems(savedBatches.map((batch) => String(batch.id)));
+      return successRes(
+        {
+          idempotent: false,
+          batches,
+        },
+        201,
+        'Branch transfer batches created',
+      );
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async cancelBranchTransferBatches(input: {
+    batch_ids: string[];
+    remove_order_bindings?: boolean;
+    requester_id?: string;
+    notes?: string | null;
+  }) {
+    const batchIds = Array.from(new Set((input?.batch_ids ?? []).map((id) => String(id).trim()).filter(Boolean)));
+    if (!batchIds.length) {
+      this.badRequest('batch_ids is required');
+    }
+
+    const requesterId = String(input?.requester_id ?? '').trim() || '0';
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
+      const batchHistoryRepo = queryRunner.manager.getRepository(BranchTransferBatchHistory);
+      const orderRepo = queryRunner.manager.getRepository(Order);
+
+      const now = new Date();
+      await batchRepo
+        .createQueryBuilder()
+        .update(BranchTransferBatch)
+        .set({
+          status: BranchTransferBatchStatus.CANCELLED,
+          cancelled_at: now,
+        })
+        .where('id IN (:...batchIds)', { batchIds })
+        .andWhere('"is_deleted" = false')
+        .execute();
+
+      if (input?.remove_order_bindings) {
+        await orderRepo
+          .createQueryBuilder()
+          .update(Order)
+          .set({ current_batch_id: null })
+          .where('"current_batch_id" IN (:...batchIds)', { batchIds })
+          .andWhere('"is_deleted" = false')
+          .execute();
+      }
+
+      const histories = batchIds.map((batchId) =>
+        batchHistoryRepo.create({
+          batch_id: batchId,
+          user_id: requesterId,
+          action: BranchTransferBatchAction.CANCELLED,
+          notes: input?.notes?.trim() || null,
+        }),
+      );
+      await batchHistoryRepo.save(histories);
+
+      await queryRunner.commitTransaction();
+      return successRes({ batch_ids: batchIds }, 200, 'Branch transfer batches cancelled');
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async addBranchTransferBatchHistory(input: {
+    batch_id?: string;
+    user_id?: string;
+    action?: BranchTransferBatchAction | string;
+    notes?: string | null;
+  }) {
+    const batchId = String(input?.batch_id ?? '').trim();
+    if (!batchId) {
+      this.badRequest('batch_id is required');
+    }
+
+    const userId = String(input?.user_id ?? '').trim() || '0';
+    const actionRaw = String(input?.action ?? BranchTransferBatchAction.CREATED).trim().toUpperCase();
+    const allowedActions = new Set<string>(Object.values(BranchTransferBatchAction));
+    if (!allowedActions.has(actionRaw)) {
+      this.badRequest(`action must be one of: ${Object.values(BranchTransferBatchAction).join(', ')}`);
+    }
+
+    const batch = await this.transferBatchRepo.findOne({
+      where: { id: batchId, isDeleted: false },
+      select: ['id'],
+    });
+    if (!batch) {
+      this.notFound('Transfer batch not found');
+    }
+
+    const entity = this.transferBatchHistoryRepo.create({
+      batch_id: batchId,
+      user_id: userId,
+      action: actionRaw as BranchTransferBatchAction,
+      notes: input?.notes?.trim() || null,
+    });
+    await this.transferBatchHistoryRepo.save(entity);
+    return successRes(entity, 201, 'Transfer batch history added');
   }
 
   normalizeUpdatePayload(dto: Record<string, any>): Record<string, any> {
