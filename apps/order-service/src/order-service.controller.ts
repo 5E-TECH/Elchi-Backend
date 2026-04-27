@@ -621,6 +621,22 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.transfer_batch.cancel' })
+  cancelTransferBatchSingle(
+    @Payload()
+    data: {
+      batch_id?: string;
+      reason?: string;
+      requester_id?: string;
+      requester_name?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.cancelBranchTransferBatch(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.transfer_batch.find_by_qr' })
   findTransferBatchByQr(
     @Payload() data: { token?: string },

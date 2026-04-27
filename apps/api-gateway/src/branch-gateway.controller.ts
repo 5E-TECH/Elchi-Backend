@@ -26,6 +26,7 @@ import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
   AssignBranchUserRequestDto,
+  CancelTransferBatchRequestDto,
   CreateBranchTransferBatchesRequestDto,
   CreateBranchRequestDto,
   SendTransferBatchRequestDto,
@@ -184,6 +185,22 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.receive' },
       { id, requester: this.toRequester(req) },
+    );
+  }
+
+  @Post('transfer-batches/:id/cancel')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.OPERATOR)
+  @ApiOperation({ summary: 'Cancel transfer batch and unassign its orders' })
+  @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
+  @ApiBody({ type: CancelTransferBatchRequestDto })
+  cancelTransferBatch(
+    @Param('id') id: string,
+    @Body() dto: CancelTransferBatchRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.transfer_batches.cancel' },
+      { id, dto, requester: this.toRequester(req) },
     );
   }
 

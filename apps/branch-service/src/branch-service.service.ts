@@ -879,6 +879,57 @@ export class BranchServiceService implements OnModuleInit {
     });
   }
 
+  async cancelTransferBatch(
+    batchId: string,
+    dto: {
+      reason?: string;
+    },
+    requester?: RequesterContext,
+  ) {
+    const id = String(batchId ?? '').trim();
+    if (!id) {
+      this.badRequest('batch id is required');
+    }
+
+    const reason = String(dto?.reason ?? '').trim();
+    if (!reason || reason.length < 10) {
+      this.badRequest("Bekor qilish sababi kamida 10 ta belgidan iborat bo'lishi kerak");
+    }
+
+    const batchRes = await this.sendOrderCommand<{
+      data?: { source_branch_id?: string };
+    }>('order.transfer_batch.find_by_id', { id });
+    const sourceBranchId = String(batchRes?.data?.source_branch_id ?? '').trim();
+    if (!sourceBranchId) {
+      this.notFound('Transfer batch not found');
+    }
+
+    await this.assertCanCreateTransferBatch(sourceBranchId, requester);
+
+    const requesterId = String(requester?.id ?? '').trim() || '0';
+    const requesterName = requesterId;
+
+    const cancelResult = await this.sendOrderCommand('order.transfer_batch.cancel', {
+      batch_id: id,
+      reason,
+      requester_id: requesterId,
+      requester_name: requesterName,
+    });
+
+    // Keep compatibility with T13 flow: send explicit unassign command as well.
+    // This is safe and idempotent even if orders were already unassigned in cancel command.
+    try {
+      await this.sendOrderCommand('order.bulk_remove_from_batch', {
+        batch_id: id,
+        message_id: `cancel_batch_${id}`,
+      });
+    } catch {
+      // Best-effort call; main cancel transaction has already handled unassignment.
+    }
+
+    return cancelResult;
+  }
+
   async findTransferBatchByToken(token: string, requester?: RequesterContext) {
     const normalizedToken = String(token ?? '').trim();
     if (!normalizedToken) {

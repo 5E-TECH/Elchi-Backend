@@ -3978,7 +3978,26 @@ export class OrderServiceService {
       this.notFound('Transfer batch not found');
     }
 
-    return successRes(batch, 200, 'Transfer batch found');
+    const items = await this.transferBatchItemRepo.find({
+      where: { batch_id: String(batch.id), isDeleted: false },
+      order: { createdAt: 'ASC' },
+    });
+
+    return successRes(
+      {
+        ...batch,
+        items: items.map((item) => ({
+          id: item.id,
+          order_id: item.order_id,
+          snapshot_price: item.snapshot_price,
+          snapshot_market_id: item.snapshot_market_id,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        })),
+      },
+      200,
+      'Transfer batch found',
+    );
   }
 
   async sendBranchTransferBatch(input: {
@@ -4158,6 +4177,84 @@ export class OrderServiceService {
 
       await queryRunner.commitTransaction();
       return successRes(savedBatch, 200, 'Transfer batch received');
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async cancelBranchTransferBatch(input: {
+    batch_id?: string;
+    reason?: string;
+    requester_id?: string;
+    requester_name?: string;
+  }) {
+    const batchId = String(input?.batch_id ?? '').trim();
+    if (!batchId) {
+      this.badRequest('batch_id is required');
+    }
+
+    const reason = String(input?.reason ?? '').trim();
+    if (!reason || reason.length < 10) {
+      this.badRequest("Bekor qilish sababi kamida 10 ta belgidan iborat bo'lishi kerak");
+    }
+
+    const requesterId = String(input?.requester_id ?? '').trim() || '0';
+    const requesterName = String(input?.requester_name ?? '').trim() || requesterId || 'unknown';
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
+      const orderRepo = queryRunner.manager.getRepository(Order);
+      const historyRepo = queryRunner.manager.getRepository(BranchTransferBatchHistory);
+
+      const batch = await batchRepo.findOne({
+        where: { id: batchId, isDeleted: false },
+      });
+      if (!batch) {
+        this.notFound('Transfer batch not found');
+      }
+
+      if (batch.status === BranchTransferBatchStatus.RECEIVED) {
+        this.badRequest("RECEIVED paketni bekor qilib bo'lmaydi");
+      }
+      if (batch.status === BranchTransferBatchStatus.CANCELLED) {
+        this.badRequest("Bekor qilingan paketni qayta bekor qilib bo'lmaydi");
+      }
+      if (
+        batch.status !== BranchTransferBatchStatus.PENDING &&
+        batch.status !== BranchTransferBatchStatus.SENT
+      ) {
+        this.badRequest(`Paketni bekor qilib bo'lmaydi. Current status: ${batch.status}`);
+      }
+
+      batch.status = BranchTransferBatchStatus.CANCELLED;
+      batch.cancelled_at = new Date();
+      const savedBatch = await batchRepo.save(batch);
+
+      await orderRepo
+        .createQueryBuilder()
+        .update(Order)
+        .set({ current_batch_id: null })
+        .where('"current_batch_id" = :batchId', { batchId: String(batch.id) })
+        .andWhere('"is_deleted" = false')
+        .execute();
+
+      await historyRepo.save(
+        historyRepo.create({
+          batch_id: String(batch.id),
+          user_id: requesterId,
+          action: BranchTransferBatchAction.CANCELLED,
+          notes: `Operator ${requesterName} paketni bekor qildi. Sabab: ${reason}`,
+        }),
+      );
+
+      await queryRunner.commitTransaction();
+      return successRes(savedBatch, 200, 'Transfer batch cancelled');
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;
