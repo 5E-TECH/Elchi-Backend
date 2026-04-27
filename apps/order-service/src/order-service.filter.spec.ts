@@ -30,6 +30,7 @@ describe('OrderServiceService filters', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
     );
 
     return { service, qb };

@@ -577,4 +577,33 @@ export class OrderServiceController {
       this.orderService.addBranchTransferBatchHistory(data),
     );
   }
+
+  @MessagePattern({ cmd: 'order.bulk_assign_batch' })
+  bulkAssignBatch(
+    @Payload()
+    data: {
+      batch_id?: string;
+      order_ids?: string[];
+      message_id?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.bulkAssignBatch(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.bulk_remove_from_batch' })
+  bulkRemoveFromBatch(
+    @Payload()
+    data: {
+      batch_id?: string;
+      message_id?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.bulkRemoveFromBatch(data),
+    );
+  }
 }

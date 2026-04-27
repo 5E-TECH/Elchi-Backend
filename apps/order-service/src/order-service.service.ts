@@ -10,6 +10,7 @@ import { OrderTracking } from './entities/order-tracking.entity';
 import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.entity';
 import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
+import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.entity';
 import {
   BranchTransferBatchAction,
   BranchTransferBatchStatus,
@@ -3418,6 +3419,23 @@ export class OrderServiceService {
     return normalized;
   }
 
+  private normalizeInboxMessageId(value?: string): string {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+      this.badRequest('message_id is required');
+    }
+    if (!/^[A-Za-z0-9:_-]{8,128}$/.test(normalized)) {
+      this.badRequest('message_id must match /^[A-Za-z0-9:_-]{8,128}$/');
+    }
+    return normalized;
+  }
+
+  private isDuplicateMessageError(error: unknown): boolean {
+    const code = (error as { code?: string; driverError?: { code?: string } } | null)?.code;
+    const driverCode = (error as { driverError?: { code?: string } } | null)?.driverError?.code;
+    return code === '23505' || driverCode === '23505';
+  }
+
   private async generateTransferQrToken(
     repo: Repository<BranchTransferBatch>,
     direction: BranchTransferDirection,
@@ -3717,6 +3735,157 @@ export class OrderServiceService {
 
       await queryRunner.commitTransaction();
       return successRes({ batch_ids: batchIds }, 200, 'Branch transfer batches cancelled');
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async bulkAssignBatch(input: {
+    batch_id?: string;
+    order_ids?: string[];
+    message_id?: string;
+  }) {
+    const batchId = String(input?.batch_id ?? '').trim();
+    if (!batchId) {
+      this.badRequest('batch_id is required');
+    }
+
+    const messageId = this.normalizeInboxMessageId(input?.message_id);
+    const orderIds = Array.from(
+      new Set((input?.order_ids ?? []).map((id) => String(id).trim()).filter(Boolean)),
+    );
+
+    if (!orderIds.length) {
+      this.badRequest('order_ids is required');
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const inboxRepo = queryRunner.manager.getRepository(OrderBatchInboxMessage);
+      const orderRepo = queryRunner.manager.getRepository(Order);
+
+      try {
+        await inboxRepo.insert(
+          inboxRepo.create({
+            command: 'order.bulk_assign_batch',
+            message_id: messageId,
+          }),
+        );
+      } catch (error) {
+        if (this.isDuplicateMessageError(error)) {
+          await queryRunner.rollbackTransaction();
+          return successRes(
+            {
+              idempotent: true,
+              message_id: messageId,
+              batch_id: batchId,
+            },
+            200,
+            'Bulk assign already processed',
+          );
+        }
+        throw error;
+      }
+
+      const result = await orderRepo
+        .createQueryBuilder()
+        .update(Order)
+        .set({ current_batch_id: batchId })
+        .where('id IN (:...orderIds)', { orderIds })
+        .andWhere('"is_deleted" = false')
+        .execute();
+
+      if (Number(result.affected ?? 0) !== orderIds.length) {
+        throw new RpcException({
+          statusCode: 409,
+          message: 'Some orders are not found or unavailable for batch assignment',
+        });
+      }
+
+      await queryRunner.commitTransaction();
+      return successRes(
+        {
+          idempotent: false,
+          message_id: messageId,
+          batch_id: batchId,
+          affected: Number(result.affected ?? 0),
+        },
+        200,
+        'Orders assigned to batch',
+      );
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async bulkRemoveFromBatch(input: {
+    batch_id?: string;
+    message_id?: string;
+  }) {
+    const batchId = String(input?.batch_id ?? '').trim();
+    if (!batchId) {
+      this.badRequest('batch_id is required');
+    }
+
+    const messageId = this.normalizeInboxMessageId(input?.message_id);
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const inboxRepo = queryRunner.manager.getRepository(OrderBatchInboxMessage);
+      const orderRepo = queryRunner.manager.getRepository(Order);
+
+      try {
+        await inboxRepo.insert(
+          inboxRepo.create({
+            command: 'order.bulk_remove_from_batch',
+            message_id: messageId,
+          }),
+        );
+      } catch (error) {
+        if (this.isDuplicateMessageError(error)) {
+          await queryRunner.rollbackTransaction();
+          return successRes(
+            {
+              idempotent: true,
+              message_id: messageId,
+              batch_id: batchId,
+            },
+            200,
+            'Bulk remove already processed',
+          );
+        }
+        throw error;
+      }
+
+      const result = await orderRepo
+        .createQueryBuilder()
+        .update(Order)
+        .set({ current_batch_id: null })
+        .where('"current_batch_id" = :batchId', { batchId })
+        .andWhere('"is_deleted" = false')
+        .execute();
+
+      await queryRunner.commitTransaction();
+      return successRes(
+        {
+          idempotent: false,
+          message_id: messageId,
+          batch_id: batchId,
+          affected: Number(result.affected ?? 0),
+        },
+        200,
+        'Orders removed from batch',
+      );
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;

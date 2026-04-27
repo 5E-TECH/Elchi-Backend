@@ -10,6 +10,7 @@ import { OrderTracking } from './entities/order-tracking.entity';
 import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.entity';
 import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
+import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.entity';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-his
       BranchTransferBatch,
       BranchTransferBatchItem,
       BranchTransferBatchHistory,
+      OrderBatchInboxMessage,
     ]),
   ],
   controllers: [OrderServiceController],

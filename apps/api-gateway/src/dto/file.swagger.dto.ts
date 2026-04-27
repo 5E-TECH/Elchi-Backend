@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
 
 export class GetFileUrlQueryDto {
   @ApiPropertyOptional({ example: 3600, description: 'Signed URL expiration seconds (max 86400)' })
@@ -20,6 +20,16 @@ export class GenerateQrRequestDto {
   @IsOptional()
   @IsString()
   file_name?: string;
+
+  @ApiPropertyOptional({
+    example: 'ORD-',
+    enum: ['BTB-', 'BTR-', 'ORD-'],
+    description: 'QR matni oldiga qo‘shiladigan prefix',
+  })
+  @IsOptional()
+  @IsString()
+  @IsIn(['BTB-', 'BTR-', 'ORD-'])
+  prefix?: 'BTB-' | 'BTR-' | 'ORD-';
 
   @ApiPropertyOptional({ example: 'qr' })
   @IsOptional()
@@ -48,4 +58,3 @@ export class GeneratePdfRequestDto {
   @IsString()
   folder?: string;
 }
-

@@ -11,6 +11,7 @@ jest.mock('qrcode', () => ({
 
 describe('FileServiceService', () => {
   let service: FileServiceService;
+  const qrCodeModule = jest.requireMock('qrcode') as { toBuffer: jest.Mock };
 
   beforeEach(() => {
     const config = {
@@ -72,6 +73,24 @@ describe('FileServiceService', () => {
 
   it('generateQr throws when text is empty', async () => {
     await expect(service.generateQr({ text: '   ' } as any)).rejects.toBeInstanceOf(RpcException);
+  });
+
+  it('generateQr sends prefixed text to QR encoder', async () => {
+    jest.spyOn(service as any, 'uploadBuffer').mockResolvedValue({
+      key: 'qr-k',
+      bucket: 'b',
+      file_name: 'qr.png',
+      mime_type: 'image/png',
+      size: 7,
+      url: 'u',
+    });
+
+    await service.generateQr({ text: '12345', prefix: 'BTB-' } as any);
+
+    expect(qrCodeModule.toBuffer).toHaveBeenCalledWith(
+      'BTB-12345',
+      expect.objectContaining({ type: 'png' }),
+    );
   });
 
   it('generatePdf throws when content is empty', async () => {

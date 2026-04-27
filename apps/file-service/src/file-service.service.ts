@@ -269,8 +269,14 @@ export class FileServiceService implements OnModuleInit {
     try {
       const text = String(data?.text ?? '').trim();
       if (!text) throw new BadRequestException('text is required');
+      const prefix = data?.prefix ? String(data.prefix) : '';
+      const qrText = `${prefix}${text}`;
 
-      const buffer = await QRCode.toBuffer(text, { type: 'png', width: 512, errorCorrectionLevel: 'M' });
+      const buffer = await QRCode.toBuffer(qrText, {
+        type: 'png',
+        width: 512,
+        errorCorrectionLevel: 'M',
+      });
       const result = await this.uploadBuffer({
         buffer,
         fileName: data?.file_name?.trim() || 'qr.png',
