@@ -677,6 +677,40 @@ describe('BranchServiceService', () => {
         { id: '77', roles: ['operator'] },
       ),
     ).rejects.toBeInstanceOf(RpcException);
+  });
+
+  it('receiveTransferBatch updates batch status to RECEIVED through order service', async () => {
+    orderClient.send
+      .mockReturnValueOnce(of({ data: { id: '801', destination_branch_id: '20' } }))
+      .mockReturnValueOnce(of({ statusCode: 200, data: { id: '801', status: 'RECEIVED' } }));
+    branchUserRepo.findOne.mockResolvedValue({ id: 'bu-1' });
+
+    const res = await service.receiveTransferBatch(
+      '801',
+      { id: '55', roles: ['operator'] },
+    );
+
+    expect(res).toEqual(expect.objectContaining({ statusCode: 200 }));
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.transfer_batch.receive' },
+      expect.objectContaining({ batch_id: '801', requester_id: '55' }),
+    );
+  });
+
+  it('receiveTransferBatch fails when requester not assigned to destination branch', async () => {
+    orderClient.send.mockReturnValueOnce(
+      of({ data: { id: '802', destination_branch_id: '30' } }),
+    );
+    branchUserRepo.findOne.mockResolvedValue(null);
+
+    await expect(
+      service.receiveTransferBatch(
+        '802',
+        { id: '999', roles: ['operator'] },
+      ),
+    ).rejects.toBeInstanceOf(RpcException);
+  });
+
   it('findTransferBatchByToken delegates to order-service', async () => {
     orderClient.send.mockReturnValueOnce(
       of({

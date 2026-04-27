@@ -827,6 +827,58 @@ export class BranchServiceService implements OnModuleInit {
       requester_id: requesterId,
       requester_name: requesterId,
     });
+  }
+
+  private async assertRequesterWorksInBranch(branchId: string, requester?: RequesterContext) {
+    if (this.isSystemPrivileged(requester)) {
+      return;
+    }
+
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId) {
+      this.forbidden('Requester aniqlanmadi');
+    }
+
+    const assignment = await this.branchUserRepo.findOne({
+      where: {
+        user_id: requesterId,
+        branch_id: String(branchId),
+        isDeleted: false,
+      },
+      select: ['id'],
+    });
+    if (!assignment) {
+      this.forbidden("Qabul qiluvchi xodim manzil filialga biriktirilmagan");
+    }
+  }
+
+  async receiveTransferBatch(
+    batchId: string,
+    requester?: RequesterContext,
+  ) {
+    const id = String(batchId ?? '').trim();
+    if (!id) {
+      this.badRequest('batch id is required');
+    }
+
+    const batchRes = await this.sendOrderCommand<{
+      data?: { destination_branch_id?: string };
+    }>('order.transfer_batch.find_by_id', { id });
+    const destinationBranchId = String(batchRes?.data?.destination_branch_id ?? '').trim();
+    if (!destinationBranchId) {
+      this.notFound('Transfer batch not found');
+    }
+
+    await this.assertRequesterWorksInBranch(destinationBranchId, requester);
+
+    const requesterId = String(requester?.id ?? '').trim() || '0';
+    return this.sendOrderCommand('order.transfer_batch.receive', {
+      batch_id: id,
+      requester_id: requesterId,
+      requester_name: requesterId,
+    });
+  }
+
   async findTransferBatchByToken(token: string, requester?: RequesterContext) {
     const normalizedToken = String(token ?? '').trim();
     if (!normalizedToken) {
