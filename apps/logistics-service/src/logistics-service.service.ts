@@ -50,6 +50,11 @@ interface CourierRow {
   role?: string;
 }
 
+interface BranchAssignmentRow {
+  branch_id?: string | null;
+  role?: string | null;
+}
+
 @Injectable()
 export class LogisticsServiceService implements OnModuleInit {
   constructor(
@@ -357,6 +362,63 @@ export class LogisticsServiceService implements OnModuleInit {
         throw error;
       }
       this.forbidden("Courier filialini aniqlab bo'lmadi");
+    }
+  }
+
+  private async findBranchAssignmentByUserId(
+    userId: string,
+    requester: RequesterContext,
+  ): Promise<BranchAssignmentRow | null> {
+    const normalizedUserId = String(userId ?? '').trim();
+    if (!normalizedUserId) {
+      this.badRequest('user_id is required');
+    }
+
+    try {
+      const response = await lastValueFrom(
+        this.branchClient
+          .send(
+            { cmd: 'branch.user.find_by_user' },
+            {
+              user_id: normalizedUserId,
+              requester: { id: requester.id, roles: requester.roles ?? [Roles.BRANCH] },
+            },
+          )
+          .pipe(timeout(5000)),
+      );
+
+      return (response?.data ?? null) as BranchAssignmentRow | null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async findBranchUsersByBranchId(
+    branchId: string,
+    requester: RequesterContext,
+  ): Promise<Array<{ user_id?: string; role?: string }>> {
+    const normalizedBranchId = String(branchId ?? '').trim();
+    if (!normalizedBranchId) {
+      return [];
+    }
+
+    try {
+      const response = await lastValueFrom(
+        this.branchClient
+          .send(
+            { cmd: 'branch.user.find_by_branch' },
+            {
+              branch_id: normalizedBranchId,
+              requester: { id: requester.id, roles: requester.roles ?? [Roles.BRANCH] },
+            },
+          )
+          .pipe(timeout(5000)),
+      );
+
+      const rows = response?.data;
+      return Array.isArray(rows) ? rows : [];
+    } catch {
+      return [];
     }
   }
 
@@ -1470,6 +1532,217 @@ export class LogisticsServiceService implements OnModuleInit {
       },
       200,
       'Order courierga biriktirildi',
+    );
+  }
+
+  async assignOrdersToCourier(
+    requester: RequesterContext,
+    dto: { order_ids: string[]; courier_id: string },
+  ) {
+    const orderIds = Array.from(new Set((dto?.order_ids ?? []).map((id) => String(id).trim()).filter(Boolean)));
+    const courierId = String(dto?.courier_id ?? '').trim();
+
+    if (!orderIds.length) {
+      this.badRequest('order_ids bo‘sh bo‘lishi mumkin emas');
+    }
+    if (!courierId) {
+      this.badRequest('courier_id is required');
+    }
+
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId) {
+      this.forbidden('Requester aniqlanmadi');
+    }
+
+    const requesterAssignment = await this.findBranchAssignmentByUserId(
+      requesterId,
+      requester,
+    );
+    const requesterBranchId = String(requesterAssignment?.branch_id ?? '').trim();
+    const requesterBranchRole = String(requesterAssignment?.role ?? '').trim().toUpperCase();
+
+    if (!requesterBranchId) {
+      this.forbidden('Manager filialga biriktirilmagan');
+    }
+    if (requesterBranchRole !== 'MANAGER') {
+      this.forbidden('Faqat MANAGER orderlarni courierga ommaviy biriktira oladi');
+    }
+
+    const branchUsers = await this.findBranchUsersByBranchId(
+      requesterBranchId,
+      requester,
+    );
+    const courierInBranch = branchUsers.find(
+      (item) =>
+        String(item?.user_id ?? '').trim() === courierId &&
+        String(item?.role ?? '').trim().toUpperCase() === 'COURIER',
+    );
+
+    if (!courierInBranch) {
+      this.badRequest('Courier ushbu filialga COURIER sifatida biriktirilmagan');
+    }
+
+    const orders = await Promise.all(orderIds.map((id) => this.findOrderById(id)));
+
+    const firstBranchId = String(orders[0]?.branch_id ?? '').trim();
+    if (!firstBranchId) {
+      this.badRequest("Order(lar) filialga biriktirilmagan");
+    }
+
+    if (firstBranchId !== requesterBranchId) {
+      this.forbidden("Manager faqat o'z filiali orderlarini biriktira oladi");
+    }
+
+    const hasMixedBranch = orders.some(
+      (order) => String(order?.branch_id ?? '').trim() !== firstBranchId,
+    );
+    if (hasMixedBranch) {
+      this.badRequest('Orderlar aralash filialdan: faqat bitta filial orderlarini tanlang');
+    }
+
+    const invalidStatusOrder = orders.find(
+      (order) =>
+        order.status !== Order_status.NEW &&
+        order.status !== Order_status.RECEIVED,
+    );
+    if (invalidStatusOrder) {
+      this.badRequest(
+        `Order #${invalidStatusOrder.id} holati noto'g'ri: faqat NEW yoki RECEIVED bo'lishi kerak`,
+      );
+    }
+
+    const assignedToAnotherCourier = orders.find((order) => {
+      const currentCourierId = String(order?.courier_id ?? '').trim();
+      return currentCourierId && currentCourierId !== courierId;
+    });
+    if (assignedToAnotherCourier) {
+      this.badRequest(
+        `Order #${assignedToAnotherCourier.id} allaqachon boshqa courierga biriktirilgan`,
+      );
+    }
+
+    let targetPost = await this.postRepo.findOne({
+      where: { courier_id: courierId, status: Post_status.SENT },
+      order: { createdAt: 'DESC' },
+    });
+
+    const createdNewPost = !targetPost;
+    if (!targetPost) {
+      targetPost = await this.postRepo.save(
+        this.postRepo.create({
+          courier_id: courierId,
+          region_id: orders[0]?.region_id ? String(orders[0].region_id) : null,
+          order_quantity: 0,
+          post_total_price: 0,
+          qr_code_token: this.generateToken(),
+          status: Post_status.SENT,
+        }),
+      );
+      void this.syncPostToSearch(targetPost);
+    }
+
+    const updatedOrderSnapshots: Array<{
+      id: string;
+      previous: {
+        courier_id: string | null;
+        assigned_at: string | Date | null;
+        status: Order_status | undefined;
+        post_id: string | null;
+      };
+    }> = [];
+
+    let affectedCount = 0;
+    let affectedTotal = 0;
+
+    try {
+      for (const order of orders) {
+        const orderId = String(order.id);
+        const previous = {
+          courier_id: order.courier_id ?? null,
+          assigned_at: order.assigned_at ?? null,
+          status: order.status,
+          post_id: order.post_id ?? null,
+        };
+
+        if (order.status === Order_status.NEW) {
+          await this.updateOrder(
+            orderId,
+            { status: Order_status.RECEIVED },
+            {
+              id: requesterId,
+              roles: requester.roles ?? [Roles.BRANCH],
+              note: 'Bulk assign oldidan NEW -> RECEIVED',
+            },
+          );
+        }
+
+        await this.updateOrder(
+          orderId,
+          {
+            courier_id: courierId,
+            assigned_at: new Date().toISOString(),
+            status: Order_status.ON_THE_ROAD,
+            post_id: targetPost.id,
+          },
+          {
+            id: requesterId,
+            roles: requester.roles ?? [Roles.BRANCH],
+            note: 'Manager tomonidan ommaviy courier biriktirish',
+          },
+        );
+
+        updatedOrderSnapshots.push({ id: orderId, previous });
+        affectedCount += 1;
+        affectedTotal += Number(order.total_price ?? 0);
+      }
+
+      targetPost.order_quantity = Number(targetPost.order_quantity ?? 0) + affectedCount;
+      targetPost.post_total_price = Number(targetPost.post_total_price ?? 0) + affectedTotal;
+      const savedPost = await this.postRepo.save(targetPost);
+      void this.syncPostToSearch(savedPost);
+    } catch (error) {
+      for (const snapshot of updatedOrderSnapshots) {
+        try {
+          await this.updateOrder(
+            snapshot.id,
+            {
+              courier_id: snapshot.previous.courier_id,
+              assigned_at: snapshot.previous.assigned_at,
+              status: snapshot.previous.status,
+              post_id: snapshot.previous.post_id,
+            },
+            {
+              id: requesterId,
+              roles: requester.roles ?? [Roles.BRANCH],
+              note: 'Bulk assign rollback',
+            },
+          );
+        } catch {
+          // best effort rollback
+        }
+      }
+
+      if (createdNewPost && targetPost?.id) {
+        try {
+          await this.postRepo.remove(targetPost);
+        } catch {
+          // ignore cleanup failures
+        }
+      }
+
+      throw error;
+    }
+
+    return successRes(
+      {
+        order_ids: orderIds,
+        courier_id: courierId,
+        post_id: targetPost.id,
+        post_created: createdNewPost,
+        assigned_count: orderIds.length,
+      },
+      200,
+      'Orderlar courierga biriktirildi',
     );
   }
 
