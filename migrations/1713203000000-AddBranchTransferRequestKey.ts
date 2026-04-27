@@ -32,14 +32,39 @@ export class AddBranchTransferRequestKey1713203000000 implements MigrationInterf
       BEGIN
         IF NOT EXISTS (
           SELECT 1
-          FROM information_schema.table_constraints
-          WHERE constraint_schema = '${schema}'
-            AND table_name = 'branch_transfer_batches'
-            AND constraint_name = 'UQ_BRANCH_TRANSFER_BATCHES_SOURCE_REQUEST_KEY'
+          FROM pg_constraint c
+          JOIN pg_namespace n ON n.oid = c.connamespace
+          WHERE n.nspname = '${schema}'
+            AND c.conname = 'UQ_BRANCH_TRANSFER_BATCHES_SOURCE_REQUEST_KEY'
         ) THEN
-          ALTER TABLE "${schema}"."branch_transfer_batches"
-          ADD CONSTRAINT "UQ_BRANCH_TRANSFER_BATCHES_SOURCE_REQUEST_KEY"
-          UNIQUE ("source_branch_id", "request_key");
+          IF EXISTS (
+            SELECT 1
+            FROM pg_class cls
+            JOIN pg_namespace n ON n.oid = cls.relnamespace
+            WHERE n.nspname = '${schema}'
+              AND cls.relname = 'UQ_BRANCH_TRANSFER_BATCHES_SOURCE_REQUEST_KEY'
+              AND cls.relkind = 'i'
+          ) THEN
+            BEGIN
+              ALTER TABLE "${schema}"."branch_transfer_batches"
+              ADD CONSTRAINT "UQ_BRANCH_TRANSFER_BATCHES_SOURCE_REQUEST_KEY"
+              UNIQUE USING INDEX "UQ_BRANCH_TRANSFER_BATCHES_SOURCE_REQUEST_KEY";
+            EXCEPTION
+              WHEN duplicate_object THEN
+                NULL;
+            END;
+          ELSE
+            BEGIN
+              ALTER TABLE "${schema}"."branch_transfer_batches"
+              ADD CONSTRAINT "UQ_BRANCH_TRANSFER_BATCHES_SOURCE_REQUEST_KEY"
+              UNIQUE ("source_branch_id", "request_key");
+            EXCEPTION
+              WHEN duplicate_table THEN
+                NULL;
+              WHEN duplicate_object THEN
+                NULL;
+            END;
+          END IF;
         END IF;
       END $$;
     `);
