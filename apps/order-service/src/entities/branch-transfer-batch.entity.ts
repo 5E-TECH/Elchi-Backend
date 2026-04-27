@@ -77,6 +77,9 @@ export class BranchTransferBatch extends BaseEntity {
   @Column({ type: 'timestamptz', nullable: true })
   received_at!: Date | null;
 
+  @Column({ type: 'bigint', nullable: true })
+  received_by_user_id!: string | null;
+
   @Column({ type: 'timestamptz', nullable: true })
   cancelled_at!: Date | null;
 

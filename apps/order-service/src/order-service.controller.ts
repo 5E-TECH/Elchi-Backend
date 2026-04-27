@@ -603,6 +603,24 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.sendBranchTransferBatch(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.transfer_batch.receive' })
+  receiveTransferBatch(
+    @Payload()
+    data: {
+      batch_id?: string;
+      requester_id?: string;
+      requester_name?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.receiveBranchTransferBatch(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.transfer_batch.find_by_qr' })
   findTransferBatchByQr(
     @Payload() data: { token?: string },

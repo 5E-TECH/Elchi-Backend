@@ -173,6 +173,20 @@ export class BranchGatewayController {
     );
   }
 
+  @Post('transfer-batches/:id/receive')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.OPERATOR)
+  @ApiOperation({ summary: 'Receive transfer batch by destination branch staff' })
+  @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
+  receiveTransferBatch(
+    @Param('id') id: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.transfer_batches.receive' },
+      { id, requester: this.toRequester(req) },
+    );
+  }
+
   @Patch('branches/:id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Update branch' })
