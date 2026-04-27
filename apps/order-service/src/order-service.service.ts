@@ -3938,6 +3938,14 @@ export class OrderServiceService {
 
     const batch = await this.transferBatchRepo.findOne({
       where: { id, isDeleted: false },
+  async findBranchTransferBatchByQrToken(token: string) {
+    const normalizedToken = String(token ?? '').trim();
+    if (!normalizedToken) {
+      this.badRequest('token is required');
+    }
+
+    const batch = await this.transferBatchRepo.findOne({
+      where: { qr_code_token: normalizedToken, isDeleted: false },
     });
     if (!batch) {
       this.notFound('Transfer batch not found');
@@ -4009,6 +4017,26 @@ export class OrderServiceService {
     );
 
     return successRes(saved, 200, 'Transfer batch sent');
+    const items = await this.transferBatchItemRepo.find({
+      where: { batch_id: String(batch.id), isDeleted: false },
+      order: { createdAt: 'ASC' },
+    });
+
+    return successRes(
+      {
+        ...batch,
+        items: items.map((item) => ({
+          id: item.id,
+          order_id: item.order_id,
+          snapshot_price: item.snapshot_price,
+          snapshot_market_id: item.snapshot_market_id,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        })),
+      },
+      200,
+      'Transfer batch found',
+    );
   }
 
   normalizeUpdatePayload(dto: Record<string, any>): Record<string, any> {

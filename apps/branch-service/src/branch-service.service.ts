@@ -8,7 +8,7 @@ import { Branch } from './entities/branch.entity';
 import { BranchUser } from './entities/branch-user.entity';
 import { BranchConfig } from './entities/branch-config.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
-import { lastValueFrom, timeout } from 'rxjs';
+import { lastValueFrom, timeout, TimeoutError } from 'rxjs';
 
 type RequesterContext = {
   id?: string;
@@ -827,6 +827,47 @@ export class BranchServiceService implements OnModuleInit {
       requester_id: requesterId,
       requester_name: requesterId,
     });
+  async findTransferBatchByToken(token: string, requester?: RequesterContext) {
+    const normalizedToken = String(token ?? '').trim();
+    if (!normalizedToken) {
+      this.badRequest('token is required');
+    }
+
+    let response: {
+      data?: Record<string, unknown>;
+      statusCode?: number;
+      message?: string;
+    };
+    try {
+      response = await lastValueFrom(
+        this.orderClient
+          .send(
+            { cmd: 'order.transfer_batch.find_by_qr' },
+            { token: normalizedToken },
+          )
+          .pipe(timeout(15000)),
+      );
+    } catch (error) {
+      if (error instanceof TimeoutError) {
+        throw new RpcException(errorRes('Order service unavailable', 502));
+      }
+      throw error;
+    }
+
+    const payload = (response?.data ?? null) as
+      | { source_branch_id?: string; destination_branch_id?: string }
+      | null;
+
+    const sourceBranchId = String(payload?.source_branch_id ?? '').trim();
+    const destinationBranchId = String(payload?.destination_branch_id ?? '').trim();
+
+    if (sourceBranchId) {
+      await this.assertCanReadBranch(sourceBranchId, requester);
+    } else if (destinationBranchId) {
+      await this.assertCanReadBranch(destinationBranchId, requester);
+    }
+
+    return response;
   }
 
   async createBranch(dto: {

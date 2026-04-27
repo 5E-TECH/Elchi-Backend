@@ -100,6 +100,11 @@ export class BranchServiceController {
       this.branchService.sendTransferBatch(
         data?.id,
         data?.dto ?? data,
+  @MessagePattern({ cmd: 'branch.transfer_batch.find_by_token' })
+  findTransferBatchByToken(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.findTransferBatchByToken(
+        data?.token,
         this.getRequester(data),
       ),
     );

@@ -677,5 +677,29 @@ describe('BranchServiceService', () => {
         { id: '77', roles: ['operator'] },
       ),
     ).rejects.toBeInstanceOf(RpcException);
+  it('findTransferBatchByToken delegates to order-service', async () => {
+    orderClient.send.mockReturnValueOnce(
+      of({
+        statusCode: 200,
+        data: {
+          id: '900',
+          qr_code_token: 'BTB-a1b2c3',
+          source_branch_id: '10',
+          destination_branch_id: '1',
+        },
+      }),
+    );
+
+    const res = await service.findTransferBatchByToken('BTB-a1b2c3', {
+      id: '1',
+      roles: ['admin'],
+    });
+
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.transfer_batch.find_by_qr' },
+      { token: 'BTB-a1b2c3' },
+    );
+    expect(res.statusCode).toBe(200);
+    expect((res as any).data.id).toBe('900');
   });
 });
