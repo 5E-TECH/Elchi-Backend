@@ -1,9 +1,14 @@
-import { IsOptional, IsString, MinLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, MinLength } from 'class-validator';
 
 export class GenerateQrDto {
   @IsString()
   @MinLength(1)
   text!: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['BTB-', 'BTR-', 'ORD-'])
+  prefix?: 'BTB-' | 'BTR-' | 'ORD-';
 
   @IsOptional()
   @IsString()
@@ -13,4 +18,3 @@ export class GenerateQrDto {
   @IsString()
   folder?: string;
 }
-
