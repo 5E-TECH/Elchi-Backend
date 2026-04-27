@@ -425,3 +425,20 @@ export class ScanAssignOrderRequestDto {
   @IsString()
   qr_token!: string;
 }
+
+export class AssignOrdersToCourierRequestDto {
+  @ApiProperty({
+    type: [String],
+    example: ['101', '102', '103'],
+    description: 'Biriktiriladigan order IDlar',
+  })
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsString({ each: true })
+  order_ids!: string[];
+
+  @ApiProperty({ example: '44', description: 'Courier user ID' })
+  @IsNotEmpty()
+  @IsString()
+  courier_id!: string;
+}

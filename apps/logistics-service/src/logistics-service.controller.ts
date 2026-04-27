@@ -258,6 +258,20 @@ export class LogisticsServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'logistics.order.assign_to_courier' })
+  assignOrdersToCourier(
+    @Payload()
+    data: {
+      dto: { order_ids: string[]; courier_id: string };
+      requester: { id: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.assignOrdersToCourier(data.requester, data.dto),
+    );
+  }
+
   @MessagePattern({ cmd: 'logistics.post.cancel.create' })
   createCanceledPost(
     @Payload() data: { dto: ReceivePostDto; requester: { id: string; roles?: string[] } },

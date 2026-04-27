@@ -25,6 +25,7 @@ import {
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import {
+  AssignOrdersToCourierRequestDto,
   CreateExternalOrderRequestDto,
   CreateOrderRequestDto,
   OrdersArrayDto,
@@ -863,6 +864,28 @@ export class OrderGatewayController {
   ) {
     return this.sendLogisticsWithTimeout(
       { cmd: 'logistics.order.scan_assign' },
+      {
+        dto,
+        requester: {
+          id: req.user.sub,
+          roles: req.user.roles ?? [],
+        },
+      },
+    );
+  }
+
+  @Post('assign-to-courier')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.BRANCH)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Manager bulk-assign orders to one courier' })
+  @ApiBody({ type: AssignOrdersToCourierRequestDto })
+  assignOrdersToCourier(
+    @Body() dto: AssignOrdersToCourierRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.order.assign_to_courier' },
       {
         dto,
         requester: {
