@@ -7,6 +7,7 @@ import { RmqModule, DatabaseModule, orderValidationSchema } from '@app/common';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
+import { Branch } from './entities/branch.entity';
 import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.entity';
 import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
@@ -31,6 +32,7 @@ import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.ent
       Order,
       OrderItem,
       OrderTracking,
+      Branch,
       BranchTransferBatch,
       BranchTransferBatchItem,
       BranchTransferBatchHistory,

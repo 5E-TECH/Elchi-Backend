@@ -1,8 +1,9 @@
-import { Column, Entity, OneToMany } from 'typeorm';
+import { Column, Entity, JoinColumn, ManyToOne, OneToMany } from 'typeorm';
 import { BaseEntity } from '@app/common';
 import { Order_status, Where_deliver } from '@app/common';
 import { OrderItem } from './order-item.entity';
 import { OrderTracking } from './order-tracking.entity';
+import { Branch } from './branch.entity';
 
 export enum Order_source {
   INTERNAL = 'internal',
@@ -71,6 +72,10 @@ export class Order extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   branch_id!: string | null;
+
+  @ManyToOne(() => Branch, { nullable: true, createForeignKeyConstraints: false })
+  @JoinColumn({ name: 'branch_id' })
+  branch!: Branch | null;
 
   @Column({ type: 'bigint', nullable: true })
   current_batch_id!: string | null;
