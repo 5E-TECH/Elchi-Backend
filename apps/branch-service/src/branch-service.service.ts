@@ -3,7 +3,7 @@ import { RpcException } from '@nestjs/microservices';
 import { ClientProxy } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { BranchType, BranchUserRole, Order_status, Status } from '@app/common';
+import { BranchTransferDirection, BranchType, BranchUserRole, Order_status, Status } from '@app/common';
 import { Branch } from './entities/branch.entity';
 import { BranchUser } from './entities/branch-user.entity';
 import { BranchConfig } from './entities/branch-config.entity';
@@ -42,6 +42,7 @@ export class BranchServiceService implements OnModuleInit {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
+    @Inject('FILE') private readonly fileClient: ClientProxy,
   ) {}
 
   async onModuleInit() {
@@ -575,6 +576,214 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     return [String(branchId)];
+  }
+
+  private normalizeTransferDirection(value?: string): BranchTransferDirection {
+    const normalized = String(value ?? '').trim().toUpperCase();
+    if (normalized !== BranchTransferDirection.FORWARD && normalized !== BranchTransferDirection.RETURN) {
+      this.badRequest(`direction must be one of: ${BranchTransferDirection.FORWARD}, ${BranchTransferDirection.RETURN}`);
+    }
+    return normalized as BranchTransferDirection;
+  }
+
+  private normalizeTransferRequestKey(value?: string): string {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+      this.badRequest('request_key is required');
+    }
+    if (!/^[A-Za-z0-9_-]{8,80}$/.test(normalized)) {
+      this.badRequest('request_key must match /^[A-Za-z0-9_-]{8,80}$/');
+    }
+    return normalized;
+  }
+
+  private async assertCanCreateTransferBatch(branchId: string, requester?: RequesterContext) {
+    if (this.isSystemPrivileged(requester)) {
+      return;
+    }
+
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId) {
+      this.forbidden('Requester aniqlanmadi');
+    }
+
+    const assignments = await this.branchUserRepo.find({
+      where: { user_id: requesterId, isDeleted: false },
+      select: ['branch_id', 'role'],
+    });
+
+    const ownAssignment = assignments.find(
+      (item) =>
+        String(item.branch_id) === String(branchId) &&
+        (this.normalizeBranchUserRole(item.role) === BranchUserRole.OPERATOR ||
+          this.normalizeBranchUserRole(item.role) === BranchUserRole.MANAGER),
+    );
+    if (ownAssignment) {
+      return;
+    }
+
+    const managerRoots = assignments
+      .filter((item) => this.normalizeBranchUserRole(item.role) === BranchUserRole.MANAGER)
+      .map((item) => String(item.branch_id));
+
+    if (!managerRoots.length) {
+      this.forbidden('Transfer batch yaratishga ruxsat yo‘q');
+    }
+
+    const managerTree = await this.collectDescendantBranchIds(managerRoots);
+    if (!managerTree.has(String(branchId))) {
+      this.forbidden('Transfer batch yaratishga ruxsat yo‘q');
+    }
+  }
+
+  private async sendOrderCommand<T>(cmd: string, payload: Record<string, unknown>): Promise<T> {
+    try {
+      return await lastValueFrom(
+        this.orderClient
+          .send<T>({ cmd }, payload)
+          .pipe(timeout(15000)),
+      );
+    } catch {
+      throw new RpcException(errorRes('Order service unavailable', 502));
+    }
+  }
+
+  private async sendFileCommand<T>(cmd: string, payload: Record<string, unknown>): Promise<T> {
+    try {
+      return await lastValueFrom(
+        this.fileClient
+          .send<T>({ cmd }, payload)
+          .pipe(timeout(15000)),
+      );
+    } catch {
+      throw new RpcException(errorRes('File service unavailable', 502));
+    }
+  }
+
+  async createTransferBatches(
+    branchId: string,
+    dto: {
+      destination_branch_id?: string;
+      direction?: string;
+      request_key?: string;
+      vehicle_plate?: string | null;
+      driver_name?: string | null;
+      driver_phone?: string | null;
+      notes?: string | null;
+    },
+    requester?: RequesterContext,
+  ) {
+    const sourceBranchId = String(branchId ?? '').trim();
+    const destinationBranchId = String(dto?.destination_branch_id ?? '').trim();
+    if (!sourceBranchId || !destinationBranchId) {
+      this.badRequest('source branch and destination_branch_id are required');
+    }
+
+    await this.getBranchOrThrow(sourceBranchId);
+    await this.getBranchOrThrow(destinationBranchId);
+    await this.assertCanCreateTransferBatch(sourceBranchId, requester);
+
+    const direction = this.normalizeTransferDirection(dto?.direction);
+    const requestKey = this.normalizeTransferRequestKey(dto?.request_key);
+    const requesterId = String(requester?.id ?? '').trim() || '0';
+
+    const createRes = await this.sendOrderCommand<{
+      statusCode?: number;
+      data?: { idempotent?: boolean; batches?: Array<Record<string, any>> };
+      message?: string;
+    }>('order.transfer_batch.create', {
+      source_branch_id: sourceBranchId,
+      destination_branch_id: destinationBranchId,
+      direction,
+      request_key: requestKey,
+      requester_id: requesterId,
+      vehicle_plate: dto?.vehicle_plate ?? null,
+      driver_name: dto?.driver_name ?? null,
+      driver_phone: dto?.driver_phone ?? null,
+      notes: dto?.notes ?? null,
+    });
+
+    const createdBatches = Array.isArray(createRes?.data?.batches) ? createRes.data.batches : [];
+    const batchIds = createdBatches.map((batch) => String(batch.id));
+
+    if (createRes?.data?.idempotent) {
+      return successRes(
+        {
+          idempotent: true,
+          batches: createdBatches,
+        },
+        200,
+        'Transfer batches already exist for this request key',
+      );
+    }
+
+    const qrFiles: Array<{ batch_id: string; key: string; url: string }> = [];
+    try {
+      for (const batch of createdBatches) {
+        const token = String(batch?.qr_code_token ?? '').trim();
+        if (!token) {
+          throw new RpcException(errorRes('QR token missing for created batch', 500));
+        }
+        const qrResponse = await this.sendFileCommand<{
+          data?: { key?: string; url?: string };
+        }>('file.generate_qr', {
+          text: token,
+          file_name: `${token}.png`,
+          folder: 'branch-transfer-batches',
+        });
+
+        await this.sendOrderCommand('order.transfer_batch.history.add', {
+          batch_id: String(batch.id),
+          user_id: requesterId,
+          action: 'CREATED',
+          notes: '[STEP] QR_GENERATED',
+        });
+
+        qrFiles.push({
+          batch_id: String(batch.id),
+          key: String(qrResponse?.data?.key ?? ''),
+          url: String(qrResponse?.data?.url ?? ''),
+        });
+      }
+    } catch (error) {
+      await Promise.all(
+        qrFiles
+          .filter((file) => Boolean(file.key))
+          .map(async (file) => {
+            try {
+              await this.sendFileCommand('file.delete', { key: file.key });
+            } catch {
+              return null;
+            }
+            return null;
+          }),
+      );
+
+      if (batchIds.length) {
+        await this.sendOrderCommand('order.transfer_batch.cancel_many', {
+          batch_ids: batchIds,
+          remove_order_bindings: true,
+          requester_id: requesterId,
+          notes: '[AUTO_ROLLBACK] QR generation failed',
+        });
+      }
+      throw error;
+    }
+
+    const qrByBatchId = new Map(qrFiles.map((item) => [item.batch_id, item]));
+    const enriched = createdBatches.map((batch) => ({
+      ...batch,
+      qr_file: qrByBatchId.get(String(batch.id)) ?? null,
+    }));
+
+    return successRes(
+      {
+        idempotent: false,
+        batches: enriched,
+      },
+      201,
+      'Transfer batches created',
+    );
   }
 
   async createBranch(dto: {

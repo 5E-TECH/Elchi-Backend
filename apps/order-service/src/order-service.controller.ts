@@ -524,4 +524,57 @@ export class OrderServiceController {
       this.orderService.getRevenueStats(data.startDate, data.endDate, data.period),
     );
   }
+
+  @MessagePattern({ cmd: 'order.transfer_batch.create' })
+  createTransferBatch(
+    @Payload()
+    data: {
+      source_branch_id: string;
+      destination_branch_id: string;
+      direction?: 'FORWARD' | 'RETURN';
+      request_key: string;
+      requester_id?: string;
+      vehicle_plate?: string | null;
+      driver_name?: string | null;
+      driver_phone?: string | null;
+      notes?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.createBranchTransferBatches(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.transfer_batch.cancel_many' })
+  cancelTransferBatches(
+    @Payload()
+    data: {
+      batch_ids: string[];
+      remove_order_bindings?: boolean;
+      requester_id?: string;
+      notes?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.cancelBranchTransferBatches(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.transfer_batch.history.add' })
+  addTransferBatchHistory(
+    @Payload()
+    data: {
+      batch_id?: string;
+      user_id?: string;
+      action?: 'CREATED' | 'SENT' | 'RECEIVED' | 'CANCELLED';
+      notes?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.addBranchTransferBatchHistory(data),
+    );
+  }
 }

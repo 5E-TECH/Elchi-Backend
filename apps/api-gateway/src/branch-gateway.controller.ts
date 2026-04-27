@@ -26,6 +26,7 @@ import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
   AssignBranchUserRequestDto,
+  CreateBranchTransferBatchesRequestDto,
   CreateBranchRequestDto,
   SetBranchConfigRequestDto,
   UpdateBranchConfigRequestDto,
@@ -136,6 +137,22 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.analytics.markets' },
       { id, requester: this.toRequester(req) },
+    );
+  }
+
+  @Post('branches/:id/transfer-batches')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.OPERATOR)
+  @ApiOperation({ summary: 'Create transfer batches by unassigned orders grouped by region' })
+  @ApiParam({ name: 'id', description: 'Source branch ID (bigint string)' })
+  @ApiBody({ type: CreateBranchTransferBatchesRequestDto })
+  createTransferBatches(
+    @Param('id') id: string,
+    @Body() dto: CreateBranchTransferBatchesRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.transfer_batches.create' },
+      { id, dto, requester: this.toRequester(req) },
     );
   }
 

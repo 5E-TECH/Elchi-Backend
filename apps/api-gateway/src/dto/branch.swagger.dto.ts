@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { BranchType } from '@app/common';
+import { BranchTransferDirection, BranchType } from '@app/common';
 import { IsEnum, IsNumberString, IsOptional, IsString, Matches, MinLength } from 'class-validator';
 import { BranchUserRole } from '@app/common';
 
@@ -138,4 +138,41 @@ export class UpdateBranchConfigRequestDto {
   })
   @IsOptional()
   config_value?: Record<string, unknown> | null;
+}
+
+export class CreateBranchTransferBatchesRequestDto {
+  @ApiProperty({ example: '1', description: 'Destination branch ID (bigint string)' })
+  @IsNumberString()
+  destination_branch_id!: string;
+
+  @ApiProperty({ enum: BranchTransferDirection, example: BranchTransferDirection.FORWARD })
+  @IsEnum(BranchTransferDirection)
+  direction!: BranchTransferDirection;
+
+  @ApiProperty({
+    example: 'req_20260427_01A2B3C4',
+    description: 'Idempotency key to prevent duplicate batch creation',
+  })
+  @Matches(/^[A-Za-z0-9_-]{8,80}$/)
+  request_key!: string;
+
+  @ApiPropertyOptional({ example: '01 A 123 AB' })
+  @IsOptional()
+  @IsString()
+  vehicle_plate?: string;
+
+  @ApiPropertyOptional({ example: 'Abdulloh' })
+  @IsOptional()
+  @IsString()
+  driver_name?: string;
+
+  @ApiPropertyOptional({ example: '+998901234567' })
+  @IsOptional()
+  @IsString()
+  driver_phone?: string;
+
+  @ApiPropertyOptional({ example: 'Samarqand oqimlari' })
+  @IsOptional()
+  @IsString()
+  notes?: string;
 }

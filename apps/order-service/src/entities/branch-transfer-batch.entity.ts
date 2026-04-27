@@ -9,6 +9,10 @@ import { BranchTransferBatchItem } from './branch-transfer-batch-item.entity';
 @Index('IDX_BRANCH_TRANSFER_BATCHES_TARGET_REGION_ID', ['target_region_id'])
 @Index('IDX_BRANCH_TRANSFER_BATCHES_STATUS', ['status'])
 @Index('IDX_BRANCH_TRANSFER_BATCHES_DIRECTION', ['direction'])
+@Index('IDX_BRANCH_TRANSFER_BATCHES_REQUEST_KEY', ['request_key'])
+@Index('UQ_BRANCH_TRANSFER_BATCHES_SOURCE_REQUEST_KEY', ['source_branch_id', 'request_key'], {
+  unique: true,
+})
 @Index('UQ_BRANCH_TRANSFER_BATCHES_QR_CODE_TOKEN', ['qr_code_token'], { unique: true })
 @Check(
   'CHK_BRANCH_TRANSFER_BATCH_QR_TOKEN_DIRECTION',
@@ -27,6 +31,9 @@ export class BranchTransferBatch extends BaseEntity {
 
   @Column({ type: 'bigint' })
   source_branch_id!: string;
+
+  @Column({ type: 'varchar', length: 80 })
+  request_key!: string;
 
   @Column({ type: 'bigint' })
   destination_branch_id!: string;

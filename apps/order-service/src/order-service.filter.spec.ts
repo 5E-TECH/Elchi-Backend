@@ -27,6 +27,9 @@ describe('OrderServiceService filters', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
     );
 
     return { service, qb };
@@ -46,4 +49,3 @@ describe('OrderServiceService filters', () => {
     expect(qb.andWhere).toHaveBeenCalledWith('order.source = :source', { source: 'branch' });
   });
 });
-
