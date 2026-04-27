@@ -578,6 +578,16 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.transfer_batch.find_by_qr' })
+  findTransferBatchByQr(
+    @Payload() data: { token?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findBranchTransferBatchByQrToken(String(data?.token ?? '').trim()),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.bulk_assign_batch' })
   bulkAssignBatch(
     @Payload()
