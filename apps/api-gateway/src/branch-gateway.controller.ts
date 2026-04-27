@@ -28,6 +28,7 @@ import {
   AssignBranchUserRequestDto,
   CreateBranchTransferBatchesRequestDto,
   CreateBranchRequestDto,
+  SendTransferBatchRequestDto,
   SetBranchConfigRequestDto,
   UpdateBranchConfigRequestDto,
   UpdateBranchRequestDto,
@@ -152,6 +153,22 @@ export class BranchGatewayController {
   ) {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.create' },
+      { id, dto, requester: this.toRequester(req) },
+    );
+  }
+
+  @Post('transfer-batches/:id/send')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.OPERATOR)
+  @ApiOperation({ summary: 'Mark transfer batch as sent with vehicle info' })
+  @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
+  @ApiBody({ type: SendTransferBatchRequestDto })
+  sendTransferBatch(
+    @Param('id') id: string,
+    @Body() dto: SendTransferBatchRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.transfer_batches.send' },
       { id, dto, requester: this.toRequester(req) },
     );
   }

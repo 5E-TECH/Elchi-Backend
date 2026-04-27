@@ -3930,6 +3930,14 @@ export class OrderServiceService {
     return successRes(entity, 201, 'Transfer batch history added');
   }
 
+  async findBranchTransferBatchById(batchId: string) {
+    const id = String(batchId ?? '').trim();
+    if (!id) {
+      this.badRequest('batch_id is required');
+    }
+
+    const batch = await this.transferBatchRepo.findOne({
+      where: { id, isDeleted: false },
   async findBranchTransferBatchByQrToken(token: string) {
     const normalizedToken = String(token ?? '').trim();
     if (!normalizedToken) {
@@ -3943,6 +3951,72 @@ export class OrderServiceService {
       this.notFound('Transfer batch not found');
     }
 
+    return successRes(batch, 200, 'Transfer batch found');
+  }
+
+  async sendBranchTransferBatch(input: {
+    batch_id?: string;
+    vehicle_plate?: string;
+    driver_name?: string;
+    driver_phone?: string;
+    requester_id?: string;
+    requester_name?: string;
+  }) {
+    const batchId = String(input?.batch_id ?? '').trim();
+    const vehiclePlate = String(input?.vehicle_plate ?? '').trim();
+    const driverName = String(input?.driver_name ?? '').trim();
+    const driverPhone = String(input?.driver_phone ?? '').trim();
+
+    if (!batchId) {
+      this.badRequest('batch_id is required');
+    }
+
+    if (!vehiclePlate || !driverName || !driverPhone) {
+      this.badRequest("Avtomobil ma'lumotlari majburiy");
+    }
+
+    const batch = await this.transferBatchRepo.findOne({
+      where: { id: batchId, isDeleted: false },
+    });
+    if (!batch) {
+      this.notFound('Transfer batch not found');
+    }
+
+    if (batch.status === BranchTransferBatchStatus.SENT) {
+      this.badRequest("Bu paket allaqachon yo'lda");
+    }
+    if (batch.status === BranchTransferBatchStatus.CANCELLED) {
+      this.badRequest("Bekor qilingan paketni jo'natib bo'lmaydi");
+    }
+    if (batch.status === BranchTransferBatchStatus.RECEIVED) {
+      this.badRequest("Qabul qilingan paketni qayta jo'natib bo'lmaydi");
+    }
+    if (batch.status !== BranchTransferBatchStatus.PENDING) {
+      this.badRequest(`Paketni jo'natib bo'lmaydi. Current status: ${batch.status}`);
+    }
+
+    batch.status = BranchTransferBatchStatus.SENT;
+    batch.sent_at = new Date();
+    batch.vehicle_plate = vehiclePlate;
+    batch.driver_name = driverName;
+    batch.driver_phone = driverPhone;
+
+    const saved = await this.transferBatchRepo.save(batch);
+
+    const actor =
+      String(input?.requester_name ?? '').trim() ||
+      String(input?.requester_id ?? '').trim() ||
+      'unknown';
+    await this.transferBatchHistoryRepo.save(
+      this.transferBatchHistoryRepo.create({
+        batch_id: batchId,
+        user_id: String(input?.requester_id ?? '').trim() || '0',
+        action: BranchTransferBatchAction.SENT,
+        notes: `Operator ${actor} paketni jo'natdi. Avtomobil: ${vehiclePlate}`,
+      }),
+    );
+
+    return successRes(saved, 200, 'Transfer batch sent');
     const items = await this.transferBatchItemRepo.find({
       where: { batch_id: String(batch.id), isDeleted: false },
       order: { createdAt: 'ASC' },

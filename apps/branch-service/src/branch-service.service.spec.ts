@@ -644,6 +644,39 @@ describe('BranchServiceService', () => {
     );
   });
 
+  it('sendTransferBatch updates batch status to SENT through order service', async () => {
+    orderClient.send
+      .mockReturnValueOnce(of({ data: { id: '701', source_branch_id: '10' } }))
+      .mockReturnValueOnce(of({ statusCode: 200, data: { id: '701', status: 'SENT' } }));
+    branchUserRepo.find.mockResolvedValue([
+      { branch_id: '10', role: 'OPERATOR', isDeleted: false },
+    ]);
+
+    const res = await service.sendTransferBatch(
+      '701',
+      {
+        vehicle_plate: '01 A 123 AB',
+        driver_name: 'Haydovchi',
+        driver_phone: '+998901234567',
+      },
+      { id: '77', roles: ['operator'] },
+    );
+
+    expect(res).toEqual(expect.objectContaining({ statusCode: 200 }));
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.transfer_batch.send' },
+      expect.objectContaining({ batch_id: '701', vehicle_plate: '01 A 123 AB' }),
+    );
+  });
+
+  it("sendTransferBatch fails when vehicle data is empty", async () => {
+    await expect(
+      service.sendTransferBatch(
+        '701',
+        { vehicle_plate: '', driver_name: '', driver_phone: '' },
+        { id: '77', roles: ['operator'] },
+      ),
+    ).rejects.toBeInstanceOf(RpcException);
   it('findTransferBatchByToken delegates to order-service', async () => {
     orderClient.send.mockReturnValueOnce(
       of({
