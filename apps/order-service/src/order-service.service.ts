@@ -1208,6 +1208,7 @@ export class OrderServiceService {
     const qb = this.orderRepo
       .createQueryBuilder('order')
       .leftJoinAndSelect('order.items', 'items')
+      .leftJoinAndSelect('order.branch', 'branch')
       .where('order.isDeleted = :isDeleted', { isDeleted: false });
 
     if (market_id) {
@@ -2431,7 +2432,7 @@ export class OrderServiceService {
     try {
       order = await this.orderRepo.findOne({
         where: { id, isDeleted: false },
-        relations: { items: true },
+        relations: { items: true, branch: true },
       });
     } catch (error) {
       this.handleDbError(error);
@@ -2447,7 +2448,7 @@ export class OrderServiceService {
     try {
       order = await this.orderRepo.findOne({
         where: { qr_code_token: token, isDeleted: false },
-        relations: { items: true },
+        relations: { items: true, branch: true },
       });
     } catch (error) {
       this.handleDbError(error);
