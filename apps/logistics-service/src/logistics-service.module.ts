@@ -17,6 +17,7 @@ import { District } from './entities/district.entity';
     }),
     RmqModule,
     RmqModule.register({ name: 'ORDER' }),
+    RmqModule.register({ name: 'BRANCH' }),
     RmqModule.register({ name: 'IDENTITY' }),
     RmqModule.register({ name: 'SEARCH' }),
     DatabaseModule,

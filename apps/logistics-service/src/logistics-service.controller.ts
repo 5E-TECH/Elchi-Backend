@@ -244,6 +244,20 @@ export class LogisticsServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'logistics.order.scan_assign' })
+  scanAssignOrder(
+    @Payload()
+    data: {
+      dto: { qr_token: string };
+      requester: { id: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.scanAssignOrder(data.requester, data.dto),
+    );
+  }
+
   @MessagePattern({ cmd: 'logistics.post.cancel.create' })
   createCanceledPost(
     @Payload() data: { dto: ReceivePostDto; requester: { id: string; roles?: string[] } },

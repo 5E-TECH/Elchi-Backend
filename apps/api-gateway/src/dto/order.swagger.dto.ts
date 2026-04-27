@@ -418,3 +418,10 @@ export class CreateExternalOrderRequestDto extends CreateOrderRequestDto {
   @IsString()
   external_id?: string | null;
 }
+
+export class ScanAssignOrderRequestDto {
+  @ApiProperty({ example: 'ORD-abc123' })
+  @IsNotEmpty()
+  @IsString()
+  qr_token!: string;
+}
