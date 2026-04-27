@@ -29,6 +29,7 @@ import {
   CreateOrderRequestDto,
   OrdersArrayDto,
   PartlySellOrderRequestDto,
+  ScanAssignOrderRequestDto,
   SellOrderRequestDto,
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
@@ -847,6 +848,28 @@ export class OrderGatewayController {
       { cmd: 'order.find_by_qr_enriched' },
       { cmd: 'order.find_by_qr' },
       { token },
+    );
+  }
+
+  @Post('scan-assign')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Scan QR and assign order to current courier" })
+  @ApiBody({ type: ScanAssignOrderRequestDto })
+  scanAssignOrder(
+    @Body() dto: ScanAssignOrderRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.order.scan_assign' },
+      {
+        dto,
+        requester: {
+          id: req.user.sub,
+          roles: req.user.roles ?? [],
+        },
+      },
     );
   }
 

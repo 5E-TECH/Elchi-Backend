@@ -34,6 +34,9 @@ interface OrderRow {
   return_requested?: boolean;
   post_id?: string | null;
   canceled_post_id?: string | null;
+  branch_id?: string | null;
+  courier_id?: string | null;
+  assigned_at?: string | Date | null;
   region_id?: string | null;
   district_id?: string | null;
   customer_id?: string;
@@ -54,6 +57,7 @@ export class LogisticsServiceService implements OnModuleInit {
     @InjectRepository(Region) private readonly regionRepo: Repository<Region>,
     @InjectRepository(District) private readonly districtRepo: Repository<District>,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
+    @Inject('BRANCH') private readonly branchClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('SEARCH') private readonly searchClient: ClientProxy,
   ) {}
@@ -64,6 +68,10 @@ export class LogisticsServiceService implements OnModuleInit {
 
   private badRequest(message: string): never {
     throw new RpcException(errorRes(message, 400));
+  }
+
+  private forbidden(message: string): never {
+    throw new RpcException(errorRes(message, 403));
   }
 
   private conflict(message: string): never {
@@ -290,6 +298,65 @@ export class LogisticsServiceService implements OnModuleInit {
       );
     } catch {
       throw new RpcException(errorRes(`Order #${id} update failed`, 502));
+    }
+  }
+
+  private async findOrderByQrToken(qrToken: string): Promise<OrderRow> {
+    try {
+      const response = await lastValueFrom(
+        this.orderClient
+          .send({ cmd: 'order.find_by_qr' }, { token: qrToken })
+          .pipe(timeout(5000)),
+      );
+
+      const candidates = [
+        response?.data?.data,
+        response?.data,
+        response,
+      ];
+
+      for (const candidate of candidates) {
+        if (candidate && typeof candidate === 'object' && 'id' in candidate) {
+          return candidate as OrderRow;
+        }
+      }
+    } catch {
+      // handled below
+    }
+
+    this.notFound('Order topilmadi');
+  }
+
+  private async findCourierBranchId(requester: RequesterContext): Promise<string> {
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId) {
+      this.forbidden("Courier aniqlanmadi");
+    }
+
+    try {
+      const response = await lastValueFrom(
+        this.branchClient
+          .send(
+            { cmd: 'branch.user.find_by_user' },
+            {
+              user_id: requesterId,
+              requester: { id: requesterId, roles: requester.roles ?? [Roles.COURIER] },
+            },
+          )
+          .pipe(timeout(5000)),
+      );
+
+      const branchId = String(response?.data?.branch_id ?? '').trim();
+      if (!branchId) {
+        this.forbidden("Courier filialga biriktirilmagan");
+      }
+
+      return branchId;
+    } catch (error) {
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.forbidden("Courier filialini aniqlab bo'lmadi");
     }
   }
 
@@ -1278,6 +1345,132 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     return successRes({}, 200, 'Order received');
+  }
+
+  async scanAssignOrder(
+    requester: RequesterContext,
+    dto: { qr_token: string },
+  ) {
+    const qrToken = String(dto?.qr_token ?? '').trim();
+    if (!qrToken) {
+      this.badRequest('qr_token is required');
+    }
+
+    const order = await this.findOrderByQrToken(qrToken);
+    const courierBranchId = await this.findCourierBranchId(requester);
+    const orderBranchId = String(order.branch_id ?? '').trim();
+
+    if (!orderBranchId) {
+      this.badRequest("Order filialga biriktirilmagan");
+    }
+
+    if (orderBranchId !== courierBranchId) {
+      this.forbidden("Boshqa filial orderi — qabul qila olmaysiz");
+    }
+
+    const requesterId = String(requester.id);
+    const currentCourierId = String(order.courier_id ?? '').trim();
+    if (currentCourierId && currentCourierId !== requesterId) {
+      this.badRequest("Order allaqachon boshqa courierga biriktirilgan");
+    }
+
+    const currentStatus = order.status;
+    const isAlreadyAssignedToCurrentCourier =
+      currentCourierId === requesterId && currentStatus === Order_status.ON_THE_ROAD;
+
+    if (!isAlreadyAssignedToCurrentCourier) {
+      if (currentStatus !== Order_status.NEW && currentStatus !== Order_status.RECEIVED) {
+        this.badRequest("Order holati noto'g'ri: faqat NEW yoki RECEIVED bo'lishi kerak");
+      }
+    }
+
+    let targetPost: Post | null = null;
+    if (order.post_id) {
+      targetPost = await this.postRepo.findOne({
+        where: { id: String(order.post_id), courier_id: requesterId },
+      });
+    }
+
+    if (!targetPost) {
+      targetPost = await this.postRepo.findOne({
+        where: { courier_id: requesterId, status: Post_status.SENT },
+        order: { createdAt: 'DESC' },
+      });
+    }
+
+    const createdNewPost = !targetPost;
+    if (!targetPost) {
+      const created = this.postRepo.create({
+        courier_id: requesterId,
+        region_id: order.region_id ? String(order.region_id) : null,
+        order_quantity: 0,
+        post_total_price: 0,
+        qr_code_token: this.generateToken(),
+        status: Post_status.SENT,
+      });
+      targetPost = await this.postRepo.save(created);
+      void this.syncPostToSearch(targetPost);
+    }
+
+    if (isAlreadyAssignedToCurrentCourier) {
+      return successRes(
+        {
+          idempotent: true,
+          order_id: String(order.id),
+          post_id: targetPost.id,
+          post_created: false,
+        },
+        200,
+        'Order already assigned to this courier',
+      );
+    }
+
+    if (currentStatus === Order_status.NEW) {
+      await this.updateOrder(
+        String(order.id),
+        { status: Order_status.RECEIVED },
+        {
+          id: requesterId,
+          roles: requester.roles ?? [Roles.COURIER],
+          note: "Order skan orqali courierga biriktirish oldidan RECEIVED holatiga o'tkazildi",
+        },
+      );
+    }
+
+    await this.updateOrder(
+      String(order.id),
+      {
+        courier_id: requesterId,
+        assigned_at: new Date().toISOString(),
+        status: Order_status.ON_THE_ROAD,
+        post_id: targetPost.id,
+      },
+      {
+        id: requesterId,
+        roles: requester.roles ?? [Roles.COURIER],
+        note: 'Order skan orqali courierga biriktirildi',
+      },
+    );
+
+    const alreadyInTargetPost = String(order.post_id ?? '') === String(targetPost.id);
+    if (!alreadyInTargetPost) {
+      targetPost.order_quantity = Number(targetPost.order_quantity ?? 0) + 1;
+      targetPost.post_total_price =
+        Number(targetPost.post_total_price ?? 0) + Number(order.total_price ?? 0);
+      const savedPost = await this.postRepo.save(targetPost);
+      void this.syncPostToSearch(savedPost);
+    }
+
+    return successRes(
+      {
+        idempotent: false,
+        order_id: String(order.id),
+        post_id: targetPost.id,
+        post_created: createdNewPost,
+      },
+      200,
+      'Order courierga biriktirildi',
+    );
   }
 
   async createCanceledPost(requester: RequesterContext, dto: ReceivePostDto) {

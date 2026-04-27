@@ -193,3 +193,13 @@ export class SendTransferBatchRequestDto {
   @Matches(/^\+998\d{9}$/)
   driver_phone!: string;
 }
+
+export class CancelTransferBatchRequestDto {
+  @ApiProperty({
+    example: "Noto'g'ri viloyat tanlangan, paket noto'g'ri yo'naltirilgan",
+    description: 'Bekor qilish sababi (kamida 10 ta belgi)',
+  })
+  @IsString()
+  @MinLength(10)
+  reason!: string;
+}

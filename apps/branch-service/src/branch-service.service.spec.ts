@@ -736,4 +736,51 @@ describe('BranchServiceService', () => {
     expect(res.statusCode).toBe(200);
     expect((res as any).data.id).toBe('900');
   });
+
+  it('cancelTransferBatch validates reason and calls order-service', async () => {
+    orderClient.send
+      .mockReturnValueOnce(
+        of({
+          statusCode: 200,
+          data: {
+            id: '501',
+            source_branch_id: '10',
+            status: 'PENDING',
+          },
+        }),
+      )
+      .mockReturnValueOnce(
+        of({
+          statusCode: 200,
+          data: { id: '501', status: 'CANCELLED' },
+        }),
+      )
+      .mockReturnValueOnce(of({ statusCode: 200, data: { affected: 2 } }));
+    branchUserRepo.find.mockResolvedValue([{ branch_id: '10', role: 'OPERATOR', isDeleted: false }]);
+
+    const res = await service.cancelTransferBatch(
+      '501',
+      { reason: "noto'g'ri viloyat tanlangan" },
+      { id: '77', roles: ['operator'] },
+    );
+
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.transfer_batch.cancel' },
+      expect.objectContaining({
+        batch_id: '501',
+        reason: "noto'g'ri viloyat tanlangan",
+      }),
+    );
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.bulk_remove_from_batch' },
+      expect.objectContaining({ batch_id: '501', message_id: 'cancel_batch_501' }),
+    );
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('cancelTransferBatch rejects short reason', async () => {
+    await expect(
+      service.cancelTransferBatch('501', { reason: 'qisqa' }, { id: '77', roles: ['operator'] }),
+    ).rejects.toBeInstanceOf(RpcException);
+  });
 });
