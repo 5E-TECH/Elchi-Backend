@@ -176,3 +176,20 @@ export class CreateBranchTransferBatchesRequestDto {
   @IsString()
   notes?: string;
 }
+
+export class SendTransferBatchRequestDto {
+  @ApiProperty({ example: '01 A 123 AB' })
+  @IsString()
+  @MinLength(3)
+  vehicle_plate!: string;
+
+  @ApiProperty({ example: 'Abdulloh' })
+  @IsString()
+  @MinLength(2)
+  driver_name!: string;
+
+  @ApiProperty({ example: '+998901234567' })
+  @IsString()
+  @Matches(/^\+998\d{9}$/)
+  driver_phone!: string;
+}

@@ -786,6 +786,49 @@ export class BranchServiceService implements OnModuleInit {
     );
   }
 
+  async sendTransferBatch(
+    batchId: string,
+    dto: {
+      vehicle_plate?: string;
+      driver_name?: string;
+      driver_phone?: string;
+    },
+    requester?: RequesterContext,
+  ) {
+    const id = String(batchId ?? '').trim();
+    if (!id) {
+      this.badRequest('batch id is required');
+    }
+
+    const vehiclePlate = String(dto?.vehicle_plate ?? '').trim();
+    const driverName = String(dto?.driver_name ?? '').trim();
+    const driverPhone = String(dto?.driver_phone ?? '').trim();
+
+    if (!vehiclePlate || !driverName || !driverPhone) {
+      this.badRequest("Avtomobil ma'lumotlari majburiy");
+    }
+
+    const batchRes = await this.sendOrderCommand<{
+      data?: { source_branch_id?: string };
+    }>('order.transfer_batch.find_by_id', { id });
+    const sourceBranchId = String(batchRes?.data?.source_branch_id ?? '').trim();
+    if (!sourceBranchId) {
+      this.notFound('Transfer batch not found');
+    }
+
+    await this.assertCanCreateTransferBatch(sourceBranchId, requester);
+
+    const requesterId = String(requester?.id ?? '').trim() || '0';
+    return this.sendOrderCommand('order.transfer_batch.send', {
+      batch_id: id,
+      vehicle_plate: vehiclePlate,
+      driver_name: driverName,
+      driver_phone: driverPhone,
+      requester_id: requesterId,
+      requester_name: requesterId,
+    });
+  }
+
   async createBranch(dto: {
     name?: string;
     location?: string;

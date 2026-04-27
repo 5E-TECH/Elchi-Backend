@@ -578,6 +578,34 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.transfer_batch.find_by_id' })
+  findTransferBatchById(
+    @Payload() data: { id?: string; batch_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findBranchTransferBatchById(data?.id ?? data?.batch_id ?? ''),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.transfer_batch.send' })
+  sendTransferBatch(
+    @Payload()
+    data: {
+      batch_id?: string;
+      vehicle_plate?: string;
+      driver_name?: string;
+      driver_phone?: string;
+      requester_id?: string;
+      requester_name?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.sendBranchTransferBatch(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.bulk_assign_batch' })
   bulkAssignBatch(
     @Payload()
