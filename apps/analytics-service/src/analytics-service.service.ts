@@ -344,9 +344,18 @@ export class AnalyticsServiceService {
       rmqSend(this.orderClient, { cmd: 'order.analytics.top_couriers' }, {}),
     ]);
 
+    const ordersOverview = this.unwrap<any>(orders as any) as any;
+    const isRegistrator = roles.has(Roles.REGISTRATOR);
+    const safeOrdersOverview = isRegistrator && ordersOverview && typeof ordersOverview === 'object'
+      ? (() => {
+          const { profit: _profit, ...rest } = ordersOverview;
+          return rest;
+        })()
+      : ordersOverview;
+
     return successRes(
       {
-        orders: this.unwrap(orders),
+        orders: safeOrdersOverview,
         markets: this.unwrap(markets),
         couriers: this.unwrap(couriers),
         topMarkets: this.unwrap(topMarkets),

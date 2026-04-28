@@ -28,6 +28,7 @@ type OrderAnalyticsRow = {
   status: string | null;
   total_price: number;
   current_batch_id: string | null;
+  courier_id: string | null;
   createdAt: Date | null;
 };
 
@@ -523,6 +524,7 @@ export class BranchServiceService implements OnModuleInit {
           status: row?.status ? String(row.status) : null,
           total_price: Number(row?.total_price ?? 0) || 0,
           current_batch_id: row?.current_batch_id ? String(row.current_batch_id) : null,
+          courier_id: row?.courier_id ? String(row.courier_id) : null,
           createdAt: createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : null,
         };
       });
@@ -1402,6 +1404,176 @@ export class BranchServiceService implements OnModuleInit {
       items.filter((item) => item.new_orders_count > 0),
       200,
       'Branches with NEW orders',
+    );
+  }
+
+  private async resolveRequesterBranchRole(
+    targetBranchIds: string[],
+    requester?: RequesterContext,
+  ): Promise<'SUPER' | BranchUserRole | null> {
+    if (this.isSystemPrivileged(requester)) {
+      return 'SUPER';
+    }
+
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId) {
+      return null;
+    }
+
+    const assignments = await this.branchUserRepo.find({
+      where: {
+        user_id: requesterId,
+        branch_id: In(targetBranchIds),
+        isDeleted: false,
+      },
+      select: ['role'],
+    });
+
+    const roles = assignments.map((assignment) =>
+      this.normalizeBranchUserRole(assignment.role),
+    );
+
+    if (roles.includes(BranchUserRole.MANAGER)) {
+      return BranchUserRole.MANAGER;
+    }
+    if (roles.includes(BranchUserRole.OPERATOR)) {
+      return BranchUserRole.OPERATOR;
+    }
+    if (roles.includes(BranchUserRole.COURIER)) {
+      return BranchUserRole.COURIER;
+    }
+
+    return null;
+  }
+
+  async getBranchDashboard(id: string, requester?: RequesterContext) {
+    const targetBranchIds = await this.resolveAnalyticsBranchIds(id, requester);
+    const orders = await this.getOrdersByBranchIds(targetBranchIds);
+
+    const requesterBranchRole = await this.resolveRequesterBranchRole(
+      targetBranchIds,
+      requester,
+    );
+
+    const now = new Date();
+    const todayStart = this.toTashkentStartOfDay(now);
+    const todayOrders = orders.filter(
+      (order) => order.createdAt && order.createdAt >= todayStart,
+    );
+
+    const deliveredStatuses = new Set<string>([
+      Order_status.WAITING,
+      Order_status.SOLD,
+      Order_status.PAID,
+      Order_status.PARTLY_PAID,
+      Order_status.CLOSED,
+    ]);
+
+    const returnedStatuses = new Set<string>([
+      Order_status.RETURNED_TO_MARKET,
+    ]);
+
+    const ordersCard = {
+      total: todayOrders.length,
+      new: todayOrders.filter((order) => order.status === Order_status.NEW).length,
+      on_the_road: todayOrders.filter(
+        (order) => order.status === Order_status.ON_THE_ROAD,
+      ).length,
+      delivered: todayOrders.filter(
+        (order) => order.status && deliveredStatuses.has(order.status),
+      ).length,
+      returned: todayOrders.filter(
+        (order) => order.status && returnedStatuses.has(order.status),
+      ).length,
+    };
+
+    const marketMap = new Map<
+      string,
+      { market_id: string; orders_count: number; total_price: number }
+    >();
+    for (const order of todayOrders) {
+      const marketId = String(order.market_id ?? '').trim();
+      if (!marketId) continue;
+      const current = marketMap.get(marketId) ?? {
+        market_id: marketId,
+        orders_count: 0,
+        total_price: 0,
+      };
+      current.orders_count += 1;
+      current.total_price += Number(order.total_price ?? 0) || 0;
+      marketMap.set(marketId, current);
+    }
+
+    const marketsCard = Array.from(marketMap.values()).sort(
+      (left, right) => right.orders_count - left.orders_count,
+    );
+
+    const packagesOnTheWay = new Set(
+      orders
+        .filter(
+          (order) =>
+            order.current_batch_id &&
+            order.status === Order_status.ON_THE_ROAD,
+        )
+        .map((order) => String(order.current_batch_id)),
+    ).size;
+
+    const waitingForAcceptance = new Set(
+      orders
+        .filter(
+          (order) =>
+            order.current_batch_id &&
+            order.status === Order_status.RECEIVED,
+        )
+        .map((order) => String(order.current_batch_id)),
+    ).size;
+
+    const packagesCard = {
+      on_the_way: packagesOnTheWay,
+      waiting_for_acceptance: waitingForAcceptance,
+    };
+
+    const branchCouriersCount = await this.branchUserRepo.count({
+      where: {
+        branch_id: In(targetBranchIds),
+        role: BranchUserRole.COURIER,
+        isDeleted: false,
+      },
+    });
+
+    const activeTodayCouriersCount = new Set(
+      todayOrders
+        .map((order) => String(order.courier_id ?? '').trim())
+        .filter((courierId) => Boolean(courierId)),
+    ).size;
+
+    const couriersCard = {
+      branch_couriers: branchCouriersCount,
+      active_today: activeTodayCouriersCount,
+    };
+
+    const canSeeAll =
+      requesterBranchRole === 'SUPER' || requesterBranchRole === BranchUserRole.MANAGER;
+    const canSeeMarkets = canSeeAll;
+
+    return successRes(
+      {
+        role: requesterBranchRole,
+        cards: {
+          orders: ordersCard,
+          markets: canSeeMarkets ? marketsCard : null,
+          packages: packagesCard,
+          couriers: canSeeAll ? couriersCard : null,
+        },
+        visibility: {
+          orders: true,
+          markets: canSeeMarkets,
+          packages: true,
+          couriers: canSeeAll,
+        },
+      },
+      200,
+      'Branch dashboard',
     );
   }
 
