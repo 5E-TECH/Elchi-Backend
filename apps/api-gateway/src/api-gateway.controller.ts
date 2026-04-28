@@ -244,7 +244,7 @@ export class ApiGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Create operator (market_operator)' })
+  @ApiOperation({ summary: 'Create branch operator' })
   @ApiBody({ type: CreateOperatorRequestDto })
   @ApiCreatedResponse({ description: 'Operator created' })
   @ApiConflictResponse({ description: 'Conflict' })
@@ -356,7 +356,7 @@ export class ApiGatewayController {
       { cmd: 'identity.user.find_all' },
       {
         query: {
-          role: RoleEnum.BRANCH,
+          role: RoleEnum.MANAGER,
           search,
           status,
           page: page ? Number(page) : undefined,

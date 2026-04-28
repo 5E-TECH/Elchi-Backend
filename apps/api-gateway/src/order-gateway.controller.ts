@@ -294,6 +294,7 @@ export class OrderGatewayController {
     RoleEnum.REGISTRATOR,
     RoleEnum.MARKET,
     RoleEnum.OPERATOR,
+    RoleEnum.MANAGER,
     RoleEnum.BRANCH,
   )
   @ApiBearerAuth()
@@ -304,7 +305,9 @@ export class OrderGatewayController {
     let customerId = dto.customer_id;
     const roles = this.normalizeRoles(req.user.roles);
     const shouldResolveBranchAssignment =
-      roles.includes(RoleEnum.BRANCH) || roles.includes(RoleEnum.OPERATOR);
+      roles.includes(RoleEnum.BRANCH) ||
+      roles.includes(RoleEnum.MANAGER) ||
+      roles.includes(RoleEnum.OPERATOR);
     const branchAssignment = shouldResolveBranchAssignment
       ? await this.resolveBranchAssignment(req.user)
       : null;
@@ -387,7 +390,10 @@ export class OrderGatewayController {
               ...orderDto,
               market_id: resolvedMarketId,
               customer_id: finalCustomerId,
-              operator_id: roles.includes(RoleEnum.OPERATOR) ? req.user.sub : null,
+              operator_id:
+                roles.includes(RoleEnum.OPERATOR) || roles.includes(RoleEnum.MARKET_OPERATOR)
+                  ? req.user.sub
+                  : null,
               branch_id: isBranchStaff ? assignedBranchId : (orderDto.branch_id ?? null),
               source: isBranchStaff ? 'branch' : orderDto.source,
             },
@@ -405,7 +411,7 @@ export class OrderGatewayController {
 
   @Post('telegram/bot/create')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.OPERATOR)
+  @Roles(RoleEnum.MARKET_OPERATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create order by telegram bot' })
   @ApiBody({ type: CreateOrderByTelegramBotRequestDto })
@@ -918,7 +924,7 @@ export class OrderGatewayController {
 
   @Post('assign-to-courier')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.BRANCH)
+  @Roles(RoleEnum.BRANCH, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Manager bulk-assign orders to one courier' })
   @ApiBody({ type: AssignOrdersToCourierRequestDto })
