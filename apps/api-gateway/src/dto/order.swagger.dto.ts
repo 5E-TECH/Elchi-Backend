@@ -442,3 +442,58 @@ export class AssignOrdersToCourierRequestDto {
   @IsString()
   courier_id!: string;
 }
+
+export class CreateOrderByTelegramBotRequestDto {
+  @ApiProperty({ example: 'Ali Valiyev' })
+  @IsNotEmpty()
+  @IsString()
+  name!: string;
+
+  @ApiProperty({ example: '+998901112233' })
+  @IsNotEmpty()
+  @IsString()
+  phone_number!: string;
+
+  @ApiProperty({ example: '12' })
+  @IsNotEmpty()
+  @IsString()
+  district_id!: string;
+
+  @ApiPropertyOptional({ example: '90-111-22-33' })
+  @IsOptional()
+  @IsString()
+  extra_number?: string;
+
+  @ApiPropertyOptional({ example: 'Yunusobod, 12-kvartal' })
+  @IsOptional()
+  @IsString()
+  address?: string;
+
+  @ApiProperty({ type: [OrderItemDto] })
+  @IsArray()
+  @ArrayNotEmpty()
+  @ValidateNested({ each: true })
+  @Type(() => OrderItemDto)
+  order_item_info!: OrderItemDto[];
+
+  @ApiProperty({ example: 120000 })
+  @Transform(({ value }) => parseFormattedNumber(value))
+  @IsNumber()
+  total_price!: number;
+
+  @ApiPropertyOptional({ enum: Where_deliver, default: Where_deliver.CENTER })
+  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
+  @IsOptional()
+  @IsEnum(Where_deliver)
+  where_deliver?: Where_deliver;
+
+  @ApiPropertyOptional({ example: 'Izoh' })
+  @IsOptional()
+  @IsString()
+  comment?: string | null;
+
+  @ApiPropertyOptional({ example: 'Operator' })
+  @IsOptional()
+  @IsString()
+  operator?: string | null;
+}

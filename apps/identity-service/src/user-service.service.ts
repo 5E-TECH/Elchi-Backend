@@ -13,6 +13,8 @@ import { CreateMarketDto } from './dto/create-market.dto';
 import { UpdateMarketDto } from './dto/update-market.dto';
 import { CreateCourierDto } from './dto/create-courier.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
+import { CreateManagerDto } from './dto/create-manager.dto';
+import { CreateOperatorDto } from './dto/create-operator.dto';
 import { UserFilterQuery } from './contracts/user.payloads';
 import { Cashbox_type, Roles, Status, rmqSend } from '@app/common';
 import { catchError, errorRes, successRes } from '../../../libs/common/helpers/response';
@@ -736,6 +738,60 @@ export class UserServiceService implements OnModuleInit {
     await this.ensureUserCashbox(saved.id, Cashbox_type.FOR_COURIER);
     void this.syncUserToSearch(saved);
     return successRes(this.sanitize(saved), 201, 'Courier yaratildi');
+  }
+
+  async createManager(dto: CreateManagerDto) {
+    await this.ensurePhoneUnique(dto.phone_number);
+    await this.ensureUsernameUnique(dto.phone_number);
+
+    const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
+
+    const manager = this.users.create({
+      name: dto.name,
+      phone_number: dto.phone_number,
+      username: dto.phone_number,
+      password: hashedPassword,
+      salary: 0,
+      payment_day: new Date().getDate(),
+      role: Roles.BRANCH,
+      status: Status.ACTIVE,
+      tariff_home: null,
+      tariff_center: null,
+      add_order: false,
+      default_tariff: null,
+      isDeleted: false,
+    });
+
+    const saved = await this.users.save(manager);
+    void this.syncUserToSearch(saved);
+    return successRes(this.sanitize(saved), 201, 'Manager yaratildi');
+  }
+
+  async createOperator(dto: CreateOperatorDto) {
+    await this.ensurePhoneUnique(dto.phone_number);
+    await this.ensureUsernameUnique(dto.phone_number);
+
+    const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
+
+    const operator = this.users.create({
+      name: dto.name,
+      phone_number: dto.phone_number,
+      username: dto.phone_number,
+      password: hashedPassword,
+      salary: 0,
+      payment_day: new Date().getDate(),
+      role: Roles.OPERATOR,
+      status: Status.ACTIVE,
+      tariff_home: null,
+      tariff_center: null,
+      add_order: false,
+      default_tariff: null,
+      isDeleted: false,
+    });
+
+    const saved = await this.users.save(operator);
+    void this.syncUserToSearch(saved);
+    return successRes(this.sanitize(saved), 201, 'Operator yaratildi');
   }
 
   async createCustomer(dto: CreateCustomerDto) {

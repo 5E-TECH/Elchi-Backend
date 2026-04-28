@@ -26,6 +26,7 @@ import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import {
   AssignOrdersToCourierRequestDto,
+  CreateOrderByTelegramBotRequestDto,
   CreateExternalOrderRequestDto,
   CreateOrderRequestDto,
   OrdersArrayDto,
@@ -34,7 +35,7 @@ import {
   SellOrderRequestDto,
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
-import { Order_status, Roles as RoleEnum } from '@app/common';
+import { Order_status, Roles as RoleEnum, Where_deliver } from '@app/common';
 import { successRes } from '../../../libs/common/helpers/response';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
@@ -64,6 +65,18 @@ export class OrderGatewayController {
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
   ) {}
+
+  private normalizeRoles(roles?: string[]) {
+    const normalized = new Set<string>();
+    for (const rawRole of roles ?? []) {
+      const role = String(rawRole ?? '').trim().toLowerCase();
+      if (!role) {
+        continue;
+      }
+      normalized.add(role);
+    }
+    return Array.from(normalized);
+  }
 
   private toSnakeCaseKey(value: string) {
     return value
@@ -289,7 +302,7 @@ export class OrderGatewayController {
   async create(@Body() dto: CreateOrderRequestDto, @Req() req: { user: JwtUser }) {
     const { customer, ...orderDto } = dto;
     let customerId = dto.customer_id;
-    const roles = req.user.roles ?? [];
+    const roles = this.normalizeRoles(req.user.roles);
     const shouldResolveBranchAssignment =
       roles.includes(RoleEnum.BRANCH) || roles.includes(RoleEnum.OPERATOR);
     const branchAssignment = shouldResolveBranchAssignment
@@ -388,6 +401,35 @@ export class OrderGatewayController {
       }
       throw error;
     });
+  }
+
+  @Post('telegram/bot/create')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.OPERATOR)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Create order by telegram bot' })
+  @ApiBody({ type: CreateOrderByTelegramBotRequestDto })
+  async botOrderCreate(
+    @Body() dto: CreateOrderByTelegramBotRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    const mappedDto: CreateOrderRequestDto = {
+      customer: {
+        name: dto.name,
+        phone_number: dto.phone_number,
+        district_id: dto.district_id,
+        extra_number: dto.extra_number,
+        address: dto.address,
+      },
+      where_deliver: dto.where_deliver ?? Where_deliver.CENTER,
+      total_price: dto.total_price,
+      status: Order_status.CREATED,
+      comment: dto.comment ?? null,
+      operator: dto.operator ?? null,
+      items: dto.order_item_info,
+    };
+
+    return this.create(mappedDto, req);
   }
 
   @Post('receive')
@@ -506,7 +548,7 @@ export class OrderGatewayController {
   async createExternal(@Body() dto: CreateExternalOrderRequestDto, @Req() req: { user: JwtUser }) {
     const { customer, external_id, ...orderDto } = dto;
     let customerId = dto.customer_id;
-    const roles = req.user.roles ?? [];
+    const roles = this.normalizeRoles(req.user.roles);
 
     let resolvedMarketId = orderDto.market_id;
     if (roles.includes(RoleEnum.MARKET)) {
@@ -868,7 +910,7 @@ export class OrderGatewayController {
         dto,
         requester: {
           id: req.user.sub,
-          roles: req.user.roles ?? [],
+          roles: this.normalizeRoles(req.user.roles),
         },
       },
     );
@@ -890,7 +932,7 @@ export class OrderGatewayController {
         dto,
         requester: {
           id: req.user.sub,
-          roles: req.user.roles ?? [],
+          roles: this.normalizeRoles(req.user.roles),
         },
       },
     );
@@ -930,7 +972,7 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.sell' },
-          { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+          { id, dto, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -957,7 +999,7 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.cancel' },
-          { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+          { id, dto, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -984,7 +1026,7 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.partly_sell' },
-          { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+          { id, dto, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -1009,7 +1051,7 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.rollback_waiting' },
-          { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+          { id, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -1035,7 +1077,7 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.update_normalized' },
-          { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+          { id, dto, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -1061,7 +1103,7 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.update_normalized' },
-          { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+          { id, dto, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -1086,7 +1128,7 @@ export class OrderGatewayController {
   remove(@Param('id') id: string, @Req() req: { user: JwtUser }) {
     return this.orderClient.send(
       { cmd: 'order.delete' },
-      { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+      { id, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
     );
   }
 }

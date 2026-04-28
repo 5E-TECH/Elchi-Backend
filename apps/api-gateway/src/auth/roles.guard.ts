@@ -12,6 +12,18 @@ interface JwtUser {
 export class RolesGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}
 
+  private normalizeRoles(roles?: string[]) {
+    const normalized = new Set<string>();
+    for (const rawRole of roles ?? []) {
+      const role = String(rawRole ?? '').trim().toLowerCase();
+      if (!role) {
+        continue;
+      }
+      normalized.add(role);
+    }
+    return Array.from(normalized);
+  }
+
   canActivate(context: ExecutionContext): boolean {
     const requiredRoles = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
       context.getHandler(),
@@ -29,6 +41,10 @@ export class RolesGuard implements CanActivate {
       return false;
     }
 
-    return requiredRoles.some((role) => user.roles!.includes(role));
+    const normalizedUserRoles = this.normalizeRoles(user.roles);
+    user.roles = normalizedUserRoles;
+    const normalizedRequiredRoles = this.normalizeRoles(requiredRoles);
+
+    return normalizedRequiredRoles.some((role) => normalizedUserRoles.includes(role));
   }
 }

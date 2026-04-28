@@ -11,6 +11,8 @@ import type {
   FindAllUsersPayload,
   FindCouriersByIdsPayload,
   FindUserByIdPayload,
+  CreateManagerPayload,
+  CreateOperatorPayload,
   UpdateUserStatusPayload,
   UpdateUserPayload,
 } from './contracts/user.payloads';
@@ -111,6 +113,16 @@ export class IdentityController {
   @MessagePattern({ cmd: 'identity.courier.create' })
   createCourier(@Payload() payload: CreateCourierPayload, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.userService.createCourier(payload.dto));
+  }
+
+  @MessagePattern({ cmd: 'identity.manager.create' })
+  createManager(@Payload() payload: CreateManagerPayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.userService.createManager(payload.dto));
+  }
+
+  @MessagePattern({ cmd: 'identity.operator.create' })
+  createOperator(@Payload() payload: CreateOperatorPayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.userService.createOperator(payload.dto));
   }
 
   @MessagePattern({ cmd: 'identity.courier.find_all' })

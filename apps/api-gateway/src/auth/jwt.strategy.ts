@@ -17,7 +17,22 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     });
   }
 
+  private normalizeRoles(roles?: string[]) {
+    const normalized = new Set<string>();
+    for (const rawRole of roles ?? []) {
+      const role = String(rawRole ?? '').trim().toLowerCase();
+      if (!role) {
+        continue;
+      }
+      normalized.add(role);
+    }
+    return Array.from(normalized);
+  }
+
   validate(payload: { sub: string; username: string; roles?: string[] }) {
-    return payload;
+    return {
+      ...payload,
+      roles: this.normalizeRoles(payload.roles),
+    };
   }
 }
