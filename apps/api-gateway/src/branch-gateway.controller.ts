@@ -142,20 +142,6 @@ export class BranchGatewayController {
     );
   }
 
-  @Get('branches/:id/dashboard')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.OPERATOR)
-  @ApiOperation({ summary: 'Branch dashboard cards (orders, markets, packages, couriers)' })
-  @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
-  findBranchDashboard(
-    @Param('id') id: string,
-    @Req() req: { user?: { sub?: string; roles?: string[] } },
-  ) {
-    return this.branchClient.send(
-      { cmd: 'branch.dashboard' },
-      { id, requester: this.toRequester(req) },
-    );
-  }
-
   @Get('branches/new-orders')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.OPERATOR)
   @ApiOperation({ summary: 'Branches that currently have NEW orders' })
