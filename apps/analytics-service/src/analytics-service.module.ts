@@ -15,6 +15,7 @@ import { RmqModule, analyticsValidationSchema } from '@app/common';
     RmqModule.register({ name: 'ORDER' }),
     RmqModule.register({ name: 'FINANCE' }),
     RmqModule.register({ name: 'IDENTITY' }),
+    RmqModule.register({ name: 'BRANCH' }),
     // Note: Analytics service may connect to read-replica or other data sources
     // DatabaseModule can be added when needed
   ],
