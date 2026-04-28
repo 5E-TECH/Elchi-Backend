@@ -1335,6 +1335,76 @@ export class BranchServiceService implements OnModuleInit {
     return successRes(items, 200, 'Branch market analytics');
   }
 
+  async getBranchesWithNewOrders(requester?: RequesterContext) {
+    const scope = await this.resolveAccessScope(requester);
+
+    const where: Record<string, unknown> = { isDeleted: false };
+    if (!this.isSystemPrivileged(requester)) {
+      const ids = Array.from(scope.readableBranchIds);
+      if (!ids.length) {
+        return successRes([], 200, 'Branches with NEW orders');
+      }
+      where.id = In(ids);
+    }
+
+    const branches = await this.branchRepo.find({
+      where,
+      order: { level: 'ASC', createdAt: 'ASC' },
+      select: ['id', 'name', 'type', 'level', 'parent_id', 'code', 'status'],
+    });
+
+    const items = await Promise.all(
+      branches.map(async (branch) => {
+        try {
+          const response = await lastValueFrom(
+            this.orderClient
+              .send(
+                { cmd: 'order.find_all' },
+                {
+                  query: {
+                    branch_id: String(branch.id),
+                    status: Order_status.NEW,
+                    fetch_all: true,
+                    limit: 5000,
+                  },
+                },
+              )
+              .pipe(timeout(10000)),
+          );
+
+          const orders = this.extractOrderRows(response);
+          return {
+            id: branch.id,
+            name: branch.name,
+            type: branch.type,
+            level: branch.level,
+            parent_id: branch.parent_id,
+            code: branch.code,
+            status: branch.status,
+            new_orders_count: orders.length,
+          };
+        } catch {
+          return {
+            id: branch.id,
+            name: branch.name,
+            type: branch.type,
+            level: branch.level,
+            parent_id: branch.parent_id,
+            code: branch.code,
+            status: branch.status,
+            new_orders_count: 0,
+          };
+        }
+      }),
+    );
+
+    return successRes(
+      items.filter((item) => item.new_orders_count > 0),
+      200,
+      'Branches with NEW orders',
+    );
+  }
+
   async updateBranch(
     id: string,
     dto: {

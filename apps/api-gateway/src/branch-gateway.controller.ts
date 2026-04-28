@@ -115,7 +115,7 @@ export class BranchGatewayController {
   }
 
   @Get('branches/:id/stats')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.OPERATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.OPERATOR)
   @ApiOperation({ summary: 'Branch operational stats (today/week/orders/batches/couriers)' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   findBranchStats(
@@ -129,7 +129,7 @@ export class BranchGatewayController {
   }
 
   @Get('branches/:id/analytics/markets')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.OPERATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.OPERATOR)
   @ApiOperation({ summary: 'Branch market analytics (orders, delivered, total price)' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   findBranchMarketsAnalytics(
@@ -142,8 +142,20 @@ export class BranchGatewayController {
     );
   }
 
+  @Get('branches/new-orders')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.OPERATOR)
+  @ApiOperation({ summary: 'Branches that currently have NEW orders' })
+  findBranchesWithNewOrders(
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.new_orders.branches' },
+      { requester: this.toRequester(req) },
+    );
+  }
+
   @Post('branches/:id/transfer-batches')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.OPERATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.OPERATOR)
   @ApiOperation({ summary: 'Create transfer batches by unassigned orders grouped by region' })
   @ApiParam({ name: 'id', description: 'Source branch ID (bigint string)' })
   @ApiBody({ type: CreateBranchTransferBatchesRequestDto })
@@ -159,7 +171,7 @@ export class BranchGatewayController {
   }
 
   @Post('transfer-batches/:id/send')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.OPERATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.OPERATOR)
   @ApiOperation({ summary: 'Mark transfer batch as sent with vehicle info' })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   @ApiBody({ type: SendTransferBatchRequestDto })
@@ -175,7 +187,7 @@ export class BranchGatewayController {
   }
 
   @Post('transfer-batches/:id/receive')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.OPERATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.OPERATOR)
   @ApiOperation({ summary: 'Receive transfer batch by destination branch staff' })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   receiveTransferBatch(
@@ -189,7 +201,7 @@ export class BranchGatewayController {
   }
 
   @Post('transfer-batches/:id/cancel')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.OPERATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.OPERATOR)
   @ApiOperation({ summary: 'Cancel transfer batch and unassign its orders' })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   @ApiBody({ type: CancelTransferBatchRequestDto })

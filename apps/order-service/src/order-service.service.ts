@@ -564,7 +564,7 @@ export class OrderServiceService {
       const response = await rmqSend<any>(
         this.identityClient,
         { cmd: 'identity.user.find_all' },
-        { query: { role: Roles.OPERATOR, page, limit } },
+        { query: { role: Roles.MARKET_OPERATOR, page, limit } },
       ).catch(() => null);
 
       const payload = response?.data ?? response ?? {};
@@ -1067,7 +1067,9 @@ export class OrderServiceService {
     items?: Array<{ product_id: string; quantity?: number }>;
   }, requester?: { id: string; roles?: string[] }) {
     const roles = new Set((requester?.roles ?? []).map((role) => String(role).toLowerCase()));
-    const operatorId = dto.operator_id ?? (roles.has(Roles.OPERATOR) ? requester?.id ?? null : null);
+    const isOperatorRequester =
+      roles.has(Roles.OPERATOR) || roles.has(Roles.MARKET_OPERATOR);
+    const operatorId = dto.operator_id ?? (isOperatorRequester ? requester?.id ?? null : null);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();

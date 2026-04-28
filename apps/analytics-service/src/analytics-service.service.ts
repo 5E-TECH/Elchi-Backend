@@ -240,7 +240,7 @@ export class AnalyticsServiceService {
     requester: RequesterContext | undefined,
     roles: Set<string>,
   ): Promise<RequesterContext | undefined> {
-    if (!requester || !roles.has(Roles.OPERATOR)) {
+    if (!requester || !roles.has(Roles.MARKET_OPERATOR)) {
       return requester;
     }
 
@@ -299,7 +299,7 @@ export class AnalyticsServiceService {
       );
     }
 
-    if (roles.has(Roles.MARKET) || roles.has(Roles.OPERATOR)) {
+    if (roles.has(Roles.MARKET) || roles.has(Roles.MARKET_OPERATOR)) {
       const marketRequester = await this.resolveRequesterForMarket(requester, roles);
       const [myStat, markets, topMarkets, topOperators] = await Promise.all([
         rmqSend(

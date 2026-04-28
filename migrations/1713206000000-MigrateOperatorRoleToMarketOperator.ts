@@ -40,7 +40,8 @@ export class MigrateOperatorRoleToMarketOperator1713206000000
 
             UPDATE identity_schema.admins
             SET role = 'market_operator'
-            WHERE role::text = 'operator';
+            WHERE role::text = 'operator'
+              AND market_id IS NOT NULL;
           END IF;
         END IF;
       END $$;
@@ -82,7 +83,8 @@ export class MigrateOperatorRoleToMarketOperator1713206000000
 
             UPDATE identity_schema.admins
             SET role = 'operator'
-            WHERE role::text = 'market_operator';
+            WHERE role::text = 'market_operator'
+              AND market_id IS NOT NULL;
           END IF;
         END IF;
       END $$;

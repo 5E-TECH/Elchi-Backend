@@ -83,6 +83,13 @@ export class BranchServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'branch.new_orders.branches' })
+  getBranchesWithNewOrders(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.getBranchesWithNewOrders(this.getRequester(data)),
+    );
+  }
+
   @MessagePattern({ cmd: 'branch.transfer_batches.create' })
   createTransferBatches(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>

@@ -753,7 +753,7 @@ export class UserServiceService implements OnModuleInit {
       password: hashedPassword,
       salary: 0,
       payment_day: new Date().getDate(),
-      role: Roles.BRANCH,
+      role: Roles.MANAGER,
       status: Status.ACTIVE,
       tariff_home: null,
       tariff_center: null,

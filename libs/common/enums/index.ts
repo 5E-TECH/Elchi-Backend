@@ -5,7 +5,9 @@ export enum Roles {
   REGISTRATOR = 'registrator',
   MARKET = 'market',
   CUSTOMER = 'customer',
-  OPERATOR = 'market_operator',
+  OPERATOR = 'operator',
+  MARKET_OPERATOR = 'market_operator',
+  MANAGER = 'manager',
   BRANCH = 'branch',
   INVESTOR = 'investor'
 }
