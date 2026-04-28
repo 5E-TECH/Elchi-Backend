@@ -28,6 +28,7 @@ export class AnalyticsServiceService {
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    @Inject('BRANCH') private readonly branchClient: ClientProxy,
   ) {}
 
   private unwrap<T>(response: T | { data?: T }) {
@@ -262,12 +263,40 @@ export class AnalyticsServiceService {
     };
   }
 
+  private async resolveRequesterBranchDashboard(requester: RequesterContext | undefined) {
+    if (!requester?.id) {
+      return null;
+    }
+
+    const assignmentRes = await rmqSend<any>(
+      this.branchClient,
+      { cmd: 'branch.user.find_by_user' },
+      { user_id: requester.id, requester },
+    ).catch(() => null);
+
+    const assignmentData = this.unwrap<any>(assignmentRes as any) as any;
+    const branchId = assignmentData?.branch_id ? String(assignmentData.branch_id) : null;
+    if (!branchId) {
+      return null;
+    }
+
+    const dashboardRes = await rmqSend<any>(
+      this.branchClient,
+      { cmd: 'branch.dashboard' },
+      { id: branchId, requester },
+    ).catch(() => null);
+
+    return this.unwrap<any>(dashboardRes as any) ?? null;
+  }
+
   async getDashboard(
     requester: RequesterContext | undefined,
     filter: { startDate?: string; endDate?: string },
   ) {
     const normalized = this.normalizeDateRange(filter);
     const roles = this.roleSet(requester);
+    const isBranchRole =
+      roles.has(Roles.BRANCH) || roles.has(Roles.MANAGER) || roles.has(Roles.OPERATOR);
 
     if (roles.has(Roles.COURIER)) {
       const [myStat, couriers, topCouriers] = await Promise.all([
@@ -343,6 +372,9 @@ export class AnalyticsServiceService {
       rmqSend(this.orderClient, { cmd: 'order.analytics.top_markets' }, {}),
       rmqSend(this.orderClient, { cmd: 'order.analytics.top_couriers' }, {}),
     ]);
+    const branchDashboard = isBranchRole
+      ? await this.resolveRequesterBranchDashboard(requester)
+      : null;
 
     const ordersOverview = this.unwrap<any>(orders as any) as any;
     const isRegistrator = roles.has(Roles.REGISTRATOR);
@@ -360,6 +392,7 @@ export class AnalyticsServiceService {
         couriers: this.unwrap(couriers),
         topMarkets: this.unwrap(topMarkets),
         topCouriers: this.unwrap(topCouriers),
+        branchDashboard,
       },
       200,
       'Dashboard infos',

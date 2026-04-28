@@ -17,7 +17,11 @@ jest.mock('@app/common', () => ({
   Roles: {
     COURIER: 'courier',
     MARKET: 'market',
+    MARKET_OPERATOR: 'market_operator',
+    BRANCH: 'branch',
+    MANAGER: 'manager',
     OPERATOR: 'operator',
+    REGISTRATOR: 'registrator',
   },
   rmqSend: (...args: any[]) => rmqSendMock(...args),
 }));
@@ -27,7 +31,7 @@ describe('AnalyticsServiceService', () => {
 
   beforeEach(() => {
     rmqSendMock.mockReset();
-    service = new AnalyticsServiceService({} as any, {} as any, {} as any);
+    service = new AnalyticsServiceService({} as any, {} as any, {} as any, {} as any);
   });
 
   it('getDashboard returns courier-specific payload for courier role', async () => {

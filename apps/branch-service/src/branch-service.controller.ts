@@ -69,8 +69,8 @@ export class BranchServiceController {
     );
   }
 
-  @MessagePattern({ cmd: 'branch.stats' })
-  getStats(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  @MessagePattern({ cmd: 'branch.dashboard' })
+  getDashboard(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.branchService.getBranchStats(data?.id, this.getRequester(data)),
     );
