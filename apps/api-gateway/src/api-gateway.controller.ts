@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -33,7 +34,9 @@ import { RolesGuard } from './auth/roles.guard';
 import {
   CreateAdminRequestDto,
   CreateCourierRequestDto,
+  CreateManagerRequestDto,
   CreateMarketRequestDto,
+  CreateOperatorRequestDto,
   CreateRegistratorRequestDto,
   UpdateAdminRequestDto,
   UpdateMarketAddOrderRequestDto,
@@ -52,6 +55,7 @@ export class ApiGatewayController {
   constructor(
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
+    @Inject('BRANCH') private readonly branchClient: ClientProxy,
   ) {}
 
   private toRequester(req: { user: JwtUser }) {
@@ -191,6 +195,96 @@ export class ApiGatewayController {
     return this.identityClient.send({ cmd: 'identity.courier.create' }, { dto });
   }
 
+  @Post('managers')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Create manager' })
+  @ApiBody({ type: CreateManagerRequestDto })
+  @ApiCreatedResponse({ description: 'Manager created' })
+  @ApiConflictResponse({ description: 'Conflict' })
+  async createManager(@Body() dto: CreateManagerRequestDto, @Req() req: { user: JwtUser }) {
+    const created = await firstValueFrom(
+      this.identityClient.send({ cmd: 'identity.manager.create' }, { dto }),
+    );
+
+    const managerId = String(created?.data?.id ?? '').trim();
+    if (!managerId) {
+      throw new BadRequestException('Manager yaratildi, lekin id qaytmadi');
+    }
+
+    try {
+      await firstValueFrom(
+        this.branchClient.send(
+          { cmd: 'branch.user.assign' },
+          {
+            requester: this.toRequester(req),
+            dto: {
+              branch_id: dto.branch_id,
+              user_id: managerId,
+              role: 'MANAGER',
+            },
+          },
+        ),
+      );
+    } catch (error) {
+      await firstValueFrom(
+        this.identityClient.send(
+          { cmd: 'identity.user.delete' },
+          { id: managerId, requester: this.toRequester(req) },
+        ),
+      ).catch(() => null);
+      throw error;
+    }
+
+    return created;
+  }
+
+  @Post('operators')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Create operator (market_operator)' })
+  @ApiBody({ type: CreateOperatorRequestDto })
+  @ApiCreatedResponse({ description: 'Operator created' })
+  @ApiConflictResponse({ description: 'Conflict' })
+  async createOperator(@Body() dto: CreateOperatorRequestDto, @Req() req: { user: JwtUser }) {
+    const created = await firstValueFrom(
+      this.identityClient.send({ cmd: 'identity.operator.create' }, { dto }),
+    );
+
+    const operatorId = String(created?.data?.id ?? '').trim();
+    if (!operatorId) {
+      throw new BadRequestException('Operator yaratildi, lekin id qaytmadi');
+    }
+
+    try {
+      await firstValueFrom(
+        this.branchClient.send(
+          { cmd: 'branch.user.assign' },
+          {
+            requester: this.toRequester(req),
+            dto: {
+              branch_id: dto.branch_id,
+              user_id: operatorId,
+              role: 'OPERATOR',
+            },
+          },
+        ),
+      );
+    } catch (error) {
+      await firstValueFrom(
+        this.identityClient.send(
+          { cmd: 'identity.user.delete' },
+          { id: operatorId, requester: this.toRequester(req) },
+        ),
+      ).catch(() => null);
+      throw error;
+    }
+
+    return created;
+  }
+
   @Get('couriers')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
@@ -240,6 +334,66 @@ export class ApiGatewayController {
     );
 
     return response;
+  }
+
+  @Get('managers')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List managers with filtering and pagination' })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiOkResponse({ description: 'Manager list' })
+  getManagers(
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.identityClient.send(
+      { cmd: 'identity.user.find_all' },
+      {
+        query: {
+          role: RoleEnum.BRANCH,
+          search,
+          status,
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+        },
+      },
+    );
+  }
+
+  @Get('operators')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List operators with filtering and pagination' })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiOkResponse({ description: 'Operator list' })
+  getOperators(
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.identityClient.send(
+      { cmd: 'identity.user.find_all' },
+      {
+        query: {
+          role: RoleEnum.OPERATOR,
+          search,
+          status,
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+        },
+      },
+    );
   }
 
   @Get('couriers/region/:id')

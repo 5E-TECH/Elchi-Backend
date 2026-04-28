@@ -181,6 +181,46 @@ export class CreateCourierRequestDto {
   tariff_center!: number;
 }
 
+export class CreateManagerRequestDto {
+  @ApiProperty({ example: 'Branch manager' })
+  @IsString()
+  @MinLength(2)
+  name!: string;
+
+  @ApiProperty({ example: '+998901234567' })
+  @IsPhoneNumber('UZ')
+  phone_number!: string;
+
+  @ApiProperty({ example: 'secret123' })
+  @IsString()
+  @MinLength(4)
+  password!: string;
+
+  @ApiProperty({ example: '1', description: 'Branch ID' })
+  @IsString()
+  branch_id!: string;
+}
+
+export class CreateOperatorRequestDto {
+  @ApiProperty({ example: 'Market operator' })
+  @IsString()
+  @MinLength(2)
+  name!: string;
+
+  @ApiProperty({ example: '+998901234567' })
+  @IsPhoneNumber('UZ')
+  phone_number!: string;
+
+  @ApiProperty({ example: 'secret123' })
+  @IsString()
+  @MinLength(4)
+  password!: string;
+
+  @ApiProperty({ example: '1', description: 'Branch ID' })
+  @IsString()
+  branch_id!: string;
+}
+
 export class UpdateMarketRequestDto {
   @ApiPropertyOptional({ example: 'Market 1 Updated' })
   @IsOptional()
