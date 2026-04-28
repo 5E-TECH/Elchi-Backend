@@ -1236,6 +1236,10 @@ export class BranchServiceService implements OnModuleInit {
   async getBranchStats(id: string, requester?: RequesterContext) {
     const targetBranchIds = await this.resolveAnalyticsBranchIds(id, requester);
     const orders = await this.getOrdersByBranchIds(targetBranchIds);
+    const requesterBranchRole = await this.resolveRequesterBranchRole(
+      targetBranchIds,
+      requester,
+    );
 
     const now = new Date();
     const todayStart = this.toTashkentStartOfDay(now);
@@ -1248,6 +1252,9 @@ export class BranchServiceService implements OnModuleInit {
     const weekOrdersCount = orders.filter(
       (order) => order.createdAt && order.createdAt >= weekStart,
     ).length;
+    const todayOrders = orders.filter(
+      (order) => order.createdAt && order.createdAt >= todayStart,
+    );
 
     const activeBatchStatuses = new Set<string>([
       Order_status.CREATED,
@@ -1278,12 +1285,112 @@ export class BranchServiceService implements OnModuleInit {
       },
     });
 
+    const deliveredStatuses = new Set<string>([
+      Order_status.WAITING,
+      Order_status.SOLD,
+      Order_status.PAID,
+      Order_status.PARTLY_PAID,
+      Order_status.CLOSED,
+    ]);
+
+    const returnedStatuses = new Set<string>([
+      Order_status.RETURNED_TO_MARKET,
+    ]);
+
+    const ordersCard = {
+      total: todayOrders.length,
+      new: todayOrders.filter((order) => order.status === Order_status.NEW).length,
+      on_the_road: todayOrders.filter(
+        (order) => order.status === Order_status.ON_THE_ROAD,
+      ).length,
+      delivered: todayOrders.filter(
+        (order) => order.status && deliveredStatuses.has(order.status),
+      ).length,
+      returned: todayOrders.filter(
+        (order) => order.status && returnedStatuses.has(order.status),
+      ).length,
+    };
+
+    const marketMap = new Map<
+      string,
+      { market_id: string; orders_count: number; total_price: number }
+    >();
+    for (const order of todayOrders) {
+      const marketId = String(order.market_id ?? '').trim();
+      if (!marketId) continue;
+      const current = marketMap.get(marketId) ?? {
+        market_id: marketId,
+        orders_count: 0,
+        total_price: 0,
+      };
+      current.orders_count += 1;
+      current.total_price += Number(order.total_price ?? 0) || 0;
+      marketMap.set(marketId, current);
+    }
+
+    const marketsCard = Array.from(marketMap.values()).sort(
+      (left, right) => right.orders_count - left.orders_count,
+    );
+
+    const packagesOnTheWay = new Set(
+      orders
+        .filter(
+          (order) =>
+            order.current_batch_id &&
+            order.status === Order_status.ON_THE_ROAD,
+        )
+        .map((order) => String(order.current_batch_id)),
+    ).size;
+
+    const waitingForAcceptance = new Set(
+      orders
+        .filter(
+          (order) =>
+            order.current_batch_id &&
+            order.status === Order_status.RECEIVED,
+        )
+        .map((order) => String(order.current_batch_id)),
+    ).size;
+
+    const packagesCard = {
+      on_the_way: packagesOnTheWay,
+      waiting_for_acceptance: waitingForAcceptance,
+    };
+
+    const activeTodayCouriersCount = new Set(
+      todayOrders
+        .map((order) => String(order.courier_id ?? '').trim())
+        .filter((courierId) => Boolean(courierId)),
+    ).size;
+
+    const couriersCard = {
+      branch_couriers: couriersCount,
+      active_today: activeTodayCouriersCount,
+    };
+
+    const canSeeAll =
+      requesterBranchRole === 'SUPER' || requesterBranchRole === BranchUserRole.MANAGER;
+    const canSeeMarkets = canSeeAll;
+
     return successRes(
       {
         today_orders_count: todayOrdersCount,
         week_orders_count: weekOrdersCount,
         active_batches_count: activeBatchesCount,
         couriers_count: couriersCount,
+        role: requesterBranchRole,
+        cards: {
+          orders: ordersCard,
+          markets: canSeeMarkets ? marketsCard : null,
+          packages: packagesCard,
+          couriers: canSeeAll ? couriersCard : null,
+        },
+        visibility: {
+          orders: true,
+          markets: canSeeMarkets,
+          packages: true,
+          couriers: canSeeAll,
+        },
       },
       200,
       'Branch stats',
@@ -1444,137 +1551,6 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     return null;
-  }
-
-  async getBranchDashboard(id: string, requester?: RequesterContext) {
-    const targetBranchIds = await this.resolveAnalyticsBranchIds(id, requester);
-    const orders = await this.getOrdersByBranchIds(targetBranchIds);
-
-    const requesterBranchRole = await this.resolveRequesterBranchRole(
-      targetBranchIds,
-      requester,
-    );
-
-    const now = new Date();
-    const todayStart = this.toTashkentStartOfDay(now);
-    const todayOrders = orders.filter(
-      (order) => order.createdAt && order.createdAt >= todayStart,
-    );
-
-    const deliveredStatuses = new Set<string>([
-      Order_status.WAITING,
-      Order_status.SOLD,
-      Order_status.PAID,
-      Order_status.PARTLY_PAID,
-      Order_status.CLOSED,
-    ]);
-
-    const returnedStatuses = new Set<string>([
-      Order_status.RETURNED_TO_MARKET,
-    ]);
-
-    const ordersCard = {
-      total: todayOrders.length,
-      new: todayOrders.filter((order) => order.status === Order_status.NEW).length,
-      on_the_road: todayOrders.filter(
-        (order) => order.status === Order_status.ON_THE_ROAD,
-      ).length,
-      delivered: todayOrders.filter(
-        (order) => order.status && deliveredStatuses.has(order.status),
-      ).length,
-      returned: todayOrders.filter(
-        (order) => order.status && returnedStatuses.has(order.status),
-      ).length,
-    };
-
-    const marketMap = new Map<
-      string,
-      { market_id: string; orders_count: number; total_price: number }
-    >();
-    for (const order of todayOrders) {
-      const marketId = String(order.market_id ?? '').trim();
-      if (!marketId) continue;
-      const current = marketMap.get(marketId) ?? {
-        market_id: marketId,
-        orders_count: 0,
-        total_price: 0,
-      };
-      current.orders_count += 1;
-      current.total_price += Number(order.total_price ?? 0) || 0;
-      marketMap.set(marketId, current);
-    }
-
-    const marketsCard = Array.from(marketMap.values()).sort(
-      (left, right) => right.orders_count - left.orders_count,
-    );
-
-    const packagesOnTheWay = new Set(
-      orders
-        .filter(
-          (order) =>
-            order.current_batch_id &&
-            order.status === Order_status.ON_THE_ROAD,
-        )
-        .map((order) => String(order.current_batch_id)),
-    ).size;
-
-    const waitingForAcceptance = new Set(
-      orders
-        .filter(
-          (order) =>
-            order.current_batch_id &&
-            order.status === Order_status.RECEIVED,
-        )
-        .map((order) => String(order.current_batch_id)),
-    ).size;
-
-    const packagesCard = {
-      on_the_way: packagesOnTheWay,
-      waiting_for_acceptance: waitingForAcceptance,
-    };
-
-    const branchCouriersCount = await this.branchUserRepo.count({
-      where: {
-        branch_id: In(targetBranchIds),
-        role: BranchUserRole.COURIER,
-        isDeleted: false,
-      },
-    });
-
-    const activeTodayCouriersCount = new Set(
-      todayOrders
-        .map((order) => String(order.courier_id ?? '').trim())
-        .filter((courierId) => Boolean(courierId)),
-    ).size;
-
-    const couriersCard = {
-      branch_couriers: branchCouriersCount,
-      active_today: activeTodayCouriersCount,
-    };
-
-    const canSeeAll =
-      requesterBranchRole === 'SUPER' || requesterBranchRole === BranchUserRole.MANAGER;
-    const canSeeMarkets = canSeeAll;
-
-    return successRes(
-      {
-        role: requesterBranchRole,
-        cards: {
-          orders: ordersCard,
-          markets: canSeeMarkets ? marketsCard : null,
-          packages: packagesCard,
-          couriers: canSeeAll ? couriersCard : null,
-        },
-        visibility: {
-          orders: true,
-          markets: canSeeMarkets,
-          packages: true,
-          couriers: canSeeAll,
-        },
-      },
-      200,
-      'Branch dashboard',
-    );
   }
 
   async updateBranch(
