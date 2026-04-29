@@ -3968,6 +3968,96 @@ export class OrderServiceService {
     );
   }
 
+  async findBranchTransferBatches(input: {
+    source_branch_id?: string;
+    destination_branch_id?: string;
+    status?: string;
+    direction?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const sourceBranchId = String(input?.source_branch_id ?? '').trim();
+    const destinationBranchId = String(input?.destination_branch_id ?? '').trim();
+    const statusRaw = String(input?.status ?? '').trim().toUpperCase();
+    const directionRaw = String(input?.direction ?? '').trim().toUpperCase();
+
+    const page = Number(input?.page) > 0 ? Number(input?.page) : 1;
+    const limit = Number(input?.limit) > 0 ? Math.min(Number(input?.limit), 100) : 20;
+    const skip = (page - 1) * limit;
+
+    const qb = this.transferBatchRepo
+      .createQueryBuilder('batch')
+      .where('batch.isDeleted = :isDeleted', { isDeleted: false });
+
+    if (sourceBranchId) {
+      qb.andWhere('batch.source_branch_id = :sourceBranchId', { sourceBranchId });
+    }
+
+    if (destinationBranchId) {
+      qb.andWhere('batch.destination_branch_id = :destinationBranchId', { destinationBranchId });
+    }
+
+    if (statusRaw) {
+      if (!Object.values(BranchTransferBatchStatus).includes(statusRaw as BranchTransferBatchStatus)) {
+        this.badRequest(`status must be one of: ${Object.values(BranchTransferBatchStatus).join(', ')}`);
+      }
+      qb.andWhere('batch.status = :status', { status: statusRaw });
+    }
+
+    if (directionRaw) {
+      if (!Object.values(BranchTransferDirection).includes(directionRaw as BranchTransferDirection)) {
+        this.badRequest(`direction must be one of: ${Object.values(BranchTransferDirection).join(', ')}`);
+      }
+      qb.andWhere('batch.direction = :direction', { direction: directionRaw });
+    }
+
+    const [rows, total] = await qb
+      .orderBy('batch.createdAt', 'DESC')
+      .skip(skip)
+      .take(limit)
+      .getManyAndCount();
+
+    const batchIds = rows.map((row) => String(row.id));
+    const items = batchIds.length
+      ? await this.transferBatchItemRepo.find({
+          where: { batch_id: In(batchIds), isDeleted: false },
+          order: { createdAt: 'ASC' },
+        })
+      : [];
+
+    const itemsByBatch = new Map<string, BranchTransferBatchItem[]>();
+    for (const item of items) {
+      const key = String(item.batch_id);
+      const list = itemsByBatch.get(key) ?? [];
+      list.push(item);
+      itemsByBatch.set(key, list);
+    }
+
+    return successRes(
+      {
+        items: rows.map((batch) => ({
+          ...batch,
+          items: (itemsByBatch.get(String(batch.id)) ?? []).map((item) => ({
+            id: item.id,
+            order_id: item.order_id,
+            snapshot_price: item.snapshot_price,
+            snapshot_market_id: item.snapshot_market_id,
+            createdAt: item.createdAt,
+            updatedAt: item.updatedAt,
+          })),
+        })),
+        meta: {
+          page,
+          limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+        },
+      },
+      200,
+      'Transfer batches found',
+    );
+  }
+
   async findBranchTransferBatchByQrToken(token: string) {
     const normalizedToken = String(token ?? '').trim();
     if (!normalizedToken) {

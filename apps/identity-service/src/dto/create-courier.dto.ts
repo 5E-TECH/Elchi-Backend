@@ -1,6 +1,9 @@
 import {
+  Max,
+  MinLength,
   IsNotEmpty,
   IsNumber,
+  IsOptional,
   IsPhoneNumber,
   IsString,
   Min,
@@ -29,7 +32,27 @@ export class CreateCourierDto {
   @ApiProperty({ example: 'secret123' })
   @IsNotEmpty()
   @IsString()
+  @MinLength(4)
   password: string;
+
+  @ApiProperty({ example: 2000000, minimum: 0 })
+  @IsNotEmpty()
+  @IsNumber()
+  @Min(0)
+  salary: number;
+
+  @ApiProperty({
+    example: 10,
+    minimum: 1,
+    maximum: 30,
+    required: false,
+    description: 'Payment day of month',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(30)
+  payment_day?: number;
 
   @ApiProperty({ example: 10000, minimum: 0 })
   @IsNotEmpty()

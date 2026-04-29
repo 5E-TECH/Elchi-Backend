@@ -588,6 +588,24 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.transfer_batch.find_all' })
+  findTransferBatches(
+    @Payload()
+    data: {
+      source_branch_id?: string;
+      destination_branch_id?: string;
+      status?: string;
+      direction?: string;
+      page?: number;
+      limit?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findBranchTransferBatches(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.transfer_batch.send' })
   sendTransferBatch(
     @Payload()

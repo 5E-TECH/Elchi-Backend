@@ -16,11 +16,6 @@ export class UpdateUserDto {
   name?: string;
 
   @IsOptional()
-  @IsString()
-  @MinLength(3)
-  username?: string;
-
-  @IsOptional()
   @IsPhoneNumber('UZ')
   phone_number?: string;
 

@@ -831,6 +831,82 @@ export class BranchServiceService implements OnModuleInit {
     });
   }
 
+  async findTransferBatches(
+    query: {
+      source_branch_id?: string;
+      destination_branch_id?: string;
+      status?: string;
+      direction?: string;
+      page?: number;
+      limit?: number;
+    },
+    requester?: RequesterContext,
+  ) {
+    const sourceBranchId = String(query?.source_branch_id ?? '').trim();
+    const destinationBranchId = String(query?.destination_branch_id ?? '').trim();
+
+    if (sourceBranchId) {
+      await this.assertCanReadBranch(sourceBranchId, requester);
+    }
+    if (destinationBranchId) {
+      await this.assertCanReadBranch(destinationBranchId, requester);
+    }
+
+    if (!this.isSystemPrivileged(requester) && !sourceBranchId && !destinationBranchId) {
+      const requesterId = String(requester?.id ?? '').trim();
+      if (!requesterId) {
+        this.forbidden('Requester aniqlanmadi');
+      }
+
+      const assignment = await this.branchUserRepo.findOne({
+        where: { user_id: requesterId, isDeleted: false },
+        order: { createdAt: 'ASC' },
+      });
+
+      if (!assignment) {
+        this.forbidden('Filial biriktirilmagan foydalanuvchi');
+      }
+      return this.sendOrderCommand('order.transfer_batch.find_all', {
+        source_branch_id: String(assignment.branch_id),
+        status: query?.status,
+        direction: query?.direction,
+        page: query?.page,
+        limit: query?.limit,
+      });
+    }
+
+    return this.sendOrderCommand('order.transfer_batch.find_all', {
+      source_branch_id: sourceBranchId || undefined,
+      destination_branch_id: destinationBranchId || undefined,
+      status: query?.status,
+      direction: query?.direction,
+      page: query?.page,
+      limit: query?.limit,
+    });
+  }
+
+  async findTransferBatchById(id: string, requester?: RequesterContext) {
+    const batchId = String(id ?? '').trim();
+    if (!batchId) {
+      this.badRequest('batch id is required');
+    }
+
+    const response = await this.sendOrderCommand<{
+      data?: { source_branch_id?: string; destination_branch_id?: string };
+    }>('order.transfer_batch.find_by_id', { id: batchId });
+
+    const sourceBranchId = String(response?.data?.source_branch_id ?? '').trim();
+    const destinationBranchId = String(response?.data?.destination_branch_id ?? '').trim();
+
+    if (sourceBranchId) {
+      await this.assertCanReadBranch(sourceBranchId, requester);
+    } else if (destinationBranchId) {
+      await this.assertCanReadBranch(destinationBranchId, requester);
+    }
+
+    return response;
+  }
+
   private async assertRequesterWorksInBranch(branchId: string, requester?: RequesterContext) {
     if (this.isSystemPrivileged(requester)) {
       return;

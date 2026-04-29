@@ -57,12 +57,6 @@ export class UpdateAdminRequestDto {
   @IsPhoneNumber('UZ')
   phone_number?: string;
 
-  @ApiPropertyOptional({ example: 'admin_01' })
-  @IsOptional()
-  @IsString()
-  @MinLength(3)
-  username?: string;
-
   @ApiPropertyOptional({ example: 'newStrongPassword123' })
   @IsOptional()
   @IsString()
@@ -174,6 +168,18 @@ export class CreateCourierRequestDto {
   @MinLength(4)
   password!: string;
 
+  @ApiProperty({ example: 2000000 })
+  @IsNumber()
+  @Min(0)
+  salary!: number;
+
+  @ApiPropertyOptional({ example: 10 })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(30)
+  payment_day?: number;
+
   @ApiProperty({ example: 10000 })
   @IsNumber()
   @Min(0)
@@ -185,21 +191,7 @@ export class CreateCourierRequestDto {
   tariff_center!: number;
 }
 
-export class CreateManagerRequestDto {
-  @ApiProperty({ example: 'Branch manager' })
-  @IsString()
-  @MinLength(2)
-  name!: string;
-
-  @ApiProperty({ example: '+998901234567' })
-  @IsPhoneNumber('UZ')
-  phone_number!: string;
-
-  @ApiProperty({ example: 'secret123' })
-  @IsString()
-  @MinLength(4)
-  password!: string;
-
+export class CreateManagerRequestDto extends CreateAdminRequestDto {
   @ApiProperty({ example: '1', description: 'Branch ID' })
   @IsString()
   branch_id!: string;
