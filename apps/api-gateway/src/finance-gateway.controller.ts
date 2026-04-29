@@ -336,7 +336,7 @@ export class FinanceGatewayController {
 
   @Get('history')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.OPERATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Find cashbox history list' })
   @ApiQuery({ name: 'cashbox_id', required: false })
@@ -359,7 +359,7 @@ export class FinanceGatewayController {
   @Roles(
     RoleEnum.SUPERADMIN,
     RoleEnum.ADMIN,
-    RoleEnum.OPERATOR,
+    RoleEnum.REGISTRATOR,
     RoleEnum.COURIER,
     RoleEnum.MARKET,
   )
@@ -372,7 +372,7 @@ export class FinanceGatewayController {
 
   @Post('shift/open')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.OPERATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Open shift' })
   @ApiBody({ type: OpenShiftRequestDto })
@@ -382,7 +382,7 @@ export class FinanceGatewayController {
 
   @Post('shift/close')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.OPERATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Close shift' })
   @ApiBody({ type: CloseShiftRequestDto })
@@ -392,7 +392,7 @@ export class FinanceGatewayController {
 
   @Get('shift')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.OPERATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Find shifts with filters' })
   @ApiQuery({ name: 'opened_by', required: false })

@@ -2,7 +2,6 @@ import { CreateAdminDto } from '../dto/create-admin.dto';
 import { CreateCourierDto } from '../dto/create-courier.dto';
 import { CreateCustomerDto } from '../dto/create-customer.dto';
 import { CreateManagerDto } from '../dto/create-manager.dto';
-import { CreateOperatorDto } from '../dto/create-operator.dto';
 import { UpdateUserDto } from '../dto/update-user.dto';
 import { Status } from '@app/common';
 
@@ -26,10 +25,6 @@ export interface CreateCustomerPayload {
 
 export interface CreateManagerPayload {
   dto: CreateManagerDto;
-}
-
-export interface CreateOperatorPayload {
-  dto: CreateOperatorDto;
 }
 
 export interface FindCouriersByIdsPayload {

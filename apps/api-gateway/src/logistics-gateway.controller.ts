@@ -472,7 +472,6 @@ export class LogisticsGatewayController {
     RoleEnum.REGISTRATOR,
     RoleEnum.MARKET,
     RoleEnum.COURIER,
-    RoleEnum.OPERATOR,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all regions' })
@@ -500,7 +499,6 @@ export class LogisticsGatewayController {
     RoleEnum.REGISTRATOR,
     RoleEnum.MARKET,
     RoleEnum.COURIER,
-    RoleEnum.OPERATOR,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get region by id' })
@@ -539,7 +537,6 @@ export class LogisticsGatewayController {
     RoleEnum.REGISTRATOR,
     RoleEnum.MARKET,
     RoleEnum.COURIER,
-    RoleEnum.OPERATOR,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all districts' })
@@ -565,7 +562,7 @@ export class LogisticsGatewayController {
     RoleEnum.SUPERADMIN,
     RoleEnum.COURIER,
     RoleEnum.MARKET,
-    RoleEnum.OPERATOR,
+    RoleEnum.REGISTRATOR,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get district by sato_code' })
@@ -581,7 +578,7 @@ export class LogisticsGatewayController {
     RoleEnum.SUPERADMIN,
     RoleEnum.COURIER,
     RoleEnum.MARKET,
-    RoleEnum.OPERATOR,
+    RoleEnum.REGISTRATOR,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get district by id' })
