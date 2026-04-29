@@ -172,6 +172,54 @@ export class BranchGatewayController {
     );
   }
 
+  @Get('transfer-batches')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @ApiOperation({ summary: 'List transfer batches' })
+  @ApiQuery({ name: 'source_branch_id', required: false, type: String })
+  @ApiQuery({ name: 'destination_branch_id', required: false, type: String })
+  @ApiQuery({ name: 'status', required: false, enum: ['PENDING', 'SENT', 'RECEIVED', 'CANCELLED'] })
+  @ApiQuery({ name: 'direction', required: false, enum: ['FORWARD', 'RETURN'] })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  findTransferBatches(
+    @Query('source_branch_id') sourceBranchId: string | undefined,
+    @Query('destination_branch_id') destinationBranchId: string | undefined,
+    @Query('status') status: string | undefined,
+    @Query('direction') direction: string | undefined,
+    @Query('page') page: string | undefined,
+    @Query('limit') limit: string | undefined,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.transfer_batches.find_all' },
+      {
+        requester: this.toRequester(req),
+        query: {
+          source_branch_id: sourceBranchId,
+          destination_branch_id: destinationBranchId,
+          status,
+          direction,
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+        },
+      },
+    );
+  }
+
+  @Get('transfer-batches/:id')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @ApiOperation({ summary: 'Get transfer batch by id' })
+  @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
+  findTransferBatchById(
+    @Param('id') id: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.transfer_batches.find_by_id' },
+      { id, requester: this.toRequester(req) },
+    );
+  }
+
   @Post('transfer-batches/:id/receive')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
   @ApiOperation({ summary: 'Receive transfer batch by destination branch staff' })

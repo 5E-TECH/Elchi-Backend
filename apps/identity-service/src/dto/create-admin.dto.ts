@@ -21,12 +21,6 @@ export class CreateAdminDto {
   @IsPhoneNumber('UZ')
   phone_number: string;
 
-  @ApiPropertyOptional({ example: 'admin_01' })
-  @IsOptional()
-  @IsString()
-  @MinLength(3)
-  username?: string;
-
   @ApiProperty({ example: 'strongPassword123' })
   @IsNotEmpty()
   @IsString()

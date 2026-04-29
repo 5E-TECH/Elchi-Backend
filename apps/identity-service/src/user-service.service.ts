@@ -322,7 +322,7 @@ export class UserServiceService implements OnModuleInit {
         const superAdminThis = this.users.create({
           name: config.ADMIN_NAME,
           phone_number: config.ADMIN_PHONE_NUMBER,
-          username: config.ADMIN_PHONE_NUMBER,
+          username: null,
           password: hashedPassword,
           role: Roles.SUPERADMIN,
           status: Status.ACTIVE,
@@ -340,14 +340,13 @@ export class UserServiceService implements OnModuleInit {
     this.assertRequesterCanCreateAdmin(requester);
 
     await this.ensurePhoneUnique(dto.phone_number);
-    await this.ensureUsernameUnique(dto.phone_number);
 
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const admin = this.users.create({
       name: dto.name,
       phone_number: dto.phone_number,
-      username: dto.phone_number,
+      username: null,
       password: hashedPassword,
       salary: dto.salary,
       payment_day: dto.payment_day ?? new Date().getDate(),
@@ -365,14 +364,13 @@ export class UserServiceService implements OnModuleInit {
     this.assertRequesterCanCreateRegistrator(requester);
 
     await this.ensurePhoneUnique(dto.phone_number);
-    await this.ensureUsernameUnique(dto.phone_number);
 
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const registrator = this.users.create({
       name: dto.name,
       phone_number: dto.phone_number,
-      username: dto.phone_number,
+      username: null,
       password: hashedPassword,
       salary: dto.salary,
       payment_day: dto.payment_day ?? new Date().getDate(),
@@ -403,11 +401,6 @@ export class UserServiceService implements OnModuleInit {
     if (dto.phone_number && dto.phone_number !== admin.phone_number) {
       await this.ensurePhoneUnique(dto.phone_number, id);
       admin.phone_number = dto.phone_number;
-    }
-
-    if (dto.username && dto.username !== admin.username) {
-      await this.ensureUsernameUnique(dto.username, id);
-      admin.username = dto.username;
     }
 
     if (dto.password) {
@@ -710,17 +703,16 @@ export class UserServiceService implements OnModuleInit {
   async createCourier(dto: CreateCourierDto) {
     await this.validateRegionExists(dto.region_id);
     await this.ensurePhoneUnique(dto.phone_number);
-    await this.ensureUsernameUnique(dto.phone_number);
 
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const courier = this.users.create({
       name: dto.name,
       phone_number: dto.phone_number,
-      username: dto.phone_number,
+      username: null,
       password: hashedPassword,
-      salary: 0,
-      payment_day: undefined,
+      salary: dto.salary,
+      payment_day: dto.payment_day ?? new Date().getDate(),
       region_id: dto.region_id,
       role: Roles.COURIER,
       status: Status.ACTIVE,
@@ -740,17 +732,16 @@ export class UserServiceService implements OnModuleInit {
 
   async createManager(dto: CreateManagerDto) {
     await this.ensurePhoneUnique(dto.phone_number);
-    await this.ensureUsernameUnique(dto.phone_number);
 
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
 
     const manager = this.users.create({
       name: dto.name,
       phone_number: dto.phone_number,
-      username: dto.phone_number,
+      username: null,
       password: hashedPassword,
-      salary: 0,
-      payment_day: new Date().getDate(),
+      salary: dto.salary,
+      payment_day: dto.payment_day ?? new Date().getDate(),
       role: Roles.MANAGER,
       status: Status.ACTIVE,
       tariff_home: null,
@@ -769,7 +760,6 @@ export class UserServiceService implements OnModuleInit {
     const existing = await this.users.findOne({
       where: [
         { phone_number: dto.phone_number, isDeleted: false },
-        { username: dto.phone_number, isDeleted: false },
       ],
     });
 
@@ -788,7 +778,7 @@ export class UserServiceService implements OnModuleInit {
       extra_number: dto.extra_number ?? null,
       address: dto.address ?? null,
       district_id: dto.district_id,
-      username: dto.phone_number,
+      username: null,
       password: await this.bcryptEncryption.encrypt(generatedPassword),
       salary: 0,
       payment_day: undefined,

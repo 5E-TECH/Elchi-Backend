@@ -112,6 +112,20 @@ export class BranchServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'branch.transfer_batches.find_all' })
+  findTransferBatches(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.findTransferBatches(data?.query ?? data, this.getRequester(data)),
+    );
+  }
+
+  @MessagePattern({ cmd: 'branch.transfer_batches.find_by_id' })
+  findTransferBatchById(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.findTransferBatchById(data?.id, this.getRequester(data)),
+    );
+  }
+
   @MessagePattern({ cmd: 'branch.transfer_batch.find_by_token' })
   findTransferBatchByToken(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
