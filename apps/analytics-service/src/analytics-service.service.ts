@@ -296,7 +296,9 @@ export class AnalyticsServiceService {
     const normalized = this.normalizeDateRange(filter);
     const roles = this.roleSet(requester);
     const isBranchRole =
-      roles.has(Roles.BRANCH) || roles.has(Roles.MANAGER) || roles.has(Roles.OPERATOR);
+      roles.has(Roles.BRANCH) ||
+      roles.has(Roles.MANAGER) ||
+      roles.has(Roles.REGISTRATOR);
 
     if (roles.has(Roles.COURIER)) {
       const [myStat, couriers, topCouriers] = await Promise.all([

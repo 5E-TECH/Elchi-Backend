@@ -121,7 +121,7 @@ export class NotificationGatewayController {
 
   @Post('connect-by-token')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.OPERATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Connect telegram group by group token' })
   @ApiBody({ type: ConnectTelegramByTokenRequestDto })
@@ -131,7 +131,7 @@ export class NotificationGatewayController {
 
   @Post('send')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.OPERATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Send notification to telegram group(s)' })
   @ApiBody({ type: SendNotificationRequestDto })

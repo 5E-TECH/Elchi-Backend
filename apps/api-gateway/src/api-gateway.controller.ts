@@ -36,7 +36,6 @@ import {
   CreateCourierRequestDto,
   CreateManagerRequestDto,
   CreateMarketRequestDto,
-  CreateOperatorRequestDto,
   CreateRegistratorRequestDto,
   UpdateAdminRequestDto,
   UpdateMarketAddOrderRequestDto,
@@ -113,14 +112,48 @@ export class ApiGatewayController {
   @ApiBody({ type: CreateRegistratorRequestDto })
   @ApiCreatedResponse({ description: 'Registrator created' })
   @ApiConflictResponse({ description: 'Conflict' })
-  createRegistrator(
+  async createRegistrator(
     @Body() dto: CreateRegistratorRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return this.identityClient.send(
-      { cmd: 'identity.registrator.create' },
-      { dto, requester: this.toRequester(req) },
+    const { branch_id, ...identityDto } = dto;
+    const created = await firstValueFrom(
+      this.identityClient.send(
+        { cmd: 'identity.registrator.create' },
+        { dto: identityDto, requester: this.toRequester(req) },
+      ),
     );
+
+    const registratorId = String(created?.data?.id ?? '').trim();
+    if (!registratorId) {
+      throw new BadRequestException('Registrator yaratildi, lekin id qaytmadi');
+    }
+
+    try {
+      await firstValueFrom(
+        this.branchClient.send(
+          { cmd: 'branch.user.assign' },
+          {
+            requester: this.toRequester(req),
+            dto: {
+              branch_id,
+              user_id: registratorId,
+              role: 'OPERATOR',
+            },
+          },
+        ),
+      );
+    } catch (error) {
+      await firstValueFrom(
+        this.identityClient.send(
+          { cmd: 'identity.user.delete' },
+          { id: registratorId, requester: this.toRequester(req) },
+        ),
+      ).catch(() => null);
+      throw error;
+    }
+
+    return created;
   }
 
   @Get('registrators')
@@ -240,51 +273,6 @@ export class ApiGatewayController {
     return created;
   }
 
-  @Post('operators')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'Create branch operator' })
-  @ApiBody({ type: CreateOperatorRequestDto })
-  @ApiCreatedResponse({ description: 'Operator created' })
-  @ApiConflictResponse({ description: 'Conflict' })
-  async createOperator(@Body() dto: CreateOperatorRequestDto, @Req() req: { user: JwtUser }) {
-    const created = await firstValueFrom(
-      this.identityClient.send({ cmd: 'identity.operator.create' }, { dto }),
-    );
-
-    const operatorId = String(created?.data?.id ?? '').trim();
-    if (!operatorId) {
-      throw new BadRequestException('Operator yaratildi, lekin id qaytmadi');
-    }
-
-    try {
-      await firstValueFrom(
-        this.branchClient.send(
-          { cmd: 'branch.user.assign' },
-          {
-            requester: this.toRequester(req),
-            dto: {
-              branch_id: dto.branch_id,
-              user_id: operatorId,
-              role: 'OPERATOR',
-            },
-          },
-        ),
-      );
-    } catch (error) {
-      await firstValueFrom(
-        this.identityClient.send(
-          { cmd: 'identity.user.delete' },
-          { id: operatorId, requester: this.toRequester(req) },
-        ),
-      ).catch(() => null);
-      throw error;
-    }
-
-    return created;
-  }
-
   @Get('couriers')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
@@ -357,36 +345,6 @@ export class ApiGatewayController {
       {
         query: {
           role: RoleEnum.MANAGER,
-          search,
-          status,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
-        },
-      },
-    );
-  }
-
-  @Get('operators')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'List operators with filtering and pagination' })
-  @ApiQuery({ name: 'search', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
-  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
-  @ApiOkResponse({ description: 'Operator list' })
-  getOperators(
-    @Query('search') search?: string,
-    @Query('status') status?: string,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-  ) {
-    return this.identityClient.send(
-      { cmd: 'identity.user.find_all' },
-      {
-        query: {
-          role: RoleEnum.OPERATOR,
           search,
           status,
           page: page ? Number(page) : undefined,

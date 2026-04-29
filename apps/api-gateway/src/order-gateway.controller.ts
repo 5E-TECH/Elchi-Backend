@@ -293,7 +293,6 @@ export class OrderGatewayController {
     RoleEnum.SUPERADMIN,
     RoleEnum.REGISTRATOR,
     RoleEnum.MARKET,
-    RoleEnum.OPERATOR,
     RoleEnum.MANAGER,
     RoleEnum.BRANCH,
   )
@@ -307,7 +306,7 @@ export class OrderGatewayController {
     const shouldResolveBranchAssignment =
       roles.includes(RoleEnum.BRANCH) ||
       roles.includes(RoleEnum.MANAGER) ||
-      roles.includes(RoleEnum.OPERATOR);
+      roles.includes(RoleEnum.REGISTRATOR);
     const branchAssignment = shouldResolveBranchAssignment
       ? await this.resolveBranchAssignment(req.user)
       : null;
@@ -335,19 +334,6 @@ export class OrderGatewayController {
     let resolvedMarketId = orderDto.market_id;
     if (roles.includes(RoleEnum.MARKET)) {
       resolvedMarketId = req.user.sub;
-    } else if (roles.includes(RoleEnum.OPERATOR)) {
-      const operatorResponse = await this.sendIdentityWithTimeout(
-        { cmd: 'identity.user.find_by_id' },
-        { id: req.user.sub },
-      );
-      const operatorUser = operatorResponse?.data ?? operatorResponse;
-      if (!operatorUser?.market_id) {
-        throw new BadRequestException('Operator uchun market aniqlanmadi');
-      }
-      resolvedMarketId = String(operatorUser.market_id);
-      if (!orderDto.operator) {
-        orderDto.operator = operatorUser.name ?? operatorUser.username ?? null;
-      }
     } else if (
       (roles.includes(RoleEnum.ADMIN) ||
         roles.includes(RoleEnum.SUPERADMIN) ||
@@ -391,7 +377,8 @@ export class OrderGatewayController {
               market_id: resolvedMarketId,
               customer_id: finalCustomerId,
               operator_id:
-                roles.includes(RoleEnum.OPERATOR) || roles.includes(RoleEnum.MARKET_OPERATOR)
+                roles.includes(RoleEnum.REGISTRATOR) ||
+                roles.includes(RoleEnum.MARKET_OPERATOR)
                   ? req.user.sub
                   : null,
               branch_id: isBranchStaff ? assignedBranchId : (orderDto.branch_id ?? null),

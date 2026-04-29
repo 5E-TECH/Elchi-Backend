@@ -39,7 +39,11 @@ export class CreateAdminRequestDto {
   payment_day?: number;
 }
 
-export class CreateRegistratorRequestDto extends CreateAdminRequestDto {}
+export class CreateRegistratorRequestDto extends CreateAdminRequestDto {
+  @ApiProperty({ example: '1', description: 'Branch ID' })
+  @IsString()
+  branch_id!: string;
+}
 
 export class UpdateAdminRequestDto {
   @ApiPropertyOptional({ example: 'Admin User Updated' })
@@ -183,26 +187,6 @@ export class CreateCourierRequestDto {
 
 export class CreateManagerRequestDto {
   @ApiProperty({ example: 'Branch manager' })
-  @IsString()
-  @MinLength(2)
-  name!: string;
-
-  @ApiProperty({ example: '+998901234567' })
-  @IsPhoneNumber('UZ')
-  phone_number!: string;
-
-  @ApiProperty({ example: 'secret123' })
-  @IsString()
-  @MinLength(4)
-  password!: string;
-
-  @ApiProperty({ example: '1', description: 'Branch ID' })
-  @IsString()
-  branch_id!: string;
-}
-
-export class CreateOperatorRequestDto {
-  @ApiProperty({ example: 'Market operator' })
   @IsString()
   @MinLength(2)
   name!: string;

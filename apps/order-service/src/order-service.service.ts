@@ -1068,7 +1068,7 @@ export class OrderServiceService {
   }, requester?: { id: string; roles?: string[] }) {
     const roles = new Set((requester?.roles ?? []).map((role) => String(role).toLowerCase()));
     const isOperatorRequester =
-      roles.has(Roles.OPERATOR) || roles.has(Roles.MARKET_OPERATOR);
+      roles.has(Roles.REGISTRATOR) || roles.has(Roles.MARKET_OPERATOR);
     const operatorId = dto.operator_id ?? (isOperatorRequester ? requester?.id ?? null : null);
 
     const queryRunner = this.dataSource.createQueryRunner();
