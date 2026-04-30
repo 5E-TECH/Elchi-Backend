@@ -136,20 +136,32 @@ export class OrderServiceController {
   }
 
   @MessagePattern({ cmd: 'order.find_new_markets' })
-  findNewMarkets(@Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.orderService.findNewMarkets());
+  findNewMarkets(
+    @Payload() data: { branch_id?: string; exclude_branch_source?: boolean } | undefined,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findNewMarkets(data?.branch_id, Boolean(data?.exclude_branch_source)),
+    );
   }
 
   @MessagePattern({ cmd: 'order.find_new_by_market' })
   findNewByMarket(
     @Payload()
-    data: { market_id: string; branch_id?: string; page?: number; limit?: number },
+    data: {
+      market_id: string;
+      branch_id?: string;
+      exclude_branch_source?: boolean;
+      page?: number;
+      limit?: number;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.findNewOrdersByMarket(
         data.market_id,
         data.branch_id,
+        Boolean(data?.exclude_branch_source),
         data.page,
         data.limit,
       ),
@@ -448,21 +460,35 @@ export class OrderServiceController {
   }
 
   @MessagePattern({ cmd: 'order.find_new_markets_enriched' })
-  findNewMarketsEnriched(@Ctx() context: RmqContext) {
+  findNewMarketsEnriched(
+    @Payload() data: { branch_id?: string; exclude_branch_source?: boolean } | undefined,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.orderService.findNewMarketsEnriched(),
+      this.orderService.findNewMarketsEnriched(
+        data?.branch_id,
+        Boolean(data?.exclude_branch_source),
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'order.find_new_by_market_enriched' })
   findNewByMarketEnriched(
-    @Payload() data: { market_id: string; branch_id?: string; page?: number; limit?: number },
+    @Payload()
+    data: {
+      market_id: string;
+      branch_id?: string;
+      exclude_branch_source?: boolean;
+      page?: number;
+      limit?: number;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.findNewByMarketEnriched(
         data.market_id,
         data.branch_id,
+        Boolean(data?.exclude_branch_source),
         data.page,
         data.limit,
       ),

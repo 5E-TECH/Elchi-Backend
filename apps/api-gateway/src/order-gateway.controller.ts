@@ -830,11 +830,36 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Markets with NEW orders' })
-  async findNewMarkets() {
+  async findNewMarkets(
+    @Req() req?: { user: JwtUser },
+  ) {
+    const roles = req?.user?.roles ?? [];
+    const normalizedRoles = this.normalizeRoles(roles);
+    const isBranchScopedRequester =
+      normalizedRoles.includes(RoleEnum.BRANCH) ||
+      normalizedRoles.includes(RoleEnum.MANAGER) ||
+      normalizedRoles.includes(RoleEnum.REGISTRATOR);
+
+    let resolvedBranchId: string | undefined;
+    let excludeBranchSource = false;
+
+    if (isBranchScopedRequester && req?.user) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
+        throw new BadRequestException('Branch user branchga biriktirilmagan');
+      }
+      resolvedBranchId = String(assignment.branch_id);
+    } else {
+      excludeBranchSource = true;
+    }
+
     const result = await this.sendOrderWithFallback(
       { cmd: 'order.find_new_markets_enriched' },
       { cmd: 'order.find_new_markets' },
-      {},
+      {
+        branch_id: resolvedBranchId,
+        exclude_branch_source: excludeBranchSource,
+      },
     );
 
     if (!Array.isArray(result)) {
@@ -866,6 +891,7 @@ export class OrderGatewayController {
 
     const pagination = this.parsePaginationQuery(page, limit);
     let resolvedBranchId: string | undefined;
+    let excludeBranchSource = false;
 
     if (isBranchScopedRequester && req?.user) {
       const assignment = await this.resolveBranchAssignment(req.user);
@@ -873,11 +899,14 @@ export class OrderGatewayController {
         throw new BadRequestException('Branch user branchga biriktirilmagan');
       }
       resolvedBranchId = String(assignment.branch_id);
+    } else {
+      excludeBranchSource = true;
     }
 
     const payload = {
       market_id: marketId,
       branch_id: resolvedBranchId,
+      exclude_branch_source: excludeBranchSource,
       page: pagination.page,
       limit: pagination.limit,
     };
