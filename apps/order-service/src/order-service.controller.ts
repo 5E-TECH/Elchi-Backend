@@ -143,12 +143,13 @@ export class OrderServiceController {
   @MessagePattern({ cmd: 'order.find_new_by_market' })
   findNewByMarket(
     @Payload()
-    data: { market_id: string; page?: number; limit?: number },
+    data: { market_id: string; branch_id?: string; page?: number; limit?: number },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.findNewOrdersByMarket(
         data.market_id,
+        data.branch_id,
         data.page,
         data.limit,
       ),
@@ -455,11 +456,16 @@ export class OrderServiceController {
 
   @MessagePattern({ cmd: 'order.find_new_by_market_enriched' })
   findNewByMarketEnriched(
-    @Payload() data: { market_id: string; page?: number; limit?: number },
+    @Payload() data: { market_id: string; branch_id?: string; page?: number; limit?: number },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.findNewByMarketEnriched(data.market_id, data.page, data.limit),
+      this.orderService.findNewByMarketEnriched(
+        data.market_id,
+        data.branch_id,
+        data.page,
+        data.limit,
+      ),
     );
   }
 

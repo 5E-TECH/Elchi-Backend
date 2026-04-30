@@ -855,10 +855,29 @@ export class OrderGatewayController {
     @Param('marketId') marketId: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Req() req?: { user: JwtUser },
   ) {
+    const roles = req?.user?.roles ?? [];
+    const normalizedRoles = this.normalizeRoles(roles);
+    const isBranchScopedRequester =
+      normalizedRoles.includes(RoleEnum.BRANCH) ||
+      normalizedRoles.includes(RoleEnum.MANAGER) ||
+      normalizedRoles.includes(RoleEnum.REGISTRATOR);
+
     const pagination = this.parsePaginationQuery(page, limit);
+    let resolvedBranchId: string | undefined;
+
+    if (isBranchScopedRequester && req?.user) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
+        throw new BadRequestException('Branch user branchga biriktirilmagan');
+      }
+      resolvedBranchId = String(assignment.branch_id);
+    }
+
     const payload = {
       market_id: marketId,
+      branch_id: resolvedBranchId,
       page: pagination.page,
       limit: pagination.limit,
     };
