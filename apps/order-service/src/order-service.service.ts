@@ -1292,6 +1292,7 @@ export class OrderServiceService {
     region_id?: string;
     branch_id?: string;
     source?: Order_source | 'internal' | 'external' | 'branch';
+    exclude_sources?: Array<Order_source | 'internal' | 'external' | 'branch'>;
     fetch_all?: boolean | string;
     fetchAll?: boolean | string;
     page?: number;
@@ -1314,6 +1315,7 @@ export class OrderServiceService {
       region_id,
       branch_id,
       source,
+      exclude_sources,
       fetch_all,
       fetchAll,
       page,
@@ -1329,6 +1331,9 @@ export class OrderServiceService {
     const pagination = this.normalizePagination(page, limit, useFetchAll);
     const statusFilter = this.normalizeStatusFilter(status);
     const sourceFilter = this.normalizeSourceFilter(source);
+    const excludeSourceFilters = (exclude_sources ?? [])
+      .map((value) => this.normalizeSourceFilter(value))
+      .filter((value): value is Order_source => Boolean(value));
 
     const qb = this.orderRepo
       .createQueryBuilder('order')
@@ -1383,6 +1388,9 @@ export class OrderServiceService {
         source: Order_source.BRANCH,
       });
     }
+    if (excludeSourceFilters.length) {
+      qb.andWhere('order.source NOT IN (:...excludeSourceFilters)', { excludeSourceFilters });
+    }
     if (courier) {
       qb.andWhere(
         new Brackets((nested) => {
@@ -1432,7 +1440,7 @@ export class OrderServiceService {
     };
   }
 
-  async findNewMarkets() {
+  async findNewMarkets(branch_id?: string, exclude_branch_source = false) {
     const qb = this.orderRepo
       .createQueryBuilder('order')
       .select('order.market_id', 'market_id')
@@ -1442,6 +1450,13 @@ export class OrderServiceService {
       .andWhere('order.status = :status', { status: Order_status.NEW })
       .groupBy('order.market_id')
       .orderBy('orders_count', 'DESC');
+
+    if (branch_id) {
+      qb.andWhere('order.branch_id = :branch_id', { branch_id });
+    }
+    if (exclude_branch_source) {
+      qb.andWhere('order.source != :branch_source', { branch_source: Order_source.BRANCH });
+    }
 
     let rows: Array<{
       market_id: string;
@@ -1461,8 +1476,21 @@ export class OrderServiceService {
     }));
   }
 
-  async findNewOrdersByMarket(market_id: string, branch_id?: string, page = 1, limit = 20) {
-    return this.findAll({ market_id, branch_id, status: Order_status.NEW, page, limit });
+  async findNewOrdersByMarket(
+    market_id: string,
+    branch_id?: string,
+    exclude_branch_source = false,
+    page = 1,
+    limit = 20,
+  ) {
+    return this.findAll({
+      market_id,
+      branch_id,
+      status: Order_status.NEW,
+      ...(exclude_branch_source ? { exclude_sources: [Order_source.BRANCH] } : {}),
+      page,
+      limit,
+    });
   }
 
   async findAllExternal(query: {
@@ -3016,8 +3044,8 @@ export class OrderServiceService {
     return enriched[0] ?? order;
   }
 
-  async findNewMarketsEnriched() {
-    const rows = await this.findNewMarkets();
+  async findNewMarketsEnriched(branch_id?: string, exclude_branch_source = false) {
+    const rows = await this.findNewMarkets(branch_id, exclude_branch_source);
     const marketIds = rows.map((r) => r.market_id).filter(Boolean);
 
     if (!marketIds.length) return rows;
@@ -3036,8 +3064,20 @@ export class OrderServiceService {
     }));
   }
 
-  async findNewByMarketEnriched(market_id: string, branch_id?: string, page = 1, limit = 10) {
-    const result = await this.findAll({ market_id, branch_id, status: Order_status.NEW, page, limit });
+  async findNewByMarketEnriched(
+    market_id: string,
+    branch_id?: string,
+    exclude_branch_source = false,
+    page = 1,
+    limit = 10,
+  ) {
+    const result = await this.findNewOrdersByMarket(
+      market_id,
+      branch_id,
+      exclude_branch_source,
+      page,
+      limit,
+    );
     const enriched = await this.enrichOrders(result.data);
     return {
       data: enriched,
