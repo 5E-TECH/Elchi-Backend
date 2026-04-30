@@ -191,7 +191,13 @@ export class CatalogGatewayController {
 
   @Get('market/:marketId')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.ADMIN,
+    RoleEnum.SUPERADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+    RoleEnum.BRANCH,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get products by market id' })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })

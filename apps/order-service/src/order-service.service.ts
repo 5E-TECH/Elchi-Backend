@@ -1461,8 +1461,8 @@ export class OrderServiceService {
     }));
   }
 
-  async findNewOrdersByMarket(market_id: string, page = 1, limit = 20) {
-    return this.findAll({ market_id, status: Order_status.NEW, page, limit });
+  async findNewOrdersByMarket(market_id: string, branch_id?: string, page = 1, limit = 20) {
+    return this.findAll({ market_id, branch_id, status: Order_status.NEW, page, limit });
   }
 
   async findAllExternal(query: {
@@ -3036,8 +3036,8 @@ export class OrderServiceService {
     }));
   }
 
-  async findNewByMarketEnriched(market_id: string, page = 1, limit = 10) {
-    const result = await this.findAll({ market_id, status: Order_status.NEW, page, limit });
+  async findNewByMarketEnriched(market_id: string, branch_id?: string, page = 1, limit = 10) {
+    const result = await this.findAll({ market_id, branch_id, status: Order_status.NEW, page, limit });
     const enriched = await this.enrichOrders(result.data);
     return {
       data: enriched,
