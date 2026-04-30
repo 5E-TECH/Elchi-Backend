@@ -171,12 +171,12 @@ export class BranchGatewayController {
     );
   }
 
-  @Post('transfer-batches/:id/send')
+  @Patch('transfer-batches/:id/send')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
   @ApiOperation({ summary: 'Mark transfer batch as sent with vehicle info' })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   @ApiBody({ type: SendTransferBatchRequestDto })
-  sendTransferBatch(
+  sendTransferBatchPatch(
     @Param('id') id: string,
     @Body() dto: SendTransferBatchRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
