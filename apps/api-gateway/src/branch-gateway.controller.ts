@@ -141,19 +141,17 @@ export class BranchGatewayController {
     );
   }
 
-  @Post('branches/:id/transfer-batches')
+  @Post('branches/transfer-batches')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
-  @ApiOperation({ summary: 'Create transfer batches by unassigned orders grouped by region' })
-  @ApiParam({ name: 'id', description: 'Source branch ID (bigint string)' })
+  @ApiOperation({ summary: "Create transfer batches from requester's branch by order_ids" })
   @ApiBody({ type: CreateBranchTransferBatchesRequestDto })
   createTransferBatches(
-    @Param('id') id: string,
     @Body() dto: CreateBranchTransferBatchesRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.create' },
-      { id, dto, requester: this.toRequester(req) },
+      { dto, requester: this.toRequester(req) },
     );
   }
 

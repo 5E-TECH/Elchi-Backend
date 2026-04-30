@@ -663,31 +663,35 @@ export class BranchServiceService implements OnModuleInit {
   }
 
   async createTransferBatches(
-    branchId: string,
+    branchId: string | undefined,
     dto: {
-      destination_branch_id?: string;
-      direction?: string;
-      request_key?: string;
-      vehicle_plate?: string | null;
-      driver_name?: string | null;
-      driver_phone?: string | null;
-      notes?: string | null;
+      order_ids?: string[];
     },
     requester?: RequesterContext,
   ) {
-    const sourceBranchId = String(branchId ?? '').trim();
-    const destinationBranchId = String(dto?.destination_branch_id ?? '').trim();
-    if (!sourceBranchId || !destinationBranchId) {
-      this.badRequest('source branch and destination_branch_id are required');
+    let sourceBranchId = String(branchId ?? '').trim();
+    if (!sourceBranchId) {
+      sourceBranchId = await this.resolveRequesterBranchIdForTransfer(requester);
     }
 
-    await this.getBranchOrThrow(sourceBranchId);
+    const sourceBranch = await this.getBranchOrThrow(sourceBranchId);
+    const destinationBranchId = String(sourceBranch.parent_id ?? '').trim();
+    if (!destinationBranchId) {
+      this.badRequest("Source branch ota branch'i topilmadi");
+    }
+
     await this.getBranchOrThrow(destinationBranchId);
     await this.assertCanCreateTransferBatch(sourceBranchId, requester);
 
-    const direction = this.normalizeTransferDirection(dto?.direction);
-    const requestKey = this.normalizeTransferRequestKey(dto?.request_key);
+    const orderIds = Array.from(
+      new Set((dto?.order_ids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean)),
+    );
+    if (!orderIds.length) {
+      this.badRequest('order_ids is required');
+    }
+
     const requesterId = String(requester?.id ?? '').trim() || '0';
+    const requestKey = `req_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
 
     const createRes = await this.sendOrderCommand<{
       statusCode?: number;
@@ -696,13 +700,10 @@ export class BranchServiceService implements OnModuleInit {
     }>('order.transfer_batch.create', {
       source_branch_id: sourceBranchId,
       destination_branch_id: destinationBranchId,
-      direction,
+      direction: BranchTransferDirection.FORWARD,
       request_key: requestKey,
       requester_id: requesterId,
-      vehicle_plate: dto?.vehicle_plate ?? null,
-      driver_name: dto?.driver_name ?? null,
-      driver_phone: dto?.driver_phone ?? null,
-      notes: dto?.notes ?? null,
+      order_ids: orderIds,
     });
 
     const createdBatches = Array.isArray(createRes?.data?.batches) ? createRes.data.batches : [];
@@ -786,6 +787,33 @@ export class BranchServiceService implements OnModuleInit {
       201,
       'Transfer batches created',
     );
+  }
+
+  private async resolveRequesterBranchIdForTransfer(requester?: RequesterContext): Promise<string> {
+    if (this.isSystemPrivileged(requester)) {
+      this.badRequest('source branch id is required');
+    }
+
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId) {
+      this.forbidden('Requester aniqlanmadi');
+    }
+
+    const assignment = await this.branchUserRepo.findOne({
+      where: { user_id: requesterId, isDeleted: false },
+      order: { createdAt: 'ASC' },
+    });
+
+    if (!assignment?.branch_id) {
+      this.forbidden('Branch assignment topilmadi');
+    }
+
+    const role = this.normalizeBranchUserRole(assignment.role);
+    if (role !== BranchUserRole.MANAGER && role !== BranchUserRole.OPERATOR) {
+      this.forbidden('Transfer batch yaratishga ruxsat yo‘q');
+    }
+
+    return String(assignment.branch_id);
   }
 
   async createReturnBatches(

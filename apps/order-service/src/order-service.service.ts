@@ -3699,13 +3699,10 @@ export class OrderServiceService {
   async createBranchTransferBatches(input: {
     source_branch_id: string;
     destination_branch_id: string;
+    order_ids?: string[];
     direction?: BranchTransferDirection | string;
     request_key?: string;
     requester_id?: string;
-    vehicle_plate?: string | null;
-    driver_name?: string | null;
-    driver_phone?: string | null;
-    notes?: string | null;
   }) {
     const sourceBranchId = String(input?.source_branch_id ?? '').trim();
     const destinationBranchId = String(input?.destination_branch_id ?? '').trim();
@@ -3743,20 +3740,34 @@ export class OrderServiceService {
       );
     }
 
+    const selectedOrderIds = Array.from(
+      new Set((input?.order_ids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean)),
+    );
+    const whereClause: {
+      branch_id: string;
+      current_batch_id: ReturnType<typeof IsNull>;
+      isDeleted: false;
+      status: Order_status;
+      id?: ReturnType<typeof In>;
+    } = {
+      branch_id: sourceBranchId,
+      current_batch_id: IsNull(),
+      isDeleted: false,
+      status: Order_status.NEW,
+    };
+    if (selectedOrderIds.length) {
+      whereClause.id = In(selectedOrderIds);
+    }
+
     const unassignedOrders = await this.orderRepo.find({
-      where: {
-        branch_id: sourceBranchId,
-        current_batch_id: IsNull(),
-        isDeleted: false,
-      },
-      select: [
-        'id',
-        'region_id',
-        'market_id',
-        'total_price',
-      ],
+      where: whereClause,
+      select: ['id', 'region_id', 'market_id', 'total_price'],
       order: { createdAt: 'ASC' },
     });
+
+    if (selectedOrderIds.length && unassignedOrders.length !== selectedOrderIds.length) {
+      this.badRequest('Some orders are not found, not NEW, or already assigned to another batch');
+    }
 
     const candidateOrders = unassignedOrders.filter((order) => Boolean(order.region_id));
     if (!candidateOrders.length) {
@@ -3798,9 +3809,9 @@ export class OrderServiceService {
             status: BranchTransferBatchStatus.PENDING,
             order_count: orders.length,
             total_price: totalPrice,
-            vehicle_plate: input?.vehicle_plate?.trim() || null,
-            driver_name: input?.driver_name?.trim() || null,
-            driver_phone: input?.driver_phone?.trim() || null,
+            vehicle_plate: null,
+            driver_name: null,
+            driver_phone: null,
             sent_at: null,
             received_at: null,
             cancelled_at: null,
@@ -3853,7 +3864,7 @@ export class OrderServiceService {
             batch_id: String(batch.id),
             user_id: requesterId,
             action: BranchTransferBatchAction.CREATED,
-            notes: `[STEP] BATCH_CREATED${input?.notes ? ` | ${String(input.notes).trim()}` : ''}`,
+            notes: '[STEP] BATCH_CREATED',
           }),
         );
         historyEntities.push(
