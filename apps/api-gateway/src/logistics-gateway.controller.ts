@@ -469,6 +469,7 @@ export class LogisticsGatewayController {
   @Roles(
     RoleEnum.ADMIN,
     RoleEnum.SUPERADMIN,
+    RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
     RoleEnum.MARKET,
     RoleEnum.COURIER,
@@ -496,6 +497,7 @@ export class LogisticsGatewayController {
   @Roles(
     RoleEnum.ADMIN,
     RoleEnum.SUPERADMIN,
+    RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
     RoleEnum.MARKET,
     RoleEnum.COURIER,
@@ -534,6 +536,7 @@ export class LogisticsGatewayController {
   @Roles(
     RoleEnum.ADMIN,
     RoleEnum.SUPERADMIN,
+    RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
     RoleEnum.MARKET,
     RoleEnum.COURIER,
@@ -560,6 +563,7 @@ export class LogisticsGatewayController {
   @Roles(
     RoleEnum.ADMIN,
     RoleEnum.SUPERADMIN,
+    RoleEnum.MANAGER,
     RoleEnum.COURIER,
     RoleEnum.MARKET,
     RoleEnum.REGISTRATOR,
@@ -576,6 +580,7 @@ export class LogisticsGatewayController {
   @Roles(
     RoleEnum.ADMIN,
     RoleEnum.SUPERADMIN,
+    RoleEnum.MANAGER,
     RoleEnum.COURIER,
     RoleEnum.MARKET,
     RoleEnum.REGISTRATOR,
