@@ -665,6 +665,7 @@ export class BranchServiceService implements OnModuleInit {
   async createTransferBatches(
     branchId: string | undefined,
     dto: {
+      orderIds?: string[];
       order_ids?: string[];
     },
     requester?: RequesterContext,
@@ -684,7 +685,7 @@ export class BranchServiceService implements OnModuleInit {
     await this.assertCanCreateTransferBatch(sourceBranchId, requester);
 
     const orderIds = Array.from(
-      new Set((dto?.order_ids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean)),
+      new Set((dto?.orderIds ?? dto?.order_ids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean)),
     );
     if (!orderIds.length) {
       this.badRequest('order_ids is required');
