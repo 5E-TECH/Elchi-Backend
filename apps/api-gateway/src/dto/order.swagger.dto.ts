@@ -443,6 +443,13 @@ export class AssignOrdersToCourierRequestDto {
   courier_id!: string;
 }
 
+export class InitiateOrderReturnRequestDto {
+  @ApiProperty({ example: "Mijoz qabul qilmayapti, qaytarish kerak" })
+  @IsNotEmpty()
+  @IsString()
+  reason!: string;
+}
+
 export class CreateOrderByTelegramBotRequestDto {
   @ApiProperty({ example: 'Ali Valiyev' })
   @IsNotEmpty()

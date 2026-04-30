@@ -229,6 +229,35 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.initiate_return' })
+  initiateReturn(
+    @Payload()
+    data: {
+      id: string;
+      dto: { reason?: string };
+      requester: { id: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.initiateReturn(data.requester, data.id, data.dto ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.mark_returned_to_market' })
+  markReturnedToMarket(
+    @Payload()
+    data: {
+      id: string;
+      requester: { id: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.markReturnedToMarket(data.requester, data.id),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.update' })
   update(
     @Payload()

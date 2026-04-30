@@ -1008,6 +1008,129 @@ export class OrderServiceService {
     return successRes({}, 200, 'Order WAITING holatiga qaytarildi');
   }
 
+  async initiateReturn(
+    requester: { id: string; roles?: string[] },
+    id: string,
+    dto: { reason?: string },
+  ) {
+    const reason = String(dto?.reason ?? '').trim();
+    if (!reason) {
+      this.badRequest('reason is required');
+    }
+
+    const order = await this.findById(id);
+    if (
+      order.status === Order_status.SOLD ||
+      order.status === Order_status.PAID ||
+      order.status === Order_status.PARTLY_PAID ||
+      order.status === Order_status.RETURNED_TO_MARKET ||
+      order.status === Order_status.CLOSED ||
+      order.status === Order_status.CANCELLED
+    ) {
+      this.badRequest("Bu holatdagi orderni qaytarishni boshlab bo'lmaydi");
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const orderRepo = queryRunner.manager.getRepository(Order);
+      const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+
+      order.return_reason = reason;
+      order.return_requested = true;
+      await orderRepo.save(order);
+
+      await this.createTrackingEvent(
+        {
+          order_id: order.id,
+          from_status: order.status,
+          to_status: order.status,
+          changed_by: String(requester?.id ?? 'system'),
+          changed_by_role: requester?.id ? this.toTrackingRole(requester.roles) : 'system',
+          note: `Return initiated: ${reason}`,
+        },
+        trackingRepo,
+      );
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.handleDbError(error);
+    } finally {
+      await queryRunner.release();
+    }
+
+    const updated = await this.findById(id);
+    void this.syncOrderToSearch(updated);
+    return successRes(updated, 200, 'Order return initiated');
+  }
+
+  async markReturnedToMarket(
+    requester: { id: string; roles?: string[] },
+    id: string,
+  ) {
+    const order = await this.findById(id);
+    if (order.status === Order_status.RETURNED_TO_MARKET) {
+      this.badRequest("Order allaqachon RETURNED_TO_MARKET holatida");
+    }
+
+    const receivedReturnBatchItem = await this.transferBatchItemRepo
+      .createQueryBuilder('item')
+      .innerJoin(
+        BranchTransferBatch,
+        'batch',
+        'batch.id = item.batch_id AND batch.is_deleted = false',
+      )
+      .where('item.order_id = :orderId', { orderId: String(order.id) })
+      .andWhere('item.is_deleted = false')
+      .andWhere('batch.direction = :direction', { direction: BranchTransferDirection.RETURN })
+      .andWhere('batch.status = :status', { status: BranchTransferBatchStatus.RECEIVED })
+      .andWhere('batch.destination_branch_id = :branchId', { branchId: String(order.branch_id ?? '') })
+      .select(['item.id'])
+      .getRawOne();
+
+    if (!receivedReturnBatchItem) {
+      this.badRequest("Order return paketda filialga qabul qilingan bo'lishi kerak");
+    }
+
+    const oldStatus = order.status;
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const orderRepo = queryRunner.manager.getRepository(Order);
+      const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+
+      order.status = Order_status.RETURNED_TO_MARKET;
+      order.return_requested = false;
+      await orderRepo.save(order);
+
+      await this.createTrackingEvent(
+        {
+          order_id: order.id,
+          from_status: oldStatus,
+          to_status: Order_status.RETURNED_TO_MARKET,
+          changed_by: String(requester?.id ?? 'system'),
+          changed_by_role: requester?.id ? this.toTrackingRole(requester.roles) : 'system',
+          note: `Xodim ${String(requester?.id ?? 'unknown')} market egasiga topshirdi`,
+        },
+        trackingRepo,
+      );
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.handleDbError(error);
+    } finally {
+      await queryRunner.release();
+    }
+
+    const updated = await this.findById(id);
+    void this.syncOrderToSearch(updated);
+    return successRes(updated, 200, 'Order marked as returned to market');
+  }
+
   private async replaceOrderItems(
     orderId: string,
     items?: Array<{ product_id: string; quantity?: number }>,
