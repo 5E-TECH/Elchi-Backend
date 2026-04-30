@@ -1,0 +1,169 @@
+import { RpcException } from '@nestjs/microservices';
+import { OrderServiceService } from './order-service.service';
+import { Order_status, BranchTransferBatchStatus, BranchTransferDirection } from '@app/common';
+import { Order } from './entities/order.entity';
+import { OrderTracking } from './entities/order-tracking.entity';
+
+describe('OrderServiceService return flow', () => {
+  function makeService(options?: {
+    orderStatus?: Order_status;
+    hasReceivedReturnBatch?: boolean;
+  }) {
+    const order = {
+      id: '101',
+      status: options?.orderStatus ?? Order_status.WAITING,
+      branch_id: '10',
+      return_requested: false,
+      return_reason: null,
+      isDeleted: false,
+    } as any;
+
+    const orderRepo = {
+      findOne: jest.fn().mockResolvedValue(order),
+      save: jest.fn(async (entity: any) => entity),
+    };
+
+    const transferBatchItemQb = {
+      innerJoin: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      getRawOne: jest
+        .fn()
+        .mockResolvedValue(options?.hasReceivedReturnBatch === false ? null : { item_id: '1' }),
+    };
+    const transferBatchItemRepo = {
+      createQueryBuilder: jest.fn().mockReturnValue(transferBatchItemQb),
+    };
+
+    const trackingRepo = {
+      create: jest.fn((x) => x),
+      save: jest.fn(async (x) => x),
+    };
+
+    const queryRunner = {
+      connect: jest.fn(),
+      startTransaction: jest.fn(),
+      commitTransaction: jest.fn(),
+      rollbackTransaction: jest.fn(),
+      release: jest.fn(),
+      manager: {
+        getRepository: jest.fn((entity: { name: string }) => {
+          if (entity.name === Order.name) return orderRepo;
+          if (entity.name === OrderTracking.name) return trackingRepo;
+          return {};
+        }),
+      },
+    };
+
+    const service = new OrderServiceService(
+      { createQueryRunner: jest.fn(() => queryRunner) } as any,
+      orderRepo as any,
+      {} as any,
+      trackingRepo as any,
+      {} as any,
+      transferBatchItemRepo as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+
+    return { service, orderRepo, transferBatchItemQb, trackingRepo, queryRunner };
+  }
+
+  async function expectRpc(promise: Promise<unknown>, code: number) {
+    try {
+      await promise;
+      throw new Error('expected RpcException');
+    } catch (error) {
+      expect(error).toBeInstanceOf(RpcException);
+      expect(((error as RpcException).getError() as any)?.statusCode).toBe(code);
+    }
+  }
+
+  it('initiateReturn requires reason', async () => {
+    const { service } = makeService();
+    await expectRpc(service.initiateReturn({ id: '1', roles: ['admin'] }, '101', { reason: '' }), 400);
+  });
+
+  it('initiateReturn rejects disallowed status', async () => {
+    const { service } = makeService({ orderStatus: Order_status.SOLD });
+    await expectRpc(
+      service.initiateReturn({ id: '1', roles: ['admin'] }, '101', { reason: 'Mijoz rad etdi' }),
+      400,
+    );
+  });
+
+  it('initiateReturn stores reason and return_requested and writes history', async () => {
+    const { service, orderRepo, trackingRepo, queryRunner } = makeService({
+      orderStatus: Order_status.WAITING,
+    });
+
+    const res: any = await service.initiateReturn(
+      { id: '7', roles: ['admin'] },
+      '101',
+      { reason: 'Adres noto‘g‘ri bo‘lgani uchun qaytarilsin' },
+    );
+
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        return_requested: true,
+        return_reason: 'Adres noto‘g‘ri bo‘lgani uchun qaytarilsin',
+      }),
+    );
+    expect(trackingRepo.save).toHaveBeenCalled();
+    expect(queryRunner.commitTransaction).toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('markReturnedToMarket requires order to be received in return batch', async () => {
+    const { service } = makeService({
+      orderStatus: Order_status.RECEIVED,
+      hasReceivedReturnBatch: false,
+    });
+
+    await expectRpc(service.markReturnedToMarket({ id: '9', roles: ['operator'] }, '101'), 400);
+  });
+
+  it('markReturnedToMarket sets final status and history once', async () => {
+    const { service, orderRepo, trackingRepo, transferBatchItemQb } = makeService({
+      orderStatus: Order_status.RECEIVED,
+      hasReceivedReturnBatch: true,
+    });
+
+    const res: any = await service.markReturnedToMarket(
+      { id: '9', roles: ['operator'] },
+      '101',
+    );
+
+    expect(transferBatchItemQb.andWhere).toHaveBeenCalledWith(
+      'batch.direction = :direction',
+      { direction: BranchTransferDirection.RETURN },
+    );
+    expect(transferBatchItemQb.andWhere).toHaveBeenCalledWith(
+      'batch.status = :status',
+      { status: BranchTransferBatchStatus.RECEIVED },
+    );
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: Order_status.RETURNED_TO_MARKET,
+        return_requested: false,
+      }),
+    );
+    expect(trackingRepo.save).toHaveBeenCalled();
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('markReturnedToMarket cannot run twice', async () => {
+    const { service } = makeService({
+      orderStatus: Order_status.RETURNED_TO_MARKET,
+    });
+
+    await expectRpc(service.markReturnedToMarket({ id: '9', roles: ['operator'] }, '101'), 400);
+  });
+});

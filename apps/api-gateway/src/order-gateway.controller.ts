@@ -28,6 +28,7 @@ import {
   AssignOrdersToCourierRequestDto,
   CreateOrderByTelegramBotRequestDto,
   CreateExternalOrderRequestDto,
+  InitiateOrderReturnRequestDto,
   CreateOrderRequestDto,
   OrdersArrayDto,
   PartlySellOrderRequestDto,
@@ -1058,6 +1059,58 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.rollback_waiting' },
+          { id, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  @Post(':id/initiate-return')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Initiate order return (HQ)' })
+  @ApiParam({ name: 'id', description: 'Order ID (id)' })
+  @ApiBody({ type: InitiateOrderReturnRequestDto })
+  initiateReturn(
+    @Param('id') id: string,
+    @Body() dto: InitiateOrderReturnRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.initiate_return' },
+          { id, dto, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  @Post(':id/mark-returned-to-market')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.OPERATOR)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Mark order as returned to market (branch)' })
+  @ApiParam({ name: 'id', description: 'Order ID (id)' })
+  markReturnedToMarket(
+    @Param('id') id: string,
+    @Req() req: { user: JwtUser },
+  ) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.mark_returned_to_market' },
           { id, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
         )
         .pipe(timeout(8000)),
