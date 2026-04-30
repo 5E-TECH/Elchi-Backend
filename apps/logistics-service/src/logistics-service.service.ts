@@ -1441,8 +1441,14 @@ export class LogisticsServiceService implements OnModuleInit {
       currentCourierId === requesterId && currentStatus === Order_status.ON_THE_ROAD;
 
     if (!isAlreadyAssignedToCurrentCourier) {
-      if (currentStatus !== Order_status.NEW && currentStatus !== Order_status.RECEIVED) {
-        this.badRequest("Order holati noto'g'ri: faqat NEW yoki RECEIVED bo'lishi kerak");
+      if (
+        currentStatus !== Order_status.NEW &&
+        currentStatus !== Order_status.RECEIVED &&
+        currentStatus !== Order_status.WAITING_CUSTOMER
+      ) {
+        this.badRequest(
+          "Order holati noto'g'ri: faqat NEW, RECEIVED yoki WAITING_CUSTOMER bo'lishi kerak",
+        );
       }
     }
 

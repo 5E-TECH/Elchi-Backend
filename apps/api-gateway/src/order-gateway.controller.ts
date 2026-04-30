@@ -26,6 +26,7 @@ import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import {
   AssignOrdersToCourierRequestDto,
+  CouldNotDeliverOrderRequestDto,
   CreateOrderByTelegramBotRequestDto,
   CreateExternalOrderRequestDto,
   InitiateOrderReturnRequestDto,
@@ -1007,6 +1008,33 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.cancel' },
+          { id, dto, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  @Post(':id/could-not-deliver')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.COURIER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Mark order as couldn't deliver (courier)" })
+  @ApiParam({ name: 'id', description: 'Order ID (id)' })
+  @ApiBody({ type: CouldNotDeliverOrderRequestDto })
+  couldNotDeliverOrder(
+    @Param('id') id: string,
+    @Body() dto: CouldNotDeliverOrderRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.could_not_deliver' },
           { id, dto, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
         )
         .pipe(timeout(8000)),

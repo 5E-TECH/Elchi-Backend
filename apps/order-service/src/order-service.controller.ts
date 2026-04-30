@@ -195,6 +195,21 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.could_not_deliver' })
+  couldNotDeliver(
+    @Payload()
+    data: {
+      id: string;
+      dto: { reason?: string };
+      requester: { id: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.couldNotDeliverOrder(data.requester, data.id, data.dto ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.partly_sell' })
   partlySell(
     @Payload()

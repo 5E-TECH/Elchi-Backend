@@ -4,6 +4,7 @@ import {
   IsArray,
   IsEnum,
   IsISO8601,
+  MinLength,
   IsNotEmpty,
   IsNumber,
   IsOptional,
@@ -374,6 +375,16 @@ export class SellOrderRequestDto {
   @IsOptional()
   @IsNumber()
   paidAmount?: number;
+}
+
+export class CouldNotDeliverOrderRequestDto {
+  @ApiProperty({
+    example: "Mijoz uyda yo'q edi, ertaga qayta urinish so'radi",
+    description: "Yetkazib berolmaslik sababi (kamida 10 ta belgi)",
+  })
+  @IsString()
+  @MinLength(10)
+  reason!: string;
 }
 
 export class PartlySoldItemDto {
