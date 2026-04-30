@@ -788,6 +788,126 @@ export class BranchServiceService implements OnModuleInit {
     );
   }
 
+  async createReturnBatches(
+    branchId: string,
+    dto: {
+      order_ids?: string[];
+      request_key?: string;
+      notes?: string | null;
+    },
+    requester?: RequesterContext,
+  ) {
+    const sourceBranchId = String(branchId ?? '').trim();
+    if (!sourceBranchId) {
+      this.badRequest('source branch is required');
+    }
+
+    await this.getBranchOrThrow(sourceBranchId);
+    await this.assertCanCreateTransferBatch(sourceBranchId, requester);
+
+    const orderIds = Array.from(
+      new Set((dto?.order_ids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean)),
+    );
+    if (!orderIds.length) {
+      this.badRequest('order_ids is required');
+    }
+
+    const requestKey = this.normalizeTransferRequestKey(dto?.request_key);
+    const requesterId = String(requester?.id ?? '').trim() || '0';
+
+    const createRes = await this.sendOrderCommand<{
+      data?: { idempotent?: boolean; batches?: Array<Record<string, any>> };
+    }>('order.transfer_batch.create_return', {
+      source_branch_id: sourceBranchId,
+      order_ids: orderIds,
+      request_key: requestKey,
+      requester_id: requesterId,
+      notes: dto?.notes ?? null,
+    });
+
+    const createdBatches = Array.isArray(createRes?.data?.batches) ? createRes.data.batches : [];
+    const batchIds = createdBatches.map((batch) => String(batch.id));
+
+    if (createRes?.data?.idempotent) {
+      return successRes(
+        {
+          idempotent: true,
+          batches: createdBatches,
+        },
+        200,
+        'Return batches already exist for this request key',
+      );
+    }
+
+    const qrFiles: Array<{ batch_id: string; key: string; url: string }> = [];
+    try {
+      for (const batch of createdBatches) {
+        const token = String(batch?.qr_code_token ?? '').trim();
+        if (!token) {
+          throw new RpcException(errorRes('QR token missing for created batch', 500));
+        }
+        const qrResponse = await this.sendFileCommand<{
+          data?: { key?: string; url?: string };
+        }>('file.generate_qr', {
+          text: token,
+          file_name: `${token}.png`,
+          folder: 'branch-transfer-batches',
+        });
+
+        await this.sendOrderCommand('order.transfer_batch.history.add', {
+          batch_id: String(batch.id),
+          user_id: requesterId,
+          action: 'CREATED',
+          notes: '[STEP] QR_GENERATED',
+        });
+
+        qrFiles.push({
+          batch_id: String(batch.id),
+          key: String(qrResponse?.data?.key ?? ''),
+          url: String(qrResponse?.data?.url ?? ''),
+        });
+      }
+    } catch (error) {
+      await Promise.all(
+        qrFiles
+          .filter((file) => Boolean(file.key))
+          .map(async (file) => {
+            try {
+              await this.sendFileCommand('file.delete', { key: file.key });
+            } catch {
+              return null;
+            }
+            return null;
+          }),
+      );
+
+      if (batchIds.length) {
+        await this.sendOrderCommand('order.transfer_batch.cancel_many', {
+          batch_ids: batchIds,
+          remove_order_bindings: true,
+          requester_id: requesterId,
+          notes: '[AUTO_ROLLBACK] QR generation failed',
+        });
+      }
+      throw error;
+    }
+
+    const qrByBatchId = new Map(qrFiles.map((item) => [item.batch_id, item]));
+    const enriched = createdBatches.map((batch) => ({
+      ...batch,
+      qr_file: qrByBatchId.get(String(batch.id)) ?? null,
+    }));
+
+    return successRes(
+      {
+        idempotent: false,
+        batches: enriched,
+      },
+      201,
+      'Return batches created',
+    );
+  }
+
   async sendTransferBatch(
     batchId: string,
     dto: {

@@ -1,6 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { BranchTransferDirection, BranchType } from '@app/common';
-import { IsEnum, IsNumberString, IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import { IsArray, IsEnum, IsNumberString, IsOptional, IsString, Matches, MinLength } from 'class-validator';
 import { BranchUserRole } from '@app/common';
 
 export class CreateBranchRequestDto {
@@ -192,6 +192,31 @@ export class SendTransferBatchRequestDto {
   @IsString()
   @Matches(/^\+998\d{9}$/)
   driver_phone!: string;
+}
+
+export class CreateReturnBatchesRequestDto {
+  @ApiProperty({
+    example: ['46', '47', '48'],
+    description: "Qaytariladigan order ID'lari ro'yxati",
+    type: [String],
+  })
+  @IsArray()
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  order_ids!: string[];
+
+  @ApiPropertyOptional({
+    example: 'ret_20260430_A1B2C3D4',
+    description: 'Idempotency key (berilmasa server generatsiya qiladi)',
+  })
+  @IsOptional()
+  @Matches(/^[A-Za-z0-9_-]{8,80}$/)
+  request_key?: string;
+
+  @ApiPropertyOptional({ example: "HQ'dan qaytarish: mijoz olmadi" })
+  @IsOptional()
+  @IsString()
+  notes?: string;
 }
 
 export class CancelTransferBatchRequestDto {

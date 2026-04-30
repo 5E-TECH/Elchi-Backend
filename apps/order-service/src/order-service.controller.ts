@@ -546,6 +546,23 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.transfer_batch.create_return' })
+  createReturnTransferBatch(
+    @Payload()
+    data: {
+      source_branch_id: string;
+      order_ids: string[];
+      request_key: string;
+      requester_id?: string;
+      notes?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.createBranchReturnBatches(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.transfer_batch.cancel_many' })
   cancelTransferBatches(
     @Payload()
