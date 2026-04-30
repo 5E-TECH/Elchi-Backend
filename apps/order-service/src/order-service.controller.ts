@@ -607,13 +607,10 @@ export class OrderServiceController {
     data: {
       source_branch_id: string;
       destination_branch_id: string;
+      order_ids?: string[];
       direction?: 'FORWARD' | 'RETURN';
       request_key: string;
       requester_id?: string;
-      vehicle_plate?: string | null;
-      driver_name?: string | null;
-      driver_phone?: string | null;
-      notes?: string | null;
     },
     @Ctx() context: RmqContext,
   ) {
