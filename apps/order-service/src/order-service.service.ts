@@ -2217,6 +2217,46 @@ export class OrderServiceService {
     return successRes({ id }, 200, 'Order canceled');
   }
 
+  async couldNotDeliverOrder(
+    requester: { id: string; roles?: string[] },
+    id: string,
+    dto: { reason?: string },
+  ) {
+    const reason = String(dto?.reason ?? '').trim();
+    if (reason.length < 10) {
+      this.badRequest('reason must be at least 10 characters');
+    }
+
+    const order = await this.findById(id);
+    if (order.status !== Order_status.ON_THE_ROAD) {
+      this.badRequest('Order not found or not in on the road status');
+    }
+    if (!order.post_id) {
+      this.badRequest('Order has no post');
+    }
+
+    const postRes = await rmqSend<{ data?: { id: string; courier_id?: string | null } }>(
+      this.logisticsClient,
+      { cmd: 'logistics.post.find_by_id' },
+      { id: String(order.post_id) },
+    ).catch(() => ({ data: undefined }));
+    const post = postRes?.data;
+    if (!post || String(post.courier_id ?? '') !== String(requester.id)) {
+      this.badRequest('Order is not assigned to this courier');
+    }
+
+    const trackingNote = `Courier ${String(requester.id)} yetkaza olmadi. Sabab: ${reason}`;
+    await this.updateFull(
+      id,
+      {
+        status: Order_status.WAITING_CUSTOMER,
+      },
+      { id: requester.id, roles: requester.roles, note: trackingNote },
+    );
+
+    return successRes({ id }, 200, "Order WAITING_CUSTOMER holatiga o'tkazildi");
+  }
+
   async partlySellOrder(
     requester: { id: string; roles?: string[] },
     id: string,
