@@ -275,7 +275,13 @@ export class ApiGatewayController {
 
   @Get('couriers')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List couriers with filtering and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String })
@@ -520,7 +526,14 @@ export class ApiGatewayController {
 
   @Get('markets')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.COURIER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List markets with filtering and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String })

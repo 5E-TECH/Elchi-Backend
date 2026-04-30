@@ -28,6 +28,7 @@ import {
   AssignBranchUserRequestDto,
   CancelTransferBatchRequestDto,
   CreateBranchTransferBatchesRequestDto,
+  CreateReturnBatchesRequestDto,
   CreateBranchRequestDto,
   SendTransferBatchRequestDto,
   SetBranchConfigRequestDto,
@@ -152,6 +153,22 @@ export class BranchGatewayController {
   ) {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.create' },
+      { id, dto, requester: this.toRequester(req) },
+    );
+  }
+
+  @Post('branches/:id/return-batches')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @ApiOperation({ summary: 'Create return batches grouped by original branch (direction=RETURN, QR=BTR-*)' })
+  @ApiParam({ name: 'id', description: 'Source branch ID (HQ / current branch)' })
+  @ApiBody({ type: CreateReturnBatchesRequestDto })
+  createReturnBatches(
+    @Param('id') id: string,
+    @Body() dto: CreateReturnBatchesRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.return_batches.create' },
       { id, dto, requester: this.toRequester(req) },
     );
   }

@@ -621,7 +621,7 @@ export class OrderGatewayController {
   @ApiQuery({ name: 'source', required: false, enum: ['internal', 'external', 'branch'] })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1, schema: { default: 1, minimum: 1 } as any })
   @ApiQuery({ name: 'limit', required: false, enum: [10, 25, 50, 100], schema: { default: 10 } as any })
-  findAll(
+  async findAll(
     @Query('market_id') market_id?: string,
     @Query('customer_id') customer_id?: string,
     @Query('status') status?: string | string[],
@@ -637,7 +637,12 @@ export class OrderGatewayController {
     @Req() req?: { user: JwtUser },
   ) {
     const roles = req?.user?.roles ?? [];
-    const isMarket = roles.includes(RoleEnum.MARKET);
+    const normalizedRoles = this.normalizeRoles(roles);
+    const isMarket = normalizedRoles.includes(RoleEnum.MARKET);
+    const isBranchScopedRequester =
+      normalizedRoles.includes(RoleEnum.BRANCH) ||
+      normalizedRoles.includes(RoleEnum.MANAGER) ||
+      normalizedRoles.includes(RoleEnum.REGISTRATOR);
     const requesterId = req?.user?.sub;
 
     if (isMarket && market_id && requesterId && String(market_id) !== String(requesterId)) {
@@ -645,6 +650,15 @@ export class OrderGatewayController {
     }
 
     const resolvedMarketId = isMarket && requesterId ? requesterId : market_id;
+    let resolvedBranchId = branch_id;
+
+    if (isBranchScopedRequester && req?.user) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
+        throw new BadRequestException('Branch user branchga biriktirilmagan');
+      }
+      resolvedBranchId = String(assignment.branch_id);
+    }
 
     const pagination = this.parsePaginationQuery(page, limit);
 
@@ -660,7 +674,7 @@ export class OrderGatewayController {
         end_day,
         courier,
         region_id,
-        branch_id,
+        branch_id: resolvedBranchId,
         source,
         page: pagination.page,
         limit: pagination.limit,
