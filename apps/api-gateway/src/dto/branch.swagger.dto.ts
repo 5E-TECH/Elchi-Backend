@@ -153,20 +153,15 @@ export class CreateBranchTransferBatchesRequestDto {
 }
 
 export class SendTransferBatchRequestDto {
-  @ApiProperty({ example: '01 A 123 AB' })
-  @IsString()
-  @MinLength(3)
-  vehicle_plate!: string;
-
-  @ApiProperty({ example: 'Abdulloh' })
-  @IsString()
-  @MinLength(2)
-  driver_name!: string;
-
-  @ApiProperty({ example: '+998901234567' })
-  @IsString()
-  @Matches(/^\+998\d{9}$/)
-  driver_phone!: string;
+  @ApiProperty({
+    example: ['46', '47', '48'],
+    description: "Yuborilayotgan batch ichidagi order ID'lar",
+    type: [String],
+  })
+  @IsArray()
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  orderIds!: string[];
 }
 
 export class CreateReturnBatchesRequestDto {
