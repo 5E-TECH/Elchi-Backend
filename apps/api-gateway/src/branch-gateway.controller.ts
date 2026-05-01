@@ -96,7 +96,7 @@ export class BranchGatewayController {
     return this.branchClient.send({ cmd: 'branch.tree' }, {});
   }
 
-  @Get('branches/:id')
+  @Get('branches/:id(\d+)')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Find branch by id' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
@@ -107,7 +107,7 @@ export class BranchGatewayController {
     return this.branchClient.send({ cmd: 'branch.find_by_id' }, { id, requester: this.toRequester(req) });
   }
 
-  @Get('branches/:id/descendants')
+  @Get('branches/:id(\d+)/descendants')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Get all descendants of a branch (flat list)' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
@@ -115,7 +115,7 @@ export class BranchGatewayController {
     return this.branchClient.send({ cmd: 'branch.descendants' }, { id });
   }
 
-  @Get('branches/:id/analytics/markets')
+  @Get('branches/:id(\d+)/analytics/markets')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
   @ApiOperation({ summary: 'Branch market analytics (orders, delivered, total price)' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
