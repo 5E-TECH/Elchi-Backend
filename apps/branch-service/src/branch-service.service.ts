@@ -977,12 +977,35 @@ export class BranchServiceService implements OnModuleInit {
     const requesterId = String(requester?.id ?? '').trim() || '0';
     return this.sendOrderCommand('order.transfer_batch.send', {
       batch_id: id,
+      order_ids: orderIds,
       vehicle_plate: vehiclePlate,
       driver_name: driverName,
       driver_phone: driverPhone,
       requester_id: requesterId,
       requester_name: requesterId,
     });
+  }
+
+  async findRemainingTransferBatchById(id: string, requester?: RequesterContext) {
+    const batchId = String(id ?? '').trim();
+    if (!batchId) {
+      this.badRequest('batch id is required');
+    }
+
+    const response = await this.sendOrderCommand<{
+      data?: { source_branch_id?: string; destination_branch_id?: string };
+    }>('order.transfer_batch.find_by_id', { id: batchId });
+
+    const sourceBranchId = String(response?.data?.source_branch_id ?? '').trim();
+    const destinationBranchId = String(response?.data?.destination_branch_id ?? '').trim();
+
+    if (sourceBranchId) {
+      await this.assertCanReadBranch(sourceBranchId, requester);
+    } else if (destinationBranchId) {
+      await this.assertCanReadBranch(destinationBranchId, requester);
+    }
+
+    return this.sendOrderCommand('order.transfer_batch.find_remaining', { id: batchId });
   }
 
   async findTransferBatches(

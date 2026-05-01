@@ -701,6 +701,8 @@ export class OrderServiceController {
     @Payload()
     data: {
       batch_id?: string;
+      order_ids?: string[];
+      orderIds?: string[];
       vehicle_plate?: string;
       driver_name?: string;
       driver_phone?: string;
@@ -711,6 +713,16 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.sendBranchTransferBatch(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.transfer_batch.find_remaining' })
+  findRemainingTransferBatchItems(
+    @Payload() data: { id?: string; batch_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findRemainingBranchTransferBatchItems(data?.id ?? data?.batch_id ?? ''),
     );
   }
 
