@@ -4566,6 +4566,62 @@ export class OrderServiceService {
     );
   }
 
+  async findBranchesWithSentTransferBatches(input?: {
+    direction?: string;
+    side?: 'source' | 'destination' | string;
+  }) {
+    const directionRaw = String(input?.direction ?? '').trim().toUpperCase();
+    const sideRaw = String(input?.side ?? 'source').trim().toLowerCase();
+    const side: 'source' | 'destination' = sideRaw === 'destination' ? 'destination' : 'source';
+    const column = side === 'destination' ? 'destination_branch_id' : 'source_branch_id';
+
+    if (directionRaw) {
+      if (!Object.values(BranchTransferDirection).includes(directionRaw as BranchTransferDirection)) {
+        this.badRequest(`direction must be one of: ${Object.values(BranchTransferDirection).join(', ')}`);
+      }
+    }
+
+    const qb = this.transferBatchRepo
+      .createQueryBuilder('batch')
+      .select(`batch.${column}`, 'branch_id')
+      .addSelect('COUNT(*)::int', 'sent_batches_count')
+      .addSelect('COALESCE(SUM(batch.total_price), 0)::bigint', 'sent_total_price')
+      .where('batch.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('batch.status = :status', { status: BranchTransferBatchStatus.SENT })
+      .andWhere(`batch.${column} IS NOT NULL`);
+
+    if (directionRaw) {
+      qb.andWhere('batch.direction = :direction', { direction: directionRaw });
+    }
+
+    const rows = await qb
+      .groupBy(`batch.${column}`)
+      .orderBy(`batch.${column}`, 'ASC')
+      .getRawMany<{
+        branch_id: string;
+        sent_batches_count: string | number;
+        sent_total_price: string | number;
+      }>();
+
+    const items = rows
+      .map((row) => ({
+        branch_id: String(row?.branch_id ?? '').trim(),
+        sent_batches_count: Number(row?.sent_batches_count ?? 0),
+        sent_total_price: Number(row?.sent_total_price ?? 0),
+      }))
+      .filter((row) => Boolean(row.branch_id));
+
+    return successRes(
+      {
+        side,
+        direction: directionRaw || undefined,
+        items,
+      },
+      200,
+      'Branches with sent transfer batches found',
+    );
+  }
+
   async findRemainingBranchTransferBatchItems(batchId: string) {
     const id = String(batchId ?? '').trim();
     if (!id) {

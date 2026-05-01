@@ -141,6 +141,25 @@ export class BranchGatewayController {
     );
   }
 
+  @Get('branches/with-sent-batches')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @ApiOperation({ summary: 'List branches that have SENT transfer batches' })
+  @ApiQuery({ name: 'direction', required: false, enum: ['FORWARD', 'RETURN'] })
+  @ApiQuery({ name: 'side', required: false, enum: ['source', 'destination'] })
+  findBranchesWithSentBatches(
+    @Query('direction') direction: string | undefined,
+    @Query('side') side: 'source' | 'destination' | undefined,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.transfer_batches.sent_branches' },
+      {
+        requester: this.toRequester(req),
+        query: { direction, side },
+      },
+    );
+  }
+
   @Post('branches/transfer-batches')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
   @ApiOperation({ summary: "Create transfer batches from requester's branch by order_ids" })

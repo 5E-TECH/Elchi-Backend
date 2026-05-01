@@ -130,6 +130,13 @@ export class BranchServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'branch.transfer_batches.sent_branches' })
+  findBranchesWithSentBatches(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.findBranchesWithSentBatches(data?.query ?? data, this.getRequester(data)),
+    );
+  }
+
   @MessagePattern({ cmd: 'branch.transfer_batches.find_by_id' })
   findTransferBatchById(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
