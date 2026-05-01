@@ -1020,16 +1020,17 @@ export class BranchServiceService implements OnModuleInit {
       if (!assignment) {
         this.forbidden('Filial biriktirilmagan foydalanuvchi');
       }
-      return this.sendOrderCommand('order.transfer_batch.find_all', {
+      const response = await this.sendOrderCommand('order.transfer_batch.find_all', {
         source_branch_id: String(assignment.branch_id),
         status: query?.status,
         direction: query?.direction,
         page: query?.page,
         limit: query?.limit,
       });
+      return this.attachRegionsToTransferBatches(response);
     }
 
-    return this.sendOrderCommand('order.transfer_batch.find_all', {
+    const response = await this.sendOrderCommand('order.transfer_batch.find_all', {
       source_branch_id: sourceBranchId || undefined,
       destination_branch_id: destinationBranchId || undefined,
       status: query?.status,
@@ -1037,6 +1038,39 @@ export class BranchServiceService implements OnModuleInit {
       page: query?.page,
       limit: query?.limit,
     });
+    return this.attachRegionsToTransferBatches(response);
+  }
+
+  private async attachRegionsToTransferBatches(response: any) {
+    const items = Array.isArray(response?.data?.items) ? response.data.items : [];
+    if (!items.length) {
+      return response;
+    }
+
+    const regionIds: string[] = Array.from(
+      new Set(
+        items
+          .map((batch: Record<string, unknown>) => String(batch?.target_region_id ?? '').trim())
+          .filter(Boolean),
+      ),
+    );
+
+    const regionMap = await this.getRegionsByIds(regionIds);
+    const enrichedItems = items.map((batch: Record<string, unknown>) => {
+      const regionId = String(batch?.target_region_id ?? '').trim();
+      return {
+        ...batch,
+        region: regionId ? (regionMap.get(regionId) ?? null) : null,
+      };
+    });
+
+    return {
+      ...response,
+      data: {
+        ...(response?.data ?? {}),
+        items: enrichedItems,
+      },
+    };
   }
 
   async findTransferBatchById(id: string, requester?: RequesterContext) {
@@ -1058,7 +1092,18 @@ export class BranchServiceService implements OnModuleInit {
       await this.assertCanReadBranch(destinationBranchId, requester);
     }
 
-    return response;
+    const batchData = (response as { data?: Record<string, unknown> })?.data;
+    if (!batchData || typeof batchData !== 'object') {
+      return response;
+    }
+
+    const regionId = String((batchData as Record<string, unknown>)?.target_region_id ?? '').trim();
+    const regionMap = await this.getRegionsByIds(regionId ? [regionId] : []);
+
+    return {
+      ...batchData,
+      region: regionId ? (regionMap.get(regionId) ?? null) : null,
+    };
   }
 
   private async assertRequesterWorksInBranch(branchId: string, requester?: RequesterContext) {
