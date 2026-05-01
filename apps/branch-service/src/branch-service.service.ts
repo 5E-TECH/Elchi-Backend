@@ -1116,7 +1116,7 @@ export class BranchServiceService implements OnModuleInit {
           );
           return {
             ...item,
-            order: orderRes?.data ?? null,
+            order: (orderRes as { data?: Record<string, unknown> })?.data ?? orderRes ?? null,
           };
         } catch {
           return {
