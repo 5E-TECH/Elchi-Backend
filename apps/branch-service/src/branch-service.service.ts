@@ -638,6 +638,30 @@ export class BranchServiceService implements OnModuleInit {
     }
   }
 
+  private extractRpcError(error: unknown): { statusCode: number; message: string } | null {
+    const fallback = { statusCode: 500, message: 'Internal service error' };
+    const source = error as
+      | { message?: string; error?: { statusCode?: number; message?: string | string[] } }
+      | undefined;
+
+    const nested = source?.error;
+    const nestedMessage = Array.isArray(nested?.message)
+      ? nested?.message?.join('. ')
+      : nested?.message;
+    const topMessage = source?.message;
+
+    const statusCode = Number(nested?.statusCode ?? NaN);
+    const message = String(nestedMessage ?? topMessage ?? '').trim();
+
+    if (Number.isFinite(statusCode) && message) {
+      return { statusCode, message };
+    }
+    if (message) {
+      return { ...fallback, message };
+    }
+    return null;
+  }
+
   private async sendOrderCommand<T>(cmd: string, payload: Record<string, unknown>): Promise<T> {
     try {
       return await lastValueFrom(
@@ -645,7 +669,11 @@ export class BranchServiceService implements OnModuleInit {
           .send<T>({ cmd }, payload)
           .pipe(timeout(15000)),
       );
-    } catch {
+    } catch (error) {
+      const parsed = this.extractRpcError(error);
+      if (parsed) {
+        throw new RpcException(errorRes(parsed.message, parsed.statusCode));
+      }
       throw new RpcException(errorRes('Order service unavailable', 502));
     }
   }
