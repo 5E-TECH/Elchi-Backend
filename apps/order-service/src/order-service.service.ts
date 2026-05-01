@@ -3716,6 +3716,7 @@ export class OrderServiceService {
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
     const direction = this.normalizeTransferDirection(input?.direction);
     const requestKey = this.normalizeTransferRequestKey(input?.request_key);
+    const maxRegionalPendingBatches = 13;
 
     if (!sourceBranchId || !destinationBranchId) {
       this.badRequest('source_branch_id and destination_branch_id are required');
@@ -3798,14 +3799,35 @@ export class OrderServiceService {
       const batchHistoryRepo = queryRunner.manager.getRepository(BranchTransferBatchHistory);
       const orderRepo = queryRunner.manager.getRepository(Order);
 
-      const batchEntities: BranchTransferBatch[] = [];
-      for (const [regionId, orders] of grouped.entries()) {
-        const totalPrice = orders.reduce(
-          (sum, order) => sum + Number(order.total_price ?? 0),
-          0,
-        );
+      const pendingBatches = await batchRepo.find({
+        where: {
+          source_branch_id: sourceBranchId,
+          destination_branch_id: destinationBranchId,
+          direction,
+          status: BranchTransferBatchStatus.PENDING,
+          isDeleted: false,
+        },
+        order: { createdAt: 'ASC' },
+      });
+
+      const batchByRegion = new Map<string, BranchTransferBatch>();
+      for (const batch of pendingBatches) {
+        const regionId = String(batch.target_region_id ?? '').trim();
+        if (regionId && !batchByRegion.has(regionId)) {
+          batchByRegion.set(regionId, batch);
+        }
+      }
+
+      const missingRegionIds = Array.from(grouped.keys()).filter((regionId) => !batchByRegion.has(regionId));
+      const currentPendingRegionsCount = batchByRegion.size;
+      if (currentPendingRegionsCount + missingRegionIds.length > maxRegionalPendingBatches) {
+        this.badRequest(`Maximum ${maxRegionalPendingBatches} ta pending transfer batch bo‘lishi mumkin`);
+      }
+
+      const newBatchEntities: BranchTransferBatch[] = [];
+      for (const regionId of missingRegionIds) {
         const qrToken = await this.generateTransferQrToken(batchRepo, direction);
-        batchEntities.push(
+        newBatchEntities.push(
           batchRepo.create({
             qr_code_token: qrToken,
             request_key: requestKey,
@@ -3814,8 +3836,8 @@ export class OrderServiceService {
             direction,
             target_region_id: regionId,
             status: BranchTransferBatchStatus.PENDING,
-            order_count: orders.length,
-            total_price: totalPrice,
+            order_count: 0,
+            total_price: 0,
             vehicle_plate: null,
             driver_name: null,
             driver_phone: null,
@@ -3826,17 +3848,21 @@ export class OrderServiceService {
         );
       }
 
-      const savedBatches = await batchRepo.save(batchEntities);
-      const batchByRegion = new Map(savedBatches.map((batch) => [String(batch.target_region_id), batch]));
+      const savedNewBatches = newBatchEntities.length ? await batchRepo.save(newBatchEntities) : [];
+      for (const batch of savedNewBatches) {
+        batchByRegion.set(String(batch.target_region_id), batch);
+      }
 
       const itemEntities: BranchTransferBatchItem[] = [];
       const historyEntities: BranchTransferBatchHistory[] = [];
+      const touchedBatchIds = new Set<string>();
 
       for (const [regionId, orders] of grouped.entries()) {
         const batch = batchByRegion.get(regionId);
         if (!batch) {
           throw new RpcException({ statusCode: 500, message: 'Batch create failed' });
         }
+        touchedBatchIds.add(String(batch.id));
 
         const orderIds = orders.map((order) => String(order.id));
         const updateResult = await orderRepo
@@ -3855,6 +3881,11 @@ export class OrderServiceService {
           });
         }
 
+        const regionTotalPrice = orders.reduce((sum, order) => sum + Number(order.total_price ?? 0), 0);
+        batch.order_count = Number(batch.order_count ?? 0) + orders.length;
+        batch.total_price = Number(batch.total_price ?? 0) + regionTotalPrice;
+        await batchRepo.save(batch);
+
         for (const order of orders) {
           itemEntities.push(
             batchItemRepo.create({
@@ -3871,7 +3902,7 @@ export class OrderServiceService {
             batch_id: String(batch.id),
             user_id: requesterId,
             action: BranchTransferBatchAction.CREATED,
-            notes: '[STEP] BATCH_CREATED',
+            notes: missingRegionIds.includes(regionId) ? '[STEP] BATCH_CREATED' : '[STEP] BATCH_REUSED',
           }),
         );
         historyEntities.push(
@@ -3888,7 +3919,7 @@ export class OrderServiceService {
       await batchHistoryRepo.save(historyEntities);
       await queryRunner.commitTransaction();
 
-      const batches = await this.listBatchesWithItems(savedBatches.map((batch) => String(batch.id)));
+      const batches = await this.listBatchesWithItems(Array.from(touchedBatchIds));
       return successRes(
         {
           idempotent: false,

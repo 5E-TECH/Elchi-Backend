@@ -1005,7 +1005,50 @@ export class BranchServiceService implements OnModuleInit {
       await this.assertCanReadBranch(destinationBranchId, requester);
     }
 
-    return this.sendOrderCommand('order.transfer_batch.find_remaining', { id: batchId });
+    const remainingResponse = await this.sendOrderCommand<{
+      data?: Record<string, unknown>;
+    }>('order.transfer_batch.find_remaining', { id: batchId });
+
+    const batchData = (remainingResponse as { data?: Record<string, unknown> })?.data;
+    if (!batchData || typeof batchData !== 'object') {
+      return remainingResponse;
+    }
+
+    const batchRecord = batchData as Record<string, unknown>;
+    const regionId = String(batchRecord?.target_region_id ?? '').trim();
+    const regionMap = await this.getRegionsByIds(regionId ? [regionId] : []);
+    const rawItems = Array.isArray(batchRecord?.items) ? (batchRecord.items as Array<Record<string, unknown>>) : [];
+
+    const enrichedItems = await Promise.all(
+      rawItems.map(async (item) => {
+        const orderId = String(item?.order_id ?? '').trim();
+        if (!orderId) {
+          return { ...item, order: null };
+        }
+
+        try {
+          const orderRes = await this.sendOrderCommand<{ data?: Record<string, unknown> }>(
+            'order.find_by_id_enriched',
+            { id: orderId },
+          );
+          return {
+            ...item,
+            order: (orderRes as { data?: Record<string, unknown> })?.data ?? orderRes ?? null,
+          };
+        } catch {
+          return {
+            ...item,
+            order: null,
+          };
+        }
+      }),
+    );
+
+    return {
+      ...batchRecord,
+      items: enrichedItems,
+      region: regionId ? (regionMap.get(regionId) ?? null) : null,
+    };
   }
 
   async findTransferBatches(
