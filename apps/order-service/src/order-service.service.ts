@@ -1293,6 +1293,7 @@ export class OrderServiceService {
     branch_id?: string;
     source?: Order_source | 'internal' | 'external' | 'branch';
     exclude_sources?: Array<Order_source | 'internal' | 'external' | 'branch'>;
+    unbatched_only?: boolean;
     fetch_all?: boolean | string;
     fetchAll?: boolean | string;
     page?: number;
@@ -1316,6 +1317,7 @@ export class OrderServiceService {
       branch_id,
       source,
       exclude_sources,
+      unbatched_only,
       fetch_all,
       fetchAll,
       page,
@@ -1374,6 +1376,9 @@ export class OrderServiceService {
     }
     if (branch_id) {
       qb.andWhere('order.branch_id = :branch_id', { branch_id });
+    }
+    if (unbatched_only) {
+      qb.andWhere('order.current_batch_id IS NULL');
     }
     if (sourceFilter === Order_source.EXTERNAL) {
       qb.andWhere('(order.source = :source OR order.external_id IS NOT NULL)', {
@@ -1448,6 +1453,7 @@ export class OrderServiceService {
       .addSelect('COALESCE(SUM(order.total_price), 0)', 'total_price_sum')
       .where('order.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('order.status = :status', { status: Order_status.NEW })
+      .andWhere('order.current_batch_id IS NULL')
       .groupBy('order.market_id')
       .orderBy('orders_count', 'DESC');
 
@@ -1487,6 +1493,7 @@ export class OrderServiceService {
       market_id,
       branch_id,
       status: Order_status.NEW,
+      unbatched_only: true,
       ...(exclude_branch_source ? { exclude_sources: [Order_source.BRANCH] } : {}),
       page,
       limit,
@@ -4370,6 +4377,7 @@ export class OrderServiceService {
           order_id: item.order_id,
           snapshot_price: item.snapshot_price,
           snapshot_market_id: item.snapshot_market_id,
+          sent_at: item.sent_at,
           createdAt: item.createdAt,
           updatedAt: item.updatedAt,
         })),
@@ -4453,6 +4461,7 @@ export class OrderServiceService {
             order_id: item.order_id,
             snapshot_price: item.snapshot_price,
             snapshot_market_id: item.snapshot_market_id,
+            sent_at: item.sent_at,
             createdAt: item.createdAt,
             updatedAt: item.updatedAt,
           })),
@@ -4466,6 +4475,43 @@ export class OrderServiceService {
       },
       200,
       'Transfer batches found',
+    );
+  }
+
+  async findRemainingBranchTransferBatchItems(batchId: string) {
+    const id = String(batchId ?? '').trim();
+    if (!id) {
+      this.badRequest('batch_id is required');
+    }
+
+    const batch = await this.transferBatchRepo.findOne({
+      where: { id, isDeleted: false },
+    });
+    if (!batch) {
+      this.notFound('Transfer batch not found');
+    }
+
+    const items = await this.transferBatchItemRepo.find({
+      where: { batch_id: id, isDeleted: false },
+      order: { createdAt: 'ASC' },
+    });
+
+    const remainingItems = items.filter((item) => !item.sent_at);
+    return successRes(
+      {
+        ...batch,
+        items: remainingItems.map((item) => ({
+          id: item.id,
+          order_id: item.order_id,
+          snapshot_price: item.snapshot_price,
+          snapshot_market_id: item.snapshot_market_id,
+          sent_at: item.sent_at,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        })),
+      },
+      200,
+      'Remaining transfer batch items found',
     );
   }
 
@@ -4506,6 +4552,8 @@ export class OrderServiceService {
 
   async sendBranchTransferBatch(input: {
     batch_id?: string;
+    order_ids?: string[];
+    orderIds?: string[];
     vehicle_plate?: string;
     driver_name?: string;
     driver_phone?: string;
@@ -4521,6 +4569,13 @@ export class OrderServiceService {
       this.badRequest('batch_id is required');
     }
 
+    const orderIds = Array.from(
+      new Set((input?.orderIds ?? input?.order_ids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean)),
+    );
+    if (!orderIds.length) {
+      this.badRequest('orderIds is required');
+    }
+
     if (!vehiclePlate || !driverName || !driverPhone) {
       this.badRequest("Avtomobil ma'lumotlari majburiy");
     }
@@ -4532,21 +4587,45 @@ export class OrderServiceService {
       this.notFound('Transfer batch not found');
     }
 
-    if (batch.status === BranchTransferBatchStatus.SENT) {
-      this.badRequest("Bu paket allaqachon yo'lda");
-    }
     if (batch.status === BranchTransferBatchStatus.CANCELLED) {
       this.badRequest("Bekor qilingan paketni jo'natib bo'lmaydi");
     }
     if (batch.status === BranchTransferBatchStatus.RECEIVED) {
       this.badRequest("Qabul qilingan paketni qayta jo'natib bo'lmaydi");
     }
-    if (batch.status !== BranchTransferBatchStatus.PENDING) {
+    if (![BranchTransferBatchStatus.PENDING, BranchTransferBatchStatus.SENT].includes(batch.status)) {
       this.badRequest(`Paketni jo'natib bo'lmaydi. Current status: ${batch.status}`);
     }
 
-    batch.status = BranchTransferBatchStatus.SENT;
-    batch.sent_at = new Date();
+    const batchItems = await this.transferBatchItemRepo.find({
+      where: { batch_id: batchId, isDeleted: false },
+    });
+    const itemByOrderId = new Map(batchItems.map((item) => [String(item.order_id), item]));
+    const selectedItems = orderIds
+      .map((orderId) => itemByOrderId.get(orderId))
+      .filter((item): item is BranchTransferBatchItem => Boolean(item));
+
+    if (selectedItems.length !== orderIds.length) {
+      this.badRequest('Some orderIds are not part of this batch');
+    }
+
+    const now = new Date();
+    const toMark = selectedItems.filter((item) => !item.sent_at);
+    if (!toMark.length) {
+      this.badRequest("Tanlangan orderlar allaqachon jo'natilgan");
+    }
+    toMark.forEach((item) => {
+      item.sent_at = now;
+    });
+    await this.transferBatchItemRepo.save(toMark);
+
+    const refreshedItems = await this.transferBatchItemRepo.find({
+      where: { batch_id: batchId, isDeleted: false },
+    });
+    const allSent = refreshedItems.length > 0 && refreshedItems.every((item) => Boolean(item.sent_at));
+
+    batch.status = allSent ? BranchTransferBatchStatus.SENT : BranchTransferBatchStatus.PENDING;
+    batch.sent_at = allSent ? now : null;
     batch.vehicle_plate = vehiclePlate;
     batch.driver_name = driverName;
     batch.driver_phone = driverPhone;

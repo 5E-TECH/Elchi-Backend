@@ -137,6 +137,13 @@ export class BranchServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'branch.transfer_batches.find_remaining' })
+  findRemainingTransferBatchById(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.findRemainingTransferBatchById(data?.id, this.getRequester(data)),
+    );
+  }
+
   @MessagePattern({ cmd: 'branch.transfer_batch.find_by_token' })
   findTransferBatchByToken(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>

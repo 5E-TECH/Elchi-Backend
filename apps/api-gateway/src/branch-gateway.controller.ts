@@ -235,6 +235,20 @@ export class BranchGatewayController {
     );
   }
 
+  @Get('transfer-batches/:id/remaining')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @ApiOperation({ summary: 'Get remaining (not sent) items of transfer batch by id' })
+  @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
+  findRemainingTransferBatchById(
+    @Param('id') id: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.transfer_batches.find_remaining' },
+      { id, requester: this.toRequester(req) },
+    );
+  }
+
   @Post('transfer-batches/:id/receive')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
   @ApiOperation({ summary: 'Receive transfer batch by destination branch staff' })

@@ -27,4 +27,7 @@ export class BranchTransferBatchItem extends BaseEntity {
 
   @Column({ type: 'bigint' })
   snapshot_market_id!: string;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  sent_at!: Date | null;
 }
