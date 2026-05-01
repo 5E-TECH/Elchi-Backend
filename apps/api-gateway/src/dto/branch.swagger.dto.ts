@@ -149,7 +149,7 @@ export class CreateBranchTransferBatchesRequestDto {
   @IsArray()
   @IsString({ each: true })
   @MinLength(1, { each: true })
-  order_ids!: string[];
+  orderIds!: string[];
 }
 
 export class SendTransferBatchRequestDto {
