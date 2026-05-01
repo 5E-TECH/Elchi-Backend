@@ -940,6 +940,8 @@ export class BranchServiceService implements OnModuleInit {
   async sendTransferBatch(
     batchId: string,
     dto: {
+      orderIds?: string[];
+      order_ids?: string[];
       vehicle_plate?: string;
       driver_name?: string;
       driver_phone?: string;
@@ -951,13 +953,16 @@ export class BranchServiceService implements OnModuleInit {
       this.badRequest('batch id is required');
     }
 
-    const vehiclePlate = String(dto?.vehicle_plate ?? '').trim();
-    const driverName = String(dto?.driver_name ?? '').trim();
-    const driverPhone = String(dto?.driver_phone ?? '').trim();
-
-    if (!vehiclePlate || !driverName || !driverPhone) {
-      this.badRequest("Avtomobil ma'lumotlari majburiy");
+    const orderIds = Array.from(
+      new Set((dto?.orderIds ?? dto?.order_ids ?? []).map((value) => String(value ?? '').trim()).filter(Boolean)),
+    );
+    if (!orderIds.length) {
+      this.badRequest('orderIds is required');
     }
+
+    const vehiclePlate = String(dto?.vehicle_plate ?? 'N/A').trim() || 'N/A';
+    const driverName = String(dto?.driver_name ?? 'N/A').trim() || 'N/A';
+    const driverPhone = String(dto?.driver_phone ?? '+998000000000').trim() || '+998000000000';
 
     const batchRes = await this.sendOrderCommand<{
       data?: { source_branch_id?: string };
