@@ -1135,6 +1135,93 @@ export class BranchServiceService implements OnModuleInit {
     return this.attachRegionsToTransferBatches(response);
   }
 
+  async findBranchesWithSentBatches(
+    query: {
+      direction?: string;
+      side?: 'source' | 'destination' | string;
+    },
+    requester?: RequesterContext,
+  ) {
+    const response = await this.sendOrderCommand<{
+      data?: {
+        side?: 'source' | 'destination';
+        direction?: string;
+        items?: Array<{
+          branch_id?: string;
+          sent_batches_count?: number | string;
+          sent_total_price?: number | string;
+        }>;
+      };
+    }>('order.transfer_batch.find_branches_with_sent', {
+      direction: query?.direction,
+      side: query?.side,
+    });
+
+    const sideRaw = String(response?.data?.side ?? 'source').toLowerCase();
+    const side: 'source' | 'destination' = sideRaw === 'destination' ? 'destination' : 'source';
+    const aggregates = (response?.data?.items ?? [])
+      .map((row) => ({
+        branch_id: String(row?.branch_id ?? '').trim(),
+        sent_batches_count: Number(row?.sent_batches_count ?? 0),
+        sent_total_price: Number(row?.sent_total_price ?? 0),
+      }))
+      .filter((row) => Boolean(row.branch_id));
+    const branchIds = Array.from(new Set(aggregates.map((row) => row.branch_id)));
+
+    if (!branchIds.length) {
+      return successRes(
+        { side, direction: response?.data?.direction, items: [] },
+        200,
+        'Branches with sent transfer batches found',
+      );
+    }
+
+    const rows = await this.branchRepo.find({
+      where: { id: In(branchIds), isDeleted: false },
+      order: { name: 'ASC' },
+    });
+    const aggregateByBranchId = new Map(aggregates.map((row) => [row.branch_id, row]));
+
+    const canRead = async (branchId: string) => {
+      try {
+        await this.assertCanReadBranch(branchId, requester);
+        return true;
+      } catch {
+        return false;
+      }
+    };
+
+    const visible: Array<{
+      id: string;
+      name: string;
+      phone_number: string | null;
+      sent_batches_count: number;
+      sent_total_price: number;
+    }> = [];
+    for (const row of rows) {
+      if (await canRead(String(row.id))) {
+        const aggregate = aggregateByBranchId.get(String(row.id));
+        visible.push({
+          id: String(row.id),
+          name: row.name,
+          phone_number: row.phone_number ?? null,
+          sent_batches_count: Number(aggregate?.sent_batches_count ?? 0),
+          sent_total_price: Number(aggregate?.sent_total_price ?? 0),
+        });
+      }
+    }
+
+    return successRes(
+      {
+        side,
+        direction: response?.data?.direction,
+        items: visible,
+      },
+      200,
+      'Branches with sent transfer batches found',
+    );
+  }
+
   private async attachRegionsToTransferBatches(response: any) {
     const items = Array.isArray(response?.data?.items) ? response.data.items : [];
     if (!items.length) {

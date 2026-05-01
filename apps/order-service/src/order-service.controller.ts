@@ -696,6 +696,20 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.transfer_batch.find_branches_with_sent' })
+  findBranchesWithSentTransferBatches(
+    @Payload()
+    data: {
+      direction?: string;
+      side?: 'source' | 'destination' | string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findBranchesWithSentTransferBatches(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.transfer_batch.send' })
   sendTransferBatch(
     @Payload()
