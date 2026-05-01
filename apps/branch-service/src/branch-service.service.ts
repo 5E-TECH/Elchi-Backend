@@ -1097,11 +1097,39 @@ export class BranchServiceService implements OnModuleInit {
       return response;
     }
 
-    const regionId = String((batchData as Record<string, unknown>)?.target_region_id ?? '').trim();
+    const batchRecord = batchData as Record<string, unknown>;
+    const regionId = String(batchRecord?.target_region_id ?? '').trim();
     const regionMap = await this.getRegionsByIds(regionId ? [regionId] : []);
+    const rawItems = Array.isArray(batchRecord?.items) ? (batchRecord.items as Array<Record<string, unknown>>) : [];
+
+    const enrichedItems = await Promise.all(
+      rawItems.map(async (item) => {
+        const orderId = String(item?.order_id ?? '').trim();
+        if (!orderId) {
+          return { ...item, order: null };
+        }
+
+        try {
+          const orderRes = await this.sendOrderCommand<{ data?: Record<string, unknown> }>(
+            'order.find_by_id_enriched',
+            { id: orderId },
+          );
+          return {
+            ...item,
+            order: orderRes?.data ?? null,
+          };
+        } catch {
+          return {
+            ...item,
+            order: null,
+          };
+        }
+      }),
+    );
 
     return {
-      ...batchData,
+      ...batchRecord,
+      items: enrichedItems,
       region: regionId ? (regionMap.get(regionId) ?? null) : null,
     };
   }
