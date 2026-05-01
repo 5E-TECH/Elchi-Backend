@@ -4483,25 +4483,82 @@ export class OrderServiceService {
       itemsByBatch.set(key, list);
     }
 
+    const mappedRows = rows.map((batch) => {
+      const mappedItems = (itemsByBatch.get(String(batch.id)) ?? []).map((item) => ({
+        id: item.id,
+        order_id: item.order_id,
+        snapshot_price: item.snapshot_price,
+        snapshot_market_id: item.snapshot_market_id,
+        sent_at: item.sent_at,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      }));
+
+      if (batch.status !== BranchTransferBatchStatus.PENDING) {
+        return {
+          ...batch,
+          items: mappedItems,
+        };
+      }
+
+      const remainingItems = mappedItems.filter((item) => !item.sent_at);
+      const remainingCount = remainingItems.length;
+      const remainingTotalPrice = remainingItems.reduce(
+        (sum, item) => sum + Number(item.snapshot_price ?? 0),
+        0,
+      );
+
+      return {
+        ...batch,
+        order_count: remainingCount,
+        total_price: remainingTotalPrice,
+        items: remainingItems,
+      };
+    });
+
+    const shouldCollapsePending =
+      !statusRaw || statusRaw === BranchTransferBatchStatus.PENDING;
+
+    const resultRows = shouldCollapsePending
+      ? mappedRows.filter((candidate, index, all) => {
+          if (candidate.status !== BranchTransferBatchStatus.PENDING) {
+            return true;
+          }
+
+          const key = [
+            String(candidate.source_branch_id ?? ''),
+            String(candidate.destination_branch_id ?? ''),
+            String(candidate.direction ?? ''),
+            String(candidate.target_region_id ?? ''),
+          ].join('|');
+
+          const firstPending = all.find((row) => {
+            if (row.status !== BranchTransferBatchStatus.PENDING) {
+              return false;
+            }
+            const rowKey = [
+              String(row.source_branch_id ?? ''),
+              String(row.destination_branch_id ?? ''),
+              String(row.direction ?? ''),
+              String(row.target_region_id ?? ''),
+            ].join('|');
+            return rowKey === key;
+          });
+
+          return firstPending ? String(firstPending.id) === String(candidate.id) : index === 0;
+        })
+      : mappedRows;
+
     return successRes(
       {
-        items: rows.map((batch) => ({
-          ...batch,
-          items: (itemsByBatch.get(String(batch.id)) ?? []).map((item) => ({
-            id: item.id,
-            order_id: item.order_id,
-            snapshot_price: item.snapshot_price,
-            snapshot_market_id: item.snapshot_market_id,
-            sent_at: item.sent_at,
-            createdAt: item.createdAt,
-            updatedAt: item.updatedAt,
-          })),
-        })),
+        items: resultRows,
         meta: {
           page,
           limit,
-          total,
-          totalPages: Math.max(1, Math.ceil(total / limit)),
+          total: shouldCollapsePending ? resultRows.length : total,
+          totalPages: shouldCollapsePending
+            ? Math.max(1, Math.ceil(resultRows.length / limit))
+            : Math.max(1, Math.ceil(total / limit)),
         },
       },
       200,
