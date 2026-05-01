@@ -1111,7 +1111,7 @@ export class BranchServiceService implements OnModuleInit {
 
         try {
           const orderRes = await this.sendOrderCommand<{ data?: Record<string, unknown> }>(
-            'order.find_by_id_enriched',
+            'order.find_by_id',
             { id: orderId },
           );
           return {
