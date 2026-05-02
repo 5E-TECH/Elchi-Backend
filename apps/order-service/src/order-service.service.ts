@@ -4912,6 +4912,165 @@ export class OrderServiceService {
     }
   }
 
+  async receiveBranchTransferBatchOrders(input: {
+    batch_id?: string;
+    order_ids?: string[];
+    requester_id?: string;
+    requester_name?: string;
+  }) {
+    const batchId = String(input?.batch_id ?? '').trim();
+    if (!batchId) {
+      this.badRequest('batch_id is required');
+    }
+
+    const orderIds = Array.isArray(input?.order_ids)
+      ? input.order_ids.map((value) => String(value ?? '').trim()).filter(Boolean)
+      : [];
+    if (!orderIds.length) {
+      this.badRequest("order_ids bo'sh bo'lmasligi kerak");
+    }
+    const uniqueOrderIds = [...new Set(orderIds)];
+
+    const requesterId = String(input?.requester_id ?? '').trim() || '0';
+    const requesterName =
+      String(input?.requester_name ?? '').trim() ||
+      requesterId ||
+      'unknown';
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
+      const batchItemRepo = queryRunner.manager.getRepository(BranchTransferBatchItem);
+      const orderRepo = queryRunner.manager.getRepository(Order);
+      const historyRepo = queryRunner.manager.getRepository(BranchTransferBatchHistory);
+
+      const batch = await batchRepo.findOne({
+        where: { id: batchId, isDeleted: false },
+      });
+      if (!batch) {
+        this.notFound('Transfer batch not found');
+      }
+
+      if (batch.status === BranchTransferBatchStatus.RECEIVED) {
+        this.badRequest("Bu paket allaqachon qabul qilingan");
+      }
+      if (batch.status === BranchTransferBatchStatus.PENDING) {
+        this.badRequest("Hali jo'natilmagan paketdan qabul qilib bo'lmaydi");
+      }
+      if (batch.status === BranchTransferBatchStatus.CANCELLED) {
+        this.badRequest("Bekor qilingan paketdan qabul qilib bo'lmaydi");
+      }
+      if (batch.status !== BranchTransferBatchStatus.SENT) {
+        this.badRequest(`Paketdan qabul qilib bo'lmaydi. Current status: ${batch.status}`);
+      }
+
+      const selectedItems = await batchItemRepo.find({
+        where: { batch_id: batchId, isDeleted: false, order_id: In(uniqueOrderIds) },
+      });
+      if (!selectedItems.length) {
+        this.badRequest('Berilgan orderlar bu batch ichida topilmadi');
+      }
+
+      const selectedOrderIds = selectedItems.map((item) => String(item.order_id));
+      const missingOrderIds = uniqueOrderIds.filter((id) => !selectedOrderIds.includes(id));
+      if (missingOrderIds.length) {
+        this.badRequest(`Quyidagi orderlar batch ichida yo'q: ${missingOrderIds.join(', ')}`);
+      }
+
+      const notSentOrderIds = selectedItems
+        .filter((item) => !item.sent_at)
+        .map((item) => String(item.order_id));
+      if (notSentOrderIds.length) {
+        this.badRequest(`Quyidagi orderlar hali jo'natilmagan: ${notSentOrderIds.join(', ')}`);
+      }
+
+      await orderRepo
+        .createQueryBuilder()
+        .update(Order)
+        .set({
+          current_batch_id: null,
+          branch_id: String(batch.destination_branch_id),
+        })
+        .where('id IN (:...orderIds)', { orderIds: selectedOrderIds })
+        .andWhere('"is_deleted" = false')
+        .execute();
+
+      const orders = await orderRepo.find({
+        where: { id: In(selectedOrderIds), isDeleted: false },
+        select: ['id', 'region_id'],
+      });
+
+      const localOrderIds = orders
+        .filter((order) => String(order.region_id ?? '') === String(batch.target_region_id))
+        .map((order) => String(order.id));
+      const transitOrderIds = orders
+        .filter((order) => String(order.region_id ?? '') !== String(batch.target_region_id))
+        .map((order) => String(order.id));
+
+      if (localOrderIds.length) {
+        await orderRepo
+          .createQueryBuilder()
+          .update(Order)
+          .set({ status: Order_status.RECEIVED })
+          .where('id IN (:...localOrderIds)', { localOrderIds })
+          .andWhere('"is_deleted" = false')
+          .execute();
+      }
+
+      if (transitOrderIds.length) {
+        await orderRepo
+          .createQueryBuilder()
+          .update(Order)
+          .set({ status: Order_status.NEW })
+          .where('id IN (:...transitOrderIds)', { transitOrderIds })
+          .andWhere('"is_deleted" = false')
+          .execute();
+      }
+
+      await batchItemRepo
+        .createQueryBuilder()
+        .update(BranchTransferBatchItem)
+        .set({ isDeleted: true })
+        .where('batch_id = :batchId', { batchId })
+        .andWhere('order_id IN (:...orderIds)', { orderIds: selectedOrderIds })
+        .andWhere('"is_deleted" = false')
+        .execute();
+
+      const remainingItems = await batchItemRepo.find({
+        where: { batch_id: batchId, isDeleted: false },
+      });
+      batch.order_count = remainingItems.length;
+      batch.total_price = remainingItems.reduce((acc, item) => acc + Number(item.snapshot_price ?? 0), 0);
+
+      if (!remainingItems.length) {
+        batch.status = BranchTransferBatchStatus.RECEIVED;
+        batch.received_at = new Date();
+        batch.received_by_user_id = requesterId;
+      }
+
+      const savedBatch = await batchRepo.save(batch);
+
+      await historyRepo.save(
+        historyRepo.create({
+          batch_id: batchId,
+          user_id: requesterId,
+          action: BranchTransferBatchAction.RECEIVED,
+          notes: `Xodim ${requesterName} batchdan ${selectedOrderIds.length} ta order qabul qildi`,
+        }),
+      );
+
+      await queryRunner.commitTransaction();
+      return successRes(savedBatch, 200, 'Selected transfer batch orders received');
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
   async cancelBranchTransferBatch(input: {
     batch_id?: string;
     reason?: string;

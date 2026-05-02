@@ -755,6 +755,22 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.transfer_batch.receive_orders' })
+  receiveTransferBatchOrders(
+    @Payload()
+    data: {
+      batch_id?: string;
+      order_ids?: string[];
+      requester_id?: string;
+      requester_name?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.receiveBranchTransferBatchOrders(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.transfer_batch.cancel' })
   cancelTransferBatchSingle(
     @Payload()

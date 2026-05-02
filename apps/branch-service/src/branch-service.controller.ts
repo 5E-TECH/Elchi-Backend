@@ -171,6 +171,17 @@ export class BranchServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'branch.transfer_batches.receive_orders' })
+  receiveTransferBatchOrders(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.receiveTransferBatchOrders(
+        data?.id,
+        data?.dto ?? data,
+        this.getRequester(data),
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'branch.transfer_batches.cancel' })
   cancelTransferBatch(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>

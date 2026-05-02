@@ -30,6 +30,7 @@ import {
   CreateBranchTransferBatchesRequestDto,
   CreateReturnBatchesRequestDto,
   CreateBranchRequestDto,
+  ReceiveTransferBatchOrdersRequestDto,
   SendTransferBatchRequestDto,
   SetBranchConfigRequestDto,
   UpdateBranchConfigRequestDto,
@@ -279,6 +280,22 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.receive' },
       { id, requester: this.toRequester(req) },
+    );
+  }
+
+  @Post('transfer-batches/:id/receive-orders')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @ApiOperation({ summary: 'Receive selected orders from transfer batch by destination branch staff' })
+  @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
+  @ApiBody({ type: ReceiveTransferBatchOrdersRequestDto })
+  receiveTransferBatchOrders(
+    @Param('id') id: string,
+    @Body() dto: ReceiveTransferBatchOrdersRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.transfer_batches.receive_orders' },
+      { id, dto, requester: this.toRequester(req) },
     );
   }
 
