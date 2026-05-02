@@ -96,7 +96,26 @@ export class BranchGatewayController {
     return this.branchClient.send({ cmd: 'branch.tree' }, {});
   }
 
-  @Get('branches/:id(\d+)')
+  @Get('branches/with-sent-batches')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @ApiOperation({ summary: 'List branches that have SENT transfer batches' })
+  @ApiQuery({ name: 'direction', required: false, enum: ['FORWARD', 'RETURN'] })
+  @ApiQuery({ name: 'side', required: false, enum: ['source', 'destination'] })
+  findBranchesWithSentBatches(
+    @Query('direction') direction: string | undefined,
+    @Query('side') side: 'source' | 'destination' | undefined,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.transfer_batches.sent_branches' },
+      {
+        requester: this.toRequester(req),
+        query: { direction, side },
+      },
+    );
+  }
+
+  @Get('branches/:id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Find branch by id' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
@@ -107,7 +126,7 @@ export class BranchGatewayController {
     return this.branchClient.send({ cmd: 'branch.find_by_id' }, { id, requester: this.toRequester(req) });
   }
 
-  @Get('branches/:id(\d+)/descendants')
+  @Get('branches/:id/descendants')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Get all descendants of a branch (flat list)' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
@@ -115,7 +134,7 @@ export class BranchGatewayController {
     return this.branchClient.send({ cmd: 'branch.descendants' }, { id });
   }
 
-  @Get('branches/:id(\d+)/analytics/markets')
+  @Get('branches/:id/analytics/markets')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
   @ApiOperation({ summary: 'Branch market analytics (orders, delivered, total price)' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
@@ -138,25 +157,6 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.new_orders.branches' },
       { requester: this.toRequester(req) },
-    );
-  }
-
-  @Get('branches/with-sent-batches')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
-  @ApiOperation({ summary: 'List branches that have SENT transfer batches' })
-  @ApiQuery({ name: 'direction', required: false, enum: ['FORWARD', 'RETURN'] })
-  @ApiQuery({ name: 'side', required: false, enum: ['source', 'destination'] })
-  findBranchesWithSentBatches(
-    @Query('direction') direction: string | undefined,
-    @Query('side') side: 'source' | 'destination' | undefined,
-    @Req() req: { user?: { sub?: string; roles?: string[] } },
-  ) {
-    return this.branchClient.send(
-      { cmd: 'branch.transfer_batches.sent_branches' },
-      {
-        requester: this.toRequester(req),
-        query: { direction, side },
-      },
     );
   }
 
