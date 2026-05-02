@@ -1365,6 +1365,44 @@ export class BranchServiceService implements OnModuleInit {
     });
   }
 
+  async receiveTransferBatchOrders(
+    batchId: string,
+    dto: { orderIds?: string[] },
+    requester?: RequesterContext,
+  ) {
+    const id = String(batchId ?? '').trim();
+    if (!id) {
+      this.badRequest('batch id is required');
+    }
+
+    const orderIds = Array.isArray(dto?.orderIds)
+      ? dto.orderIds.map((value) => String(value ?? '').trim()).filter(Boolean)
+      : [];
+    if (!orderIds.length) {
+      this.badRequest("orderIds bo'sh bo'lmasligi kerak");
+    }
+
+    const uniqueOrderIds = [...new Set(orderIds)];
+
+    const batchRes = await this.sendOrderCommand<{
+      data?: { destination_branch_id?: string };
+    }>('order.transfer_batch.find_by_id', { id });
+    const destinationBranchId = String(batchRes?.data?.destination_branch_id ?? '').trim();
+    if (!destinationBranchId) {
+      this.notFound('Transfer batch not found');
+    }
+
+    await this.assertRequesterWorksInBranch(destinationBranchId, requester);
+
+    const requesterId = String(requester?.id ?? '').trim() || '0';
+    return this.sendOrderCommand('order.transfer_batch.receive_orders', {
+      batch_id: id,
+      order_ids: uniqueOrderIds,
+      requester_id: requesterId,
+      requester_name: requesterId,
+    });
+  }
+
   async cancelTransferBatch(
     batchId: string,
     dto: {

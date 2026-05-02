@@ -198,3 +198,15 @@ export class CancelTransferBatchRequestDto {
   @MinLength(10)
   reason!: string;
 }
+
+export class ReceiveTransferBatchOrdersRequestDto {
+  @ApiProperty({
+    example: ['46', '47'],
+    description: "Qabul qilinadigan batch ichidagi order ID'lar",
+    type: [String],
+  })
+  @IsArray()
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  orderIds!: string[];
+}
