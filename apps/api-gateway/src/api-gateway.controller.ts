@@ -243,8 +243,42 @@ export class ApiGatewayController {
   @ApiBody({ type: CreateCourierRequestDto })
   @ApiCreatedResponse({ description: 'Courier created' })
   @ApiConflictResponse({ description: 'Conflict' })
-  createCourier(@Body() dto: CreateCourierRequestDto) {
-    return this.identityClient.send({ cmd: 'identity.courier.create' }, { dto });
+  async createCourier(@Body() dto: CreateCourierRequestDto, @Req() req: { user: JwtUser }) {
+    const { branch_id, ...identityDto } = dto;
+    const created = await firstValueFrom(
+      this.identityClient.send({ cmd: 'identity.courier.create' }, { dto: identityDto }),
+    );
+
+    const courierId = String(created?.data?.id ?? '').trim();
+    if (!courierId) {
+      throw new BadRequestException('Courier yaratildi, lekin id qaytmadi');
+    }
+
+    try {
+      await firstValueFrom(
+        this.branchClient.send(
+          { cmd: 'branch.user.assign' },
+          {
+            requester: this.toRequester(req),
+            dto: {
+              branch_id,
+              user_id: courierId,
+              role: 'COURIER',
+            },
+          },
+        ),
+      );
+    } catch (error) {
+      await firstValueFrom(
+        this.identityClient.send(
+          { cmd: 'identity.user.delete' },
+          { id: courierId, requester: this.toRequester(req) },
+        ),
+      ).catch(() => null);
+      throw error;
+    }
+
+    return created;
   }
 
   @Post('managers')

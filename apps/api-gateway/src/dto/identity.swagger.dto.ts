@@ -150,6 +150,10 @@ export class CreateMarketRequestDto {
 }
 
 export class CreateCourierRequestDto {
+  @ApiProperty({ example: '12', description: 'Branch ID' })
+  @IsString()
+  branch_id!: string;
+
   @ApiProperty({ example: '1' })
   @IsString()
   region_id!: string;
