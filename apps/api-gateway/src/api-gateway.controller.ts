@@ -48,6 +48,11 @@ interface JwtUser {
   roles?: string[];
 }
 
+interface BranchAssignment {
+  branch_id?: string | null;
+  role?: string | null;
+}
+
 @ApiTags('Identity')
 @Controller()
 export class ApiGatewayController {
@@ -62,6 +67,20 @@ export class ApiGatewayController {
       id: req.user.sub,
       roles: req.user.roles ?? [],
     };
+  }
+
+  private async resolveBranchAssignment(reqUser: JwtUser): Promise<BranchAssignment | null> {
+    const response = await firstValueFrom(
+      this.branchClient.send(
+        { cmd: 'branch.user.find_by_user' },
+        {
+          user_id: reqUser.sub,
+          requester: { id: reqUser.sub, roles: reqUser.roles ?? [] },
+        },
+      ),
+    );
+
+    return (response?.data ?? null) as BranchAssignment | null;
   }
 
   private async findUserCashbox(userId: string, cashboxType: Cashbox_type) {
@@ -138,7 +157,7 @@ export class ApiGatewayController {
             dto: {
               branch_id,
               user_id: registratorId,
-              role: 'OPERATOR',
+              role: 'REGISTRATOR',
             },
           },
         ),
@@ -288,6 +307,7 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
   @ApiQuery({ name: 'region_id', required: false, type: String })
   @ApiQuery({ name: 'regionId', required: false, type: String, description: 'Alias for region_id' })
+  @ApiQuery({ name: 'branch_id', required: false, type: String })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({ description: 'Courier list' })
@@ -296,10 +316,24 @@ export class ApiGatewayController {
     @Query('status') status?: string,
     @Query('region_id') region_id?: string,
     @Query('regionId') regionId?: string,
+    @Query('branch_id') branch_id?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Req() req?: { user: JwtUser },
   ) {
     const resolvedRegionId = region_id ?? regionId;
+    const roles = (req?.user?.roles ?? []).map((role) => String(role).toLowerCase());
+    const isSystemPrivileged = roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
+
+    let resolvedBranchId = String(branch_id ?? '').trim() || undefined;
+    if (!isSystemPrivileged && req?.user?.sub) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      const assignedBranchId = String(assignment?.branch_id ?? '').trim();
+      if (assignedBranchId) {
+        resolvedBranchId = assignedBranchId;
+      }
+    }
+
     const response = await firstValueFrom(
       this.identityClient.send(
         { cmd: 'identity.courier.find_all' },
@@ -315,8 +349,35 @@ export class ApiGatewayController {
       ),
     );
 
-    const items = Array.isArray(response?.data?.items) ? response.data.items : [];
+    let items = Array.isArray(response?.data?.items) ? response.data.items : [];
+
+    if (resolvedBranchId && req?.user) {
+      const branchUsersResponse = await firstValueFrom(
+        this.branchClient.send(
+          { cmd: 'branch.user.find_by_branch' },
+          {
+            branch_id: resolvedBranchId,
+            requester: this.toRequester(req),
+          },
+        ),
+      );
+
+      const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
+      const courierIdsInBranch = new Set(
+        branchUsers
+          .filter((row: any) => String(row?.role ?? '').toUpperCase() === 'COURIER')
+          .map((row: any) => String(row?.user_id ?? '').trim())
+          .filter(Boolean),
+      );
+      items = items.filter((courier: any) => courierIdsInBranch.has(String(courier?.id ?? '').trim()));
+    }
+
     if (!items.length) {
+      if (response?.data?.meta) {
+        response.data.meta.total = 0;
+        response.data.meta.totalPages = 1;
+      }
+      response.data.items = [];
       return response;
     }
 

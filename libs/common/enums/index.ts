@@ -95,7 +95,7 @@ export enum Group_type {
 
 export enum BranchUserRole {
   MANAGER = 'MANAGER',
-  OPERATOR = 'OPERATOR',
+  REGISTRATOR = 'REGISTRATOR',
   COURIER = 'COURIER',
 }
 

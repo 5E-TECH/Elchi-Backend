@@ -165,7 +165,7 @@ export class OrderGatewayController {
 
   private isBranchStaffAssignment(assignment?: BranchAssignment | null): boolean {
     const role = String(assignment?.role ?? '').toUpperCase();
-    return role === 'MANAGER' || role === 'OPERATOR';
+    return role === 'MANAGER' || role === 'REGISTRATOR';
   }
 
   private async resolveBranchAssignment(reqUser: JwtUser): Promise<BranchAssignment | null> {
@@ -936,6 +936,8 @@ export class OrderGatewayController {
   @Roles(
     RoleEnum.SUPERADMIN,
     RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
     RoleEnum.COURIER,
     RoleEnum.MARKET,
     RoleEnum.REGISTRATOR,
@@ -975,7 +977,7 @@ export class OrderGatewayController {
 
   @Post('assign-to-courier')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.BRANCH, RoleEnum.MANAGER)
+  @Roles(RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Manager bulk-assign orders to one courier' })
   @ApiBody({ type: AssignOrdersToCourierRequestDto })
@@ -1175,7 +1177,7 @@ export class OrderGatewayController {
 
   @Post(':id/mark-returned-to-market')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.OPERATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Mark order as returned to market (branch)' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })

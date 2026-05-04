@@ -109,7 +109,7 @@ export class AssignBranchUserRequestDto {
   @IsNumberString()
   user_id!: string;
 
-  @ApiPropertyOptional({ enum: BranchUserRole, example: BranchUserRole.OPERATOR })
+  @ApiPropertyOptional({ enum: BranchUserRole, example: BranchUserRole.REGISTRATOR })
   @IsOptional()
   @IsEnum(BranchUserRole)
   role?: BranchUserRole;
