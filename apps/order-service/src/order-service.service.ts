@@ -4423,6 +4423,8 @@ export class OrderServiceService {
     destination_branch_id?: string;
     status?: string;
     direction?: string;
+    period?: string;
+    date?: string;
     page?: number;
     limit?: number;
   }) {
@@ -4430,6 +4432,8 @@ export class OrderServiceService {
     const destinationBranchId = String(input?.destination_branch_id ?? '').trim();
     const statusRaw = String(input?.status ?? '').trim().toUpperCase();
     const directionRaw = String(input?.direction ?? '').trim().toUpperCase();
+    const periodRaw = String(input?.period ?? '').trim().toLowerCase();
+    const dateRaw = String(input?.date ?? '').trim();
 
     const page = Number(input?.page) > 0 ? Number(input?.page) : 1;
     const limit = Number(input?.limit) > 0 ? Math.min(Number(input?.limit), 100) : 20;
@@ -4459,6 +4463,56 @@ export class OrderServiceService {
         this.badRequest(`direction must be one of: ${Object.values(BranchTransferDirection).join(', ')}`);
       }
       qb.andWhere('batch.direction = :direction', { direction: directionRaw });
+    }
+
+    const parseDate = (value: string, field: 'date') => {
+      const parsed = new Date(value);
+      if (Number.isNaN(parsed.getTime())) {
+        this.badRequest(`${field} is invalid date format`);
+      }
+      return parsed;
+    };
+
+    const getUzNow = () => {
+      const now = new Date();
+      return new Date(now.getTime() + 5 * 60 * 60 * 1000);
+    };
+
+    const uzToUtc = (uzDate: Date) => new Date(uzDate.getTime() - 5 * 60 * 60 * 1000);
+
+    if (dateRaw) {
+      const parsedDate = parseDate(dateRaw, 'date');
+      const dayStart = new Date(parsedDate);
+      dayStart.setHours(0, 0, 0, 0);
+      const dayEnd = new Date(parsedDate);
+      dayEnd.setHours(23, 59, 59, 999);
+      qb.andWhere('batch.createdAt BETWEEN :dayStart AND :dayEnd', { dayStart, dayEnd });
+    } else if (periodRaw) {
+      const allowedPeriods = new Set(['today', 'week', 'month']);
+      if (!allowedPeriods.has(periodRaw)) {
+        this.badRequest("period must be one of: today, week, month");
+      }
+
+      const uzNow = getUzNow();
+      let periodStartUz = new Date(uzNow);
+      periodStartUz.setHours(0, 0, 0, 0);
+      let periodEndUz = new Date(uzNow);
+      periodEndUz.setHours(23, 59, 59, 999);
+
+      if (periodRaw === 'week') {
+        const day = periodStartUz.getDay(); // Sunday=0
+        const diffToMonday = day === 0 ? 6 : day - 1;
+        periodStartUz.setDate(periodStartUz.getDate() - diffToMonday);
+      }
+
+      if (periodRaw === 'month') {
+        periodStartUz.setDate(1);
+        periodEndUz = new Date(periodStartUz.getFullYear(), periodStartUz.getMonth() + 1, 0, 23, 59, 59, 999);
+      }
+
+      const periodStart = uzToUtc(periodStartUz);
+      const periodEnd = uzToUtc(periodEndUz);
+      qb.andWhere('batch.createdAt BETWEEN :periodStart AND :periodEnd', { periodStart, periodEnd });
     }
 
     const [rows, total] = await qb
