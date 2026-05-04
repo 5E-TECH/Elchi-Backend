@@ -1568,10 +1568,10 @@ export class LogisticsServiceService implements OnModuleInit {
     const requesterBranchRole = String(requesterAssignment?.role ?? '').trim().toUpperCase();
 
     if (!requesterBranchId) {
-      this.forbidden('Manager filialga biriktirilmagan');
+      this.forbidden("Manager yoki registrator filialga biriktirilmagan");
     }
-    if (requesterBranchRole !== 'MANAGER') {
-      this.forbidden('Faqat MANAGER orderlarni courierga ommaviy biriktira oladi');
+    if (requesterBranchRole !== 'MANAGER' && requesterBranchRole !== 'REGISTRATOR') {
+      this.forbidden('Faqat MANAGER yoki REGISTRATOR orderlarni courierga ommaviy biriktira oladi');
     }
 
     const branchUsers = await this.findBranchUsersByBranchId(
@@ -1596,7 +1596,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     if (firstBranchId !== requesterBranchId) {
-      this.forbidden("Manager faqat o'z filiali orderlarini biriktira oladi");
+      this.forbidden("Manager/registrator faqat o'z filiali orderlarini biriktira oladi");
     }
 
     const hasMixedBranch = orders.some(

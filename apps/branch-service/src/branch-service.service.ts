@@ -67,17 +67,17 @@ export class BranchServiceService implements OnModuleInit {
   }
 
   private normalizeBranchUserRole(role?: string | null): BranchUserRole {
-    const normalized = String(role ?? BranchUserRole.OPERATOR).trim().toUpperCase();
+    const normalized = String(role ?? BranchUserRole.REGISTRATOR).trim().toUpperCase();
     if (normalized === BranchUserRole.MANAGER) {
       return BranchUserRole.MANAGER;
     }
-    if (normalized === BranchUserRole.OPERATOR) {
-      return BranchUserRole.OPERATOR;
+    if (normalized === BranchUserRole.REGISTRATOR) {
+      return BranchUserRole.REGISTRATOR;
     }
     if (normalized === BranchUserRole.COURIER) {
       return BranchUserRole.COURIER;
     }
-    this.badRequest('role faqat MANAGER, OPERATOR, COURIER bo‘lishi mumkin');
+    this.badRequest('role faqat MANAGER, REGISTRATOR, COURIER bo‘lishi mumkin');
   }
 
   private isSystemPrivileged(requester?: RequesterContext): boolean {
@@ -617,7 +617,7 @@ export class BranchServiceService implements OnModuleInit {
     const ownAssignment = assignments.find(
       (item) =>
         String(item.branch_id) === String(branchId) &&
-        (this.normalizeBranchUserRole(item.role) === BranchUserRole.OPERATOR ||
+        (this.normalizeBranchUserRole(item.role) === BranchUserRole.REGISTRATOR ||
           this.normalizeBranchUserRole(item.role) === BranchUserRole.MANAGER),
     );
     if (ownAssignment) {
@@ -838,7 +838,7 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const role = this.normalizeBranchUserRole(assignment.role);
-    if (role !== BranchUserRole.MANAGER && role !== BranchUserRole.OPERATOR) {
+    if (role !== BranchUserRole.MANAGER && role !== BranchUserRole.REGISTRATOR) {
       this.forbidden('Transfer batch yaratishga ruxsat yo‘q');
     }
 
@@ -2071,8 +2071,8 @@ export class BranchServiceService implements OnModuleInit {
     if (roles.includes(BranchUserRole.MANAGER)) {
       return BranchUserRole.MANAGER;
     }
-    if (roles.includes(BranchUserRole.OPERATOR)) {
-      return BranchUserRole.OPERATOR;
+    if (roles.includes(BranchUserRole.REGISTRATOR)) {
+      return BranchUserRole.REGISTRATOR;
     }
     if (roles.includes(BranchUserRole.COURIER)) {
       return BranchUserRole.COURIER;
