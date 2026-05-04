@@ -686,6 +686,8 @@ export class OrderServiceController {
       destination_branch_id?: string;
       status?: string;
       direction?: string;
+      period?: string;
+      date?: string;
       page?: number;
       limit?: number;
     },

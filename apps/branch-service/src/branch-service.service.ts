@@ -1085,6 +1085,8 @@ export class BranchServiceService implements OnModuleInit {
       destination_branch_id?: string;
       status?: string;
       direction?: string;
+      period?: string;
+      date?: string;
       page?: number;
       limit?: number;
     },
@@ -1118,6 +1120,8 @@ export class BranchServiceService implements OnModuleInit {
         source_branch_id: String(assignment.branch_id),
         status: query?.status,
         direction: query?.direction,
+        period: query?.period,
+        date: query?.date,
         page: query?.page,
         limit: query?.limit,
       });
@@ -1129,6 +1133,8 @@ export class BranchServiceService implements OnModuleInit {
       destination_branch_id: destinationBranchId || undefined,
       status: query?.status,
       direction: query?.direction,
+      period: query?.period,
+      date: query?.date,
       page: query?.page,
       limit: query?.limit,
     });

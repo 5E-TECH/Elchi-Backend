@@ -214,6 +214,8 @@ export class BranchGatewayController {
   @ApiQuery({ name: 'destination_branch_id', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, enum: ['PENDING', 'SENT', 'RECEIVED', 'CANCELLED'] })
   @ApiQuery({ name: 'direction', required: false, enum: ['FORWARD', 'RETURN'] })
+  @ApiQuery({ name: 'period', required: false, enum: ['today', 'week', 'month'] })
+  @ApiQuery({ name: 'date', required: false, type: String, description: 'YYYY-MM-DD or ISO datetime' })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   findTransferBatches(
@@ -221,6 +223,8 @@ export class BranchGatewayController {
     @Query('destination_branch_id') destinationBranchId: string | undefined,
     @Query('status') status: string | undefined,
     @Query('direction') direction: string | undefined,
+    @Query('period') period: string | undefined,
+    @Query('date') date: string | undefined,
     @Query('page') page: string | undefined,
     @Query('limit') limit: string | undefined,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
@@ -234,6 +238,8 @@ export class BranchGatewayController {
           destination_branch_id: destinationBranchId,
           status,
           direction,
+          period,
+          date,
           page: page ? Number(page) : undefined,
           limit: limit ? Number(limit) : undefined,
         },
