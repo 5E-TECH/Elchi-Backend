@@ -8,7 +8,7 @@ import {
   IsString,
   Min,
 } from 'class-validator';
-import { ApiProperty } from '@nestjs/swagger';
+import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 
 export class CreateCourierDto {
   @ApiProperty({
@@ -35,11 +35,11 @@ export class CreateCourierDto {
   @MinLength(4)
   password: string;
 
-  @ApiProperty({ example: 2000000, minimum: 0 })
-  @IsNotEmpty()
+  @ApiPropertyOptional({ example: 2000000, minimum: 0, description: 'Optional, default is 0' })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  salary: number;
+  salary?: number;
 
   @ApiProperty({
     example: 10,
