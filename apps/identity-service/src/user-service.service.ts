@@ -348,7 +348,7 @@ export class UserServiceService implements OnModuleInit {
       phone_number: dto.phone_number,
       username: null,
       password: hashedPassword,
-      salary: dto.salary,
+      salary: dto.salary ?? 0,
       payment_day: dto.payment_day ?? new Date().getDate(),
       role: Roles.ADMIN,
       status: Status.ACTIVE,

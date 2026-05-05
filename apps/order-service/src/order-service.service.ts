@@ -4869,6 +4869,7 @@ export class OrderServiceService {
       const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
       const batchItemRepo = queryRunner.manager.getRepository(BranchTransferBatchItem);
       const orderRepo = queryRunner.manager.getRepository(Order);
+      const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
       const historyRepo = queryRunner.manager.getRepository(BranchTransferBatchHistory);
 
       const batch = await batchRepo.findOne({
@@ -4916,7 +4917,7 @@ export class OrderServiceService {
 
         const orders = await orderRepo.find({
           where: { id: In(orderIds), isDeleted: false },
-          select: ['id', 'region_id'],
+          select: ['id', 'region_id', 'status'],
         });
 
         const localOrderIds = orders
@@ -4944,6 +4945,26 @@ export class OrderServiceService {
             .where('id IN (:...transitOrderIds)', { transitOrderIds })
             .andWhere('"is_deleted" = false')
             .execute();
+        }
+
+        const ordersById = new Map(orders.map((order) => [String(order.id), order]));
+        for (const localOrderId of localOrderIds) {
+          const order = ordersById.get(String(localOrderId));
+          const fromStatus = order?.status as Order_status | undefined;
+          if (!fromStatus) continue;
+          if (fromStatus !== Order_status.RECEIVED) {
+            await this.createTrackingEvent(
+              {
+                order_id: String(localOrderId),
+                from_status: fromStatus,
+                to_status: Order_status.RECEIVED,
+                changed_by: requesterId,
+                changed_by_role: 'system',
+                note: `Batch #${batchId} qabul qilindi`,
+              },
+              trackingRepo,
+            );
+          }
         }
       }
 
@@ -4998,6 +5019,7 @@ export class OrderServiceService {
       const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
       const batchItemRepo = queryRunner.manager.getRepository(BranchTransferBatchItem);
       const orderRepo = queryRunner.manager.getRepository(Order);
+      const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
       const historyRepo = queryRunner.manager.getRepository(BranchTransferBatchHistory);
 
       const batch = await batchRepo.findOne({
@@ -5053,7 +5075,7 @@ export class OrderServiceService {
 
       const orders = await orderRepo.find({
         where: { id: In(selectedOrderIds), isDeleted: false },
-        select: ['id', 'region_id'],
+        select: ['id', 'region_id', 'status'],
       });
 
       const localOrderIds = orders
@@ -5081,6 +5103,26 @@ export class OrderServiceService {
           .where('id IN (:...transitOrderIds)', { transitOrderIds })
           .andWhere('"is_deleted" = false')
           .execute();
+      }
+
+      const ordersById = new Map(orders.map((order) => [String(order.id), order]));
+      for (const localOrderId of localOrderIds) {
+        const order = ordersById.get(String(localOrderId));
+        const fromStatus = order?.status as Order_status | undefined;
+        if (!fromStatus) continue;
+        if (fromStatus !== Order_status.RECEIVED) {
+          await this.createTrackingEvent(
+            {
+              order_id: String(localOrderId),
+              from_status: fromStatus,
+              to_status: Order_status.RECEIVED,
+              changed_by: requesterId,
+              changed_by_role: 'system',
+              note: `Batch #${batchId} dan qabul qilindi`,
+            },
+            trackingRepo,
+          );
+        }
       }
 
       await batchItemRepo

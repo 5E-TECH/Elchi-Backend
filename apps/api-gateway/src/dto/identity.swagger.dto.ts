@@ -150,6 +150,10 @@ export class CreateMarketRequestDto {
 }
 
 export class CreateCourierRequestDto {
+  @ApiProperty({ example: '12', description: 'Branch ID' })
+  @IsString()
+  branch_id!: string;
+
   @ApiProperty({ example: '1' })
   @IsString()
   region_id!: string;
@@ -168,10 +172,11 @@ export class CreateCourierRequestDto {
   @MinLength(4)
   password!: string;
 
-  @ApiProperty({ example: 2000000 })
+  @ApiPropertyOptional({ example: 2000000, description: 'Optional, default is 0' })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  salary!: number;
+  salary?: number;
 
   @ApiPropertyOptional({ example: 10 })
   @IsOptional()

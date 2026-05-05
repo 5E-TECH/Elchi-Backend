@@ -361,16 +361,17 @@ export class BranchServiceService implements OnModuleInit {
     return branch;
   }
 
-  private async ensureUserExists(userId: string): Promise<void> {
+  private async ensureUserExists(userId: string): Promise<{ id: string; role?: string | null }> {
     try {
       const res = await lastValueFrom(
         this.identityClient
-          .send<{ data?: { id?: string } }>({ cmd: 'identity.user.find_by_id' }, { id: userId })
+          .send<{ data?: { id?: string; role?: string | null } }>({ cmd: 'identity.user.find_by_id' }, { id: userId })
           .pipe(timeout(5000)),
       );
       if (!res?.data?.id) {
         this.notFound('User not found');
       }
+      return { id: String(res.data.id), role: res.data.role ?? null };
     } catch (error) {
       if (error instanceof RpcException) {
         const err = error.getError() as
@@ -398,6 +399,20 @@ export class BranchServiceService implements OnModuleInit {
       }
       throw new RpcException(errorRes('Identity service unavailable', 502));
     }
+  }
+
+  private resolveBranchRoleFromUserRole(userRole?: string | null): BranchUserRole {
+    const normalized = String(userRole ?? '').trim().toLowerCase();
+    if (normalized === 'manager') {
+      return BranchUserRole.MANAGER;
+    }
+    if (normalized === 'registrator' || normalized === 'operator') {
+      return BranchUserRole.REGISTRATOR;
+    }
+    if (normalized === 'courier') {
+      return BranchUserRole.COURIER;
+    }
+    this.badRequest("User roli branchga biriktirish uchun mos emas (faqat manager/registrator/courier)");
   }
 
   private async getRegionsByIds(regionIds: string[]): Promise<Map<string, unknown>> {
@@ -2207,7 +2222,6 @@ export class BranchServiceService implements OnModuleInit {
   ) {
     const branchId = String(data?.branch_id ?? '').trim();
     const userId = String(data?.user_id ?? '').trim();
-    const role = this.normalizeBranchUserRole(data?.role);
 
     if (!branchId) {
       this.badRequest('branch_id is required');
@@ -2219,7 +2233,15 @@ export class BranchServiceService implements OnModuleInit {
     await this.assertCanWriteBranch(branchId, requester);
 
     await this.getBranchOrThrow(branchId);
-    await this.ensureUserExists(userId);
+    const user = await this.ensureUserExists(userId);
+    const derivedRole = this.resolveBranchRoleFromUserRole(user.role);
+    const requestedRole = String(data?.role ?? '').trim()
+      ? this.normalizeBranchUserRole(data?.role)
+      : null;
+    if (requestedRole && requestedRole !== derivedRole) {
+      this.badRequest(`Berilgan role user roli bilan mos emas. User roli: ${derivedRole}`);
+    }
+    const role = derivedRole;
 
     const anotherBranch = await this.branchUserRepo.findOne({
       where: {
