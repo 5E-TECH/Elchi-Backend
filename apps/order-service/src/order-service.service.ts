@@ -5015,6 +5015,8 @@ export class OrderServiceService {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
+    let remainingOrderIdsForReturn: string[] = [];
+    let returnSourceBranchId: string | null = null;
     try {
       const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
       const batchItemRepo = queryRunner.manager.getRepository(BranchTransferBatchItem);
@@ -5068,6 +5070,7 @@ export class OrderServiceService {
         .set({
           current_batch_id: null,
           branch_id: String(batch.destination_branch_id),
+          status: Order_status.RECEIVED,
         })
         .where('id IN (:...orderIds)', { orderIds: selectedOrderIds })
         .andWhere('"is_deleted" = false')
@@ -5075,45 +5078,18 @@ export class OrderServiceService {
 
       const orders = await orderRepo.find({
         where: { id: In(selectedOrderIds), isDeleted: false },
-        select: ['id', 'region_id', 'status'],
+        select: ['id', 'status'],
       });
 
-      const localOrderIds = orders
-        .filter((order) => String(order.region_id ?? '') === String(batch.target_region_id))
-        .map((order) => String(order.id));
-      const transitOrderIds = orders
-        .filter((order) => String(order.region_id ?? '') !== String(batch.target_region_id))
-        .map((order) => String(order.id));
-
-      if (localOrderIds.length) {
-        await orderRepo
-          .createQueryBuilder()
-          .update(Order)
-          .set({ status: Order_status.RECEIVED })
-          .where('id IN (:...localOrderIds)', { localOrderIds })
-          .andWhere('"is_deleted" = false')
-          .execute();
-      }
-
-      if (transitOrderIds.length) {
-        await orderRepo
-          .createQueryBuilder()
-          .update(Order)
-          .set({ status: Order_status.NEW })
-          .where('id IN (:...transitOrderIds)', { transitOrderIds })
-          .andWhere('"is_deleted" = false')
-          .execute();
-      }
-
       const ordersById = new Map(orders.map((order) => [String(order.id), order]));
-      for (const localOrderId of localOrderIds) {
-        const order = ordersById.get(String(localOrderId));
+      for (const selectedOrderId of selectedOrderIds) {
+        const order = ordersById.get(String(selectedOrderId));
         const fromStatus = order?.status as Order_status | undefined;
         if (!fromStatus) continue;
         if (fromStatus !== Order_status.RECEIVED) {
           await this.createTrackingEvent(
             {
-              order_id: String(localOrderId),
+              order_id: String(selectedOrderId),
               from_status: fromStatus,
               to_status: Order_status.RECEIVED,
               changed_by: requesterId,
@@ -5137,14 +5113,42 @@ export class OrderServiceService {
       const remainingItems = await batchItemRepo.find({
         where: { batch_id: batchId, isDeleted: false },
       });
-      batch.order_count = remainingItems.length;
-      batch.total_price = remainingItems.reduce((acc, item) => acc + Number(item.snapshot_price ?? 0), 0);
 
-      if (!remainingItems.length) {
-        batch.status = BranchTransferBatchStatus.RECEIVED;
-        batch.received_at = new Date();
-        batch.received_by_user_id = requesterId;
+      if (remainingItems.length) {
+        const remainingOrderIds = remainingItems.map((item) => String(item.order_id));
+
+        await orderRepo
+          .createQueryBuilder()
+          .update(Order)
+          .set({
+            current_batch_id: null,
+            status: Order_status.NEW,
+          })
+          .where('id IN (:...orderIds)', { orderIds: remainingOrderIds })
+          .andWhere('"is_deleted" = false')
+          .execute();
+
+        await batchItemRepo
+          .createQueryBuilder()
+          .update(BranchTransferBatchItem)
+          .set({ isDeleted: true })
+          .where('batch_id = :batchId', { batchId })
+          .andWhere('order_id IN (:...orderIds)', { orderIds: remainingOrderIds })
+          .andWhere('"is_deleted" = false')
+          .execute();
+
+        remainingOrderIdsForReturn = remainingOrderIds;
+        returnSourceBranchId = String(batch.destination_branch_id);
       }
+
+      batch.order_count = selectedItems.length;
+      batch.total_price = selectedItems.reduce(
+        (acc, item) => acc + Number(item.snapshot_price ?? 0),
+        0,
+      );
+      batch.status = BranchTransferBatchStatus.RECEIVED;
+      batch.received_at = new Date();
+      batch.received_by_user_id = requesterId;
 
       const savedBatch = await batchRepo.save(batch);
 
@@ -5153,11 +5157,25 @@ export class OrderServiceService {
           batch_id: batchId,
           user_id: requesterId,
           action: BranchTransferBatchAction.RECEIVED,
-          notes: `Xodim ${requesterName} batchdan ${selectedOrderIds.length} ta order qabul qildi`,
+          notes:
+            remainingOrderIdsForReturn.length > 0
+              ? `Xodim ${requesterName} batchdan ${selectedOrderIds.length} ta order qabul qildi, ${remainingOrderIdsForReturn.length} ta order qayta batchlandi`
+              : `Xodim ${requesterName} batchdan ${selectedOrderIds.length} ta order qabul qildi`,
         }),
       );
 
       await queryRunner.commitTransaction();
+
+      if (remainingOrderIdsForReturn.length && returnSourceBranchId) {
+        await this.createBranchReturnBatches({
+          source_branch_id: returnSourceBranchId,
+          order_ids: remainingOrderIdsForReturn,
+          request_key: `ret_from_receive_${batchId}_${Date.now()}`,
+          requester_id: requesterId,
+          notes: `[STEP] PARTIAL_RECEIVE_REMAINDER`,
+        });
+      }
+
       return successRes(savedBatch, 200, 'Selected transfer batch orders received');
     } catch (error) {
       await queryRunner.rollbackTransaction();
