@@ -481,6 +481,30 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send({ cmd: 'logistics.region.find_all' }, {});
   }
 
+  @Get('region/stats/all')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.ADMIN,
+    RoleEnum.SUPERADMIN,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MARKET,
+    RoleEnum.COURIER,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get all region stats' })
+  @ApiQuery({ name: 'startDate', required: false, type: String, description: 'YYYY-MM-DD or ISO date-time' })
+  @ApiQuery({ name: 'endDate', required: false, type: String, description: 'YYYY-MM-DD or ISO date-time' })
+  getAllRegionStats(
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.region.stats_all' },
+      { startDate, endDate },
+    );
+  }
+
   @Post('region')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)

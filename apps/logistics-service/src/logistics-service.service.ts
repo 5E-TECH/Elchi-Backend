@@ -230,10 +230,12 @@ export class LogisticsServiceService implements OnModuleInit {
   private async findOrders(query: {
     post_id?: string;
     canceled_post_id?: string;
-    status?: Order_status;
+    status?: Order_status | Order_status[] | string | string[];
     return_requested?: boolean;
     customer_id?: string;
     qr_code_token?: string;
+    start_day?: string;
+    end_day?: string;
     fetch_all?: boolean;
     page?: number;
     limit?: number;
@@ -2096,6 +2098,117 @@ export class LogisticsServiceService implements OnModuleInit {
       order: { createdAt: 'DESC' },
     });
     return successRes(rows);
+  }
+
+  async getAllRegionsStats(startDate?: string, endDate?: string) {
+    const regions = await this.regionRepo.find({
+      relations: ['districts'],
+      order: { name: 'ASC' },
+    });
+
+    const regionIds = regions.map((region) => String(region.id));
+    const regionIdSet = new Set(regionIds);
+
+    const orders = await this.findOrders({
+      fetch_all: true,
+      start_day: startDate,
+      end_day: endDate,
+      limit: 100,
+    });
+
+    const deliveredStatuses = new Set<Order_status>([
+      Order_status.SOLD,
+      Order_status.PAID,
+      Order_status.PARTLY_PAID,
+    ]);
+    const cancelledStatuses = new Set<Order_status>([
+      Order_status.CANCELLED,
+      Order_status.CANCELLED_SENT,
+    ]);
+
+    const statsByRegion = new Map<
+      string,
+      { totalOrders: number; deliveredOrders: number; cancelledOrders: number; revenue: number }
+    >();
+
+    for (const regionId of regionIds) {
+      statsByRegion.set(regionId, {
+        totalOrders: 0,
+        deliveredOrders: 0,
+        cancelledOrders: 0,
+        revenue: 0,
+      });
+    }
+
+    for (const order of orders) {
+      const regionId = String(order.region_id ?? '').trim();
+      if (!regionId || !regionIdSet.has(regionId)) {
+        continue;
+      }
+
+      const stats = statsByRegion.get(regionId);
+      if (!stats) {
+        continue;
+      }
+
+      const status = order.status as Order_status | undefined;
+      const price = Number(order.total_price ?? 0);
+
+      stats.totalOrders += 1;
+
+      if (status && deliveredStatuses.has(status)) {
+        stats.deliveredOrders += 1;
+        stats.revenue += Number.isFinite(price) ? price : 0;
+      }
+
+      if (status && cancelledStatuses.has(status)) {
+        stats.cancelledOrders += 1;
+      }
+    }
+
+    const rows = regions.map((region) => {
+      const stats = statsByRegion.get(String(region.id)) ?? {
+        totalOrders: 0,
+        deliveredOrders: 0,
+        cancelledOrders: 0,
+        revenue: 0,
+      };
+
+      return {
+        id: region.id,
+        name: region.name,
+        sato_code: region.sato_code,
+        districts_count: Array.isArray(region.districts) ? region.districts.length : 0,
+        ...stats,
+      };
+    });
+
+    const summary = rows.reduce(
+      (acc, row) => {
+        acc.totalRegions += 1;
+        acc.totalOrders += row.totalOrders;
+        acc.deliveredOrders += row.deliveredOrders;
+        acc.cancelledOrders += row.cancelledOrders;
+        acc.totalRevenue += row.revenue;
+        return acc;
+      },
+      {
+        totalRegions: 0,
+        totalOrders: 0,
+        deliveredOrders: 0,
+        cancelledOrders: 0,
+        totalRevenue: 0,
+      },
+    );
+
+    return successRes(
+      {
+        regions: rows,
+        summary,
+      },
+      200,
+      'Region stats',
+    );
   }
 
   async findRegionById(id: string) {
