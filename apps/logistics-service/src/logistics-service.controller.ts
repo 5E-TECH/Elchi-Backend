@@ -333,6 +333,16 @@ export class LogisticsServiceController {
     return this.executeAndAck(context, () => this.logisticsService.findAllRegions());
   }
 
+  @MessagePattern({ cmd: 'logistics.region.stats_all' })
+  findAllRegionStats(
+    @Payload() payload: { startDate?: string; endDate?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.getAllRegionsStats(payload?.startDate, payload?.endDate),
+    );
+  }
+
   @MessagePattern({ cmd: 'logistics.region.find_by_id' })
   findRegionById(@Payload() payload: { id: string }, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.logisticsService.findRegionById(payload.id));
