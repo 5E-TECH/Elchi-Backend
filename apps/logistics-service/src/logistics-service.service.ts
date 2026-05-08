@@ -2211,6 +2211,79 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
+  async getRegionDetailedStats(id: string, startDate?: string, endDate?: string) {
+    const regionId = String(id ?? '').trim();
+    if (!regionId) {
+      this.badRequest('Region id is required');
+    }
+
+    const region = await this.regionRepo.findOne({
+      where: { id: regionId },
+      relations: ['districts'],
+    });
+
+    if (!region) {
+      this.notFound('Region not found');
+    }
+
+    const orders = await this.findOrders({
+      fetch_all: true,
+      start_day: startDate,
+      end_day: endDate,
+      limit: 100,
+    });
+
+    const deliveredStatuses = new Set<Order_status>([
+      Order_status.SOLD,
+      Order_status.PAID,
+      Order_status.PARTLY_PAID,
+    ]);
+    const cancelledStatuses = new Set<Order_status>([
+      Order_status.CANCELLED,
+      Order_status.CANCELLED_SENT,
+    ]);
+
+    let totalOrders = 0;
+    let deliveredOrders = 0;
+    let cancelledOrders = 0;
+    let revenue = 0;
+
+    for (const order of orders) {
+      if (String(order.region_id ?? '').trim() !== regionId) {
+        continue;
+      }
+
+      totalOrders += 1;
+
+      const status = order.status as Order_status | undefined;
+      const price = Number(order.total_price ?? 0);
+
+      if (status && deliveredStatuses.has(status)) {
+        deliveredOrders += 1;
+        revenue += Number.isFinite(price) ? price : 0;
+      }
+
+      if (status && cancelledStatuses.has(status)) {
+        cancelledOrders += 1;
+      }
+    }
+
+    return successRes(
+      {
+        id: region.id,
+        name: region.name,
+        sato_code: region.sato_code,
+        districts_count: Array.isArray(region.districts) ? region.districts.length : 0,
+        totalOrders,
+        deliveredOrders,
+        cancelledOrders,
+        revenue,
+      },
+      200,
+      'Region detailed stats',
+    );
+  }
+
   async findRegionById(id: string) {
     const region = await this.regionRepo.findOne({
       where: { id },
