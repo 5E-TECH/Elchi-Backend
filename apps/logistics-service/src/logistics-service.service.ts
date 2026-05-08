@@ -2289,12 +2289,14 @@ export class LogisticsServiceService implements OnModuleInit {
         (order) => String(order.courier_id ?? '').trim() === courierId,
       );
       const stats = summarizeOrders(courierOrders);
+      const districtId = String(courier?.district_id ?? '').trim();
 
       return {
         id: courierId || null,
         name: String(courier?.name ?? ''),
-        phoneNumber: String(courier?.phone_number ?? ''),
+        phoneNumber: String(courier?.phone_number ?? courier?.phoneNumber ?? ''),
         status: courier?.status ?? null,
+        districtId: districtId || null,
         totalOrders: stats.totalOrders,
         deliveredOrders: stats.deliveredOrders,
         cancelledOrders: stats.cancelledOrders,
@@ -2309,12 +2311,19 @@ export class LogisticsServiceService implements OnModuleInit {
         (order) => String(order.district_id ?? '').trim() === districtId,
       );
       const stats = summarizeOrders(districtOrders);
+      const districtCouriers = couriers
+        .filter((courier) => String(courier.districtId ?? '') === districtId)
+        .map((courier) => ({
+          id: courier.id,
+          name: courier.name,
+          phone_number: courier.phoneNumber,
+        }));
 
       return {
         id: district.id,
         name: district.name,
         satoCode: district.sato_code,
-        couriers: [],
+        couriers: districtCouriers,
         totalOrders: stats.totalOrders,
         deliveredOrders: stats.deliveredOrders,
         cancelledOrders: stats.cancelledOrders,
@@ -2328,13 +2337,23 @@ export class LogisticsServiceService implements OnModuleInit {
       (courier) => String(courier.status ?? '').toLowerCase() === 'active',
     ).length;
 
+    const topCourier = couriers
+      .slice()
+      .sort((a, b) => b.deliveredOrders - a.deliveredOrders)[0];
+
     return successRes(
       {
         region: {
           id: region.id,
           name: region.name,
           satoCode: region.sato_code,
-          mainCourier: null,
+          mainCourier: topCourier
+            ? {
+                id: topCourier.id,
+                name: topCourier.name,
+                phone_number: topCourier.phoneNumber,
+              }
+            : null,
         },
         summary: {
           totalOrders: summary.totalOrders,
