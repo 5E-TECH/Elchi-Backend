@@ -3,6 +3,7 @@ import {
   Controller,
   Get,
   Inject,
+  Patch,
   Post,
   Req,
   Res,
@@ -27,6 +28,7 @@ import {
   MinimalAuthResponseDto,
   RefreshRequestDto,
 } from './dto/auth.swagger.dto';
+import { UpdateAdminRequestDto } from './dto/identity.swagger.dto';
 
 interface JwtUser {
   sub: string;
@@ -109,6 +111,13 @@ export class AuthGatewayController {
     }
 
     return { accessToken };
+  }
+
+  private toRequester(req: { user: JwtUser }) {
+    return {
+      id: req.user.sub,
+      roles: req.user.roles ?? [],
+    };
   }
 
   @Post('login')
@@ -219,5 +228,22 @@ export class AuthGatewayController {
   @ApiUnauthorizedResponse({ description: 'Unauthorized' })
   myProfile(@Req() req: { user: JwtUser }) {
     return this.identityClient.send({ cmd: 'identity.user.profile' }, { id: req.user.sub });
+  }
+
+  @Patch('my-profile')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update current user profile' })
+  @ApiBody({ type: UpdateAdminRequestDto })
+  @ApiOkResponse({ description: 'Current user profile updated' })
+  @ApiUnauthorizedResponse({ description: 'Unauthorized' })
+  updateMyProfile(
+    @Req() req: { user: JwtUser },
+    @Body() dto: UpdateAdminRequestDto,
+  ) {
+    return this.identityClient.send(
+      { cmd: 'identity.user.update' },
+      { id: req.user.sub, dto, requester: this.toRequester(req) },
+    );
   }
 }
