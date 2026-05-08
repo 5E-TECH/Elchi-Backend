@@ -2243,41 +2243,112 @@ export class LogisticsServiceService implements OnModuleInit {
       Order_status.CANCELLED_SENT,
     ]);
 
-    let totalOrders = 0;
-    let deliveredOrders = 0;
-    let cancelledOrders = 0;
-    let revenue = 0;
+    const regionOrders = orders.filter(
+      (order) => String(order.region_id ?? '').trim() === regionId,
+    );
 
-    for (const order of orders) {
-      if (String(order.region_id ?? '').trim() !== regionId) {
-        continue;
+    const summarizeOrders = (rows: OrderRow[]) => {
+      let totalOrders = 0;
+      let deliveredOrders = 0;
+      let cancelledOrders = 0;
+      let totalRevenue = 0;
+
+      for (const order of rows) {
+        totalOrders += 1;
+        const status = order.status as Order_status | undefined;
+        const price = Number(order.total_price ?? 0);
+
+        if (status && deliveredStatuses.has(status)) {
+          deliveredOrders += 1;
+          totalRevenue += Number.isFinite(price) ? price : 0;
+        }
+
+        if (status && cancelledStatuses.has(status)) {
+          cancelledOrders += 1;
+        }
       }
 
-      totalOrders += 1;
+      const pendingOrders = Math.max(0, totalOrders - deliveredOrders - cancelledOrders);
+      const successRate =
+        totalOrders > 0 ? Math.round((deliveredOrders / totalOrders) * 100) : 0;
 
-      const status = order.status as Order_status | undefined;
-      const price = Number(order.total_price ?? 0);
-
-      if (status && deliveredStatuses.has(status)) {
-        deliveredOrders += 1;
-        revenue += Number.isFinite(price) ? price : 0;
-      }
-
-      if (status && cancelledStatuses.has(status)) {
-        cancelledOrders += 1;
-      }
-    }
-
-    return successRes(
-      {
-        id: region.id,
-        name: region.name,
-        sato_code: region.sato_code,
-        districts_count: Array.isArray(region.districts) ? region.districts.length : 0,
+      return {
         totalOrders,
         deliveredOrders,
         cancelledOrders,
-        revenue,
+        pendingOrders,
+        totalRevenue,
+        successRate,
+      };
+    };
+
+    const couriersRaw = await this.listCouriersByRegion(regionId);
+    const couriers = couriersRaw.map((courier) => {
+      const courierId = String(courier?.id ?? '').trim();
+      const courierOrders = regionOrders.filter(
+        (order) => String(order.courier_id ?? '').trim() === courierId,
+      );
+      const stats = summarizeOrders(courierOrders);
+
+      return {
+        id: courierId || null,
+        name: String(courier?.name ?? ''),
+        phoneNumber: String(courier?.phone_number ?? ''),
+        status: courier?.status ?? null,
+        totalOrders: stats.totalOrders,
+        deliveredOrders: stats.deliveredOrders,
+        cancelledOrders: stats.cancelledOrders,
+        totalRevenue: stats.totalRevenue,
+        successRate: stats.successRate,
+      };
+    });
+
+    const districts = (Array.isArray(region.districts) ? region.districts : []).map((district) => {
+      const districtId = String(district.id);
+      const districtOrders = regionOrders.filter(
+        (order) => String(order.district_id ?? '').trim() === districtId,
+      );
+      const stats = summarizeOrders(districtOrders);
+
+      return {
+        id: district.id,
+        name: district.name,
+        satoCode: district.sato_code,
+        couriers: [],
+        totalOrders: stats.totalOrders,
+        deliveredOrders: stats.deliveredOrders,
+        cancelledOrders: stats.cancelledOrders,
+        totalRevenue: stats.totalRevenue,
+        successRate: stats.successRate,
+      };
+    });
+
+    const summary = summarizeOrders(regionOrders);
+    const activeCouriers = couriers.filter(
+      (courier) => String(courier.status ?? '').toLowerCase() === 'active',
+    ).length;
+
+    return successRes(
+      {
+        region: {
+          id: region.id,
+          name: region.name,
+          satoCode: region.sato_code,
+          mainCourier: null,
+        },
+        summary: {
+          totalOrders: summary.totalOrders,
+          deliveredOrders: summary.deliveredOrders,
+          cancelledOrders: summary.cancelledOrders,
+          pendingOrders: summary.pendingOrders,
+          totalRevenue: summary.totalRevenue,
+          successRate: summary.successRate,
+          totalCouriers: couriers.length,
+          activeCouriers,
+          totalDistricts: districts.length,
+        },
+        couriers: couriers.sort((a, b) => b.deliveredOrders - a.deliveredOrders),
+        districts: districts.sort((a, b) => b.totalOrders - a.totalOrders),
       },
       200,
       'Region detailed stats',
