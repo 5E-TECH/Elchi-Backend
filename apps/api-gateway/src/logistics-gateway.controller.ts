@@ -505,6 +505,32 @@ export class LogisticsGatewayController {
     );
   }
 
+  @Get('region/stats/:id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.ADMIN,
+    RoleEnum.SUPERADMIN,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MARKET,
+    RoleEnum.COURIER,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get region detailed stats by id' })
+  @ApiParam({ name: 'id', description: 'Region ID (id)' })
+  @ApiQuery({ name: 'startDate', required: false, type: String, description: 'YYYY-MM-DD or ISO date-time' })
+  @ApiQuery({ name: 'endDate', required: false, type: String, description: 'YYYY-MM-DD or ISO date-time' })
+  getRegionStatsById(
+    @Param('id') id: string,
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+  ) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.region.stats_by_id' },
+      { id, startDate, endDate },
+    );
+  }
+
   @Post('region')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)

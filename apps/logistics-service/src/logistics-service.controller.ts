@@ -343,6 +343,20 @@ export class LogisticsServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'logistics.region.stats_by_id' })
+  findRegionStatsById(
+    @Payload() payload: { id: string; startDate?: string; endDate?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.getRegionDetailedStats(
+        payload?.id,
+        payload?.startDate,
+        payload?.endDate,
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'logistics.region.find_by_id' })
   findRegionById(@Payload() payload: { id: string }, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.logisticsService.findRegionById(payload.id));
