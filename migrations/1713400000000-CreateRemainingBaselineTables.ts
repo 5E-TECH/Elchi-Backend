@@ -324,7 +324,7 @@ export class CreateRemainingBaselineTables1713400000000
           EXECUTE 'CREATE TYPE "finance_schema"."cashboxes_cashbox_type_enum" AS ENUM (''main'',''couriers'',''markets'')';
         END IF;
         IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE t.typname='cashbox_history_operation_type_enum' AND n.nspname='finance_schema') THEN
-          EXECUTE 'CREATE TYPE "finance_schema"."cashbox_history_operation_type_enum" AS ENUM (''INCOME'',''EXPENSE'')';
+          EXECUTE 'CREATE TYPE "finance_schema"."cashbox_history_operation_type_enum" AS ENUM (''income'',''expense'')';
         END IF;
         IF NOT EXISTS (SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE t.typname='cashbox_history_source_type_enum' AND n.nspname='finance_schema') THEN
           EXECUTE 'CREATE TYPE "finance_schema"."cashbox_history_source_type_enum" AS ENUM (''courier_payment'',''market_payment'',''manual_expense'',''manual_income'',''correction'',''salary'',''sell'',''cancel'',''extra_cost'',''bills'')';
