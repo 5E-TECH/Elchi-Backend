@@ -1055,7 +1055,13 @@ export class BranchServiceService implements OnModuleInit {
     const sourceBranchId = String(response?.data?.source_branch_id ?? '').trim();
     const destinationBranchId = String(response?.data?.destination_branch_id ?? '').trim();
 
-    if (sourceBranchId) {
+    if (sourceBranchId && destinationBranchId) {
+      try {
+        await this.assertCanReadBranch(sourceBranchId, requester);
+      } catch {
+        await this.assertCanReadBranch(destinationBranchId, requester);
+      }
+    } else if (sourceBranchId) {
       await this.assertCanReadBranch(sourceBranchId, requester);
     } else if (destinationBranchId) {
       await this.assertCanReadBranch(destinationBranchId, requester);
