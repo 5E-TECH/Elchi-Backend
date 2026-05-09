@@ -1,6 +1,6 @@
 import { Controller } from '@nestjs/common';
 import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
-import { RmqService } from '@app/common';
+import { RmqService, executeAndAck } from '@app/common';
 import { BranchServiceService } from './branch-service.service';
 
 @Controller()
@@ -14,18 +14,11 @@ export class BranchServiceController {
     return data?.requester;
   }
 
-  private async executeAndAck<T>(
+  private executeAndAck<T>(
     context: RmqContext,
     handler: () => Promise<T> | T,
   ): Promise<T> {
-    try {
-      const result = await handler();
-      this.rmqService.ack(context);
-      return result;
-    } catch (error) {
-      this.rmqService.nack(context);
-      throw error;
-    }
+    return executeAndAck(this.rmqService, context, handler);
   }
 
   @MessagePattern({ cmd: 'branch.health' })
@@ -47,6 +40,13 @@ export class BranchServiceController {
   findAll(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.branchService.findAllBranches(data?.query ?? data, this.getRequester(data)),
+    );
+  }
+
+  @MessagePattern({ cmd: 'branch.find_by_code' })
+  findByCode(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.findBranchByCode(data?.code),
     );
   }
 

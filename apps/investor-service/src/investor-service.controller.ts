@@ -1,6 +1,6 @@
 import { Controller } from '@nestjs/common';
 import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
-import { RmqService } from '@app/common';
+import { RmqService, executeAndAck } from '@app/common';
 import { InvestorServiceService } from './investor-service.service';
 import { CreateInvestorDto } from './dto/create-investor.dto';
 import { UpdateInvestorDto } from './dto/update-investor.dto';
@@ -16,18 +16,11 @@ export class InvestorServiceController {
     private readonly investorService: InvestorServiceService,
   ) {}
 
-  private async executeAndAck<T>(
+  private executeAndAck<T>(
     context: RmqContext,
     handler: () => Promise<T> | T,
   ): Promise<T> {
-    try {
-      const result = await handler();
-      this.rmqService.ack(context);
-      return result;
-    } catch (error) {
-      this.rmqService.nack(context);
-      throw error;
-    }
+    return executeAndAck(this.rmqService, context, handler);
   }
 
   private unwrapDto<T>(payload: T | { dto: T }): T {

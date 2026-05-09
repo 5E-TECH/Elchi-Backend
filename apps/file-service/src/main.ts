@@ -6,6 +6,7 @@ async function bootstrap() {
   const app = await NestFactory.create(FileServiceModule);
   const rmqService = app.get<RmqService>(RmqService);
 
+  await rmqService.setupDlqTopology('FILE');
   app.connectMicroservice(rmqService.getOptions('FILE'));
 
   await app.startAllMicroservices();

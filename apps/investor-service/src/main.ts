@@ -14,6 +14,7 @@ async function bootstrap() {
     }),
   );
 
+  await rmqService.setupDlqTopology('INVESTOR');
   app.connectMicroservice(rmqService.getOptions('INVESTOR'));
 
   await app.startAllMicroservices();

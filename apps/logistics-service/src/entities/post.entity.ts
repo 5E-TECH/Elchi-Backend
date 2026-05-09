@@ -7,6 +7,7 @@ import { Region } from './region.entity';
 @Index('IDX_POST_STATUS', ['status'])
 @Index('IDX_POST_COURIER', ['courier_id'])
 @Index('IDX_POST_REGION', ['region_id'])
+@Index('IDX_POST_BRANCH', ['branch_id'])
 export class Post extends BaseEntity {
   @Column({ type: 'bigint' })
   courier_id!: string;
@@ -22,6 +23,9 @@ export class Post extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   region_id!: string | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  branch_id!: string | null;
 
   @ManyToOne(() => Region, { nullable: true })
   @JoinColumn({ name: 'region_id' })

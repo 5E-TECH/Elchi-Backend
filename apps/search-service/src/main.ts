@@ -6,6 +6,7 @@ async function bootstrap() {
   const app = await NestFactory.create(SearchServiceModule);
   const rmqService = app.get<RmqService>(RmqService);
 
+  await rmqService.setupDlqTopology('SEARCH');
   app.connectMicroservice(rmqService.getOptions('SEARCH'));
 
   await app.startAllMicroservices();

@@ -6,6 +6,7 @@ async function bootstrap() {
   const app = await NestFactory.create(C2cServiceModule);
   const rmqService = app.get<RmqService>(RmqService);
 
+  await rmqService.setupDlqTopology('C2C');
   app.connectMicroservice(rmqService.getOptions('C2C'));
 
   await app.startAllMicroservices();

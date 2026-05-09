@@ -6,6 +6,7 @@ async function bootstrap() {
   const app = await NestFactory.create(NotificationServiceModule);
   const rmqService = app.get<RmqService>(RmqService);
 
+  await rmqService.setupDlqTopology('NOTIFICATION');
   app.connectMicroservice(rmqService.getOptions('NOTIFICATION'));
 
   await app.startAllMicroservices();

@@ -6,6 +6,7 @@ async function bootstrap() {
   const app = await NestFactory.create(AnalyticsServiceModule);
   const rmqService = app.get<RmqService>(RmqService);
 
+  await rmqService.setupDlqTopology('ANALYTICS');
   app.connectMicroservice(rmqService.getOptions('ANALYTICS'));
 
   await app.startAllMicroservices();

@@ -1,6 +1,6 @@
 import { Controller } from '@nestjs/common';
 import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
-import { RmqService } from '@app/common';
+import { RmqService, executeAndAck } from '@app/common';
 import { FinanceServiceService } from './finance-service.service';
 import { CreateCashboxDto } from './dto/cashbox/create-cashbox.dto';
 import { FindCashboxByUserDto } from './dto/cashbox/find-cashbox-by-user.dto';
@@ -20,18 +20,11 @@ export class FinanceServiceController {
     private readonly financeService: FinanceServiceService,
   ) {}
 
-  private async executeAndAck<T>(
+  private executeAndAck<T>(
     context: RmqContext,
     handler: () => Promise<T> | T,
   ): Promise<T> {
-    try {
-      const result = await handler();
-      this.rmqService.ack(context);
-      return result;
-    } catch (error) {
-      this.rmqService.nack(context);
-      throw error;
-    }
+    return executeAndAck(this.rmqService, context, handler);
   }
 
   @MessagePattern({ cmd: 'finance.health' })

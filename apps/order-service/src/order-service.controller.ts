@@ -1,6 +1,11 @@
 import { Controller } from '@nestjs/common';
 import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
-import { RmqService } from '@app/common';
+import {
+  RmqService,
+  executeAndAck,
+  IdempotencyService,
+  executeIdempotent,
+} from '@app/common';
 import { Order_status, Where_deliver } from '@app/common';
 import { OrderServiceService } from './order-service.service';
 import { Order_source } from './entities/order.entity';
@@ -10,20 +15,14 @@ export class OrderServiceController {
   constructor(
     private readonly rmqService: RmqService,
     private readonly orderService: OrderServiceService,
+    private readonly idempotencyService: IdempotencyService,
   ) {}
 
-  private async executeAndAck<T>(
+  private executeAndAck<T>(
     context: RmqContext,
     handler: () => Promise<T> | T,
   ): Promise<T> {
-    try {
-      const result = await handler();
-      this.rmqService.ack(context);
-      return result;
-    } catch (error) {
-      this.rmqService.nack(context);
-      throw error;
-    }
+    return executeAndAck(this.rmqService, context, handler);
   }
 
   @MessagePattern({ cmd: 'salom_ber_order' })
@@ -66,10 +65,17 @@ export class OrderServiceController {
         items?: Array<{ product_id: string; quantity?: number }>;
       };
       requester?: { id: string; roles?: string[] };
+      request_id?: string;
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.orderService.create(data.dto, data.requester));
+    return executeIdempotent(
+      this.rmqService,
+      this.idempotencyService,
+      context,
+      { requestId: data.request_id, pattern: 'order.create' },
+      () => this.orderService.create(data.dto, data.requester),
+    );
   }
 
   @MessagePattern({ cmd: 'order.find_all' })
@@ -109,6 +115,16 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () => this.orderService.findById(data.id));
+  }
+
+  @MessagePattern({ cmd: 'order.branch_can_delete' })
+  branchCanDelete(
+    @Payload() data: { branch_id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.branchCanDelete(data?.branch_id),
+    );
   }
 
   @MessagePattern({ cmd: 'order.find_by_qr' })

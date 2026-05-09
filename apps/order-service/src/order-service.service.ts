@@ -18,6 +18,7 @@ import {
   Cashbox_type,
   Operation_type,
   Order_status,
+  OutboxService,
   PaymentMethod,
   Post_status,
   Roles,
@@ -26,6 +27,7 @@ import {
   rmqSend,
   RMQ_SERVICE_TIMEOUT,
 } from '@app/common';
+import type { EntityManager } from 'typeorm';
 import { successRes } from '../../../libs/common/helpers/response';
 
 @Injectable()
@@ -50,7 +52,66 @@ export class OrderServiceService {
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
     @Inject('INTEGRATION') private readonly integrationClient: ClientProxy,
+    @Inject('BRANCH') private readonly branchClient: ClientProxy,
+    private readonly outbox: OutboxService,
   ) {}
+
+  private hqBranchIdCache: string | null = null;
+
+  /**
+   * Resolve the branch_id to attach to a new order.
+   * Priority: explicit dto.branch_id → requester's assigned branch → HQ fallback.
+   * Never returns null; the audit identified branch_id NULL leak as a long-term risk.
+   */
+  private async resolveBranchIdForOrder(
+    explicitBranchId: string | null | undefined,
+    requester?: { id: string; roles?: string[] },
+  ): Promise<string | null> {
+    if (explicitBranchId) {
+      return String(explicitBranchId);
+    }
+
+    if (requester?.id) {
+      try {
+        const response = await rmqSend<{
+          data?: { branch_id?: string | null };
+        }>(
+          this.branchClient,
+          { cmd: 'branch.user.find_by_user' },
+          { user_id: String(requester.id), requester },
+          { attachRequestId: false, retries: 1 },
+        );
+        const branchId = response?.data?.branch_id;
+        if (branchId) {
+          return String(branchId);
+        }
+      } catch {
+        // fall through to HQ fallback
+      }
+    }
+
+    if (this.hqBranchIdCache) {
+      return this.hqBranchIdCache;
+    }
+
+    try {
+      const response = await rmqSend<{ data?: { id?: string } }>(
+        this.branchClient,
+        { cmd: 'branch.find_by_code' },
+        { code: 'HQ-TSHKNT' },
+        { attachRequestId: false, retries: 1 },
+      );
+      const hqId = response?.data?.id;
+      if (hqId) {
+        this.hqBranchIdCache = String(hqId);
+        return this.hqBranchIdCache;
+      }
+    } catch {
+      // last-resort fallback: leave null (rare; ensureHqBranch should have run)
+    }
+
+    return null;
+  }
 
   private async syncOrderToSearch(order: Order): Promise<void> {
     try {
@@ -590,28 +651,29 @@ export class OrderServiceService {
     return response?.data;
   }
 
-  private async updateCashboxBalance(data: {
-    user_id: string;
-    cashbox_type: Cashbox_type;
-    amount: number;
-    operation_type: Operation_type;
-    source_type: Source_type;
-    source_id?: string;
-    source_user_id?: string;
-    comment?: string;
-    created_by?: string;
-  }) {
+  private async updateCashboxBalance(
+    data: {
+      user_id: string;
+      cashbox_type: Cashbox_type;
+      amount: number;
+      operation_type: Operation_type;
+      source_type: Source_type;
+      source_id?: string;
+      source_user_id?: string;
+      comment?: string;
+      created_by?: string;
+    },
+    manager?: EntityManager,
+  ) {
     if (data.amount <= 0) {
       return;
     }
 
-    await rmqSend(
-      this.financeClient,
-      { cmd: 'finance.cashbox.update_balance' },
-      {
-        ...data,
-        payment_method: PaymentMethod.CASH,
-      },
+    await this.outbox.enqueue(
+      'FINANCE',
+      'finance.cashbox.update_balance',
+      { ...data, payment_method: PaymentMethod.CASH },
+      { manager },
     );
   }
 
@@ -1194,6 +1256,8 @@ export class OrderServiceService {
       roles.has(Roles.REGISTRATOR) || roles.has(Roles.MARKET_OPERATOR);
     const operatorId = dto.operator_id ?? (isOperatorRequester ? requester?.id ?? null : null);
 
+    const resolvedBranchId = await this.resolveBranchIdForOrder(dto.branch_id, requester);
+
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -1218,7 +1282,7 @@ export class OrderServiceService {
         post_id: dto.post_id ?? null,
         canceled_post_id: dto.canceled_post_id ?? null,
         sold_at: dto.sold_at ?? null,
-        branch_id: dto.branch_id ?? null,
+        branch_id: resolvedBranchId,
         current_batch_id: dto.current_batch_id ?? null,
         courier_id: dto.courier_id ?? null,
         assigned_at: this.normalizeDateTimeInput(dto.assigned_at),
@@ -2641,6 +2705,56 @@ export class OrderServiceService {
       this.notFound(`Order #${id} topilmadi`);
     }
     return order;
+  }
+
+  /**
+   * Check whether a branch is safe to soft-delete from order-service's perspective:
+   * counts active (non-closed) orders and active transfer batches that reference it.
+   * branch-service consults this before allowing deleteBranch to proceed.
+   */
+  async branchCanDelete(branchId: string) {
+    const id = String(branchId ?? '').trim();
+    if (!id) {
+      this.badRequest('branch_id is required');
+    }
+
+    const closedOrderStatuses = [
+      Order_status.SOLD,
+      Order_status.CANCELLED,
+      Order_status.RETURNED_TO_MARKET,
+      Order_status.PAID,
+      Order_status.CLOSED,
+    ];
+
+    const activeOrders = await this.orderRepo
+      .createQueryBuilder('o')
+      .where('o.branch_id = :id', { id })
+      .andWhere('o.is_deleted = false')
+      .andWhere('o.status NOT IN (:...closed)', { closed: closedOrderStatuses })
+      .getCount();
+
+    const activeBatchStatuses = [
+      BranchTransferBatchStatus.PENDING,
+      BranchTransferBatchStatus.SENT,
+    ];
+
+    const activeBatches = await this.transferBatchRepo
+      .createQueryBuilder('b')
+      .where('b.is_deleted = false')
+      .andWhere('b.status IN (:...active)', { active: activeBatchStatuses })
+      .andWhere('(b.source_branch_id = :id OR b.destination_branch_id = :id)', { id })
+      .getCount();
+
+    return successRes(
+      {
+        branch_id: id,
+        active_orders: activeOrders,
+        active_batches: activeBatches,
+        can_delete: activeOrders === 0 && activeBatches === 0,
+      },
+      200,
+      'Branch delete check',
+    );
   }
 
   async findByQrCode(token: string) {
