@@ -14,8 +14,7 @@ export class StrengthenBranchUserUnique1714000000000 implements MigrationInterfa
   name = 'StrengthenBranchUserUnique1714000000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    const schema =
-      (queryRunner.connection.options as { schema?: string }).schema ?? 'public';
+    const schema = 'branch_schema';
 
     const duplicates = await queryRunner.query(`
       SELECT user_id, COUNT(*) AS active_count
@@ -49,8 +48,7 @@ export class StrengthenBranchUserUnique1714000000000 implements MigrationInterfa
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    const schema =
-      (queryRunner.connection.options as { schema?: string }).schema ?? 'public';
+    const schema = 'branch_schema';
 
     await queryRunner.query(`
       DROP INDEX IF EXISTS "${schema}"."IDX_BRANCH_USER_USER_UNIQUE_ACTIVE";
