@@ -1131,17 +1131,8 @@ export class BranchServiceService implements OnModuleInit {
       if (!assignment) {
         this.forbidden('Filial biriktirilmagan foydalanuvchi');
       }
-
-      const direction = String(query?.direction ?? '').trim().toUpperCase();
-      const assignmentBranchId = String(assignment.branch_id);
-      const scopedSourceBranchId =
-        direction === BranchTransferDirection.RETURN ? undefined : assignmentBranchId;
-      const scopedDestinationBranchId =
-        direction === BranchTransferDirection.RETURN ? assignmentBranchId : undefined;
-
       const response = await this.sendOrderCommand('order.transfer_batch.find_all', {
-        source_branch_id: scopedSourceBranchId,
-        destination_branch_id: scopedDestinationBranchId,
+        source_branch_id: String(assignment.branch_id),
         status: query?.status,
         direction: query?.direction,
         period: query?.period,
