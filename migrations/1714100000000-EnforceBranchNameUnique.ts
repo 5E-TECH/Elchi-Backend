@@ -11,8 +11,7 @@ export class EnforceBranchNameUnique1714100000000 implements MigrationInterface 
   name = 'EnforceBranchNameUnique1714100000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    const schema =
-      (queryRunner.connection.options as { schema?: string }).schema ?? 'public';
+    const schema = 'branch_schema';
 
     const duplicates = await queryRunner.query(`
       SELECT LOWER(TRIM(name)) AS normalized, COUNT(*) AS dup_count, MIN(name) AS sample
@@ -42,8 +41,7 @@ export class EnforceBranchNameUnique1714100000000 implements MigrationInterface 
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    const schema =
-      (queryRunner.connection.options as { schema?: string }).schema ?? 'public';
+    const schema = 'branch_schema';
     await queryRunner.query(
       `DROP INDEX IF EXISTS "${schema}"."IDX_BRANCH_NAME_UNIQUE_ACTIVE";`,
     );
