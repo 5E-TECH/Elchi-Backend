@@ -58,6 +58,10 @@ export class UserServiceService implements OnModuleInit {
     return requester?.roles?.includes(role) ?? false;
   }
 
+  private isSelfRequester(requester: RequesterContext | undefined, targetUserId: string): boolean {
+    return Boolean(requester?.id && String(requester.id) === String(targetUserId));
+  }
+
   private assertRequesterCanCreateAdmin(requester?: RequesterContext) {
     if (!requester) {
       return;
@@ -88,6 +92,7 @@ export class UserServiceService implements OnModuleInit {
 
   private assertRequesterCanMutateUser(
     requester: RequesterContext | undefined,
+    targetUserId: string,
     targetRole: Roles,
   ) {
     if (!requester) {
@@ -102,6 +107,10 @@ export class UserServiceService implements OnModuleInit {
       if (targetRole === Roles.SUPERADMIN || targetRole === Roles.ADMIN) {
         this.forbidden('Admin admin yoki superadminni boshqara olmaydi');
       }
+      return;
+    }
+
+    if (this.isSelfRequester(requester, targetUserId)) {
       return;
     }
 
@@ -396,7 +405,11 @@ export class UserServiceService implements OnModuleInit {
     if (!admin) {
       this.notFound('User topilmadi');
     }
-    this.assertRequesterCanMutateUser(requester, admin.role);
+    this.assertRequesterCanMutateUser(requester, id, admin.role);
+
+    const requesterIsSelf = this.isSelfRequester(requester, id);
+    const requesterIsPrivileged =
+      this.hasRole(requester, Roles.SUPERADMIN) || this.hasRole(requester, Roles.ADMIN);
 
     if (dto.phone_number && dto.phone_number !== admin.phone_number) {
       await this.ensurePhoneUnique(dto.phone_number, id);
@@ -411,31 +424,31 @@ export class UserServiceService implements OnModuleInit {
       admin.name = dto.name;
     }
 
-    if (dto.status) {
+    if (dto.status && !requesterIsSelf) {
       admin.status = dto.status;
     }
 
-    if (typeof dto.salary !== 'undefined') {
+    if (typeof dto.salary !== 'undefined' && !requesterIsSelf) {
       admin.salary = dto.salary;
     }
 
-    if (typeof dto.payment_day !== 'undefined') {
+    if (typeof dto.payment_day !== 'undefined' && !requesterIsSelf) {
       admin.payment_day = dto.payment_day;
     }
 
-    if (typeof dto.tariff_home !== 'undefined') {
+    if (typeof dto.tariff_home !== 'undefined' && (requesterIsPrivileged || !requesterIsSelf)) {
       admin.tariff_home = dto.tariff_home;
     }
 
-    if (typeof dto.tariff_center !== 'undefined') {
+    if (typeof dto.tariff_center !== 'undefined' && (requesterIsPrivileged || !requesterIsSelf)) {
       admin.tariff_center = dto.tariff_center;
     }
 
-    if (typeof dto.add_order !== 'undefined') {
+    if (typeof dto.add_order !== 'undefined' && !requesterIsSelf) {
       admin.add_order = dto.add_order;
     }
 
-    if (typeof dto.default_tariff !== 'undefined') {
+    if (typeof dto.default_tariff !== 'undefined' && (requesterIsPrivileged || !requesterIsSelf)) {
       admin.default_tariff = dto.default_tariff;
     }
 
@@ -455,7 +468,7 @@ export class UserServiceService implements OnModuleInit {
     if (!admin) {
       this.notFound('User topilmadi');
     }
-    this.assertRequesterCanMutateUser(requester, admin.role);
+    this.assertRequesterCanMutateUser(requester, id, admin.role);
 
     if (admin.role === Roles.SUPERADMIN) {
       this.badRequest('Superadminni o‘chirib bo‘lmaydi');
@@ -1021,7 +1034,7 @@ export class UserServiceService implements OnModuleInit {
     if (!user) {
       this.notFound('User topilmadi');
     }
-    this.assertRequesterCanMutateUser(requester, user.role);
+    this.assertRequesterCanMutateUser(requester, id, user.role);
 
     user.status = status;
     const saved = await this.users.save(user);

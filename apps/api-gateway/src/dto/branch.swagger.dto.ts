@@ -41,11 +41,6 @@ export class CreateBranchRequestDto {
   @ApiProperty({ example: 'SAM' })
   @Matches(/^[A-Z0-9-]{2,32}$/)
   code!: string;
-  @ApiPropertyOptional({ example: 'active', enum: ['active', 'inactive'] })
-  @IsOptional()
-  @IsEnum(['active', 'inactive'])
-  status?: string;
-
   @ApiPropertyOptional({ example: '12', description: 'Manager user ID (bigint string)' })
   @IsOptional()
   @IsNumberString()
