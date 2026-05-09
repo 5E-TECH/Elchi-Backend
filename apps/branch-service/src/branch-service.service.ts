@@ -1528,7 +1528,6 @@ export class BranchServiceService implements OnModuleInit {
     parent_id?: string | null;
     type?: BranchType | string;
     code?: string;
-    status?: string;
     manager_id?: string | null;
   }) {
     const name = String(dto?.name ?? '').trim();
@@ -1580,7 +1579,7 @@ export class BranchServiceService implements OnModuleInit {
         level,
         code,
         manager_id: this.normalizeNullableBigint(dto?.manager_id),
-        status: this.parseStatus(dto?.status) ?? Status.ACTIVE,
+        status: Status.ACTIVE,
       }),
     );
 
