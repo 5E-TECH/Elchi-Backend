@@ -6,6 +6,7 @@ async function bootstrap() {
   const app = await NestFactory.create(BranchServiceModule);
   const rmqService = app.get<RmqService>(RmqService);
 
+  await rmqService.setupDlqTopology('BRANCH');
   app.connectMicroservice(rmqService.getOptions('BRANCH'));
 
   await app.startAllMicroservices();

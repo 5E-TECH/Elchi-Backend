@@ -1,6 +1,6 @@
 import { Controller } from '@nestjs/common';
 import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
-import { RmqService, Group_type } from '@app/common';
+import { RmqService, Group_type, executeAndAck } from '@app/common';
 import { NotificationServiceService } from './notification-service.service';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { UpdateNotificationDto } from './dto/update-notification.dto';
@@ -13,18 +13,11 @@ export class NotificationServiceController {
     private readonly notificationService: NotificationServiceService,
   ) {}
 
-  private async executeAndAck<T>(
+  private executeAndAck<T>(
     context: RmqContext,
     handler: () => Promise<T> | T,
   ): Promise<T> {
-    try {
-      const result = await handler();
-      this.rmqService.ack(context);
-      return result;
-    } catch (error) {
-      this.rmqService.nack(context);
-      throw error;
-    }
+    return executeAndAck(this.rmqService, context, handler);
   }
 
   @MessagePattern({ cmd: 'notification.health' })

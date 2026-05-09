@@ -550,6 +550,7 @@ export class LogisticsServiceService implements OnModuleInit {
     const uniqueOrderIds = [...new Set((dto.orderIDs ?? []).filter(Boolean))];
     let totalPrice = 0;
     let regionId: string | null = null;
+    let branchIdFromOrders: string | null = null;
 
     for (const orderId of uniqueOrderIds) {
       const order = await this.findOrderById(orderId);
@@ -557,12 +558,24 @@ export class LogisticsServiceService implements OnModuleInit {
       if (!regionId && order?.region_id) {
         regionId = String(order.region_id);
       }
+      if (!branchIdFromOrders && order?.branch_id) {
+        branchIdFromOrders = String(order.branch_id);
+      }
     }
+
+    const courierAssignment = await this.findBranchAssignmentByUserId(
+      dto.courier_id,
+      { id: dto.courier_id, roles: [Roles.COURIER] },
+    );
+    const branchId =
+      (courierAssignment?.branch_id ? String(courierAssignment.branch_id) : null) ??
+      branchIdFromOrders;
 
     const post = this.postRepo.create({
       courier_id: dto.courier_id,
       qr_code_token: dto.qr_code_token?.trim() || this.generateToken(),
       region_id: regionId,
+      branch_id: branchId,
       post_total_price: totalPrice,
       order_quantity: uniqueOrderIds.length,
       status: Post_status.NEW,
@@ -581,12 +594,18 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(savedPost, 201, 'Post created');
   }
 
-  async findAllPosts(page = 1, limit = 8) {
+  async findAllPosts(page = 1, limit = 8, filters?: { branch_id?: string }) {
     const take = limit > 100 ? 100 : Math.max(1, limit);
     const skip = (Math.max(1, page) - 1) * take;
 
+    const branchId = filters?.branch_id ? String(filters.branch_id).trim() : '';
+    const where: Record<string, unknown> = { status: Not(Post_status.NEW) };
+    if (branchId) {
+      where.branch_id = branchId;
+    }
+
     const [data, total] = await this.postRepo.findAndCount({
-      where: { status: Not(Post_status.NEW) },
+      where,
       relations: ['region'],
       order: { createdAt: 'DESC' },
       skip,

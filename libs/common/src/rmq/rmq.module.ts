@@ -26,6 +26,7 @@ export class RmqModule {
                 options: {
                   urls: [configService.get<string>('RABBITMQ_URI')!],
                   queue: configService.get<string>(`RABBITMQ_${name}_QUEUE`)!,
+                  noAssert: true,
                   queueOptions: {
                     durable: true,
                     messageTtl: Number.isFinite(ttl) && ttl > 0 ? ttl : 10000,

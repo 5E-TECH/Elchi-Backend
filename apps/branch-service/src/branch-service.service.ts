@@ -223,6 +223,19 @@ export class BranchServiceService implements OnModuleInit {
     return normalized;
   }
 
+  private async ensureBranchNameUnique(name: string, exceptId?: string): Promise<void> {
+    const normalized = name.trim();
+    if (!normalized) return;
+    const found = await this.branchRepo
+      .createQueryBuilder('b')
+      .where('LOWER(TRIM(b.name)) = LOWER(:name)', { name: normalized })
+      .andWhere('b.is_deleted = false')
+      .getOne();
+    if (found && (!exceptId || found.id !== exceptId)) {
+      this.conflict('Branch with this name already exists');
+    }
+  }
+
   private async ensureBranchCodeUnique(code: string, exceptId?: string): Promise<void> {
     const exists = await this.branchRepo.findOne({
       where: { code, isDeleted: false },
@@ -1535,12 +1548,7 @@ export class BranchServiceService implements OnModuleInit {
       this.badRequest('name is required');
     }
 
-    const exists = await this.branchRepo.findOne({
-      where: { name, isDeleted: false },
-    });
-    if (exists) {
-      this.conflict('Branch with this name already exists');
-    }
+    await this.ensureBranchNameUnique(name);
 
     const type = this.parseBranchType(dto?.type);
     const code = this.normalizeBranchCode(dto?.code);
@@ -1681,6 +1689,20 @@ export class BranchServiceService implements OnModuleInit {
       200,
       'Branches list',
     );
+  }
+
+  async findBranchByCode(code: string) {
+    const normalized = String(code ?? '').trim().toUpperCase();
+    if (!normalized) {
+      this.badRequest('code is required');
+    }
+    const branch = await this.branchRepo.findOne({
+      where: { code: normalized, isDeleted: false },
+    });
+    if (!branch) {
+      this.notFound('Branch not found by code');
+    }
+    return successRes(branch, 200, 'Branch found');
   }
 
   async findBranchById(id: string, requester?: RequesterContext) {
@@ -2120,13 +2142,8 @@ export class BranchServiceService implements OnModuleInit {
       if (!nextName) {
         this.badRequest('name cannot be empty');
       }
-      if (nextName !== branch.name) {
-        const nameExists = await this.branchRepo.findOne({
-          where: { name: nextName, isDeleted: false },
-        });
-        if (nameExists && nameExists.id !== branch.id) {
-          this.conflict('Branch with this name already exists');
-        }
+      if (nextName.toLowerCase() !== (branch.name ?? '').toLowerCase()) {
+        await this.ensureBranchNameUnique(nextName, branch.id);
       }
       branch.name = nextName;
     }
@@ -2206,9 +2223,51 @@ export class BranchServiceService implements OnModuleInit {
   async deleteBranch(id: string, requester?: RequesterContext) {
     await this.assertCanWriteBranch(id, requester);
     const branch = await this.getBranchOrThrow(id);
+
     if (await this.hasActiveChildren(branch.id)) {
       this.badRequest('Cannot delete branch with child branches');
     }
+
+    const activeUsers = await this.branchUserRepo.count({
+      where: { branch_id: branch.id, isDeleted: false },
+    });
+    if (activeUsers > 0) {
+      this.badRequest(
+        `Cannot delete branch — ${activeUsers} active user(s) assigned. Reassign or remove them first.`,
+      );
+    }
+
+    type CanDeleteShape = {
+      active_orders?: number;
+      active_batches?: number;
+    };
+    let canDelete: CanDeleteShape | null = null;
+    try {
+      const response = await lastValueFrom(
+        this.orderClient
+          .send<{ data?: CanDeleteShape }>(
+            { cmd: 'order.branch_can_delete' },
+            { branch_id: branch.id },
+          )
+          .pipe(timeout(5000)),
+      );
+      canDelete = response?.data ?? null;
+    } catch (error) {
+      this.badRequest(
+        `Cannot verify branch is safe to delete (order-service unreachable): ${(error as Error)?.message ?? 'unknown'}`,
+      );
+    }
+
+    if (canDelete) {
+      const orders = Number(canDelete.active_orders ?? 0);
+      const batches = Number(canDelete.active_batches ?? 0);
+      if (orders > 0 || batches > 0) {
+        this.badRequest(
+          `Cannot delete branch — ${orders} active order(s) and ${batches} active transfer batch(es) reference it.`,
+        );
+      }
+    }
+
     branch.isDeleted = true;
     branch.status = Status.INACTIVE;
     await this.branchRepo.save(branch);

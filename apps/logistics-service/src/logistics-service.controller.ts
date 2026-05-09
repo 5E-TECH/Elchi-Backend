@@ -1,6 +1,6 @@
 import { Controller } from '@nestjs/common';
 import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
-import { RmqService } from '@app/common';
+import { RmqService, executeAndAck } from '@app/common';
 import { LogisticsServiceService } from './logistics-service.service';
 import { CreateDistrictDto } from './dto/create-district.dto';
 import { UpdateDistrictDto } from './dto/update-district.dto';
@@ -21,18 +21,11 @@ export class LogisticsServiceController {
     private readonly logisticsService: LogisticsServiceService,
   ) {}
 
-  private async executeAndAck<T>(
+  private executeAndAck<T>(
     context: RmqContext,
     handler: () => Promise<T> | T,
   ): Promise<T> {
-    try {
-      const result = await handler();
-      this.rmqService.ack(context);
-      return result;
-    } catch (error) {
-      this.rmqService.nack(context);
-      throw error;
-    }
+    return executeAndAck(this.rmqService, context, handler);
   }
 
   @MessagePattern({ cmd: 'logistics.health' })
@@ -58,11 +51,13 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.find_all' })
   findAllPosts(
-    @Payload() data: { query: { page?: number; limit?: number } },
+    @Payload() data: { query: { page?: number; limit?: number; branch_id?: string } },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.logisticsService.findAllPosts(data?.query?.page, data?.query?.limit),
+      this.logisticsService.findAllPosts(data?.query?.page, data?.query?.limit, {
+        branch_id: data?.query?.branch_id,
+      }),
     );
   }
 

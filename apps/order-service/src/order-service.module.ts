@@ -3,7 +3,13 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { OrderServiceController } from './order-service.controller';
 import { OrderServiceService } from './order-service.service';
-import { RmqModule, DatabaseModule, orderValidationSchema } from '@app/common';
+import {
+  RmqModule,
+  DatabaseModule,
+  orderValidationSchema,
+  IdempotencyModule,
+  OutboxModule,
+} from '@app/common';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
@@ -27,7 +33,12 @@ import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.ent
     RmqModule.register({ name: 'CATALOG' }),
     RmqModule.register({ name: 'FINANCE' }),
     RmqModule.register({ name: 'INTEGRATION' }),
+    RmqModule.register({ name: 'BRANCH' }),
     DatabaseModule,
+    IdempotencyModule.forService(),
+    OutboxModule.forService({
+      targets: ['FINANCE', 'CATALOG', 'SEARCH', 'IDENTITY', 'LOGISTICS', 'INTEGRATION', 'BRANCH'],
+    }),
     TypeOrmModule.forFeature([
       Order,
       OrderItem,

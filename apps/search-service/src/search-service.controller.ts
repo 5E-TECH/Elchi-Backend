@@ -1,6 +1,6 @@
 import { Controller } from '@nestjs/common';
 import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
-import { RmqService } from '@app/common';
+import { RmqService, executeAndAck } from '@app/common';
 import { SearchServiceService } from './search-service.service';
 
 @Controller()
@@ -10,15 +10,8 @@ export class SearchServiceController {
     private readonly searchService: SearchServiceService,
   ) {}
 
-  private async executeAndAck<T>(context: RmqContext, handler: () => Promise<T> | T): Promise<T> {
-    try {
-      const result = await handler();
-      this.rmqService.ack(context);
-      return result;
-    } catch (error) {
-      this.rmqService.nack(context);
-      throw error;
-    }
+  private executeAndAck<T>(context: RmqContext, handler: () => Promise<T> | T): Promise<T> {
+    return executeAndAck(this.rmqService, context, handler);
   }
 
   @MessagePattern({ cmd: 'search.health' })

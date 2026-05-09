@@ -15,6 +15,7 @@ async function bootstrap() {
     }),
   );
 
+  await rmqService.setupDlqTopology('IDENTITY');
   app.connectMicroservice(rmqService.getOptions('IDENTITY'));
 
   await app.startAllMicroservices();

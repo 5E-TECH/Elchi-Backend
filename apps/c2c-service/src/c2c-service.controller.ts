@@ -1,6 +1,6 @@
 import { Controller } from '@nestjs/common';
 import { Ctx, MessagePattern, Payload, RmqContext, RpcException } from '@nestjs/microservices';
-import { RmqService } from '@app/common';
+import { RmqService, executeAndAck } from '@app/common';
 import { errorRes } from '../../../libs/common/helpers/response';
 import { C2cServiceService } from './c2c-service.service';
 
@@ -17,18 +17,11 @@ export class C2cServiceController {
     );
   }
 
-  private async executeAndAck<T>(
+  private executeAndAck<T>(
     context: RmqContext,
     handler: () => Promise<T> | T,
   ): Promise<T> {
-    try {
-      const result = await handler();
-      this.rmqService.ack(context);
-      return result;
-    } catch (error) {
-      this.rmqService.nack(context);
-      throw error;
-    }
+    return executeAndAck(this.rmqService, context, handler);
   }
 
   @MessagePattern({ cmd: 'c2c.health' })
