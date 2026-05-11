@@ -158,10 +158,6 @@ export class CreateCourierRequestDto {
   @IsString()
   branch_id?: string;
 
-  @ApiProperty({ example: '1' })
-  @IsString()
-  region_id!: string;
-
   @ApiProperty({ example: 'Akmal Abdullaev' })
   @IsString()
   @MinLength(2)

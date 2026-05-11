@@ -248,15 +248,31 @@ export class ApiGatewayController {
   @ApiCreatedResponse({ description: 'Courier created' })
   @ApiConflictResponse({ description: 'Conflict' })
   async createCourier(@Body() dto: CreateCourierRequestDto, @Req() req: { user: JwtUser }) {
-    const { branch_id: _, ...identityDto } = dto;
+    const { branch_id: _, ...identityDto } = dto as CreateCourierRequestDto & {
+      region_id?: string;
+    };
     const assignment = await this.resolveBranchAssignment(req.user);
     const branchId = String(assignment?.branch_id ?? '').trim();
     if (!branchId) {
       throw new ForbiddenException('Manager hech qaysi branchga biriktirilmagan');
     }
 
+    const branchResponse = await firstValueFrom(
+      this.branchClient.send(
+        { cmd: 'branch.find_by_id' },
+        { id: branchId, requester: this.toRequester(req) },
+      ),
+    );
+    const branchRegionId = String(branchResponse?.data?.region_id ?? '').trim();
+    if (!branchRegionId) {
+      throw new BadRequestException('Manager branchida region_id topilmadi');
+    }
+
     const created = await firstValueFrom(
-      this.identityClient.send({ cmd: 'identity.courier.create' }, { dto: identityDto }),
+      this.identityClient.send(
+        { cmd: 'identity.courier.create' },
+        { dto: { ...identityDto, region_id: branchRegionId } },
+      ),
     );
 
     const courierId = String(created?.data?.id ?? '').trim();
