@@ -127,6 +127,9 @@ export class UserServiceService implements OnModuleInit {
       role: query.role?.trim(),
       status: query.status?.trim(),
       region_id: query.region_id?.trim(),
+      user_ids: Array.isArray(query.user_ids)
+        ? query.user_ids.map((id) => String(id ?? '').trim()).filter(Boolean)
+        : [],
       page,
       limit,
       skip: (page - 1) * limit,
@@ -592,7 +595,7 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async findAllAdmins(query: UserFilterQuery = {}) {
-    const { search, role, status, region_id, page, limit, skip } = this.normalizeQuery(query);
+    const { search, role, status, region_id, user_ids, page, limit, skip } = this.normalizeQuery(query);
 
     const baseQb = this.users
       .createQueryBuilder('admin')
@@ -617,6 +620,10 @@ export class UserServiceService implements OnModuleInit {
 
     if (region_id) {
       baseQb.andWhere('admin.region_id = :region_id', { region_id });
+    }
+
+    if (user_ids.length) {
+      baseQb.andWhere('admin.id IN (:...user_ids)', { user_ids });
     }
 
     const listQb = baseQb.clone();
