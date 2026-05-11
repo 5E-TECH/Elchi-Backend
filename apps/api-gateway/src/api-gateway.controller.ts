@@ -241,14 +241,20 @@ export class ApiGatewayController {
 
   @Post('couriers')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create courier' })
   @ApiBody({ type: CreateCourierRequestDto })
   @ApiCreatedResponse({ description: 'Courier created' })
   @ApiConflictResponse({ description: 'Conflict' })
   async createCourier(@Body() dto: CreateCourierRequestDto, @Req() req: { user: JwtUser }) {
-    const { branch_id, ...identityDto } = dto;
+    const { branch_id: _, ...identityDto } = dto;
+    const assignment = await this.resolveBranchAssignment(req.user);
+    const branchId = String(assignment?.branch_id ?? '').trim();
+    if (!branchId) {
+      throw new ForbiddenException('Manager hech qaysi branchga biriktirilmagan');
+    }
+
     const created = await firstValueFrom(
       this.identityClient.send({ cmd: 'identity.courier.create' }, { dto: identityDto }),
     );
@@ -265,7 +271,7 @@ export class ApiGatewayController {
           {
             requester: this.toRequester(req),
             dto: {
-              branch_id,
+              branch_id: branchId,
               user_id: courierId,
               role: 'COURIER',
             },

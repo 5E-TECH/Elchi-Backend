@@ -150,9 +150,13 @@ export class CreateMarketRequestDto {
 }
 
 export class CreateCourierRequestDto {
-  @ApiProperty({ example: '12', description: 'Branch ID' })
+  @ApiPropertyOptional({
+    example: '12',
+    description: "Branch ID (manager flowda avtomatik aniqlanadi, yuborish shart emas)",
+  })
+  @IsOptional()
   @IsString()
-  branch_id!: string;
+  branch_id?: string;
 
   @ApiProperty({ example: '1' })
   @IsString()
