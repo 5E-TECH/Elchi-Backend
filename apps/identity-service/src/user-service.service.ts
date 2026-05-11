@@ -29,6 +29,7 @@ export class UserServiceService implements OnModuleInit {
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
+    @Inject('BRANCH') private readonly branchClient: ClientProxy,
     private readonly bcryptEncryption: BcryptEncryption,
     private readonly configService: ConfigService,
   ) {}
@@ -126,6 +127,9 @@ export class UserServiceService implements OnModuleInit {
       role: query.role?.trim(),
       status: query.status?.trim(),
       region_id: query.region_id?.trim(),
+      user_ids: Array.isArray(query.user_ids)
+        ? query.user_ids.map((id) => String(id ?? '').trim()).filter(Boolean)
+        : [],
       page,
       limit,
       skip: (page - 1) * limit,
@@ -207,6 +211,36 @@ export class UserServiceService implements OnModuleInit {
     } catch {
       return null;
     }
+  }
+
+  private async getUserBranchAssignment(userId: string, role: Roles) {
+    try {
+      const response = await lastValueFrom(
+        this.branchClient
+          .send(
+            { cmd: 'branch.user.find_by_user' },
+            {
+              user_id: userId,
+              requester: { id: userId, roles: [String(role).toLowerCase()] },
+            },
+          )
+          .pipe(timeout(5000)),
+      );
+      return response?.data ?? null;
+    } catch {
+      return null;
+    }
+  }
+
+  private shouldAttachBranchRelation(role: Roles | string | null | undefined): boolean {
+    const normalized = String(role ?? '').trim().toLowerCase();
+    return (
+      normalized === Roles.MANAGER ||
+      normalized === Roles.COURIER ||
+      normalized === Roles.BRANCH ||
+      normalized === Roles.REGISTRATOR ||
+      normalized === 'branch_admin'
+    );
   }
 
   private stripRegionDistricts<T>(region: T): T {
@@ -533,10 +567,15 @@ export class UserServiceService implements OnModuleInit {
 
     const safeUser = this.sanitize(user);
     const profileRegion = await this.getRegionById(safeUser.region_id);
+    const profileBranch =
+      this.shouldAttachBranchRelation(safeUser.role)
+        ? await this.getUserBranchAssignment(String(safeUser.id), safeUser.role as Roles)
+        : null;
 
     return successRes({
       ...safeUser,
       region: profileRegion,
+      branch: profileBranch,
     });
   }
 
@@ -556,7 +595,7 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async findAllAdmins(query: UserFilterQuery = {}) {
-    const { search, role, status, region_id, page, limit, skip } = this.normalizeQuery(query);
+    const { search, role, status, region_id, user_ids, page, limit, skip } = this.normalizeQuery(query);
 
     const baseQb = this.users
       .createQueryBuilder('admin')
@@ -581,6 +620,10 @@ export class UserServiceService implements OnModuleInit {
 
     if (region_id) {
       baseQb.andWhere('admin.region_id = :region_id', { region_id });
+    }
+
+    if (user_ids.length) {
+      baseQb.andWhere('admin.id IN (:...user_ids)', { user_ids });
     }
 
     const listQb = baseQb.clone();

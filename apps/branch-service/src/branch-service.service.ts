@@ -246,11 +246,7 @@ export class BranchServiceService implements OnModuleInit {
   }
 
   private async getParentBranchOrThrow(parentId: string): Promise<Branch> {
-    const parent = await this.getBranchOrThrow(parentId);
-    if (parent.type === BranchType.DISTRICT) {
-      this.badRequest('DISTRICT branch cannot be a parent branch');
-    }
-    return parent;
+    return this.getBranchOrThrow(parentId);
   }
 
   private async ensureNotCyclicParent(branchId: string, parentId: string): Promise<void> {
@@ -666,6 +662,22 @@ export class BranchServiceService implements OnModuleInit {
     }
   }
 
+  private assertBranchCanCreateBatches(branch: Branch, operation: 'transfer' | 'return') {
+    if (branch.type === BranchType.REGIONAL) {
+      this.forbidden(
+        operation === 'return'
+          ? 'REGIONAL filial return batch yarata olmaydi'
+          : 'REGIONAL filial transfer batch yarata olmaydi',
+      );
+    }
+  }
+
+  private assertBranchCanReceiveBatches(branch: Branch) {
+    if (branch.type === BranchType.PICKUP) {
+      this.forbidden("PICKUP filial boshqa filialdan kelgan batchni qabul qila olmaydi");
+    }
+  }
+
   private extractRpcError(error: unknown): { statusCode: number; message: string } | null {
     const fallback = { statusCode: 500, message: 'Internal service error' };
     const source = error as
@@ -732,6 +744,7 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const sourceBranch = await this.getBranchOrThrow(sourceBranchId);
+    this.assertBranchCanCreateBatches(sourceBranch, 'transfer');
     const destinationBranchId = String(sourceBranch.parent_id ?? '').trim();
     if (!destinationBranchId) {
       this.badRequest("Source branch ota branch'i topilmadi");
@@ -887,7 +900,8 @@ export class BranchServiceService implements OnModuleInit {
       this.badRequest('source branch is required');
     }
 
-    await this.getBranchOrThrow(sourceBranchId);
+    const sourceBranch = await this.getBranchOrThrow(sourceBranchId);
+    this.assertBranchCanCreateBatches(sourceBranch, 'return');
     await this.assertCanCreateTransferBatch(sourceBranchId, requester);
 
     const orderIds = Array.from(
@@ -1055,7 +1069,13 @@ export class BranchServiceService implements OnModuleInit {
     const sourceBranchId = String(response?.data?.source_branch_id ?? '').trim();
     const destinationBranchId = String(response?.data?.destination_branch_id ?? '').trim();
 
-    if (sourceBranchId) {
+    if (sourceBranchId && destinationBranchId) {
+      try {
+        await this.assertCanReadBranch(sourceBranchId, requester);
+      } catch {
+        await this.assertCanReadBranch(destinationBranchId, requester);
+      }
+    } else if (sourceBranchId) {
       await this.assertCanReadBranch(sourceBranchId, requester);
     } else if (destinationBranchId) {
       await this.assertCanReadBranch(destinationBranchId, requester);
@@ -1144,8 +1164,17 @@ export class BranchServiceService implements OnModuleInit {
       if (!assignment) {
         this.forbidden('Filial biriktirilmagan foydalanuvchi');
       }
+
+      const direction = String(query?.direction ?? '').trim().toUpperCase();
+      const assignmentBranchId = String(assignment.branch_id);
+      const scopedSourceBranchId =
+        direction === BranchTransferDirection.RETURN ? undefined : assignmentBranchId;
+      const scopedDestinationBranchId =
+        direction === BranchTransferDirection.RETURN ? assignmentBranchId : undefined;
+
       const response = await this.sendOrderCommand('order.transfer_batch.find_all', {
-        source_branch_id: String(assignment.branch_id),
+        source_branch_id: scopedSourceBranchId,
+        destination_branch_id: scopedDestinationBranchId,
         status: query?.status,
         direction: query?.direction,
         period: query?.period,
@@ -1388,6 +1417,8 @@ export class BranchServiceService implements OnModuleInit {
     if (!destinationBranchId) {
       this.notFound('Transfer batch not found');
     }
+    const destinationBranch = await this.getBranchOrThrow(destinationBranchId);
+    this.assertBranchCanReceiveBatches(destinationBranch);
 
     await this.assertRequesterWorksInBranch(destinationBranchId, requester);
 
@@ -1425,6 +1456,8 @@ export class BranchServiceService implements OnModuleInit {
     if (!destinationBranchId) {
       this.notFound('Transfer batch not found');
     }
+    const destinationBranch = await this.getBranchOrThrow(destinationBranchId);
+    this.assertBranchCanReceiveBatches(destinationBranch);
 
     await this.assertRequesterWorksInBranch(destinationBranchId, requester);
 
@@ -2202,10 +2235,6 @@ export class BranchServiceService implements OnModuleInit {
       branch.level = Number(parent.level) + 1;
     }
 
-    if (nextType === BranchType.DISTRICT && (await this.hasActiveChildren(branch.id))) {
-      this.badRequest('DISTRICT branch cannot have child branches');
-    }
-
     branch.type = nextType;
     if (typeof dto?.manager_id !== 'undefined') {
       branch.manager_id = this.normalizeNullableBigint(dto.manager_id);
@@ -2300,6 +2329,33 @@ export class BranchServiceService implements OnModuleInit {
       this.badRequest(`Berilgan role user roli bilan mos emas. User roli: ${derivedRole}`);
     }
     const role = derivedRole;
+
+    if (role === BranchUserRole.COURIER) {
+      const requesterRoles = (requester?.roles ?? []).map((item) =>
+        String(item ?? '').trim().toLowerCase(),
+      );
+      if (requesterRoles.includes('superadmin') || requesterRoles.includes('admin')) {
+        this.forbidden('Courier biriktirish faqat REGIONAL/HYBRID branch manageri uchun ruxsat etilgan');
+      }
+
+      const branch = await this.getBranchOrThrow(branchId);
+      if (branch.type !== BranchType.REGIONAL && branch.type !== BranchType.HYBRID) {
+        this.forbidden('Courier faqat REGIONAL yoki HYBRID branchga biriktirilishi mumkin');
+      }
+
+      const managerAssignment = await this.branchUserRepo.findOne({
+        where: {
+          user_id: String(requester?.id ?? '').trim(),
+          branch_id: branchId,
+          isDeleted: false,
+        },
+        select: ['id', 'role'],
+      });
+
+      if (!managerAssignment || this.normalizeBranchUserRole(managerAssignment.role) !== BranchUserRole.MANAGER) {
+        this.forbidden('Courier biriktirish uchun ushbu branchda MANAGER bo‘lish kerak');
+      }
+    }
 
     const anotherBranch = await this.branchUserRepo.findOne({
       where: {

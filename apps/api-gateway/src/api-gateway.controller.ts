@@ -51,6 +51,10 @@ interface JwtUser {
 interface BranchAssignment {
   branch_id?: string | null;
   role?: string | null;
+  branch?: {
+    id?: string | null;
+    type?: string | null;
+  } | null;
 }
 
 @ApiTags('Identity')
@@ -475,7 +479,7 @@ export class ApiGatewayController {
 
   @Get('users')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List all users with filtering and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String })
@@ -486,7 +490,7 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({ description: 'User list' })
-  getUsers(
+  async getUsers(
     @Query('search') search?: string,
     @Query('role') role?: string,
     @Query('status') status?: string,
@@ -494,8 +498,42 @@ export class ApiGatewayController {
     @Query('regionId') regionId?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Req() req?: { user: JwtUser },
   ) {
     const resolvedRegionId = region_id ?? regionId;
+    const requesterRoles = (req?.user?.roles ?? []).map((item) => String(item ?? '').toLowerCase());
+    const isSystemPrivileged =
+      requesterRoles.includes(RoleEnum.SUPERADMIN) || requesterRoles.includes(RoleEnum.ADMIN);
+
+    let scopedUserIds: string[] | undefined;
+    if (!isSystemPrivileged && requesterRoles.includes(RoleEnum.MANAGER) && req?.user?.sub) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      const branchId = String(assignment?.branch_id ?? '').trim();
+      const branchType = String(assignment?.branch?.type ?? '').trim().toUpperCase();
+
+      if (!branchId) {
+        throw new ForbiddenException('Manager hech qaysi branchga biriktirilmagan');
+      }
+      if (branchType !== 'REGIONAL' && branchType !== 'HYBRID') {
+        throw new ForbiddenException('Bu branch type uchun userlarni ko‘rish ruxsati yo‘q');
+      }
+
+      const branchUsersResponse = await firstValueFrom(
+        this.branchClient.send(
+          { cmd: 'branch.user.find_by_branch' },
+          { branch_id: branchId, requester: this.toRequester(req) },
+        ),
+      );
+      const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
+      scopedUserIds = Array.from(
+        new Set(
+          branchUsers
+            .map((row: any) => String(row?.user_id ?? '').trim())
+            .filter(Boolean),
+        ),
+      );
+    }
+
     return this.identityClient.send(
       { cmd: 'identity.user.find_all' },
       {
@@ -504,6 +542,7 @@ export class ApiGatewayController {
           role,
           status,
           region_id: resolvedRegionId,
+          user_ids: scopedUserIds,
           page: page ? Number(page) : undefined,
           limit: limit ? Number(limit) : undefined,
         },
@@ -513,7 +552,7 @@ export class ApiGatewayController {
 
   @Get('users/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get user by id (admin/superadmin)' })
   @ApiParam({ name: 'id', description: 'User ID' })
@@ -530,6 +569,36 @@ export class ApiGatewayController {
 
     if (requesterIsMarket && !requesterIsPrivileged && req?.user?.sub !== id) {
       throw new ForbiddenException('Market faqat o‘z profilini ko‘ra oladi');
+    }
+
+    if (!requesterIsPrivileged && requesterRoles.includes(RoleEnum.MANAGER) && req?.user?.sub) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      const branchId = String(assignment?.branch_id ?? '').trim();
+      const branchType = String(assignment?.branch?.type ?? '').trim().toUpperCase();
+
+      if (!branchId) {
+        throw new ForbiddenException('Manager hech qaysi branchga biriktirilmagan');
+      }
+      if (branchType !== 'REGIONAL' && branchType !== 'HYBRID') {
+        throw new ForbiddenException('Bu branch type uchun userlarni ko‘rish ruxsati yo‘q');
+      }
+
+      const branchUsersResponse = await firstValueFrom(
+        this.branchClient.send(
+          { cmd: 'branch.user.find_by_branch' },
+          { branch_id: branchId, requester: this.toRequester(req as { user: JwtUser }) },
+        ),
+      );
+      const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
+      const branchUserIds = new Set(
+        branchUsers
+          .map((row: any) => String(row?.user_id ?? '').trim())
+          .filter(Boolean),
+      );
+
+      if (!branchUserIds.has(String(id).trim())) {
+        throw new ForbiddenException('Siz bu user ma’lumotini ko‘ra olmaysiz');
+      }
     }
 
     return firstValueFrom(

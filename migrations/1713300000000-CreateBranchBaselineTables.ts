@@ -20,7 +20,7 @@ export class CreateBranchBaselineTables1713300000000 implements MigrationInterfa
           WHERE t.typname = 'branches_type_enum'
             AND n.nspname = '${schema}'
         ) THEN
-          EXECUTE 'CREATE TYPE "${schema}"."branches_type_enum" AS ENUM (''HQ'', ''CITY'', ''REGIONAL'', ''DISTRICT'')';
+          EXECUTE 'CREATE TYPE "${schema}"."branches_type_enum" AS ENUM (''HQ'', ''PICKUP'', ''REGIONAL'', ''HYBRID'')';
         END IF;
       END $$;
     `);
@@ -67,7 +67,7 @@ export class CreateBranchBaselineTables1713300000000 implements MigrationInterfa
         "region_id" bigint,
         "district_id" bigint,
         "parent_id" bigint,
-        "type" "${schema}"."branches_type_enum" NOT NULL DEFAULT 'DISTRICT',
+        "type" "${schema}"."branches_type_enum" NOT NULL DEFAULT 'PICKUP',
         "level" integer NOT NULL DEFAULT 0,
         "code" character varying,
         "status" "${schema}"."branches_status_enum" NOT NULL DEFAULT 'active',

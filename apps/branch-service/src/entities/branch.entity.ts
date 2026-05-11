@@ -26,7 +26,7 @@ export class Branch extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   parent_id!: string | null;
 
-  @Column({ type: 'enum', enum: BranchType, default: BranchType.DISTRICT })
+  @Column({ type: 'enum', enum: BranchType, default: BranchType.PICKUP })
   type!: BranchType;
 
   @Column({ type: 'int', default: 0 })

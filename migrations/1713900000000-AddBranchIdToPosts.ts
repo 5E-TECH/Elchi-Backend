@@ -9,8 +9,7 @@ export class AddBranchIdToPosts1713900000000 implements MigrationInterface {
   name = 'AddBranchIdToPosts1713900000000';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
-    const schema =
-      (queryRunner.connection.options as { schema?: string }).schema ?? 'public';
+    const schema = 'logistics_schema';
 
     await queryRunner.query(`
       ALTER TABLE "${schema}"."posts"
@@ -24,8 +23,7 @@ export class AddBranchIdToPosts1713900000000 implements MigrationInterface {
   }
 
   public async down(queryRunner: QueryRunner): Promise<void> {
-    const schema =
-      (queryRunner.connection.options as { schema?: string }).schema ?? 'public';
+    const schema = 'logistics_schema';
     await queryRunner.query(
       `DROP INDEX IF EXISTS "${schema}"."IDX_POST_BRANCH";`,
     );

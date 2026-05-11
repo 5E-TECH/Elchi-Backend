@@ -79,7 +79,7 @@ export class UpdateBranchRequestDto {
   @IsNumberString()
   parent_id?: string;
 
-  @ApiPropertyOptional({ example: 'CITY', enum: BranchType })
+  @ApiPropertyOptional({ example: 'PICKUP', enum: BranchType })
   @IsOptional()
   @IsEnum(BranchType)
   type?: BranchType;

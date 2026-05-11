@@ -13,9 +13,9 @@ jest.mock('@app/common', () => {
     },
     BranchType: {
       HQ: 'HQ',
-      CITY: 'CITY',
+      PICKUP: 'PICKUP',
       REGIONAL: 'REGIONAL',
-      DISTRICT: 'DISTRICT',
+      HYBRID: 'HYBRID',
     },
   };
 });
