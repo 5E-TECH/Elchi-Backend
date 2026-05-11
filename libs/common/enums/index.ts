@@ -19,9 +19,9 @@ export enum Status {
 
 export enum BranchType {
   HQ = 'HQ',
-  CITY = 'CITY',
+  PICKUP = 'PICKUP',
   REGIONAL = 'REGIONAL',
-  DISTRICT = 'DISTRICT',
+  HYBRID = 'HYBRID',
 }
 
 export enum PaymentMethod {
