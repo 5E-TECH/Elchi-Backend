@@ -193,6 +193,18 @@ export class BranchServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'branch.post.dispatch' })
+  dispatchPostToBranch(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.dispatchPostToBranch(
+        data?.source_branch_id,
+        data?.post_id,
+        data?.destination_branch_id,
+        this.getRequester(data),
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'branch.update' })
   update(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>

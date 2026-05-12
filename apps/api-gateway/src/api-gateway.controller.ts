@@ -241,7 +241,7 @@ export class ApiGatewayController {
 
   @Post('couriers')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.MANAGER)
+  @Roles(RoleEnum.MANAGER, RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create courier' })
   @ApiBody({ type: CreateCourierRequestDto })
@@ -254,7 +254,7 @@ export class ApiGatewayController {
     const assignment = await this.resolveBranchAssignment(req.user);
     const branchId = String(assignment?.branch_id ?? '').trim();
     if (!branchId) {
-      throw new ForbiddenException('Manager hech qaysi branchga biriktirilmagan');
+      throw new ForbiddenException('Foydalanuvchi hech qaysi branchga biriktirilmagan');
     }
 
     const branchResponse = await firstValueFrom(
