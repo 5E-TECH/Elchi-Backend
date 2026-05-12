@@ -321,6 +321,29 @@ export class BranchGatewayController {
     );
   }
 
+  @Post('branches/:sourceBranchId/posts/:postId/dispatch/:destinationBranchId')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @ApiOperation({ summary: 'Dispatch HQ post to REGIONAL/HYBRID branch' })
+  @ApiParam({ name: 'sourceBranchId', description: 'Source branch ID (must be HQ)' })
+  @ApiParam({ name: 'postId', description: 'Logistics post ID' })
+  @ApiParam({ name: 'destinationBranchId', description: 'Destination branch ID (REGIONAL/HYBRID)' })
+  dispatchPostToBranch(
+    @Param('sourceBranchId') sourceBranchId: string,
+    @Param('postId') postId: string,
+    @Param('destinationBranchId') destinationBranchId: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient.send(
+      { cmd: 'branch.post.dispatch' },
+      {
+        source_branch_id: sourceBranchId,
+        post_id: postId,
+        destination_branch_id: destinationBranchId,
+        requester: this.toRequester(req),
+      },
+    );
+  }
+
   @Patch('branches/:id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Update branch' })

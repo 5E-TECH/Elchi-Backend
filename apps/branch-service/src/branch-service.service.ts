@@ -718,6 +718,18 @@ export class BranchServiceService implements OnModuleInit {
     }
   }
 
+  private async sendLogisticsCommand<T>(cmd: string, payload: Record<string, unknown>): Promise<T> {
+    try {
+      return await lastValueFrom(
+        this.logisticsClient
+          .send<T>({ cmd }, payload)
+          .pipe(timeout(15000)),
+      );
+    } catch {
+      throw new RpcException(errorRes('Logistics service unavailable', 502));
+    }
+  }
+
   private async sendFileCommand<T>(cmd: string, payload: Record<string, unknown>): Promise<T> {
     try {
       return await lastValueFrom(
@@ -1519,6 +1531,97 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     return cancelResult;
+  }
+
+  async dispatchPostToBranch(
+    sourceBranchIdInput: string,
+    postIdInput: string,
+    destinationBranchIdInput: string,
+    requester?: RequesterContext,
+  ) {
+    const sourceBranchId = String(sourceBranchIdInput ?? '').trim();
+    const destinationBranchId = String(destinationBranchIdInput ?? '').trim();
+    const postId = String(postIdInput ?? '').trim();
+
+    if (!sourceBranchId || !destinationBranchId || !postId) {
+      this.badRequest('source_branch_id, destination_branch_id va post_id majburiy');
+    }
+
+    const sourceBranch = await this.getBranchOrThrow(sourceBranchId);
+    const destinationBranch = await this.getBranchOrThrow(destinationBranchId);
+
+    if (sourceBranch.type !== BranchType.HQ) {
+      this.forbidden("Post dispatch faqat HQ branch'dan ruxsat etilgan");
+    }
+    if (
+      destinationBranch.type !== BranchType.REGIONAL &&
+      destinationBranch.type !== BranchType.HYBRID
+    ) {
+      this.forbidden("Post dispatch faqat REGIONAL yoki HYBRID branch'ga ruxsat etilgan");
+    }
+
+    await this.assertCanWriteBranch(sourceBranchId, requester);
+
+    const requesterPayload = {
+      id: String(requester?.id ?? ''),
+      roles: requester?.roles ?? [],
+    };
+
+    const postOrdersResponse = await this.sendLogisticsCommand<{
+      data?: Array<Record<string, unknown>>;
+    }>('logistics.post.orders_by_post', {
+      id: postId,
+      requester: requesterPayload,
+    });
+
+    const orders = Array.isArray(postOrdersResponse?.data) ? postOrdersResponse.data : [];
+    if (!orders.length) {
+      this.badRequest("Post ichida jo'natishga mos order topilmadi");
+    }
+
+    const orderIds = orders.map((order) => String(order?.id ?? '')).filter(Boolean);
+    const mismatchedOrders = orders.filter(
+      (order) => String(order?.branch_id ?? '') !== sourceBranchId,
+    );
+    if (mismatchedOrders.length) {
+      this.badRequest(
+        "Post ichida HQga tegishli bo'lmagan order bor. Avval postni tozalang yoki to'g'rilang",
+      );
+    }
+
+    const requesterId = String(requester?.id ?? '').trim() || '0';
+    const note = `Post #${postId} HQ'dan branch #${destinationBranchId} ga dispatch qilindi`;
+
+    for (const orderId of orderIds) {
+      await this.sendOrderCommand('order.update', {
+        id: orderId,
+        dto: {
+          branch_id: destinationBranchId,
+          post_id: null,
+          current_batch_id: null,
+          status: Order_status.RECEIVED,
+        },
+        requester: {
+          id: requesterId,
+          roles: requester?.roles ?? [],
+          note,
+        },
+      });
+    }
+
+    await this.sendLogisticsCommand('logistics.post.delete', { id: postId });
+
+    return successRes(
+      {
+        source_branch_id: sourceBranchId,
+        destination_branch_id: destinationBranchId,
+        post_id: postId,
+        moved_orders_count: orderIds.length,
+        moved_order_ids: orderIds,
+      },
+      200,
+      'Post HQ dan branchga muvaffaqiyatli dispatch qilindi',
+    );
   }
 
   async findTransferBatchByToken(token: string, requester?: RequesterContext) {
@@ -2334,26 +2437,26 @@ export class BranchServiceService implements OnModuleInit {
       const requesterRoles = (requester?.roles ?? []).map((item) =>
         String(item ?? '').trim().toLowerCase(),
       );
-      if (requesterRoles.includes('superadmin') || requesterRoles.includes('admin')) {
-        this.forbidden('Courier biriktirish faqat REGIONAL/HYBRID branch manageri uchun ruxsat etilgan');
-      }
+      const isSystemPrivileged = requesterRoles.includes('superadmin') || requesterRoles.includes('admin');
 
       const branch = await this.getBranchOrThrow(branchId);
       if (branch.type !== BranchType.REGIONAL && branch.type !== BranchType.HYBRID) {
         this.forbidden('Courier faqat REGIONAL yoki HYBRID branchga biriktirilishi mumkin');
       }
 
-      const managerAssignment = await this.branchUserRepo.findOne({
-        where: {
-          user_id: String(requester?.id ?? '').trim(),
-          branch_id: branchId,
-          isDeleted: false,
-        },
-        select: ['id', 'role'],
-      });
+      if (!isSystemPrivileged) {
+        const managerAssignment = await this.branchUserRepo.findOne({
+          where: {
+            user_id: String(requester?.id ?? '').trim(),
+            branch_id: branchId,
+            isDeleted: false,
+          },
+          select: ['id', 'role'],
+        });
 
-      if (!managerAssignment || this.normalizeBranchUserRole(managerAssignment.role) !== BranchUserRole.MANAGER) {
-        this.forbidden('Courier biriktirish uchun ushbu branchda MANAGER bo‘lish kerak');
+        if (!managerAssignment || this.normalizeBranchUserRole(managerAssignment.role) !== BranchUserRole.MANAGER) {
+          this.forbidden('Courier biriktirish uchun ushbu branchda MANAGER bo‘lish kerak');
+        }
       }
     }
 
