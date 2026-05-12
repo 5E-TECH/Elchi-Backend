@@ -2440,8 +2440,12 @@ export class BranchServiceService implements OnModuleInit {
       const isSystemPrivileged = requesterRoles.includes('superadmin') || requesterRoles.includes('admin');
 
       const branch = await this.getBranchOrThrow(branchId);
-      if (branch.type !== BranchType.REGIONAL && branch.type !== BranchType.HYBRID) {
-        this.forbidden('Courier faqat REGIONAL yoki HYBRID branchga biriktirilishi mumkin');
+      if (
+        branch.type !== BranchType.HQ &&
+        branch.type !== BranchType.REGIONAL &&
+        branch.type !== BranchType.HYBRID
+      ) {
+        this.forbidden('Courier faqat HQ, REGIONAL yoki HYBRID branchga biriktirilishi mumkin');
       }
 
       if (!isSystemPrivileged) {

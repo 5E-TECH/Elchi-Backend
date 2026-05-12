@@ -129,15 +129,17 @@ export class CreateMarketRequestDto {
   @MinLength(4)
   password!: string;
 
-  @ApiProperty({ example: 10000 })
+  @ApiPropertyOptional({ example: 10000, description: 'Optional, default is 0' })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  tariff_home!: number;
+  tariff_home?: number;
 
-  @ApiProperty({ example: 8000 })
+  @ApiPropertyOptional({ example: 8000, description: 'Optional, default is 0' })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  tariff_center!: number;
+  tariff_center?: number;
 
   @ApiProperty({ example: 'center', enum: ['center', 'address'] })
   @IsEnum(['center', 'address'])

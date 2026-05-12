@@ -54,15 +54,15 @@ export class CreateCourierDto {
   @Max(30)
   payment_day?: number;
 
-  @ApiProperty({ example: 10000, minimum: 0 })
-  @IsNotEmpty()
+  @ApiPropertyOptional({ example: 10000, minimum: 0, description: 'Optional, default is 0' })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  tariff_home: number;
+  tariff_home?: number;
 
-  @ApiProperty({ example: 8000, minimum: 0 })
-  @IsNotEmpty()
+  @ApiPropertyOptional({ example: 8000, minimum: 0, description: 'Optional, default is 0' })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  tariff_center: number;
+  tariff_center?: number;
 }
