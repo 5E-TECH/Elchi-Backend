@@ -251,10 +251,28 @@ export class ApiGatewayController {
     const { branch_id: _, ...identityDto } = dto as CreateCourierRequestDto & {
       region_id?: string;
     };
-    const assignment = await this.resolveBranchAssignment(req.user);
-    const branchId = String(assignment?.branch_id ?? '').trim();
-    if (!branchId) {
-      throw new ForbiddenException('Foydalanuvchi hech qaysi branchga biriktirilmagan');
+    const requesterRoles = (req?.user?.roles ?? []).map((role) =>
+      String(role ?? '').trim().toLowerCase(),
+    );
+    const isSystemPrivileged =
+      requesterRoles.includes(RoleEnum.SUPERADMIN) || requesterRoles.includes(RoleEnum.ADMIN);
+
+    let branchId = '';
+
+    if (isSystemPrivileged) {
+      const hqBranch = await firstValueFrom(
+        this.branchClient.send({ cmd: 'branch.find_by_code' }, { code: 'HQ-TSHKNT' }),
+      );
+      branchId = String(hqBranch?.data?.id ?? '').trim();
+      if (!branchId) {
+        throw new BadRequestException('HQ branch topilmadi (code=HQ-TSHKNT)');
+      }
+    } else {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      branchId = String(assignment?.branch_id ?? '').trim();
+      if (!branchId) {
+        throw new ForbiddenException('Foydalanuvchi hech qaysi branchga biriktirilmagan');
+      }
     }
 
     const branchResponse = await firstValueFrom(
