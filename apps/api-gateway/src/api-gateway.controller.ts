@@ -248,8 +248,9 @@ export class ApiGatewayController {
   @ApiCreatedResponse({ description: 'Courier created' })
   @ApiConflictResponse({ description: 'Conflict' })
   async createCourier(@Body() dto: CreateCourierRequestDto, @Req() req: { user: JwtUser }) {
-    const { branch_id: _, ...identityDto } = dto as CreateCourierRequestDto & {
+    const { branch_id: _branchIdFromBody } = dto as CreateCourierRequestDto & {
       region_id?: string;
+      branch_id?: string;
     };
     const requesterRoles = (req?.user?.roles ?? []).map((role) =>
       String(role ?? '').trim().toLowerCase(),
@@ -281,15 +282,31 @@ export class ApiGatewayController {
         { id: branchId, requester: this.toRequester(req) },
       ),
     );
+    const branchType = String(branchResponse?.data?.type ?? '').trim().toUpperCase();
+    if (isSystemPrivileged && branchType !== 'HQ') {
+      throw new BadRequestException("Admin/Superadmin uchun courier faqat HQ branch'da yaratiladi");
+    }
+
     const branchRegionId = String(branchResponse?.data?.region_id ?? '').trim();
-    if (!branchRegionId) {
+    if (!branchRegionId && !isSystemPrivileged) {
       throw new BadRequestException('Manager branchida region_id topilmadi');
     }
+
+    const safeCourierDto = {
+      name: dto.name,
+      phone_number: dto.phone_number,
+      password: dto.password,
+      salary: dto.salary,
+      payment_day: dto.payment_day,
+      tariff_home: dto.tariff_home,
+      tariff_center: dto.tariff_center,
+      region_id: branchRegionId || undefined,
+    };
 
     const created = await firstValueFrom(
       this.identityClient.send(
         { cmd: 'identity.courier.create' },
-        { dto: { ...identityDto, region_id: branchRegionId } },
+        { dto: safeCourierDto },
       ),
     );
 
@@ -541,6 +558,7 @@ export class ApiGatewayController {
     @Req() req?: { user: JwtUser },
   ) {
     const resolvedRegionId = region_id ?? regionId;
+    const normalizedRole = String(role ?? '').trim().toLowerCase();
     const requesterRoles = (req?.user?.roles ?? []).map((item) => String(item ?? '').toLowerCase());
     const isSystemPrivileged =
       requesterRoles.includes(RoleEnum.SUPERADMIN) || requesterRoles.includes(RoleEnum.ADMIN);
@@ -572,6 +590,44 @@ export class ApiGatewayController {
             .filter(Boolean),
         ),
       );
+    }
+
+    const needsCourierBranchScope =
+      normalizedRole === RoleEnum.COURIER &&
+      (requesterRoles.includes(RoleEnum.MANAGER) ||
+        requesterRoles.includes(RoleEnum.ADMIN) ||
+        requesterRoles.includes(RoleEnum.SUPERADMIN));
+
+    if (needsCourierBranchScope && req?.user?.sub) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      const branchId = String(assignment?.branch_id ?? '').trim();
+
+      if (!branchId) {
+        throw new ForbiddenException("Foydalanuvchi courier ko'rish uchun branchga biriktirilmagan");
+      }
+
+      const branchUsersResponse = await firstValueFrom(
+        this.branchClient.send(
+          { cmd: 'branch.user.find_by_branch' },
+          { branch_id: branchId, requester: this.toRequester(req) },
+        ),
+      );
+      const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
+      const branchCourierIds: string[] = Array.from(
+        new Set(
+          branchUsers
+            .filter((row: any) => String(row?.role ?? '').trim().toUpperCase() === 'COURIER')
+            .map((row: any) => String(row?.user_id ?? '').trim())
+            .filter(Boolean),
+        ),
+      );
+
+      if (Array.isArray(scopedUserIds)) {
+        const branchCourierSet = new Set(branchCourierIds);
+        scopedUserIds = scopedUserIds.filter((id) => branchCourierSet.has(id));
+      } else {
+        scopedUserIds = branchCourierIds;
+      }
     }
 
     return this.identityClient.send(
