@@ -144,6 +144,9 @@ export class ApiGatewayController {
     );
     const isManager = requesterRoles.includes(RoleEnum.MANAGER);
 
+    // Manager'lar uchun branch_id'ni JWT yoki BranchUser orqali to'g'rilash;
+    // boshqalar uchun body'dan keladi. HYBRID branch tekshiruvi ham shu yerda.
+    // (Bu hozircha gateway'da qoladi — kelajakda branch-service'ga ko'chiriladi.)
     let resolvedBranchId = String(dto?.branch_id ?? '').trim();
     if (isManager) {
       const assignment = await this.resolveBranchAssignment(req.user);
@@ -163,44 +166,17 @@ export class ApiGatewayController {
       throw new BadRequestException('branch_id majburiy');
     }
 
-    const { branch_id: _branchIdFromBody, ...identityDto } = dto;
-    const created = await firstValueFrom(
+    // identity-service o'zi user.save + branch.user.assign saga'sini bajaradi
+    // va fail bo'lsa user'ni o'chiradi. Gateway endi faqat transit qiladi.
+    return firstValueFrom(
       this.identityClient.send(
         { cmd: 'identity.registrator.create' },
-        { dto: identityDto, requester: this.toRequester(req) },
+        {
+          dto: { ...dto, branch_id: resolvedBranchId },
+          requester: this.toRequester(req),
+        },
       ),
     );
-
-    const registratorId = String(created?.data?.id ?? '').trim();
-    if (!registratorId) {
-      throw new BadRequestException('Registrator yaratildi, lekin id qaytmadi');
-    }
-
-    try {
-      await firstValueFrom(
-        this.branchClient.send(
-          { cmd: 'branch.user.assign' },
-          {
-            requester: this.toRequester(req),
-            dto: {
-              branch_id: resolvedBranchId,
-              user_id: registratorId,
-              role: 'REGISTRATOR',
-            },
-          },
-        ),
-      );
-    } catch (error) {
-      await firstValueFrom(
-        this.identityClient.send(
-          { cmd: 'identity.user.delete' },
-          { id: registratorId, requester: this.toRequester(req) },
-        ),
-      ).catch(() => null);
-      throw error;
-    }
-
-    return created;
   }
 
   @Get('registrators')
@@ -272,18 +248,16 @@ export class ApiGatewayController {
   @ApiCreatedResponse({ description: 'Courier created' })
   @ApiConflictResponse({ description: 'Conflict' })
   async createCourier(@Body() dto: CreateCourierRequestDto, @Req() req: { user: JwtUser }) {
-    const { branch_id: _branchIdFromBody } = dto as CreateCourierRequestDto & {
-      region_id?: string;
-      branch_id?: string;
-    };
     const requesterRoles = (req?.user?.roles ?? []).map((role) =>
       String(role ?? '').trim().toLowerCase(),
     );
     const isSystemPrivileged =
       requesterRoles.includes(RoleEnum.SUPERADMIN) || requesterRoles.includes(RoleEnum.ADMIN);
 
+    // Branch selection: SUPERADMIN/ADMIN — HQ filial, qolganlar — o'z BranchUser
+    // assignment'idan. region_id ham branch'dan keladi. (Hozircha gateway'da —
+    // kelajakda branch-service'ga ko'chiriladi.)
     let branchId = '';
-
     if (isSystemPrivileged) {
       const hqBranch = await firstValueFrom(
         this.branchClient.send({ cmd: 'branch.find_by_code' }, { code: 'HQ-TSHKNT' }),
@@ -316,54 +290,27 @@ export class ApiGatewayController {
       throw new BadRequestException('Manager branchida region_id topilmadi');
     }
 
-    const safeCourierDto = {
-      name: dto.name,
-      phone_number: dto.phone_number,
-      password: dto.password,
-      salary: dto.salary,
-      payment_day: dto.payment_day,
-      tariff_home: dto.tariff_home,
-      tariff_center: dto.tariff_center,
-      region_id: branchRegionId || undefined,
-    };
-
-    const created = await firstValueFrom(
+    // identity-service create + branch.user.assign saga'sini o'zi bajaradi.
+    // Fail bo'lsa user'ni o'chiradi.
+    return firstValueFrom(
       this.identityClient.send(
         { cmd: 'identity.courier.create' },
-        { dto: safeCourierDto },
+        {
+          dto: {
+            name: dto.name,
+            phone_number: dto.phone_number,
+            password: dto.password,
+            salary: dto.salary,
+            payment_day: dto.payment_day,
+            tariff_home: dto.tariff_home,
+            tariff_center: dto.tariff_center,
+            region_id: branchRegionId || undefined,
+            branch_id: branchId,
+          },
+          requester: this.toRequester(req),
+        },
       ),
     );
-
-    const courierId = String(created?.data?.id ?? '').trim();
-    if (!courierId) {
-      throw new BadRequestException('Courier yaratildi, lekin id qaytmadi');
-    }
-
-    try {
-      await firstValueFrom(
-        this.branchClient.send(
-          { cmd: 'branch.user.assign' },
-          {
-            requester: this.toRequester(req),
-            dto: {
-              branch_id: branchId,
-              user_id: courierId,
-              role: 'COURIER',
-            },
-          },
-        ),
-      );
-    } catch (error) {
-      await firstValueFrom(
-        this.identityClient.send(
-          { cmd: 'identity.user.delete' },
-          { id: courierId, requester: this.toRequester(req) },
-        ),
-      ).catch(() => null);
-      throw error;
-    }
-
-    return created;
   }
 
   @Post('managers')
@@ -375,40 +322,14 @@ export class ApiGatewayController {
   @ApiCreatedResponse({ description: 'Manager created' })
   @ApiConflictResponse({ description: 'Conflict' })
   async createManager(@Body() dto: CreateManagerRequestDto, @Req() req: { user: JwtUser }) {
-    const created = await firstValueFrom(
-      this.identityClient.send({ cmd: 'identity.manager.create' }, { dto }),
+    // identity-service'ning createManager o'zi user.save + branch.user.assign
+    // saga'sini bajaradi (branch_id DTO'da majburiy).
+    return firstValueFrom(
+      this.identityClient.send(
+        { cmd: 'identity.manager.create' },
+        { dto, requester: this.toRequester(req) },
+      ),
     );
-
-    const managerId = String(created?.data?.id ?? '').trim();
-    if (!managerId) {
-      throw new BadRequestException('Manager yaratildi, lekin id qaytmadi');
-    }
-
-    try {
-      await firstValueFrom(
-        this.branchClient.send(
-          { cmd: 'branch.user.assign' },
-          {
-            requester: this.toRequester(req),
-            dto: {
-              branch_id: dto.branch_id,
-              user_id: managerId,
-              role: 'MANAGER',
-            },
-          },
-        ),
-      );
-    } catch (error) {
-      await firstValueFrom(
-        this.identityClient.send(
-          { cmd: 'identity.user.delete' },
-          { id: managerId, requester: this.toRequester(req) },
-        ),
-      ).catch(() => null);
-      throw error;
-    }
-
-    return created;
   }
 
   @Get('couriers')

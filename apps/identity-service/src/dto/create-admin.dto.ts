@@ -44,4 +44,13 @@ export class CreateAdminDto {
   @Min(1)
   @Max(30)
   payment_day: number;
+
+  @ApiPropertyOptional({
+    example: '1',
+    description:
+      'Branch ID. When set, identity-service will assign the new user to this branch as part of the create flow (atomic from the caller perspective).',
+  })
+  @IsOptional()
+  @IsString()
+  branch_id?: string;
 }

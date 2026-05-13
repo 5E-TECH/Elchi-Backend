@@ -86,6 +86,10 @@ export const integrationValidationSchema = Joi.object({
   DB_SCHEMA: Joi.string().default('integration_schema'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_INTEGRATION_QUEUE: Joi.string().required(),
+  INTEGRATION_CREDENTIAL_SECRET: Joi.string()
+    .min(32)
+    .required()
+    .description('Secret used to AES-encrypt external integration credentials in DB. Must be >=32 chars of random entropy. Rotating it invalidates existing encrypted credentials — plan a re-encrypt migration first.'),
 });
 
 export const analyticsValidationSchema = Joi.object({

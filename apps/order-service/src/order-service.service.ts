@@ -68,10 +68,15 @@ export class OrderServiceService {
    */
   private async resolveBranchIdForOrder(
     explicitBranchId: string | null | undefined,
-    requester?: { id: string; roles?: string[] },
+    requester?: { id: string; roles?: string[]; branch_id?: string | null },
   ): Promise<string | null> {
     if (explicitBranchId) {
       return String(explicitBranchId);
+    }
+
+    // JWT now carries branch_id; prefer it to avoid a per-request RMQ hop to branch-service.
+    if (requester?.branch_id) {
+      return String(requester.branch_id);
     }
 
     if (requester?.id) {
@@ -116,64 +121,61 @@ export class OrderServiceService {
     return null;
   }
 
+  /**
+   * Queue a search-index upsert via the Outbox. The previous direct rmqSend
+   * silently dropped the request when search-service was unavailable, leaving
+   * the DB and search index out of sync. With Outbox, the publisher retries
+   * with exponential backoff until delivered (or the DLQ after maxAttempts).
+   */
   private async syncOrderToSearch(order: Order): Promise<void> {
     try {
-      await lastValueFrom(
-        this.searchClient
-          .send(
-            { cmd: 'search.index.upsert' },
-            {
-              source: 'order',
-              type: 'order',
-              sourceId: order.id,
-              title: `Order #${order.id}`,
-              content: [order.status, order.address, order.comment, order.market_id, order.customer_id]
-                .filter(Boolean)
-                .join(' '),
-              tags: ['order', order.status, order.where_deliver].filter(Boolean),
-              metadata: {
-                status: order.status,
-                source: order.source,
-                market_id: order.market_id,
-                customer_id: order.customer_id,
-                post_id: order.post_id,
-                canceled_post_id: order.canceled_post_id,
-                branch_id: order.branch_id,
-                current_batch_id: order.current_batch_id,
-                courier_id: order.courier_id,
-                holder_type: order.holder_type,
-                holder_branch_id: order.holder_branch_id,
-                holder_courier_id: order.holder_courier_id,
-                last_handover_at: order.last_handover_at,
-                last_handover_by: order.last_handover_by,
-                assigned_at: order.assigned_at,
-                return_reason: order.return_reason,
-                region_id: order.region_id,
-                district_id: order.district_id,
-                total_price: order.total_price,
-                isDeleted: order.isDeleted,
-              },
-            },
-          )
-          .pipe(timeout(1500)),
-      );
+      await this.outbox.enqueue('SEARCH', 'search.index.upsert', {
+        source: 'order',
+        type: 'order',
+        sourceId: order.id,
+        title: `Order #${order.id}`,
+        content: [order.status, order.address, order.comment, order.market_id, order.customer_id]
+          .filter(Boolean)
+          .join(' '),
+        tags: ['order', order.status, order.where_deliver].filter(Boolean),
+        metadata: {
+          status: order.status,
+          source: order.source,
+          market_id: order.market_id,
+          customer_id: order.customer_id,
+          post_id: order.post_id,
+          canceled_post_id: order.canceled_post_id,
+          branch_id: order.branch_id,
+          current_batch_id: order.current_batch_id,
+          courier_id: order.courier_id,
+          holder_type: order.holder_type,
+          holder_branch_id: order.holder_branch_id,
+          holder_courier_id: order.holder_courier_id,
+          last_handover_at: order.last_handover_at,
+          last_handover_by: order.last_handover_by,
+          assigned_at: order.assigned_at,
+          return_reason: order.return_reason,
+          region_id: order.region_id,
+          district_id: order.district_id,
+          total_price: order.total_price,
+          isDeleted: order.isDeleted,
+        },
+      });
     } catch {
-      // Search sync should not block order flows.
+      // Outbox enqueue failure (e.g. DB blip) — non-fatal for the calling flow;
+      // dropping the event is no worse than the previous fire-and-forget rmqSend.
     }
   }
 
   private async removeOrderFromSearch(orderId: string): Promise<void> {
     try {
-      await lastValueFrom(
-        this.searchClient
-          .send(
-            { cmd: 'search.index.remove' },
-            { source: 'order', type: 'order', sourceId: orderId },
-          )
-          .pipe(timeout(1500)),
-      );
+      await this.outbox.enqueue('SEARCH', 'search.index.remove', {
+        source: 'order',
+        type: 'order',
+        sourceId: orderId,
+      });
     } catch {
-      // Search sync should not block order flows.
+      // see syncOrderToSearch
     }
   }
 
@@ -2208,102 +2210,17 @@ export class OrderServiceService {
     let toBePaid = 0;
     let courierToBePaid = 0;
 
+    // Compute payment state up front so we can derive nextStatus before opening
+    // the transaction. Pure math, no IO.
     if (totalPrice === 0) {
-      await Promise.all([
-        this.updateCashboxBalance({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: marketTariff,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: "0 so'mlik mahsulot sotuvi",
-        }),
-        this.updateCashboxBalance({
-          user_id: String(requester.id),
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          amount: courierTariff,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: "0 so'mlik mahsulot sotuvi",
-        }),
-      ]);
+      // no toBePaid / courierToBePaid changes; both expenses applied below
     } else if (totalPrice < courierTariff) {
-      await Promise.all([
-        this.updateCashboxBalance({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Math.max(marketTariff - totalPrice, 0),
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: `${totalPrice} so'mlik mahsulot sotuvi`,
-        }),
-        this.updateCashboxBalance({
-          user_id: String(requester.id),
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          amount: Math.max(courierTariff - totalPrice, 0),
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: `${totalPrice} so'mlik mahsulot sotuvi`,
-        }),
-      ]);
+      // both expenses
     } else if (totalPrice < marketTariff) {
       courierToBePaid = totalPrice - courierTariff;
-      await Promise.all([
-        this.updateCashboxBalance({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Math.max(marketTariff - totalPrice, 0),
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: `${totalPrice} so'mlik mahsulot sotuvi`,
-        }),
-        this.updateCashboxBalance({
-          user_id: String(requester.id),
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          amount: Math.max(courierToBePaid, 0),
-          operation_type: Operation_type.INCOME,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: `${totalPrice} so'mlik mahsulot sotuvi`,
-        }),
-      ]);
     } else {
       toBePaid = totalPrice - marketTariff;
       courierToBePaid = totalPrice - courierTariff;
-
-      await Promise.all([
-        this.updateCashboxBalance({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Math.max(toBePaid, 0),
-          operation_type: Operation_type.INCOME,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: finalComment,
-        }),
-        this.updateCashboxBalance({
-          user_id: String(requester.id),
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          amount: Math.max(courierToBePaid, 0),
-          operation_type: Operation_type.INCOME,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: finalComment,
-        }),
-      ]);
     }
 
     const netToBePaid = Math.max(Number(toBePaid) || 0, 0);
@@ -2324,38 +2241,194 @@ export class OrderServiceService {
           ? Order_status.PARTLY_PAID
           : Order_status.SOLD;
 
-    if (extraCost > 0) {
-      await Promise.all([
-        this.updateCashboxBalance({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: extraCost,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.EXTRA_COST,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: finalComment,
-        }),
-        this.updateCashboxBalance({
-          user_id: String(requester.id),
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          amount: extraCost,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.EXTRA_COST,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: finalComment,
-        }),
-      ]);
+    // Atomic block: outbox enqueues for cashbox updates + order status save must
+    // commit together. Otherwise a crash between them produces missing finance
+    // events or an order in WAITING when the cashboxes were already credited.
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const tx = queryRunner.manager;
+
+      if (totalPrice === 0) {
+        await this.updateCashboxBalance(
+          {
+            user_id: String(order.market_id),
+            cashbox_type: Cashbox_type.FOR_MARKET,
+            amount: marketTariff,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: "0 so'mlik mahsulot sotuvi",
+          },
+          tx,
+        );
+        await this.updateCashboxBalance(
+          {
+            user_id: String(requester.id),
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: courierTariff,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: "0 so'mlik mahsulot sotuvi",
+          },
+          tx,
+        );
+      } else if (totalPrice < courierTariff) {
+        await this.updateCashboxBalance(
+          {
+            user_id: String(order.market_id),
+            cashbox_type: Cashbox_type.FOR_MARKET,
+            amount: Math.max(marketTariff - totalPrice, 0),
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: `${totalPrice} so'mlik mahsulot sotuvi`,
+          },
+          tx,
+        );
+        await this.updateCashboxBalance(
+          {
+            user_id: String(requester.id),
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: Math.max(courierTariff - totalPrice, 0),
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: `${totalPrice} so'mlik mahsulot sotuvi`,
+          },
+          tx,
+        );
+      } else if (totalPrice < marketTariff) {
+        await this.updateCashboxBalance(
+          {
+            user_id: String(order.market_id),
+            cashbox_type: Cashbox_type.FOR_MARKET,
+            amount: Math.max(marketTariff - totalPrice, 0),
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: `${totalPrice} so'mlik mahsulot sotuvi`,
+          },
+          tx,
+        );
+        await this.updateCashboxBalance(
+          {
+            user_id: String(requester.id),
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: Math.max(courierToBePaid, 0),
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: `${totalPrice} so'mlik mahsulot sotuvi`,
+          },
+          tx,
+        );
+      } else {
+        await this.updateCashboxBalance(
+          {
+            user_id: String(order.market_id),
+            cashbox_type: Cashbox_type.FOR_MARKET,
+            amount: Math.max(toBePaid, 0),
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: finalComment,
+          },
+          tx,
+        );
+        await this.updateCashboxBalance(
+          {
+            user_id: String(requester.id),
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: Math.max(courierToBePaid, 0),
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: finalComment,
+          },
+          tx,
+        );
+      }
+
+      if (extraCost > 0) {
+        await this.updateCashboxBalance(
+          {
+            user_id: String(order.market_id),
+            cashbox_type: Cashbox_type.FOR_MARKET,
+            amount: extraCost,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.EXTRA_COST,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: finalComment,
+          },
+          tx,
+        );
+        await this.updateCashboxBalance(
+          {
+            user_id: String(requester.id),
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: extraCost,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.EXTRA_COST,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: finalComment,
+          },
+          tx,
+        );
+      }
+
+      await this.updateFull(
+        id,
+        {
+          status: nextStatus,
+          to_be_paid: netToBePaid,
+          paid_amount: paidAfter,
+          sold_at: String(Date.now()),
+          comment: finalComment || null,
+        },
+        { id: requester.id, roles: requester.roles, note: 'Order sold' },
+        tx,
+      );
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.handleDbError(error);
+      throw new RpcException({
+        statusCode: 500,
+        message: error instanceof Error ? error.message : 'Internal server error',
+      });
+    } finally {
+      await queryRunner.release();
     }
 
-    await this.updateFull(id, {
-      status: nextStatus,
-      to_be_paid: netToBePaid,
-      paid_amount: paidAfter,
-      sold_at: String(Date.now()),
-      comment: finalComment || null,
-    }, { id: requester.id, roles: requester.roles, note: 'Order sold' });
+    // Post-commit side effects: search index + external status sync.
+    try {
+      const updated = await this.findById(id);
+      const action = this.resolveSyncAction(Order_status.WAITING, nextStatus);
+      if (action) {
+        void this.queueExternalStatusSync(updated, action, Order_status.WAITING, nextStatus);
+      }
+      void this.syncOrderToSearch(updated);
+    } catch {
+      // Search/external sync failures are non-fatal; outbox publisher and the
+      // updated DB state are authoritative.
+    }
 
     return successRes({}, 200, 'Order sold');
   }
@@ -3021,6 +3094,7 @@ export class OrderServiceService {
       items?: Array<{ product_id: string; quantity?: number }>;
     },
     requester?: { id?: string; roles?: string[]; note?: string | null },
+    externalManager?: EntityManager,
   ) {
     const order = await this.findById(id);
     const oldStatus = order.status;
@@ -3116,14 +3190,10 @@ export class OrderServiceService {
     // Prevent TypeORM cascade on stale one-to-many relation from nulling order_id.
     delete (order as Partial<Order> & { items?: OrderItem[] }).items;
 
-    const queryRunner = this.dataSource.createQueryRunner();
-    await queryRunner.connect();
-    await queryRunner.startTransaction();
-
-    try {
-      const orderRepo = queryRunner.manager.getRepository(Order);
-      const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
-      const custodyRepo = queryRunner.manager.getRepository(OrderCustodyEvent);
+    const writeOrderChanges = async (manager: EntityManager): Promise<void> => {
+      const orderRepo = manager.getRepository(Order);
+      const trackingRepo = manager.getRepository(OrderTracking);
+      const custodyRepo = manager.getRepository(OrderCustodyEvent);
       await orderRepo.save(order);
 
       if (oldStatus !== order.status) {
@@ -3157,7 +3227,26 @@ export class OrderServiceService {
           custodyRepo,
         );
       }
+    };
 
+    if (externalManager) {
+      // Caller owns the transaction; just apply writes within it and return.
+      // Post-commit side-effects (search sync, external status sync) must be
+      // triggered by the caller after their own commit completes.
+      try {
+        await writeOrderChanges(externalManager);
+      } catch (error) {
+        this.handleDbError(error);
+      }
+      return order;
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      await writeOrderChanges(queryRunner.manager);
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();
