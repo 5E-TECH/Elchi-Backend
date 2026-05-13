@@ -5,8 +5,9 @@ import { Between, Brackets, DataSource, In, IsNull, QueryFailedError, Repository
 import { lastValueFrom, timeout } from 'rxjs';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
-import { Order_source } from './entities/order.entity';
+import { OrderHolderType, Order_source } from './entities/order.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
+import { OrderCustodyEvent } from './entities/order-custody-event.entity';
 import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.entity';
 import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
@@ -40,6 +41,8 @@ export class OrderServiceService {
     private readonly orderItemRepo: Repository<OrderItem>,
     @InjectRepository(OrderTracking)
     private readonly orderTrackingRepo: Repository<OrderTracking>,
+    @InjectRepository(OrderCustodyEvent)
+    private readonly orderCustodyEventRepo: Repository<OrderCustodyEvent>,
     @InjectRepository(BranchTransferBatch)
     private readonly transferBatchRepo: Repository<BranchTransferBatch>,
     @InjectRepository(BranchTransferBatchItem)
@@ -138,6 +141,11 @@ export class OrderServiceService {
                 branch_id: order.branch_id,
                 current_batch_id: order.current_batch_id,
                 courier_id: order.courier_id,
+                holder_type: order.holder_type,
+                holder_branch_id: order.holder_branch_id,
+                holder_courier_id: order.holder_courier_id,
+                last_handover_at: order.last_handover_at,
+                last_handover_by: order.last_handover_by,
                 assigned_at: order.assigned_at,
                 return_reason: order.return_reason,
                 region_id: order.region_id,
@@ -290,6 +298,91 @@ export class OrderServiceService {
       order_id: data.order_id,
       from_status: data.from_status,
       to_status: data.to_status,
+      changed_by: data.changed_by,
+      changed_by_role: data.changed_by_role,
+      note: data.note ?? null,
+    });
+    await repo.save(entity);
+  }
+
+  private async getHqBranchId(): Promise<string | null> {
+    if (this.hqBranchIdCache) {
+      return this.hqBranchIdCache;
+    }
+
+    try {
+      const response = await rmqSend<{ data?: { id?: string } }>(
+        this.branchClient,
+        { cmd: 'branch.find_by_code' },
+        { code: 'HQ-TSHKNT' },
+        { attachRequestId: false, retries: 1 },
+      );
+      const hqId = response?.data?.id;
+      if (hqId) {
+        this.hqBranchIdCache = String(hqId);
+      }
+    } catch {
+      return null;
+    }
+
+    return this.hqBranchIdCache;
+  }
+
+  private async resolveHolderFromState(
+    branchId: string | null | undefined,
+    courierId: string | null | undefined,
+  ): Promise<{ holder_type: OrderHolderType; holder_branch_id: string | null; holder_courier_id: string | null }> {
+    const normalizedBranchId = branchId ? String(branchId) : null;
+    const normalizedCourierId = courierId ? String(courierId) : null;
+
+    if (normalizedCourierId) {
+      return {
+        holder_type: OrderHolderType.COURIER,
+        holder_branch_id: normalizedBranchId,
+        holder_courier_id: normalizedCourierId,
+      };
+    }
+
+    const hqBranchId = await this.getHqBranchId();
+    if (normalizedBranchId && normalizedBranchId !== hqBranchId) {
+      return {
+        holder_type: OrderHolderType.BRANCH,
+        holder_branch_id: normalizedBranchId,
+        holder_courier_id: null,
+      };
+    }
+
+    return {
+      holder_type: OrderHolderType.HQ,
+      holder_branch_id: null,
+      holder_courier_id: null,
+    };
+  }
+
+  private async createCustodyEvent(
+    data: {
+      order_id: string;
+      from_holder_type: OrderHolderType | null;
+      to_holder_type: OrderHolderType;
+      from_branch_id: string | null;
+      to_branch_id: string | null;
+      from_courier_id: string | null;
+      to_courier_id: string | null;
+      changed_by: string;
+      changed_by_role: 'admin' | 'courier' | 'market' | 'system';
+      note?: string | null;
+    },
+    repository?: Repository<OrderCustodyEvent>,
+  ) {
+    const repo = repository ?? this.orderCustodyEventRepo;
+    const entity = repo.create({
+      order_id: data.order_id,
+      from_holder_type: data.from_holder_type,
+      to_holder_type: data.to_holder_type,
+      from_branch_id: data.from_branch_id,
+      to_branch_id: data.to_branch_id,
+      from_courier_id: data.from_courier_id,
+      to_courier_id: data.to_courier_id,
       changed_by: data.changed_by,
       changed_by_role: data.changed_by_role,
       note: data.note ?? null,
@@ -1257,6 +1350,10 @@ export class OrderServiceService {
     const operatorId = dto.operator_id ?? (isOperatorRequester ? requester?.id ?? null : null);
 
     const resolvedBranchId = await this.resolveBranchIdForOrder(dto.branch_id, requester);
+    const resolvedHolder = await this.resolveHolderFromState(
+      resolvedBranchId,
+      dto.courier_id ?? null,
+    );
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -1267,6 +1364,7 @@ export class OrderServiceService {
       const orderRepo = queryRunner.manager.getRepository(Order);
       const orderItemRepo = queryRunner.manager.getRepository(OrderItem);
       const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+      const custodyRepo = queryRunner.manager.getRepository(OrderCustodyEvent);
 
       const order = orderRepo.create({
         market_id: dto.market_id,
@@ -1286,6 +1384,11 @@ export class OrderServiceService {
         current_batch_id: dto.current_batch_id ?? null,
         courier_id: dto.courier_id ?? null,
         assigned_at: this.normalizeDateTimeInput(dto.assigned_at),
+        holder_type: resolvedHolder.holder_type,
+        holder_branch_id: resolvedHolder.holder_branch_id,
+        holder_courier_id: resolvedHolder.holder_courier_id,
+        last_handover_at: new Date(),
+        last_handover_by: requester?.id ? String(requester.id) : null,
         return_reason: dto.return_reason ?? null,
         district_id: dto.district_id ?? null,
         region_id: dto.region_id ?? null,
@@ -1324,6 +1427,22 @@ export class OrderServiceService {
           note: 'Order created',
         },
         trackingRepo,
+      );
+
+      await this.createCustodyEvent(
+        {
+          order_id: saved.id,
+          from_holder_type: null,
+          to_holder_type: resolvedHolder.holder_type,
+          from_branch_id: null,
+          to_branch_id: resolvedHolder.holder_branch_id,
+          from_courier_id: null,
+          to_courier_id: resolvedHolder.holder_courier_id,
+          changed_by: String(requester?.id ?? 'system'),
+          changed_by_role: requester?.id ? this.toTrackingRole(requester.roles) : 'system',
+          note: 'Initial custody assigned',
+        },
+        custodyRepo,
       );
 
       await queryRunner.commitTransaction();
@@ -2810,6 +2929,30 @@ export class OrderServiceService {
     }));
   }
 
+  async getCustodyHistoryByOrderId(id: string) {
+    await this.findById(id);
+
+    const rows = await this.orderCustodyEventRepo.find({
+      where: { order_id: id },
+      order: { created_at: 'ASC' },
+    });
+
+    return rows.map((row) => ({
+      id: row.id,
+      order_id: row.order_id,
+      from_holder_type: row.from_holder_type,
+      to_holder_type: row.to_holder_type,
+      from_branch_id: row.from_branch_id,
+      to_branch_id: row.to_branch_id,
+      from_courier_id: row.from_courier_id,
+      to_courier_id: row.to_courier_id,
+      changed_by: row.changed_by,
+      changed_by_role: row.changed_by_role,
+      note: row.note,
+      created_at: this.toUzIsoString(row.created_at),
+    }));
+  }
+
   async update(
     id: string,
     dto: {
@@ -2881,6 +3024,9 @@ export class OrderServiceService {
   ) {
     const order = await this.findById(id);
     const oldStatus = order.status;
+    const previousHolderType = order.holder_type;
+    const previousHolderBranchId = order.holder_branch_id;
+    const previousHolderCourierId = order.holder_courier_id;
 
     Object.assign(order, {
       market_id: dto.market_id ?? order.market_id,
@@ -2944,6 +3090,21 @@ export class OrderServiceService {
       source: dto.source ?? order.source ?? Order_source.INTERNAL,
     });
 
+    const resolvedHolder = await this.resolveHolderFromState(order.branch_id, order.courier_id);
+    order.holder_type = resolvedHolder.holder_type;
+    order.holder_branch_id = resolvedHolder.holder_branch_id;
+    order.holder_courier_id = resolvedHolder.holder_courier_id;
+
+    const custodyChanged =
+      previousHolderType !== order.holder_type ||
+      String(previousHolderBranchId ?? '') !== String(order.holder_branch_id ?? '') ||
+      String(previousHolderCourierId ?? '') !== String(order.holder_courier_id ?? '');
+
+    if (custodyChanged) {
+      order.last_handover_at = new Date();
+      order.last_handover_by = requester?.id ? String(requester.id) : null;
+    }
+
     if (oldStatus !== order.status && !this.isValidStatusTransition(oldStatus, order.status)) {
       this.badRequest(`Invalid status transition: ${oldStatus} -> ${order.status}`);
     }
@@ -2962,6 +3123,7 @@ export class OrderServiceService {
     try {
       const orderRepo = queryRunner.manager.getRepository(Order);
       const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+      const custodyRepo = queryRunner.manager.getRepository(OrderCustodyEvent);
       await orderRepo.save(order);
 
       if (oldStatus !== order.status) {
@@ -2975,6 +3137,24 @@ export class OrderServiceService {
             note: requester?.note ?? null,
           },
           trackingRepo,
+        );
+      }
+
+      if (custodyChanged) {
+        await this.createCustodyEvent(
+          {
+            order_id: order.id,
+            from_holder_type: previousHolderType ?? null,
+            to_holder_type: order.holder_type,
+            from_branch_id: previousHolderBranchId ?? null,
+            to_branch_id: order.holder_branch_id ?? null,
+            from_courier_id: previousHolderCourierId ?? null,
+            to_courier_id: order.holder_courier_id ?? null,
+            changed_by: String(requester?.id ?? 'system'),
+            changed_by_role: requester?.id ? this.toTrackingRole(requester.roles) : 'system',
+            note: requester?.note ?? 'Order custody changed',
+          },
+          custodyRepo,
         );
       }
 

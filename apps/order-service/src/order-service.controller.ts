@@ -151,6 +151,14 @@ export class OrderServiceController {
     return this.executeAndAck(context, () => this.orderService.getTrackingByOrderId(data.id));
   }
 
+  @MessagePattern({ cmd: 'order.custody_history' })
+  custodyHistory(
+    @Payload() data: { id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.orderService.getCustodyHistoryByOrderId(data.id));
+  }
+
   @MessagePattern({ cmd: 'order.find_new_markets' })
   findNewMarkets(
     @Payload() data: { branch_id?: string; exclude_branch_source?: boolean } | undefined,
