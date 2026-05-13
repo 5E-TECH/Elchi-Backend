@@ -564,16 +564,13 @@ export class ApiGatewayController {
       requesterRoles.includes(RoleEnum.SUPERADMIN) || requesterRoles.includes(RoleEnum.ADMIN);
 
     let scopedUserIds: string[] | undefined;
+    let managerBranchUserIds: string[] | undefined;
     if (!isSystemPrivileged && requesterRoles.includes(RoleEnum.MANAGER) && req?.user?.sub) {
       const assignment = await this.resolveBranchAssignment(req.user);
       const branchId = String(assignment?.branch_id ?? '').trim();
-      const branchType = String(assignment?.branch?.type ?? '').trim().toUpperCase();
 
       if (!branchId) {
         throw new ForbiddenException('Manager hech qaysi branchga biriktirilmagan');
-      }
-      if (branchType !== 'REGIONAL' && branchType !== 'HYBRID') {
-        throw new ForbiddenException('Bu branch type uchun userlarni ko‘rish ruxsati yo‘q');
       }
 
       const branchUsersResponse = await firstValueFrom(
@@ -583,22 +580,24 @@ export class ApiGatewayController {
         ),
       );
       const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
-      scopedUserIds = Array.from(
+      managerBranchUserIds = Array.from(
         new Set(
           branchUsers
             .map((row: any) => String(row?.user_id ?? '').trim())
             .filter(Boolean),
         ),
       );
+      scopedUserIds = managerBranchUserIds;
     }
 
-    const needsCourierBranchScope =
-      normalizedRole === RoleEnum.COURIER &&
-      (requesterRoles.includes(RoleEnum.MANAGER) ||
-        requesterRoles.includes(RoleEnum.ADMIN) ||
-        requesterRoles.includes(RoleEnum.SUPERADMIN));
+    const requesterCanHaveCourierScope =
+      requesterRoles.includes(RoleEnum.MANAGER) ||
+      requesterRoles.includes(RoleEnum.ADMIN) ||
+      requesterRoles.includes(RoleEnum.SUPERADMIN);
 
-    if (needsCourierBranchScope && req?.user?.sub) {
+    let branchCourierIds: string[] | undefined;
+    let branchBoundUserIds: string[] | undefined;
+    if (requesterCanHaveCourierScope && req?.user?.sub) {
       const assignment = await this.resolveBranchAssignment(req.user);
       const branchId = String(assignment?.branch_id ?? '').trim();
 
@@ -613,7 +612,14 @@ export class ApiGatewayController {
         ),
       );
       const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
-      const branchCourierIds: string[] = Array.from(
+      branchBoundUserIds = Array.from(
+        new Set(
+          branchUsers
+            .map((row: any) => String(row?.user_id ?? '').trim())
+            .filter(Boolean),
+        ),
+      );
+      branchCourierIds = Array.from(
         new Set(
           branchUsers
             .filter((row: any) => String(row?.role ?? '').trim().toUpperCase() === 'COURIER')
@@ -621,7 +627,9 @@ export class ApiGatewayController {
             .filter(Boolean),
         ),
       );
+    }
 
+    if (normalizedRole === RoleEnum.COURIER && Array.isArray(branchCourierIds)) {
       if (Array.isArray(scopedUserIds)) {
         const branchCourierSet = new Set(branchCourierIds);
         scopedUserIds = scopedUserIds.filter((id) => branchCourierSet.has(id));
@@ -630,20 +638,73 @@ export class ApiGatewayController {
       }
     }
 
-    return this.identityClient.send(
-      { cmd: 'identity.user.find_all' },
-      {
-        query: {
-          search,
-          role,
-          status,
-          region_id: resolvedRegionId,
-          user_ids: scopedUserIds,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
+    const response = await firstValueFrom(
+      this.identityClient.send(
+        { cmd: 'identity.user.find_all' },
+        {
+          query: {
+            search,
+            role,
+            status,
+            region_id: resolvedRegionId,
+            user_ids: scopedUserIds,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
         },
-      },
+      ),
     );
+
+    const items = Array.isArray(response?.data?.items) ? response.data.items : [];
+    if (!normalizedRole && Array.isArray(branchBoundUserIds)) {
+      const allowedBranchBoundIds = new Set(branchBoundUserIds);
+      const filteredItems = items.filter((row: any) => {
+        const rowRole = String(row?.role ?? '').trim().toLowerCase();
+        const shouldScopeByBranch =
+          rowRole === RoleEnum.COURIER ||
+          rowRole === RoleEnum.BRANCH ||
+          rowRole === 'branch_admin';
+
+        if (!shouldScopeByBranch) {
+          return true;
+        }
+        return allowedBranchBoundIds.has(String(row?.id ?? '').trim());
+      });
+
+      if (response?.data) {
+        response.data.items = filteredItems;
+        if (response.data.meta) {
+          response.data.meta.total = filteredItems.length;
+          response.data.meta.totalUsers = filteredItems.length;
+          const limitValue = Number(response.data.meta.limit ?? limit ?? 10);
+          response.data.meta.totalPages =
+            limitValue > 0 ? Math.max(1, Math.ceil(filteredItems.length / limitValue)) : 1;
+        }
+      }
+    }
+
+    if (requesterRoles.includes(RoleEnum.MANAGER) && req?.user?.sub && response?.data) {
+      const allowed = new Set((managerBranchUserIds ?? []).map((id) => String(id)));
+      const requesterId = String(req.user.sub);
+      const branchScoped = (Array.isArray(response.data.items) ? response.data.items : []).filter((row: any) => {
+        const userId = String(row?.id ?? '').trim();
+        if (!allowed.has(userId)) {
+          return false;
+        }
+        return userId !== requesterId;
+      });
+
+      response.data.items = branchScoped;
+      if (response.data.meta) {
+        response.data.meta.total = branchScoped.length;
+        response.data.meta.totalUsers = branchScoped.length;
+        const limitValue = Number(response.data.meta.limit ?? limit ?? 10);
+        response.data.meta.totalPages =
+          limitValue > 0 ? Math.max(1, Math.ceil(branchScoped.length / limitValue)) : 1;
+      }
+    }
+
+    return response;
   }
 
   @Get('users/:id')
