@@ -13,6 +13,7 @@ import {
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
+import { OrderCustodyEvent } from './entities/order-custody-event.entity';
 import { Branch } from './entities/branch.entity';
 import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.entity';
@@ -43,6 +44,7 @@ import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.ent
       Order,
       OrderItem,
       OrderTracking,
+      OrderCustodyEvent,
       Branch,
       BranchTransferBatch,
       BranchTransferBatchItem,

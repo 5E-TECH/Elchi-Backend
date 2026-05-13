@@ -4,11 +4,18 @@ import { Order_status, Where_deliver } from '@app/common';
 import { OrderItem } from './order-item.entity';
 import { OrderTracking } from './order-tracking.entity';
 import { Branch } from './branch.entity';
+import { OrderCustodyEvent } from './order-custody-event.entity';
 
 export enum Order_source {
   INTERNAL = 'internal',
   EXTERNAL = 'external',
   BRANCH = 'branch',
+}
+
+export enum OrderHolderType {
+  HQ = 'HQ',
+  BRANCH = 'BRANCH',
+  COURIER = 'COURIER',
 }
 
 @Entity({ name: 'orders' })
@@ -86,6 +93,21 @@ export class Order extends BaseEntity {
   @Column({ type: 'timestamptz', nullable: true })
   assigned_at!: Date | null;
 
+  @Column({ type: 'enum', enum: OrderHolderType, default: OrderHolderType.HQ })
+  holder_type!: OrderHolderType;
+
+  @Column({ type: 'bigint', nullable: true })
+  holder_branch_id!: string | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  holder_courier_id!: string | null;
+
+  @Column({ type: 'timestamptz', nullable: true })
+  last_handover_at!: Date | null;
+
+  @Column({ type: 'bigint', nullable: true })
+  last_handover_by!: string | null;
+
   @Column({ type: 'text', nullable: true })
   return_reason!: string | null;
 
@@ -109,4 +131,7 @@ export class Order extends BaseEntity {
 
   @OneToMany(() => OrderTracking, (tracking) => tracking.order)
   tracking!: OrderTracking[];
+
+  @OneToMany(() => OrderCustodyEvent, (event) => event.order)
+  custody_events!: OrderCustodyEvent[];
 }
