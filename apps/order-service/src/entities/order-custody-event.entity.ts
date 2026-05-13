@@ -7,7 +7,10 @@ import {
   ManyToOne,
   PrimaryGeneratedColumn,
 } from 'typeorm';
-import { Order, OrderHolderType } from './order.entity';
+import { Order } from './order.entity';
+import type { OrderHolderType } from './order.entity';
+
+const ORDER_HOLDER_TYPES = ['HQ', 'BRANCH', 'COURIER'] as const;
 
 @Entity({ name: 'order_custody_events' })
 @Index('IDX_order_custody_events_order_id_created_at', ['order_id', 'created_at'])
@@ -22,10 +25,10 @@ export class OrderCustodyEvent {
   @JoinColumn({ name: 'order_id' })
   order!: Order;
 
-  @Column({ type: 'enum', enum: OrderHolderType, nullable: true })
+  @Column({ type: 'enum', enum: ORDER_HOLDER_TYPES, nullable: true })
   from_holder_type!: OrderHolderType | null;
 
-  @Column({ type: 'enum', enum: OrderHolderType })
+  @Column({ type: 'enum', enum: ORDER_HOLDER_TYPES })
   to_holder_type!: OrderHolderType;
 
   @Column({ type: 'bigint', nullable: true })
