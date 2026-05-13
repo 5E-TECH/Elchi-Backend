@@ -84,7 +84,11 @@ export class UserServiceService implements OnModuleInit {
       return;
     }
 
-    if (this.hasRole(requester, Roles.SUPERADMIN) || this.hasRole(requester, Roles.ADMIN)) {
+    if (
+      this.hasRole(requester, Roles.SUPERADMIN) ||
+      this.hasRole(requester, Roles.ADMIN) ||
+      this.hasRole(requester, Roles.MANAGER)
+    ) {
       return;
     }
 

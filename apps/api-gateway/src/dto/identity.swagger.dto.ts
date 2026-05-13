@@ -40,9 +40,13 @@ export class CreateAdminRequestDto {
 }
 
 export class CreateRegistratorRequestDto extends CreateAdminRequestDto {
-  @ApiProperty({ example: '1', description: 'Branch ID' })
+  @ApiPropertyOptional({
+    example: '1',
+    description: 'Branch ID (manager HYBRID flowda avtomatik aniqlanadi)',
+  })
+  @IsOptional()
   @IsString()
-  branch_id!: string;
+  branch_id?: string;
 }
 
 export class UpdateAdminRequestDto {
