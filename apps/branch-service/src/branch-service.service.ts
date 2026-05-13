@@ -13,6 +13,10 @@ import { lastValueFrom, timeout, TimeoutError } from 'rxjs';
 type RequesterContext = {
   id?: string;
   roles?: string[];
+  // Optional: JWT carries this for non-system roles. Available for callers
+  // that want to skip a BranchUser lookup; resolveAccessScope below still
+  // queries the DB to derive role-based scope (manager descendant tree).
+  branch_id?: string | null;
 };
 
 type BranchAccessScope = {

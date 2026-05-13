@@ -94,7 +94,10 @@ type SyncHistoryQuery = {
 @Injectable()
 export class IntegrationServiceService {
   private readonly tokenCache = new Map<string, { token: string; expiresAt: number }>();
-  private readonly credentialSecret = process.env.INTEGRATION_CREDENTIAL_SECRET || 'elchi-integration-secret';
+  // No default fallback by design: an environment without this variable must
+  // not boot, otherwise stored credentials would silently encrypt with a
+  // publicly-known key. Joi validation guarantees presence at startup.
+  private readonly credentialSecret = process.env.INTEGRATION_CREDENTIAL_SECRET!;
   private queueProcessing = false;
 
   constructor(

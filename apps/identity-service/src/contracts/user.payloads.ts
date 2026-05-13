@@ -17,6 +17,7 @@ export interface CreateUserPayload {
 
 export interface CreateCourierPayload {
   dto: CreateCourierDto;
+  requester?: RequesterContext;
 }
 
 export interface CreateCustomerPayload {
@@ -25,6 +26,7 @@ export interface CreateCustomerPayload {
 
 export interface CreateManagerPayload {
   dto: CreateManagerDto;
+  requester?: RequesterContext;
 }
 
 export interface FindCouriersByIdsPayload {

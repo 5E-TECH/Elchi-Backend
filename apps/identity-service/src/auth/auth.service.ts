@@ -1,5 +1,5 @@
-import { Injectable } from '@nestjs/common';
-import { RpcException } from '@nestjs/microservices';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -9,18 +9,48 @@ import { User } from '../entities/user.entity';
 import { BcryptEncryption } from '../../../../libs/common/helpers/bcrypt';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
-import { Status } from '@app/common';
+import { Status, rmqSend } from '@app/common';
 import { errorRes, successRes } from '../../../../libs/common/helpers/response';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly users: Repository<User>,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
     private readonly bcryptEncryption: BcryptEncryption,
+    @Inject('BRANCH') private readonly branchClient: ClientProxy,
   ) {}
+
+  /**
+   * Resolve the user's current branch assignment from branch-service.
+   * Returns null when the user has no branch (e.g. SUPERADMIN, MARKET, CUSTOMER).
+   * Failure is non-fatal: tokens still issue with branch_id=null and downstream
+   * services fall back to BranchUser lookup.
+   */
+  private async resolveBranchId(userId: string): Promise<string | null> {
+    try {
+      const response = await rmqSend<{ data?: { branch_id?: string | null } }>(
+        this.branchClient,
+        { cmd: 'branch.user.find_by_user' },
+        {
+          user_id: String(userId),
+          requester: { id: String(userId), roles: ['SUPERADMIN'] },
+        },
+        { attachRequestId: false, retries: 1, timeoutMs: 3000 },
+      );
+      const branchId = response?.data?.branch_id;
+      return branchId ? String(branchId) : null;
+    } catch (error) {
+      this.logger.warn(
+        `branch.user.find_by_user failed for user ${userId}: ${(error as Error)?.message ?? 'unknown'} — issuing tokens without branch_id`,
+      );
+      return null;
+    }
+  }
 
   async login(dto: LoginDto) {
     const user = await this.users.findOne({
@@ -129,10 +159,13 @@ export class AuthService {
   }
 
   private async issueTokens(user: User) {
+    const branchId = await this.resolveBranchId(user.id);
+
     const payload: Record<string, unknown> = {
       sub: user.id,
       username: user.username,
       roles: [user.role],
+      branch_id: branchId,
     };
 
     const accessToken = await this.jwtService.signAsync(payload);

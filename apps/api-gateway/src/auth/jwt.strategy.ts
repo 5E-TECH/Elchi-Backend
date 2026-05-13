@@ -29,10 +29,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     return Array.from(normalized);
   }
 
-  validate(payload: { sub: string; username: string; roles?: string[] }) {
+  validate(payload: {
+    sub: string;
+    username: string;
+    roles?: string[];
+    branch_id?: string | null;
+  }) {
     return {
       ...payload,
       roles: this.normalizeRoles(payload.roles),
+      branch_id: payload.branch_id ?? null,
     };
   }
 }

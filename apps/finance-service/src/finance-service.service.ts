@@ -9,6 +9,7 @@ import {
   In,
   LessThanOrEqual,
   MoreThanOrEqual,
+  QueryFailedError,
   Repository,
 } from 'typeorm';
 import { Cashbox } from './entities/cashbox.entity';
@@ -365,11 +366,20 @@ export class FinanceServiceService implements OnModuleInit {
       user_id?: string;
       cashbox_type?: Cashbox_type;
     },
+    options: { lock?: boolean } = {},
   ) {
+    // `lock: true` acquires a row-level FOR UPDATE so concurrent updateBalance
+    // calls for the same cashbox serialize instead of clobbering each other's
+    // in-memory recomputed balance. Only safe inside an active transaction.
+    const lock = options.lock
+      ? ({ mode: 'pessimistic_write' as const })
+      : undefined;
+
     if (selector.cashbox_id) {
       this.assertBigIntId(selector.cashbox_id, 'cashbox_id');
       const byId = await manager.findOne(Cashbox, {
         where: { id: selector.cashbox_id },
+        lock,
       });
       if (!byId) {
         throw new NotFoundException('Cashbox not found');
@@ -389,6 +399,7 @@ export class FinanceServiceService implements OnModuleInit {
         user_id: selector.user_id,
         cashbox_type: selector.cashbox_type,
       },
+      lock,
     });
 
     if (!byUserType) {
@@ -529,11 +540,15 @@ export class FinanceServiceService implements OnModuleInit {
       await queryRunner.startTransaction();
 
       try {
-        const cashbox = await this.getCashboxBySelectorWithManager(queryRunner.manager, {
-          cashbox_id: dto.cashbox_id,
-          user_id: dto.user_id,
-          cashbox_type: dto.cashbox_type,
-        });
+        const cashbox = await this.getCashboxBySelectorWithManager(
+          queryRunner.manager,
+          {
+            cashbox_id: dto.cashbox_id,
+            user_id: dto.user_id,
+            cashbox_type: dto.cashbox_type,
+          },
+          { lock: true },
+        );
 
         this.updateBalancesByMethod(
           cashbox,
@@ -792,6 +807,10 @@ export class FinanceServiceService implements OnModuleInit {
     try {
       this.assertBigIntId(dto.opened_by, 'opened_by');
 
+      // Optimistic pre-check produces a friendlier error message, but is racy.
+      // The partial unique index `IDX_SHIFT_OPENED_BY_OPEN_UNIQUE` is the
+      // authoritative guard: two concurrent inserts both pass the check but
+      // exactly one wins at the DB level; the loser hits 23505 below.
       const openShift = await this.shiftRepo.findOne({
         where: { opened_by: dto.opened_by, status: ShiftStatus.OPEN },
       });
@@ -809,8 +828,20 @@ export class FinanceServiceService implements OnModuleInit {
         comment: dto.comment ?? null,
       });
 
-      const saved = await this.shiftRepo.save(shift);
-      return this.successRes(saved, 201, 'Shift opened');
+      try {
+        const saved = await this.shiftRepo.save(shift);
+        return this.successRes(saved, 201, 'Shift opened');
+      } catch (insertError) {
+        if (
+          insertError instanceof QueryFailedError &&
+          (insertError as QueryFailedError & { code?: string }).code === '23505'
+        ) {
+          throw new BadRequestException(
+            'An open shift already exists for this user',
+          );
+        }
+        throw insertError;
+      }
     } catch (error) {
       this.toRpcError(error);
     }
@@ -820,71 +851,96 @@ export class FinanceServiceService implements OnModuleInit {
     try {
       this.assertBigIntId(dto.closed_by, 'closed_by');
 
-      let shift: Shift | null = null;
+      // Pre-locate the shift's id without lock so we can then re-fetch with a
+      // row-level lock inside the transaction. Without the lock, two parallel
+      // closeShift calls can both pass the status==='open' check and double-write.
+      let shiftId: string | null = null;
 
       if (dto.shift_id) {
         this.assertBigIntId(dto.shift_id, 'shift_id');
-        shift = await this.shiftRepo.findOne({ where: { id: dto.shift_id } });
+        shiftId = String(dto.shift_id);
       } else if (dto.opened_by) {
         this.assertBigIntId(dto.opened_by, 'opened_by');
-        shift = await this.shiftRepo.findOne({
+        const candidate = await this.shiftRepo.findOne({
           where: {
             opened_by: dto.opened_by,
             status: ShiftStatus.OPEN,
           },
           order: { opened_at: 'DESC' },
         });
+        shiftId = candidate ? String(candidate.id) : null;
       }
 
-      if (!shift) {
+      if (!shiftId) {
         throw new NotFoundException('Open shift not found');
       }
 
-      if (shift.status !== ShiftStatus.OPEN) {
-        throw new BadRequestException('Shift is already closed');
-      }
+      const queryRunner = this.dataSource.createQueryRunner();
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
 
-      const closeTime = new Date();
-      const histories = await this.historyRepo.find({
-        where: {
-          createdAt: Between(shift.opened_at, closeTime),
-        },
-      });
+      try {
+        const shift = await queryRunner.manager.findOne(Shift, {
+          where: { id: shiftId },
+          lock: { mode: 'pessimistic_write' },
+        });
 
-      let totalIncomeCash = 0;
-      let totalIncomeCard = 0;
-      let totalExpenseCash = 0;
-      let totalExpenseCard = 0;
+        if (!shift) {
+          throw new NotFoundException('Open shift not found');
+        }
 
-      for (const h of histories) {
-        if (h.operation_type === Operation_type.INCOME) {
-          if (h.payment_method === PaymentMethod.CASH) {
-            totalIncomeCash += Number(h.amount);
-          } else {
-            totalIncomeCard += Number(h.amount);
-          }
-        } else if (h.operation_type === Operation_type.EXPENSE) {
-          if (h.payment_method === PaymentMethod.CASH) {
-            totalExpenseCash += Number(h.amount);
-          } else {
-            totalExpenseCard += Number(h.amount);
+        if (shift.status !== ShiftStatus.OPEN) {
+          throw new BadRequestException('Shift is already closed');
+        }
+
+        const closeTime = new Date();
+        const histories = await queryRunner.manager.find(CashboxHistory, {
+          where: {
+            createdAt: Between(shift.opened_at, closeTime),
+          },
+        });
+
+        let totalIncomeCash = 0;
+        let totalIncomeCard = 0;
+        let totalExpenseCash = 0;
+        let totalExpenseCard = 0;
+
+        for (const h of histories) {
+          if (h.operation_type === Operation_type.INCOME) {
+            if (h.payment_method === PaymentMethod.CASH) {
+              totalIncomeCash += Number(h.amount);
+            } else {
+              totalIncomeCard += Number(h.amount);
+            }
+          } else if (h.operation_type === Operation_type.EXPENSE) {
+            if (h.payment_method === PaymentMethod.CASH) {
+              totalExpenseCash += Number(h.amount);
+            } else {
+              totalExpenseCard += Number(h.amount);
+            }
           }
         }
+
+        shift.closed_by = dto.closed_by;
+        shift.closed_at = closeTime;
+        shift.status = ShiftStatus.CLOSED;
+        shift.total_income_cash = totalIncomeCash;
+        shift.total_income_card = totalIncomeCard;
+        shift.total_expense_cash = totalExpenseCash;
+        shift.total_expense_card = totalExpenseCard;
+        shift.closing_balance_cash = Number(dto.closing_balance_cash ?? 0);
+        shift.closing_balance_card = Number(dto.closing_balance_card ?? 0);
+        shift.comment = dto.comment ?? shift.comment;
+
+        const saved = await queryRunner.manager.save(shift);
+        await queryRunner.commitTransaction();
+        return this.successRes(saved, 200, 'Shift closed');
+      } catch (error) {
+        await queryRunner.rollbackTransaction();
+        throw error;
+      } finally {
+        await queryRunner.release();
       }
-
-      shift.closed_by = dto.closed_by;
-      shift.closed_at = closeTime;
-      shift.status = ShiftStatus.CLOSED;
-      shift.total_income_cash = totalIncomeCash;
-      shift.total_income_card = totalIncomeCard;
-      shift.total_expense_cash = totalExpenseCash;
-      shift.total_expense_card = totalExpenseCard;
-      shift.closing_balance_cash = Number(dto.closing_balance_cash ?? 0);
-      shift.closing_balance_card = Number(dto.closing_balance_card ?? 0);
-      shift.comment = dto.comment ?? shift.comment;
-
-      const saved = await this.shiftRepo.save(shift);
-      return this.successRes(saved, 200, 'Shift closed');
     } catch (error) {
       this.toRpcError(error);
     }

@@ -65,4 +65,13 @@ export class CreateCourierDto {
   @IsNumber()
   @Min(0)
   tariff_center?: number;
+
+  @ApiPropertyOptional({
+    example: '1',
+    description:
+      'Branch ID. When set, identity-service will assign the new courier to this branch as part of the create flow.',
+  })
+  @IsOptional()
+  @IsString()
+  branch_id?: string;
 }

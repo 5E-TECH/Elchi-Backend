@@ -39,6 +39,41 @@ export class UserServiceService implements OnModuleInit {
     return safeUser;
   }
 
+  /**
+   * Assign a freshly-created user to a branch. On failure, compensate by
+   * hard-deleting the user so the staff-create operation stays atomic from
+   * the caller's perspective. Previously this saga lived in the API gateway,
+   * which left orphaned users when the gateway crashed mid-flight; centralising
+   * it here keeps the user lifecycle owned by identity-service.
+   */
+  private async assignUserToBranchOrCompensate(
+    userId: string,
+    branchId: string,
+    branchRole: 'REGISTRATOR' | 'COURIER' | 'MANAGER',
+    requester?: RequesterContext,
+  ): Promise<void> {
+    try {
+      await rmqSend(
+        this.branchClient,
+        { cmd: 'branch.user.assign' },
+        {
+          requester,
+          dto: {
+            branch_id: String(branchId),
+            user_id: String(userId),
+            role: branchRole,
+          },
+        },
+        { attachRequestId: false, retries: 1, timeoutMs: 5000 },
+      );
+    } catch (assignError) {
+      // Hard delete the user; soft-delete would leave a stale row that blocks
+      // phone-number uniqueness on retry.
+      await this.users.delete({ id: userId }).catch(() => undefined);
+      throw assignError;
+    }
+  }
+
   private notFound(message: string): never {
     throw new RpcException(errorRes(message, 404));
   }
@@ -427,6 +462,16 @@ export class UserServiceService implements OnModuleInit {
     });
 
     const saved = await this.users.save(registrator);
+
+    if (dto.branch_id) {
+      await this.assignUserToBranchOrCompensate(
+        saved.id,
+        dto.branch_id,
+        'REGISTRATOR',
+        requester,
+      );
+    }
+
     void this.syncUserToSearch(saved);
     return successRes(this.sanitize(saved), 201, "Ro'yxatchi yaratildi");
   }
@@ -760,7 +805,7 @@ export class UserServiceService implements OnModuleInit {
     return successRes(this.sanitize(saved), 201, 'Market yaratildi');
   }
 
-  async createCourier(dto: CreateCourierDto) {
+  async createCourier(dto: CreateCourierDto, requester?: RequesterContext) {
     await this.validateRegionExists(dto.region_id);
     await this.ensurePhoneUnique(dto.phone_number);
 
@@ -782,15 +827,24 @@ export class UserServiceService implements OnModuleInit {
       default_tariff: null,
       isDeleted: false,
     });
-    
 
     const saved = await this.users.save(courier);
+
+    if (dto.branch_id) {
+      await this.assignUserToBranchOrCompensate(
+        saved.id,
+        dto.branch_id,
+        'COURIER',
+        requester,
+      );
+    }
+
     await this.ensureUserCashbox(saved.id, Cashbox_type.FOR_COURIER);
     void this.syncUserToSearch(saved);
     return successRes(this.sanitize(saved), 201, 'Courier yaratildi');
   }
 
-  async createManager(dto: CreateManagerDto) {
+  async createManager(dto: CreateManagerDto, requester?: RequesterContext) {
     await this.ensurePhoneUnique(dto.phone_number);
 
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
@@ -812,6 +866,16 @@ export class UserServiceService implements OnModuleInit {
     });
 
     const saved = await this.users.save(manager);
+
+    if (dto.branch_id) {
+      await this.assignUserToBranchOrCompensate(
+        saved.id,
+        dto.branch_id,
+        'MANAGER',
+        requester,
+      );
+    }
+
     void this.syncUserToSearch(saved);
     return successRes(this.sanitize(saved), 201, 'Manager yaratildi');
   }
