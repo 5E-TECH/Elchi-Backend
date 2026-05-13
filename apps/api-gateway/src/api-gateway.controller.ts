@@ -129,7 +129,7 @@ export class ApiGatewayController {
 
   @Post('registrators')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create registrator' })
   @ApiBody({ type: CreateRegistratorRequestDto })
@@ -139,7 +139,31 @@ export class ApiGatewayController {
     @Body() dto: CreateRegistratorRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    const { branch_id, ...identityDto } = dto;
+    const requesterRoles = (req?.user?.roles ?? []).map((role) =>
+      String(role ?? '').trim().toLowerCase(),
+    );
+    const isManager = requesterRoles.includes(RoleEnum.MANAGER);
+
+    let resolvedBranchId = String(dto?.branch_id ?? '').trim();
+    if (isManager) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      const branchId = String(assignment?.branch_id ?? '').trim();
+      const branchType = String(assignment?.branch?.type ?? '').trim().toUpperCase();
+
+      if (!branchId) {
+        throw new ForbiddenException('Manager hech qaysi branchga biriktirilmagan');
+      }
+      if (branchType !== 'HYBRID') {
+        throw new ForbiddenException("Faqat HYBRID branch manager'i registrator yarata oladi");
+      }
+      resolvedBranchId = branchId;
+    }
+
+    if (!resolvedBranchId) {
+      throw new BadRequestException('branch_id majburiy');
+    }
+
+    const { branch_id: _branchIdFromBody, ...identityDto } = dto;
     const created = await firstValueFrom(
       this.identityClient.send(
         { cmd: 'identity.registrator.create' },
@@ -159,7 +183,7 @@ export class ApiGatewayController {
           {
             requester: this.toRequester(req),
             dto: {
-              branch_id,
+              branch_id: resolvedBranchId,
               user_id: registratorId,
               role: 'REGISTRATOR',
             },
