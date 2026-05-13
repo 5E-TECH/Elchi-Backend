@@ -599,7 +599,14 @@ export class ApiGatewayController {
     let branchBoundUserIds: string[] | undefined;
     if (requesterCanHaveCourierScope && req?.user?.sub) {
       const assignment = await this.resolveBranchAssignment(req.user);
-      const branchId = String(assignment?.branch_id ?? '').trim();
+      let branchId = String(assignment?.branch_id ?? '').trim();
+
+      if (!branchId && isSystemPrivileged) {
+        const hqBranch = await firstValueFrom(
+          this.branchClient.send({ cmd: 'branch.find_by_code' }, { code: 'HQ-TSHKNT' }),
+        );
+        branchId = String(hqBranch?.data?.id ?? '').trim();
+      }
 
       if (!branchId) {
         throw new ForbiddenException("Foydalanuvchi courier ko'rish uchun branchga biriktirilmagan");
