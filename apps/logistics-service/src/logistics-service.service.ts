@@ -1325,6 +1325,24 @@ export class LogisticsServiceService implements OnModuleInit {
       }
     }
 
+    if (targetBranchId) {
+      for (const order of allOrders) {
+        if (String(order.branch_id ?? '').trim() === targetBranchId) {
+          continue;
+        }
+        try {
+          await this.updateOrder(order.id, {
+            branch_id: targetBranchId,
+          });
+        } catch (err) {
+          failures.push({
+            order_id: String(order.id),
+            error: (err as Error)?.message ?? String(err),
+          });
+        }
+      }
+    }
+
     if (failures.length > 0) {
       this.logger.warn(
         `receivePost partial failure for post=${id}: ${failures.length} order update(s) failed — operator should reconcile. Sample: ${failures
