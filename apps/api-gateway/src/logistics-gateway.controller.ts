@@ -147,26 +147,41 @@ export class LogisticsGatewayController {
   // ---------- Post ----------
   @Get('post')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.COURIER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List all posts (with pagination)' })
-  getAllPosts(@Query('page') page?: string, @Query('limit') limit?: string) {
+  getAllPosts(
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Req() req?: { user?: JwtUser },
+  ) {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.find_all' },
-      { query: { page: page ? Number(page) : 1, limit: limit ? Number(limit) : 8 } },
+      {
+        query: { page: page ? Number(page) : 1, limit: limit ? Number(limit) : 8 },
+        requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
+      },
     );
   }
 
   @Get('post/new')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List new posts' })
   @ApiQuery({ name: 'search', required: false, type: String, description: 'Region name search' })
-  getNewPosts(@Query('search') search?: string) {
+  getNewPosts(@Query('search') search?: string, @Req() req?: { user?: JwtUser }) {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.new' },
       {
+        requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
         query: {
           search,
         },
@@ -176,11 +191,14 @@ export class LogisticsGatewayController {
 
   @Get('post/rejected')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List rejected posts' })
-  getRejectedPosts() {
-    return this.logisticsClient.send({ cmd: 'logistics.post.rejected' }, {});
+  getRejectedPosts(@Req() req?: { user?: JwtUser }) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.rejected' },
+      { requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] } },
+    );
   }
 
   @Get('post/on-the-road')
@@ -229,12 +247,22 @@ export class LogisticsGatewayController {
 
   @Get('post/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.COURIER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get post by id' })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
-  getPostById(@Param('id') id: string) {
-    return this.logisticsClient.send({ cmd: 'logistics.post.find_by_id' }, { id });
+  getPostById(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
+    return this.logisticsClient.send(
+      { cmd: 'logistics.post.find_by_id' },
+      { id, requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] } },
+    );
   }
 
   @Delete('post/:id')
@@ -315,14 +343,21 @@ export class LogisticsGatewayController {
 
   @Get('post/orders/rejected/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.COURIER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get rejected orders by post id' })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
-  getRejectedOrdersByPost(@Param('id') id: string) {
+  getRejectedOrdersByPost(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.rejected_orders_by_post' },
-      { id },
+      { id, requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] } },
     );
   }
 

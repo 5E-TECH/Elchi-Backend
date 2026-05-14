@@ -83,6 +83,32 @@ export class LogisticsServiceService implements OnModuleInit {
     throw new RpcException(errorRes(message, 409));
   }
 
+  private isSystemPrivileged(requester?: RequesterContext): boolean {
+    const roles = (requester?.roles ?? []).map((role) => String(role ?? '').toLowerCase());
+    return roles.includes(Roles.SUPERADMIN) || roles.includes(Roles.ADMIN);
+  }
+
+  private async resolveScopedBranchId(requester?: RequesterContext): Promise<string | null> {
+    if (this.isSystemPrivileged(requester)) {
+      return null;
+    }
+
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId) {
+      this.forbidden("Foydalanuvchi aniqlanmadi");
+    }
+
+    const assignment = await this.findBranchAssignmentByUserId(requesterId, {
+      id: requesterId,
+      roles: requester?.roles ?? [],
+    });
+    const branchId = String(assignment?.branch_id ?? '').trim();
+    if (!branchId) {
+      this.forbidden("Foydalanuvchi branchga biriktirilmagan");
+    }
+    return branchId;
+  }
+
   private generateToken(): string {
     return `POST-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
   }
@@ -594,11 +620,17 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(savedPost, 201, 'Post created');
   }
 
-  async findAllPosts(page = 1, limit = 8, filters?: { branch_id?: string }) {
+  async findAllPosts(
+    page = 1,
+    limit = 8,
+    filters?: { branch_id?: string },
+    requester?: RequesterContext,
+  ) {
     const take = limit > 100 ? 100 : Math.max(1, limit);
     const skip = (Math.max(1, page) - 1) * take;
 
-    const branchId = filters?.branch_id ? String(filters.branch_id).trim() : '';
+    const scopedBranchId = await this.resolveScopedBranchId(requester);
+    const branchId = scopedBranchId ?? (filters?.branch_id ? String(filters.branch_id).trim() : '');
     const where: Record<string, unknown> = { status: Not(Post_status.NEW) };
     if (branchId) {
       where.branch_id = branchId;
@@ -625,7 +657,7 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
-  async newPosts(query?: { search?: string }) {
+  async newPosts(query?: { search?: string }, requester?: RequesterContext) {
     const orphanOrders = await this.findOrders({ status: Order_status.RECEIVED, page: 1, limit: 1000 });
     const candidates = orphanOrders.filter((order) => !order.post_id && order.region_id);
 
@@ -695,7 +727,11 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const searchFilter = query?.search?.trim().toLowerCase();
 
+    const scopedBranchId = await this.resolveScopedBranchId(requester);
     const filteredPosts = postsWithRegion.filter((post) => {
+      if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId) {
+        return false;
+      }
       if (searchFilter) {
         const regionName = String(post.region?.name ?? '').toLowerCase();
         if (!regionName.includes(searchFilter)) {
@@ -709,9 +745,15 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(filteredPosts, 200, 'All new posts');
   }
 
-  async rejectedPosts() {
+  async rejectedPosts(requester?: RequesterContext) {
+    const scopedBranchId = await this.resolveScopedBranchId(requester);
+    const where: Record<string, unknown> = { status: Post_status.CANCELED };
+    if (scopedBranchId) {
+      where.branch_id = scopedBranchId;
+    }
+
     const allPosts = await this.postRepo.find({
-      where: { status: Post_status.CANCELED },
+      where,
       relations: ['region'],
       order: { createdAt: 'DESC' },
     });
@@ -803,10 +845,14 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
-  async findPostById(id: string) {
+  async findPostById(id: string, requester?: RequesterContext) {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) {
       this.notFound('Post not found');
+    }
+    const scopedBranchId = await this.resolveScopedBranchId(requester);
+    if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId) {
+      this.forbidden("Siz bu branch pochtasini ko'ra olmaysiz");
     }
     return successRes(post, 200, 'Post found');
   }
@@ -869,6 +915,10 @@ export class LogisticsServiceService implements OnModuleInit {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) {
       this.notFound('Post not found');
+    }
+    const scopedBranchId = await this.resolveScopedBranchId(requester);
+    if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId) {
+      this.forbidden("Siz bu branch pochtasidagi orderlarni ko'ra olmaysiz");
     }
 
     const [ordersByPostId, ordersByCanceledPostId] = await Promise.all([
@@ -936,7 +986,16 @@ export class LogisticsServiceService implements OnModuleInit {
     return this.getPostOrders(id, requester);
   }
 
-  async getRejectedPostOrders(id: string) {
+  async getRejectedPostOrders(id: string, requester?: RequesterContext) {
+    const post = await this.postRepo.findOne({ where: { id } });
+    if (!post) {
+      this.notFound('Post not found');
+    }
+    const scopedBranchId = await this.resolveScopedBranchId(requester);
+    if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId) {
+      this.forbidden("Siz bu branch pochtasidagi rejected orderlarni ko'ra olmaysiz");
+    }
+
     const orders = await this.findOrders({
       canceled_post_id: id,
       page: 1,
