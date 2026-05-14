@@ -316,7 +316,14 @@ export class LogisticsGatewayController {
 
   @Get('post/scan/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.COURIER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get post by scanner' })
   @ApiParam({ name: 'id', description: 'Post QR token' })
