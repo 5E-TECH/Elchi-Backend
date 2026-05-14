@@ -1609,14 +1609,14 @@ export class BranchServiceService implements OnModuleInit {
     const selectedOrderIds = Array.isArray(orderIdsInput)
       ? orderIdsInput.map((id) => String(id ?? '').trim()).filter(Boolean)
       : [];
-    const hasSelectedOrderIds = selectedOrderIds.length > 0;
+    if (!selectedOrderIds.length) {
+      this.badRequest('order_ids is required');
+    }
+
     const selectedSet = new Set(selectedOrderIds);
+    const candidateOrders = orders.filter((order) => selectedSet.has(String(order?.id ?? '').trim()));
 
-    const candidateOrders = hasSelectedOrderIds
-      ? orders.filter((order) => selectedSet.has(String(order?.id ?? '').trim()))
-      : orders;
-
-    if (hasSelectedOrderIds && !candidateOrders.length) {
+    if (!candidateOrders.length) {
       throw new RpcException(
         errorRes("Tanlangan order_ids post ichida topilmadi", 400, {
           post_id: postId,
@@ -1710,7 +1710,7 @@ export class BranchServiceService implements OnModuleInit {
       });
     }
 
-    const shouldDeletePost = !hasSelectedOrderIds || eligibleOrderIds.length === orders.length;
+    const shouldDeletePost = eligibleOrderIds.length === orders.length;
     if (shouldDeletePost) {
       await this.sendLogisticsCommand('logistics.post.delete', { id: postId });
     }
@@ -1720,7 +1720,7 @@ export class BranchServiceService implements OnModuleInit {
         source_branch_id: sourceBranchId,
         destination_branch_id: destinationBranchId,
         post_id: postId,
-        selected_order_ids: hasSelectedOrderIds ? selectedOrderIds : null,
+        selected_order_ids: selectedOrderIds,
         moved_orders_count: eligibleOrderIds.length,
         moved_order_ids: eligibleOrderIds,
         post_deleted: shouldDeletePost,

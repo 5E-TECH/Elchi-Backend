@@ -363,7 +363,7 @@ export class BranchGatewayController {
   @ApiBody({
     schema: {
       type: 'object',
-      required: ['destination_branch_id'],
+      required: ['destination_branch_id', 'order_ids'],
       properties: {
         destination_branch_id: {
           type: 'string',
@@ -385,6 +385,13 @@ export class BranchGatewayController {
     @Body('order_ids') orderIds: string[] | undefined,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
+    const normalizedOrderIds = Array.isArray(orderIds)
+      ? orderIds.map((id) => String(id ?? '').trim()).filter(Boolean)
+      : [];
+    if (!normalizedOrderIds.length) {
+      throw new BadRequestException('order_ids is required');
+    }
+
     const sourceBranchId = await this.resolveSourceBranchIdForDispatch(req);
     return this.branchClient.send(
       { cmd: 'branch.post.dispatch' },
@@ -392,7 +399,7 @@ export class BranchGatewayController {
         source_branch_id: sourceBranchId,
         post_id: postId,
         destination_branch_id: destinationBranchId,
-        order_ids: Array.isArray(orderIds) ? orderIds : undefined,
+        order_ids: normalizedOrderIds,
         requester: this.toRequester(req),
       },
     );
