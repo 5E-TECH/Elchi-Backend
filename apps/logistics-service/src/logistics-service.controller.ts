@@ -52,7 +52,7 @@ export class LogisticsServiceController {
   @MessagePattern({ cmd: 'logistics.post.find_all' })
   findAllPosts(
     @Payload() data: {
-      query: { page?: number; limit?: number; branch_id?: string };
+      query: { page?: number; limit?: number; branch_id?: string; status?: string };
       requester?: { id?: string; roles?: string[] };
     },
     @Ctx() context: RmqContext,
@@ -63,6 +63,7 @@ export class LogisticsServiceController {
     return this.executeAndAck(context, () =>
       this.logisticsService.findAllPosts(data?.query?.page, data?.query?.limit, {
         branch_id: data?.query?.branch_id,
+        status: data?.query?.status,
       }, requester),
     );
   }
