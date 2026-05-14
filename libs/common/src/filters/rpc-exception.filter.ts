@@ -1,10 +1,12 @@
 import { Catch, ArgumentsHost, ExceptionFilter, HttpStatus } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import { Response } from 'express';
+import { captureException } from '../sentry/sentry.helper';
 
 @Catch(RpcException)
 export class RpcExceptionFilter implements ExceptionFilter {
   catch(exception: RpcException, host: ArgumentsHost) {
+    captureException(exception);
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const error = exception.getError();

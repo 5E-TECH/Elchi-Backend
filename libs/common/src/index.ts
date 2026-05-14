@@ -25,3 +25,10 @@ export * from './enums';
 
 export * from './filters/rpc-exception.filter';
 export * from './filters/all-exceptions.filter';
+
+export * from './logger/app-logger.module';
+
+export * from './context/request-context';
+export * from './context/rmq-trace.interceptor';
+
+export * from './sentry/sentry.helper';

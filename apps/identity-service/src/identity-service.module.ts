@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { RmqModule, DatabaseModule, identityValidationSchema } from '@app/common';
+import { AppLoggerModule, RmqModule, DatabaseModule, identityValidationSchema } from '@app/common';
 import { IdentityController } from './identity.controller';
 import { UserServiceService } from './user-service.service';
 import { AuthService } from './auth/auth.service';
@@ -17,6 +17,7 @@ import type { StringValue } from 'ms';
       envFilePath: './.env',
       validationSchema: identityValidationSchema,
     }),
+    AppLoggerModule.forRoot({ serviceName: 'identity-service' }),
     RmqModule,
     RmqModule.register({ name: 'SEARCH' }),
     RmqModule.register({ name: 'CATALOG' }),

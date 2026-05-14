@@ -2,7 +2,7 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AnalyticsServiceController } from './analytics-service.controller';
 import { AnalyticsServiceService } from './analytics-service.service';
-import { RmqModule, analyticsValidationSchema } from '@app/common';
+import { AppLoggerModule, RmqModule, analyticsValidationSchema } from '@app/common';
 
 @Module({
   imports: [
@@ -11,6 +11,7 @@ import { RmqModule, analyticsValidationSchema } from '@app/common';
       envFilePath: './.env',
       validationSchema: analyticsValidationSchema,
     }),
+    AppLoggerModule.forRoot({ serviceName: 'analytics-service' }),
     RmqModule,
     RmqModule.register({ name: 'ORDER' }),
     RmqModule.register({ name: 'FINANCE' }),

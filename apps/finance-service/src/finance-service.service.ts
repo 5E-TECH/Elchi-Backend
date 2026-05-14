@@ -1,4 +1,4 @@
-import { BadRequestException, Inject, Injectable, NotFoundException, OnModuleInit } from '@nestjs/common';
+import { BadRequestException, Inject, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import {
@@ -38,6 +38,7 @@ import { FindSalaryByUserDto } from './dto/salary/find-salary-by-user.dto';
 @Injectable()
 export class FinanceServiceService implements OnModuleInit {
   private static readonly MAIN_CASHBOX_USER_ID = '0';
+  private readonly logger = new Logger(FinanceServiceService.name);
 
   constructor(
     @InjectRepository(Cashbox) private readonly cashboxRepo: Repository<Cashbox>,
@@ -241,8 +242,8 @@ export class FinanceServiceService implements OnModuleInit {
       await this.applyPaymentToOrders(marketId, amount);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'unknown sync error';
-      console.warn(
-        `[finance] transfer committed, but order sync failed (market_id=${marketId}, amount=${amount}): ${message}`,
+      this.logger.warn(
+        `transfer committed, but order sync failed (market_id=${marketId}, amount=${amount}): ${message}`,
       );
     }
   }

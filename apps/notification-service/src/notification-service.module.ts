@@ -3,7 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { NotificationServiceController } from './notification-service.controller';
 import { NotificationServiceService } from './notification-service.service';
-import { RmqModule, DatabaseModule, notificationValidationSchema } from '@app/common';
+import { AppLoggerModule, RmqModule, DatabaseModule, notificationValidationSchema } from '@app/common';
 import { TelegramMarket } from './entities/telegram-market.entity';
 import { NotificationBotUpdateService } from './notification-bot.update';
 
@@ -14,6 +14,7 @@ import { NotificationBotUpdateService } from './notification-bot.update';
       envFilePath: './.env',
       validationSchema: notificationValidationSchema,
     }),
+    AppLoggerModule.forRoot({ serviceName: 'notification-service' }),
     RmqModule,
     RmqModule.register({ name: 'IDENTITY' }),
     DatabaseModule,

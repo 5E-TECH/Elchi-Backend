@@ -4,6 +4,7 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { OrderServiceController } from './order-service.controller';
 import { OrderServiceService } from './order-service.service';
 import {
+  AppLoggerModule,
   RmqModule,
   DatabaseModule,
   orderValidationSchema,
@@ -27,6 +28,7 @@ import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.ent
       envFilePath: './.env',
       validationSchema: orderValidationSchema,
     }),
+    AppLoggerModule.forRoot({ serviceName: 'order-service' }),
     RmqModule,
     RmqModule.register({ name: 'SEARCH' }),
     RmqModule.register({ name: 'IDENTITY' }),

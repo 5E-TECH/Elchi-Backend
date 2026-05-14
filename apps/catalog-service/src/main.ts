@@ -1,9 +1,16 @@
 import { NestFactory } from '@nestjs/core';
+import { Logger } from 'nestjs-pino';
 import { CatalogServiceModule } from './catalog-service.module';
-import { RmqService } from '@app/common';
+import { RmqService, RmqTraceInterceptor, initSentry, flushSentry } from '@app/common';
 
 async function bootstrap() {
-  const app = await NestFactory.create(CatalogServiceModule);
+  initSentry({ serviceName: 'catalog-service' });
+  const app = await NestFactory.create(CatalogServiceModule, { bufferLogs: true });
+  app.enableShutdownHooks();
+  app.useLogger(app.get(Logger));
+  app.useGlobalInterceptors(new RmqTraceInterceptor());
+  process.on('SIGTERM', async () => { await flushSentry(); await app.close(); process.exit(0); });
+  process.on('SIGINT', async () => { await flushSentry(); await app.close(); process.exit(0); });
   const rmqService = app.get<RmqService>(RmqService);
 
   await rmqService.setupDlqTopology('CATALOG');

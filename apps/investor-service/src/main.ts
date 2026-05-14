@@ -1,10 +1,17 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { Logger } from 'nestjs-pino';
 import { InvestorServiceModule } from './investor-service.module';
-import { RmqService } from '@app/common';
+import { RmqService, RmqTraceInterceptor, initSentry, flushSentry } from '@app/common';
 
 async function bootstrap() {
-  const app = await NestFactory.create(InvestorServiceModule);
+  initSentry({ serviceName: 'investor-service' });
+  const app = await NestFactory.create(InvestorServiceModule, { bufferLogs: true });
+  app.enableShutdownHooks();
+  app.useLogger(app.get(Logger));
+  app.useGlobalInterceptors(new RmqTraceInterceptor());
+  process.on('SIGTERM', async () => { await flushSentry(); await app.close(); process.exit(0); });
+  process.on('SIGINT', async () => { await flushSentry(); await app.close(); process.exit(0); });
   const rmqService = app.get<RmqService>(RmqService);
   app.useGlobalPipes(
     new ValidationPipe({
