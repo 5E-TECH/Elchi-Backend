@@ -2633,11 +2633,11 @@ export class LogisticsServiceService implements OnModuleInit {
     for (const regionOrders of byBranchRegion.values()) {
       const first = regionOrders[0];
       const regionId = String(first?.assigned_region ?? '').trim();
-      const branchId = String(first?.assigned_branch ?? '').trim() || null;
+      const branchId = String(first?.assigned_branch ?? '').trim();
       let post = await this.postRepo.findOne({
         where: {
           region_id: regionId,
-          branch_id: branchId,
+          ...(branchId ? { branch_id: branchId } : {}),
           status: Post_status.NEW,
         },
       });
@@ -2647,7 +2647,7 @@ export class LogisticsServiceService implements OnModuleInit {
           courier_id: '0',
           qr_code_token: this.generateToken(),
           region_id: regionId,
-          branch_id: branchId,
+          branch_id: branchId || null,
           status: Post_status.NEW,
           post_total_price: 0,
           order_quantity: 0,
