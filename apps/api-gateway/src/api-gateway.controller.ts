@@ -773,13 +773,31 @@ export class ApiGatewayController {
 
   @Post('markets')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create market' })
   @ApiBody({ type: CreateMarketRequestDto })
   @ApiCreatedResponse({ description: 'Market created' })
   @ApiConflictResponse({ description: 'Conflict' })
-  createMarket(@Body() dto: CreateMarketRequestDto) {
+  async createMarket(@Body() dto: CreateMarketRequestDto, @Req() req: { user: JwtUser }) {
+    const requesterRoles = (req?.user?.roles ?? []).map((role) =>
+      String(role ?? '').trim().toLowerCase(),
+    );
+    const isManager = requesterRoles.includes(RoleEnum.MANAGER);
+
+    if (isManager) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      const branchId = String(assignment?.branch_id ?? '').trim();
+      const branchType = String(assignment?.branch?.type ?? '').trim().toUpperCase();
+
+      if (!branchId) {
+        throw new ForbiddenException('Manager hech qaysi branchga biriktirilmagan');
+      }
+      if (branchType !== 'HYBRID') {
+        throw new ForbiddenException("Faqat HYBRID branch manager'i market yarata oladi");
+      }
+    }
+
     return this.identityClient.send(
       { cmd: 'identity.market.create' },
       {

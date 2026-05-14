@@ -1580,23 +1580,83 @@ export class BranchServiceService implements OnModuleInit {
 
     const orders = Array.isArray(postOrdersResponse?.data) ? postOrdersResponse.data : [];
     if (!orders.length) {
-      this.badRequest("Post ichida jo'natishga mos order topilmadi");
+      throw new RpcException(
+        errorRes("Post ichida jo'natishga mos order topilmadi", 400, {
+          post_id: postId,
+          source_branch_id: sourceBranchId,
+          destination_branch_id: destinationBranchId,
+          total_in_post: 0,
+          eligible_orders_count: 0,
+          reasons: {
+            empty_post: true,
+          },
+        }),
+      );
     }
 
     const orderIds = orders.map((order) => String(order?.id ?? '')).filter(Boolean);
-    const mismatchedOrders = orders.filter(
-      (order) => String(order?.branch_id ?? '') !== sourceBranchId,
+    const mismatchedOrders = orders.filter((order) => String(order?.branch_id ?? '') !== sourceBranchId);
+    const deletedOrders = orders.filter((order) => Boolean(order?.isDeleted ?? order?.is_deleted));
+    const blockedStatusOrders = orders.filter((order) => {
+      const status = String(order?.status ?? '').trim().toLowerCase();
+      return status === Order_status.CANCELLED || status === Order_status.CLOSED;
+    });
+
+    const ineligibleOrderIds = new Set(
+      [...mismatchedOrders, ...deletedOrders, ...blockedStatusOrders]
+        .map((order) => String(order?.id ?? '').trim())
+        .filter(Boolean),
     );
+
+    const eligibleOrderIds = orderIds.filter((id) => !ineligibleOrderIds.has(id));
+
+    if (!eligibleOrderIds.length) {
+      throw new RpcException(
+        errorRes("Post ichida jo'natishga mos order topilmadi", 400, {
+          post_id: postId,
+          source_branch_id: sourceBranchId,
+          destination_branch_id: destinationBranchId,
+          total_in_post: orderIds.length,
+          eligible_orders_count: 0,
+          reasons: {
+            branch_mismatch_count: mismatchedOrders.length,
+            deleted_count: deletedOrders.length,
+            blocked_status_count: blockedStatusOrders.length,
+          },
+          sample_order_ids: orderIds.slice(0, 10),
+        }),
+      );
+    }
+
     if (mismatchedOrders.length) {
-      this.badRequest(
-        "Post ichida HQga tegishli bo'lmagan order bor. Avval postni tozalang yoki to'g'rilang",
+      throw new RpcException(
+        errorRes(
+          "Post ichida manba branch'ga tegishli bo'lmagan order bor. Avval postni tozalang yoki to'g'rilang",
+          400,
+          {
+            post_id: postId,
+            source_branch_id: sourceBranchId,
+            destination_branch_id: destinationBranchId,
+            total_in_post: orderIds.length,
+            eligible_orders_count: eligibleOrderIds.length,
+            reasons: {
+              branch_mismatch_count: mismatchedOrders.length,
+              deleted_count: deletedOrders.length,
+              blocked_status_count: blockedStatusOrders.length,
+            },
+            mismatched_order_ids: mismatchedOrders
+              .map((order) => String(order?.id ?? '').trim())
+              .filter(Boolean)
+              .slice(0, 20),
+          },
+        ),
       );
     }
 
     const requesterId = String(requester?.id ?? '').trim() || '0';
     const note = `Post #${postId} HQ'dan branch #${destinationBranchId} ga dispatch qilindi`;
 
-    for (const orderId of orderIds) {
+    for (const orderId of eligibleOrderIds) {
       await this.sendOrderCommand('order.update', {
         id: orderId,
         dto: {
@@ -1620,8 +1680,8 @@ export class BranchServiceService implements OnModuleInit {
         source_branch_id: sourceBranchId,
         destination_branch_id: destinationBranchId,
         post_id: postId,
-        moved_orders_count: orderIds.length,
-        moved_order_ids: orderIds,
+        moved_orders_count: eligibleOrderIds.length,
+        moved_order_ids: eligibleOrderIds,
       },
       200,
       'Post HQ dan branchga muvaffaqiyatli dispatch qilindi',
