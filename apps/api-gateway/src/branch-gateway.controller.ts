@@ -370,12 +370,19 @@ export class BranchGatewayController {
           example: '12',
           description: 'Destination branch ID (REGIONAL/HYBRID)',
         },
+        order_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          example: ['101', '102'],
+          description: 'Optional: only selected orders from post are dispatched',
+        },
       },
     },
   })
   async dispatchPostToBranch(
     @Param('postId') postId: string,
     @Body('destination_branch_id') destinationBranchId: string,
+    @Body('order_ids') orderIds: string[] | undefined,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     const sourceBranchId = await this.resolveSourceBranchIdForDispatch(req);
@@ -385,6 +392,7 @@ export class BranchGatewayController {
         source_branch_id: sourceBranchId,
         post_id: postId,
         destination_branch_id: destinationBranchId,
+        order_ids: Array.isArray(orderIds) ? orderIds : undefined,
         requester: this.toRequester(req),
       },
     );

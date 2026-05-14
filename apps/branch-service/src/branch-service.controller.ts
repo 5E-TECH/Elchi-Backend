@@ -200,6 +200,7 @@ export class BranchServiceController {
         data?.source_branch_id,
         data?.post_id,
         data?.destination_branch_id,
+        data?.order_ids,
         this.getRequester(data),
       ),
     );
