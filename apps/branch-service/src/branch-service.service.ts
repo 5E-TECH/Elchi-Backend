@@ -729,7 +729,11 @@ export class BranchServiceService implements OnModuleInit {
           .send<T>({ cmd }, payload)
           .pipe(timeout(15000)),
       );
-    } catch {
+    } catch (error) {
+      const parsed = this.extractRpcError(error);
+      if (parsed) {
+        throw new RpcException(errorRes(parsed.message, parsed.statusCode));
+      }
       throw new RpcException(errorRes('Logistics service unavailable', 502));
     }
   }
