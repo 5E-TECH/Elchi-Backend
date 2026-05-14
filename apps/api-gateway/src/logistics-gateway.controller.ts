@@ -343,7 +343,14 @@ export class LogisticsGatewayController {
 
   @Get('post/orders/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.COURIER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all orders by post id' })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
