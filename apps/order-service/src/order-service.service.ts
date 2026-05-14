@@ -3146,7 +3146,10 @@ export class OrderServiceService implements OnModuleInit {
           : order.return_requested,
       comment: dto.comment ?? order.comment,
       operator: dto.operator ?? order.operator,
-      post_id: dto.post_id ?? order.post_id,
+      post_id:
+        typeof dto.post_id !== 'undefined'
+          ? dto.post_id
+          : order.post_id,
       canceled_post_id:
         typeof dto.canceled_post_id !== 'undefined'
           ? dto.canceled_post_id
