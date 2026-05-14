@@ -4,7 +4,7 @@ import { RpcException } from '@nestjs/microservices';
 import { ClientProxy } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { BranchTransferDirection, BranchType, BranchUserRole, Order_status, Status } from '@app/common';
+import { BranchTransferDirection, BranchType, BranchUserRole, Order_status, Post_status, Status } from '@app/common';
 import { Branch } from './entities/branch.entity';
 import { BranchUser } from './entities/branch-user.entity';
 import { BranchConfig } from './entities/branch-config.entity';
