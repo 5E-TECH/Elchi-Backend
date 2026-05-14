@@ -486,7 +486,15 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.receive_orders' })
   receiveOrdersIntoPosts(
-    @Payload() data: { orders: Array<{ order_id: string; assigned_region: string; total_price: number }> },
+    @Payload()
+    data: {
+      orders: Array<{
+        order_id: string;
+        assigned_region: string;
+        total_price: number;
+        assigned_branch?: string;
+      }>;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>

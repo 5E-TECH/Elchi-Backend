@@ -1716,12 +1716,32 @@ export class BranchServiceService implements OnModuleInit {
     const requesterId = String(requester?.id ?? '').trim() || '0';
     const note = `Post #${postId} HQ'dan branch #${destinationBranchId} ga dispatch qilindi`;
 
+    const destinationPostAssignmentsRes = await this.sendLogisticsCommand<{
+      data?: Array<{ order_id?: string; post_id?: string }>;
+    }>('logistics.post.receive_orders', {
+      orders: candidateOrders
+        .filter((order) => eligibleOrderIds.includes(String(order?.id ?? '')))
+        .map((order) => ({
+          order_id: String(order?.id ?? ''),
+          assigned_region: String(order?.region_id ?? ''),
+          assigned_branch: destinationBranchId,
+          total_price: Number(order?.total_price ?? 0),
+        })),
+    });
+
+    const assignmentMap = new Map<string, string>(
+      (destinationPostAssignmentsRes?.data ?? [])
+        .map((row) => [String(row?.order_id ?? ''), String(row?.post_id ?? '')] as const)
+        .filter(([orderId, postId]) => Boolean(orderId) && Boolean(postId)),
+    );
+
     for (const orderId of eligibleOrderIds) {
+      const destinationPostId = assignmentMap.get(orderId) ?? null;
       await this.sendOrderCommand('order.update', {
         id: orderId,
         dto: {
           branch_id: destinationBranchId,
-          post_id: null,
+          post_id: destinationPostId,
           current_batch_id: null,
           status: Order_status.RECEIVED,
         },
