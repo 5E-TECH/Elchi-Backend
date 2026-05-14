@@ -1288,7 +1288,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
     for (const orderId of waitingOrderIds) {
       const target = orderById.get(orderId);
-      if (target?.status === Order_status.ON_THE_ROAD) {
+      if (target && target.status !== Order_status.WAITING) {
         try {
           await this.updateOrder(orderId, {
             status: Order_status.WAITING,
@@ -1305,7 +1305,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     const remaining = allOrders.filter(
-      (o) => o.status === Order_status.ON_THE_ROAD && !waitingOrderIdSet.has(String(o.id)),
+      (o) => !waitingOrderIdSet.has(String(o.id)) && o.status !== Order_status.WAITING,
     );
 
     if (remaining.length) {
