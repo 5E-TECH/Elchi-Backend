@@ -3,7 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { C2cServiceController } from './c2c-service.controller';
 import { C2cServiceService } from './c2c-service.service';
-import { RmqModule, DatabaseModule, c2cValidationSchema } from '@app/common';
+import { AppLoggerModule, RmqModule, DatabaseModule, c2cValidationSchema } from '@app/common';
 import { Listing } from './entities/listing.entity';
 import { C2COrder } from './entities/c2c-order.entity';
 import { Review } from './entities/review.entity';
@@ -16,6 +16,7 @@ import { Dispute } from './entities/dispute.entity';
       envFilePath: './.env',
       validationSchema: c2cValidationSchema,
     }),
+    AppLoggerModule.forRoot({ serviceName: 'c2c-service' }),
     RmqModule,
     DatabaseModule,
     TypeOrmModule.forFeature([Listing, C2COrder, Review, Dispute]),

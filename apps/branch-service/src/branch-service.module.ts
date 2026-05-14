@@ -3,7 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BranchServiceController } from './branch-service.controller';
 import { BranchServiceService } from './branch-service.service';
-import { RmqModule, DatabaseModule, branchValidationSchema } from '@app/common';
+import { AppLoggerModule, RmqModule, DatabaseModule, branchValidationSchema } from '@app/common';
 import { Branch } from './entities/branch.entity';
 import { BranchUser } from './entities/branch-user.entity';
 import { BranchConfig } from './entities/branch-config.entity';
@@ -15,6 +15,7 @@ import { BranchConfig } from './entities/branch-config.entity';
       envFilePath: './.env',
       validationSchema: branchValidationSchema,
     }),
+    AppLoggerModule.forRoot({ serviceName: 'branch-service' }),
     RmqModule,
     RmqModule.register({ name: 'IDENTITY' }),
     RmqModule.register({ name: 'LOGISTICS' }),

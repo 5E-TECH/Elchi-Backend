@@ -1,6 +1,7 @@
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { firstValueFrom, timeout, retry, timer, throwError } from 'rxjs';
 import { randomUUID } from 'crypto';
+import { requestContext } from '../context/request-context';
 
 export const RMQ_GATEWAY_TIMEOUT = 8000;
 export const RMQ_SERVICE_TIMEOUT = 5000;
@@ -15,19 +16,27 @@ export interface RmqSendOptions {
 }
 
 /**
- * Auto-inject request_id into the payload so server-side handlers can
- * deduplicate retries via IdempotencyService. Caller-provided request_id is
- * preserved. Non-object payloads (strings, primitives) are passed through.
+ * Auto-inject `request_id` (idempotency, per-call) and `trace_id` (correlation,
+ * per-HTTP-request) into the outgoing payload. Server-side handlers use
+ * `request_id` for IdempotencyService dedup and `trace_id` to bind logs to
+ * the originating HTTP request. Caller-provided values are preserved.
  */
 function withRequestId<T>(data: T): T {
   if (data === null || typeof data !== 'object' || Array.isArray(data)) {
     return data;
   }
   const obj = data as Record<string, unknown>;
-  if (typeof obj.request_id === 'string' && obj.request_id.length > 0) {
-    return data;
+  const enriched: Record<string, unknown> = { ...obj };
+  if (typeof obj.request_id !== 'string' || obj.request_id.length === 0) {
+    enriched.request_id = randomUUID();
   }
-  return { ...obj, request_id: randomUUID() } as T;
+  if (typeof obj.trace_id !== 'string' || obj.trace_id.length === 0) {
+    const ctxTraceId = requestContext.getTraceId();
+    if (ctxTraceId) {
+      enriched.trace_id = ctxTraceId;
+    }
+  }
+  return enriched as T;
 }
 
 /**

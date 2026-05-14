@@ -2,11 +2,45 @@ import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
+import { Logger } from 'nestjs-pino';
+import { randomUUID } from 'node:crypto';
+import type { NextFunction, Request, Response } from 'express';
 import { ApiGatewayModule } from './api-gateway.module';
-import { RpcExceptionFilter, AllExceptionsFilter } from '@app/common';
+import {
+  RpcExceptionFilter,
+  AllExceptionsFilter,
+  requestContext,
+  initSentry,
+  flushSentry,
+} from '@app/common';
 
 async function bootstrap() {
-  const app = await NestFactory.create(ApiGatewayModule);
+  // Initialise Sentry before app creation so any boot-time errors are captured.
+  // No-op if SENTRY_DSN is unset (dev/local).
+  initSentry({ serviceName: 'api-gateway' });
+
+  const app = await NestFactory.create(ApiGatewayModule, { bufferLogs: true });
+  app.enableShutdownHooks();
+  // Replace the built-in Nest logger with Pino so every line (incl. ones
+  // emitted by Nest internals) goes through the structured pipeline.
+  app.useLogger(app.get(Logger));
+
+  // Trace correlation: read x-request-id from the client (typical proxy
+  // pattern) or mint a fresh one. The id propagates through pino logs,
+  // outgoing RMQ calls (libs/common rmqSend), and on into every downstream
+  // service via the trace_id payload field.
+  app.use((req: Request, res: Response, next: NextFunction) => {
+    const headerId = req.headers['x-request-id'];
+    const traceId =
+      typeof headerId === 'string' && headerId.trim()
+        ? headerId.trim()
+        : Array.isArray(headerId) && headerId[0]?.trim()
+          ? headerId[0].trim()
+          : randomUUID();
+    res.setHeader('x-request-id', traceId);
+    requestContext.run({ traceId }, () => next());
+  });
+
   const corsOrigins = (process.env.CORS_ORIGINS ?? '')
     .split(',')
     .map((origin) => origin.trim())
@@ -95,14 +129,23 @@ async function bootstrap() {
     });
   } catch (error) {
     // Swagger schema xatosi bo'lsa ham API ishlashda davom etadi.
-    console.error('Swagger initialization failed:', error);
+    app.get(Logger).error({ err: error }, 'Swagger initialization failed');
   }
 
- 
+  // Flush pending Sentry events on SIGTERM/SIGINT so the process exits
+  // without losing in-flight error reports.
+  const shutdown = async () => {
+    await flushSentry().catch(() => undefined);
+    await app.close();
+    process.exit(0);
+  };
+  process.on('SIGTERM', shutdown);
+  process.on('SIGINT', shutdown);
+
   // AWS va Docker interfeyslari uchun 0.0.0.0 majburiy
   const port = Number(process.env.PORT || 3004);
   await app.listen(port, '0.0.0.0');
 
-  console.log(`Gateway is running on: http://localhost:${port}/api`);
+  app.get(Logger).log(`Gateway is running on: http://localhost:${port}/api`);
 }
 bootstrap();

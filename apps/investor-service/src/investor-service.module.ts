@@ -3,7 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { InvestorServiceController } from './investor-service.controller';
 import { InvestorServiceService } from './investor-service.service';
-import { RmqModule, DatabaseModule, investorValidationSchema } from '@app/common';
+import { AppLoggerModule, RmqModule, DatabaseModule, investorValidationSchema } from '@app/common';
 import { Investor } from './entities/investor.entity';
 import { Investment } from './entities/investment.entity';
 import { ProfitShare } from './entities/profit-share.entity';
@@ -15,6 +15,7 @@ import { ProfitShare } from './entities/profit-share.entity';
       envFilePath: './.env',
       validationSchema: investorValidationSchema,
     }),
+    AppLoggerModule.forRoot({ serviceName: 'investor-service' }),
     RmqModule,
     DatabaseModule,
     TypeOrmModule.forFeature([Investor, Investment, ProfitShare]),

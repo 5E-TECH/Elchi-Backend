@@ -6,10 +6,14 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { Response } from 'express';
+import { captureException } from '../sentry/sentry.helper';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
   catch(exception: unknown, host: ArgumentsHost) {
+    // Forward unexpected (5xx) exceptions to Sentry. captureException itself
+    // ignores 4xx-shaped business errors so this is safe to call unguarded.
+    captureException(exception);
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     let status =
