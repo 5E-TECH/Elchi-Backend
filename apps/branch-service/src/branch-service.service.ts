@@ -729,7 +729,11 @@ export class BranchServiceService implements OnModuleInit {
           .send<T>({ cmd }, payload)
           .pipe(timeout(15000)),
       );
-    } catch {
+    } catch (error) {
+      const parsed = this.extractRpcError(error);
+      if (parsed) {
+        throw new RpcException(errorRes(parsed.message, parsed.statusCode));
+      }
       throw new RpcException(errorRes('Logistics service unavailable', 502));
     }
   }
@@ -1541,6 +1545,7 @@ export class BranchServiceService implements OnModuleInit {
     sourceBranchIdInput: string,
     postIdInput: string,
     destinationBranchIdInput: string,
+    orderIdsInput?: string[],
     requester?: RequesterContext,
   ) {
     const sourceBranchId = String(sourceBranchIdInput ?? '').trim();
@@ -1572,13 +1577,20 @@ export class BranchServiceService implements OnModuleInit {
     };
 
     const postOrdersResponse = await this.sendLogisticsCommand<{
-      data?: Array<Record<string, unknown>>;
+      data?:
+        | Array<Record<string, unknown>>
+        | { allOrdersByPostId?: Array<Record<string, unknown>> };
     }>('logistics.post.orders_by_post', {
       id: postId,
       requester: requesterPayload,
     });
 
-    const orders = Array.isArray(postOrdersResponse?.data) ? postOrdersResponse.data : [];
+    const rawData = postOrdersResponse?.data;
+    const orders = Array.isArray(rawData)
+      ? rawData
+      : Array.isArray(rawData?.allOrdersByPostId)
+        ? rawData.allOrdersByPostId
+        : [];
     if (!orders.length) {
       throw new RpcException(
         errorRes("Post ichida jo'natishga mos order topilmadi", 400, {
@@ -1594,10 +1606,35 @@ export class BranchServiceService implements OnModuleInit {
       );
     }
 
-    const orderIds = orders.map((order) => String(order?.id ?? '')).filter(Boolean);
-    const mismatchedOrders = orders.filter((order) => String(order?.branch_id ?? '') !== sourceBranchId);
-    const deletedOrders = orders.filter((order) => Boolean(order?.isDeleted ?? order?.is_deleted));
-    const blockedStatusOrders = orders.filter((order) => {
+    const selectedOrderIds = Array.isArray(orderIdsInput)
+      ? orderIdsInput.map((id) => String(id ?? '').trim()).filter(Boolean)
+      : [];
+    if (!selectedOrderIds.length) {
+      this.badRequest('order_ids is required');
+    }
+
+    const selectedSet = new Set(selectedOrderIds);
+    const candidateOrders = orders.filter((order) => selectedSet.has(String(order?.id ?? '').trim()));
+
+    if (!candidateOrders.length) {
+      throw new RpcException(
+        errorRes("Tanlangan order_ids post ichida topilmadi", 400, {
+          post_id: postId,
+          source_branch_id: sourceBranchId,
+          destination_branch_id: destinationBranchId,
+          selected_order_ids: selectedOrderIds,
+        }),
+      );
+    }
+
+    const orderIds = candidateOrders.map((order) => String(order?.id ?? '')).filter(Boolean);
+    const mismatchedOrders = candidateOrders.filter(
+      (order) => String(order?.branch_id ?? '') !== sourceBranchId,
+    );
+    const deletedOrders = candidateOrders.filter((order) =>
+      Boolean(order?.isDeleted ?? order?.is_deleted),
+    );
+    const blockedStatusOrders = candidateOrders.filter((order) => {
       const status = String(order?.status ?? '').trim().toLowerCase();
       return status === Order_status.CANCELLED || status === Order_status.CLOSED;
     });
@@ -1673,15 +1710,20 @@ export class BranchServiceService implements OnModuleInit {
       });
     }
 
-    await this.sendLogisticsCommand('logistics.post.delete', { id: postId });
+    const shouldDeletePost = eligibleOrderIds.length === orders.length;
+    if (shouldDeletePost) {
+      await this.sendLogisticsCommand('logistics.post.delete', { id: postId });
+    }
 
     return successRes(
       {
         source_branch_id: sourceBranchId,
         destination_branch_id: destinationBranchId,
         post_id: postId,
+        selected_order_ids: selectedOrderIds,
         moved_orders_count: eligibleOrderIds.length,
         moved_order_ids: eligibleOrderIds,
+        post_deleted: shouldDeletePost,
       },
       200,
       'Post HQ dan branchga muvaffaqiyatli dispatch qilindi',
