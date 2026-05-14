@@ -275,7 +275,7 @@ export class InvestorServiceService {
     }
 
     const investedAt = this.parseDate(
-      dto.invested_at ? new Date(dto.invested_at).toISOString() : undefined,
+      dto.invested_at,
       'invested_at',
     );
     if (!investedAt) {
@@ -385,7 +385,7 @@ export class InvestorServiceService {
 
     if (dto.invested_at !== undefined) {
       const investedAt = this.parseDate(
-        dto.invested_at ? new Date(dto.invested_at).toISOString() : undefined,
+        dto.invested_at,
         'invested_at',
       );
       if (!investedAt) {
@@ -426,14 +426,8 @@ export class InvestorServiceService {
       this.badRequest('percentage must be between 0 and 100');
     }
 
-    const period_start = this.parseDate(
-      dto.period_start ? new Date(dto.period_start).toISOString() : undefined,
-      'period_start',
-    );
-    const period_end = this.parseDate(
-      dto.period_end ? new Date(dto.period_end).toISOString() : undefined,
-      'period_end',
-    );
+    const period_start = this.parseDate(dto.period_start, 'period_start');
+    const period_end = this.parseDate(dto.period_end, 'period_end');
     if (!period_start || !period_end) {
       this.badRequest('period_start and period_end are required');
     }

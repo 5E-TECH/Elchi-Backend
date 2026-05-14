@@ -10,6 +10,13 @@ export enum ShiftStatus {
 @Index('IDX_SHIFT_OPENED_BY', ['opened_by'])
 @Index('IDX_SHIFT_STATUS', ['status'])
 @Index('IDX_SHIFT_OPENED_AT', ['opened_at'])
+// One open shift per user. Migration 1714500000000-EnforceSingleOpenShift
+// creates the same index; this decorator keeps the entity authoritative so
+// TypeORM schema-sync (if ever enabled) won't drop the constraint.
+@Index('IDX_SHIFT_OPENED_BY_OPEN_UNIQUE', ['opened_by'], {
+  unique: true,
+  where: "status = 'open' AND is_deleted = false",
+})
 export class Shift extends BaseEntity {
   @Column({ type: 'bigint' })
   opened_by!: string;

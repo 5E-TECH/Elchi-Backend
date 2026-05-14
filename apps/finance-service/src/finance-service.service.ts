@@ -550,6 +550,30 @@ export class FinanceServiceService implements OnModuleInit {
           { lock: true },
         );
 
+        // Idempotency: if a history row already exists for the same business
+        // event (cashbox + source_type + source_id + operation_type), this is
+        // a duplicate RMQ delivery — skip the balance mutation and return the
+        // already-applied state. The pessimistic lock above guarantees we see
+        // committed history from earlier deliveries.
+        if (dto.source_id) {
+          const existingHistory = await queryRunner.manager.findOne(CashboxHistory, {
+            where: {
+              cashbox_id: String(cashbox.id),
+              source_type: dto.source_type,
+              source_id: String(dto.source_id),
+              operation_type: dto.operation_type,
+            },
+          });
+          if (existingHistory) {
+            await queryRunner.commitTransaction();
+            return this.successRes(
+              { cashbox, history: existingHistory, idempotent: true },
+              200,
+              'Cashbox balance already applied (idempotent replay)',
+            );
+          }
+        }
+
         this.updateBalancesByMethod(
           cashbox,
           Number(dto.amount),
@@ -1227,13 +1251,17 @@ export class FinanceServiceService implements OnModuleInit {
         throw new BadRequestException("Click_to_market usulida market_id bo'lishi shart va majburiy !!!");
       }
 
+      // Lock order: courier → main → market. Same order in paymentsToMarket
+      // and updateBalance to avoid deadlocks across concurrent payments.
       const courierCashbox = await queryRunner.manager.findOne(Cashbox, {
         where: { user_id: data.courier_id, cashbox_type: Cashbox_type.FOR_COURIER },
+        lock: { mode: 'pessimistic_write' },
       });
       if (!courierCashbox) throw new NotFoundException('Courier cashbox not found');
 
       const mainCashbox = await queryRunner.manager.findOne(Cashbox, {
         where: { cashbox_type: Cashbox_type.MAIN },
+        lock: { mode: 'pessimistic_write' },
       });
       if (!mainCashbox) throw new NotFoundException('Main cashbox not found');
 
@@ -1284,6 +1312,7 @@ export class FinanceServiceService implements OnModuleInit {
       if (data.payment_method === PaymentMethod.CLICK_TO_MARKET && data.market_id) {
         const marketCashbox = await queryRunner.manager.findOne(Cashbox, {
           where: { user_id: data.market_id, cashbox_type: Cashbox_type.FOR_MARKET },
+          lock: { mode: 'pessimistic_write' },
         });
         if (!marketCashbox) throw new NotFoundException('Market cashbox topilmadi');
 
@@ -1384,13 +1413,17 @@ export class FinanceServiceService implements OnModuleInit {
       this.assertBigIntId(data.market_id, 'market_id');
       this.assertPositiveAmount(Number(data.amount));
 
+      // Lock order: main → market (same order as paymentsFromCourier to avoid
+      // cross-method deadlocks).
       const mainCashbox = await queryRunner.manager.findOne(Cashbox, {
         where: { cashbox_type: Cashbox_type.MAIN },
+        lock: { mode: 'pessimistic_write' },
       });
       if (!mainCashbox) throw new NotFoundException('Main cashbox not found');
 
       const marketCashbox = await queryRunner.manager.findOne(Cashbox, {
         where: { user_id: data.market_id, cashbox_type: Cashbox_type.FOR_MARKET },
+        lock: { mode: 'pessimistic_write' },
       });
       if (!marketCashbox) throw new NotFoundException('Market cashbox not found');
 

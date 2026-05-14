@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, IsNull, LessThanOrEqual, Repository } from 'typeorm';
@@ -93,12 +93,21 @@ type SyncHistoryQuery = {
 
 @Injectable()
 export class IntegrationServiceService {
+  private readonly logger = new Logger(IntegrationServiceService.name);
   private readonly tokenCache = new Map<string, { token: string; expiresAt: number }>();
-  // No default fallback by design: an environment without this variable must
-  // not boot, otherwise stored credentials would silently encrypt with a
+  // No default fallback by design: an environment without INTEGRATION_CREDENTIAL_SECRET
+  // must not boot, otherwise stored credentials would silently encrypt with a
   // publicly-known key. Joi validation guarantees presence at startup.
-  private readonly credentialSecret = process.env.INTEGRATION_CREDENTIAL_SECRET!;
-  private queueProcessing = false;
+  // Optional PREVIOUS key supports rotation: rows encrypted with the older
+  // secret can still be decrypted, then re-encrypted with the primary on next save.
+  private readonly primaryKey = createHash('sha256')
+    .update(process.env.INTEGRATION_CREDENTIAL_SECRET!)
+    .digest();
+  private readonly previousKey = process.env.INTEGRATION_CREDENTIAL_SECRET_PREVIOUS
+    ? createHash('sha256')
+        .update(process.env.INTEGRATION_CREDENTIAL_SECRET_PREVIOUS)
+        .digest()
+    : null;
 
   constructor(
     @InjectRepository(ExternalIntegration) private readonly integrationRepo: Repository<ExternalIntegration>,
@@ -381,10 +390,6 @@ export class IntegrationServiceService {
     return raw;
   }
 
-  private getCredentialKey(): Buffer {
-    return createHash('sha256').update(this.credentialSecret).digest();
-  }
-
   private encryptCredential(value?: string | null): string | null {
     if (!value) {
       return null;
@@ -395,11 +400,16 @@ export class IntegrationServiceService {
     }
 
     const iv = randomBytes(16);
-    const cipher = createCipheriv('aes-256-cbc', this.getCredentialKey(), iv);
+    const cipher = createCipheriv('aes-256-cbc', this.primaryKey, iv);
     const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
     return `enc:${iv.toString('hex')}:${encrypted.toString('hex')}`;
   }
 
+  /**
+   * Decrypt with the primary key; on auth failure fall back to the previous
+   * key (rotation window). Returns the raw value if both keys fail, matching
+   * the legacy "treat unparseable as plaintext" contract.
+   */
   private decryptCredential(value?: string | null): string | null {
     if (!value) {
       return null;
@@ -409,19 +419,42 @@ export class IntegrationServiceService {
       return value;
     }
 
-    try {
-      const [, ivHex, encryptedHex] = value.split(':');
-      if (!ivHex || !encryptedHex) {
-        return value;
-      }
-      const iv = Buffer.from(ivHex, 'hex');
-      const encrypted = Buffer.from(encryptedHex, 'hex');
-      const decipher = createDecipheriv('aes-256-cbc', this.getCredentialKey(), iv);
-      const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
-      return decrypted.toString('utf8');
-    } catch {
+    const [, ivHex, encryptedHex] = value.split(':');
+    if (!ivHex || !encryptedHex) {
       return value;
     }
+
+    const iv = Buffer.from(ivHex, 'hex');
+    const encrypted = Buffer.from(encryptedHex, 'hex');
+
+    const tryKey = (key: Buffer): string | null => {
+      try {
+        const decipher = createDecipheriv('aes-256-cbc', key, iv);
+        const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+        return decrypted.toString('utf8');
+      } catch {
+        return null;
+      }
+    };
+
+    const primary = tryKey(this.primaryKey);
+    if (primary !== null) {
+      return primary;
+    }
+
+    if (this.previousKey) {
+      const fromPrevious = tryKey(this.previousKey);
+      if (fromPrevious !== null) {
+        this.logger.warn(
+          'Credential decrypted with previous key — re-encrypt with primary on next save (rotation in progress)',
+        );
+        return fromPrevious;
+      }
+    }
+
+    // Both keys failed — leave value untouched; an audit script can re-key it
+    // manually once the right secret is known.
+    return value;
   }
 
   private async getProductsCountByMarket(marketId: string): Promise<number> {
@@ -1455,17 +1488,33 @@ export class IntegrationServiceService {
     }
   }
 
+  // 0x494e5447515545 = "INTGQUE" ASCII. Postgres advisory locks are
+  // session-scoped → released automatically if the connection dies, so a
+  // crashed processor never leaves the queue blocked.
+  private static readonly QUEUE_ADVISORY_LOCK_KEY = 0x494e5447515545n;
+
   async processPendingSyncQueue(limit = 20, integration_id?: string) {
-    if (this.queueProcessing) {
-      return successRes({ message: 'queue processor is already running' });
-    }
+    // Advisory locks are session-scoped — acquire/release MUST run on the
+    // same connection. A dedicated QueryRunner pins one connection for the
+    // entire critical section (pooled queries elsewhere don't interfere).
+    const queryRunner = this.syncQueueRepo.manager.connection.createQueryRunner();
+    await queryRunner.connect();
 
-    this.queueProcessing = true;
-    let processed = 0;
-    let completed = 0;
-    let failed = 0;
-
+    let acquired = false;
     try {
+      const lockRows = await queryRunner.query(
+        'SELECT pg_try_advisory_lock($1::bigint) AS acquired',
+        [IntegrationServiceService.QUEUE_ADVISORY_LOCK_KEY.toString()],
+      );
+      acquired = Boolean(lockRows?.[0]?.acquired);
+      if (!acquired) {
+        return successRes({ message: 'queue processor is already running' });
+      }
+
+      let processed = 0;
+      let completed = 0;
+      let failed = 0;
+
       while (processed < Math.max(1, limit)) {
         const now = new Date();
         const pendingWhere = integration_id
@@ -1497,16 +1546,25 @@ export class IntegrationServiceService {
       }
 
       return successRes(
-        {
-          processed,
-          completed,
-          failed,
-        },
+        { processed, completed, failed },
         200,
         'sync queue processed',
       );
     } finally {
-      this.queueProcessing = false;
+      if (acquired) {
+        try {
+          // unlock_all is bulletproof: even if our explicit unlock fails (or
+          // is somehow skipped), the connection cannot return to the pool
+          // still holding our lock. Pooled connections persist across users,
+          // so a stuck lock would silently block every future processor.
+          await queryRunner.query('SELECT pg_advisory_unlock_all()');
+        } catch (err) {
+          this.logger.warn(
+            `pg_advisory_unlock_all failed: ${(err as Error)?.message ?? err}`,
+          );
+        }
+      }
+      await queryRunner.release();
     }
   }
 

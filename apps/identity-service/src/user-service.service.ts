@@ -1,4 +1,4 @@
-import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
 import { Brackets, In, Repository } from 'typeorm';
@@ -21,6 +21,8 @@ import { RequesterContext } from './contracts/user.payloads';
 
 @Injectable()
 export class UserServiceService implements OnModuleInit {
+  private readonly logger = new Logger(UserServiceService.name);
+
   constructor(
     @InjectRepository(User)
     private readonly users: Repository<User>,
@@ -41,10 +43,11 @@ export class UserServiceService implements OnModuleInit {
 
   /**
    * Assign a freshly-created user to a branch. On failure, compensate by
-   * hard-deleting the user so the staff-create operation stays atomic from
-   * the caller's perspective. Previously this saga lived in the API gateway,
+   * soft-deleting the user (with mangled phone/username so uniqueness is
+   * preserved for a retry). Previously this saga lived in the API gateway,
    * which left orphaned users when the gateway crashed mid-flight; centralising
-   * it here keeps the user lifecycle owned by identity-service.
+   * it here keeps the user lifecycle owned by identity-service and preserves
+   * the audit trail that hard-delete would erase.
    */
   private async assignUserToBranchOrCompensate(
     userId: string,
@@ -67,11 +70,48 @@ export class UserServiceService implements OnModuleInit {
         { attachRequestId: false, retries: 1, timeoutMs: 5000 },
       );
     } catch (assignError) {
-      // Hard delete the user; soft-delete would leave a stale row that blocks
-      // phone-number uniqueness on retry.
-      await this.users.delete({ id: userId }).catch(() => undefined);
+      await this.softCompensateUser(userId).catch(() => undefined);
       throw assignError;
     }
+  }
+
+  /**
+   * Soft-delete a freshly-created user when a downstream saga step fails.
+   * Mirrors the soft-delete shape used by deleteUser() — phone/username are
+   * mangled so the original values are free for a retry, but the row remains
+   * for audit. Skips the side effects (search sync, catalog cleanup) that
+   * are pointless for a never-activated user.
+   */
+  private async softCompensateUser(userId: string): Promise<void> {
+    const admin = await this.users.findOne({
+      where: { id: String(userId), isDeleted: false },
+    });
+    if (!admin) {
+      return;
+    }
+    const ts = Date.now();
+    admin.isDeleted = true;
+    admin.status = Status.INACTIVE;
+    admin.phone_number = `${admin.phone_number}-d${ts % 100000}`.slice(0, 20);
+    if (admin.username?.length) {
+      admin.username = `${admin.username}#del#${ts % 100000}`.slice(0, 60);
+    }
+    await this.users.save(admin);
+  }
+
+  /**
+   * Day-of-month in Toshkent timezone, used as the salary payment day
+   * fallback. The server may run in UTC; `new Date().getDate()` would then
+   * return the UTC day, which drifts off by ±1 around midnight Toshkent
+   * time and makes the first/last day of the month flicker.
+   */
+  private getBusinessPaymentDay(): number {
+    const formatted = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Tashkent',
+      day: 'numeric',
+    }).format(new Date());
+    const day = Number.parseInt(formatted, 10);
+    return Number.isFinite(day) ? day : new Date().getUTCDate();
   }
 
   private notFound(message: string): never {
@@ -327,8 +367,12 @@ export class UserServiceService implements OnModuleInit {
           )
           .pipe(timeout(1500)),
       );
-    } catch {
-      // Search sync should not block identity flows.
+    } catch (err) {
+      // Search sync should not block identity flows, but a persistent silent
+      // failure here drifts the search index out of sync with identity DB.
+      this.logger.warn(
+        `search.index.upsert failed for user ${user.id}: ${(err as Error)?.message ?? err}`,
+      );
     }
   }
 
@@ -342,8 +386,10 @@ export class UserServiceService implements OnModuleInit {
           )
           .pipe(timeout(1500)),
       );
-    } catch {
-      // Search sync should not block identity flows.
+    } catch (err) {
+      this.logger.warn(
+        `search.index.remove failed for user ${user.id}: ${(err as Error)?.message ?? err}`,
+      );
     }
   }
 
@@ -431,7 +477,7 @@ export class UserServiceService implements OnModuleInit {
       username: null,
       password: hashedPassword,
       salary: dto.salary ?? 0,
-      payment_day: dto.payment_day ?? new Date().getDate(),
+      payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       role: Roles.ADMIN,
       status: Status.ACTIVE,
       isDeleted: false,
@@ -455,7 +501,7 @@ export class UserServiceService implements OnModuleInit {
       username: null,
       password: hashedPassword,
       salary: dto.salary,
-      payment_day: dto.payment_day ?? new Date().getDate(),
+      payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       role: Roles.REGISTRATOR,
       status: Status.ACTIVE,
       isDeleted: false,
@@ -817,7 +863,7 @@ export class UserServiceService implements OnModuleInit {
       username: null,
       password: hashedPassword,
       salary: dto.salary,
-      payment_day: dto.payment_day ?? new Date().getDate(),
+      payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       region_id: dto.region_id,
       role: Roles.COURIER,
       status: Status.ACTIVE,
@@ -855,7 +901,7 @@ export class UserServiceService implements OnModuleInit {
       username: null,
       password: hashedPassword,
       salary: dto.salary,
-      payment_day: dto.payment_day ?? new Date().getDate(),
+      payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       role: Roles.MANAGER,
       status: Status.ACTIVE,
       tariff_home: null,

@@ -50,6 +50,11 @@ export class BranchServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'branch.find_hq' })
+  findHq(@Payload() _data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.branchService.findHqBranch());
+  }
+
   @MessagePattern({ cmd: 'branch.find_by_id' })
   findById(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>

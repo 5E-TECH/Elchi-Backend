@@ -22,6 +22,7 @@ import {
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
+import { randomUUID } from 'node:crypto';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import {
@@ -1031,7 +1032,12 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.sell' },
-          { id, dto, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
+          {
+            id,
+            dto,
+            requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) },
+            request_id: randomUUID(),
+          },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -1058,7 +1064,12 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.cancel' },
-          { id, dto, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
+          {
+            id,
+            dto,
+            requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) },
+            request_id: randomUUID(),
+          },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -1085,7 +1096,12 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.could_not_deliver' },
-          { id, dto, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
+          {
+            id,
+            dto,
+            requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) },
+            request_id: randomUUID(),
+          },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -1112,7 +1128,12 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.partly_sell' },
-          { id, dto, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
+          {
+            id,
+            dto,
+            requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) },
+            request_id: randomUUID(),
+          },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -1137,7 +1158,11 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.rollback_waiting' },
-          { id, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
+          {
+            id,
+            requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) },
+            request_id: randomUUID(),
+          },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {

@@ -35,6 +35,7 @@ export class FileServiceService implements OnModuleInit {
   private readonly bucket: string;
   private readonly maxSizeBytes: number;
   private readonly defaultExpiresIn: number;
+  private readonly maxExpiresIn: number;
   private readonly allowedMime = new Set<string>([
     'image/png',
     'image/jpeg',
@@ -54,6 +55,10 @@ export class FileServiceService implements OnModuleInit {
     const maxMb = Number(this.configService.get<string>('FILE_MAX_SIZE_MB') ?? 10);
     this.maxSizeBytes = Math.max(1, maxMb) * 1024 * 1024;
     this.defaultExpiresIn = Number(this.configService.get<string>('FILE_SIGNED_URL_EXPIRES') ?? 3600);
+    this.maxExpiresIn = Math.max(
+      this.defaultExpiresIn,
+      Number(this.configService.get<string>('FILE_SIGNED_URL_MAX_EXPIRES') ?? 86_400),
+    );
 
     const endpoint = `${useSsl ? 'https' : 'http'}://${endpointHost}:${port}`;
     this.s3 = new S3Client({
@@ -140,6 +145,52 @@ export class FileServiceService implements OnModuleInit {
     }
   }
 
+  /**
+   * Inspect the buffer's leading bytes (file signature / "magic number") and
+   * confirm they match the claimed MIME type. Client-supplied mime_type alone
+   * is untrusted — an attacker can label an .exe as image/jpeg and the
+   * whitelist check above would pass.
+   */
+  private assertMagicBytesMatchMime(buffer: Buffer, mimeType: string): void {
+    if (buffer.length < 4) {
+      throw new BadRequestException('File content too small to validate');
+    }
+
+    // Compare an exact prefix against the buffer.
+    const startsWith = (prefix: number[]): boolean =>
+      prefix.every((byte, idx) => buffer[idx] === byte);
+
+    const detected = ((): string | null => {
+      // PNG: 89 50 4E 47 0D 0A 1A 0A
+      if (startsWith([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png';
+      // JPEG: FF D8 FF
+      if (startsWith([0xff, 0xd8, 0xff])) return 'image/jpeg';
+      // PDF: %PDF-
+      if (startsWith([0x25, 0x50, 0x44, 0x46, 0x2d])) return 'application/pdf';
+      // ZIP (XLSX/DOCX/PPTX containers): PK\x03\x04
+      if (startsWith([0x50, 0x4b, 0x03, 0x04])) {
+        return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+      }
+      return null;
+    })();
+
+    if (!detected) {
+      throw new BadRequestException(
+        'File content does not match any allowed type (magic bytes unrecognised)',
+      );
+    }
+
+    const normalizedClaimed = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+    if (detected !== normalizedClaimed) {
+      this.logger.warn(
+        `MIME mismatch: client claimed "${mimeType}", buffer signature is "${detected}" — rejecting`,
+      );
+      throw new BadRequestException(
+        `File content (${detected}) does not match declared mime_type (${mimeType})`,
+      );
+    }
+  }
+
   private async ensureBucketExists() {
     const buckets = await this.s3.send(new ListBucketsCommand({}));
     const exists = (buckets.Buckets ?? []).some((bucket) => bucket.Name === this.bucket);
@@ -202,6 +253,7 @@ export class FileServiceService implements OnModuleInit {
 
       const buffer = this.decodeBase64(String(data?.file_base64 ?? ''));
       this.validateFile(mimeType, buffer.length);
+      this.assertMagicBytesMatchMime(buffer, mimeType);
 
       const result = await this.uploadBuffer({
         buffer,
@@ -224,7 +276,10 @@ export class FileServiceService implements OnModuleInit {
       await this.ensureObjectExists(key);
 
       const expiresIn = Number(data?.expires_in ?? this.defaultExpiresIn);
-      const safeExpires = Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : this.defaultExpiresIn;
+      const bounded =
+        Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : this.defaultExpiresIn;
+      // Cap at maxExpiresIn so a client cannot request a multi-year link.
+      const safeExpires = Math.min(bounded, this.maxExpiresIn);
       const url = await getSignedUrl(
         this.s3,
         new GetObjectCommand({ Bucket: this.bucket, Key: key }),

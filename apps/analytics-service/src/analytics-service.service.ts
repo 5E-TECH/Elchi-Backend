@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { Order_status, Roles, rmqSend } from '@app/common';
 import { successRes } from '../../../libs/common/helpers/response';
@@ -23,6 +23,18 @@ type RevenuePeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 @Injectable()
 export class AnalyticsServiceService {
   private static readonly TASHKENT_OFFSET_MINUTES = 5 * 60;
+  private static readonly COURIER_REPORT_TTL_MS = 30_000;
+
+  private readonly logger = new Logger(AnalyticsServiceService.name);
+  // Short-lived cache for getCourierReport. Dashboards refresh on a timer and
+  // each render fans out N RMQ calls to order-service (one per courier). 30s
+  // is short enough that the data still looks live, long enough to absorb
+  // multiple operators hitting refresh in quick succession.
+  // Proper fix: order.analytics.courier_stats_batch({ ids }) — separate sprint.
+  private readonly courierReportCache = new Map<
+    string,
+    { data: any; expiresAt: number }
+  >();
 
   constructor(
     @Inject('ORDER') private readonly orderClient: ClientProxy,
@@ -654,45 +666,72 @@ export class AnalyticsServiceService {
     filter: RevenueFilter,
   ) {
     const normalized = this.normalizeDateRangeAny(filter);
-    const [courierStats, topCouriers] = await Promise.all([
-      rmqSend(this.orderClient, { cmd: 'order.analytics.courier_stats' }, normalized),
-      rmqSend(this.orderClient, { cmd: 'order.analytics.top_couriers' }, { limit: 20 }),
-    ]);
 
-    const courierStatsData = Array.isArray(this.unwrap<any>(courierStats as any))
-      ? (this.unwrap<any>(courierStats as any) as any[])
-      : [];
-    const topCouriersData = Array.isArray(this.unwrap<any>(topCouriers as any))
-      ? (this.unwrap<any>(topCouriers as any) as any[])
-      : [];
+    // Cache key intentionally ignores requester — the heavy N+1 work is
+    // role-independent (we return the same items[]/ranking[]; only the
+    // final filter step at the end differs per requester).
+    const cacheKey = `${normalized.startDate ?? ''}|${normalized.endDate ?? ''}`;
+    const now = Date.now();
+    const cached = this.courierReportCache.get(cacheKey);
+    let items: any[];
+    let topCouriersData: any[];
 
-    const items = await Promise.all(
-      courierStatsData.map(async (row) => {
-        const courierId = String(row?.courier?.id ?? '');
-        let detail: any = null;
-        if (courierId) {
-          detail = await rmqSend(
-            this.orderClient,
-            { cmd: 'order.analytics.courier_stat' },
-            { requester: { id: courierId }, ...normalized },
-          ).catch(() => null);
+    if (cached && cached.expiresAt > now) {
+      items = cached.data.items;
+      topCouriersData = cached.data.ranking;
+    } else {
+      const [courierStats, topCouriers] = await Promise.all([
+        rmqSend(this.orderClient, { cmd: 'order.analytics.courier_stats' }, normalized),
+        rmqSend(this.orderClient, { cmd: 'order.analytics.top_couriers' }, { limit: 20 }),
+      ]);
+
+      const courierStatsData = Array.isArray(this.unwrap<any>(courierStats as any))
+        ? (this.unwrap<any>(courierStats as any) as any[])
+        : [];
+      topCouriersData = Array.isArray(this.unwrap<any>(topCouriers as any))
+        ? (this.unwrap<any>(topCouriers as any) as any[])
+        : [];
+
+      items = await Promise.all(
+        courierStatsData.map(async (row) => {
+          const courierId = String(row?.courier?.id ?? '');
+          let detail: any = null;
+          if (courierId) {
+            detail = await rmqSend(
+              this.orderClient,
+              { cmd: 'order.analytics.courier_stat' },
+              { requester: { id: courierId }, ...normalized },
+            ).catch(() => null);
+          }
+
+          const detailData = this.unwrap<any>(detail as any) as any;
+          return {
+            courier: row?.courier ?? null,
+            deliveredOrders: this.parseNumber(row?.soldOrders),
+            cancelledOrders: this.parseNumber(
+              detailData?.canceledOrders,
+              Math.max(0, this.parseNumber(row?.totalOrders) - this.parseNumber(row?.soldOrders)),
+            ),
+            averageDeliveryHours: null,
+            totalAmount: this.parseNumber(detailData?.profit),
+            salaryEstimate: this.parseNumber(detailData?.profit),
+            successRate: this.parseNumber(row?.successRate),
+          };
+        }),
+      );
+
+      // Opportunistic eviction to keep the map bounded.
+      for (const [key, entry] of this.courierReportCache.entries()) {
+        if (entry.expiresAt <= now) {
+          this.courierReportCache.delete(key);
         }
+      }
 
-        const detailData = this.unwrap<any>(detail as any) as any;
-        return {
-          courier: row?.courier ?? null,
-          deliveredOrders: this.parseNumber(row?.soldOrders),
-          cancelledOrders: this.parseNumber(
-            detailData?.canceledOrders,
-            Math.max(0, this.parseNumber(row?.totalOrders) - this.parseNumber(row?.soldOrders)),
-          ),
-          averageDeliveryHours: null,
-          totalAmount: this.parseNumber(detailData?.profit),
-          salaryEstimate: this.parseNumber(detailData?.profit),
-          successRate: this.parseNumber(row?.successRate),
-        };
-      }),
-    );
+      this.courierReportCache.set(cacheKey, {
+        data: { items, ranking: topCouriersData },
+        expiresAt: now + AnalyticsServiceService.COURIER_REPORT_TTL_MS,
+      });
+    }
 
     if (this.roleSet(requester).has(Roles.COURIER)) {
       const requesterId = requester?.id ? String(requester.id) : '';
