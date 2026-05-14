@@ -51,29 +51,44 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.find_all' })
   findAllPosts(
-    @Payload() data: { query: { page?: number; limit?: number; branch_id?: string } },
+    @Payload() data: {
+      query: { page?: number; limit?: number; branch_id?: string };
+      requester?: { id?: string; roles?: string[] };
+    },
     @Ctx() context: RmqContext,
   ) {
+    const requester = data?.requester
+      ? { id: String(data.requester.id ?? ''), roles: data.requester.roles ?? [] }
+      : undefined;
     return this.executeAndAck(context, () =>
       this.logisticsService.findAllPosts(data?.query?.page, data?.query?.limit, {
         branch_id: data?.query?.branch_id,
-      }),
+      }, requester),
     );
   }
 
   @MessagePattern({ cmd: 'logistics.post.new' })
   newPosts(
-    @Payload() data: { query?: { search?: string } },
+    @Payload() data: { query?: { search?: string }; requester?: { id?: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
+    const requester = data?.requester
+      ? { id: String(data.requester.id ?? ''), roles: data.requester.roles ?? [] }
+      : undefined;
     return this.executeAndAck(context, () =>
-      this.logisticsService.newPosts(data?.query),
+      this.logisticsService.newPosts(data?.query, requester),
     );
   }
 
   @MessagePattern({ cmd: 'logistics.post.rejected' })
-  rejectedPosts(@Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.logisticsService.rejectedPosts());
+  rejectedPosts(
+    @Payload() data: { requester?: { id?: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    const requester = data?.requester
+      ? { id: String(data.requester.id ?? ''), roles: data.requester.roles ?? [] }
+      : undefined;
+    return this.executeAndAck(context, () => this.logisticsService.rejectedPosts(requester));
   }
 
   @MessagePattern({ cmd: 'logistics.post.on_the_road' })
@@ -117,8 +132,14 @@ export class LogisticsServiceController {
   }
 
   @MessagePattern({ cmd: 'logistics.post.find_by_id' })
-  findPostById(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.logisticsService.findPostById(data.id));
+  findPostById(
+    @Payload() data: { id: string; requester?: { id?: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    const requester = data?.requester
+      ? { id: String(data.requester.id ?? ''), roles: data.requester.roles ?? [] }
+      : undefined;
+    return this.executeAndAck(context, () => this.logisticsService.findPostById(data.id, requester));
   }
 
   @MessagePattern({ cmd: 'logistics.post.delete' })
@@ -166,9 +187,15 @@ export class LogisticsServiceController {
   }
 
   @MessagePattern({ cmd: 'logistics.post.rejected_orders_by_post' })
-  rejectedOrdersByPost(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
+  rejectedOrdersByPost(
+    @Payload() data: { id: string; requester?: { id?: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    const requester = data?.requester
+      ? { id: String(data.requester.id ?? ''), roles: data.requester.roles ?? [] }
+      : undefined;
     return this.executeAndAck(context, () =>
-      this.logisticsService.getRejectedPostOrders(data.id),
+      this.logisticsService.getRejectedPostOrders(data.id, requester),
     );
   }
 
