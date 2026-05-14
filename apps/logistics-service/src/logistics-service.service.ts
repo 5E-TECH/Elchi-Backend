@@ -1279,6 +1279,7 @@ export class LogisticsServiceService implements OnModuleInit {
     const waitingOrderIdSet = new Set(waitingOrderIds);
     const allOrders = await this.findOrders({ post_id: id, page: 1, limit: 1000 });
     const orderById = new Map(allOrders.map((order) => [String(order.id), order]));
+    const targetBranchId = String(post.branch_id ?? '').trim() || undefined;
 
     // receivePost spans multiple updateOrder RMQ calls + a local postRepo.save
     // across two services — no atomic TX possible. Track which transitions
@@ -1292,6 +1293,7 @@ export class LogisticsServiceService implements OnModuleInit {
           await this.updateOrder(orderId, {
             status: Order_status.WAITING,
             return_requested: false,
+            ...(targetBranchId ? { branch_id: targetBranchId } : {}),
           });
         } catch (err) {
           failures.push({
@@ -1312,6 +1314,7 @@ export class LogisticsServiceService implements OnModuleInit {
           await this.updateOrder(order.id, {
             status: Order_status.WAITING,
             return_requested: true,
+            ...(targetBranchId ? { branch_id: targetBranchId } : {}),
           });
         } catch (err) {
           failures.push({
