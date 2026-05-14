@@ -1572,13 +1572,20 @@ export class BranchServiceService implements OnModuleInit {
     };
 
     const postOrdersResponse = await this.sendLogisticsCommand<{
-      data?: Array<Record<string, unknown>>;
+      data?:
+        | Array<Record<string, unknown>>
+        | { allOrdersByPostId?: Array<Record<string, unknown>> };
     }>('logistics.post.orders_by_post', {
       id: postId,
       requester: requesterPayload,
     });
 
-    const orders = Array.isArray(postOrdersResponse?.data) ? postOrdersResponse.data : [];
+    const rawData = postOrdersResponse?.data;
+    const orders = Array.isArray(rawData)
+      ? rawData
+      : Array.isArray(rawData?.allOrdersByPostId)
+        ? rawData.allOrdersByPostId
+        : [];
     if (!orders.length) {
       throw new RpcException(
         errorRes("Post ichida jo'natishga mos order topilmadi", 400, {
