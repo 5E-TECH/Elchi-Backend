@@ -1304,15 +1304,13 @@ export class LogisticsServiceService implements OnModuleInit {
       }
     }
 
-    const remaining = allOrders.filter(
-      (o) => !waitingOrderIdSet.has(String(o.id)) && o.status !== Order_status.WAITING,
-    );
+    const remaining = allOrders.filter((o) => !waitingOrderIdSet.has(String(o.id)));
 
     if (remaining.length) {
       for (const order of remaining) {
         try {
           await this.updateOrder(order.id, {
-            status: Order_status.WAITING,
+            status: Order_status.ON_THE_ROAD,
             return_requested: true,
             ...(targetBranchId ? { branch_id: targetBranchId } : {}),
           });
