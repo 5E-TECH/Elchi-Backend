@@ -1725,6 +1725,7 @@ export class BranchServiceService implements OnModuleInit {
           order_id: String(order?.id ?? ''),
           assigned_region: String(order?.region_id ?? ''),
           assigned_branch: destinationBranchId,
+          assigned_post_status: Post_status.SENT,
           total_price: Number(order?.total_price ?? 0),
         })),
     });

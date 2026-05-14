@@ -2604,6 +2604,7 @@ export class LogisticsServiceService implements OnModuleInit {
       assigned_region: string;
       total_price: number;
       assigned_branch?: string;
+      assigned_post_status?: Post_status;
     }>,
   ) {
     if (!orders.length) {
@@ -2612,11 +2613,18 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const byBranchRegion = new Map<
       string,
-      Array<{ order_id: string; total_price: number; assigned_region: string; assigned_branch?: string }>
+      Array<{
+        order_id: string;
+        total_price: number;
+        assigned_region: string;
+        assigned_branch?: string;
+        assigned_post_status?: Post_status;
+      }>
     >();
     for (const order of orders) {
       const branchId = String(order.assigned_branch ?? '').trim();
       const regionId = String(order.assigned_region ?? '').trim();
+      const targetPostStatus = order.assigned_post_status ?? Post_status.NEW;
       const key = `${branchId}:${regionId}`;
       const group = byBranchRegion.get(key) ?? [];
       group.push({
@@ -2624,6 +2632,7 @@ export class LogisticsServiceService implements OnModuleInit {
         total_price: order.total_price,
         assigned_region: regionId,
         assigned_branch: branchId || undefined,
+        assigned_post_status: targetPostStatus,
       });
       byBranchRegion.set(key, group);
     }
@@ -2634,11 +2643,12 @@ export class LogisticsServiceService implements OnModuleInit {
       const first = regionOrders[0];
       const regionId = String(first?.assigned_region ?? '').trim();
       const branchId = String(first?.assigned_branch ?? '').trim();
+      const targetPostStatus = first?.assigned_post_status ?? Post_status.NEW;
       let post = await this.postRepo.findOne({
         where: {
           region_id: regionId,
           ...(branchId ? { branch_id: branchId } : {}),
-          status: Post_status.NEW,
+          status: targetPostStatus,
         },
       });
 
@@ -2648,7 +2658,7 @@ export class LogisticsServiceService implements OnModuleInit {
           qr_code_token: this.generateToken(),
           region_id: regionId,
           branch_id: branchId || null,
-          status: Post_status.NEW,
+          status: targetPostStatus,
           post_total_price: 0,
           order_quantity: 0,
         });

@@ -13,6 +13,7 @@ import { CreatePostDto } from './dto/create-post.dto';
 import { SendPostDto } from './dto/send-post.dto';
 import { ReceivePostDto } from './dto/receive-post.dto';
 import { PostIdDto } from './dto/post-id.dto';
+import { Post_status } from '@app/common';
 
 @Controller()
 export class LogisticsServiceController {
@@ -493,6 +494,7 @@ export class LogisticsServiceController {
         assigned_region: string;
         total_price: number;
         assigned_branch?: string;
+        assigned_post_status?: Post_status;
       }>;
     },
     @Ctx() context: RmqContext,
