@@ -157,7 +157,11 @@ export class LogisticsGatewayController {
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List all posts (with pagination)' })
-  @ApiQuery({ name: 'status', required: false, enum: ['new', 'sent', 'closed', 'canceled'] })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['new', 'sent', 'received', 'canceled', 'canceled_received'],
+  })
   getAllPosts(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
