@@ -412,9 +412,16 @@ export class LogisticsGatewayController {
 
   @Patch('post/receive/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.COURIER)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.COURIER,
+  )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Receive post (courier)' })
+  @ApiOperation({ summary: 'Receive post (branch/courier)' })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   @ApiBody({ type: ReceivePostRequestDto })
   receivePost(

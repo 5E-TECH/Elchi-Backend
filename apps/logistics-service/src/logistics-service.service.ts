@@ -1250,10 +1250,27 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   async receivePost(requester: RequesterContext, id: string, dto: ReceivePostDto) {
-    const post = await this.postRepo.findOne({ where: { id, courier_id: requester.id } });
+    const post = await this.postRepo.findOne({ where: { id } });
     if (!post) {
       this.notFound('Post not found');
     }
+    const scopedBranchId = await this.resolveScopedBranchId(requester);
+    if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId) {
+      this.forbidden("Siz bu branch pochtasini qabul qila olmaysiz");
+    }
+
+    const requesterRoles = (requester?.roles ?? []).map((role) => String(role ?? '').toLowerCase());
+    const requesterId = String(requester?.id ?? '').trim();
+    const requesterIsCourier = requesterRoles.includes(Roles.COURIER);
+    if (
+      requesterIsCourier &&
+      !this.isSystemPrivileged(requester) &&
+      requesterId &&
+      String(post.courier_id ?? '') !== requesterId
+    ) {
+      this.forbidden("Courier faqat o'ziga biriktirilgan pochtani qabul qilishi mumkin");
+    }
+
     if (post.status !== Post_status.SENT) {
       this.badRequest('Cannot receive post with this status');
     }
