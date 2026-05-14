@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -13,6 +14,7 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { Roles as RoleEnum } from '@app/common';
+import { firstValueFrom } from 'rxjs';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -49,6 +51,39 @@ export class BranchGatewayController {
       id: String(req?.user?.sub ?? ''),
       roles: req?.user?.roles ?? [],
     };
+  }
+
+  private async resolveSourceBranchIdForDispatch(
+    req: { user?: { sub?: string; roles?: string[] } },
+  ): Promise<string> {
+    const requester = this.toRequester(req);
+    const requesterRoles = (requester.roles ?? []).map((role) => String(role ?? '').toLowerCase());
+    const isSystemPrivileged =
+      requesterRoles.includes(RoleEnum.SUPERADMIN) || requesterRoles.includes(RoleEnum.ADMIN);
+
+    if (isSystemPrivileged) {
+      const hqResponse = await firstValueFrom(
+        this.branchClient.send({ cmd: 'branch.find_by_code' }, { code: 'HQ-TSHKNT' }),
+      );
+      const hqBranchId = String(hqResponse?.data?.id ?? '').trim();
+      if (!hqBranchId) {
+        throw new BadRequestException('HQ branch topilmadi (code=HQ-TSHKNT)');
+      }
+      return hqBranchId;
+    }
+
+    const assignmentResponse = await firstValueFrom(
+      this.branchClient.send(
+        { cmd: 'branch.user.find_by_user' },
+        { user_id: requester.id, requester },
+      ),
+    );
+    const assignedBranchId = String(assignmentResponse?.data?.branch_id ?? '').trim();
+    if (!assignedBranchId) {
+      throw new BadRequestException('Foydalanuvchi hech qaysi branchga biriktirilmagan');
+    }
+
+    return assignedBranchId;
   }
 
   @Post('branches')
@@ -321,18 +356,29 @@ export class BranchGatewayController {
     );
   }
 
-  @Post('branches/:sourceBranchId/posts/:postId/dispatch/:destinationBranchId')
+  @Post('branches/posts/:postId/dispatch')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
   @ApiOperation({ summary: 'Dispatch HQ post to REGIONAL/HYBRID branch' })
-  @ApiParam({ name: 'sourceBranchId', description: 'Source branch ID (must be HQ)' })
   @ApiParam({ name: 'postId', description: 'Logistics post ID' })
-  @ApiParam({ name: 'destinationBranchId', description: 'Destination branch ID (REGIONAL/HYBRID)' })
-  dispatchPostToBranch(
-    @Param('sourceBranchId') sourceBranchId: string,
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['destination_branch_id'],
+      properties: {
+        destination_branch_id: {
+          type: 'string',
+          example: '12',
+          description: 'Destination branch ID (REGIONAL/HYBRID)',
+        },
+      },
+    },
+  })
+  async dispatchPostToBranch(
     @Param('postId') postId: string,
-    @Param('destinationBranchId') destinationBranchId: string,
+    @Body('destination_branch_id') destinationBranchId: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
+    const sourceBranchId = await this.resolveSourceBranchIdForDispatch(req);
     return this.branchClient.send(
       { cmd: 'branch.post.dispatch' },
       {
