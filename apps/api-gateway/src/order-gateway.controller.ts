@@ -47,6 +47,7 @@ interface JwtUser {
   sub: string;
   username: string;
   roles: string[];
+  branch_id?: string | null;
 }
 
 type BranchAssignment = {
@@ -166,10 +167,28 @@ export class OrderGatewayController {
 
   private isBranchStaffAssignment(assignment?: BranchAssignment | null): boolean {
     const role = String(assignment?.role ?? '').toUpperCase();
-    return role === 'MANAGER' || role === 'REGISTRATOR';
+    return role === 'MANAGER' || role === 'REGISTRATOR' || role === 'BRANCH';
   }
 
   private async resolveBranchAssignment(reqUser: JwtUser): Promise<BranchAssignment | null> {
+    const normalizedRoles = this.normalizeRoles(reqUser.roles);
+    const jwtBranchId = String(reqUser?.branch_id ?? '').trim();
+    const canUseJwtBranch =
+      normalizedRoles.includes(RoleEnum.BRANCH) ||
+      normalizedRoles.includes(RoleEnum.MANAGER) ||
+      normalizedRoles.includes(RoleEnum.REGISTRATOR);
+
+    if (canUseJwtBranch && jwtBranchId) {
+      const inferredRole =
+        normalizedRoles.find((role) =>
+          [RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR].includes(role as RoleEnum),
+        ) ?? RoleEnum.BRANCH;
+      return {
+        branch_id: jwtBranchId,
+        role: inferredRole.toUpperCase(),
+      };
+    }
+
     const response = await this.sendBranchWithTimeout(
       { cmd: 'branch.user.find_by_user' },
       {
