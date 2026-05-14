@@ -157,15 +157,25 @@ export class LogisticsGatewayController {
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List all posts (with pagination)' })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['new', 'sent', 'received', 'canceled', 'canceled_received'],
+  })
   getAllPosts(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('status') status?: string,
     @Req() req?: { user?: JwtUser },
   ) {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.find_all' },
       {
-        query: { page: page ? Number(page) : 1, limit: limit ? Number(limit) : 8 },
+        query: {
+          page: page ? Number(page) : 1,
+          limit: limit ? Number(limit) : 8,
+          status: status ? String(status).trim().toLowerCase() : undefined,
+        },
         requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
       },
     );

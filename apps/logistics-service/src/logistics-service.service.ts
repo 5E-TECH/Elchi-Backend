@@ -637,7 +637,7 @@ export class LogisticsServiceService implements OnModuleInit {
   async findAllPosts(
     page = 1,
     limit = 8,
-    filters?: { branch_id?: string },
+    filters?: { branch_id?: string; status?: string },
     requester?: RequesterContext,
   ) {
     const take = limit > 100 ? 100 : Math.max(1, limit);
@@ -645,9 +645,22 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const scopedBranchId = await this.resolveScopedBranchId(requester);
     const branchId = scopedBranchId ?? (filters?.branch_id ? String(filters.branch_id).trim() : '');
+    const status = filters?.status ? String(filters.status).trim().toLowerCase() : '';
     const where: Record<string, unknown> = { status: Not(Post_status.NEW) };
     if (branchId) {
       where.branch_id = branchId;
+    }
+    if (status) {
+      const allowedStatuses = new Set<string>([
+        Post_status.NEW,
+        Post_status.SENT,
+        Post_status.RECEIVED,
+        Post_status.CANCELED,
+        Post_status.CANCELED_RECEIVED,
+      ]);
+      if (allowedStatuses.has(status)) {
+        where.status = status;
+      }
     }
 
     const [data, total] = await this.postRepo.findAndCount({
