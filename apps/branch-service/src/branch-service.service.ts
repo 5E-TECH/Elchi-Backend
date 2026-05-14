@@ -1,4 +1,5 @@
-import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { RpcException } from '@nestjs/microservices';
 import { ClientProxy } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -38,7 +39,10 @@ type OrderAnalyticsRow = {
 
 @Injectable()
 export class BranchServiceService implements OnModuleInit {
-  private static readonly HQ_CODE = 'HQ-TSHKNT';
+  private readonly logger = new Logger(BranchServiceService.name);
+  private readonly hqCode: string;
+  private readonly hqName: string;
+  private readonly hqAddress: string | null;
 
   constructor(
     @InjectRepository(Branch) private readonly branchRepo: Repository<Branch>,
@@ -48,7 +52,13 @@ export class BranchServiceService implements OnModuleInit {
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('FILE') private readonly fileClient: ClientProxy,
-  ) {}
+    config: ConfigService,
+  ) {
+    this.hqCode = config.get<string>('BRANCH_HQ_CODE', 'HQ-TSHKNT');
+    this.hqName = config.get<string>('BRANCH_HQ_NAME', 'HQ Toshkent');
+    const addr = config.get<string>('BRANCH_HQ_ADDRESS', 'Toshkent');
+    this.hqAddress = addr === '' ? null : addr;
+  }
 
   async onModuleInit() {
     await this.ensureHqBranch();
@@ -90,30 +100,37 @@ export class BranchServiceService implements OnModuleInit {
   }
 
   private async collectDescendantBranchIds(rootBranchIds: string[]): Promise<Set<string>> {
-    const visited = new Set<string>(rootBranchIds.map((id) => String(id)));
-    let frontier = Array.from(visited);
-
-    while (frontier.length > 0) {
-      const children = await this.branchRepo.find({
-        where: {
-          parent_id: In(frontier),
-          isDeleted: false,
-        },
-        select: ['id'],
-      });
-
-      const next: string[] = [];
-      for (const child of children) {
-        const id = String(child.id);
-        if (!visited.has(id)) {
-          visited.add(id);
-          next.push(id);
-        }
-      }
-      frontier = next;
+    const roots = Array.from(
+      new Set(rootBranchIds.map((id) => String(id ?? '').trim()).filter(Boolean)),
+    );
+    if (roots.length === 0) {
+      return new Set<string>();
     }
 
-    return visited;
+    const tablePath = this.branchRepo.metadata.tablePath;
+    const tableRef = tablePath
+      .split('.')
+      .map((part) => `"${part}"`)
+      .join('.');
+
+    const rows: Array<{ id: string }> = await this.branchRepo.manager.query(
+      `
+        WITH RECURSIVE tree AS (
+          SELECT id
+          FROM ${tableRef}
+          WHERE id = ANY($1::bigint[]) AND is_deleted = false
+          UNION ALL
+          SELECT b.id
+          FROM ${tableRef} b
+          INNER JOIN tree t ON b.parent_id = t.id
+          WHERE b.is_deleted = false
+        )
+        SELECT id FROM tree;
+      `,
+      [roots],
+    );
+
+    return new Set<string>(rows.map((row) => String(row.id)));
   }
 
   private async resolveAccessScope(requester?: RequesterContext): Promise<BranchAccessScope> {
@@ -318,7 +335,7 @@ export class BranchServiceService implements OnModuleInit {
 
   private async ensureHqBranch(): Promise<void> {
     const hqByCode = await this.branchRepo.findOne({
-      where: { code: BranchServiceService.HQ_CODE, isDeleted: false },
+      where: { code: this.hqCode, isDeleted: false },
     });
     if (hqByCode) {
       if (hqByCode.type !== BranchType.HQ || hqByCode.level !== 0 || hqByCode.parent_id !== null) {
@@ -335,7 +352,7 @@ export class BranchServiceService implements OnModuleInit {
     });
     if (anyHq) {
       if (!anyHq.code) {
-        anyHq.code = BranchServiceService.HQ_CODE;
+        anyHq.code = this.hqCode;
       }
       if (anyHq.parent_id !== null || anyHq.level !== 0) {
         anyHq.parent_id = null;
@@ -347,15 +364,15 @@ export class BranchServiceService implements OnModuleInit {
 
     await this.branchRepo.save(
       this.branchRepo.create({
-        name: 'HQ Toshkent',
-        address: 'Toshkent',
+        name: this.hqName,
+        address: this.hqAddress,
         phone_number: null,
         region_id: null,
         district_id: null,
         parent_id: null,
         type: BranchType.HQ,
         level: 0,
-        code: BranchServiceService.HQ_CODE,
+        code: this.hqCode,
         status: Status.ACTIVE,
         manager_id: null,
       }),
@@ -419,7 +436,7 @@ export class BranchServiceService implements OnModuleInit {
     if (normalized === 'manager') {
       return BranchUserRole.MANAGER;
     }
-    if (normalized === 'registrator' || normalized === 'operator') {
+    if (normalized === 'registrator') {
       return BranchUserRole.REGISTRATOR;
     }
     if (normalized === 'courier') {
@@ -452,7 +469,10 @@ export class BranchServiceService implements OnModuleInit {
         }
       });
       return map;
-    } catch {
+    } catch (err) {
+      this.logger.warn(
+        `logistics.region.find_by_ids failed (ids=${regionIds.length}): ${(err as Error)?.message ?? err}`,
+      );
       return new Map();
     }
   }
@@ -481,7 +501,10 @@ export class BranchServiceService implements OnModuleInit {
         }
       });
       return map;
-    } catch {
+    } catch (err) {
+      this.logger.warn(
+        `logistics.district.find_by_ids failed (ids=${districtIds.length}): ${(err as Error)?.message ?? err}`,
+      );
       return new Map();
     }
   }
@@ -891,7 +914,7 @@ export class BranchServiceService implements OnModuleInit {
 
     const assignment = await this.branchUserRepo.findOne({
       where: { user_id: requesterId, isDeleted: false },
-      order: { createdAt: 'ASC' },
+      order: { createdAt: 'DESC' },
     });
 
     if (!assignment?.branch_id) {
@@ -1178,7 +1201,7 @@ export class BranchServiceService implements OnModuleInit {
 
       const assignment = await this.branchUserRepo.findOne({
         where: { user_id: requesterId, isDeleted: false },
-        order: { createdAt: 'ASC' },
+        order: { createdAt: 'DESC' },
       });
 
       if (!assignment) {
@@ -1945,6 +1968,22 @@ export class BranchServiceService implements OnModuleInit {
       this.notFound('Branch not found by code');
     }
     return successRes(branch, 200, 'Branch found');
+  }
+
+  async findHqBranch() {
+    const branch = await this.branchRepo.findOne({
+      where: { code: this.hqCode, isDeleted: false },
+    });
+    if (branch) {
+      return successRes(branch, 200, 'HQ branch');
+    }
+    const fallback = await this.branchRepo.findOne({
+      where: { type: BranchType.HQ, isDeleted: false },
+    });
+    if (!fallback) {
+      this.notFound('HQ branch topilmadi');
+    }
+    return successRes(fallback, 200, 'HQ branch');
   }
 
   async findBranchById(id: string, requester?: RequesterContext) {

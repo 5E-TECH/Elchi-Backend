@@ -1,6 +1,7 @@
 import { Controller, Get, HttpStatus, Inject, Res } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
+import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
 import { firstValueFrom, timeout } from 'rxjs';
 
@@ -30,6 +31,7 @@ const SERVICE_HEALTH_PROBES: Array<{ token: string; cmd: string }> = [
 const PROBE_TIMEOUT_MS = 1500;
 
 @ApiTags('Health')
+@SkipThrottle()
 @Controller('health')
 export class HealthController {
   private readonly clients: Map<string, ClientProxy>;

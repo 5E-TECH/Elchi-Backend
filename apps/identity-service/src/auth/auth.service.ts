@@ -4,6 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { createHash } from 'node:crypto';
 import type { StringValue } from 'ms';
 import { User } from '../entities/user.entity';
 import { BcryptEncryption } from '../../../../libs/common/helpers/bcrypt';
@@ -122,7 +123,24 @@ export class AuthService {
       throw new RpcException(errorRes('Invalid refresh token', 401));
     }
 
-    if (!user.refresh_token || user.refresh_token !== dto.refreshToken) {
+    const presentedHash = this.hashRefreshToken(dto.refreshToken);
+
+    if (!user.refresh_token) {
+      // Already logged out (or never logged in on this token). 401.
+      throw new RpcException(errorRes('Invalid refresh token', 401));
+    }
+
+    if (user.refresh_token !== presentedHash) {
+      // Reuse detected: signature is valid but this token is no longer the
+      // active one for the user. Either an attacker is replaying a stolen
+      // token after a legitimate rotation, or the legitimate user is using
+      // a stale token. In both cases the safe response is to invalidate the
+      // entire session — the real user can log in again.
+      this.logger.warn(
+        `Refresh token reuse detected for user ${user.id} — invalidating session`,
+      );
+      user.refresh_token = null;
+      await this.users.save(user);
       throw new RpcException(errorRes('Invalid refresh token', 401));
     }
 
@@ -154,8 +172,19 @@ export class AuthService {
     return successRes({}, 200, 'Logged out successfully');
   }
 
+  /**
+   * Refresh tokens are stored as SHA-256 hex so a DB leak does not expose
+   * usable session tokens. The plaintext value only lives in transit/memory.
+   */
+  private hashRefreshToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
   private async saveRefreshToken(userId: string, refreshToken: string) {
-    await this.users.update({ id: userId }, { refresh_token: refreshToken });
+    await this.users.update(
+      { id: userId },
+      { refresh_token: this.hashRefreshToken(refreshToken) },
+    );
   }
 
   private async issueTokens(user: User) {

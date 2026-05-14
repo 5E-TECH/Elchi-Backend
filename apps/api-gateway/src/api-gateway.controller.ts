@@ -260,11 +260,11 @@ export class ApiGatewayController {
     let branchId = '';
     if (isSystemPrivileged) {
       const hqBranch = await firstValueFrom(
-        this.branchClient.send({ cmd: 'branch.find_by_code' }, { code: 'HQ-TSHKNT' }),
+        this.branchClient.send({ cmd: 'branch.find_hq' }, {}),
       );
       branchId = String(hqBranch?.data?.id ?? '').trim();
       if (!branchId) {
-        throw new BadRequestException('HQ branch topilmadi (code=HQ-TSHKNT)');
+        throw new BadRequestException('HQ branch topilmadi');
       }
     } else {
       const assignment = await this.resolveBranchAssignment(req.user);
@@ -548,7 +548,7 @@ export class ApiGatewayController {
 
       if (!branchId && isSystemPrivileged) {
         const hqBranch = await firstValueFrom(
-          this.branchClient.send({ cmd: 'branch.find_by_code' }, { code: 'HQ-TSHKNT' }),
+          this.branchClient.send({ cmd: 'branch.find_hq' }, {}),
         );
         branchId = String(hqBranch?.data?.id ?? '').trim();
       }

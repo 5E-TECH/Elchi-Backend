@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { Between, Brackets, DataSource, In, IsNull, QueryFailedError, Repository } from 'typeorm';
@@ -32,7 +32,9 @@ import type { EntityManager } from 'typeorm';
 import { successRes } from '../../../libs/common/helpers/response';
 
 @Injectable()
-export class OrderServiceService {
+export class OrderServiceService implements OnModuleInit {
+  private readonly logger = new Logger(OrderServiceService.name);
+
   constructor(
     private readonly dataSource: DataSource,
     @InjectRepository(Order)
@@ -61,15 +63,29 @@ export class OrderServiceService {
 
   private hqBranchIdCache: string | null = null;
 
+  async onModuleInit(): Promise<void> {
+    // Warm the HQ branch cache up-front. branch-service seeds HQ on its own
+    // init, so this should succeed on a healthy stack. If RMQ isn't ready yet
+    // (cold-start race) we just log; the first order create will retry.
+    try {
+      await this.getHqBranchId();
+    } catch (err) {
+      this.logger.warn(
+        `HQ branch warm-up failed: ${(err as Error)?.message ?? err}`,
+      );
+    }
+  }
+
   /**
    * Resolve the branch_id to attach to a new order.
    * Priority: explicit dto.branch_id → requester's assigned branch → HQ fallback.
-   * Never returns null; the audit identified branch_id NULL leak as a long-term risk.
+   * Throws RpcException 500 if all paths fail — refuse to persist an order
+   * with NULL branch_id (the audit identified this as a long-term data risk).
    */
   private async resolveBranchIdForOrder(
     explicitBranchId: string | null | undefined,
     requester?: { id: string; roles?: string[]; branch_id?: string | null },
-  ): Promise<string | null> {
+  ): Promise<string> {
     if (explicitBranchId) {
       return String(explicitBranchId);
     }
@@ -98,84 +114,95 @@ export class OrderServiceService {
       }
     }
 
-    if (this.hqBranchIdCache) {
-      return this.hqBranchIdCache;
+    const hqId = await this.getHqBranchId();
+    if (hqId) {
+      return hqId;
     }
 
-    try {
-      const response = await rmqSend<{ data?: { id?: string } }>(
-        this.branchClient,
-        { cmd: 'branch.find_by_code' },
-        { code: 'HQ-TSHKNT' },
-        { attachRequestId: false, retries: 1 },
-      );
-      const hqId = response?.data?.id;
-      if (hqId) {
-        this.hqBranchIdCache = String(hqId);
-        return this.hqBranchIdCache;
-      }
-    } catch {
-      // last-resort fallback: leave null (rare; ensureHqBranch should have run)
-    }
-
-    return null;
+    throw new RpcException({
+      statusCode: 500,
+      message:
+        'Cannot resolve branch_id for order: no explicit/JWT/assigned branch and HQ fallback unavailable',
+    });
   }
 
   /**
-   * Queue a search-index upsert via the Outbox. The previous direct rmqSend
-   * silently dropped the request when search-service was unavailable, leaving
-   * the DB and search index out of sync. With Outbox, the publisher retries
-   * with exponential backoff until delivered (or the DLQ after maxAttempts).
+   * Queue a search-index upsert via the Outbox. Pass `manager` to enqueue the
+   * event inside the same transaction as the order mutation — that way commit
+   * is atomic (search event is logged iff the order change persists). If
+   * `manager` is omitted, the enqueue runs on the default connection (legacy
+   * post-commit pattern, retained only for non-transactional callers).
    */
-  private async syncOrderToSearch(order: Order): Promise<void> {
+  private async syncOrderToSearch(
+    order: Order,
+    manager?: EntityManager,
+  ): Promise<void> {
     try {
-      await this.outbox.enqueue('SEARCH', 'search.index.upsert', {
-        source: 'order',
-        type: 'order',
-        sourceId: order.id,
-        title: `Order #${order.id}`,
-        content: [order.status, order.address, order.comment, order.market_id, order.customer_id]
-          .filter(Boolean)
-          .join(' '),
-        tags: ['order', order.status, order.where_deliver].filter(Boolean),
-        metadata: {
-          status: order.status,
-          source: order.source,
-          market_id: order.market_id,
-          customer_id: order.customer_id,
-          post_id: order.post_id,
-          canceled_post_id: order.canceled_post_id,
-          branch_id: order.branch_id,
-          current_batch_id: order.current_batch_id,
-          courier_id: order.courier_id,
-          holder_type: order.holder_type,
-          holder_branch_id: order.holder_branch_id,
-          holder_courier_id: order.holder_courier_id,
-          last_handover_at: order.last_handover_at,
-          last_handover_by: order.last_handover_by,
-          assigned_at: order.assigned_at,
-          return_reason: order.return_reason,
-          region_id: order.region_id,
-          district_id: order.district_id,
-          total_price: order.total_price,
-          isDeleted: order.isDeleted,
+      await this.outbox.enqueue(
+        'SEARCH',
+        'search.index.upsert',
+        {
+          source: 'order',
+          type: 'order',
+          sourceId: order.id,
+          title: `Order #${order.id}`,
+          content: [order.status, order.address, order.comment, order.market_id, order.customer_id]
+            .filter(Boolean)
+            .join(' '),
+          tags: ['order', order.status, order.where_deliver].filter(Boolean),
+          metadata: {
+            status: order.status,
+            source: order.source,
+            market_id: order.market_id,
+            customer_id: order.customer_id,
+            post_id: order.post_id,
+            canceled_post_id: order.canceled_post_id,
+            branch_id: order.branch_id,
+            current_batch_id: order.current_batch_id,
+            courier_id: order.courier_id,
+            holder_type: order.holder_type,
+            holder_branch_id: order.holder_branch_id,
+            holder_courier_id: order.holder_courier_id,
+            last_handover_at: order.last_handover_at,
+            last_handover_by: order.last_handover_by,
+            assigned_at: order.assigned_at,
+            return_reason: order.return_reason,
+            region_id: order.region_id,
+            district_id: order.district_id,
+            total_price: order.total_price,
+            isDeleted: order.isDeleted,
+          },
         },
-      });
-    } catch {
-      // Outbox enqueue failure (e.g. DB blip) — non-fatal for the calling flow;
-      // dropping the event is no worse than the previous fire-and-forget rmqSend.
+        { manager },
+      );
+    } catch (err) {
+      // When called inside a TX, re-throw so the surrounding rollback fires;
+      // post-commit callers (legacy) ignore enqueue failures as before.
+      if (manager) {
+        throw err;
+      }
     }
   }
 
-  private async removeOrderFromSearch(orderId: string): Promise<void> {
+  private async removeOrderFromSearch(
+    orderId: string,
+    manager?: EntityManager,
+  ): Promise<void> {
     try {
-      await this.outbox.enqueue('SEARCH', 'search.index.remove', {
-        source: 'order',
-        type: 'order',
-        sourceId: orderId,
-      });
-    } catch {
-      // see syncOrderToSearch
+      await this.outbox.enqueue(
+        'SEARCH',
+        'search.index.remove',
+        {
+          source: 'order',
+          type: 'order',
+          sourceId: orderId,
+        },
+        { manager },
+      );
+    } catch (err) {
+      if (manager) {
+        throw err;
+      }
     }
   }
 
@@ -315,8 +342,8 @@ export class OrderServiceService {
     try {
       const response = await rmqSend<{ data?: { id?: string } }>(
         this.branchClient,
-        { cmd: 'branch.find_by_code' },
-        { code: 'HQ-TSHKNT' },
+        { cmd: 'branch.find_hq' },
+        {},
         { attachRequestId: false, retries: 1 },
       );
       const hqId = response?.data?.id;
@@ -1210,6 +1237,7 @@ export class OrderServiceService {
         trackingRepo,
       );
 
+      await this.syncOrderToSearch(order, queryRunner.manager);
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -1219,7 +1247,6 @@ export class OrderServiceService {
     }
 
     const updated = await this.findById(id);
-    void this.syncOrderToSearch(updated);
     return successRes(updated, 200, 'Order return initiated');
   }
 
@@ -1275,6 +1302,7 @@ export class OrderServiceService {
         trackingRepo,
       );
 
+      await this.syncOrderToSearch(order, queryRunner.manager);
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -1284,7 +1312,6 @@ export class OrderServiceService {
     }
 
     const updated = await this.findById(id);
-    void this.syncOrderToSearch(updated);
     return successRes(updated, 200, 'Order marked as returned to market');
   }
 
@@ -1447,6 +1474,7 @@ export class OrderServiceService {
         custodyRepo,
       );
 
+      await this.syncOrderToSearch(saved, queryRunner.manager);
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -1456,7 +1484,6 @@ export class OrderServiceService {
     }
 
     const fullOrder = await this.findById(savedId);
-    void this.syncOrderToSearch(fullOrder);
     return fullOrder;
   }
 
@@ -1945,7 +1972,7 @@ export class OrderServiceService {
       (postAssignments?.data ?? []).map((a) => [a.order_id, a.post_id]),
     );
 
-    // 8. Update order statuses in own schema (transaction)
+    // 8. Update order statuses + enqueue search sync (single TX)
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -1978,6 +2005,9 @@ export class OrderServiceService {
             trackingRepo,
           );
         }
+        order.status = nextStatus;
+        order.post_id = postId ?? null;
+        await this.syncOrderToSearch(order, queryRunner.manager);
       }
       await queryRunner.commitTransaction();
     } catch (error) {
@@ -1999,18 +2029,6 @@ export class OrderServiceService {
     } finally {
       await queryRunner.release();
     }
-
-    // 9. Sync to search (fire-and-forget)
-    await Promise.all(
-      orders.map(async (order) => {
-        try {
-          const updated = await this.findById(order.id);
-          await this.syncOrderToSearch(updated);
-        } catch {
-          // Search sync should not block receive flow.
-        }
-      }),
-    );
 
     return successRes({}, 200, 'Orders received');
   }
@@ -2228,6 +2246,11 @@ export class OrderServiceService {
     if (!Number.isFinite(requestedPaidAmount) || requestedPaidAmount < 0) {
       this.badRequest('paidAmount must be a non-negative number');
     }
+    if (requestedPaidAmount > netToBePaid) {
+      this.badRequest(
+        `paidAmount (${requestedPaidAmount}) qoldiq summa (${netToBePaid}) dan oshmasligi kerak`,
+      );
+    }
     const currentPaid = Math.min(Math.max(requestedPaidAmount, 0), netToBePaid);
     const remainingBeforeDebt = netToBePaid - currentPaid;
     const debtBeforeSale = marketBalanceBefore < 0 ? Math.abs(marketBalanceBefore) : 0;
@@ -2417,17 +2440,16 @@ export class OrderServiceService {
       await queryRunner.release();
     }
 
-    // Post-commit side effects: search index + external status sync.
+    // Post-commit external integration sync (non-DB side effect; outbox handles
+    // search). Failure here is non-fatal — DB and search are already consistent.
     try {
       const updated = await this.findById(id);
       const action = this.resolveSyncAction(Order_status.WAITING, nextStatus);
       if (action) {
         void this.queueExternalStatusSync(updated, action, Order_status.WAITING, nextStatus);
       }
-      void this.syncOrderToSearch(updated);
     } catch {
-      // Search/external sync failures are non-fatal; outbox publisher and the
-      // updated DB state are authoritative.
+      // External sync is best-effort.
     }
 
     return successRes({}, 200, 'Order sold');
@@ -3227,6 +3249,10 @@ export class OrderServiceService {
           custodyRepo,
         );
       }
+
+      // Atomic search index update: enqueue the outbox event in the same
+      // transaction so the search publisher only sees committed state.
+      await this.syncOrderToSearch(order, manager);
     };
 
     if (externalManager) {
@@ -3263,7 +3289,6 @@ export class OrderServiceService {
         void this.queueExternalStatusSync(updated, action, oldStatus, newStatus);
       }
     }
-    void this.syncOrderToSearch(updated);
     return updated;
   }
 
@@ -3296,9 +3321,11 @@ export class OrderServiceService {
       this.badRequest("Faqat 'created', 'new' yoki 'received' holatdagi buyurtmani o‘chirish mumkin");
     }
 
-    order.isDeleted = true;
-    await this.orderRepo.save(order);
-    void this.removeOrderFromSearch(id);
+    await this.dataSource.transaction(async (tx) => {
+      order.isDeleted = true;
+      await tx.getRepository(Order).save(order);
+      await this.removeOrderFromSearch(id, tx);
+    });
     return successRes({}, 200, `Order #${id} o'chirildi`);
   }
 
@@ -4627,18 +4654,23 @@ export class OrderServiceService {
         throw error;
       }
 
+      // current_batch_id IS NULL guards against concurrent batches racing for
+      // the same order (each batch insert here is atomic; affected-count
+      // mismatch below triggers rollback if any order was already taken).
       const result = await orderRepo
         .createQueryBuilder()
         .update(Order)
         .set({ current_batch_id: batchId })
         .where('id IN (:...orderIds)', { orderIds })
         .andWhere('"is_deleted" = false')
+        .andWhere('current_batch_id IS NULL')
         .execute();
 
       if (Number(result.affected ?? 0) !== orderIds.length) {
         throw new RpcException({
           statusCode: 409,
-          message: 'Some orders are not found or unavailable for batch assignment',
+          message:
+            'Some orders are not found or already assigned to another batch',
         });
       }
 

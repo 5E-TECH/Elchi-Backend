@@ -1,5 +1,14 @@
 import { Group_type } from '@app/common';
-import { IsBoolean, IsEnum, IsOptional, IsString, Matches } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsIn,
+  IsNotEmpty,
+  IsOptional,
+  IsString,
+  MaxLength,
+  Matches,
+} from 'class-validator';
 
 export class SendNotificationDto {
   @IsOptional()
@@ -19,11 +28,15 @@ export class SendNotificationDto {
   @IsString()
   token?: string;
 
+  // Telegram's sendMessage caps text at 4096 chars; reject anything longer
+  // at the gateway rather than getting a confusing 400 from upstream.
   @IsString()
+  @IsNotEmpty()
+  @MaxLength(4096)
   message!: string;
 
   @IsOptional()
-  @IsString()
+  @IsIn(['Markdown', 'MarkdownV2', 'HTML'])
   parse_mode?: 'Markdown' | 'MarkdownV2' | 'HTML';
 
   @IsOptional()

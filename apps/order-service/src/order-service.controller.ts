@@ -25,6 +25,21 @@ export class OrderServiceController {
     return executeAndAck(this.rmqService, context, handler);
   }
 
+  private runIdempotent<T>(
+    context: RmqContext,
+    pattern: string,
+    requestId: string | undefined,
+    handler: () => Promise<T> | T,
+  ): Promise<T> {
+    return executeIdempotent(
+      this.rmqService,
+      this.idempotencyService,
+      context,
+      { requestId, pattern },
+      handler,
+    );
+  }
+
   @MessagePattern({ cmd: 'salom_ber_order' })
   health(@Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => ({
@@ -209,10 +224,11 @@ export class OrderServiceController {
       id: string;
       dto: { comment?: string; extraCost?: number; paidAmount?: number };
       requester: { id: string; roles?: string[] };
+      request_id?: string;
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () =>
+    return this.runIdempotent(context, 'order.sell', data.request_id, () =>
       this.orderService.sellOrder(data.requester, data.id, data.dto ?? {}),
     );
   }
@@ -224,10 +240,11 @@ export class OrderServiceController {
       id: string;
       dto: { comment?: string; extraCost?: number };
       requester: { id: string; roles?: string[] };
+      request_id?: string;
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () =>
+    return this.runIdempotent(context, 'order.cancel', data.request_id, () =>
       this.orderService.cancelOrder(data.requester, data.id, data.dto ?? {}),
     );
   }
@@ -239,11 +256,15 @@ export class OrderServiceController {
       id: string;
       dto: { reason?: string };
       requester: { id: string; roles?: string[] };
+      request_id?: string;
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () =>
-      this.orderService.couldNotDeliverOrder(data.requester, data.id, data.dto ?? {}),
+    return this.runIdempotent(
+      context,
+      'order.could_not_deliver',
+      data.request_id,
+      () => this.orderService.couldNotDeliverOrder(data.requester, data.id, data.dto ?? {}),
     );
   }
 
@@ -259,11 +280,15 @@ export class OrderServiceController {
         comment?: string;
       };
       requester: { id: string; roles?: string[] };
+      request_id?: string;
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () =>
-      this.orderService.partlySellOrder(data.requester, data.id, data.dto),
+    return this.runIdempotent(
+      context,
+      'order.partly_sell',
+      data.request_id,
+      () => this.orderService.partlySellOrder(data.requester, data.id, data.dto),
     );
   }
 
@@ -273,11 +298,15 @@ export class OrderServiceController {
     data: {
       id: string;
       requester: { id: string; roles?: string[] };
+      request_id?: string;
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () =>
-      this.orderService.rollbackOrderToWaiting(data.requester, data.id),
+    return this.runIdempotent(
+      context,
+      'order.rollback_waiting',
+      data.request_id,
+      () => this.orderService.rollbackOrderToWaiting(data.requester, data.id),
     );
   }
 

@@ -18,6 +18,12 @@ export const gatewayValidationSchema = Joi.object({
   RABBITMQ_FILE_QUEUE: Joi.string().required(),
   RABBITMQ_C2C_QUEUE: Joi.string().required(),
   RABBITMQ_SEARCH_QUEUE: Joi.string().required(),
+  // Global throttle: how many requests per IP within the window (ms).
+  // Auth endpoints (login/refresh) override these with stricter limits.
+  THROTTLE_TTL_MS: Joi.number().integer().min(1000).default(60_000),
+  THROTTLE_LIMIT: Joi.number().integer().min(1).default(60),
+  AUTH_THROTTLE_TTL_MS: Joi.number().integer().min(1000).default(60_000),
+  AUTH_THROTTLE_LIMIT: Joi.number().integer().min(1).default(10),
 });
 
 export const identityValidationSchema = Joi.object({
@@ -89,7 +95,11 @@ export const integrationValidationSchema = Joi.object({
   INTEGRATION_CREDENTIAL_SECRET: Joi.string()
     .min(32)
     .required()
-    .description('Secret used to AES-encrypt external integration credentials in DB. Must be >=32 chars of random entropy. Rotating it invalidates existing encrypted credentials — plan a re-encrypt migration first.'),
+    .description('Primary secret used to AES-encrypt external integration credentials in DB. Must be >=32 chars of random entropy.'),
+  INTEGRATION_CREDENTIAL_SECRET_PREVIOUS: Joi.string()
+    .min(32)
+    .optional()
+    .description('Optional previous secret. During rotation: set both vars, then trigger a re-encrypt pass; rows decrypted with the previous key are re-encrypted with the primary on next save. Remove this var once all rows are migrated.'),
 });
 
 export const analyticsValidationSchema = Joi.object({
@@ -102,6 +112,9 @@ export const branchValidationSchema = Joi.object({
   DB_SCHEMA: Joi.string().default('branch_schema'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_BRANCH_QUEUE: Joi.string().required(),
+  BRANCH_HQ_CODE: Joi.string().min(1).default('HQ-TSHKNT'),
+  BRANCH_HQ_NAME: Joi.string().min(1).default('HQ Toshkent'),
+  BRANCH_HQ_ADDRESS: Joi.string().allow('').default('Toshkent'),
 });
 
 export const investorValidationSchema = Joi.object({
@@ -121,6 +134,8 @@ export const fileValidationSchema = Joi.object({
   MINIO_SECRET_KEY: Joi.string().required(),
   MINIO_BUCKET: Joi.string().default('elchi-files'),
   FILE_SIGNED_URL_EXPIRES: Joi.number().default(3600),
+  // Hard upper bound on client-provided expires_in. AWS S3 max is 7 days (604800s).
+  FILE_SIGNED_URL_MAX_EXPIRES: Joi.number().default(86_400),
   FILE_MAX_SIZE_MB: Joi.number().default(10),
 });
 

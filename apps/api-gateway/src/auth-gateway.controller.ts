@@ -21,8 +21,17 @@ import {
   ApiTags,
   ApiUnauthorizedResponse,
 } from '@nestjs/swagger';
+import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+
+// Decorator metadata evaluates at class load — read env directly so the values
+// pick up the same .env defaults that gatewayValidationSchema declares.
+const AUTH_THROTTLE_LIMIT = Number(process.env.AUTH_THROTTLE_LIMIT ?? '10');
+const AUTH_THROTTLE_TTL_MS = Number(process.env.AUTH_THROTTLE_TTL_MS ?? '60000');
+const AUTH_THROTTLE = {
+  default: { limit: AUTH_THROTTLE_LIMIT, ttl: AUTH_THROTTLE_TTL_MS },
+};
 import {
   LoginRequestDto,
   MinimalAuthResponseDto,
@@ -120,6 +129,7 @@ export class AuthGatewayController {
     };
   }
 
+  @Throttle(AUTH_THROTTLE)
   @Post('login')
   @ApiOperation({ summary: 'Login with phone number and password' })
   @ApiBody({ type: LoginRequestDto })
@@ -148,6 +158,7 @@ export class AuthGatewayController {
     return this.sanitizeAuthPayload(response);
   }
 
+  @Throttle(AUTH_THROTTLE)
   @Post('refresh')
   @ApiOperation({ summary: 'Refresh access token' })
   @ApiBody({ type: RefreshRequestDto })

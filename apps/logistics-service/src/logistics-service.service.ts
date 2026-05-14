@@ -1,4 +1,4 @@
-import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { In, Not, Repository } from 'typeorm';
@@ -57,6 +57,8 @@ interface BranchAssignmentRow {
 
 @Injectable()
 export class LogisticsServiceService implements OnModuleInit {
+  private readonly logger = new Logger(LogisticsServiceService.name);
+
   constructor(
     @InjectRepository(Post) private readonly postRepo: Repository<Post>,
     @InjectRepository(Region) private readonly regionRepo: Repository<Region>,
@@ -139,8 +141,10 @@ export class LogisticsServiceService implements OnModuleInit {
           )
           .pipe(timeout(1500)),
       );
-    } catch {
-      // Search sync should not block logistics flows.
+    } catch (err) {
+      this.logger.warn(
+        `search.index.upsert (post ${post.id}) failed: ${(err as Error)?.message ?? err}`,
+      );
     }
   }
 
@@ -154,8 +158,10 @@ export class LogisticsServiceService implements OnModuleInit {
           )
           .pipe(timeout(1500)),
       );
-    } catch {
-      // Search sync should not block logistics flows.
+    } catch (err) {
+      this.logger.warn(
+        `search.index.remove (post ${post.id}) failed: ${(err as Error)?.message ?? err}`,
+      );
     }
   }
 
@@ -179,8 +185,10 @@ export class LogisticsServiceService implements OnModuleInit {
           )
           .pipe(timeout(1500)),
       );
-    } catch {
-      // Search sync should not block logistics flows.
+    } catch (err) {
+      this.logger.warn(
+        `search.index.upsert (region ${region.id}) failed: ${(err as Error)?.message ?? err}`,
+      );
     }
   }
 
@@ -194,8 +202,10 @@ export class LogisticsServiceService implements OnModuleInit {
           )
           .pipe(timeout(1500)),
       );
-    } catch {
-      // Search sync should not block logistics flows.
+    } catch (err) {
+      this.logger.warn(
+        `search.index.remove (region ${region.id}) failed: ${(err as Error)?.message ?? err}`,
+      );
     }
   }
 
@@ -223,8 +233,10 @@ export class LogisticsServiceService implements OnModuleInit {
           )
           .pipe(timeout(1500)),
       );
-    } catch {
-      // Search sync should not block logistics flows.
+    } catch (err) {
+      this.logger.warn(
+        `search.index.upsert (district ${district.id}) failed: ${(err as Error)?.message ?? err}`,
+      );
     }
   }
 
@@ -238,8 +250,10 @@ export class LogisticsServiceService implements OnModuleInit {
           )
           .pipe(timeout(1500)),
       );
-    } catch {
-      // Search sync should not block logistics flows.
+    } catch (err) {
+      this.logger.warn(
+        `search.index.remove (district ${district.id}) failed: ${(err as Error)?.message ?? err}`,
+      );
     }
   }
 
@@ -694,10 +708,23 @@ export class LogisticsServiceService implements OnModuleInit {
         await this.updateOrder(orderId, { post_id: post.id });
       }
 
-      post.order_quantity = Number(post.order_quantity ?? 0) + payload.ids.length;
-      post.post_total_price = Number(post.post_total_price ?? 0) + payload.total;
-      const savedPost = await this.postRepo.save(post);
-      void this.syncPostToSearch(savedPost);
+      // Atomic increment — avoids lost-update if newPosts is invoked
+      // concurrently for the same region.
+      const incrementCount = payload.ids.length;
+      const incrementTotal = Number.isFinite(payload.total) ? payload.total : 0;
+      await this.postRepo
+        .createQueryBuilder()
+        .update(Post)
+        .set({
+          order_quantity: () => `order_quantity + ${incrementCount}`,
+          post_total_price: () => `post_total_price + ${incrementTotal}`,
+        })
+        .where('id = :id', { id: post.id })
+        .execute();
+      const refreshedPost = await this.postRepo.findOne({ where: { id: post.id } });
+      if (refreshedPost) {
+        void this.syncPostToSearch(refreshedPost);
+      }
     }
 
     const allPosts = await this.postRepo.find({
@@ -1187,13 +1214,25 @@ export class LogisticsServiceService implements OnModuleInit {
     const allOrders = await this.findOrders({ post_id: id, page: 1, limit: 1000 });
     const orderById = new Map(allOrders.map((order) => [String(order.id), order]));
 
+    // receivePost spans multiple updateOrder RMQ calls + a local postRepo.save
+    // across two services — no atomic TX possible. Track which transitions
+    // succeeded so partial failures are visible in logs rather than silent.
+    const failures: Array<{ order_id: string; error: string }> = [];
+
     for (const orderId of waitingOrderIds) {
       const target = orderById.get(orderId);
       if (target?.status === Order_status.ON_THE_ROAD) {
-        await this.updateOrder(orderId, {
-          status: Order_status.WAITING,
-          return_requested: false,
-        });
+        try {
+          await this.updateOrder(orderId, {
+            status: Order_status.WAITING,
+            return_requested: false,
+          });
+        } catch (err) {
+          failures.push({
+            order_id: String(orderId),
+            error: (err as Error)?.message ?? String(err),
+          });
+        }
       }
     }
 
@@ -1203,11 +1242,27 @@ export class LogisticsServiceService implements OnModuleInit {
 
     if (remaining.length) {
       for (const order of remaining) {
-        await this.updateOrder(order.id, {
-          status: Order_status.WAITING,
-          return_requested: true,
-        });
+        try {
+          await this.updateOrder(order.id, {
+            status: Order_status.WAITING,
+            return_requested: true,
+          });
+        } catch (err) {
+          failures.push({
+            order_id: String(order.id),
+            error: (err as Error)?.message ?? String(err),
+          });
+        }
       }
+    }
+
+    if (failures.length > 0) {
+      this.logger.warn(
+        `receivePost partial failure for post=${id}: ${failures.length} order update(s) failed — operator should reconcile. Sample: ${failures
+          .slice(0, 3)
+          .map((f) => `${f.order_id}:${f.error}`)
+          .join(' | ')}`,
+      );
     }
 
     post.status = Post_status.RECEIVED;
@@ -1379,10 +1434,21 @@ export class LogisticsServiceService implements OnModuleInit {
         addedTotal += Number(order.total_price ?? 0);
       }
 
-      newPost.order_quantity = Number(newPost.order_quantity ?? 0) + regionOrders.length;
-      newPost.post_total_price = Number(newPost.post_total_price ?? 0) + addedTotal;
-      const savedNewPost = await this.postRepo.save(newPost);
-      void this.syncPostToSearch(savedNewPost);
+      const incrementCount = regionOrders.length;
+      const incrementTotal = Number.isFinite(addedTotal) ? addedTotal : 0;
+      await this.postRepo
+        .createQueryBuilder()
+        .update(Post)
+        .set({
+          order_quantity: () => `order_quantity + ${incrementCount}`,
+          post_total_price: () => `post_total_price + ${incrementTotal}`,
+        })
+        .where('id = :id', { id: newPost.id })
+        .execute();
+      const savedNewPost = await this.postRepo.findOne({ where: { id: newPost.id } });
+      if (savedNewPost) {
+        void this.syncPostToSearch(savedNewPost);
+      }
     }
 
     return successRes(
@@ -1602,11 +1668,31 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const alreadyInTargetPost = String(order.post_id ?? '') === String(targetPost.id);
     if (!alreadyInTargetPost) {
-      targetPost.order_quantity = Number(targetPost.order_quantity ?? 0) + 1;
-      targetPost.post_total_price =
-        Number(targetPost.post_total_price ?? 0) + Number(order.total_price ?? 0);
-      const savedPost = await this.postRepo.save(targetPost);
-      void this.syncPostToSearch(savedPost);
+      // Atomic UPDATE — read-modify-write would lose increments under
+      // concurrent scans for the same post (two couriers, two QR scans).
+      const delta = Number(order.total_price ?? 0);
+      try {
+        await this.postRepo
+          .createQueryBuilder()
+          .update(Post)
+          .set({
+            order_quantity: () => 'order_quantity + 1',
+            post_total_price: () => `post_total_price + ${Number.isFinite(delta) ? delta : 0}`,
+          })
+          .where('id = :id', { id: targetPost.id })
+          .execute();
+        const refreshedPost = await this.postRepo.findOne({ where: { id: targetPost.id } });
+        if (refreshedPost) {
+          void this.syncPostToSearch(refreshedPost);
+        }
+      } catch (err) {
+        // Order has already been transitioned to ON_THE_ROAD; counter drift
+        // here is recoverable from order.post_id (computed on demand). Log
+        // so ops can spot persistent failures.
+        this.logger.warn(
+          `Post counter update failed for post=${targetPost.id} order=${order.id}: ${(err as Error)?.message ?? err}`,
+        );
+      }
     }
 
     return successRes(

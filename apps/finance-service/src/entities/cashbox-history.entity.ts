@@ -9,6 +9,13 @@ import { Cashbox } from './cashbox.entity';
 @Index('IDX_CASHBOX_HISTORY_OP_TYPE', ['operation_type'])
 @Index('IDX_CASHBOX_HISTORY_SOURCE', ['source_type'])
 @Index('IDX_CASHBOX_HISTORY_CREATED_BY', ['created_by'])
+// Idempotency guard — duplicate RMQ deliveries of the same finance event must
+// not double-write. Partial: NULL source_id (manual adjustments) is exempt.
+@Index(
+  'IDX_CASHBOX_HISTORY_IDEMPOTENT',
+  ['cashbox_id', 'source_type', 'source_id', 'operation_type'],
+  { unique: true, where: 'source_id IS NOT NULL AND is_deleted = false' },
+)
 export class CashboxHistory extends BaseEntity {
   @Column({ type: 'enum', enum: Operation_type })
   operation_type!: Operation_type;

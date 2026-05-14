@@ -45,8 +45,21 @@ import type { StringValue } from 'ms';
         },
       }),
     }),
-    ThrottlerModule.forRoot({
-      throttlers: [{ ttl: 60000, limit: 60 }],
+    ThrottlerModule.forRootAsync({
+      inject: [ConfigService],
+      useFactory: (configService: ConfigService) => ({
+        // Global per-IP rate limit. Sensitive endpoints (login/refresh)
+        // override this with @Throttle({ default: { ... } }) to a stricter
+        // value (AUTH_THROTTLE_LIMIT). Health endpoints are exempted via
+        // @SkipThrottle().
+        throttlers: [
+          {
+            name: 'default',
+            ttl: configService.get<number>('THROTTLE_TTL_MS', 60_000),
+            limit: configService.get<number>('THROTTLE_LIMIT', 60),
+          },
+        ],
+      }),
     }),
     // Core services
     RmqModule.register({ name: 'IDENTITY' }),
