@@ -1502,6 +1502,7 @@ export class OrderServiceService implements OnModuleInit {
     end_day?: string;
     courier?: string;
     region_id?: string;
+    district_id?: string;
     branch_id?: string;
     source?: Order_source | 'internal' | 'external' | 'branch';
     exclude_sources?: Array<Order_source | 'internal' | 'external' | 'branch'>;
@@ -1526,6 +1527,7 @@ export class OrderServiceService implements OnModuleInit {
       end_day,
       courier,
       region_id,
+      district_id,
       branch_id,
       source,
       exclude_sources,
@@ -1585,6 +1587,9 @@ export class OrderServiceService implements OnModuleInit {
     }
     if (region_id) {
       qb.andWhere('order.region_id = :region_id', { region_id });
+    }
+    if (district_id) {
+      qb.andWhere('order.district_id = :district_id', { district_id });
     }
     if (branch_id) {
       qb.andWhere(
