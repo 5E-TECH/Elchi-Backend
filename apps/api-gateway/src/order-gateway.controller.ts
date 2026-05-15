@@ -1057,7 +1057,11 @@ export class OrderGatewayController {
           {
             id,
             dto,
-            requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) },
+            requester: {
+              id: req.user.sub,
+              roles: this.normalizeRoles(req.user.roles),
+              branch_id: req.user.branch_id ?? null,
+            },
             request_id: randomUUID(),
           },
         )
@@ -1089,7 +1093,11 @@ export class OrderGatewayController {
           {
             id,
             dto,
-            requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) },
+            requester: {
+              id: req.user.sub,
+              roles: this.normalizeRoles(req.user.roles),
+              branch_id: req.user.branch_id ?? null,
+            },
             request_id: randomUUID(),
           },
         )
@@ -1121,7 +1129,11 @@ export class OrderGatewayController {
           {
             id,
             dto,
-            requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) },
+            requester: {
+              id: req.user.sub,
+              roles: this.normalizeRoles(req.user.roles),
+              branch_id: req.user.branch_id ?? null,
+            },
             request_id: randomUUID(),
           },
         )
@@ -1153,7 +1165,11 @@ export class OrderGatewayController {
           {
             id,
             dto,
-            requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) },
+            requester: {
+              id: req.user.sub,
+              roles: this.normalizeRoles(req.user.roles),
+              branch_id: req.user.branch_id ?? null,
+            },
             request_id: randomUUID(),
           },
         )
@@ -1182,7 +1198,11 @@ export class OrderGatewayController {
           { cmd: 'order.rollback_waiting' },
           {
             id,
-            requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) },
+            requester: {
+              id: req.user.sub,
+              roles: this.normalizeRoles(req.user.roles),
+              branch_id: req.user.branch_id ?? null,
+            },
             request_id: randomUUID(),
           },
         )
