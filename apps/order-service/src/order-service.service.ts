@@ -805,6 +805,50 @@ export class OrderServiceService implements OnModuleInit {
     );
   }
 
+  private resolveActorCourierId(
+    requester: { id: string; roles?: string[]; branch_id?: string | null },
+    order: { branch_id?: string | null; holder_branch_id?: string | null },
+    post: { courier_id?: string | null } | null | undefined,
+  ): string {
+    const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
+    const isCourier = this.hasRole(requester, Roles.COURIER);
+    const isManager = this.hasRole(requester, Roles.MANAGER);
+
+    if (isCourier) {
+      if (String(post?.courier_id ?? '') !== String(requester.id)) {
+        this.badRequest('Order is not assigned to this courier');
+      }
+      return String(requester.id);
+    }
+
+    if (isManager) {
+      const requesterBranchId = String(requester?.branch_id ?? '').trim();
+      const orderHolderBranchId = String(order?.holder_branch_id ?? '').trim();
+      const orderBranchId = String(order?.branch_id ?? '').trim();
+      if (
+        !requesterBranchId ||
+        (requesterBranchId !== orderHolderBranchId && requesterBranchId !== orderBranchId)
+      ) {
+        this.badRequest('Order is not assigned to this manager branch');
+      }
+      const postCourierId = String(post?.courier_id ?? '').trim();
+      if (!postCourierId) {
+        this.badRequest('Post has no courier assigned');
+      }
+      return postCourierId;
+    }
+
+    if (isSuperAdmin) {
+      const postCourierId = String(post?.courier_id ?? '').trim();
+      if (!postCourierId) {
+        this.badRequest('Post has no courier assigned');
+      }
+      return postCourierId;
+    }
+
+    this.badRequest('Forbidden resource');
+  }
+
   private async findLatestHistoryBySource(data: {
     user_id: string;
     source_type: Source_type;
@@ -847,13 +891,14 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   async rollbackOrderToWaiting(
-    requester: { id: string; roles?: string[] },
+    requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,
   ) {
     const order = await this.findById(id);
     const originalStatus = order.status;
     const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
     const isCourier = this.hasRole(requester, Roles.COURIER);
+    const isManager = this.hasRole(requester, Roles.MANAGER);
 
     if (
       isCourier &&
@@ -875,7 +920,7 @@ export class OrderServiceService implements OnModuleInit {
       this.badRequest(`Rollback mumkin emas (status: ${order.status})`);
     }
 
-    if (!isCourier && !isSuperAdmin) {
+    if (!isCourier && !isSuperAdmin && !isManager) {
       this.badRequest('Rollback uchun ruxsat yo‘q');
     }
 
@@ -895,6 +940,18 @@ export class OrderServiceService implements OnModuleInit {
 
     if (isCourier && !isSuperAdmin && String(post.courier_id ?? '') !== String(requester.id)) {
       this.badRequest('Order is not assigned to this courier');
+    }
+
+    if (isManager && !isSuperAdmin) {
+      const requesterBranchId = String(requester?.branch_id ?? '').trim();
+      const orderHolderBranchId = String(order?.holder_branch_id ?? '').trim();
+      const orderBranchId = String(order?.branch_id ?? '').trim();
+      if (
+        !requesterBranchId ||
+        (requesterBranchId !== orderHolderBranchId && requesterBranchId !== orderBranchId)
+      ) {
+        this.badRequest('Order is not assigned to this manager branch');
+      }
     }
 
     const courierId = String(post.courier_id ?? '');
@@ -2173,7 +2230,7 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   async sellOrder(
-    requester: { id: string; roles?: string[] },
+    requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,
     dto: { comment?: string; extraCost?: number; paidAmount?: number },
   ) {
@@ -2191,13 +2248,11 @@ export class OrderServiceService implements OnModuleInit {
       { id: String(order.post_id) },
     ).catch(() => ({ data: undefined }));
     const post = postRes?.data;
-    if (!post || String(post.courier_id ?? '') !== String(requester.id)) {
-      this.badRequest('Order is not assigned to this courier');
-    }
+    const actorCourierId = this.resolveActorCourierId(requester, order, post);
 
     const [market, courier] = await Promise.all([
       this.getMarketsByIds([String(order.market_id)]).then((rows) => rows[0]),
-      this.getCouriersByIds([String(requester.id)]).then((rows) => rows[0]),
+      this.getCouriersByIds([actorCourierId]).then((rows) => rows[0]),
     ]);
     if (!market) {
       this.notFound('Market not found');
@@ -2208,7 +2263,7 @@ export class OrderServiceService implements OnModuleInit {
 
     const [marketCashbox, courierCashbox] = await Promise.all([
       this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
-      this.getCashboxByUser(String(requester.id), Cashbox_type.FOR_COURIER),
+      this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER),
     ]);
     if (!marketCashbox) {
       this.notFound('Market cashbox not found');
@@ -2300,7 +2355,7 @@ export class OrderServiceService implements OnModuleInit {
         );
         await this.updateCashboxBalance(
           {
-            user_id: String(requester.id),
+            user_id: actorCourierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             amount: courierTariff,
             operation_type: Operation_type.EXPENSE,
@@ -2327,7 +2382,7 @@ export class OrderServiceService implements OnModuleInit {
         );
         await this.updateCashboxBalance(
           {
-            user_id: String(requester.id),
+            user_id: actorCourierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             amount: Math.max(courierTariff - totalPrice, 0),
             operation_type: Operation_type.EXPENSE,
@@ -2354,7 +2409,7 @@ export class OrderServiceService implements OnModuleInit {
         );
         await this.updateCashboxBalance(
           {
-            user_id: String(requester.id),
+            user_id: actorCourierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             amount: Math.max(courierToBePaid, 0),
             operation_type: Operation_type.INCOME,
@@ -2381,7 +2436,7 @@ export class OrderServiceService implements OnModuleInit {
         );
         await this.updateCashboxBalance(
           {
-            user_id: String(requester.id),
+            user_id: actorCourierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             amount: Math.max(courierToBePaid, 0),
             operation_type: Operation_type.INCOME,
@@ -2410,7 +2465,7 @@ export class OrderServiceService implements OnModuleInit {
         );
         await this.updateCashboxBalance(
           {
-            user_id: String(requester.id),
+            user_id: actorCourierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             amount: extraCost,
             operation_type: Operation_type.EXPENSE,
@@ -2467,7 +2522,7 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   async cancelOrder(
-    requester: { id: string; roles?: string[] },
+    requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,
     dto: { comment?: string; extraCost?: number },
   ) {
@@ -2485,9 +2540,7 @@ export class OrderServiceService implements OnModuleInit {
       { id: String(order.post_id) },
     ).catch(() => ({ data: undefined }));
     const post = postRes?.data;
-    if (!post || String(post.courier_id ?? '') !== String(requester.id)) {
-      this.badRequest('Order is not assigned to this courier');
-    }
+    const actorCourierId = this.resolveActorCourierId(requester, order, post);
 
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
     const finalComment = this.generateSaleComment(
@@ -2499,7 +2552,7 @@ export class OrderServiceService implements OnModuleInit {
     if (extraCost > 0) {
       const [marketCashbox, courierCashbox] = await Promise.all([
         this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
-        this.getCashboxByUser(String(requester.id), Cashbox_type.FOR_COURIER),
+        this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER),
       ]);
       if (!marketCashbox) {
         this.notFound('Market cashbox not found');
@@ -2520,7 +2573,7 @@ export class OrderServiceService implements OnModuleInit {
           comment: finalComment,
         }),
         this.updateCashboxBalance({
-          user_id: String(requester.id),
+          user_id: actorCourierId,
           cashbox_type: Cashbox_type.FOR_COURIER,
           amount: extraCost,
           operation_type: Operation_type.EXPENSE,
@@ -2542,7 +2595,7 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   async couldNotDeliverOrder(
-    requester: { id: string; roles?: string[] },
+    requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,
     dto: { reason?: string },
   ) {
@@ -2565,9 +2618,7 @@ export class OrderServiceService implements OnModuleInit {
       { id: String(order.post_id) },
     ).catch(() => ({ data: undefined }));
     const post = postRes?.data;
-    if (!post || String(post.courier_id ?? '') !== String(requester.id)) {
-      this.badRequest('Order is not assigned to this courier');
-    }
+    this.resolveActorCourierId(requester, order, post);
 
     const trackingNote = `Courier ${String(requester.id)} yetkaza olmadi. Sabab: ${reason}`;
     await this.updateFull(
@@ -2582,7 +2633,7 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   async partlySellOrder(
-    requester: { id: string; roles?: string[] },
+    requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,
     dto: {
       order_item_info: Array<{ product_id: string; quantity: number }>;
@@ -2606,9 +2657,7 @@ export class OrderServiceService implements OnModuleInit {
       { id: String(order.post_id) },
     ).catch(() => ({ data: undefined }));
     const post = postRes?.data;
-    if (!post || String(post.courier_id ?? '') !== String(requester.id)) {
-      this.badRequest('Order is not assigned to this courier');
-    }
+    const actorCourierId = this.resolveActorCourierId(requester, order, post);
 
     if (!dto?.order_item_info?.length) {
       this.badRequest('order_item_info is required');
@@ -2621,7 +2670,7 @@ export class OrderServiceService implements OnModuleInit {
 
     const [market, courier] = await Promise.all([
       this.getMarketsByIds([String(order.market_id)]).then((rows) => rows[0]),
-      this.getCouriersByIds([String(requester.id)]).then((rows) => rows[0]),
+      this.getCouriersByIds([actorCourierId]).then((rows) => rows[0]),
     ]);
     if (!market) {
       this.notFound('Market not found');
@@ -2632,7 +2681,7 @@ export class OrderServiceService implements OnModuleInit {
 
     const [marketCashbox, courierCashbox] = await Promise.all([
       this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
-      this.getCashboxByUser(String(requester.id), Cashbox_type.FOR_COURIER),
+      this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER),
     ]);
     if (!marketCashbox) {
       this.notFound('Market cashbox not found');
@@ -2745,7 +2794,7 @@ export class OrderServiceService implements OnModuleInit {
           comment: "0 so'mlik mahsulot qisman sotuvi",
         }),
         this.updateCashboxBalance({
-          user_id: String(requester.id),
+          user_id: actorCourierId,
           cashbox_type: Cashbox_type.FOR_COURIER,
           amount: courierTariff,
           operation_type: Operation_type.EXPENSE,
@@ -2768,7 +2817,7 @@ export class OrderServiceService implements OnModuleInit {
           comment: `${price} so'mlik mahsulot qisman sotuvi`,
         }),
         this.updateCashboxBalance({
-          user_id: String(requester.id),
+          user_id: actorCourierId,
           cashbox_type: Cashbox_type.FOR_COURIER,
           amount: Math.max(courierTariff - price, 0),
           operation_type: Operation_type.EXPENSE,
@@ -2792,7 +2841,7 @@ export class OrderServiceService implements OnModuleInit {
           comment: `${price} so'mlik mahsulot qisman sotuvi`,
         }),
         this.updateCashboxBalance({
-          user_id: String(requester.id),
+          user_id: actorCourierId,
           cashbox_type: Cashbox_type.FOR_COURIER,
           amount: Math.max(courierToBePaid, 0),
           operation_type: Operation_type.INCOME,
@@ -2817,7 +2866,7 @@ export class OrderServiceService implements OnModuleInit {
           comment: finalComment,
         }),
         this.updateCashboxBalance({
-          user_id: String(requester.id),
+          user_id: actorCourierId,
           cashbox_type: Cashbox_type.FOR_COURIER,
           amount: Math.max(courierToBePaid, 0),
           operation_type: Operation_type.INCOME,
@@ -2853,7 +2902,7 @@ export class OrderServiceService implements OnModuleInit {
           comment: finalComment,
         }),
         this.updateCashboxBalance({
-          user_id: String(requester.id),
+          user_id: actorCourierId,
           cashbox_type: Cashbox_type.FOR_COURIER,
           amount: extraCost,
           operation_type: Operation_type.EXPENSE,
