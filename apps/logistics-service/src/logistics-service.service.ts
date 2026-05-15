@@ -1863,11 +1863,12 @@ export class LogisticsServiceService implements OnModuleInit {
     const invalidStatusOrder = orders.find(
       (order) =>
         order.status !== Order_status.NEW &&
-        order.status !== Order_status.RECEIVED,
+        order.status !== Order_status.RECEIVED &&
+        order.status !== Order_status.WAITING,
     );
     if (invalidStatusOrder) {
       this.badRequest(
-        `Order #${invalidStatusOrder.id} holati noto'g'ri: faqat NEW yoki RECEIVED bo'lishi kerak`,
+        `Order #${invalidStatusOrder.id} holati noto'g'ri: faqat NEW, RECEIVED yoki WAITING bo'lishi kerak`,
       );
     }
 
