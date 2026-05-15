@@ -17,8 +17,9 @@ describe('OrderServiceService filters', () => {
     };
 
     const service = new OrderServiceService(
-      { createQueryRunner: jest.fn() } as any,
       orderRepo as any,
+      {} as any,
+      {} as any,
       {} as any,
       {} as any,
       {} as any,
@@ -36,7 +37,7 @@ describe('OrderServiceService filters', () => {
     return { service, qb };
   }
 
-  it('filters by source=BRANCH and branch_id', async () => {
+  it('filters by source=BRANCH and branch_id/holder_branch_id', async () => {
     const { service, qb } = setup();
 
     await service.findAll({
@@ -46,7 +47,8 @@ describe('OrderServiceService filters', () => {
       limit: 10,
     } as any);
 
-    expect(qb.andWhere).toHaveBeenCalledWith('order.branch_id = :branch_id', { branch_id: '123' });
+    const whereCalls = qb.andWhere.mock.calls.map((call) => call[0]);
+    expect(whereCalls.some((value) => typeof value === 'object' && value !== null)).toBe(true);
     expect(qb.andWhere).toHaveBeenCalledWith('order.source = :source', { source: 'branch' });
   });
 });

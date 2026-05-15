@@ -13,6 +13,7 @@ import { CreatePostDto } from './dto/create-post.dto';
 import { SendPostDto } from './dto/send-post.dto';
 import { ReceivePostDto } from './dto/receive-post.dto';
 import { PostIdDto } from './dto/post-id.dto';
+import { Post_status } from '@app/common';
 
 @Controller()
 export class LogisticsServiceController {
@@ -486,7 +487,16 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.receive_orders' })
   receiveOrdersIntoPosts(
-    @Payload() data: { orders: Array<{ order_id: string; assigned_region: string; total_price: number }> },
+    @Payload()
+    data: {
+      orders: Array<{
+        order_id: string;
+        assigned_region: string;
+        total_price: number;
+        assigned_branch?: string;
+        assigned_post_status?: Post_status;
+      }>;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>

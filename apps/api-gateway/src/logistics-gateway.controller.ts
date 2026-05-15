@@ -316,7 +316,14 @@ export class LogisticsGatewayController {
 
   @Get('post/scan/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.COURIER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get post by scanner' })
   @ApiParam({ name: 'id', description: 'Post QR token' })
@@ -336,7 +343,14 @@ export class LogisticsGatewayController {
 
   @Get('post/orders/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.COURIER)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.COURIER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all orders by post id' })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
@@ -398,9 +412,16 @@ export class LogisticsGatewayController {
 
   @Patch('post/receive/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.COURIER)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.COURIER,
+  )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Receive post (courier)' })
+  @ApiOperation({ summary: 'Receive post (branch/courier)' })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   @ApiBody({ type: ReceivePostRequestDto })
   receivePost(

@@ -1587,7 +1587,13 @@ export class OrderServiceService implements OnModuleInit {
       qb.andWhere('order.region_id = :region_id', { region_id });
     }
     if (branch_id) {
-      qb.andWhere('order.branch_id = :branch_id', { branch_id });
+      qb.andWhere(
+        new Brackets((nested) => {
+          nested
+            .where('order.branch_id = :branch_id', { branch_id })
+            .orWhere('order.holder_branch_id = :branch_id', { branch_id });
+        }),
+      );
     }
     if (unbatched_only) {
       qb.andWhere('order.current_batch_id IS NULL');
