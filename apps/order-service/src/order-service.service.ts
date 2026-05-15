@@ -2248,6 +2248,8 @@ export class OrderServiceService implements OnModuleInit {
     ).catch(() => ({ data: undefined }));
     const post = postRes?.data;
     const actorCourierId = this.resolveActorCourierId(requester, order, post);
+    const isManagerRequester =
+      this.hasRole(requester, Roles.MANAGER) && !this.hasRole(requester, Roles.COURIER);
 
     const [market, courier] = await Promise.all([
       this.getMarketsByIds([String(order.market_id)]).then((rows) => rows[0]),
