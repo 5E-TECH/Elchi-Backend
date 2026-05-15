@@ -3294,10 +3294,14 @@ export class OrderServiceService implements OnModuleInit {
       source: dto.source ?? order.source ?? Order_source.INTERNAL,
     });
 
-    const resolvedHolder = await this.resolveHolderFromState(order.branch_id, order.courier_id);
-    order.holder_type = resolvedHolder.holder_type;
-    order.holder_branch_id = resolvedHolder.holder_branch_id;
-    order.holder_courier_id = resolvedHolder.holder_courier_id;
+    const shouldRecalculateHolder =
+      typeof dto.branch_id !== 'undefined' || typeof dto.courier_id !== 'undefined';
+    if (shouldRecalculateHolder) {
+      const resolvedHolder = await this.resolveHolderFromState(order.branch_id, order.courier_id);
+      order.holder_type = resolvedHolder.holder_type;
+      order.holder_branch_id = resolvedHolder.holder_branch_id;
+      order.holder_courier_id = resolvedHolder.holder_courier_id;
+    }
 
     const custodyChanged =
       previousHolderType !== order.holder_type ||
