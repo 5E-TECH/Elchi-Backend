@@ -639,6 +639,7 @@ export class OrderGatewayController {
   @ApiQuery({ name: 'end_day', required: false, type: String, description: 'End date (YYYY-MM-DD or ISO)' })
   @ApiQuery({ name: 'courier', required: false, type: String, description: 'Courier (operator text or post_id)' })
   @ApiQuery({ name: 'region_id', required: false, type: String })
+  @ApiQuery({ name: 'district_id', required: false, type: String })
   @ApiQuery({ name: 'branch_id', required: false, type: String })
   @ApiQuery({ name: 'source', required: false, enum: ['internal', 'external', 'branch'] })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1, schema: { default: 1, minimum: 1 } as any })
@@ -652,6 +653,7 @@ export class OrderGatewayController {
     @Query('end_day') end_day?: string,
     @Query('courier') courier?: string,
     @Query('region_id') region_id?: string,
+    @Query('district_id') district_id?: string,
     @Query('branch_id') branch_id?: string,
     @Query('source') source?: string,
     @Query('page') page?: string,
@@ -696,6 +698,7 @@ export class OrderGatewayController {
         end_day,
         courier,
         region_id,
+        district_id,
         branch_id: resolvedBranchId,
         source,
         page: pagination.page,
@@ -1037,7 +1040,7 @@ export class OrderGatewayController {
 
   @Post('sell/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.COURIER)
+  @Roles(RoleEnum.COURIER, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Sell order (courier)' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
@@ -1069,7 +1072,7 @@ export class OrderGatewayController {
 
   @Post('cancel/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.COURIER)
+  @Roles(RoleEnum.COURIER, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Cancel order (courier)' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
@@ -1101,7 +1104,7 @@ export class OrderGatewayController {
 
   @Post(':id/could-not-deliver')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.COURIER)
+  @Roles(RoleEnum.COURIER, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: "Mark order as couldn't deliver (courier)" })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
@@ -1133,7 +1136,7 @@ export class OrderGatewayController {
 
   @Post('partly-sell/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.COURIER)
+  @Roles(RoleEnum.COURIER, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Partly sell order (courier)' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
@@ -1165,7 +1168,7 @@ export class OrderGatewayController {
 
   @Post('rollback/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.COURIER, RoleEnum.SUPERADMIN)
+  @Roles(RoleEnum.COURIER, RoleEnum.MANAGER, RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Rollback sold/cancelled order to waiting' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })

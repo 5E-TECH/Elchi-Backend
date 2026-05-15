@@ -111,6 +111,7 @@ export class OrderServiceController {
         end_day?: string;
         courier?: string;
         region_id?: string;
+        district_id?: string;
         branch_id?: string;
         source?: Order_source | 'internal' | 'external' | 'branch';
         fetch_all?: boolean | string;
