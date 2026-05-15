@@ -747,6 +747,7 @@ export class OrderGatewayController {
   }
 
   @Get('courier/orders')
+  @Get('courier-orders')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Legacy courier orders list endpoint' })
