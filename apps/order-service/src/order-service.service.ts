@@ -292,6 +292,7 @@ export class OrderServiceService implements OnModuleInit {
         Order_status.CANCELLED,
       ],
       [Order_status.WAITING]: [
+        Order_status.ON_THE_ROAD,
         Order_status.SOLD,
         Order_status.PARTLY_PAID,
         Order_status.PAID,
