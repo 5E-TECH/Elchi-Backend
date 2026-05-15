@@ -832,10 +832,7 @@ export class OrderServiceService implements OnModuleInit {
         this.badRequest('Order is not assigned to this manager branch');
       }
       const postCourierId = String(post?.courier_id ?? '').trim();
-      if (!postCourierId) {
-        this.badRequest('Post has no courier assigned');
-      }
-      return postCourierId;
+      return postCourierId || String(requester.id);
     }
 
     if (isSuperAdmin) {
@@ -894,6 +891,8 @@ export class OrderServiceService implements OnModuleInit {
     requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,
   ) {
+    const isManagerRequester =
+      this.hasRole(requester, Roles.MANAGER) && !this.hasRole(requester, Roles.COURIER);
     const order = await this.findById(id);
     const originalStatus = order.status;
     const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
@@ -2257,18 +2256,18 @@ export class OrderServiceService implements OnModuleInit {
     if (!market) {
       this.notFound('Market not found');
     }
-    if (!courier) {
+    if (!courier && !isManagerRequester) {
       this.notFound('Courier not found');
     }
 
     const [marketCashbox, courierCashbox] = await Promise.all([
       this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
-      this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER),
+      this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER).catch(() => null),
     ]);
     if (!marketCashbox) {
       this.notFound('Market cashbox not found');
     }
-    if (!courierCashbox) {
+    if (!courierCashbox && !isManagerRequester) {
       this.notFound('Courier cashbox not found');
     }
 
@@ -2280,8 +2279,8 @@ export class OrderServiceService implements OnModuleInit {
         : Number(market.tariff_home ?? 0);
     const courierTariff =
       order.where_deliver === Where_deliver.CENTER
-        ? Number(courier.tariff_center ?? 0)
-        : Number(courier.tariff_home ?? 0);
+        ? Number(courier?.tariff_center ?? 0)
+        : Number(courier?.tariff_home ?? 0);
 
     const totalPrice = Number(order.total_price ?? 0);
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
@@ -2353,19 +2352,21 @@ export class OrderServiceService implements OnModuleInit {
           },
           tx,
         );
-        await this.updateCashboxBalance(
-          {
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: courierTariff,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: "0 so'mlik mahsulot sotuvi",
-          },
-          tx,
-        );
+        if (courierCashbox) {
+          await this.updateCashboxBalance(
+            {
+              user_id: actorCourierId,
+              cashbox_type: Cashbox_type.FOR_COURIER,
+              amount: courierTariff,
+              operation_type: Operation_type.EXPENSE,
+              source_type: Source_type.SELL,
+              source_id: String(order.id),
+              created_by: String(requester.id),
+              comment: "0 so'mlik mahsulot sotuvi",
+            },
+            tx,
+          );
+        }
       } else if (totalPrice < courierTariff) {
         await this.updateCashboxBalance(
           {
@@ -2380,19 +2381,21 @@ export class OrderServiceService implements OnModuleInit {
           },
           tx,
         );
-        await this.updateCashboxBalance(
-          {
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: Math.max(courierTariff - totalPrice, 0),
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: `${totalPrice} so'mlik mahsulot sotuvi`,
-          },
-          tx,
-        );
+        if (courierCashbox) {
+          await this.updateCashboxBalance(
+            {
+              user_id: actorCourierId,
+              cashbox_type: Cashbox_type.FOR_COURIER,
+              amount: Math.max(courierTariff - totalPrice, 0),
+              operation_type: Operation_type.EXPENSE,
+              source_type: Source_type.SELL,
+              source_id: String(order.id),
+              created_by: String(requester.id),
+              comment: `${totalPrice} so'mlik mahsulot sotuvi`,
+            },
+            tx,
+          );
+        }
       } else if (totalPrice < marketTariff) {
         await this.updateCashboxBalance(
           {
@@ -2407,19 +2410,21 @@ export class OrderServiceService implements OnModuleInit {
           },
           tx,
         );
-        await this.updateCashboxBalance(
-          {
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: Math.max(courierToBePaid, 0),
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: `${totalPrice} so'mlik mahsulot sotuvi`,
-          },
-          tx,
-        );
+        if (courierCashbox) {
+          await this.updateCashboxBalance(
+            {
+              user_id: actorCourierId,
+              cashbox_type: Cashbox_type.FOR_COURIER,
+              amount: Math.max(courierToBePaid, 0),
+              operation_type: Operation_type.INCOME,
+              source_type: Source_type.SELL,
+              source_id: String(order.id),
+              created_by: String(requester.id),
+              comment: `${totalPrice} so'mlik mahsulot sotuvi`,
+            },
+            tx,
+          );
+        }
       } else {
         await this.updateCashboxBalance(
           {
@@ -2434,19 +2439,21 @@ export class OrderServiceService implements OnModuleInit {
           },
           tx,
         );
-        await this.updateCashboxBalance(
-          {
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: Math.max(courierToBePaid, 0),
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: finalComment,
-          },
-          tx,
-        );
+        if (courierCashbox) {
+          await this.updateCashboxBalance(
+            {
+              user_id: actorCourierId,
+              cashbox_type: Cashbox_type.FOR_COURIER,
+              amount: Math.max(courierToBePaid, 0),
+              operation_type: Operation_type.INCOME,
+              source_type: Source_type.SELL,
+              source_id: String(order.id),
+              created_by: String(requester.id),
+              comment: finalComment,
+            },
+            tx,
+          );
+        }
       }
 
       if (extraCost > 0) {
@@ -2463,19 +2470,21 @@ export class OrderServiceService implements OnModuleInit {
           },
           tx,
         );
-        await this.updateCashboxBalance(
-          {
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: extraCost,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.EXTRA_COST,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: finalComment,
-          },
-          tx,
-        );
+        if (courierCashbox) {
+          await this.updateCashboxBalance(
+            {
+              user_id: actorCourierId,
+              cashbox_type: Cashbox_type.FOR_COURIER,
+              amount: extraCost,
+              operation_type: Operation_type.EXPENSE,
+              source_type: Source_type.EXTRA_COST,
+              source_id: String(order.id),
+              created_by: String(requester.id),
+              comment: finalComment,
+            },
+            tx,
+          );
+        }
       }
 
       await this.updateFull(
@@ -2526,6 +2535,8 @@ export class OrderServiceService implements OnModuleInit {
     id: string,
     dto: { comment?: string; extraCost?: number },
   ) {
+    const isManagerRequester =
+      this.hasRole(requester, Roles.MANAGER) && !this.hasRole(requester, Roles.COURIER);
     const order = await this.findById(id);
     if (order.status !== Order_status.WAITING) {
       this.badRequest('Order not found or not in waiting status');
@@ -2557,11 +2568,11 @@ export class OrderServiceService implements OnModuleInit {
       if (!marketCashbox) {
         this.notFound('Market cashbox not found');
       }
-      if (!courierCashbox) {
+      if (!courierCashbox && !isManagerRequester) {
         this.notFound('Courier cashbox not found');
       }
 
-      await Promise.all([
+      const ops: Promise<unknown>[] = [
         this.updateCashboxBalance({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
@@ -2572,17 +2583,22 @@ export class OrderServiceService implements OnModuleInit {
           created_by: String(requester.id),
           comment: finalComment,
         }),
-        this.updateCashboxBalance({
-          user_id: actorCourierId,
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          amount: extraCost,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.EXTRA_COST,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: finalComment,
-        }),
-      ]);
+      ];
+      if (courierCashbox) {
+        ops.push(
+          this.updateCashboxBalance({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: extraCost,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.EXTRA_COST,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: finalComment,
+          }),
+        );
+      }
+      await Promise.all(ops);
     }
 
     await this.updateFull(id, {
@@ -2642,6 +2658,8 @@ export class OrderServiceService implements OnModuleInit {
       comment?: string;
     },
   ) {
+    const isManagerRequester =
+      this.hasRole(requester, Roles.MANAGER) && !this.hasRole(requester, Roles.COURIER);
     const order = await this.findById(id);
     const oldTotalPrice = Number(order.total_price ?? 0);
     if (order.status !== Order_status.WAITING) {
@@ -2675,18 +2693,18 @@ export class OrderServiceService implements OnModuleInit {
     if (!market) {
       this.notFound('Market not found');
     }
-    if (!courier) {
+    if (!courier && !isManagerRequester) {
       this.notFound('Courier not found');
     }
 
     const [marketCashbox, courierCashbox] = await Promise.all([
       this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
-      this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER),
+      this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER).catch(() => null),
     ]);
     if (!marketCashbox) {
       this.notFound('Market cashbox not found');
     }
-    if (!courierCashbox) {
+    if (!courierCashbox && !isManagerRequester) {
       this.notFound('Courier cashbox not found');
     }
 
@@ -2701,8 +2719,8 @@ export class OrderServiceService implements OnModuleInit {
       order.courier_tariff != null
         ? Number(order.courier_tariff)
         : order.where_deliver === Where_deliver.CENTER
-          ? Number(courier.tariff_center ?? 0)
-          : Number(courier.tariff_home ?? 0);
+          ? Number(courier?.tariff_center ?? 0)
+          : Number(courier?.tariff_home ?? 0);
 
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
     const finalComment = this.generateSaleComment(
@@ -2782,7 +2800,7 @@ export class OrderServiceService implements OnModuleInit {
     let courierToBePaid = 0;
 
     if (price === 0) {
-      await Promise.all([
+      const ops: Promise<unknown>[] = [
         this.updateCashboxBalance({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
@@ -2793,19 +2811,24 @@ export class OrderServiceService implements OnModuleInit {
           created_by: String(requester.id),
           comment: "0 so'mlik mahsulot qisman sotuvi",
         }),
-        this.updateCashboxBalance({
-          user_id: actorCourierId,
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          amount: courierTariff,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: "0 so'mlik mahsulot qisman sotuvi",
-        }),
-      ]);
+      ];
+      if (courierCashbox) {
+        ops.push(
+          this.updateCashboxBalance({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: courierTariff,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: "0 so'mlik mahsulot qisman sotuvi",
+          }),
+        );
+      }
+      await Promise.all(ops);
     } else if (price < courierTariff) {
-      await Promise.all([
+      const ops: Promise<unknown>[] = [
         this.updateCashboxBalance({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
@@ -2816,20 +2839,25 @@ export class OrderServiceService implements OnModuleInit {
           created_by: String(requester.id),
           comment: `${price} so'mlik mahsulot qisman sotuvi`,
         }),
-        this.updateCashboxBalance({
-          user_id: actorCourierId,
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          amount: Math.max(courierTariff - price, 0),
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: `${price} so'mlik mahsulot qisman sotuvi`,
-        }),
-      ]);
+      ];
+      if (courierCashbox) {
+        ops.push(
+          this.updateCashboxBalance({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: Math.max(courierTariff - price, 0),
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: `${price} so'mlik mahsulot qisman sotuvi`,
+          }),
+        );
+      }
+      await Promise.all(ops);
     } else if (price < marketTariff) {
       courierToBePaid = price - courierTariff;
-      await Promise.all([
+      const ops: Promise<unknown>[] = [
         this.updateCashboxBalance({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
@@ -2840,21 +2868,26 @@ export class OrderServiceService implements OnModuleInit {
           created_by: String(requester.id),
           comment: `${price} so'mlik mahsulot qisman sotuvi`,
         }),
-        this.updateCashboxBalance({
-          user_id: actorCourierId,
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          amount: Math.max(courierToBePaid, 0),
-          operation_type: Operation_type.INCOME,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: `${price} so'mlik mahsulot qisman sotuvi`,
-        }),
-      ]);
+      ];
+      if (courierCashbox) {
+        ops.push(
+          this.updateCashboxBalance({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: Math.max(courierToBePaid, 0),
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: `${price} so'mlik mahsulot qisman sotuvi`,
+          }),
+        );
+      }
+      await Promise.all(ops);
     } else {
       toBePaid = price - marketTariff;
       courierToBePaid = price - courierTariff;
-      await Promise.all([
+      const ops: Promise<unknown>[] = [
         this.updateCashboxBalance({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
@@ -2865,17 +2898,22 @@ export class OrderServiceService implements OnModuleInit {
           created_by: String(requester.id),
           comment: finalComment,
         }),
-        this.updateCashboxBalance({
-          user_id: actorCourierId,
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          amount: Math.max(courierToBePaid, 0),
-          operation_type: Operation_type.INCOME,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: finalComment,
-        }),
-      ]);
+      ];
+      if (courierCashbox) {
+        ops.push(
+          this.updateCashboxBalance({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: Math.max(courierToBePaid, 0),
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: finalComment,
+          }),
+        );
+      }
+      await Promise.all(ops);
     }
 
     const netToBePaid = Math.max(Number(toBePaid) || 0, 0);
@@ -2890,7 +2928,7 @@ export class OrderServiceService implements OnModuleInit {
     const remainingAfter = netToBePaid - paidAfter;
 
     if (extraCost > 0) {
-      await Promise.all([
+      const ops: Promise<unknown>[] = [
         this.updateCashboxBalance({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
@@ -2901,17 +2939,22 @@ export class OrderServiceService implements OnModuleInit {
           created_by: String(requester.id),
           comment: finalComment,
         }),
-        this.updateCashboxBalance({
-          user_id: actorCourierId,
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          amount: extraCost,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.EXTRA_COST,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: finalComment,
-        }),
-      ]);
+      ];
+      if (courierCashbox) {
+        ops.push(
+          this.updateCashboxBalance({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: extraCost,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.EXTRA_COST,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: finalComment,
+          }),
+        );
+      }
+      await Promise.all(ops);
     }
 
     await this.updateFull(id, {
