@@ -1266,14 +1266,16 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!post) {
       this.notFound('Post not found');
     }
-    const scopedBranchId = await this.resolveScopedBranchId(requester);
-    if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId) {
-      this.forbidden("Siz bu branch pochtasini qabul qila olmaysiz");
-    }
-
     const requesterRoles = (requester?.roles ?? []).map((role) => String(role ?? '').toLowerCase());
     const requesterId = String(requester?.id ?? '').trim();
     const requesterIsCourier = requesterRoles.includes(Roles.COURIER);
+    const isOwnCourierPost = requesterIsCourier && String(post.courier_id ?? '') === requesterId;
+
+    const scopedBranchId = await this.resolveScopedBranchId(requester);
+    if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId && !isOwnCourierPost) {
+      this.forbidden("Siz bu branch pochtasini qabul qila olmaysiz");
+    }
+
     if (
       requesterIsCourier &&
       !this.isSystemPrivileged(requester) &&

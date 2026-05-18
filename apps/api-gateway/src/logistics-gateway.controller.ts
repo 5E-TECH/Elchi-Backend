@@ -446,7 +446,15 @@ export class LogisticsGatewayController {
   ) {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.receive' },
-      { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+      {
+        id,
+        dto,
+        requester: {
+          id: req.user.sub,
+          roles: req.user.roles ?? [],
+          branch_id: req.user.branch_id ?? null,
+        },
+      },
     );
   }
 
