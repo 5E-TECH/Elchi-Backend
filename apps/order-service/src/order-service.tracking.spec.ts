@@ -45,21 +45,25 @@ function createService() {
   };
 
   const nullClient = { send: jest.fn() };
+  const outbox = { enqueue: jest.fn() };
+  // OrderServiceService konstruktori — 16 ta pozitsion bog'liqlik.
   const service = new OrderServiceService(
-    dataSource as any,
-    orderRepo as any,
-    orderItemRepo as any,
-    trackingRepo as any,
-    {} as any,
-    {} as any,
-    {} as any,
-    {} as any,
-    nullClient as any,
-    nullClient as any,
-    nullClient as any,
-    nullClient as any,
-    nullClient as any,
-    nullClient as any,
+    dataSource as any, // dataSource
+    orderRepo as any, // orderRepo
+    orderItemRepo as any, // orderItemRepo
+    trackingRepo as any, // orderTrackingRepo
+    {} as any, // orderCustodyEventRepo
+    {} as any, // transferBatchRepo
+    {} as any, // transferBatchItemRepo
+    {} as any, // transferBatchHistoryRepo
+    nullClient as any, // searchClient
+    nullClient as any, // identityClient
+    nullClient as any, // logisticsClient
+    nullClient as any, // catalogClient
+    nullClient as any, // financeClient
+    nullClient as any, // integrationClient
+    nullClient as any, // branchClient
+    outbox as any, // outbox
   );
 
   jest.spyOn<any, any>(service as any, 'syncOrderToSearch').mockResolvedValue(undefined);
@@ -86,7 +90,8 @@ describe('Order tracking lifecycle', () => {
         market_id: '1',
         customer_id: '2',
       },
-      { id: '900', roles: ['admin'] },
+      // JWT branch_id — yangi kod order uchun branch_id'ni hal qilishni talab qiladi.
+      { id: '900', roles: ['admin'], branch_id: '10' },
     );
 
     expect(queryRunner.startTransaction).toHaveBeenCalled();

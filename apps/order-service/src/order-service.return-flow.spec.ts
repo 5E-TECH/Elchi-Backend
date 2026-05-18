@@ -56,24 +56,30 @@ describe('OrderServiceService return flow', () => {
       },
     };
 
+    const outbox = { enqueue: jest.fn() };
+
+    // OrderServiceService konstruktori — 16 ta pozitsion bog'liqlik.
+    // Faqat shu test ishlatadigan repolar haqiqiy mock, qolgani {}.
     const service = new OrderServiceService(
-      { createQueryRunner: jest.fn(() => queryRunner) } as any,
-      orderRepo as any,
-      {} as any,
-      trackingRepo as any,
-      {} as any,
-      transferBatchItemRepo as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
+      { createQueryRunner: jest.fn(() => queryRunner) } as any, // dataSource
+      orderRepo as any, // orderRepo
+      {} as any, // orderItemRepo
+      trackingRepo as any, // orderTrackingRepo
+      {} as any, // orderCustodyEventRepo
+      {} as any, // transferBatchRepo
+      transferBatchItemRepo as any, // transferBatchItemRepo
+      {} as any, // transferBatchHistoryRepo
+      {} as any, // searchClient
+      {} as any, // identityClient
+      {} as any, // logisticsClient
+      {} as any, // catalogClient
+      {} as any, // financeClient
+      {} as any, // integrationClient
+      {} as any, // branchClient
+      outbox as any, // outbox
     );
 
-    return { service, orderRepo, transferBatchItemQb, trackingRepo, queryRunner };
+    return { service, orderRepo, transferBatchItemQb, trackingRepo, queryRunner, outbox };
   }
 
   async function expectRpc(promise: Promise<unknown>, code: number) {

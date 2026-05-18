@@ -48,7 +48,10 @@ describe('FileServiceService', () => {
   });
 
   it('upload returns 201 on success', async () => {
-    const b64 = Buffer.from('abc').toString('base64');
+    // Magic-bytes validatsiyasidan o'tishi uchun haqiqiy PNG sarlavhasi (8 bayt).
+    const b64 = Buffer.from([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+    ]).toString('base64');
     jest.spyOn(service as any, 'uploadBuffer').mockResolvedValue({ key: 'k1', bucket: 'b', file_name: 'a.png', mime_type: 'image/png', size: 3, url: 'u' });
 
     const res = await service.upload({ file_name: 'a.png', mime_type: 'image/png', file_base64: b64 } as any);
