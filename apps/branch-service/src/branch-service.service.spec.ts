@@ -31,13 +31,39 @@ describe('BranchServiceService', () => {
   let fileClient: any;
 
   beforeEach(() => {
+    // Chainable QueryBuilder mock — ensureBranchNameUnique uses
+    // createQueryBuilder().where().andWhere().getOne().
+    const buildQb = () => {
+      const qb: any = {
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        select: jest.fn().mockReturnThis(),
+        addSelect: jest.fn().mockReturnThis(),
+        leftJoin: jest.fn().mockReturnThis(),
+        innerJoin: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        groupBy: jest.fn().mockReturnThis(),
+        skip: jest.fn().mockReturnThis(),
+        take: jest.fn().mockReturnThis(),
+        getOne: jest.fn().mockResolvedValue(null),
+        getMany: jest.fn().mockResolvedValue([]),
+        getRawMany: jest.fn().mockResolvedValue([]),
+        getCount: jest.fn().mockResolvedValue(0),
+        getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+      };
+      return qb;
+    };
+
     branchRepo = {
       findOne: jest.fn(),
       count: jest.fn().mockResolvedValue(0),
       find: jest.fn(),
       save: jest.fn(),
       create: jest.fn((v) => v),
-      createQueryBuilder: jest.fn(),
+      createQueryBuilder: jest.fn(() => buildQb()),
+      // collectDescendantBranchIds uses raw SQL via the repository manager.
+      manager: { query: jest.fn().mockResolvedValue([]) },
+      metadata: { tablePath: 'branch_schema.branches' },
     };
     branchUserRepo = {
       findOne: jest.fn(),
@@ -57,6 +83,10 @@ describe('BranchServiceService', () => {
     orderClient = { send: jest.fn().mockReturnValue(of({ data: [] })) };
     fileClient = { send: jest.fn().mockReturnValue(of({ data: { key: 'k1', url: 'u1' } })) };
 
+    const configService: any = {
+      get: jest.fn((key: string, fallback?: string) => fallback),
+    };
+
     service = new BranchServiceService(
       branchRepo,
       branchUserRepo,
@@ -65,12 +95,14 @@ describe('BranchServiceService', () => {
       logisticsClient,
       orderClient,
       fileClient,
+      configService,
     );
   });
 
   it('createBranch creates new branch', async () => {
+    // ensureBranchNameUnique now uses createQueryBuilder (QB mock returns null by default).
+    // Sequential findOne calls: ensureBranchCodeUnique → getParentBranchOrThrow.
     branchRepo.findOne
-      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ id: 'hq', level: 0, type: 'HQ', isDeleted: false });
     branchRepo.save.mockResolvedValue({ id: 'b1', name: 'Main' });
@@ -86,7 +118,13 @@ describe('BranchServiceService', () => {
   });
 
   it('createBranch throws 409 on duplicate name', async () => {
-    branchRepo.findOne.mockResolvedValue({ id: 'x' });
+    // Name uniqueness is now enforced via createQueryBuilder().getOne().
+    // Make the QB builder return an existing branch so the check fails.
+    branchRepo.createQueryBuilder.mockImplementationOnce(() => ({
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getOne: jest.fn().mockResolvedValue({ id: 'x', name: 'Main' }),
+    }));
     await expect(service.createBranch({ name: 'Main', type: 'HQ', code: 'HQ-TSHKNT' } as any)).rejects.toBeInstanceOf(RpcException);
   });
 
@@ -156,8 +194,8 @@ describe('BranchServiceService', () => {
   });
 
   it('createBranch blocks second HQ creation', async () => {
+    // findOne calls: code unique (null) → existing HQ lookup
     branchRepo.findOne
-      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ id: 'existing-hq', type: 'HQ', isDeleted: false });
 
@@ -171,8 +209,8 @@ describe('BranchServiceService', () => {
   });
 
   it('createBranch blocks duplicate code', async () => {
+    // Single findOne call: code unique check fails first.
     branchRepo.findOne
-      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ id: 'b1', code: 'SAM', isDeleted: false });
 
     await expect(
@@ -242,7 +280,6 @@ describe('BranchServiceService', () => {
 
   it('createBranch computes level automatically from parent', async () => {
     branchRepo.findOne
-      .mockResolvedValueOnce(null)
       .mockResolvedValueOnce(null)
       .mockResolvedValueOnce({ id: 'hq', level: 0, type: 'HQ', isDeleted: false });
     branchRepo.save.mockImplementation(async (payload: any) => payload);
