@@ -194,6 +194,27 @@ export class UserServiceService implements OnModuleInit {
       return;
     }
 
+    if (this.hasRole(requester, Roles.MANAGER)) {
+      if (
+        targetRole === Roles.SUPERADMIN ||
+        targetRole === Roles.ADMIN ||
+        targetRole === Roles.MANAGER
+      ) {
+        this.forbidden('Manager admin/superadmin/managerni boshqara olmaydi');
+      }
+
+      const allowedUserIds = new Set(
+        (requester.allowed_user_ids ?? [])
+          .map((id) => String(id ?? '').trim())
+          .filter(Boolean),
+      );
+
+      if (!allowedUserIds.has(String(targetUserId).trim())) {
+        this.forbidden("Manager faqat o'zi boshqaradigan userlarni yangilay oladi");
+      }
+      return;
+    }
+
     this.forbidden('Bu amal uchun ruxsat yoq');
   }
 

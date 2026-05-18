@@ -44,6 +44,7 @@ import {
 interface JwtUser {
   sub: string;
   roles?: string[];
+  branch_id?: string | null;
 }
 
 @ApiTags('Logistics')
@@ -359,7 +360,14 @@ export class LogisticsGatewayController {
       this.logisticsClient
         .send(
           { cmd: 'logistics.post.orders_by_post' },
-          { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+          {
+            id,
+            requester: {
+              id: req.user.sub,
+              roles: req.user.roles ?? [],
+              branch_id: req.user.branch_id ?? null,
+            },
+          },
         )
         .pipe(timeout(8000)),
     ).then((response) => this.enrichOrdersByPostResponse(response));
@@ -381,7 +389,14 @@ export class LogisticsGatewayController {
   getRejectedOrdersByPost(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.rejected_orders_by_post' },
-      { id, requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] } },
+      {
+        id,
+        requester: {
+          id: req?.user?.sub,
+          roles: req?.user?.roles ?? [],
+          branch_id: req?.user?.branch_id ?? null,
+        },
+      },
     );
   }
 

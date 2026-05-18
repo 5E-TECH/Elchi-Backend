@@ -24,6 +24,7 @@ import { Order_status, Post_status, Roles, Where_deliver } from '@app/common';
 interface RequesterContext {
   id: string;
   roles?: string[];
+  branch_id?: string | null;
   note?: string | null;
 }
 
@@ -93,6 +94,11 @@ export class LogisticsServiceService implements OnModuleInit {
   private async resolveScopedBranchId(requester?: RequesterContext): Promise<string | null> {
     if (this.isSystemPrivileged(requester)) {
       return null;
+    }
+
+    const jwtBranchId = String(requester?.branch_id ?? '').trim();
+    if (jwtBranchId) {
+      return jwtBranchId;
     }
 
     const requesterId = String(requester?.id ?? '').trim();

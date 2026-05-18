@@ -46,6 +46,7 @@ interface JwtUser {
   sub: string;
   username: string;
   roles?: string[];
+  branch_id?: string | null;
 }
 
 interface BranchAssignment {
@@ -717,7 +718,7 @@ export class ApiGatewayController {
 
   @Patch('users/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update user (all roles)' })
   @ApiParam({ name: 'id', description: 'User ID' })
@@ -725,14 +726,60 @@ export class ApiGatewayController {
   @ApiOkResponse({ description: 'User updated' })
   @ApiConflictResponse({ description: 'Conflict' })
   @ApiNotFoundResponse({ description: 'Not found' })
-  updateUser(
+  async updateUser(
     @Param('id') id: string,
     @Body() dto: UpdateAdminRequestDto,
     @Req() req: { user: JwtUser },
   ) {
+    let allowedUserIds: string[] | undefined;
+    const requesterRoles = (req?.user?.roles ?? [])
+      .map((role) => String(role ?? '').trim().toLowerCase())
+      .filter(Boolean);
+    const requesterIsPrivileged =
+      requesterRoles.includes(RoleEnum.SUPERADMIN) || requesterRoles.includes(RoleEnum.ADMIN);
+
+    if (!requesterIsPrivileged && requesterRoles.includes(RoleEnum.MANAGER) && req?.user?.sub) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      const branchId = String(assignment?.branch_id ?? '').trim();
+      const branchType = String(assignment?.branch?.type ?? '').trim().toUpperCase();
+
+      if (!branchId) {
+        throw new ForbiddenException('Manager hech qaysi branchga biriktirilmagan');
+      }
+      if (branchType !== 'REGIONAL' && branchType !== 'HYBRID') {
+        throw new ForbiddenException("Faqat REGIONAL/HYBRID manager user yangilay oladi");
+      }
+
+      const branchUsersResponse = await firstValueFrom(
+        this.branchClient.send(
+          { cmd: 'branch.user.find_by_branch' },
+          { branch_id: branchId, requester: this.toRequester(req as { user: JwtUser }) },
+        ),
+      );
+
+      allowedUserIds = Array.from(
+        new Set(
+          (Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [])
+            .map((row: any) => String(row?.user_id ?? '').trim())
+            .filter(Boolean),
+        ),
+      );
+
+      if (!allowedUserIds.includes(String(id).trim())) {
+        throw new ForbiddenException("Manager faqat o'zi boshqaradigan userlarni yangilay oladi");
+      }
+    }
+
     return this.identityClient.send(
       { cmd: 'identity.user.update' },
-      { id, dto, requester: this.toRequester(req) },
+      {
+        id,
+        dto,
+        requester: {
+          ...this.toRequester(req),
+          allowed_user_ids: allowedUserIds,
+        },
+      },
     );
   }
 
