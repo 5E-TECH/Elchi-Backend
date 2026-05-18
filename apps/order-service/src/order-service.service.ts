@@ -292,6 +292,7 @@ export class OrderServiceService implements OnModuleInit {
         Order_status.CANCELLED,
       ],
       [Order_status.WAITING]: [
+        Order_status.ON_THE_ROAD,
         Order_status.SOLD,
         Order_status.PARTLY_PAID,
         Order_status.PAID,
@@ -2248,6 +2249,8 @@ export class OrderServiceService implements OnModuleInit {
     ).catch(() => ({ data: undefined }));
     const post = postRes?.data;
     const actorCourierId = this.resolveActorCourierId(requester, order, post);
+    const isManagerRequester =
+      this.hasRole(requester, Roles.MANAGER) && !this.hasRole(requester, Roles.COURIER);
 
     const [market, courier] = await Promise.all([
       this.getMarketsByIds([String(order.market_id)]).then((rows) => rows[0]),
@@ -3292,10 +3295,14 @@ export class OrderServiceService implements OnModuleInit {
       source: dto.source ?? order.source ?? Order_source.INTERNAL,
     });
 
-    const resolvedHolder = await this.resolveHolderFromState(order.branch_id, order.courier_id);
-    order.holder_type = resolvedHolder.holder_type;
-    order.holder_branch_id = resolvedHolder.holder_branch_id;
-    order.holder_courier_id = resolvedHolder.holder_courier_id;
+    const shouldRecalculateHolder =
+      typeof dto.branch_id !== 'undefined' || typeof dto.courier_id !== 'undefined';
+    if (shouldRecalculateHolder) {
+      const resolvedHolder = await this.resolveHolderFromState(order.branch_id, order.courier_id);
+      order.holder_type = resolvedHolder.holder_type;
+      order.holder_branch_id = resolvedHolder.holder_branch_id;
+      order.holder_courier_id = resolvedHolder.holder_courier_id;
+    }
 
     const custodyChanged =
       previousHolderType !== order.holder_type ||

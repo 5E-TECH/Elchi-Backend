@@ -1841,7 +1841,10 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const orders = await Promise.all(orderIds.map((id) => this.findOrderById(id)));
 
-    const firstBranchId = String(orders[0]?.branch_id ?? '').trim();
+    const resolveOrderBranchScope = (order: { holder_branch_id?: string | null; branch_id?: string | null }) =>
+      String(order?.holder_branch_id ?? order?.branch_id ?? '').trim();
+
+    const firstBranchId = resolveOrderBranchScope(orders[0]);
     if (!firstBranchId) {
       this.badRequest("Order(lar) filialga biriktirilmagan");
     }
@@ -1851,7 +1854,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     const hasMixedBranch = orders.some(
-      (order) => String(order?.branch_id ?? '').trim() !== firstBranchId,
+      (order) => resolveOrderBranchScope(order) !== firstBranchId,
     );
     if (hasMixedBranch) {
       this.badRequest('Orderlar aralash filialdan: faqat bitta filial orderlarini tanlang');
@@ -1860,11 +1863,12 @@ export class LogisticsServiceService implements OnModuleInit {
     const invalidStatusOrder = orders.find(
       (order) =>
         order.status !== Order_status.NEW &&
-        order.status !== Order_status.RECEIVED,
+        order.status !== Order_status.RECEIVED &&
+        order.status !== Order_status.WAITING,
     );
     if (invalidStatusOrder) {
       this.badRequest(
-        `Order #${invalidStatusOrder.id} holati noto'g'ri: faqat NEW yoki RECEIVED bo'lishi kerak`,
+        `Order #${invalidStatusOrder.id} holati noto'g'ri: faqat NEW, RECEIVED yoki WAITING bo'lishi kerak`,
       );
     }
 
