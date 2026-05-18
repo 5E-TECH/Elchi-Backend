@@ -24,6 +24,13 @@ export const gatewayValidationSchema = Joi.object({
   THROTTLE_LIMIT: Joi.number().integer().min(1).default(60),
   AUTH_THROTTLE_TTL_MS: Joi.number().integer().min(1000).default(60_000),
   AUTH_THROTTLE_LIMIT: Joi.number().integer().min(1).default(10),
+  // Comma-separated list of allowed browser origins for CORS.
+  // localhost/127.0.0.1 are always allowed in code regardless of this value.
+  CORS_ORIGINS: Joi.string().allow('').default(''),
+  // Swagger UI (/api) HTTP Basic Auth credentials. In production Swagger is
+  // served only when SWAGGER_PASSWORD is set, and always behind Basic Auth.
+  SWAGGER_USER: Joi.string().default('admin'),
+  SWAGGER_PASSWORD: Joi.string().allow('').default(''),
 });
 
 export const identityValidationSchema = Joi.object({

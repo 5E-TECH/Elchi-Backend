@@ -1,7 +1,9 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
+import { NestExpressApplication } from '@nestjs/platform-express';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
+import basicAuth from 'express-basic-auth';
 import { Logger } from 'nestjs-pino';
 import { randomUUID } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
@@ -19,11 +21,19 @@ async function bootstrap() {
   // No-op if SENTRY_DSN is unset (dev/local).
   initSentry({ serviceName: 'api-gateway' });
 
-  const app = await NestFactory.create(ApiGatewayModule, { bufferLogs: true });
+  const app = await NestFactory.create<NestExpressApplication>(
+    ApiGatewayModule,
+    { bufferLogs: true },
+  );
   app.enableShutdownHooks();
   // Replace the built-in Nest logger with Pino so every line (incl. ones
   // emitted by Nest internals) goes through the structured pipeline.
   app.useLogger(app.get(Logger));
+
+  // Gateway Cloudflare Tunnel ortida ishlaydi. "trust proxy" yoqilganda
+  // Express req.ip va rate-limiter X-Forwarded-For / CF-Connecting-IP'dan
+  // haqiqiy mijoz IP'sini oladi — tunnel konteyneri IP'sini emas.
+  app.set('trust proxy', true);
 
   // Trace correlation: read x-request-id from the client (typical proxy
   // pattern) or mint a fresh one. The id propagates through pino logs,
@@ -117,16 +127,52 @@ async function bootstrap() {
 
     const document = SwaggerModule.createDocument(app, swaggerConfig);
 
-    // Swagger Setup
-    SwaggerModule.setup('api', app, document, {
-      customJs: [
-        'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-bundle.min.js',
-        'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-standalone-preset.min.js',
-      ],
-      customCssUrl: [
-        'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui.min.css',
-      ],
-    });
+    const swaggerUser = process.env.SWAGGER_USER ?? 'admin';
+    const swaggerPassword = process.env.SWAGGER_PASSWORD ?? '';
+    const isProd = process.env.NODE_ENV === 'production';
+
+    // Productionда Swagger faqat parol belgilangandagina ochiladi va u
+    // har doim HTTP Basic Auth bilan himoyalanadi. Parol bo'lmasa — Swagger
+    // umuman mount qilinmaydi (xato bilan ochiq qolib ketmasligi uchun).
+    if (isProd && !swaggerPassword) {
+      app
+        .get(Logger)
+        .warn(
+          'SWAGGER_PASSWORD belgilanmagan — Swagger UI production rejimida o`chirildi',
+        );
+    } else {
+      // Basic Auth: /api (UI) va /api-json (xom OpenAPI schema) himoyalanadi.
+      // Parol mavjud bo'lsa qo'llanadi; dev rejimda parolsiz ham ochiq qoladi.
+      if (swaggerPassword) {
+        app.use(
+          ['/api', '/api-json'],
+          basicAuth({
+            users: { [swaggerUser]: swaggerPassword },
+            challenge: true,
+            realm: 'Elchi API Docs',
+          }),
+        );
+      }
+
+      // Domеn ildiziga (`/`) kirilganda to'g'ridan-to'g'ri Swagger UI ochilsin.
+      app.use((req: Request, res: Response, next: NextFunction) => {
+        if (req.path === '/') {
+          res.redirect('/api');
+          return;
+        }
+        next();
+      });
+
+      SwaggerModule.setup('api', app, document, {
+        customJs: [
+          'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-bundle.min.js',
+          'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui-standalone-preset.min.js',
+        ],
+        customCssUrl: [
+          'https://cdnjs.cloudflare.com/ajax/libs/swagger-ui/4.15.5/swagger-ui.min.css',
+        ],
+      });
+    }
   } catch (error) {
     // Swagger schema xatosi bo'lsa ham API ishlashda davom etadi.
     app.get(Logger).error({ err: error }, 'Swagger initialization failed');
