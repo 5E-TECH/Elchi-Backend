@@ -1744,7 +1744,7 @@ export class BranchServiceService implements OnModuleInit {
           branch_id: destinationBranchId,
           post_id: destinationPostId,
           current_batch_id: null,
-          status: Order_status.RECEIVED,
+          status: Order_status.ON_THE_ROAD,
         },
         requester: {
           id: requesterId,
