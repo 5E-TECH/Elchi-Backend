@@ -46,6 +46,7 @@ import {
 interface JwtUser {
   sub: string;
   roles?: string[];
+  branch_id?: string | null;
 }
 
 @ApiTags('Finance')
@@ -137,6 +138,47 @@ export class FinanceGatewayController {
     return this.hasRole(user, RoleEnum.SUPERADMIN) || this.hasRole(user, RoleEnum.ADMIN);
   }
 
+  private isManager(user: JwtUser | undefined) {
+    return this.hasRole(user, RoleEnum.MANAGER) && !this.isPrivileged(user);
+  }
+
+  private async canManagerAccessUser(manager: JwtUser | undefined, userId: string) {
+    if (!manager?.sub) {
+      return false;
+    }
+    if (String(userId) === String(manager.sub)) {
+      return true;
+    }
+
+    try {
+      const userResponse = await this.sendIdentity<{ data?: Record<string, any> }>(
+        { cmd: 'identity.user.find_by_id' },
+        { id: userId },
+      );
+      const targetUser = userResponse?.data;
+      if (!targetUser) {
+        return false;
+      }
+
+      const managerId = String(manager.sub);
+      const targetCreatedBy = String(targetUser.created_by ?? '');
+      const managerBranchId = String(manager.branch_id ?? '');
+      const targetBranchId = String(targetUser.branch_id ?? '');
+
+      if (targetCreatedBy && targetCreatedBy === managerId) {
+        return true;
+      }
+
+      if (managerBranchId && targetBranchId && managerBranchId === targetBranchId) {
+        return true;
+      }
+
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
   private async loadCashboxHistory(
     cashboxId: string,
     query: { page?: number; limit?: number },
@@ -183,8 +225,15 @@ export class FinanceGatewayController {
     @Query() query: FindCashboxByUserQueryDto,
     @Req() req: { user: JwtUser },
   ) {
-    if (!this.isPrivileged(req?.user) && String(user_id) !== String(req?.user?.sub ?? '')) {
-      throw new ForbiddenException("Siz faqat o'zingizning kassangizni ko'ra olasiz");
+    if (!this.isPrivileged(req?.user)) {
+      if (this.isManager(req?.user)) {
+        const managerCanAccess = await this.canManagerAccessUser(req?.user, user_id);
+        if (!managerCanAccess) {
+          throw new ForbiddenException("Siz bu foydalanuvchi kassasini ko'ra olmaysiz");
+        }
+      } else if (String(user_id) !== String(req?.user?.sub ?? '')) {
+        throw new ForbiddenException("Siz faqat o'zingizning kassangizni ko'ra olasiz");
+      }
     }
     const response = await this.send(
       { cmd: 'finance.cashbox.find_by_user' },
@@ -203,6 +252,30 @@ export class FinanceGatewayController {
           cashboxHistory: await this.loadCashboxHistory(String(cashbox?.id ?? ''), query),
         })),
       );
+      if (
+        this.isManager(req?.user) &&
+        String(user_id) === String(req?.user?.sub ?? '')
+      ) {
+        try {
+          const couriersResponse = await this.sendIdentity<{ data?: { items?: any[] } }>(
+            { cmd: 'identity.user.find_all' },
+            { query: { role: RoleEnum.COURIER, limit: 500, page: 1 } },
+          );
+          const allCouriers = couriersResponse?.data?.items ?? [];
+          response.meta = {
+            ...(response.meta ?? {}),
+            couriers: allCouriers.filter((courier) => {
+              const sameCreator = String(courier?.created_by ?? '') === String(req.user.sub);
+              const sameBranch =
+                String(courier?.branch_id ?? '') &&
+                String(courier?.branch_id ?? '') === String(req.user.branch_id ?? '');
+              return sameCreator || sameBranch;
+            }),
+          };
+        } catch {
+          response.meta = { ...(response.meta ?? {}), couriers: [] };
+        }
+      }
       return response;
     }
 
@@ -218,6 +291,30 @@ export class FinanceGatewayController {
 
     if (response?.data?.id) {
       response.data.cashboxHistory = await this.loadCashboxHistory(String(response.data.id), query);
+      if (
+        this.isManager(req?.user) &&
+        String(user_id) === String(req?.user?.sub ?? '')
+      ) {
+        try {
+          const couriersResponse = await this.sendIdentity<{ data?: { items?: any[] } }>(
+            { cmd: 'identity.user.find_all' },
+            { query: { role: RoleEnum.COURIER, limit: 500, page: 1 } },
+          );
+          const allCouriers = couriersResponse?.data?.items ?? [];
+          response.meta = {
+            ...(response.meta ?? {}),
+            couriers: allCouriers.filter((courier) => {
+              const sameCreator = String(courier?.created_by ?? '') === String(req.user.sub);
+              const sameBranch =
+                String(courier?.branch_id ?? '') &&
+                String(courier?.branch_id ?? '') === String(req.user.branch_id ?? '');
+              return sameCreator || sameBranch;
+            }),
+          };
+        } catch {
+          response.meta = { ...(response.meta ?? {}), couriers: [] };
+        }
+      }
       return response;
     }
 
@@ -249,13 +346,20 @@ export class FinanceGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get cashbox by user ID with date filters' })
   @ApiParam({ name: 'id', description: 'User ID (bigint string)' })
-  cashboxByUserId(
+  async cashboxByUserId(
     @Param('id') id: string,
     @Query() query: MainCashboxFilterQueryDto,
     @Req() req: { user: JwtUser },
   ) {
-    if (!this.isPrivileged(req?.user) && String(id) !== String(req?.user?.sub ?? '')) {
-      throw new ForbiddenException("Siz faqat o'zingizning kassangizni ko'ra olasiz");
+    if (!this.isPrivileged(req?.user)) {
+      if (this.isManager(req?.user)) {
+        const managerCanAccess = await this.canManagerAccessUser(req?.user, id);
+        if (!managerCanAccess) {
+          throw new ForbiddenException("Siz bu foydalanuvchi kassasini ko'ra olmaysiz");
+        }
+      } else if (String(id) !== String(req?.user?.sub ?? '')) {
+        throw new ForbiddenException("Siz faqat o'zingizning kassangizni ko'ra olasiz");
+      }
     }
     return this.send({ cmd: 'finance.cashbox.user_by_id' }, { id, ...query });
   }
@@ -311,11 +415,111 @@ export class FinanceGatewayController {
 
   @Get('cashbox/all-info')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all cashboxes total info' })
-  allCashboxesInfo(@Query() query: CashboxAllInfoQueryDto) {
+  async allCashboxesInfo(
+    @Query() query: CashboxAllInfoQueryDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    if (this.isManager(req?.user)) {
+      const ownCashboxResponse = await this.send(
+        { cmd: 'finance.cashbox.my' },
+        { user_id: req.user.sub, roles: req.user.roles ?? [] },
+      );
+      const ownCashbox = ownCashboxResponse?.data?.cashbox ?? ownCashboxResponse?.data ?? null;
+      const ownHistoryResponse = await this.send(
+        { cmd: 'finance.history.find_all' },
+        { ...query, user_id: req.user.sub },
+      );
+
+      const managerBalance = Number(ownCashbox?.balance ?? 0);
+      const page = Number(query?.page ?? 1);
+      const limit = Number(query?.limit ?? 20);
+
+      return {
+        statusCode: 200,
+        message: "Manager cashbox info (faqat o'ziga tegishli)",
+        data: {
+          kassadagi_summa: managerBalance,
+          berilishi_kerak: managerBalance > 0 ? managerBalance : 0,
+          olinishi_kerak: managerBalance < 0 ? Math.abs(managerBalance) : 0,
+          counterparty: 'HQ',
+          mainCashboxTotal: 0,
+          courierCashboxTotal: managerBalance,
+          marketCashboxTotal: 0,
+          allCashboxHistories: ownHistoryResponse?.data?.items ?? [],
+          pagination: ownHistoryResponse?.data?.pagination ?? {
+            total: Number(ownHistoryResponse?.data?.total ?? 0),
+            page,
+            limit,
+            totalPages: Number(ownHistoryResponse?.data?.totalPages ?? 0),
+          },
+        },
+      };
+    }
     return this.send({ cmd: 'finance.cashbox.all_info' }, query);
+  }
+
+  @Get('cashbox/manager/settlement')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Manager cashbox settlement (HQ bilan hisob-kitob)" })
+  async managerSettlement(
+    @Req() req: { user: JwtUser },
+    @Query() query: MainCashboxFilterQueryDto,
+  ) {
+    const response = await this.send(
+      { cmd: 'finance.cashbox.my' },
+      { user_id: req.user.sub, roles: req.user.roles ?? [], ...query },
+    );
+
+    const cashbox = response?.data?.cashbox ?? response?.data ?? null;
+    const cash = Number(cashbox?.balance_cash ?? 0);
+    const card = Number(cashbox?.balance_card ?? 0);
+    const totalBalance = Number(cashbox?.balance ?? cash + card);
+    const berilishiKerak = totalBalance > 0 ? totalBalance : 0;
+    const olinishiKerak = totalBalance < 0 ? Math.abs(totalBalance) : 0;
+
+    return {
+      statusCode: 200,
+      message: "Manager settlement (HQ bilan) hisoblandi",
+      data: {
+        counterparty: 'HQ',
+        kassa: { cash, card, total: totalBalance },
+        berilishi_kerak: berilishiKerak,
+        olinishi_kerak: olinishiKerak,
+        cashbox,
+      },
+    };
+  }
+
+  @Get('cashbox/manager/payable-to-hq')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Managerdan HQga berilishi kerak summa" })
+  async managerPayableToHq(
+    @Req() req: { user: JwtUser },
+    @Query() query: MainCashboxFilterQueryDto,
+  ) {
+    const response = await this.send(
+      { cmd: 'finance.cashbox.my' },
+      { user_id: req.user.sub, roles: req.user.roles ?? [], ...query },
+    );
+
+    const cashbox = response?.data?.cashbox ?? response?.data ?? null;
+    const totalBalance = Number(cashbox?.balance ?? 0);
+
+    return {
+      statusCode: 200,
+      message: 'Manager -> HQ berilishi kerak summa',
+      data: {
+        counterparty: 'HQ',
+        berilishi_kerak: totalBalance > 0 ? totalBalance : 0,
+      },
+    };
   }
 
   @Get('cashbox/financial-balanse')
