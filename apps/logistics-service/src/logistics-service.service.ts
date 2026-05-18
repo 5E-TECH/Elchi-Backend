@@ -998,8 +998,13 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!post) {
       this.notFound('Post not found');
     }
+    const isCourier = (requester.roles ?? []).some(
+      (role) => String(role).toLowerCase() === Roles.COURIER,
+    );
+    const isOwnCourierPost = isCourier && String(post.courier_id ?? '') === String(requester.id ?? '');
+
     const scopedBranchId = await this.resolveScopedBranchId(requester);
-    if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId) {
+    if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId && !isOwnCourierPost) {
       this.forbidden("Siz bu branch pochtasidagi orderlarni ko'ra olmaysiz");
     }
 
@@ -1023,9 +1028,6 @@ export class LogisticsServiceService implements OnModuleInit {
 
     let orders = Array.from(orderMap.values());
 
-    const isCourier = (requester.roles ?? []).some(
-      (role) => String(role).toLowerCase() === Roles.COURIER,
-    );
     if (post.status === Post_status.SENT && isCourier) {
       orders = orders.filter((order) => order.status === Order_status.ON_THE_ROAD);
     }
@@ -1073,8 +1075,12 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!post) {
       this.notFound('Post not found');
     }
+    const isCourier = (requester?.roles ?? []).some(
+      (role) => String(role).toLowerCase() === Roles.COURIER,
+    );
+    const isOwnCourierPost = isCourier && String(post.courier_id ?? '') === String(requester?.id ?? '');
     const scopedBranchId = await this.resolveScopedBranchId(requester);
-    if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId) {
+    if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId && !isOwnCourierPost) {
       this.forbidden("Siz bu branch pochtasidagi rejected orderlarni ko'ra olmaysiz");
     }
 
