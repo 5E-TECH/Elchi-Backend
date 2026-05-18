@@ -943,6 +943,8 @@ export class UserServiceService implements OnModuleInit {
       );
     }
 
+    await this.ensureUserCashbox(saved.id, Cashbox_type.FOR_COURIER);
+
     void this.syncUserToSearch(saved);
     return successRes(this.sanitize(saved), 201, 'Manager yaratildi');
   }
