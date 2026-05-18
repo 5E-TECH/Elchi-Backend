@@ -25,7 +25,7 @@ import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { Roles } from './auth/roles.decorator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
-import { Roles as RoleEnum } from '@app/common';
+import { Order_status, Roles as RoleEnum, Where_deliver } from '@app/common';
 import {
   CashboxAllInfoQueryDto,
   CloseShiftRequestDto,
@@ -55,6 +55,7 @@ export class FinanceGatewayController {
   constructor(
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    @Inject('ORDER') private readonly orderClient: ClientProxy,
   ) {}
 
   private async send<T = any>(pattern: object, payload: object, timeoutMs = 8000): Promise<T> {
@@ -77,6 +78,17 @@ export class FinanceGatewayController {
       (error: unknown) => {
         if (error instanceof TimeoutError) {
           throw new GatewayTimeoutException('Identity service response timeout');
+        }
+        throw error;
+      },
+    );
+  }
+
+  private async sendOrder<T = any>(pattern: object, payload: object, timeoutMs = 8000): Promise<T> {
+    return firstValueFrom(this.orderClient.send(pattern, payload).pipe(timeout(timeoutMs))).catch(
+      (error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Order service response timeout');
         }
         throw error;
       },
@@ -192,6 +204,120 @@ export class FinanceGatewayController {
     );
     const histories = historyResponse?.data?.items ?? [];
     return this.attachCreatedByUsers(histories);
+  }
+
+  private async buildManagerSettlement(
+    user: JwtUser,
+    query?: { fromDate?: string; toDate?: string },
+  ) {
+    const ownCashboxResponse = await this.send(
+      { cmd: 'finance.cashbox.my' },
+      { user_id: user.sub, roles: user.roles ?? [], ...query },
+    );
+    const ownCashbox = ownCashboxResponse?.data?.cashbox ?? ownCashboxResponse?.data ?? null;
+    const kassa = Number(ownCashbox?.balance ?? 0);
+
+    const managerProfileRes = await this.sendIdentity<{ data?: Record<string, any> }>(
+      { cmd: 'identity.user.find_by_id' },
+      { id: user.sub },
+    );
+    const managerProfile = managerProfileRes?.data ?? {};
+    const managerTariffHome = Number(managerProfile?.tariff_home ?? 0);
+    const managerTariffCenter = Number(managerProfile?.tariff_center ?? 0);
+
+    const couriersResponse = await this.sendIdentity<{ data?: { items?: any[] } }>(
+      { cmd: 'identity.user.find_all' },
+      { query: { role: RoleEnum.COURIER, limit: 1000, page: 1 } },
+    );
+    const allCouriers = couriersResponse?.data?.items ?? [];
+    const couriers = allCouriers.filter((courier) => {
+      const sameCreator = String(courier?.created_by ?? '') === String(user.sub);
+      const sameBranch =
+        String(courier?.branch_id ?? '') &&
+        String(courier?.branch_id ?? '') === String(user.branch_id ?? '');
+      return sameCreator || sameBranch;
+    });
+
+    const courierTariffMap = new Map(
+      couriers.map((courier) => [
+        String(courier?.id ?? ''),
+        {
+          home: Number(courier?.tariff_home ?? 0),
+          center: Number(courier?.tariff_center ?? 0),
+        },
+      ]),
+    );
+
+    const courierCashboxes = await Promise.all(
+      couriers.map(async (courier) => {
+        const cashboxRes = await this.send(
+          { cmd: 'finance.cashbox.find_by_user' },
+          { user_id: String(courier.id), cashbox_type: 'for_courier', with_history: false },
+        ).catch(() => null);
+        const cashbox = cashboxRes?.data?.cashbox ?? cashboxRes?.data ?? null;
+        return Number(cashbox?.balance ?? 0);
+      }),
+    );
+    const olinishiKerak = courierCashboxes.reduce((sum, value) => sum + value, 0);
+
+    const soldOrdersResponse = await this.sendOrder(
+      { cmd: 'order.find_all' },
+      {
+        query: {
+          branch_id: user.branch_id,
+          status: [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID],
+          page: 1,
+          limit: 5000,
+          from_date: query?.fromDate,
+          to_date: query?.toDate,
+        },
+      },
+    ).catch(() => null);
+
+    const soldOrders =
+      soldOrdersResponse?.data?.data ??
+      soldOrdersResponse?.data?.items ??
+      soldOrdersResponse?.data ??
+      [];
+
+    const berilishiKerak = (Array.isArray(soldOrders) ? soldOrders : []).reduce(
+      (sum: number, order: any) => {
+        const totalPrice = Number(order?.total_price ?? 0);
+        const whereDeliver = String(order?.where_deliver ?? '').toLowerCase();
+        const managerTariff =
+          whereDeliver === String(Where_deliver.CENTER).toLowerCase()
+            ? managerTariffCenter
+            : managerTariffHome;
+
+        const courierTariffFromOrder = Number(order?.courier_tariff ?? NaN);
+        const courierId = String(order?.courier_id ?? '').trim();
+        const courierTariffByUser =
+          courierId && courierTariffMap.has(courierId)
+            ? whereDeliver === String(Where_deliver.CENTER).toLowerCase()
+              ? Number(courierTariffMap.get(courierId)?.center ?? 0)
+              : Number(courierTariffMap.get(courierId)?.home ?? 0)
+            : 0;
+        const courierTariff = Number.isFinite(courierTariffFromOrder)
+          ? courierTariffFromOrder
+          : courierTariffByUser;
+
+        const managerReceives = totalPrice - courierTariff;
+        const managerMargin = managerTariff - courierTariff;
+        const hqPayable = managerReceives - managerMargin;
+
+        return sum + Math.max(hqPayable, 0);
+      },
+      0,
+    );
+
+    return {
+      kassa,
+      olinishi_kerak: Math.max(olinishiKerak, 0),
+      berilishi_kerak: Math.max(berilishiKerak, 0),
+      counterparty: 'HQ',
+      cashbox: ownCashbox,
+      couriers,
+    };
   }
 
   @Get('health')
@@ -423,17 +549,14 @@ export class FinanceGatewayController {
     @Req() req: { user: JwtUser },
   ) {
     if (this.isManager(req?.user)) {
-      const ownCashboxResponse = await this.send(
-        { cmd: 'finance.cashbox.my' },
-        { user_id: req.user.sub, roles: req.user.roles ?? [] },
-      );
-      const ownCashbox = ownCashboxResponse?.data?.cashbox ?? ownCashboxResponse?.data ?? null;
+      const settlement = await this.buildManagerSettlement(req.user, {
+        fromDate: (query as any)?.fromDate,
+        toDate: (query as any)?.toDate,
+      });
       const ownHistoryResponse = await this.send(
         { cmd: 'finance.history.find_all' },
         { ...query, user_id: req.user.sub },
       );
-
-      const managerBalance = Number(ownCashbox?.balance ?? 0);
       const page = Number(query?.page ?? 1);
       const limit = Number(query?.limit ?? 20);
 
@@ -441,14 +564,15 @@ export class FinanceGatewayController {
         statusCode: 200,
         message: "Manager cashbox info (faqat o'ziga tegishli)",
         data: {
-          kassadagi_summa: managerBalance,
-          berilishi_kerak: managerBalance > 0 ? managerBalance : 0,
-          olinishi_kerak: managerBalance < 0 ? Math.abs(managerBalance) : 0,
-          counterparty: 'HQ',
+          kassadagi_summa: settlement.kassa,
+          berilishi_kerak: settlement.berilishi_kerak,
+          olinishi_kerak: settlement.olinishi_kerak,
+          counterparty: settlement.counterparty,
           mainCashboxTotal: 0,
-          courierCashboxTotal: managerBalance,
+          courierCashboxTotal: settlement.kassa,
           marketCashboxTotal: 0,
           allCashboxHistories: ownHistoryResponse?.data?.items ?? [],
+          couriers: settlement.couriers,
           pagination: ownHistoryResponse?.data?.pagination ?? {
             total: Number(ownHistoryResponse?.data?.total ?? 0),
             page,
@@ -470,27 +594,19 @@ export class FinanceGatewayController {
     @Req() req: { user: JwtUser },
     @Query() query: MainCashboxFilterQueryDto,
   ) {
-    const response = await this.send(
-      { cmd: 'finance.cashbox.my' },
-      { user_id: req.user.sub, roles: req.user.roles ?? [], ...query },
-    );
-
-    const cashbox = response?.data?.cashbox ?? response?.data ?? null;
-    const cash = Number(cashbox?.balance_cash ?? 0);
-    const card = Number(cashbox?.balance_card ?? 0);
-    const totalBalance = Number(cashbox?.balance ?? cash + card);
-    const berilishiKerak = totalBalance > 0 ? totalBalance : 0;
-    const olinishiKerak = totalBalance < 0 ? Math.abs(totalBalance) : 0;
+    const settlement = await this.buildManagerSettlement(req.user, query);
+    const cash = Number(settlement?.cashbox?.balance_cash ?? 0);
+    const card = Number(settlement?.cashbox?.balance_card ?? 0);
 
     return {
       statusCode: 200,
       message: "Manager settlement (HQ bilan) hisoblandi",
       data: {
-        counterparty: 'HQ',
-        kassa: { cash, card, total: totalBalance },
-        berilishi_kerak: berilishiKerak,
-        olinishi_kerak: olinishiKerak,
-        cashbox,
+        counterparty: settlement.counterparty,
+        kassa: { cash, card, total: settlement.kassa },
+        berilishi_kerak: settlement.berilishi_kerak,
+        olinishi_kerak: settlement.olinishi_kerak,
+        cashbox: settlement.cashbox,
       },
     };
   }
@@ -504,20 +620,14 @@ export class FinanceGatewayController {
     @Req() req: { user: JwtUser },
     @Query() query: MainCashboxFilterQueryDto,
   ) {
-    const response = await this.send(
-      { cmd: 'finance.cashbox.my' },
-      { user_id: req.user.sub, roles: req.user.roles ?? [], ...query },
-    );
-
-    const cashbox = response?.data?.cashbox ?? response?.data ?? null;
-    const totalBalance = Number(cashbox?.balance ?? 0);
+    const settlement = await this.buildManagerSettlement(req.user, query);
 
     return {
       statusCode: 200,
       message: 'Manager -> HQ berilishi kerak summa',
       data: {
-        counterparty: 'HQ',
-        berilishi_kerak: totalBalance > 0 ? totalBalance : 0,
+        counterparty: settlement.counterparty,
+        berilishi_kerak: settlement.berilishi_kerak,
       },
     };
   }

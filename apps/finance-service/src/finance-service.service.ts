@@ -1175,32 +1175,28 @@ export class FinanceServiceService implements OnModuleInit {
       const cashboxType = roles.includes('market')
         ? Cashbox_type.FOR_MARKET
         : Cashbox_type.FOR_COURIER;
+      let cashbox = await this.cashboxRepo.findOne({
+        where: { user_id: data.user_id, cashbox_type: cashboxType },
+        order: { createdAt: 'DESC' },
+      });
 
-      try {
-        return await this.getCashboxByUserId({
-          id: data.user_id,
+      if (!cashbox) {
+        const created = this.cashboxRepo.create({
+          user_id: data.user_id,
           cashbox_type: cashboxType,
-          fromDate: data.fromDate,
-          toDate: data.toDate,
+          balance: 0,
+          balance_cash: 0,
+          balance_card: 0,
         });
-      } catch (error) {
-        if (error instanceof NotFoundException) {
-          await this.createCashbox({
-            user_id: data.user_id,
-            cashbox_type: cashboxType,
-            balance: 0,
-            balance_cash: 0,
-            balance_card: 0,
-          });
-          return this.getCashboxByUserId({
-            id: data.user_id,
-            cashbox_type: cashboxType,
-            fromDate: data.fromDate,
-            toDate: data.toDate,
-          });
-        }
-        throw error;
+        cashbox = await this.cashboxRepo.save(created);
       }
+
+      return this.getCashboxByUserId({
+        id: data.user_id,
+        cashbox_type: cashboxType,
+        fromDate: data.fromDate,
+        toDate: data.toDate,
+      });
     } catch (error) {
       this.toRpcError(error);
     }
