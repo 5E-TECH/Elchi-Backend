@@ -1176,12 +1176,31 @@ export class FinanceServiceService implements OnModuleInit {
         ? Cashbox_type.FOR_MARKET
         : Cashbox_type.FOR_COURIER;
 
-      return this.getCashboxByUserId({
-        id: data.user_id,
-        cashbox_type: cashboxType,
-        fromDate: data.fromDate,
-        toDate: data.toDate,
-      });
+      try {
+        return await this.getCashboxByUserId({
+          id: data.user_id,
+          cashbox_type: cashboxType,
+          fromDate: data.fromDate,
+          toDate: data.toDate,
+        });
+      } catch (error) {
+        if (error instanceof NotFoundException) {
+          await this.createCashbox({
+            user_id: data.user_id,
+            cashbox_type: cashboxType,
+            balance: 0,
+            balance_cash: 0,
+            balance_card: 0,
+          });
+          return this.getCashboxByUserId({
+            id: data.user_id,
+            cashbox_type: cashboxType,
+            fromDate: data.fromDate,
+            toDate: data.toDate,
+          });
+        }
+        throw error;
+      }
     } catch (error) {
       this.toRpcError(error);
     }

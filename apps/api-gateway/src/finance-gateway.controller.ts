@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   GatewayTimeoutException,
   Get,
   Inject,
@@ -126,6 +127,16 @@ export class FinanceGatewayController {
     }));
   }
 
+  private hasRole(user: JwtUser | undefined, role: RoleEnum) {
+    return (user?.roles ?? []).some(
+      (item) => String(item ?? '').toLowerCase() === String(role).toLowerCase(),
+    );
+  }
+
+  private isPrivileged(user: JwtUser | undefined) {
+    return this.hasRole(user, RoleEnum.SUPERADMIN) || this.hasRole(user, RoleEnum.ADMIN);
+  }
+
   private async loadCashboxHistory(
     cashboxId: string,
     query: { page?: number; limit?: number },
@@ -159,7 +170,7 @@ export class FinanceGatewayController {
 
   @Get('cashbox/user/:user_id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET, RoleEnum.COURIER)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET, RoleEnum.COURIER, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Find cashbox(es) by user' })
   @ApiParam({ name: 'user_id', description: 'User id (bigint string)' })
@@ -170,7 +181,11 @@ export class FinanceGatewayController {
   async findCashboxByUser(
     @Param('user_id') user_id: string,
     @Query() query: FindCashboxByUserQueryDto,
+    @Req() req: { user: JwtUser },
   ) {
+    if (!this.isPrivileged(req?.user) && String(user_id) !== String(req?.user?.sub ?? '')) {
+      throw new ForbiddenException("Siz faqat o'zingizning kassangizni ko'ra olasiz");
+    }
     const response = await this.send(
       { cmd: 'finance.cashbox.find_by_user' },
       { user_id, ...query },
@@ -230,20 +245,24 @@ export class FinanceGatewayController {
 
   @Get('cashbox/user/:id/main')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get cashbox by user ID with date filters' })
   @ApiParam({ name: 'id', description: 'User ID (bigint string)' })
   cashboxByUserId(
     @Param('id') id: string,
     @Query() query: MainCashboxFilterQueryDto,
+    @Req() req: { user: JwtUser },
   ) {
+    if (!this.isPrivileged(req?.user) && String(id) !== String(req?.user?.sub ?? '')) {
+      throw new ForbiddenException("Siz faqat o'zingizning kassangizni ko'ra olasiz");
+    }
     return this.send({ cmd: 'finance.cashbox.user_by_id' }, { id, ...query });
   }
 
   @Get('cashbox/my-cashbox')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.COURIER, RoleEnum.MARKET)
+  @Roles(RoleEnum.COURIER, RoleEnum.MARKET, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get my cashbox (courier/market)' })
   async myCashbox(
@@ -336,7 +355,7 @@ export class FinanceGatewayController {
 
   @Get('history')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Find cashbox history list' })
   @ApiQuery({ name: 'cashbox_id', required: false })
@@ -350,7 +369,10 @@ export class FinanceGatewayController {
   @ApiQuery({ name: 'to_date', required: false })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  findHistory(@Query() query: FindHistoryQueryDto) {
+  findHistory(@Query() query: FindHistoryQueryDto, @Req() req: { user: JwtUser }) {
+    if (this.hasRole(req?.user, RoleEnum.MANAGER) && !this.isPrivileged(req?.user)) {
+      return this.send({ cmd: 'finance.history.find_all' }, { ...query, user_id: req.user.sub });
+    }
     return this.send({ cmd: 'finance.history.find_all' }, query);
   }
 
