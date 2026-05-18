@@ -8,6 +8,7 @@ import { Status } from '@app/common';
 export interface RequesterContext {
   id: string;
   roles: string[];
+  allowed_user_ids?: string[];
 }
 
 export interface CreateUserPayload {
