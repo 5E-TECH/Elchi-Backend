@@ -144,4 +144,45 @@ describe('OrderServiceService bulk batch handlers', () => {
     expect(res.data.idempotent).toBe(false);
     expect(res.data.affected).toBe(3);
   });
+
+  // ------------------------------------------------------------------
+  // Race condition guard: bulkAssignBatch must ONLY update orders whose
+  // current_batch_id IS NULL. If a concurrent batch already claimed one,
+  // the UPDATE affects fewer rows than requested and the whole batch
+  // rolls back instead of "stealing" the order silently.
+  // ------------------------------------------------------------------
+  it('bulkAssignBatch UPDATE includes "current_batch_id IS NULL" guard', async () => {
+    const { service, updateQb } = createSetup({ affected: 2 });
+
+    await service.bulkAssignBatch({
+      batch_id: '100',
+      order_ids: ['1', '2'],
+      message_id: 'msg_assign_guard',
+    });
+
+    // The guard is registered via andWhere(). Inspect all andWhere calls
+    // for the NULL clause specifically.
+    const andWhereArgs = updateQb.andWhere.mock.calls.map((c) => String(c[0]));
+    const hasNullGuard = andWhereArgs.some((q) => q.includes('current_batch_id IS NULL'));
+    expect(hasNullGuard).toBe(true);
+  });
+
+  it('bulkAssignBatch error message mentions "already assigned" on mismatch', async () => {
+    // The new error wording helps an operator distinguish "order missing"
+    // from "concurrent batch took it" when reading logs.
+    const { service } = createSetup({ affected: 0 });
+
+    try {
+      await service.bulkAssignBatch({
+        batch_id: '100',
+        order_ids: ['1', '2'],
+        message_id: 'msg_assign_take',
+      });
+      fail('expected RpcException');
+    } catch (err: any) {
+      const payload = err.getError();
+      expect(payload.statusCode).toBe(409);
+      expect(payload.message).toMatch(/already assigned to another batch/i);
+    }
+  });
 });

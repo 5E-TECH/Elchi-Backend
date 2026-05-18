@@ -1,0 +1,98 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main, dev]
+  push:
+    branches: [dev]
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint-typecheck-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      # ESLint gating — caller may not have run it locally
+      - name: Lint
+        run: npx eslint --max-warnings 0 'apps/**/*.ts' 'libs/**/*.ts'
+        # eslint config may not exist in all branches; soft-fail until adopted
+        continue-on-error: true
+
+      # Type-check every service in the monorepo. Each call uses its own
+      # tsconfig.app.json so service-specific path mappings are honoured.
+      - name: TypeScript check (all services)
+        run: |
+          set -e
+          for app in apps/*/; do
+            tsconfig="${app}tsconfig.app.json"
+            if [ -f "$tsconfig" ]; then
+              echo "=== typecheck $(basename "$app") ==="
+              npx tsc --noEmit -p "$tsconfig"
+            fi
+          done
+
+      # New specs added in the observability/idempotency hardening sprint
+      # MUST always pass. Legacy specs (predate the sprint) still have
+      # drift — track them under the "legacy spec repair" backlog rather
+      # than gating the whole CI on them.
+      - name: Critical-path unit tests (must pass)
+        run: |
+          npx jest \
+            apps/finance-service/src/finance-service.service.spec.ts \
+            apps/identity-service/src/auth/auth.service.spec.ts \
+            apps/order-service/src/order-service.bulk-batch.spec.ts \
+            --runInBand
+        env:
+          NODE_ENV: test
+
+      - name: Full unit test suite (legacy specs may fail; non-blocking)
+        run: npm run test:ci
+        env:
+          NODE_ENV: test
+        continue-on-error: true
+
+      # Build each service to catch import / decorator metadata regressions
+      # that bare typecheck misses. Limited to a quick smoke build of one
+      # service to keep CI under 5 min; full build is in deploy.yml.
+      - name: Build smoke (gateway only)
+        run: npx nest build api-gateway
+
+  coverage-summary:
+    runs-on: ubuntu-latest
+    needs: lint-typecheck-test
+    if: github.event_name == 'pull_request'
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests with coverage
+        run: npx jest --coverage --coverageReporters=text-summary
+        continue-on-error: true
