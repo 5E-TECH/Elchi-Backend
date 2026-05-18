@@ -341,6 +341,8 @@ describe('BranchServiceService', () => {
     branchRepo.find
       .mockResolvedValueOnce([{ id: '200' }])
       .mockResolvedValue([]);
+    // Avlod filiallar raw SQL (manager.query) orqali olinadi: root '100' + bola '200'.
+    branchRepo.manager.query.mockResolvedValue([{ id: '100' }, { id: '200' }]);
     branchRepo.findOne.mockResolvedValue({
       id: '200',
       name: 'Child branch',
@@ -370,13 +372,13 @@ describe('BranchServiceService', () => {
 
   it('findUserBranch returns assignment for own requester', async () => {
     branchUserRepo.find.mockResolvedValue([
-      { branch_id: '100', role: 'OPERATOR', isDeleted: false },
+      { branch_id: '100', role: 'REGISTRATOR', isDeleted: false },
     ]);
     branchUserRepo.findOne.mockResolvedValue({
       id: 'bu1',
       branch_id: '100',
       user_id: 'u1',
-      role: 'OPERATOR',
+      role: 'REGISTRATOR',
       isDeleted: false,
       createdAt: new Date(),
     });
@@ -386,11 +388,11 @@ describe('BranchServiceService', () => {
       isDeleted: false,
     });
 
-    const res = await service.findUserBranch('u1', { id: 'u1', roles: ['operator'] });
+    const res = await service.findUserBranch('u1', { id: 'u1', roles: ['branch'] });
 
     expect(res.statusCode).toBe(200);
     expect(res.data.branch_id).toBe('100');
-    expect(res.data.role).toBe('OPERATOR');
+    expect(res.data.role).toBe('REGISTRATOR');
   });
 
   it('findUserBranch forbids requesting another user assignment for non-admin', async () => {
@@ -405,6 +407,8 @@ describe('BranchServiceService', () => {
     branchRepo.find
       .mockResolvedValueOnce([{ id: '2' }])
       .mockResolvedValueOnce([]);
+    // Analitika doirasi raw SQL orqali: branch '1' + avlodi '2'.
+    branchRepo.manager.query.mockResolvedValue([{ id: '1' }, { id: '2' }]);
     branchUserRepo.count.mockResolvedValue(3);
     orderClient.send
       .mockReturnValueOnce(
@@ -450,6 +454,7 @@ describe('BranchServiceService', () => {
   it('getBranchMarketsAnalytics returns grouped market data', async () => {
     branchRepo.findOne.mockResolvedValue({ id: '1', isDeleted: false });
     branchRepo.find.mockResolvedValueOnce([]);
+    branchRepo.manager.query.mockResolvedValue([{ id: '1' }]);
     orderClient.send.mockReturnValueOnce(
       of({
         data: [
@@ -497,6 +502,8 @@ describe('BranchServiceService', () => {
       { branch_id: '100', role: 'MANAGER', isDeleted: false },
     ]);
     branchRepo.find.mockResolvedValue([{ id: '200' }]);
+    // Avlod filiallar raw SQL (manager.query) orqali: root '100' + bola '200'.
+    branchRepo.manager.query.mockResolvedValue([{ id: '100' }, { id: '200' }]);
     branchUserRepo.count.mockResolvedValue(0);
     orderClient.send
       .mockReturnValueOnce(of({ data: [] }))
@@ -518,15 +525,15 @@ describe('BranchServiceService', () => {
     );
   });
 
-  it('operator stats includes only own branch (no descendants)', async () => {
+  it('registrator stats includes only own branch (no descendants)', async () => {
     branchRepo.findOne.mockResolvedValue({ id: '300', isDeleted: false });
     branchUserRepo.find.mockResolvedValue([
-      { branch_id: '300', role: 'OPERATOR', isDeleted: false },
+      { branch_id: '300', role: 'REGISTRATOR', isDeleted: false },
     ]);
     branchUserRepo.count.mockResolvedValue(0);
     orderClient.send.mockReturnValueOnce(of({ data: [] }));
 
-    const res = await service.getBranchStats('300', { id: 'u-operator', roles: ['operator'] });
+    const res = await service.getBranchStats('300', { id: 'u-registrator', roles: ['branch'] });
 
     expect(res.statusCode).toBe(200);
     expect(orderClient.send).toHaveBeenCalledTimes(1);
@@ -587,11 +594,12 @@ describe('BranchServiceService', () => {
   });
 
   it('createTransferBatches creates batches and generates QR files', async () => {
+    // Manba filial (10) va uning OTA filiali (1) — destination = parent_id.
     branchRepo.findOne
-      .mockResolvedValueOnce({ id: '10', isDeleted: false })
+      .mockResolvedValueOnce({ id: '10', parent_id: '1', isDeleted: false })
       .mockResolvedValueOnce({ id: '1', isDeleted: false });
     branchUserRepo.find.mockResolvedValue([
-      { branch_id: '10', role: 'OPERATOR', isDeleted: false },
+      { branch_id: '10', role: 'REGISTRATOR', isDeleted: false },
     ]);
     orderClient.send.mockReturnValueOnce(
       of({
@@ -616,12 +624,8 @@ describe('BranchServiceService', () => {
 
     const res = await service.createTransferBatches(
       '10',
-      {
-        destination_branch_id: '1',
-        direction: 'FORWARD',
-        request_key: 'req_create_batch_001',
-      },
-      { id: '77', roles: ['operator'] },
+      { orderIds: ['900'] },
+      { id: '77', roles: ['branch'] },
     );
 
     expect(res.statusCode).toBe(201);
@@ -640,11 +644,12 @@ describe('BranchServiceService', () => {
   });
 
   it('createTransferBatches rollbacks batches when QR generation fails', async () => {
+    // Manba filial (10) va uning OTA filiali (1) — destination = parent_id.
     branchRepo.findOne
-      .mockResolvedValueOnce({ id: '10', isDeleted: false })
+      .mockResolvedValueOnce({ id: '10', parent_id: '1', isDeleted: false })
       .mockResolvedValueOnce({ id: '1', isDeleted: false });
     branchUserRepo.find.mockResolvedValue([
-      { branch_id: '10', role: 'OPERATOR', isDeleted: false },
+      { branch_id: '10', role: 'REGISTRATOR', isDeleted: false },
     ]);
     orderClient.send
       .mockReturnValueOnce(
@@ -665,12 +670,8 @@ describe('BranchServiceService', () => {
     await expect(
       service.createTransferBatches(
         '10',
-        {
-          destination_branch_id: '1',
-          direction: 'FORWARD',
-          request_key: 'req_create_batch_002',
-        },
-        { id: '77', roles: ['operator'] },
+        { orderIds: ['900'] },
+        { id: '77', roles: ['branch'] },
       ),
     ).rejects.toBeInstanceOf(RpcException);
 
@@ -686,17 +687,18 @@ describe('BranchServiceService', () => {
       .mockReturnValueOnce(of({ data: { id: '701', source_branch_id: '10' } }))
       .mockReturnValueOnce(of({ statusCode: 200, data: { id: '701', status: 'SENT' } }));
     branchUserRepo.find.mockResolvedValue([
-      { branch_id: '10', role: 'OPERATOR', isDeleted: false },
+      { branch_id: '10', role: 'REGISTRATOR', isDeleted: false },
     ]);
 
     const res = await service.sendTransferBatch(
       '701',
       {
+        orderIds: ['900'],
         vehicle_plate: '01 A 123 AB',
         driver_name: 'Haydovchi',
         driver_phone: '+998901234567',
       },
-      { id: '77', roles: ['operator'] },
+      { id: '77', roles: ['branch'] },
     );
 
     expect(res).toEqual(expect.objectContaining({ statusCode: 200 }));
@@ -720,11 +722,13 @@ describe('BranchServiceService', () => {
     orderClient.send
       .mockReturnValueOnce(of({ data: { id: '801', destination_branch_id: '20' } }))
       .mockReturnValueOnce(of({ statusCode: 200, data: { id: '801', status: 'RECEIVED' } }));
+    // Manzil filial (destination) getBranchOrThrow orqali branchRepo'dan qidiriladi.
+    branchRepo.findOne.mockResolvedValue({ id: '20', isDeleted: false });
     branchUserRepo.findOne.mockResolvedValue({ id: 'bu-1' });
 
     const res = await service.receiveTransferBatch(
       '801',
-      { id: '55', roles: ['operator'] },
+      { id: '55', roles: ['branch'] },
     );
 
     expect(res).toEqual(expect.objectContaining({ statusCode: 200 }));
@@ -793,12 +797,12 @@ describe('BranchServiceService', () => {
         }),
       )
       .mockReturnValueOnce(of({ statusCode: 200, data: { affected: 2 } }));
-    branchUserRepo.find.mockResolvedValue([{ branch_id: '10', role: 'OPERATOR', isDeleted: false }]);
+    branchUserRepo.find.mockResolvedValue([{ branch_id: '10', role: 'REGISTRATOR', isDeleted: false }]);
 
     const res = await service.cancelTransferBatch(
       '501',
       { reason: "noto'g'ri viloyat tanlangan" },
-      { id: '77', roles: ['operator'] },
+      { id: '77', roles: ['branch'] },
     );
 
     expect(orderClient.send).toHaveBeenCalledWith(

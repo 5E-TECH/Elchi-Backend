@@ -37,7 +37,16 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       send: jest.fn(() => of({ data: { branch_id: options?.branchId ?? '10' } })),
     };
 
+    const postUpdateQb = {
+      update: jest.fn().mockReturnThis(),
+      set: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      execute: jest.fn().mockResolvedValue({ affected: 1 }),
+    };
+
     const postRepo = {
+      // Post hisoblagichi (order_quantity) atomik UPDATE query orqali yangilanadi.
+      createQueryBuilder: jest.fn(() => postUpdateQb),
       findOne: jest.fn((query: { where?: { id?: string; courier_id?: string; status?: Post_status } }) => {
         if (query?.where?.id && options?.linkedPost !== undefined) {
           return Promise.resolve(options.linkedPost);
@@ -68,7 +77,7 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       { send: jest.fn(() => of({})) } as any,
     );
 
-    return { service, orderClient, branchClient, postRepo };
+    return { service, orderClient, branchClient, postRepo, postUpdateQb };
   }
 
   async function expectRpcStatus(
@@ -90,7 +99,7 @@ describe('LogisticsServiceService scanAssignOrder', () => {
   }
 
   it('assigns order to courier and reuses existing open post', async () => {
-    const { service, orderClient, postRepo } = setup();
+    const { service, orderClient, postUpdateQb } = setup();
 
     const result: any = await service.scanAssignOrder(
       { id: 'c1', roles: ['courier'] },
@@ -112,12 +121,9 @@ describe('LogisticsServiceService scanAssignOrder', () => {
         }),
       }),
     );
-    expect(postRepo.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        id: 'p-open',
-        order_quantity: 3,
-      }),
-    );
+    // Reused 'p-open' postning hisoblagichi atomik UPDATE query bilan oshiriladi.
+    expect(postUpdateQb.where).toHaveBeenCalledWith('id = :id', { id: 'p-open' });
+    expect(postUpdateQb.execute).toHaveBeenCalled();
     expect(result.data.idempotent).toBe(false);
     expect(result.data.post_created).toBe(false);
   });
