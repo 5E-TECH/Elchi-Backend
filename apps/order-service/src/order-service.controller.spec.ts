@@ -1,5 +1,5 @@
 import { Test, TestingModule } from '@nestjs/testing';
-import { RmqService } from '@app/common';
+import { RmqService, IdempotencyService } from '@app/common';
 import { OrderServiceController } from './order-service.controller';
 import { OrderServiceService } from './order-service.service';
 
@@ -19,6 +19,10 @@ describe('OrderServiceController', () => {
         },
         {
           provide: OrderServiceService,
+          useValue: {},
+        },
+        {
+          provide: IdempotencyService,
           useValue: {},
         },
       ],

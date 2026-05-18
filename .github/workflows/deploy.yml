@@ -58,9 +58,19 @@ jobs:
             set -euo pipefail
             cd ${{ secrets.SERVER_APP_PATH }}
             git config --global --add safe.directory ${{ secrets.SERVER_APP_PATH }} || true
+
+            # .env.production endi git'da kuzatilmaydi (maxfiy ma'lumotlar
+            # serverda saqlanadi). "git reset --hard" uni o'chirib
+            # yubormasligi uchun zaxiralab, reset'dan keyin tiklaymiz.
+            cp -f .env.production /tmp/elchi-env-backup 2>/dev/null || true
+
             git fetch origin main
             git checkout main
             git reset --hard origin/main
+
+            if [ ! -f .env.production ] && [ -f /tmp/elchi-env-backup ]; then
+              cp -f /tmp/elchi-env-backup .env.production
+            fi
 
             if command -v docker-compose >/dev/null 2>&1; then
               compose() { docker-compose "$@"; }

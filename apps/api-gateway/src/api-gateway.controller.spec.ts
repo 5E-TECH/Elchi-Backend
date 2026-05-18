@@ -21,6 +21,12 @@ describe('ApiGatewayController', () => {
             send: jest.fn().mockReturnValue(of({ ok: true })),
           },
         },
+        {
+          provide: 'BRANCH',
+          useValue: {
+            send: jest.fn().mockReturnValue(of({ ok: true })),
+          },
+        },
       ],
     }).compile();
 
