@@ -808,7 +808,12 @@ export class OrderServiceService implements OnModuleInit {
 
   private resolveActorCourierId(
     requester: { id: string; roles?: string[]; branch_id?: string | null },
-    order: { branch_id?: string | null; holder_branch_id?: string | null },
+    order: {
+      branch_id?: string | null;
+      holder_branch_id?: string | null;
+      courier_id?: string | null;
+      holder_courier_id?: string | null;
+    },
     post: { courier_id?: string | null } | null | undefined,
   ): string {
     const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
@@ -816,10 +821,20 @@ export class OrderServiceService implements OnModuleInit {
     const isManager = this.hasRole(requester, Roles.MANAGER);
 
     if (isCourier) {
-      if (String(post?.courier_id ?? '') !== String(requester.id)) {
+      const requesterId = String(requester.id ?? '').trim();
+      const postCourierId = String(post?.courier_id ?? '').trim();
+      const holderCourierId = String(order?.holder_courier_id ?? '').trim();
+      const orderCourierId = String(order?.courier_id ?? '').trim();
+      const isAssignedToRequester =
+        requesterId &&
+        (postCourierId === requesterId ||
+          holderCourierId === requesterId ||
+          orderCourierId === requesterId);
+
+      if (!isAssignedToRequester) {
         this.badRequest('Order is not assigned to this courier');
       }
-      return String(requester.id);
+      return requesterId;
     }
 
     if (isManager) {
