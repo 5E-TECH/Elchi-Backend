@@ -1518,14 +1518,17 @@ export class FinanceServiceService implements OnModuleInit {
         where: { cashbox_type: Cashbox_type.FOR_MARKET },
       });
 
-      const page = filters?.page && filters.page > 0 ? filters.page : 1;
-      const limit = filters?.limit && filters.limit > 0 ? filters.limit : 20;
+      const noPagination = filters?.page === 0 || filters?.limit === 0;
+      const page = noPagination ? 0 : filters?.page && filters.page > 0 ? filters.page : 1;
+      const limit = noPagination ? 0 : filters?.limit && filters.limit > 0 ? filters.limit : 20;
       const qb = this.historyRepo
         .createQueryBuilder('h')
         .leftJoinAndSelect('h.cashbox', 'cashbox')
-        .orderBy('h.createdAt', 'DESC')
-        .skip((page - 1) * limit)
-        .take(limit);
+        .orderBy('h.createdAt', 'DESC');
+
+      if (!noPagination) {
+        qb.skip((page - 1) * limit).take(limit);
+      }
 
       if (filters?.operationType) qb.andWhere('h.operation_type = :operationType', { operationType: filters.operationType });
       if (filters?.sourceType) qb.andWhere('h.source_type = :sourceType', { sourceType: filters.sourceType });
@@ -1543,7 +1546,12 @@ export class FinanceServiceService implements OnModuleInit {
         courierCashboxTotal,
         marketCashboxTotal,
         allCashboxHistories,
-        pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: noPagination ? (total > 0 ? 1 : 0) : Math.ceil(total / limit),
+        },
       }, 200, 'All cashbox histories');
     } catch (error) {
       this.toRpcError(error);
