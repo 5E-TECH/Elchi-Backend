@@ -55,30 +55,15 @@ jobs:
           command_timeout: 50m
           script_stop: true
           script: |
-            set -euo pipefail
+            set -ex
             cd ${{ secrets.SERVER_APP_PATH }}
             git config --global --add safe.directory ${{ secrets.SERVER_APP_PATH }} || true
-
-            # .env.production endi git'da kuzatilmaydi (maxfiy ma'lumotlar
-            # serverda saqlanadi). "git reset --hard" uni o'chirib
-            # yubormasligi uchun zaxiralab, reset'dan keyin tiklaymiz.
             cp -f .env.production /tmp/elchi-env-backup 2>/dev/null || true
-
             git fetch origin main
-            git checkout main
+            git checkout -f main
             git reset --hard origin/main
-
-            if [ ! -f .env.production ] && [ -f /tmp/elchi-env-backup ]; then
-              cp -f /tmp/elchi-env-backup .env.production
-            fi
-
-            if command -v docker-compose >/dev/null 2>&1; then
-              compose() { docker-compose "$@"; }
-            else
-              compose() { docker compose "$@"; }
-            fi
-
-            compose -f docker-compose.prod.yml pull || true
-            compose -f docker-compose.prod.yml down --remove-orphans
-            compose -f docker-compose.prod.yml up -d --build --remove-orphans
-            compose -f docker-compose.prod.yml ps
+            test -f .env.production || cp -f /tmp/elchi-env-backup .env.production
+            docker compose -f docker-compose.prod.yml pull || true
+            docker compose -f docker-compose.prod.yml down --remove-orphans || true
+            docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
+            docker compose -f docker-compose.prod.yml ps
