@@ -172,9 +172,21 @@ export class FinanceGatewayController {
         return false;
       }
 
+      let managerBranchId = String(manager.branch_id ?? '');
+      if (!managerBranchId) {
+        try {
+          const managerResponse = await this.sendIdentity<{ data?: Record<string, any> }>(
+            { cmd: 'identity.user.find_by_id' },
+            { id: manager.sub },
+          );
+          managerBranchId = String(managerResponse?.data?.branch_id ?? '');
+        } catch {
+          managerBranchId = '';
+        }
+      }
+
       const managerId = String(manager.sub);
       const targetCreatedBy = String(targetUser.created_by ?? '');
-      const managerBranchId = String(manager.branch_id ?? '');
       const targetBranchId = String(targetUser.branch_id ?? '');
 
       if (targetCreatedBy && targetCreatedBy === managerId) {
