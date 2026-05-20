@@ -1207,17 +1207,23 @@ export class FinanceServiceService implements OnModuleInit {
     amount: number;
     type?: PaymentMethod;
     comment?: string;
+    cashbox_type?: Cashbox_type;
   }) {
     try {
+      const targetCashboxType = data.cashbox_type ?? Cashbox_type.MAIN;
+      const targetUserId =
+        targetCashboxType === Cashbox_type.MAIN
+          ? FinanceServiceService.MAIN_CASHBOX_USER_ID
+          : data.user_id;
       const update = await this.updateBalance({
-        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        user_id: targetUserId,
         amount: data.amount,
         operation_type: Operation_type.EXPENSE,
         source_type: Source_type.MANUAL_EXPENSE,
         payment_method: data.type ?? PaymentMethod.CASH,
         comment: data.comment,
         created_by: data.user_id,
-        cashbox_type: Cashbox_type.MAIN,
+        cashbox_type: targetCashboxType,
       });
       return this.successRes(update?.data ?? {}, 200, 'Manual expense created');
     } catch (error) {
@@ -1230,17 +1236,23 @@ export class FinanceServiceService implements OnModuleInit {
     amount: number;
     type?: PaymentMethod;
     comment?: string;
+    cashbox_type?: Cashbox_type;
   }) {
     try {
+      const targetCashboxType = data.cashbox_type ?? Cashbox_type.MAIN;
+      const targetUserId =
+        targetCashboxType === Cashbox_type.MAIN
+          ? FinanceServiceService.MAIN_CASHBOX_USER_ID
+          : data.user_id;
       const update = await this.updateBalance({
-        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        user_id: targetUserId,
         amount: data.amount,
         operation_type: Operation_type.INCOME,
         source_type: Source_type.MANUAL_INCOME,
         payment_method: data.type ?? PaymentMethod.CASH,
         comment: data.comment,
         created_by: data.user_id,
-        cashbox_type: Cashbox_type.MAIN,
+        cashbox_type: targetCashboxType,
       });
       return this.successRes(update?.data ?? {}, 200, 'Cashbox filled');
     } catch (error) {

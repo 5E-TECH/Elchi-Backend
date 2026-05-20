@@ -164,7 +164,7 @@ export class FinanceServiceController {
   @MessagePattern({ cmd: 'finance.cashbox.spend' })
   spendMoney(
     @Payload()
-    data: { user_id: string; amount: number; type?: any; comment?: string },
+    data: { user_id: string; amount: number; type?: any; comment?: string; cashbox_type?: Cashbox_type },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () => this.financeService.spendMoney(data));
@@ -173,7 +173,7 @@ export class FinanceServiceController {
   @MessagePattern({ cmd: 'finance.cashbox.fill' })
   fillCashbox(
     @Payload()
-    data: { user_id: string; amount: number; type?: any; comment?: string },
+    data: { user_id: string; amount: number; type?: any; comment?: string; cashbox_type?: Cashbox_type },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () => this.financeService.fillTheCashbox(data));
