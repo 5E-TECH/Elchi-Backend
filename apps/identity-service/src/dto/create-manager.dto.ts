@@ -27,11 +27,11 @@ export class CreateManagerDto {
   @MinLength(4)
   password: string;
 
-  @ApiProperty({ example: 3000000, minimum: 0 })
-  @IsNotEmpty()
+  @ApiPropertyOptional({ example: 3000000, minimum: 0 })
+  @IsOptional()
   @IsNumber()
   @Min(0)
-  salary: number;
+  salary?: number;
 
   @ApiPropertyOptional({
     example: 10,
@@ -49,4 +49,16 @@ export class CreateManagerDto {
   @IsNotEmpty()
   @IsString()
   branch_id: string;
+
+  @ApiPropertyOptional({ example: 10000, minimum: 0 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  tariff_home?: number;
+
+  @ApiPropertyOptional({ example: 8000, minimum: 0 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  tariff_center?: number;
 }
