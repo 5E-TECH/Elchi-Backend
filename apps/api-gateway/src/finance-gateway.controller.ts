@@ -766,7 +766,7 @@ export class FinanceGatewayController {
 
   @Patch('cashbox/spend')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Spend money from main cashbox' })
   @ApiBody({ type: MainCashboxManualRequestDto })
@@ -774,12 +774,20 @@ export class FinanceGatewayController {
     @Req() req: { user: JwtUser },
     @Body() dto: MainCashboxManualRequestDto,
   ) {
-    return this.send({ cmd: 'finance.cashbox.spend' }, { ...dto, user_id: req.user.sub });
+    const isManager = this.isManager(req?.user);
+    return this.send(
+      { cmd: 'finance.cashbox.spend' },
+      {
+        ...dto,
+        user_id: req.user.sub,
+        ...(isManager ? { cashbox_type: Cashbox_type.FOR_COURIER } : {}),
+      },
+    );
   }
 
   @Patch('cashbox/fill')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Fill main cashbox' })
   @ApiBody({ type: MainCashboxManualRequestDto })
@@ -787,7 +795,15 @@ export class FinanceGatewayController {
     @Req() req: { user: JwtUser },
     @Body() dto: MainCashboxManualRequestDto,
   ) {
-    return this.send({ cmd: 'finance.cashbox.fill' }, { ...dto, user_id: req.user.sub });
+    const isManager = this.isManager(req?.user);
+    return this.send(
+      { cmd: 'finance.cashbox.fill' },
+      {
+        ...dto,
+        user_id: req.user.sub,
+        ...(isManager ? { cashbox_type: Cashbox_type.FOR_COURIER } : {}),
+      },
+    );
   }
 
   @Get('history')
