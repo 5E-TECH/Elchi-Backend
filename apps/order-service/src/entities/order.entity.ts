@@ -1,4 +1,12 @@
-import { Column, Entity, JoinColumn, ManyToOne, OneToMany } from 'typeorm';
+import {
+  Column,
+  DeleteDateColumn,
+  Entity,
+  Index,
+  JoinColumn,
+  ManyToOne,
+  OneToMany,
+} from 'typeorm';
 import { BaseEntity } from '@app/common';
 import { Order_status, Where_deliver } from '@app/common';
 import { OrderItem } from './order-item.entity';
@@ -19,6 +27,9 @@ export enum OrderHolderType {
 }
 
 @Entity({ name: 'orders' })
+@Index('IDX_ORDER_DELETED_AT', ['deleted_at'], {
+  where: 'deleted_at IS NOT NULL',
+})
 export class Order extends BaseEntity {
   @Column({ type: 'bigint' })
   market_id!: string;
@@ -80,7 +91,10 @@ export class Order extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   branch_id!: string | null;
 
-  @ManyToOne(() => Branch, { nullable: true, createForeignKeyConstraints: false })
+  @ManyToOne(() => Branch, {
+    nullable: true,
+    createForeignKeyConstraints: false,
+  })
   @JoinColumn({ name: 'branch_id' })
   branch!: Branch | null;
 
@@ -125,6 +139,17 @@ export class Order extends BaseEntity {
 
   @Column({ type: 'enum', enum: Order_source, default: Order_source.INTERNAL })
   source!: Order_source;
+
+  /**
+   * Soft delete marker. NULL when the order is active.
+   *
+   * TypeORM auto-filters `deleted_at IS NULL` from every query unless the
+   * caller opts in with `withDeleted()`. The legacy `isDeleted` boolean is
+   * still kept in sync by the soft-delete helper so existing code that
+   * filters on it continues to work.
+   */
+  @DeleteDateColumn({ name: 'deleted_at', type: 'timestamptz', nullable: true })
+  deleted_at!: Date | null;
 
   @OneToMany(() => OrderItem, (item) => item.order, { cascade: true })
   items!: OrderItem[];

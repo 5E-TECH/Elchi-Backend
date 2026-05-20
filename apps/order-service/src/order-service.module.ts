@@ -10,6 +10,7 @@ import {
   orderValidationSchema,
   IdempotencyModule,
   OutboxModule,
+  ActivityLogModule,
 } from '@app/common';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
@@ -40,8 +41,17 @@ import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.ent
     DatabaseModule,
     IdempotencyModule.forService(),
     OutboxModule.forService({
-      targets: ['FINANCE', 'CATALOG', 'SEARCH', 'IDENTITY', 'LOGISTICS', 'INTEGRATION', 'BRANCH'],
+      targets: [
+        'FINANCE',
+        'CATALOG',
+        'SEARCH',
+        'IDENTITY',
+        'LOGISTICS',
+        'INTEGRATION',
+        'BRANCH',
+      ],
     }),
+    ActivityLogModule.forService('order-service'),
     TypeOrmModule.forFeature([
       Order,
       OrderItem,

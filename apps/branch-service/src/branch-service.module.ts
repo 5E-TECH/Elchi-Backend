@@ -3,7 +3,13 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { BranchServiceController } from './branch-service.controller';
 import { BranchServiceService } from './branch-service.service';
-import { AppLoggerModule, RmqModule, DatabaseModule, branchValidationSchema } from '@app/common';
+import {
+  AppLoggerModule,
+  RmqModule,
+  DatabaseModule,
+  branchValidationSchema,
+  ActivityLogModule,
+} from '@app/common';
 import { Branch } from './entities/branch.entity';
 import { BranchUser } from './entities/branch-user.entity';
 import { BranchConfig } from './entities/branch-config.entity';
@@ -22,6 +28,7 @@ import { BranchConfig } from './entities/branch-config.entity';
     RmqModule.register({ name: 'ORDER' }),
     RmqModule.register({ name: 'FILE' }),
     DatabaseModule,
+    ActivityLogModule.forService('branch-service'),
     TypeOrmModule.forFeature([Branch, BranchUser, BranchConfig]),
   ],
   controllers: [BranchServiceController],
