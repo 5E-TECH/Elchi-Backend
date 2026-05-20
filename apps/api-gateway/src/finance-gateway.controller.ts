@@ -180,11 +180,19 @@ export class FinanceGatewayController {
     );
   }
 
-  private async resolveBranchIdByUserId(userId: string): Promise<string> {
+  private toRequester(user: JwtUser | undefined) {
+    return {
+      id: String(user?.sub ?? ''),
+      roles: Array.isArray(user?.roles) ? user?.roles : [],
+      branch_id: user?.branch_id ?? null,
+    };
+  }
+
+  private async resolveBranchIdByUserId(userId: string, requester?: JwtUser): Promise<string> {
     try {
       const assignment = await this.sendBranch<{ data?: Record<string, any> }>(
         { cmd: 'branch.user.find_by_user' },
-        { user_id: userId },
+        { user_id: userId, requester: this.toRequester(requester) },
       );
       return this.extractBranchId(assignment?.data);
     } catch {
@@ -192,14 +200,18 @@ export class FinanceGatewayController {
     }
   }
 
-  private async isUserAssignedToBranch(branchId: string, userId: string): Promise<boolean> {
+  private async isUserAssignedToBranch(
+    branchId: string,
+    userId: string,
+    requester?: JwtUser,
+  ): Promise<boolean> {
     if (!branchId || !userId) {
       return false;
     }
     try {
       const branchUsersResponse = await this.sendBranch<{ data?: any[] }>(
         { cmd: 'branch.user.find_by_branch' },
-        { branch_id: branchId },
+        { branch_id: branchId, requester: this.toRequester(requester) },
       );
       const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
       return branchUsers.some((row: any) => String(row?.user_id ?? '') === String(userId));
@@ -228,7 +240,7 @@ export class FinanceGatewayController {
 
       let managerBranchId = this.extractBranchId(manager);
       if (!managerBranchId) {
-        managerBranchId = await this.resolveBranchIdByUserId(String(manager.sub));
+        managerBranchId = await this.resolveBranchIdByUserId(String(manager.sub), manager);
       }
       if (!managerBranchId) {
         try {
@@ -244,7 +256,7 @@ export class FinanceGatewayController {
 
       let targetBranchId = this.extractBranchId(targetUser);
       if (!targetBranchId) {
-        targetBranchId = await this.resolveBranchIdByUserId(String(userId));
+        targetBranchId = await this.resolveBranchIdByUserId(String(userId), manager);
       }
 
       if (managerBranchId && targetBranchId && managerBranchId === targetBranchId) {
@@ -252,7 +264,7 @@ export class FinanceGatewayController {
       }
 
       if (managerBranchId) {
-        const assigned = await this.isUserAssignedToBranch(managerBranchId, String(userId));
+        const assigned = await this.isUserAssignedToBranch(managerBranchId, String(userId), manager);
         if (assigned) {
           return true;
         }
