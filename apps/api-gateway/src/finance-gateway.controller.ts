@@ -613,7 +613,11 @@ export class FinanceGatewayController {
         throw new ForbiddenException('Courier topilmadi');
       }
 
-      const roleList = Array.isArray(courier.roles) ? courier.roles : [];
+      const roleList = Array.isArray(courier.roles)
+        ? courier.roles
+        : courier.role
+          ? [courier.role]
+          : [];
       const isCourier = roleList.some(
         (role: unknown) => String(role ?? '').toLowerCase() === RoleEnum.COURIER,
       );
