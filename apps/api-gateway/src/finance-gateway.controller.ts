@@ -544,10 +544,19 @@ export class FinanceGatewayController {
 
   @Get('cashbox/main')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get main cashbox summary' })
-  getMainCashbox(@Query() query: MainCashboxFilterQueryDto) {
+  getMainCashbox(
+    @Query() query: MainCashboxFilterQueryDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    if (this.isManager(req?.user)) {
+      return this.send(
+        { cmd: 'finance.cashbox.user_by_id' },
+        { id: req.user.sub, cashbox_type: Cashbox_type.FOR_COURIER, ...query },
+      );
+    }
     return this.send({ cmd: 'finance.cashbox.main' }, query);
   }
 
