@@ -387,18 +387,25 @@ export class FinanceGatewayController {
         return Number(cashbox?.balance ?? 0);
       }),
     );
-    const olinishiKerak = courierCashboxes.reduce((sum, value) => sum + value, 0);
+    const olinishiKerak = courierCashboxes.reduce(
+      (sum, value) => sum + Math.abs(Number(value ?? 0)),
+      0,
+    );
+
+    const courierIds = couriers
+      .map((courier) => String(courier?.id ?? '').trim())
+      .filter(Boolean);
 
     const soldOrdersResponse = await this.sendOrder(
       { cmd: 'order.find_all' },
       {
         query: {
-          branch_id: managerBranchId || undefined,
+          courier_ids: courierIds.length ? courierIds : undefined,
           status: [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID],
           page: 1,
           limit: 5000,
-          from_date: query?.fromDate,
-          to_date: query?.toDate,
+          start_day: query?.fromDate,
+          end_day: query?.toDate,
         },
       },
     ).catch(() => null);
