@@ -1585,13 +1585,6 @@ export class BranchServiceService implements OnModuleInit {
     if (sourceBranch.type !== BranchType.HQ) {
       this.forbidden("Post dispatch faqat HQ branch'dan ruxsat etilgan");
     }
-    if (
-      destinationBranch.type !== BranchType.REGIONAL &&
-      destinationBranch.type !== BranchType.HYBRID
-    ) {
-      this.forbidden("Post dispatch faqat REGIONAL yoki HYBRID branch'ga ruxsat etilgan");
-    }
-
     await this.assertCanWriteBranch(sourceBranchId, requester);
 
     const requesterPayload = {
