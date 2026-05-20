@@ -1,6 +1,6 @@
 import { Controller } from '@nestjs/common';
 import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
-import { RmqService, executeAndAck } from '@app/common';
+import { Cashbox_type, RmqService, executeAndAck } from '@app/common';
 import { FinanceServiceService } from './finance-service.service';
 import { CreateCashboxDto } from './dto/cashbox/create-cashbox.dto';
 import { FindCashboxByUserDto } from './dto/cashbox/find-cashbox-by-user.dto';
@@ -115,7 +115,7 @@ export class FinanceServiceController {
       market_id?: string;
       created_by?: string;
       receiver_user_id?: string;
-      receiver_cashbox_type?: string;
+      receiver_cashbox_type?: Cashbox_type;
     },
     @Ctx() context: RmqContext,
   ) {
