@@ -114,6 +114,8 @@ export class FinanceServiceController {
       comment?: string;
       market_id?: string;
       created_by?: string;
+      receiver_user_id?: string;
+      receiver_cashbox_type?: string;
     },
     @Ctx() context: RmqContext,
   ) {

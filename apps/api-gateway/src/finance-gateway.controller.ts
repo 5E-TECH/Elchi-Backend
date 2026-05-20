@@ -25,7 +25,7 @@ import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { Roles } from './auth/roles.decorator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
-import { Order_status, Roles as RoleEnum, Where_deliver } from '@app/common';
+import { Cashbox_type, Order_status, Roles as RoleEnum, Where_deliver } from '@app/common';
 import {
   CashboxAllInfoQueryDto,
   CloseShiftRequestDto,
@@ -154,6 +154,16 @@ export class FinanceGatewayController {
     return this.hasRole(user, RoleEnum.MANAGER) && !this.isPrivileged(user);
   }
 
+  private extractBranchId(user: Record<string, any> | JwtUser | undefined) {
+    return String(
+      (user as any)?.branch_id ??
+        (user as any)?.branchId ??
+        (user as any)?.branch?.id ??
+        (user as any)?.branch?.branch_id ??
+        '',
+    );
+  }
+
   private async canManagerAccessUser(manager: JwtUser | undefined, userId: string) {
     if (!manager?.sub) {
       return false;
@@ -172,26 +182,20 @@ export class FinanceGatewayController {
         return false;
       }
 
-      let managerBranchId = String(manager.branch_id ?? '');
+      let managerBranchId = this.extractBranchId(manager);
       if (!managerBranchId) {
         try {
           const managerResponse = await this.sendIdentity<{ data?: Record<string, any> }>(
             { cmd: 'identity.user.find_by_id' },
             { id: manager.sub },
           );
-          managerBranchId = String(managerResponse?.data?.branch_id ?? '');
+          managerBranchId = this.extractBranchId(managerResponse?.data);
         } catch {
           managerBranchId = '';
         }
       }
 
-      const managerId = String(manager.sub);
-      const targetCreatedBy = String(targetUser.created_by ?? '');
-      const targetBranchId = String(targetUser.branch_id ?? '');
-
-      if (targetCreatedBy && targetCreatedBy === managerId) {
-        return true;
-      }
+      const targetBranchId = this.extractBranchId(targetUser);
 
       if (managerBranchId && targetBranchId && managerBranchId === targetBranchId) {
         return true;
@@ -521,17 +525,51 @@ export class FinanceGatewayController {
 
   @Post('cashbox/payment/courier')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Accept payment from courier' })
   @ApiBody({ type: PaymentFromCourierRequestDto })
-  paymentFromCourier(
+  async paymentFromCourier(
     @Req() req: { user: JwtUser },
     @Body() dto: PaymentFromCourierRequestDto,
   ) {
+    const isManager = this.isManager(req?.user);
+    if (isManager) {
+      const courierResponse = await this.sendIdentity<{ data?: Record<string, any> }>(
+        { cmd: 'identity.user.find_by_id' },
+        { id: dto.courier_id },
+      );
+      const courier = courierResponse?.data;
+      if (!courier) {
+        throw new ForbiddenException('Courier topilmadi');
+      }
+
+      const roleList = Array.isArray(courier.roles) ? courier.roles : [];
+      const isCourier = roleList.some(
+        (role: unknown) => String(role ?? '').toLowerCase() === RoleEnum.COURIER,
+      );
+      if (!isCourier) {
+        throw new ForbiddenException("Bu foydalanuvchi courier emas");
+      }
+
+      const managerCanAccess = await this.canManagerAccessUser(req?.user, dto.courier_id);
+      if (!managerCanAccess) {
+        throw new ForbiddenException("Siz faqat o'z branch'ingiz courieridan to'lov qabul qilasiz");
+      }
+    }
+
     return this.send(
       { cmd: 'finance.cashbox.payment_courier' },
-      { ...dto, created_by: req.user.sub },
+      {
+        ...dto,
+        created_by: req.user.sub,
+        ...(isManager
+          ? {
+              receiver_user_id: req.user.sub,
+              receiver_cashbox_type: Cashbox_type.FOR_COURIER,
+            }
+          : {}),
+      },
     );
   }
 
