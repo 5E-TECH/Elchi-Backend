@@ -1573,6 +1573,7 @@ export class OrderServiceService implements OnModuleInit {
     start_day?: string;
     end_day?: string;
     courier?: string;
+    courier_ids?: string[];
     region_id?: string;
     district_id?: string;
     branch_id?: string;
@@ -1598,6 +1599,7 @@ export class OrderServiceService implements OnModuleInit {
       start_day,
       end_day,
       courier,
+      courier_ids,
       region_id,
       district_id,
       branch_id,
@@ -1699,6 +1701,20 @@ export class OrderServiceService implements OnModuleInit {
             .orWhere('order.post_id = :courierId', { courierId: courier });
         }),
       );
+    }
+    if (courier_ids?.length) {
+      const normalizedCourierIds = courier_ids.map((id) => String(id)).filter(Boolean);
+      if (normalizedCourierIds.length) {
+        qb.andWhere(
+          new Brackets((nested) => {
+            nested
+              .where('order.courier_id IN (:...courier_ids)', { courier_ids: normalizedCourierIds })
+              .orWhere('order.holder_courier_id IN (:...courier_ids)', {
+                courier_ids: normalizedCourierIds,
+              });
+          }),
+        );
+      }
     }
     if (start_day) {
       const startDate = new Date(start_day);
@@ -3541,6 +3557,7 @@ export class OrderServiceService implements OnModuleInit {
     start_day?: string;
     end_day?: string;
     courier?: string;
+    courier_ids?: string[];
     region_id?: string;
     page?: number;
     limit?: number;
