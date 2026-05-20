@@ -202,7 +202,46 @@ export class CreateCourierRequestDto {
   tariff_center!: number;
 }
 
-export class CreateManagerRequestDto extends CreateAdminRequestDto {
+export class CreateManagerRequestDto {
+  @ApiProperty({ example: 'Branch manager' })
+  @IsString()
+  @MinLength(2)
+  name!: string;
+
+  @ApiProperty({ example: '+998901234567' })
+  @IsPhoneNumber('UZ')
+  phone_number!: string;
+
+  @ApiProperty({ example: 'secret123' })
+  @IsString()
+  @MinLength(4)
+  password!: string;
+
+  @ApiPropertyOptional({ example: 3000000 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  salary?: number;
+
+  @ApiPropertyOptional({ example: 10 })
+  @IsOptional()
+  @IsNumber()
+  @Min(1)
+  @Max(30)
+  payment_day?: number;
+
+  @ApiPropertyOptional({ example: 10000 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  tariff_home?: number;
+
+  @ApiPropertyOptional({ example: 8000 })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  tariff_center?: number;
+
   @ApiProperty({ example: '1', description: 'Branch ID' })
   @IsString()
   branch_id!: string;
