@@ -388,7 +388,7 @@ export class FinanceGatewayController {
       }),
     );
     const olinishiKerak = courierCashboxes.reduce(
-      (sum, value) => sum + Math.abs(Number(value ?? 0)),
+      (sum, value) => sum + Math.max(Number(value ?? 0), 0),
       0,
     );
 
