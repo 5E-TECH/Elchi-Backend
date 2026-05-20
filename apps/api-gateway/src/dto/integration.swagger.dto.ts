@@ -1,7 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   IsBoolean,
-  IsEnum,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsObject,
@@ -28,7 +28,7 @@ export class CreateIntegrationRequestDto {
   slug?: string;
 
   @ApiProperty({ example: 'api', enum: ['api', 'webhook', 'ftp'] })
-  @IsEnum(['api', 'webhook', 'ftp'])
+  @IsIn(['api', 'webhook', 'ftp'])
   type!: IntegrationType;
 
   @ApiProperty({ example: 'https://api.ozar.uz' })
@@ -41,7 +41,7 @@ export class CreateIntegrationRequestDto {
   credentials!: Record<string, unknown>;
 
   @ApiProperty({ example: 'active', enum: ['active', 'inactive'] })
-  @IsEnum(['active', 'inactive'])
+  @IsIn(['active', 'inactive'])
   status!: IntegrationStatus;
 
   // legacy compatibility fields (can be omitted)
@@ -120,7 +120,7 @@ export class UpdateIntegrationRequestDto {
 
   @ApiPropertyOptional({ example: 'api', enum: ['api', 'webhook', 'ftp'] })
   @IsOptional()
-  @IsEnum(['api', 'webhook', 'ftp'])
+  @IsIn(['api', 'webhook', 'ftp'])
   type?: IntegrationType;
 
   @ApiPropertyOptional({ example: 'https://api.ozar.uz' })
@@ -136,7 +136,7 @@ export class UpdateIntegrationRequestDto {
 
   @ApiPropertyOptional({ example: 'active', enum: ['active', 'inactive'] })
   @IsOptional()
-  @IsEnum(['active', 'inactive'])
+  @IsIn(['active', 'inactive'])
   status?: IntegrationStatus;
 
   // legacy compatibility fields (can be omitted)
@@ -215,7 +215,7 @@ export class QrSearchRequestDto {
 
   @ApiPropertyOptional({ example: 'POST', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] })
   @IsOptional()
-  @IsEnum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
+  @IsIn(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
   method?: HttpMethod;
 
   @ApiPropertyOptional({ example: 'qr_code' })
@@ -237,7 +237,7 @@ export class ExternalRequestDto {
 
   @ApiPropertyOptional({ example: 'POST', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] })
   @IsOptional()
-  @IsEnum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
+  @IsIn(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
   method?: HttpMethod;
 
   @ApiPropertyOptional({ type: Object })
@@ -278,7 +278,7 @@ export class IntegrationHealthcheckRequestDto {
 
   @ApiPropertyOptional({ example: 'GET', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] })
   @IsOptional()
-  @IsEnum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
+  @IsIn(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
   method?: HttpMethod;
 
   @ApiPropertyOptional({ example: true })
@@ -310,7 +310,7 @@ export class CreateSyncQueueRequestDto {
   entity_id!: string;
 
   @ApiProperty({ example: 'create', enum: ['create', 'update', 'delete'] })
-  @IsEnum(['create', 'update', 'delete'])
+  @IsIn(['create', 'update', 'delete'])
   action!: 'create' | 'update' | 'delete';
 
   @ApiPropertyOptional({ type: Object })
@@ -327,7 +327,7 @@ export class FilterSyncHistoryQueryDto {
 
   @ApiPropertyOptional({ example: 'success', enum: ['pending', 'processing', 'success', 'failed'] })
   @IsOptional()
-  @IsEnum(['pending', 'processing', 'success', 'failed'])
+  @IsIn(['pending', 'processing', 'success', 'failed'])
   status?: 'pending' | 'processing' | 'success' | 'failed';
 
   @ApiPropertyOptional({ example: '2026-03-01' })
