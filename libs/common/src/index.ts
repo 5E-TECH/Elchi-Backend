@@ -20,6 +20,17 @@ export * from './outbox/outbox.publisher';
 export * from './outbox/outbox.module';
 export * from './outbox/tokens';
 
+export * from './activity-log/activity-log.entity';
+export * from './activity-log/activity-log.service';
+export * from './activity-log/activity-log.module';
+export * from './activity-log/types';
+export * from './activity-log/diff';
+
+export * from './webhook/hmac';
+export * from './webhook/webhook-signature.guard';
+
+export * from './soft-delete/soft-delete.helper';
+
 export * from './database/database.module';
 export * from './enums';
 

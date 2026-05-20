@@ -2,7 +2,13 @@ import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { JwtModule } from '@nestjs/jwt';
 import { TypeOrmModule } from '@nestjs/typeorm';
-import { AppLoggerModule, RmqModule, DatabaseModule, identityValidationSchema } from '@app/common';
+import {
+  AppLoggerModule,
+  RmqModule,
+  DatabaseModule,
+  identityValidationSchema,
+  ActivityLogModule,
+} from '@app/common';
 import { IdentityController } from './identity.controller';
 import { UserServiceService } from './user-service.service';
 import { AuthService } from './auth/auth.service';
@@ -26,6 +32,7 @@ import type { StringValue } from 'ms';
     RmqModule.register({ name: 'FINANCE' }),
     RmqModule.register({ name: 'BRANCH' }),
     DatabaseModule,
+    ActivityLogModule.forService('identity-service'),
     TypeOrmModule.forFeature([User]),
     JwtModule.registerAsync({
       inject: [ConfigService],
