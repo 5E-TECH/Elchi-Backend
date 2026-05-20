@@ -192,6 +192,22 @@ export class FinanceGatewayController {
     }
   }
 
+  private async isUserAssignedToBranch(branchId: string, userId: string): Promise<boolean> {
+    if (!branchId || !userId) {
+      return false;
+    }
+    try {
+      const branchUsersResponse = await this.sendBranch<{ data?: any[] }>(
+        { cmd: 'branch.user.find_by_branch' },
+        { branch_id: branchId },
+      );
+      const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
+      return branchUsers.some((row: any) => String(row?.user_id ?? '') === String(userId));
+    } catch {
+      return false;
+    }
+  }
+
   private async canManagerAccessUser(manager: JwtUser | undefined, userId: string) {
     if (!manager?.sub) {
       return false;
@@ -233,6 +249,13 @@ export class FinanceGatewayController {
 
       if (managerBranchId && targetBranchId && managerBranchId === targetBranchId) {
         return true;
+      }
+
+      if (managerBranchId) {
+        const assigned = await this.isUserAssignedToBranch(managerBranchId, String(userId));
+        if (assigned) {
+          return true;
+        }
       }
 
       return false;
