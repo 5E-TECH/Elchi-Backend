@@ -295,6 +295,11 @@ export class FinanceGatewayController {
     user: JwtUser,
     query?: { fromDate?: string; toDate?: string },
   ) {
+    let managerBranchId = this.extractBranchId(user);
+    if (!managerBranchId) {
+      managerBranchId = await this.resolveBranchIdByUserId(String(user.sub), user);
+    }
+
     const ownCashboxResponse = await this.send(
       { cmd: 'finance.cashbox.my' },
       { user_id: user.sub, roles: user.roles ?? [], ...query },
@@ -307,21 +312,60 @@ export class FinanceGatewayController {
       { id: user.sub },
     );
     const managerProfile = managerProfileRes?.data ?? {};
+    if (!managerBranchId) {
+      managerBranchId = this.extractBranchId(managerProfile);
+    }
     const managerTariffHome = Number(managerProfile?.tariff_home ?? 0);
     const managerTariffCenter = Number(managerProfile?.tariff_center ?? 0);
 
-    const couriersResponse = await this.sendIdentity<{ data?: { items?: any[] } }>(
-      { cmd: 'identity.user.find_all' },
-      { query: { role: RoleEnum.COURIER, limit: 1000, page: 1 } },
-    );
-    const allCouriers = couriersResponse?.data?.items ?? [];
-    const couriers = allCouriers.filter((courier) => {
-      const sameCreator = String(courier?.created_by ?? '') === String(user.sub);
-      const sameBranch =
-        String(courier?.branch_id ?? '') &&
-        String(courier?.branch_id ?? '') === String(user.branch_id ?? '');
-      return sameCreator || sameBranch;
-    });
+    const branchCouriers: any[] = [];
+    if (managerBranchId) {
+      try {
+        const branchUsersResponse = await this.sendBranch<{ data?: any[] }>(
+          { cmd: 'branch.user.find_by_branch' },
+          { branch_id: managerBranchId, requester: this.toRequester(user) },
+        );
+        const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
+        const courierAssignments = branchUsers.filter((item: any) => {
+          const role = String(item?.role ?? '').toUpperCase();
+          return role === 'COURIER' && item?.user_id;
+        });
+
+        const loadedCouriers = await Promise.all(
+          courierAssignments.map(async (assignment: any) => {
+            try {
+              const userRes = await this.sendIdentity<{ data?: Record<string, any> }>(
+                { cmd: 'identity.user.find_by_id' },
+                { id: String(assignment.user_id) },
+              );
+              return userRes?.data ?? null;
+            } catch {
+              return null;
+            }
+          }),
+        );
+
+        branchCouriers.push(...loadedCouriers.filter(Boolean));
+      } catch {
+        // fallthrough to generic identity list below
+      }
+    }
+
+    let couriers = branchCouriers;
+    if (!couriers.length) {
+      const couriersResponse = await this.sendIdentity<{ data?: { items?: any[] } }>(
+        { cmd: 'identity.user.find_all' },
+        { query: { role: RoleEnum.COURIER, limit: 1000, page: 1 } },
+      );
+      const allCouriers = couriersResponse?.data?.items ?? [];
+      couriers = allCouriers.filter((courier) => {
+        const sameCreator = String(courier?.created_by ?? '') === String(user.sub);
+        const sameBranch =
+          String(courier?.branch_id ?? '') &&
+          String(courier?.branch_id ?? '') === String(managerBranchId ?? '');
+        return sameCreator || sameBranch;
+      });
+    }
 
     const courierTariffMap = new Map(
       couriers.map((courier) => [
@@ -349,7 +393,7 @@ export class FinanceGatewayController {
       { cmd: 'order.find_all' },
       {
         query: {
-          branch_id: user.branch_id,
+          branch_id: managerBranchId || undefined,
           status: [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID],
           page: 1,
           limit: 5000,
@@ -385,10 +429,9 @@ export class FinanceGatewayController {
         const courierTariff = Number.isFinite(courierTariffFromOrder)
           ? courierTariffFromOrder
           : courierTariffByUser;
-
-        const managerReceives = totalPrice - courierTariff;
-        const managerMargin = managerTariff - courierTariff;
-        const hqPayable = managerReceives - managerMargin;
+        const courierShare = Math.max(courierTariff, 0);
+        const managerShare = Math.max(managerTariff - courierShare, 0);
+        const hqPayable = totalPrice - courierShare - managerShare;
 
         return sum + Math.max(hqPayable, 0);
       },

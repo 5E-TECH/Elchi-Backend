@@ -110,6 +110,7 @@ export class OrderServiceController {
         start_day?: string;
         end_day?: string;
         courier?: string;
+        courier_ids?: string[];
         region_id?: string;
         district_id?: string;
         branch_id?: string;
