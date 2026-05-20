@@ -358,7 +358,7 @@ export class BranchGatewayController {
 
   @Post('branches/posts/:postId/dispatch')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
-  @ApiOperation({ summary: 'Dispatch HQ post to REGIONAL/HYBRID branch' })
+  @ApiOperation({ summary: 'Dispatch HQ post to destination branch' })
   @ApiParam({ name: 'postId', description: 'Logistics post ID' })
   @ApiBody({
     schema: {
@@ -368,7 +368,7 @@ export class BranchGatewayController {
         destination_branch_id: {
           type: 'string',
           example: '12',
-          description: 'Destination branch ID (REGIONAL/HYBRID)',
+          description: 'Destination branch ID',
         },
         order_ids: {
           type: 'array',
