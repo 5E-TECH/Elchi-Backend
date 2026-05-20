@@ -55,6 +55,7 @@ export class FinanceGatewayController {
   constructor(
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    @Inject('BRANCH') private readonly branchClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
   ) {}
 
@@ -89,6 +90,21 @@ export class FinanceGatewayController {
       (error: unknown) => {
         if (error instanceof TimeoutError) {
           throw new GatewayTimeoutException('Order service response timeout');
+        }
+        throw error;
+      },
+    );
+  }
+
+  private async sendBranch<T = any>(
+    pattern: object,
+    payload: object,
+    timeoutMs = 8000,
+  ): Promise<T> {
+    return firstValueFrom(this.branchClient.send(pattern, payload).pipe(timeout(timeoutMs))).catch(
+      (error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Branch service response timeout');
         }
         throw error;
       },
@@ -164,6 +180,18 @@ export class FinanceGatewayController {
     );
   }
 
+  private async resolveBranchIdByUserId(userId: string): Promise<string> {
+    try {
+      const assignment = await this.sendBranch<{ data?: Record<string, any> }>(
+        { cmd: 'branch.user.find_by_user' },
+        { user_id: userId },
+      );
+      return this.extractBranchId(assignment?.data);
+    } catch {
+      return '';
+    }
+  }
+
   private async canManagerAccessUser(manager: JwtUser | undefined, userId: string) {
     if (!manager?.sub) {
       return false;
@@ -184,6 +212,9 @@ export class FinanceGatewayController {
 
       let managerBranchId = this.extractBranchId(manager);
       if (!managerBranchId) {
+        managerBranchId = await this.resolveBranchIdByUserId(String(manager.sub));
+      }
+      if (!managerBranchId) {
         try {
           const managerResponse = await this.sendIdentity<{ data?: Record<string, any> }>(
             { cmd: 'identity.user.find_by_id' },
@@ -195,7 +226,10 @@ export class FinanceGatewayController {
         }
       }
 
-      const targetBranchId = this.extractBranchId(targetUser);
+      let targetBranchId = this.extractBranchId(targetUser);
+      if (!targetBranchId) {
+        targetBranchId = await this.resolveBranchIdByUserId(String(userId));
+      }
 
       if (managerBranchId && targetBranchId && managerBranchId === targetBranchId) {
         return true;
