@@ -1256,6 +1256,8 @@ export class FinanceServiceService implements OnModuleInit {
     comment?: string;
     market_id?: string;
     created_by?: string;
+    receiver_user_id?: string;
+    receiver_cashbox_type?: Cashbox_type;
   }) {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -1275,11 +1277,26 @@ export class FinanceServiceService implements OnModuleInit {
       });
       if (!courierCashbox) throw new NotFoundException('Courier cashbox not found');
 
-      const mainCashbox = await queryRunner.manager.findOne(Cashbox, {
-        where: { cashbox_type: Cashbox_type.MAIN },
+      const receiverUserId = String(
+        data.receiver_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
+      );
+      const receiverCashboxType = data.receiver_cashbox_type ?? Cashbox_type.MAIN;
+
+      let receiverCashbox = await queryRunner.manager.findOne(Cashbox, {
+        where: { user_id: receiverUserId, cashbox_type: receiverCashboxType },
         lock: { mode: 'pessimistic_write' },
       });
-      if (!mainCashbox) throw new NotFoundException('Main cashbox not found');
+      if (!receiverCashbox) {
+        receiverCashbox = await queryRunner.manager.save(
+          queryRunner.manager.create(Cashbox, {
+            user_id: receiverUserId,
+            cashbox_type: receiverCashboxType,
+            balance: 0,
+            balance_cash: 0,
+            balance_card: 0,
+          }),
+        );
+      }
 
       this.updateBalancesByMethod(
         courierCashbox,
@@ -1304,26 +1321,26 @@ export class FinanceServiceService implements OnModuleInit {
       await queryRunner.manager.save(courierHistory);
 
       this.updateBalancesByMethod(
-        mainCashbox,
+        receiverCashbox,
         Number(data.amount),
         Operation_type.INCOME,
         data.payment_method ?? PaymentMethod.CASH,
       );
-      await queryRunner.manager.save(mainCashbox);
+      await queryRunner.manager.save(receiverCashbox);
 
-      const mainHistory = queryRunner.manager.create(CashboxHistory, {
+      const receiverHistory = queryRunner.manager.create(CashboxHistory, {
         operation_type: Operation_type.INCOME,
-        cashbox_id: mainCashbox.id,
+        cashbox_id: receiverCashbox.id,
         source_type: Source_type.COURIER_PAYMENT,
         amount: Number(data.amount),
-        balance_after: mainCashbox.balance,
+        balance_after: receiverCashbox.balance,
         comment: data.comment ?? null,
         created_by: data.created_by ?? null,
         payment_date: this.parseDate(data.payment_date ?? null) ?? null,
         payment_method: data.payment_method,
         source_user_id: data.courier_id,
       });
-      await queryRunner.manager.save(mainHistory);
+      await queryRunner.manager.save(receiverHistory);
 
       if (data.payment_method === PaymentMethod.CLICK_TO_MARKET && data.market_id) {
         const marketCashbox = await queryRunner.manager.findOne(Cashbox, {
@@ -1333,19 +1350,19 @@ export class FinanceServiceService implements OnModuleInit {
         if (!marketCashbox) throw new NotFoundException('Market cashbox topilmadi');
 
         this.updateBalancesByMethod(
-          mainCashbox,
+          receiverCashbox,
           Number(data.amount),
           Operation_type.EXPENSE,
           data.payment_method,
         );
-        await queryRunner.manager.save(mainCashbox);
+        await queryRunner.manager.save(receiverCashbox);
         await queryRunner.manager.save(
           queryRunner.manager.create(CashboxHistory, {
             operation_type: Operation_type.EXPENSE,
-            cashbox_id: mainCashbox.id,
+            cashbox_id: receiverCashbox.id,
             source_type: Source_type.MARKET_PAYMENT,
             amount: Number(data.amount),
-            balance_after: mainCashbox.balance,
+            balance_after: receiverCashbox.balance,
             comment: data.comment ?? null,
             created_by: data.created_by ?? null,
             payment_date: this.parseDate(data.payment_date ?? null) ?? null,
@@ -1395,12 +1412,21 @@ export class FinanceServiceService implements OnModuleInit {
             updated_at: courierCashbox.updatedAt,
           },
           main_cashbox: {
-            id: mainCashbox.id,
-            cashbox_type: mainCashbox.cashbox_type,
-            balance: mainCashbox.balance,
-            balance_cash: mainCashbox.balance_cash,
-            balance_card: mainCashbox.balance_card,
-            updated_at: mainCashbox.updatedAt,
+            id: receiverCashbox.id,
+            cashbox_type: receiverCashbox.cashbox_type,
+            balance: receiverCashbox.balance,
+            balance_cash: receiverCashbox.balance_cash,
+            balance_card: receiverCashbox.balance_card,
+            updated_at: receiverCashbox.updatedAt,
+          },
+          receiver_cashbox: {
+            id: receiverCashbox.id,
+            user_id: receiverCashbox.user_id,
+            cashbox_type: receiverCashbox.cashbox_type,
+            balance: receiverCashbox.balance,
+            balance_cash: receiverCashbox.balance_cash,
+            balance_card: receiverCashbox.balance_card,
+            updated_at: receiverCashbox.updatedAt,
           },
         },
         201,
