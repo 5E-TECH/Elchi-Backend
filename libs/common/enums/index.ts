@@ -37,6 +37,7 @@ export enum Operation_type {
 
 export enum Source_type {
   COURIER_PAYMENT = 'courier_payment',
+  BRANCH_TO_MAIN = 'branch_to_main',
   MARKET_PAYMENT = 'market_payment',
   MANUAL_EXPENSE = 'manual_expense',
   MANUAL_INCOME = 'manual_income',
@@ -68,6 +69,7 @@ export enum Cashbox_type {
   MAIN = 'main',
   FOR_COURIER = 'couriers',
   FOR_MARKET = 'markets',
+  BRANCH = 'branch',
 }
 
 export enum Where_deliver {

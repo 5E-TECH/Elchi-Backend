@@ -138,6 +138,22 @@ export class FinanceServiceController {
     return this.executeAndAck(context, () => this.financeService.paymentsToMarket(data));
   }
 
+  @MessagePattern({ cmd: 'finance.cashbox.payment_branch_main' })
+  paymentBranchToMain(
+    @Payload()
+    data: {
+      branch_id: string;
+      amount: number;
+      payment_method: any;
+      payment_date?: string;
+      comment?: string;
+      created_by?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.financeService.paymentFromBranchToMain(data));
+  }
+
   @MessagePattern({ cmd: 'finance.cashbox.all_info' })
   allCashboxesInfo(
     @Payload()
