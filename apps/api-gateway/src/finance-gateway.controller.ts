@@ -550,6 +550,11 @@ export class FinanceGatewayController {
       return response;
     }
 
+    if (Array.isArray(response?.data?.cashboxes) && Array.isArray(response?.data?.history)) {
+      response.data.cashboxHistory = await this.attachCreatedByUsers(response.data.history);
+      return response;
+    }
+
     if (Array.isArray(response?.data?.history)) {
       response.data.cashboxHistory = await this.attachCreatedByUsers(response.data.history);
       return response;
@@ -736,59 +741,25 @@ export class FinanceGatewayController {
     @Req() req: { user: JwtUser },
     @Body() dto: PaymentBranchToMainRequestDto,
   ) {
-    let managerId = String(dto.manager_id ?? '').trim();
-
-    if (!managerId) {
-      const branchId = String(dto.branch_id ?? '').trim();
-      if (!branchId) {
-        throw new ForbiddenException("manager_id yoki branch_id yuborilishi shart");
-      }
-      const branchUsersResponse = await this.sendBranch<{ data?: Array<Record<string, any>> }>(
-        { cmd: 'branch.user.find_by_branch' },
-        { branch_id: branchId, requester: this.toRequester(req.user) },
-      );
-      const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
-      const managerAssignment = branchUsers.find(
-        (row) => String(row?.role ?? '').toUpperCase() === 'MANAGER',
-      );
-      managerId = String(managerAssignment?.user_id ?? '').trim();
-      if (!managerId) {
-        throw new ForbiddenException("Bu branch uchun manager topilmadi");
-      }
+    const branchId = String(dto.branch_id ?? '').trim();
+    if (!branchId) {
+      throw new ForbiddenException('branch_id yuborilishi shart');
     }
 
-    const managerResponse = await this.sendIdentity<{ data?: Record<string, any> }>(
-      { cmd: 'identity.user.find_by_id' },
-      { id: managerId },
+    await this.sendBranch(
+      { cmd: 'branch.find_by_id' },
+      { id: branchId, requester: this.toRequester(req.user) },
     );
-    const manager = managerResponse?.data;
-    if (!manager) {
-      throw new ForbiddenException('Manager topilmadi');
-    }
-
-    const roleList = Array.isArray(manager.roles)
-      ? manager.roles
-      : manager.role
-        ? [manager.role]
-        : [];
-    const isManager = roleList.some(
-      (role: unknown) => String(role ?? '').toLowerCase() === RoleEnum.MANAGER,
-    );
-    if (!isManager) {
-      throw new ForbiddenException("Bu foydalanuvchi manager emas");
-    }
 
     return this.send(
-      { cmd: 'finance.cashbox.payment_courier' },
+      { cmd: 'finance.cashbox.payment_branch_main' },
       {
-        courier_id: managerId,
+        branch_id: branchId,
         amount: dto.amount,
         payment_method: dto.payment_method,
         payment_date: dto.payment_date,
         comment: dto.comment,
         created_by: req.user.sub,
-        receiver_user_id: '0',
-        receiver_cashbox_type: Cashbox_type.MAIN,
       },
     );
   }

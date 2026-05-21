@@ -1478,6 +1478,107 @@ export class FinanceServiceService implements OnModuleInit {
     }
   }
 
+  async paymentFromBranchToMain(data: {
+    branch_id: string;
+    amount: number;
+    payment_method: PaymentMethod;
+    payment_date?: string;
+    comment?: string;
+    created_by?: string;
+  }) {
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      this.assertBigIntId(data.branch_id, 'branch_id');
+      this.assertPositiveAmount(Number(data.amount));
+
+      const branchCashbox = await queryRunner.manager.findOne(Cashbox, {
+        where: { user_id: data.branch_id, cashbox_type: Cashbox_type.BRANCH },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!branchCashbox) throw new NotFoundException('Branch cashbox not found');
+
+      let mainCashbox = await queryRunner.manager.findOne(Cashbox, {
+        where: {
+          user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+          cashbox_type: Cashbox_type.MAIN,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!mainCashbox) {
+        mainCashbox = await queryRunner.manager.save(
+          queryRunner.manager.create(Cashbox, {
+            user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+            cashbox_type: Cashbox_type.MAIN,
+            balance: 0,
+            balance_cash: 0,
+            balance_card: 0,
+          }),
+        );
+      }
+
+      this.updateBalancesByMethod(
+        branchCashbox,
+        Number(data.amount),
+        Operation_type.EXPENSE,
+        data.payment_method ?? PaymentMethod.CASH,
+      );
+      await queryRunner.manager.save(branchCashbox);
+
+      const branchHistory = queryRunner.manager.create(CashboxHistory, {
+        operation_type: Operation_type.EXPENSE,
+        cashbox_id: branchCashbox.id,
+        source_type: Source_type.BRANCH_TO_MAIN,
+        amount: Number(data.amount),
+        balance_after: branchCashbox.balance,
+        payment_method: data.payment_method ?? PaymentMethod.CASH,
+        comment: data.comment ?? null,
+        created_by: data.created_by ?? null,
+        source_user_id: data.branch_id,
+        payment_date: this.parseDate(data.payment_date ?? null) ?? null,
+      });
+      await queryRunner.manager.save(branchHistory);
+
+      this.updateBalancesByMethod(
+        mainCashbox,
+        Number(data.amount),
+        Operation_type.INCOME,
+        data.payment_method ?? PaymentMethod.CASH,
+      );
+      await queryRunner.manager.save(mainCashbox);
+
+      const mainHistory = queryRunner.manager.create(CashboxHistory, {
+        operation_type: Operation_type.INCOME,
+        cashbox_id: mainCashbox.id,
+        source_type: Source_type.BRANCH_TO_MAIN,
+        amount: Number(data.amount),
+        balance_after: mainCashbox.balance,
+        payment_method: data.payment_method ?? PaymentMethod.CASH,
+        comment: data.comment ?? null,
+        created_by: data.created_by ?? null,
+        source_user_id: data.branch_id,
+        payment_date: this.parseDate(data.payment_date ?? null) ?? null,
+      });
+      await queryRunner.manager.save(mainHistory);
+
+      await queryRunner.commitTransaction();
+      return this.successRes(
+        {
+          branch_cashbox: branchCashbox,
+          main_cashbox: mainCashbox,
+        },
+        200,
+        'Branch to main payment successful',
+      );
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.toRpcError(error);
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
   async paymentsToMarket(data: {
     market_id: string;
     amount: number;
