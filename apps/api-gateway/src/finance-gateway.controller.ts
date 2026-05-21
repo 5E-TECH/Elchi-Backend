@@ -736,9 +736,30 @@ export class FinanceGatewayController {
     @Req() req: { user: JwtUser },
     @Body() dto: PaymentBranchToMainRequestDto,
   ) {
+    let managerId = String(dto.manager_id ?? '').trim();
+
+    if (!managerId) {
+      const branchId = String(dto.branch_id ?? '').trim();
+      if (!branchId) {
+        throw new ForbiddenException("manager_id yoki branch_id yuborilishi shart");
+      }
+      const branchUsersResponse = await this.sendBranch<{ data?: Array<Record<string, any>> }>(
+        { cmd: 'branch.user.find_by_branch' },
+        { branch_id: branchId, requester: this.toRequester(req.user) },
+      );
+      const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
+      const managerAssignment = branchUsers.find(
+        (row) => String(row?.role ?? '').toUpperCase() === 'MANAGER',
+      );
+      managerId = String(managerAssignment?.user_id ?? '').trim();
+      if (!managerId) {
+        throw new ForbiddenException("Bu branch uchun manager topilmadi");
+      }
+    }
+
     const managerResponse = await this.sendIdentity<{ data?: Record<string, any> }>(
       { cmd: 'identity.user.find_by_id' },
-      { id: dto.manager_id },
+      { id: managerId },
     );
     const manager = managerResponse?.data;
     if (!manager) {
@@ -760,7 +781,7 @@ export class FinanceGatewayController {
     return this.send(
       { cmd: 'finance.cashbox.payment_courier' },
       {
-        courier_id: dto.manager_id,
+        courier_id: managerId,
         amount: dto.amount,
         payment_method: dto.payment_method,
         payment_date: dto.payment_date,

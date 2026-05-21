@@ -421,10 +421,17 @@ export class PaymentToMarketRequestDto {
 }
 
 export class PaymentBranchToMainRequestDto {
-  @ApiProperty({ example: '1001', description: 'Branch manager user ID' })
+  @ApiPropertyOptional({ example: '1001', description: 'Branch manager user ID' })
+  @IsOptional()
   @IsString()
   @Matches(/^\d+$/)
-  manager_id!: string;
+  manager_id?: string;
+
+  @ApiPropertyOptional({ example: '13', description: 'Branch ID (manager auto aniqlanadi)' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  branch_id?: string;
 
   @ApiProperty({ example: 250000 })
   @Type(() => Number)
