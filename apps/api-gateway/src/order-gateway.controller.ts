@@ -676,7 +676,6 @@ export class OrderGatewayController {
     const resolvedMarketId = isMarket && requesterId ? requesterId : market_id;
     let resolvedBranchId = branch_id;
     let managerCourierIds: string[] | undefined;
-    let forceCourierScopedFilter = false;
 
     if (isBranchScopedRequester && req?.user) {
       const assignment = await this.resolveBranchAssignment(req.user);
@@ -699,7 +698,6 @@ export class OrderGatewayController {
           .filter((item: any) => String(item?.role ?? '').toUpperCase() === 'COURIER')
           .map((item: any) => String(item?.user_id ?? ''))
           .filter(Boolean);
-        forceCourierScopedFilter = true;
       }
     }
 
@@ -718,7 +716,7 @@ export class OrderGatewayController {
         courier,
         region_id,
         district_id,
-        branch_id: forceCourierScopedFilter ? undefined : resolvedBranchId,
+        branch_id: resolvedBranchId,
         courier_ids: managerCourierIds,
         source,
         page: pagination.page,
