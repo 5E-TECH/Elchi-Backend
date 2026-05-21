@@ -4,7 +4,7 @@ import { RpcException } from '@nestjs/microservices';
 import { ClientProxy } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { BranchTransferDirection, BranchType, BranchUserRole, Order_status, Post_status, Status } from '@app/common';
+import { BranchTransferDirection, BranchType, BranchUserRole, Cashbox_type, Order_status, Post_status, Status } from '@app/common';
 import { Branch } from './entities/branch.entity';
 import { BranchUser } from './entities/branch-user.entity';
 import { BranchConfig } from './entities/branch-config.entity';
@@ -1975,6 +1975,21 @@ export class BranchServiceService implements OnModuleInit {
           select: ['branch_id', 'user_id'],
         })
       : [];
+    const hqBranchIds = items
+      .filter((item) => item.type === BranchType.HQ)
+      .map((item) => String(item.id))
+      .filter(Boolean);
+
+    const courierAssignments = hqBranchIds.length
+      ? await this.branchUserRepo.find({
+          where: {
+            isDeleted: false,
+            role: BranchUserRole.COURIER,
+            branch_id: In(hqBranchIds),
+          },
+          select: ['branch_id', 'user_id'],
+        })
+      : [];
 
     const managerByBranchId = new Map<string, string>();
     for (const assignment of managerAssignments) {
@@ -1986,8 +2001,23 @@ export class BranchServiceService implements OnModuleInit {
       managerByBranchId.set(branchId, userId);
     }
 
+    const courierIdsByBranchId = new Map<string, string[]>();
+    for (const assignment of courierAssignments) {
+      const branchId = String(assignment.branch_id ?? '').trim();
+      const userId = String(assignment.user_id ?? '').trim();
+      if (!branchId || !userId) continue;
+      const existing = courierIdsByBranchId.get(branchId) ?? [];
+      if (!existing.includes(userId)) {
+        existing.push(userId);
+        courierIdsByBranchId.set(branchId, existing);
+      }
+    }
+
     const managerIds = Array.from(new Set(Array.from(managerByBranchId.values())));
+    const managerUsersMap = await this.getUsersByIds(managerIds);
     const paymentByManagerId = new Map<string, unknown>();
+    const managerCashboxBalanceByManagerId = new Map<string, number>();
+    const courierBalanceByUserId = new Map<string, number>();
 
     await Promise.all(
       managerIds.map(async (managerId) => {
@@ -1998,7 +2028,67 @@ export class BranchServiceService implements OnModuleInit {
           );
           paymentByManagerId.set(managerId, salaryRes?.data ?? null);
         } catch {
+          const managerUser = managerUsersMap.get(managerId) as Record<string, unknown> | null;
+          if (managerUser) {
+            paymentByManagerId.set(managerId, {
+              user_id: managerId,
+              salary_amount: Number(managerUser.salary ?? 0),
+              payment_day:
+                managerUser.payment_day !== undefined && managerUser.payment_day !== null
+                  ? Number(managerUser.payment_day)
+                  : null,
+              tariff_home:
+                managerUser.tariff_home !== undefined && managerUser.tariff_home !== null
+                  ? Number(managerUser.tariff_home)
+                  : null,
+              tariff_center:
+                managerUser.tariff_center !== undefined && managerUser.tariff_center !== null
+                  ? Number(managerUser.tariff_center)
+                  : null,
+              source: 'identity_fallback',
+            });
+            return;
+          }
           paymentByManagerId.set(managerId, null);
+        }
+      }),
+    );
+
+    await Promise.all(
+      managerIds.map(async (managerId) => {
+        try {
+          const cashboxRes = await this.sendFinanceCommand<{ data?: { balance?: number | string } }>(
+            'finance.cashbox.find_by_user',
+            { user_id: managerId, cashbox_type: Cashbox_type.FOR_COURIER },
+          );
+          const rawBalance = Number(cashboxRes?.data?.balance ?? 0);
+          managerCashboxBalanceByManagerId.set(
+            managerId,
+            Number.isFinite(rawBalance) ? rawBalance : 0,
+          );
+        } catch {
+          managerCashboxBalanceByManagerId.set(managerId, 0);
+        }
+      }),
+    );
+
+    const allCourierIds = Array.from(
+      new Set(
+        Array.from(courierIdsByBranchId.values()).flat().map((id) => String(id)).filter(Boolean),
+      ),
+    );
+
+    await Promise.all(
+      allCourierIds.map(async (courierId) => {
+        try {
+          const cashboxRes = await this.sendFinanceCommand<{ data?: { balance?: number | string } }>(
+            'finance.cashbox.find_by_user',
+            { user_id: courierId, cashbox_type: Cashbox_type.FOR_COURIER },
+          );
+          const rawBalance = Number(cashboxRes?.data?.balance ?? 0);
+          courierBalanceByUserId.set(courierId, Number.isFinite(rawBalance) ? rawBalance : 0);
+        } catch {
+          courierBalanceByUserId.set(courierId, 0);
         }
       }),
     );
@@ -2008,6 +2098,19 @@ export class BranchServiceService implements OnModuleInit {
       region: item.region_id ? (regionMap.get(item.region_id) ?? null) : null,
       district: item.district_id ? (districtMap.get(item.district_id) ?? null) : null,
       parent: item.parent_id ? (parentMap.get(item.parent_id) ?? null) : null,
+      olinishi_kerak: (() => {
+        if (item.type === BranchType.HQ) {
+          const courierIds = courierIdsByBranchId.get(String(item.id)) ?? [];
+          return courierIds.reduce((sum, courierId) => {
+            const balance = Number(courierBalanceByUserId.get(courierId) ?? 0);
+            return balance > 0 ? sum + balance : sum;
+          }, 0);
+        }
+        const managerId = managerByBranchId.get(String(item.id));
+        if (!managerId) return 0;
+        const managerBalance = Number(managerCashboxBalanceByManagerId.get(managerId) ?? 0);
+        return managerBalance > 0 ? managerBalance : 0;
+      })(),
       payment: (() => {
         const managerId = managerByBranchId.get(String(item.id));
         if (!managerId) return null;
