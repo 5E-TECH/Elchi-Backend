@@ -526,7 +526,33 @@ export class FinanceServiceService implements OnModuleInit {
         order: { createdAt: 'DESC' },
       });
 
-      return this.successRes(all, 200, 'Cashboxes found');
+      if (!dto.with_history) {
+        return this.successRes(all, 200, 'Cashboxes found');
+      }
+
+      const [history, total] = await this.historyRepo
+        .createQueryBuilder('history')
+        .innerJoinAndSelect('history.cashbox', 'cashbox')
+        .where('cashbox.user_id = :userId', { userId: dto.user_id })
+        .orderBy('history.createdAt', 'DESC')
+        .skip((page - 1) * limit)
+        .take(limit)
+        .getManyAndCount();
+
+      return this.successRes(
+        {
+          cashboxes: all,
+          history,
+          pagination: {
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
+          },
+        },
+        200,
+        'Cashboxes found',
+      );
     } catch (error) {
       this.toRpcError(error);
     }
