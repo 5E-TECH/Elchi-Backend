@@ -420,6 +420,33 @@ export class PaymentToMarketRequestDto {
   comment?: string;
 }
 
+export class PaymentBranchToMainRequestDto {
+  @ApiProperty({ example: '1001', description: 'Branch manager user ID' })
+  @IsString()
+  @Matches(/^\d+$/)
+  manager_id!: string;
+
+  @ApiProperty({ example: 250000 })
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.0000001)
+  amount!: number;
+
+  @ApiProperty({ enum: PaymentMethod, example: PaymentMethod.CASH })
+  @IsEnum(PaymentMethod)
+  payment_method!: PaymentMethod;
+
+  @ApiPropertyOptional({ example: '2026-03-06T11:00:00Z' })
+  @IsOptional()
+  @IsString()
+  payment_date?: string;
+
+  @ApiPropertyOptional({ example: "Branch managerdan HQ main kassaga o'tkazma" })
+  @IsOptional()
+  @IsString()
+  comment?: string;
+}
+
 export class MainCashboxFilterQueryDto {
   @ApiPropertyOptional({ example: '2026-03-01T00:00:00Z' })
   @IsOptional()

@@ -37,6 +37,7 @@ import {
   MainCashboxFilterQueryDto,
   MainCashboxManualRequestDto,
   OpenShiftRequestDto,
+  PaymentBranchToMainRequestDto,
   PaymentFromCourierRequestDto,
   PaymentToMarketRequestDto,
   UpdateCashboxBalanceRequestDto,
@@ -722,6 +723,52 @@ export class FinanceGatewayController {
     return this.send(
       { cmd: 'finance.cashbox.payment_market' },
       { ...dto, created_by: req.user.sub },
+    );
+  }
+
+  @Post('cashbox/payment/branch-to-main')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Transfer money from branch manager cashbox to HQ main cashbox' })
+  @ApiBody({ type: PaymentBranchToMainRequestDto })
+  async paymentBranchToMain(
+    @Req() req: { user: JwtUser },
+    @Body() dto: PaymentBranchToMainRequestDto,
+  ) {
+    const managerResponse = await this.sendIdentity<{ data?: Record<string, any> }>(
+      { cmd: 'identity.user.find_by_id' },
+      { id: dto.manager_id },
+    );
+    const manager = managerResponse?.data;
+    if (!manager) {
+      throw new ForbiddenException('Manager topilmadi');
+    }
+
+    const roleList = Array.isArray(manager.roles)
+      ? manager.roles
+      : manager.role
+        ? [manager.role]
+        : [];
+    const isManager = roleList.some(
+      (role: unknown) => String(role ?? '').toLowerCase() === RoleEnum.MANAGER,
+    );
+    if (!isManager) {
+      throw new ForbiddenException("Bu foydalanuvchi manager emas");
+    }
+
+    return this.send(
+      { cmd: 'finance.cashbox.payment_courier' },
+      {
+        courier_id: dto.manager_id,
+        amount: dto.amount,
+        payment_method: dto.payment_method,
+        payment_date: dto.payment_date,
+        comment: dto.comment,
+        created_by: req.user.sub,
+        receiver_user_id: '0',
+        receiver_cashbox_type: Cashbox_type.MAIN,
+      },
     );
   }
 
