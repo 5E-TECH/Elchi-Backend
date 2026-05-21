@@ -52,6 +52,7 @@ export class BranchServiceService implements OnModuleInit {
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('FILE') private readonly fileClient: ClientProxy,
+    @Inject('FINANCE') private readonly financeClient: ClientProxy,
     config: ConfigService,
   ) {
     this.hqCode = config.get<string>('BRANCH_HQ_CODE', 'HQ-TSHKNT');
@@ -770,6 +771,22 @@ export class BranchServiceService implements OnModuleInit {
       );
     } catch {
       throw new RpcException(errorRes('File service unavailable', 502));
+    }
+  }
+
+  private async sendFinanceCommand<T>(cmd: string, payload: Record<string, unknown>): Promise<T> {
+    try {
+      return await lastValueFrom(
+        this.financeClient
+          .send<T>({ cmd }, payload)
+          .pipe(timeout(15000)),
+      );
+    } catch (error) {
+      const parsed = this.extractRpcError(error);
+      if (parsed) {
+        throw new RpcException(errorRes(parsed.message, parsed.statusCode));
+      }
+      throw new RpcException(errorRes('Finance service unavailable', 502));
     }
   }
 
@@ -1947,12 +1964,55 @@ export class BranchServiceService implements OnModuleInit {
     const regionMap = await this.getRegionsByIds(regionIds);
     const districtMap = await this.getDistrictsByIds(districtIds);
     const parentMap = await this.getParentsByIds(parentIds);
+    const branchIds = items.map((item) => String(item.id)).filter(Boolean);
+    const managerAssignments = branchIds.length
+      ? await this.branchUserRepo.find({
+          where: {
+            isDeleted: false,
+            role: BranchUserRole.MANAGER,
+            branch_id: In(branchIds),
+          },
+          select: ['branch_id', 'user_id'],
+        })
+      : [];
+
+    const managerByBranchId = new Map<string, string>();
+    for (const assignment of managerAssignments) {
+      const branchId = String(assignment.branch_id ?? '').trim();
+      const userId = String(assignment.user_id ?? '').trim();
+      if (!branchId || !userId || managerByBranchId.has(branchId)) {
+        continue;
+      }
+      managerByBranchId.set(branchId, userId);
+    }
+
+    const managerIds = Array.from(new Set(Array.from(managerByBranchId.values())));
+    const paymentByManagerId = new Map<string, unknown>();
+
+    await Promise.all(
+      managerIds.map(async (managerId) => {
+        try {
+          const salaryRes = await this.sendFinanceCommand<{ data?: unknown }>(
+            'finance.salary.find_by_user',
+            { user_id: managerId },
+          );
+          paymentByManagerId.set(managerId, salaryRes?.data ?? null);
+        } catch {
+          paymentByManagerId.set(managerId, null);
+        }
+      }),
+    );
 
     const enrichedItems = items.map((item) => ({
       ...item,
       region: item.region_id ? (regionMap.get(item.region_id) ?? null) : null,
       district: item.district_id ? (districtMap.get(item.district_id) ?? null) : null,
       parent: item.parent_id ? (parentMap.get(item.parent_id) ?? null) : null,
+      payment: (() => {
+        const managerId = managerByBranchId.get(String(item.id));
+        if (!managerId) return null;
+        return paymentByManagerId.get(managerId) ?? null;
+      })(),
     }));
 
     return successRes(
