@@ -381,7 +381,11 @@ export class FinanceGatewayController {
       couriers.map(async (courier) => {
         const cashboxRes = await this.send(
           { cmd: 'finance.cashbox.find_by_user' },
-          { user_id: String(courier.id), cashbox_type: 'for_courier', with_history: false },
+          {
+            user_id: String(courier.id),
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            with_history: false,
+          },
         ).catch(() => null);
         const cashbox = cashboxRes?.data?.cashbox ?? cashboxRes?.data ?? null;
         return Number(cashbox?.balance ?? 0);
