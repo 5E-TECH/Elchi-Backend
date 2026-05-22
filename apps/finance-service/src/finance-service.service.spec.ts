@@ -243,6 +243,12 @@ describe('FinanceServiceService.updateBalance', () => {
     // Income increases balance_cash by amount
     const savedCashbox = manager.save.mock.calls[0][0];
     expect(savedCashbox.balance_cash).toBe(500);
+    // History row snapshots the cash/card split after the operation, not just
+    // the total — cash payment leaves 500 in cash, 0 on card.
+    const savedHistory = manager.save.mock.calls[1][0];
+    expect(savedHistory.balance_after).toBe(500);
+    expect(savedHistory.balance_cash_after).toBe(500);
+    expect(savedHistory.balance_card_after).toBe(0);
     expect(res.statusCode).toBe(200);
   });
 

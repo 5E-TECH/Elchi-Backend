@@ -38,6 +38,16 @@ export class CashboxHistory extends BaseEntity {
   @Column({ type: 'float' })
   balance_after!: number;
 
+  // Cash / card split of the balance immediately after this operation.
+  // balance_cash_after + balance_card_after == balance_after. Nullable so
+  // rows written before this column existed (no reliable split) stay NULL
+  // rather than claiming a false 0/0 breakdown.
+  @Column({ type: 'float', nullable: true })
+  balance_cash_after!: number | null;
+
+  @Column({ type: 'float', nullable: true })
+  balance_card_after!: number | null;
+
   @Column({ type: 'enum', enum: PaymentMethod, default: PaymentMethod.CASH })
   payment_method!: PaymentMethod;
 
@@ -50,7 +60,9 @@ export class CashboxHistory extends BaseEntity {
   @Column({ type: 'timestamptz', nullable: true })
   payment_date!: Date | null;
 
-  @ManyToOne(() => Cashbox, (cashbox) => cashbox.history, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Cashbox, (cashbox) => cashbox.history, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'cashbox_id' })
   cashbox!: Cashbox;
 }
