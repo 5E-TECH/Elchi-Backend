@@ -5,7 +5,12 @@ import {
   Payload,
   RmqContext,
 } from '@nestjs/microservices';
-import { Cashbox_type, RmqService, executeAndAck } from '@app/common';
+import {
+  Cashbox_type,
+  FinancialSource_type,
+  RmqService,
+  executeAndAck,
+} from '@app/common';
 import { FinanceServiceService } from './finance-service.service';
 import { CreateCashboxDto } from './dto/cashbox/create-cashbox.dto';
 import { FindCashboxByUserDto } from './dto/cashbox/find-cashbox-by-user.dto';
@@ -18,6 +23,7 @@ import { CreateSalaryDto } from './dto/salary/create-salary.dto';
 import { UpdateSalaryDto } from './dto/salary/update-salary.dto';
 import { FindSalaryByUserDto } from './dto/salary/find-salary-by-user.dto';
 import { CreateOperatorPaymentDto } from './dto/operator/create-operator-payment.dto';
+import { RecordFinancialBalanceDto } from './dto/financial/record-financial-balance.dto';
 
 @Controller()
 export class FinanceServiceController {
@@ -356,6 +362,35 @@ export class FinanceServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.financeService.listOperatorPayments(data),
+    );
+  }
+
+  // --- Financial balance ledger ---
+
+  @MessagePattern({ cmd: 'finance.financial_balance.record' })
+  recordFinancialBalance(
+    @Payload() data: RecordFinancialBalanceDto,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.recordFinancialBalance(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'finance.financial_balance.history' })
+  findFinancialBalanceHistory(
+    @Payload()
+    data: {
+      source_type?: FinancialSource_type;
+      from_date?: string;
+      to_date?: string;
+      limit?: number;
+      offset?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.findFinancialBalanceHistory(data),
     );
   }
 }

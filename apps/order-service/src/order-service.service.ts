@@ -930,26 +930,27 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   /**
-   * Enqueue an operator-commission event for finance-service. Called from the
-   * central status-change path (writeOrderChanges) inside its transaction.
+   * Enqueue finance events triggered by an order's status change. Called from
+   * the central status-change path (writeOrderChanges) inside its transaction,
+   * so every event is durable iff the order change commits.
    *
-   * Sold-ish state (SOLD/PAID/PARTLY_PAID) → record the earning.
-   * Rollback to WAITING → remove it.
-   * Other transitions → no event.
+   * On entering a sold state (SOLD/PAID/PARTLY_PAID):
+   *   - operator commission earning (only if the order has an operator)
+   *   - SELL_PROFIT ledger entry (market_tariff - courier_tariff), always
+   * On rollback to WAITING:
+   *   - operator earning removal
    *
-   * Only orders with an operator_id are relevant; admin-created orders have
-   * no operator and earn no commission. finance-service computes the amount
-   * from the operator's commission config and dedupes on order_id.
+   * finance-service dedupes both on order_id, so re-delivery or a status
+   * bounce is safe. We deliberately do NOT auto-reverse SELL_PROFIT on
+   * rollback — the ledger is append-only and the SELL_PROFIT row is recorded
+   * once per order; an operator can post a manual CORRECTION if a confirmed
+   * sale is undone.
    */
-  private async enqueueOperatorEarning(
+  private async enqueueFinanceOnStatusChange(
     order: Order,
     oldStatus: Order_status,
     manager: EntityManager,
   ): Promise<void> {
-    if (!order.operator_id) {
-      return;
-    }
-
     const soldStates = [
       Order_status.SOLD,
       Order_status.PAID,
@@ -961,18 +962,39 @@ export class OrderServiceService implements OnModuleInit {
       order.status === Order_status.WAITING && soldStates.includes(oldStatus);
 
     if (enteredSold) {
-      await this.outbox.enqueue(
-        'FINANCE',
-        'finance.operator.earning.record',
-        {
-          order_id: String(order.id),
-          operator_id: String(order.operator_id),
-          market_id: order.market_id ? String(order.market_id) : null,
-          total_price: Number(order.total_price ?? 0),
-        },
-        { manager },
-      );
-    } else if (leftSold) {
+      if (order.operator_id) {
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.operator.earning.record',
+          {
+            order_id: String(order.id),
+            operator_id: String(order.operator_id),
+            market_id: order.market_id ? String(order.market_id) : null,
+            total_price: Number(order.total_price ?? 0),
+          },
+          { manager },
+        );
+      }
+
+      // Company profit on this order = what the market paid us minus what we
+      // pay the courier. Tariffs are snapshotted on the order at sale time.
+      const sellProfit =
+        Number(order.market_tariff ?? 0) - Number(order.courier_tariff ?? 0);
+      if (sellProfit !== 0) {
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.financial_balance.record',
+          {
+            amount: sellProfit,
+            source_type: 'sell_profit',
+            order_id: String(order.id),
+            related_user_id: order.market_id ? String(order.market_id) : null,
+            comment: `Order #${order.id} sell profit`,
+          },
+          { manager },
+        );
+      }
+    } else if (leftSold && order.operator_id) {
       await this.outbox.enqueue(
         'FINANCE',
         'finance.operator.earning.remove',
@@ -3834,12 +3856,12 @@ export class OrderServiceService implements OnModuleInit {
       // transaction so the search publisher only sees committed state.
       await this.syncOrderToSearch(order, manager);
 
-      // Operator commission: enqueue an earning event when the order enters a
-      // sold state, or a removal when it rolls back out of one. Enqueued in
-      // this transaction so the event is durable iff the order change commits;
-      // finance-service dedupes on order_id, so re-delivery is safe.
+      // Finance events on status change: operator commission earning + the
+      // SELL_PROFIT ledger entry on entering a sold state, earning removal on
+      // rollback. Enqueued in this transaction so events are durable iff the
+      // order change commits; finance-service dedupes on order_id.
       if (oldStatus !== order.status) {
-        await this.enqueueOperatorEarning(order, oldStatus, manager);
+        await this.enqueueFinanceOnStatusChange(order, oldStatus, manager);
       }
     };
 

@@ -12,6 +12,7 @@ import {
 } from 'class-validator';
 import {
   Cashbox_type,
+  FinancialSource_type,
   Operation_type,
   PaymentMethod,
   Source_type,
@@ -539,6 +540,38 @@ export class MainCashboxManualRequestDto {
   type?: PaymentMethod;
 
   @ApiPropertyOptional({ example: 'Manual operatsiya' })
+  @IsOptional()
+  @IsString()
+  comment?: string;
+}
+
+export class RecordFinancialBalanceRequestDto {
+  @ApiProperty({
+    example: -50000,
+    description:
+      'Signed amount: positive = income, negative = expense. Match the sign to source_type.',
+  })
+  @Type(() => Number)
+  @IsNumber()
+  amount!: number;
+
+  @ApiProperty({ enum: FinancialSource_type, example: FinancialSource_type.MANUAL_EXPENSE })
+  @IsEnum(FinancialSource_type)
+  source_type!: FinancialSource_type;
+
+  @ApiPropertyOptional({ example: '1001', description: 'Linked order id' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  order_id?: string;
+
+  @ApiPropertyOptional({ example: '7', description: 'Linked user id (market/courier/employee)' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  related_user_id?: string;
+
+  @ApiPropertyOptional({ example: 'Ofis ijarasi' })
   @IsOptional()
   @IsString()
   comment?: string;

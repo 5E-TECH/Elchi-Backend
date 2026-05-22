@@ -52,6 +52,9 @@ jest.mock('./entities/operator-earning.entity', () => ({
 jest.mock('./entities/operator-payment.entity', () => ({
   OperatorPayment: class OperatorPayment {},
 }));
+jest.mock('./entities/financial-balance-history.entity', () => ({
+  FinancialBalanceHistory: class FinancialBalanceHistory {},
+}));
 
 interface MockManager {
   findOne: jest.Mock;
@@ -66,6 +69,7 @@ interface MockQueryRunner {
   commitTransaction: jest.Mock;
   rollbackTransaction: jest.Mock;
   release: jest.Mock;
+  query: jest.Mock;
 }
 
 function makeQueryRunner(manager: MockManager): MockQueryRunner {
@@ -76,6 +80,7 @@ function makeQueryRunner(manager: MockManager): MockQueryRunner {
     commitTransaction: jest.fn().mockResolvedValue(undefined),
     rollbackTransaction: jest.fn().mockResolvedValue(undefined),
     release: jest.fn().mockResolvedValue(undefined),
+    query: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -112,6 +117,10 @@ function makeService(manager: MockManager) {
     createQueryBuilder: jest.fn(),
     findAndCount: jest.fn(),
   };
+  const financialHistoryRepo: any = {
+    findOne: jest.fn(),
+    findAndCount: jest.fn(),
+  };
   const activityLog: any = {
     log: jest.fn().mockResolvedValue(undefined),
     logChange: jest.fn().mockResolvedValue(undefined),
@@ -126,6 +135,7 @@ function makeService(manager: MockManager) {
     salaryRepo,
     earningRepo,
     paymentRepo,
+    financialHistoryRepo,
     dataSource,
     activityLog,
     orderClient,
@@ -139,6 +149,7 @@ function makeService(manager: MockManager) {
     cashboxRepo,
     earningRepo,
     paymentRepo,
+    financialHistoryRepo,
     activityLog,
   };
 }
@@ -532,5 +543,125 @@ describe('FinanceServiceService operator earnings & payments', () => {
     await expect(
       service.createOperatorPayment({ operator_id: '42', amount: 0 }),
     ).rejects.toBeTruthy();
+  });
+});
+
+describe('FinanceServiceService financial balance ledger', () => {
+  beforeEach(() => {
+    captureExceptionMock.mockReset();
+    rmqSendMock.mockReset();
+  });
+
+  it('appends a ledger entry with running balance from the previous row', async () => {
+    const manager = makeManager({
+      findOne: jest
+        .fn()
+        // idempotency check (order_id present) → none
+        .mockResolvedValueOnce(null)
+        // last row → previous balance 100000
+        .mockResolvedValueOnce({ balance_after: 100000 }),
+      create: jest.fn((_e: any, dto: any) => dto),
+      save: jest.fn(async (e: any) => ({ id: 'fbh1', ...e })),
+    });
+    const { service, queryRunner, activityLog } = makeService(manager);
+
+    const res = await service.recordFinancialBalance({
+      amount: 25000,
+      source_type: 'sell_profit' as any,
+      order_id: '1001',
+    });
+
+    expect(res.statusCode).toBe(201);
+    // balance_before = 100000, balance_after = 125000
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: 25000,
+        balance_before: 100000,
+        balance_after: 125000,
+      }),
+    );
+    // advisory lock acquired before reading the running total
+    expect(queryRunner.query).toHaveBeenCalledWith(
+      expect.stringContaining('pg_advisory_xact_lock'),
+      expect.anything(),
+    );
+    expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+    expect(activityLog.log).toHaveBeenCalled();
+  });
+
+  it('starts the ledger at 0 when there is no prior row', async () => {
+    const manager = makeManager({
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce(null) // no order_id idempotency hit
+        .mockResolvedValueOnce(null), // no previous row
+      create: jest.fn((_e: any, dto: any) => dto),
+      save: jest.fn(async (e: any) => ({ id: 'fbh1', ...e })),
+    });
+    const { service } = makeService(manager);
+
+    await service.recordFinancialBalance({
+      amount: -40000,
+      source_type: 'manual_expense' as any,
+    });
+
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: -40000,
+        balance_before: 0,
+        balance_after: -40000,
+      }),
+    );
+  });
+
+  it('is idempotent for order-linked entries — returns existing row', async () => {
+    const manager = makeManager({
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce({ id: 'fbh-old', balance_after: 5000 }),
+      create: jest.fn(),
+      save: jest.fn(),
+    });
+    const { service, queryRunner } = makeService(manager);
+
+    const res = await service.recordFinancialBalance({
+      amount: 25000,
+      source_type: 'sell_profit' as any,
+      order_id: '1001',
+    });
+
+    expect(res.message).toMatch(/already recorded/);
+    expect(manager.save).not.toHaveBeenCalled();
+    expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a zero-amount entry without opening a transaction', async () => {
+    const manager = makeManager();
+    const { service, dataSource } = makeService(manager);
+
+    const res = await service.recordFinancialBalance({
+      amount: 0,
+      source_type: 'correction' as any,
+    });
+
+    expect(res.message).toMatch(/zero amount/);
+    expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+  });
+
+  it('returns history rows plus the current balance', async () => {
+    const manager = makeManager();
+    const { service, financialHistoryRepo } = makeService(manager);
+
+    financialHistoryRepo.findAndCount.mockResolvedValue([
+      [{ id: '2', amount: 25000 }, { id: '1', amount: 100000 }],
+      2,
+    ]);
+    financialHistoryRepo.findOne.mockResolvedValue({ balance_after: 125000 });
+
+    const res = await service.findFinancialBalanceHistory({ limit: 10 });
+
+    expect(res.data.total).toBe(2);
+    expect(res.data.currentBalance).toBe(125000);
+    expect(res.data.rows).toHaveLength(2);
   });
 });

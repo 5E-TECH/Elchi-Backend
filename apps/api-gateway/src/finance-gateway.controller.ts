@@ -37,6 +37,7 @@ import {
   CreateCashboxRequestDto,
   CreateOperatorPaymentRequestDto,
   CreateSalaryRequestDto,
+  RecordFinancialBalanceRequestDto,
   FindCashboxByUserQueryDto,
   FindHistoryQueryDto,
   FindShiftQueryDto,
@@ -969,6 +970,55 @@ export class FinanceGatewayController {
   @ApiOperation({ summary: 'Get financial balance' })
   financialBalance() {
     return this.send({ cmd: 'finance.cashbox.financial_balance' }, {});
+  }
+
+  // --- Financial balance ledger (company-wide P&L history) ---
+
+  @Post('financial-balance/entries')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Record a manual financial ledger entry (income/expense/bills/salary/correction)',
+  })
+  @ApiBody({ type: RecordFinancialBalanceRequestDto })
+  recordFinancialBalance(
+    @Body() dto: RecordFinancialBalanceRequestDto,
+    @Req() req: { user?: JwtUser },
+  ) {
+    return this.send(
+      { cmd: 'finance.financial_balance.record' },
+      { ...dto, created_by: req.user?.sub ?? null },
+    );
+  }
+
+  @Get('financial-balance/history')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List financial balance ledger entries + current balance' })
+  @ApiQuery({ name: 'source_type', required: false })
+  @ApiQuery({ name: 'from_date', required: false })
+  @ApiQuery({ name: 'to_date', required: false })
+  @ApiQuery({ name: 'limit', required: false })
+  @ApiQuery({ name: 'offset', required: false })
+  financialBalanceHistory(
+    @Query('source_type') source_type?: string,
+    @Query('from_date') from_date?: string,
+    @Query('to_date') to_date?: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.send(
+      { cmd: 'finance.financial_balance.history' },
+      {
+        source_type,
+        from_date,
+        to_date,
+        limit: limit ? Number(limit) : undefined,
+        offset: offset ? Number(offset) : undefined,
+      },
+    );
   }
 
   @Patch('cashbox/spend')

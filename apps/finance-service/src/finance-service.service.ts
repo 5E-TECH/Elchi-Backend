@@ -25,11 +25,13 @@ import { Shift, ShiftStatus } from './entities/shift.entity';
 import { UserSalary } from './entities/user-salary.entity';
 import { OperatorEarning } from './entities/operator-earning.entity';
 import { OperatorPayment } from './entities/operator-payment.entity';
+import { FinancialBalanceHistory } from './entities/financial-balance-history.entity';
 import {
   ActivityAction,
   ActivityLogService,
   Cashbox_type,
   Commission_type,
+  FinancialSource_type,
   Operation_type,
   Order_status,
   PaymentMethod,
@@ -64,6 +66,8 @@ export class FinanceServiceService implements OnModuleInit {
     private readonly earningRepo: Repository<OperatorEarning>,
     @InjectRepository(OperatorPayment)
     private readonly paymentRepo: Repository<OperatorPayment>,
+    @InjectRepository(FinancialBalanceHistory)
+    private readonly financialHistoryRepo: Repository<FinancialBalanceHistory>,
     private readonly dataSource: DataSource,
     private readonly activityLog: ActivityLogService,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
@@ -2244,6 +2248,156 @@ export class FinanceServiceService implements OnModuleInit {
         `fetchOperatorCommission failed for operator ${operatorId}: ${(err as Error).message}`,
       );
       throw err;
+    }
+  }
+
+  // ===========================================================================
+  // Financial balance ledger (company-wide P&L)
+  // ===========================================================================
+
+  // Advisory lock key — serialises ledger appends so balance_before/after of
+  // concurrent writers can't interleave and corrupt the running total.
+  private static readonly FBH_ADVISORY_LOCK_KEY = 947_310_021;
+
+  /**
+   * Append an entry to the financial-balance ledger. The running balance is
+   * derived from the previous row, so writes MUST be serialised — a pg
+   * advisory lock pins the critical section to one writer at a time.
+   *
+   * Idempotent for order-sourced entries: SELL_PROFIT/CORRECTION carry an
+   * order_id, and a (source_type, order_id) pair is recorded at most once.
+   * Re-delivery of the outbox event returns the existing row.
+   */
+  async recordFinancialBalance(input: {
+    amount: number;
+    source_type: FinancialSource_type;
+    order_id?: string | null;
+    related_user_id?: string | null;
+    comment?: string | null;
+    created_by?: string | null;
+  }) {
+    const amount = Number(input.amount);
+    if (!Number.isFinite(amount) || amount === 0) {
+      // A zero-impact event has nothing to ledger.
+      return this.successRes(null, 200, 'zero amount — ledger entry skipped');
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      await queryRunner.query('SELECT pg_advisory_xact_lock($1::bigint)', [
+        FinanceServiceService.FBH_ADVISORY_LOCK_KEY.toString(),
+      ]);
+
+      // Idempotency for order-linked sources.
+      if (input.order_id) {
+        const existing = await queryRunner.manager.findOne(
+          FinancialBalanceHistory,
+          {
+            where: {
+              order_id: String(input.order_id),
+              source_type: input.source_type,
+            },
+          },
+        );
+        if (existing) {
+          await queryRunner.commitTransaction();
+          return this.successRes(existing, 200, 'ledger entry already recorded');
+        }
+      }
+
+      const last = await queryRunner.manager.findOne(FinancialBalanceHistory, {
+        where: {},
+        order: { id: 'DESC' },
+      });
+      const balanceBefore = Number(last?.balance_after ?? 0);
+      const balanceAfter = balanceBefore + amount;
+
+      const entity = queryRunner.manager.create(FinancialBalanceHistory, {
+        amount,
+        balance_before: balanceBefore,
+        balance_after: balanceAfter,
+        source_type: input.source_type,
+        order_id: input.order_id ? String(input.order_id) : null,
+        related_user_id: input.related_user_id
+          ? String(input.related_user_id)
+          : null,
+        comment: input.comment ?? null,
+        created_by: input.created_by ? String(input.created_by) : null,
+      });
+      const saved = await queryRunner.manager.save(entity);
+      await queryRunner.commitTransaction();
+
+      await this.activityLog.log({
+        entity_type: 'FinancialBalanceHistory',
+        entity_id: saved.id,
+        action: ActivityAction.CREATED,
+        new_value: {
+          amount,
+          balance_after: balanceAfter,
+          source_type: input.source_type,
+        },
+        user_id: input.created_by ? String(input.created_by) : null,
+        metadata: { order_id: input.order_id ?? null },
+      });
+
+      return this.successRes(saved, 201, 'financial balance entry recorded');
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.toRpcError(error);
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async findFinancialBalanceHistory(input: {
+    source_type?: FinancialSource_type;
+    from_date?: string;
+    to_date?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    try {
+      const take = Math.min(Math.max(Number(input.limit ?? 50), 1), 200);
+      const skip = Math.max(Number(input.offset ?? 0), 0);
+
+      const where: FindOptionsWhere<FinancialBalanceHistory> = {
+        isDeleted: false,
+      };
+      if (input.source_type) {
+        where.source_type = input.source_type;
+      }
+      const from = this.parseDate(input.from_date);
+      const to = this.parseDate(input.to_date);
+      if (from && to) {
+        where.createdAt = Between(from, to);
+      } else if (from) {
+        where.createdAt = MoreThanOrEqual(from);
+      } else if (to) {
+        where.createdAt = LessThanOrEqual(to);
+      }
+
+      const [rows, total] = await this.financialHistoryRepo.findAndCount({
+        where,
+        order: { createdAt: 'DESC', id: 'DESC' },
+        take,
+        skip,
+      });
+
+      const latest = await this.financialHistoryRepo.findOne({
+        where: { isDeleted: false },
+        order: { id: 'DESC' },
+      });
+      const currentBalance = Number(latest?.balance_after ?? 0);
+
+      return this.successRes(
+        { rows, total, currentBalance, limit: take, offset: skip },
+        200,
+        'financial balance history',
+      );
+    } catch (error) {
+      this.toRpcError(error);
     }
   }
 }

@@ -16,6 +16,7 @@ import { Shift } from './entities/shift.entity';
 import { UserSalary } from './entities/user-salary.entity';
 import { OperatorEarning } from './entities/operator-earning.entity';
 import { OperatorPayment } from './entities/operator-payment.entity';
+import { FinancialBalanceHistory } from './entities/financial-balance-history.entity';
 
 @Module({
   imports: [
@@ -37,6 +38,7 @@ import { OperatorPayment } from './entities/operator-payment.entity';
       UserSalary,
       OperatorEarning,
       OperatorPayment,
+      FinancialBalanceHistory,
     ]),
   ],
   controllers: [FinanceServiceController],

@@ -56,6 +56,19 @@ export enum Source_type {
   BILLS = 'bills',
 }
 
+/**
+ * Source of a financial_balance_history ledger entry — the company-wide
+ * profit/position ledger, distinct from per-cashbox Source_type movements.
+ */
+export enum FinancialSource_type {
+  SELL_PROFIT = 'sell_profit', // Net profit from a sold order (market tariff - courier tariff)
+  MANUAL_INCOME = 'manual_income', // Manually recorded income
+  MANUAL_EXPENSE = 'manual_expense', // Manually recorded expense
+  SALARY = 'salary', // Salary paid out
+  CORRECTION = 'correction', // Adjustment / rollback
+  BILLS = 'bills', // Invoices / utility bills
+}
+
 export enum Order_status {
   CREATED = 'created',
   NEW = 'new',
