@@ -102,11 +102,38 @@ export const integrationValidationSchema = Joi.object({
   INTEGRATION_CREDENTIAL_SECRET: Joi.string()
     .min(32)
     .required()
-    .description('Primary secret used to AES-encrypt external integration credentials in DB. Must be >=32 chars of random entropy.'),
+    .description(
+      'Primary secret used to AES-encrypt external integration credentials in DB. Must be >=32 chars of random entropy.',
+    ),
   INTEGRATION_CREDENTIAL_SECRET_PREVIOUS: Joi.string()
     .min(32)
     .optional()
-    .description('Optional previous secret. During rotation: set both vars, then trigger a re-encrypt pass; rows decrypted with the previous key are re-encrypted with the primary on next save. Remove this var once all rows are migrated.'),
+    .description(
+      'Optional previous secret. During rotation: set both vars, then trigger a re-encrypt pass; rows decrypted with the previous key are re-encrypted with the primary on next save. Remove this var once all rows are migrated.',
+    ),
+  // Sync queue scheduler. The processor itself is HA-safe (pg_try_advisory_lock
+  // inside processPendingSyncQueue), so multiple replicas can run the cron
+  // safely — only one will hold the lock per tick.
+  INTEGRATION_SYNC_CRON_ENABLED: Joi.boolean()
+    .truthy('true', '1', 'yes')
+    .falsy('false', '0', 'no')
+    .default(true)
+    .description(
+      'Master switch. Set false to disable auto-processing (e.g. during incident response) — manual integration.sync.trigger still works.',
+    ),
+  INTEGRATION_SYNC_CRON_EXPR: Joi.string()
+    .default('*/30 * * * * *')
+    .description(
+      'Cron expression for the sync queue tick. Default: every 30 seconds (matches PCS).',
+    ),
+  INTEGRATION_SYNC_BATCH_SIZE: Joi.number()
+    .integer()
+    .min(1)
+    .max(500)
+    .default(20)
+    .description(
+      'Max items processed per tick. Higher = lower latency under burst, more DB load per tick.',
+    ),
 });
 
 export const analyticsValidationSchema = Joi.object({
