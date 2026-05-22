@@ -4577,7 +4577,8 @@ export class OrderServiceService implements OnModuleInit {
       const batchHistoryRepo = queryRunner.manager.getRepository(BranchTransferBatchHistory);
       const orderRepo = queryRunner.manager.getRepository(Order);
 
-      const batchEntities: BranchTransferBatch[] = [];
+      const newlyCreatedBatchEntities: BranchTransferBatch[] = [];
+      const batchByDestinationBranch = new Map<string, BranchTransferBatch>();
       for (const [destinationBranchId, branchOrders] of groupedByDestinationBranch.entries()) {
         const totalPrice = branchOrders.reduce((sum, order) => sum + Number(order.total_price ?? 0), 0);
         const targetRegionId = String(branchOrders[0]?.region_id ?? '').trim();
@@ -4585,32 +4586,50 @@ export class OrderServiceService implements OnModuleInit {
           this.badRequest(`Orders for destination branch ${destinationBranchId} must have region_id`);
         }
 
-        const qrToken = await this.generateTransferQrToken(batchRepo, direction);
-        batchEntities.push(
-          batchRepo.create({
-            qr_code_token: qrToken,
-            request_key: requestKey,
+        const existingPendingBatch = await batchRepo.findOne({
+          where: {
             source_branch_id: sourceBranchId,
             destination_branch_id: destinationBranchId,
             direction,
             target_region_id: targetRegionId,
             status: BranchTransferBatchStatus.PENDING,
-            order_count: branchOrders.length,
-            total_price: totalPrice,
-            vehicle_plate: null,
-            driver_name: null,
-            driver_phone: null,
-            sent_at: null,
-            received_at: null,
-            cancelled_at: null,
-          }),
-        );
-      }
+            isDeleted: false,
+          },
+          order: { createdAt: 'DESC' },
+        });
 
-      const savedBatches = await batchRepo.save(batchEntities);
-      const batchByDestinationBranch = new Map(
-        savedBatches.map((batch) => [String(batch.destination_branch_id), batch]),
-      );
+        if (existingPendingBatch) {
+          existingPendingBatch.order_count =
+            Number(existingPendingBatch.order_count ?? 0) + branchOrders.length;
+          existingPendingBatch.total_price =
+            Number(existingPendingBatch.total_price ?? 0) + totalPrice;
+          await batchRepo.save(existingPendingBatch);
+          batchByDestinationBranch.set(destinationBranchId, existingPendingBatch);
+          continue;
+        }
+
+        const qrToken = await this.generateTransferQrToken(batchRepo, direction);
+        const newBatch = batchRepo.create({
+          qr_code_token: qrToken,
+          request_key: requestKey,
+          source_branch_id: sourceBranchId,
+          destination_branch_id: destinationBranchId,
+          direction,
+          target_region_id: targetRegionId,
+          status: BranchTransferBatchStatus.PENDING,
+          order_count: branchOrders.length,
+          total_price: totalPrice,
+          vehicle_plate: null,
+          driver_name: null,
+          driver_phone: null,
+          sent_at: null,
+          received_at: null,
+          cancelled_at: null,
+        });
+        const savedNewBatch = await batchRepo.save(newBatch);
+        newlyCreatedBatchEntities.push(savedNewBatch);
+        batchByDestinationBranch.set(destinationBranchId, savedNewBatch);
+      }
 
       const itemEntities: BranchTransferBatchItem[] = [];
       const historyEntities: BranchTransferBatchHistory[] = [];
@@ -4654,7 +4673,9 @@ export class OrderServiceService implements OnModuleInit {
             batch_id: String(batch.id),
             user_id: requesterId,
             action: BranchTransferBatchAction.CREATED,
-            notes: `[STEP] RETURN_BATCH_CREATED${input?.notes ? ` | ${String(input.notes).trim()}` : ''}`,
+            notes: newlyCreatedBatchEntities.some((created) => String(created.id) === String(batch.id))
+              ? `[STEP] RETURN_BATCH_CREATED${input?.notes ? ` | ${String(input.notes).trim()}` : ''}`
+              : `[STEP] RETURN_BATCH_APPENDED${input?.notes ? ` | ${String(input.notes).trim()}` : ''}`,
           }),
         );
         historyEntities.push(
@@ -4671,7 +4692,8 @@ export class OrderServiceService implements OnModuleInit {
       await batchHistoryRepo.save(historyEntities);
       await queryRunner.commitTransaction();
 
-      const batches = await this.listBatchesWithItems(savedBatches.map((batch) => String(batch.id)));
+      const affectedBatchIds = [...new Set([...batchByDestinationBranch.values()].map((batch) => String(batch.id)))];
+      const batches = await this.listBatchesWithItems(affectedBatchIds);
       return successRes(
         {
           idempotent: false,
