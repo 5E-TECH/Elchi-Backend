@@ -5598,7 +5598,6 @@ export class OrderServiceService implements OnModuleInit {
     await queryRunner.connect();
     await queryRunner.startTransaction();
     let remainingOrderIdsForReturn: string[] = [];
-    let returnSourceBranchId: string | null = null;
     try {
       const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
       const batchItemRepo = queryRunner.manager.getRepository(BranchTransferBatchItem);
@@ -5720,7 +5719,6 @@ export class OrderServiceService implements OnModuleInit {
           .execute();
 
         remainingOrderIdsForReturn = remainingOrderIds;
-        returnSourceBranchId = String(batch.destination_branch_id);
       }
 
       batch.order_count = selectedItems.length;
@@ -5747,16 +5745,6 @@ export class OrderServiceService implements OnModuleInit {
       );
 
       await queryRunner.commitTransaction();
-
-      if (remainingOrderIdsForReturn.length && returnSourceBranchId) {
-        await this.createBranchReturnBatches({
-          source_branch_id: returnSourceBranchId,
-          order_ids: remainingOrderIdsForReturn,
-          request_key: `ret_from_receive_${batchId}_${Date.now()}`,
-          requester_id: requesterId,
-          notes: `[STEP] PARTIAL_RECEIVE_REMAINDER`,
-        });
-      }
 
       return successRes(savedBatch, 200, 'Selected transfer batch orders received');
     } catch (error) {
