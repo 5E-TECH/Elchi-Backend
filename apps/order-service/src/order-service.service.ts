@@ -5597,7 +5597,7 @@ export class OrderServiceService implements OnModuleInit {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
-    let remainingOrderIdsForReturn: string[] = [];
+    let remainingOrderIdsForRequeue: string[] = [];
     try {
       const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
       const batchItemRepo = queryRunner.manager.getRepository(BranchTransferBatchItem);
@@ -5718,7 +5718,7 @@ export class OrderServiceService implements OnModuleInit {
           .andWhere('"is_deleted" = false')
           .execute();
 
-        remainingOrderIdsForReturn = remainingOrderIds;
+        remainingOrderIdsForRequeue = remainingOrderIds;
       }
 
       batch.order_count = selectedItems.length;
@@ -5738,13 +5738,24 @@ export class OrderServiceService implements OnModuleInit {
           user_id: requesterId,
           action: BranchTransferBatchAction.RECEIVED,
           notes:
-            remainingOrderIdsForReturn.length > 0
-              ? `Xodim ${requesterName} batchdan ${selectedOrderIds.length} ta order qabul qildi, ${remainingOrderIdsForReturn.length} ta order qayta batchlandi`
+            remainingOrderIdsForRequeue.length > 0
+              ? `Xodim ${requesterName} batchdan ${selectedOrderIds.length} ta order qabul qildi, ${remainingOrderIdsForRequeue.length} ta order qayta batchlandi`
               : `Xodim ${requesterName} batchdan ${selectedOrderIds.length} ta order qabul qildi`,
         }),
       );
 
       await queryRunner.commitTransaction();
+
+      if (remainingOrderIdsForRequeue.length > 0) {
+        await this.createBranchTransferBatches({
+          source_branch_id: String(batch.source_branch_id),
+          destination_branch_id: String(batch.destination_branch_id),
+          direction: BranchTransferDirection.FORWARD,
+          order_ids: remainingOrderIdsForRequeue,
+          request_key: `fwd_from_partial_receive_${batchId}_${Date.now()}`,
+          requester_id: requesterId,
+        });
+      }
 
       return successRes(savedBatch, 200, 'Selected transfer batch orders received');
     } catch (error) {
