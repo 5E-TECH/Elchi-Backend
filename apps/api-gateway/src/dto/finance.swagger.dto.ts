@@ -58,14 +58,20 @@ export class FindCashboxByUserQueryDto {
   @IsBoolean()
   with_history?: boolean;
 
-  @ApiPropertyOptional({ example: 1, description: '0 yuborilsa pagination o‘chadi va hamma history qaytadi' })
+  @ApiPropertyOptional({
+    example: 1,
+    description: '0 yuborilsa pagination o‘chadi va hamma history qaytadi',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(0)
   page?: number;
 
-  @ApiPropertyOptional({ example: 20, description: '0 yuborilsa pagination o‘chadi va hamma history qaytadi' })
+  @ApiPropertyOptional({
+    example: 20,
+    description: '0 yuborilsa pagination o‘chadi va hamma history qaytadi',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
@@ -156,7 +162,10 @@ export class FindHistoryQueryDto {
   @IsEnum(Cashbox_type)
   cashbox_type?: Cashbox_type;
 
-  @ApiPropertyOptional({ enum: Cashbox_type, description: 'CamelCase filter alias' })
+  @ApiPropertyOptional({
+    enum: Cashbox_type,
+    description: 'CamelCase filter alias',
+  })
   @IsOptional()
   @IsEnum(Cashbox_type)
   cashboxType?: Cashbox_type;
@@ -187,14 +196,20 @@ export class FindHistoryQueryDto {
   @IsString()
   to_date?: string;
 
-  @ApiPropertyOptional({ example: 1, description: '0 yuborilsa pagination o‘chadi va hamma history qaytadi' })
+  @ApiPropertyOptional({
+    example: 1,
+    description: '0 yuborilsa pagination o‘chadi va hamma history qaytadi',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(0)
   page?: number;
 
-  @ApiPropertyOptional({ example: 20, description: '0 yuborilsa pagination o‘chadi va hamma history qaytadi' })
+  @ApiPropertyOptional({
+    example: 20,
+    description: '0 yuborilsa pagination o‘chadi va hamma history qaytadi',
+  })
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
@@ -421,7 +436,10 @@ export class PaymentToMarketRequestDto {
 }
 
 export class PaymentBranchToMainRequestDto {
-  @ApiProperty({ example: '13', description: 'Branch ID (branch cashboxdan yechiladi)' })
+  @ApiProperty({
+    example: '13',
+    description: 'Branch ID (branch cashboxdan yechiladi)',
+  })
   @IsString()
   @Matches(/^\d+$/)
   branch_id!: string;
@@ -441,7 +459,9 @@ export class PaymentBranchToMainRequestDto {
   @IsString()
   payment_date?: string;
 
-  @ApiPropertyOptional({ example: "Branch managerdan HQ main kassaga o'tkazma" })
+  @ApiPropertyOptional({
+    example: "Branch managerdan HQ main kassaga o'tkazma",
+  })
   @IsOptional()
   @IsString()
   comment?: string;
@@ -522,4 +542,38 @@ export class MainCashboxManualRequestDto {
   @IsOptional()
   @IsString()
   comment?: string;
+}
+
+export class CreateOperatorPaymentRequestDto {
+  @ApiProperty({
+    example: '42',
+    description: 'Operator user id (bigint string)',
+  })
+  @IsString()
+  @Matches(/^\d+$/, {
+    message: 'operator_id must be a bigint-like numeric string',
+  })
+  operator_id!: string;
+
+  @ApiPropertyOptional({
+    example: '7',
+    description: 'Market id (bigint string)',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/, {
+    message: 'market_id must be a bigint-like numeric string',
+  })
+  market_id?: string;
+
+  @ApiProperty({ example: 50000, description: 'Payout amount' })
+  @Type(() => Number)
+  @IsNumber()
+  @Min(0.0000001)
+  amount!: number;
+
+  @ApiPropertyOptional({ example: 'Oylik komissiya to`lovi' })
+  @IsOptional()
+  @IsString()
+  note?: string;
 }

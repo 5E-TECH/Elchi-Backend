@@ -25,11 +25,17 @@ import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { Roles } from './auth/roles.decorator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
-import { Cashbox_type, Order_status, Roles as RoleEnum, Where_deliver } from '@app/common';
+import {
+  Cashbox_type,
+  Order_status,
+  Roles as RoleEnum,
+  Where_deliver,
+} from '@app/common';
 import {
   CashboxAllInfoQueryDto,
   CloseShiftRequestDto,
   CreateCashboxRequestDto,
+  CreateOperatorPaymentRequestDto,
   CreateSalaryRequestDto,
   FindCashboxByUserQueryDto,
   FindHistoryQueryDto,
@@ -60,15 +66,19 @@ export class FinanceGatewayController {
     @Inject('ORDER') private readonly orderClient: ClientProxy,
   ) {}
 
-  private async send<T = any>(pattern: object, payload: object, timeoutMs = 8000): Promise<T> {
-    return firstValueFrom(this.financeClient.send(pattern, payload).pipe(timeout(timeoutMs))).catch(
-      (error: unknown) => {
-        if (error instanceof TimeoutError) {
-          throw new GatewayTimeoutException('Finance service response timeout');
-        }
-        throw error;
-      },
-    );
+  private async send<T = any>(
+    pattern: object,
+    payload: object,
+    timeoutMs = 8000,
+  ): Promise<T> {
+    return firstValueFrom(
+      this.financeClient.send(pattern, payload).pipe(timeout(timeoutMs)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Finance service response timeout');
+      }
+      throw error;
+    });
   }
 
   private async sendIdentity<T = any>(
@@ -76,25 +86,29 @@ export class FinanceGatewayController {
     payload: object,
     timeoutMs = 8000,
   ): Promise<T> {
-    return firstValueFrom(this.identityClient.send(pattern, payload).pipe(timeout(timeoutMs))).catch(
-      (error: unknown) => {
-        if (error instanceof TimeoutError) {
-          throw new GatewayTimeoutException('Identity service response timeout');
-        }
-        throw error;
-      },
-    );
+    return firstValueFrom(
+      this.identityClient.send(pattern, payload).pipe(timeout(timeoutMs)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Identity service response timeout');
+      }
+      throw error;
+    });
   }
 
-  private async sendOrder<T = any>(pattern: object, payload: object, timeoutMs = 8000): Promise<T> {
-    return firstValueFrom(this.orderClient.send(pattern, payload).pipe(timeout(timeoutMs))).catch(
-      (error: unknown) => {
-        if (error instanceof TimeoutError) {
-          throw new GatewayTimeoutException('Order service response timeout');
-        }
-        throw error;
-      },
-    );
+  private async sendOrder<T = any>(
+    pattern: object,
+    payload: object,
+    timeoutMs = 8000,
+  ): Promise<T> {
+    return firstValueFrom(
+      this.orderClient.send(pattern, payload).pipe(timeout(timeoutMs)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
   }
 
   private async sendBranch<T = any>(
@@ -102,14 +116,14 @@ export class FinanceGatewayController {
     payload: object,
     timeoutMs = 8000,
   ): Promise<T> {
-    return firstValueFrom(this.branchClient.send(pattern, payload).pipe(timeout(timeoutMs))).catch(
-      (error: unknown) => {
-        if (error instanceof TimeoutError) {
-          throw new GatewayTimeoutException('Branch service response timeout');
-        }
-        throw error;
-      },
-    );
+    return firstValueFrom(
+      this.branchClient.send(pattern, payload).pipe(timeout(timeoutMs)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Branch service response timeout');
+      }
+      throw error;
+    });
   }
 
   private async attachCreatedByUsersToHistory(response: any) {
@@ -129,7 +143,11 @@ export class FinanceGatewayController {
     }
 
     const createdByIds = Array.from(
-      new Set(histories.map((item: any) => String(item?.created_by ?? '')).filter(Boolean)),
+      new Set(
+        histories
+          .map((item: any) => String(item?.created_by ?? ''))
+          .filter(Boolean),
+      ),
     );
     if (!createdByIds.length) {
       return histories;
@@ -138,10 +156,9 @@ export class FinanceGatewayController {
     const users = await Promise.all(
       createdByIds.map(async (id) => {
         try {
-          const userResponse = await this.sendIdentity<{ data?: Record<string, any> }>(
-            { cmd: 'identity.user.find_by_id' },
-            { id },
-          );
+          const userResponse = await this.sendIdentity<{
+            data?: Record<string, any>;
+          }>({ cmd: 'identity.user.find_by_id' }, { id });
           const user = userResponse?.data ?? null;
           return [id, user] as const;
         } catch {
@@ -164,7 +181,10 @@ export class FinanceGatewayController {
   }
 
   private isPrivileged(user: JwtUser | undefined) {
-    return this.hasRole(user, RoleEnum.SUPERADMIN) || this.hasRole(user, RoleEnum.ADMIN);
+    return (
+      this.hasRole(user, RoleEnum.SUPERADMIN) ||
+      this.hasRole(user, RoleEnum.ADMIN)
+    );
   }
 
   private isManager(user: JwtUser | undefined) {
@@ -189,7 +209,10 @@ export class FinanceGatewayController {
     };
   }
 
-  private async resolveBranchIdByUserId(userId: string, requester?: JwtUser): Promise<string> {
+  private async resolveBranchIdByUserId(
+    userId: string,
+    requester?: JwtUser,
+  ): Promise<string> {
     try {
       const assignment = await this.sendBranch<{ data?: Record<string, any> }>(
         { cmd: 'branch.user.find_by_user' },
@@ -214,14 +237,21 @@ export class FinanceGatewayController {
         { cmd: 'branch.user.find_by_branch' },
         { branch_id: branchId, requester: this.toRequester(requester) },
       );
-      const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
-      return branchUsers.some((row: any) => String(row?.user_id ?? '') === String(userId));
+      const branchUsers = Array.isArray(branchUsersResponse?.data)
+        ? branchUsersResponse.data
+        : [];
+      return branchUsers.some(
+        (row: any) => String(row?.user_id ?? '') === String(userId),
+      );
     } catch {
       return false;
     }
   }
 
-  private async canManagerAccessUser(manager: JwtUser | undefined, userId: string) {
+  private async canManagerAccessUser(
+    manager: JwtUser | undefined,
+    userId: string,
+  ) {
     if (!manager?.sub) {
       return false;
     }
@@ -230,10 +260,9 @@ export class FinanceGatewayController {
     }
 
     try {
-      const userResponse = await this.sendIdentity<{ data?: Record<string, any> }>(
-        { cmd: 'identity.user.find_by_id' },
-        { id: userId },
-      );
+      const userResponse = await this.sendIdentity<{
+        data?: Record<string, any>;
+      }>({ cmd: 'identity.user.find_by_id' }, { id: userId });
       const targetUser = userResponse?.data;
       if (!targetUser) {
         return false;
@@ -241,14 +270,16 @@ export class FinanceGatewayController {
 
       let managerBranchId = this.extractBranchId(manager);
       if (!managerBranchId) {
-        managerBranchId = await this.resolveBranchIdByUserId(String(manager.sub), manager);
+        managerBranchId = await this.resolveBranchIdByUserId(
+          String(manager.sub),
+          manager,
+        );
       }
       if (!managerBranchId) {
         try {
-          const managerResponse = await this.sendIdentity<{ data?: Record<string, any> }>(
-            { cmd: 'identity.user.find_by_id' },
-            { id: manager.sub },
-          );
+          const managerResponse = await this.sendIdentity<{
+            data?: Record<string, any>;
+          }>({ cmd: 'identity.user.find_by_id' }, { id: manager.sub });
           managerBranchId = this.extractBranchId(managerResponse?.data);
         } catch {
           managerBranchId = '';
@@ -257,15 +288,26 @@ export class FinanceGatewayController {
 
       let targetBranchId = this.extractBranchId(targetUser);
       if (!targetBranchId) {
-        targetBranchId = await this.resolveBranchIdByUserId(String(userId), manager);
+        targetBranchId = await this.resolveBranchIdByUserId(
+          String(userId),
+          manager,
+        );
       }
 
-      if (managerBranchId && targetBranchId && managerBranchId === targetBranchId) {
+      if (
+        managerBranchId &&
+        targetBranchId &&
+        managerBranchId === targetBranchId
+      ) {
         return true;
       }
 
       if (managerBranchId) {
-        const assigned = await this.isUserAssignedToBranch(managerBranchId, String(userId), manager);
+        const assigned = await this.isUserAssignedToBranch(
+          managerBranchId,
+          String(userId),
+          manager,
+        );
         if (assigned) {
           return true;
         }
@@ -298,20 +340,23 @@ export class FinanceGatewayController {
   ) {
     let managerBranchId = this.extractBranchId(user);
     if (!managerBranchId) {
-      managerBranchId = await this.resolveBranchIdByUserId(String(user.sub), user);
+      managerBranchId = await this.resolveBranchIdByUserId(
+        String(user.sub),
+        user,
+      );
     }
 
     const ownCashboxResponse = await this.send(
       { cmd: 'finance.cashbox.my' },
       { user_id: user.sub, roles: user.roles ?? [], ...query },
     );
-    const ownCashbox = ownCashboxResponse?.data?.cashbox ?? ownCashboxResponse?.data ?? null;
+    const ownCashbox =
+      ownCashboxResponse?.data?.cashbox ?? ownCashboxResponse?.data ?? null;
     const kassa = Number(ownCashbox?.balance ?? 0);
 
-    const managerProfileRes = await this.sendIdentity<{ data?: Record<string, any> }>(
-      { cmd: 'identity.user.find_by_id' },
-      { id: user.sub },
-    );
+    const managerProfileRes = await this.sendIdentity<{
+      data?: Record<string, any>;
+    }>({ cmd: 'identity.user.find_by_id' }, { id: user.sub });
     const managerProfile = managerProfileRes?.data ?? {};
     if (!managerBranchId) {
       managerBranchId = this.extractBranchId(managerProfile);
@@ -326,7 +371,9 @@ export class FinanceGatewayController {
           { cmd: 'branch.user.find_by_branch' },
           { branch_id: managerBranchId, requester: this.toRequester(user) },
         );
-        const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
+        const branchUsers = Array.isArray(branchUsersResponse?.data)
+          ? branchUsersResponse.data
+          : [];
         const courierAssignments = branchUsers.filter((item: any) => {
           const role = String(item?.role ?? '').toUpperCase();
           return role === 'COURIER' && item?.user_id;
@@ -335,7 +382,9 @@ export class FinanceGatewayController {
         const loadedCouriers = await Promise.all(
           courierAssignments.map(async (assignment: any) => {
             try {
-              const userRes = await this.sendIdentity<{ data?: Record<string, any> }>(
+              const userRes = await this.sendIdentity<{
+                data?: Record<string, any>;
+              }>(
                 { cmd: 'identity.user.find_by_id' },
                 { id: String(assignment.user_id) },
               );
@@ -354,13 +403,16 @@ export class FinanceGatewayController {
 
     let couriers = branchCouriers;
     if (!couriers.length) {
-      const couriersResponse = await this.sendIdentity<{ data?: { items?: any[] } }>(
+      const couriersResponse = await this.sendIdentity<{
+        data?: { items?: any[] };
+      }>(
         { cmd: 'identity.user.find_all' },
         { query: { role: RoleEnum.COURIER, limit: 1000, page: 1 } },
       );
       const allCouriers = couriersResponse?.data?.items ?? [];
       couriers = allCouriers.filter((courier) => {
-        const sameCreator = String(courier?.created_by ?? '') === String(user.sub);
+        const sameCreator =
+          String(courier?.created_by ?? '') === String(user.sub);
         const sameBranch =
           String(courier?.branch_id ?? '') &&
           String(courier?.branch_id ?? '') === String(managerBranchId ?? '');
@@ -406,7 +458,11 @@ export class FinanceGatewayController {
       {
         query: {
           courier_ids: courierIds.length ? courierIds : undefined,
-          status: [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID],
+          status: [
+            Order_status.SOLD,
+            Order_status.PAID,
+            Order_status.PARTLY_PAID,
+          ],
           page: 1,
           limit: 5000,
           start_day: query?.fromDate,
@@ -478,7 +534,13 @@ export class FinanceGatewayController {
 
   @Get('cashbox/user/:user_id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET, RoleEnum.COURIER, RoleEnum.MANAGER)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.MARKET,
+    RoleEnum.COURIER,
+    RoleEnum.MANAGER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Find cashbox(es) by user' })
   @ApiParam({ name: 'user_id', description: 'User id (bigint string)' })
@@ -493,12 +555,19 @@ export class FinanceGatewayController {
   ) {
     if (!this.isPrivileged(req?.user)) {
       if (this.isManager(req?.user)) {
-        const managerCanAccess = await this.canManagerAccessUser(req?.user, user_id);
+        const managerCanAccess = await this.canManagerAccessUser(
+          req?.user,
+          user_id,
+        );
         if (!managerCanAccess) {
-          throw new ForbiddenException("Siz bu foydalanuvchi kassasini ko'ra olmaysiz");
+          throw new ForbiddenException(
+            "Siz bu foydalanuvchi kassasini ko'ra olmaysiz",
+          );
         }
       } else if (String(user_id) !== String(req?.user?.sub ?? '')) {
-        throw new ForbiddenException("Siz faqat o'zingizning kassangizni ko'ra olasiz");
+        throw new ForbiddenException(
+          "Siz faqat o'zingizning kassangizni ko'ra olasiz",
+        );
       }
     }
     const response = await this.send(
@@ -515,7 +584,10 @@ export class FinanceGatewayController {
       response.data = await Promise.all(
         response.data.map(async (cashbox: any) => ({
           ...cashbox,
-          cashboxHistory: await this.loadCashboxHistory(String(cashbox?.id ?? ''), query),
+          cashboxHistory: await this.loadCashboxHistory(
+            String(cashbox?.id ?? ''),
+            query,
+          ),
         })),
       );
       if (
@@ -523,7 +595,9 @@ export class FinanceGatewayController {
         String(user_id) === String(req?.user?.sub ?? '')
       ) {
         try {
-          const couriersResponse = await this.sendIdentity<{ data?: { items?: any[] } }>(
+          const couriersResponse = await this.sendIdentity<{
+            data?: { items?: any[] };
+          }>(
             { cmd: 'identity.user.find_all' },
             { query: { role: RoleEnum.COURIER, limit: 500, page: 1 } },
           );
@@ -531,10 +605,12 @@ export class FinanceGatewayController {
           response.meta = {
             ...(response.meta ?? {}),
             couriers: allCouriers.filter((courier) => {
-              const sameCreator = String(courier?.created_by ?? '') === String(req.user.sub);
+              const sameCreator =
+                String(courier?.created_by ?? '') === String(req.user.sub);
               const sameBranch =
                 String(courier?.branch_id ?? '') &&
-                String(courier?.branch_id ?? '') === String(req.user.branch_id ?? '');
+                String(courier?.branch_id ?? '') ===
+                  String(req.user.branch_id ?? '');
               return sameCreator || sameBranch;
             }),
           };
@@ -546,28 +622,42 @@ export class FinanceGatewayController {
     }
 
     if (response?.data?.cashbox && Array.isArray(response?.data?.history)) {
-      response.data.cashboxHistory = await this.attachCreatedByUsers(response.data.history);
+      response.data.cashboxHistory = await this.attachCreatedByUsers(
+        response.data.history,
+      );
       return response;
     }
 
-    if (Array.isArray(response?.data?.cashboxes) && Array.isArray(response?.data?.history)) {
-      response.data.cashboxHistory = await this.attachCreatedByUsers(response.data.history);
+    if (
+      Array.isArray(response?.data?.cashboxes) &&
+      Array.isArray(response?.data?.history)
+    ) {
+      response.data.cashboxHistory = await this.attachCreatedByUsers(
+        response.data.history,
+      );
       return response;
     }
 
     if (Array.isArray(response?.data?.history)) {
-      response.data.cashboxHistory = await this.attachCreatedByUsers(response.data.history);
+      response.data.cashboxHistory = await this.attachCreatedByUsers(
+        response.data.history,
+      );
       return response;
     }
 
     if (response?.data?.id) {
-      response.data.cashboxHistory = await this.loadCashboxHistory(String(response.data.id), query);
+      response.data.cashboxHistory = await this.loadCashboxHistory(
+        String(response.data.id),
+        query,
+      );
       if (
         this.isManager(req?.user) &&
         String(user_id) === String(req?.user?.sub ?? '')
       ) {
         try {
-          const couriersResponse = await this.sendIdentity<{ data?: { items?: any[] } }>(
+          const couriersResponse = await this.sendIdentity<{
+            data?: { items?: any[] };
+          }>(
             { cmd: 'identity.user.find_all' },
             { query: { role: RoleEnum.COURIER, limit: 500, page: 1 } },
           );
@@ -575,10 +665,12 @@ export class FinanceGatewayController {
           response.meta = {
             ...(response.meta ?? {}),
             couriers: allCouriers.filter((courier) => {
-              const sameCreator = String(courier?.created_by ?? '') === String(req.user.sub);
+              const sameCreator =
+                String(courier?.created_by ?? '') === String(req.user.sub);
               const sameBranch =
                 String(courier?.branch_id ?? '') &&
-                String(courier?.branch_id ?? '') === String(req.user.branch_id ?? '');
+                String(courier?.branch_id ?? '') ===
+                  String(req.user.branch_id ?? '');
               return sameCreator || sameBranch;
             }),
           };
@@ -635,10 +727,14 @@ export class FinanceGatewayController {
       if (this.isManager(req?.user)) {
         const managerCanAccess = await this.canManagerAccessUser(req?.user, id);
         if (!managerCanAccess) {
-          throw new ForbiddenException("Siz bu foydalanuvchi kassasini ko'ra olmaysiz");
+          throw new ForbiddenException(
+            "Siz bu foydalanuvchi kassasini ko'ra olmaysiz",
+          );
         }
       } else if (String(id) !== String(req?.user?.sub ?? '')) {
-        throw new ForbiddenException("Siz faqat o'zingizning kassangizni ko'ra olasiz");
+        throw new ForbiddenException(
+          "Siz faqat o'zingizning kassangizni ko'ra olasiz",
+        );
       }
     }
     return this.send({ cmd: 'finance.cashbox.user_by_id' }, { id, ...query });
@@ -673,10 +769,9 @@ export class FinanceGatewayController {
   ) {
     const isManager = this.isManager(req?.user);
     if (isManager) {
-      const courierResponse = await this.sendIdentity<{ data?: Record<string, any> }>(
-        { cmd: 'identity.user.find_by_id' },
-        { id: dto.courier_id },
-      );
+      const courierResponse = await this.sendIdentity<{
+        data?: Record<string, any>;
+      }>({ cmd: 'identity.user.find_by_id' }, { id: dto.courier_id });
       const courier = courierResponse?.data;
       if (!courier) {
         throw new ForbiddenException('Courier topilmadi');
@@ -688,15 +783,21 @@ export class FinanceGatewayController {
           ? [courier.role]
           : [];
       const isCourier = roleList.some(
-        (role: unknown) => String(role ?? '').toLowerCase() === RoleEnum.COURIER,
+        (role: unknown) =>
+          String(role ?? '').toLowerCase() === RoleEnum.COURIER,
       );
       if (!isCourier) {
-        throw new ForbiddenException("Bu foydalanuvchi courier emas");
+        throw new ForbiddenException('Bu foydalanuvchi courier emas');
       }
 
-      const managerCanAccess = await this.canManagerAccessUser(req?.user, dto.courier_id);
+      const managerCanAccess = await this.canManagerAccessUser(
+        req?.user,
+        dto.courier_id,
+      );
       if (!managerCanAccess) {
-        throw new ForbiddenException("Siz faqat o'z branch'ingiz courieridan to'lov qabul qilasiz");
+        throw new ForbiddenException(
+          "Siz faqat o'z branch'ingiz courieridan to'lov qabul qilasiz",
+        );
       }
     }
 
@@ -735,7 +836,9 @@ export class FinanceGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Transfer money from branch manager cashbox to HQ main cashbox' })
+  @ApiOperation({
+    summary: 'Transfer money from branch manager cashbox to HQ main cashbox',
+  })
   @ApiBody({ type: PaymentBranchToMainRequestDto })
   async paymentBranchToMain(
     @Req() req: { user: JwtUser },
@@ -814,7 +917,9 @@ export class FinanceGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.MANAGER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Manager cashbox settlement (HQ bilan hisob-kitob)" })
+  @ApiOperation({
+    summary: 'Manager cashbox settlement (HQ bilan hisob-kitob)',
+  })
   async managerSettlement(
     @Req() req: { user: JwtUser },
     @Query() query: MainCashboxFilterQueryDto,
@@ -825,7 +930,7 @@ export class FinanceGatewayController {
 
     return {
       statusCode: 200,
-      message: "Manager settlement (HQ bilan) hisoblandi",
+      message: 'Manager settlement (HQ bilan) hisoblandi',
       data: {
         counterparty: settlement.counterparty,
         kassa: { cash, card, total: settlement.kassa },
@@ -840,7 +945,7 @@ export class FinanceGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.MANAGER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Managerdan HQga berilishi kerak summa" })
+  @ApiOperation({ summary: 'Managerdan HQga berilishi kerak summa' })
   async managerPayableToHq(
     @Req() req: { user: JwtUser },
     @Query() query: MainCashboxFilterQueryDto,
@@ -910,13 +1015,26 @@ export class FinanceGatewayController {
 
   @Get('history')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.MANAGER)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Find cashbox history list' })
   @ApiQuery({ name: 'cashbox_id', required: false })
   @ApiQuery({ name: 'user_id', required: false })
-  @ApiQuery({ name: 'cashbox_type', required: false, enum: ['main', 'for_courier', 'for_market'] })
-  @ApiQuery({ name: 'cashboxType', required: false, enum: ['main', 'for_courier', 'for_market'] })
+  @ApiQuery({
+    name: 'cashbox_type',
+    required: false,
+    enum: ['main', 'for_courier', 'for_market'],
+  })
+  @ApiQuery({
+    name: 'cashboxType',
+    required: false,
+    enum: ['main', 'for_courier', 'for_market'],
+  })
   @ApiQuery({ name: 'operation_type', required: false })
   @ApiQuery({ name: 'source_type', required: false })
   @ApiQuery({ name: 'created_by', required: false })
@@ -924,9 +1042,18 @@ export class FinanceGatewayController {
   @ApiQuery({ name: 'to_date', required: false })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  findHistory(@Query() query: FindHistoryQueryDto, @Req() req: { user: JwtUser }) {
-    if (this.hasRole(req?.user, RoleEnum.MANAGER) && !this.isPrivileged(req?.user)) {
-      return this.send({ cmd: 'finance.history.find_all' }, { ...query, user_id: req.user.sub });
+  findHistory(
+    @Query() query: FindHistoryQueryDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    if (
+      this.hasRole(req?.user, RoleEnum.MANAGER) &&
+      !this.isPrivileged(req?.user)
+    ) {
+      return this.send(
+        { cmd: 'finance.history.find_all' },
+        { ...query, user_id: req.user.sub },
+      );
     }
     return this.send({ cmd: 'finance.history.find_all' }, query);
   }
@@ -1010,5 +1137,88 @@ export class FinanceGatewayController {
   @ApiParam({ name: 'user_id', description: 'User id (bigint string)' })
   findSalaryByUser(@Param('user_id') user_id: string) {
     return this.send({ cmd: 'finance.salary.find_by_user' }, { user_id });
+  }
+
+  // --- Operator earnings & payments ---
+
+  @Post('operator-payments')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Record a payout to an operator' })
+  @ApiBody({ type: CreateOperatorPaymentRequestDto })
+  createOperatorPayment(
+    @Body() dto: CreateOperatorPaymentRequestDto,
+    @Req() req: { user?: JwtUser },
+  ) {
+    return this.send(
+      { cmd: 'finance.operator.payment.create' },
+      { ...dto, paid_by_id: req.user?.sub ?? null },
+    );
+  }
+
+  @Get('operators/:operator_id/balance')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Operator earned/paid/balance summary' })
+  @ApiParam({
+    name: 'operator_id',
+    description: 'Operator user id (bigint string)',
+  })
+  findOperatorBalance(@Param('operator_id') operator_id: string) {
+    return this.send({ cmd: 'finance.operator.balance.find' }, { operator_id });
+  }
+
+  @Get('operators/:operator_id/earnings')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List an operator earnings' })
+  @ApiParam({
+    name: 'operator_id',
+    description: 'Operator user id (bigint string)',
+  })
+  @ApiQuery({ name: 'limit', required: false })
+  @ApiQuery({ name: 'offset', required: false })
+  listOperatorEarnings(
+    @Param('operator_id') operator_id: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.send(
+      { cmd: 'finance.operator.earning.list' },
+      {
+        operator_id,
+        limit: limit ? Number(limit) : undefined,
+        offset: offset ? Number(offset) : undefined,
+      },
+    );
+  }
+
+  @Get('operators/:operator_id/payments')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List an operator payouts' })
+  @ApiParam({
+    name: 'operator_id',
+    description: 'Operator user id (bigint string)',
+  })
+  @ApiQuery({ name: 'limit', required: false })
+  @ApiQuery({ name: 'offset', required: false })
+  listOperatorPayments(
+    @Param('operator_id') operator_id: string,
+    @Query('limit') limit?: string,
+    @Query('offset') offset?: string,
+  ) {
+    return this.send(
+      { cmd: 'finance.operator.payment.list' },
+      {
+        operator_id,
+        limit: limit ? Number(limit) : undefined,
+        offset: offset ? Number(offset) : undefined,
+      },
+    );
   }
 }

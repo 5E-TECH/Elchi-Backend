@@ -8,7 +8,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { Status, Where_deliver } from '@app/common';
+import { Commission_type, Status, Where_deliver } from '@app/common';
 
 export class UpdateUserDto {
   @IsOptional()
@@ -58,4 +58,15 @@ export class UpdateUserDto {
   @IsOptional()
   @IsString()
   region_id?: string;
+
+  // Operator commission config. Used by finance-service to compute per-order
+  // earnings when an order created by this operator is sold.
+  @IsOptional()
+  @IsEnum(Commission_type)
+  commission_type?: Commission_type;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  commission_value?: number;
 }

@@ -1,7 +1,15 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { Between, Brackets, DataSource, In, IsNull, QueryFailedError, Repository } from 'typeorm';
+import {
+  Between,
+  Brackets,
+  DataSource,
+  In,
+  IsNull,
+  QueryFailedError,
+  Repository,
+} from 'typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
@@ -146,7 +154,13 @@ export class OrderServiceService implements OnModuleInit {
           type: 'order',
           sourceId: order.id,
           title: `Order #${order.id}`,
-          content: [order.status, order.address, order.comment, order.market_id, order.customer_id]
+          content: [
+            order.status,
+            order.address,
+            order.comment,
+            order.market_id,
+            order.customer_id,
+          ]
             .filter(Boolean)
             .join(' '),
           tags: ['order', order.status, order.where_deliver].filter(Boolean),
@@ -229,16 +243,28 @@ export class OrderServiceService implements OnModuleInit {
       const rawMessage = pgError?.message ?? '';
 
       if (rawMessage.includes('orders_status_enum')) {
-        throw new RpcException({ statusCode: 400, message: "status noto'g'ri qiymat" });
+        throw new RpcException({
+          statusCode: 400,
+          message: "status noto'g'ri qiymat",
+        });
       }
       if (rawMessage.includes('orders_where_deliver_enum')) {
-        throw new RpcException({ statusCode: 400, message: "where_deliver noto'g'ri qiymat" });
+        throw new RpcException({
+          statusCode: 400,
+          message: "where_deliver noto'g'ri qiymat",
+        });
       }
       if (pgError?.code === '22P02') {
         if (rawMessage.includes('bigint')) {
-          throw new RpcException({ statusCode: 400, message: "ID qiymatlari raqam ko'rinishida bo'lishi kerak" });
+          throw new RpcException({
+            statusCode: 400,
+            message: "ID qiymatlari raqam ko'rinishida bo'lishi kerak",
+          });
         }
-        throw new RpcException({ statusCode: 400, message: "Noto'g'ri formatdagi qiymat yuborildi" });
+        throw new RpcException({
+          statusCode: 400,
+          message: "Noto'g'ri formatdagi qiymat yuborildi",
+        });
       }
       if (pgError?.code === '23502') {
         const column = pgError?.column ?? 'unknown';
@@ -249,15 +275,26 @@ export class OrderServiceService implements OnModuleInit {
         });
       }
       if (pgError?.code === '23503') {
-        throw new RpcException({ statusCode: 400, message: "Bog'langan ma'lumot topilmadi" });
+        throw new RpcException({
+          statusCode: 400,
+          message: "Bog'langan ma'lumot topilmadi",
+        });
       }
     }
     throw error;
   }
 
-  private toTrackingRole(roles?: string[]): 'admin' | 'courier' | 'market' | 'system' {
-    const normalized = new Set((roles ?? []).map((role) => String(role).toLowerCase()));
-    if (normalized.has(Roles.SUPERADMIN) || normalized.has(Roles.ADMIN) || normalized.has(Roles.REGISTRATOR)) {
+  private toTrackingRole(
+    roles?: string[],
+  ): 'admin' | 'courier' | 'market' | 'system' {
+    const normalized = new Set(
+      (roles ?? []).map((role) => String(role).toLowerCase()),
+    );
+    if (
+      normalized.has(Roles.SUPERADMIN) ||
+      normalized.has(Roles.ADMIN) ||
+      normalized.has(Roles.REGISTRATOR)
+    ) {
       return 'admin';
     }
     if (normalized.has(Roles.COURIER)) {
@@ -273,13 +310,24 @@ export class OrderServiceService implements OnModuleInit {
     return status === Order_status.NEW ? Order_status.CREATED : status;
   }
 
-  private isValidStatusTransition(fromStatus: Order_status, toStatus: Order_status): boolean {
+  private isValidStatusTransition(
+    fromStatus: Order_status,
+    toStatus: Order_status,
+  ): boolean {
     if (fromStatus === toStatus) return true;
 
     const transitions: Record<Order_status, Order_status[]> = {
-      [Order_status.CREATED]: [Order_status.NEW, Order_status.RECEIVED, Order_status.CANCELLED],
+      [Order_status.CREATED]: [
+        Order_status.NEW,
+        Order_status.RECEIVED,
+        Order_status.CANCELLED,
+      ],
       [Order_status.NEW]: [Order_status.RECEIVED, Order_status.CANCELLED],
-      [Order_status.RECEIVED]: [Order_status.ON_THE_ROAD, Order_status.WAITING, Order_status.CANCELLED],
+      [Order_status.RECEIVED]: [
+        Order_status.ON_THE_ROAD,
+        Order_status.WAITING,
+        Order_status.CANCELLED,
+      ],
       [Order_status.ON_THE_ROAD]: [
         Order_status.WAITING,
         Order_status.WAITING_CUSTOMER,
@@ -300,12 +348,23 @@ export class OrderServiceService implements OnModuleInit {
         Order_status.RETURNED_TO_MARKET,
         Order_status.CLOSED,
       ],
-      [Order_status.SOLD]: [Order_status.PAID, Order_status.WAITING, Order_status.CLOSED],
-      [Order_status.PARTLY_PAID]: [Order_status.PAID, Order_status.WAITING, Order_status.CLOSED],
+      [Order_status.SOLD]: [
+        Order_status.PAID,
+        Order_status.WAITING,
+        Order_status.CLOSED,
+      ],
+      [Order_status.PARTLY_PAID]: [
+        Order_status.PAID,
+        Order_status.WAITING,
+        Order_status.CLOSED,
+      ],
       [Order_status.PAID]: [Order_status.WAITING, Order_status.CLOSED],
       [Order_status.CANCELLED]: [Order_status.WAITING, Order_status.CLOSED],
       [Order_status.RETURNED_TO_MARKET]: [],
-      [Order_status.CANCELLED_SENT]: [Order_status.CANCELLED, Order_status.CLOSED],
+      [Order_status.CANCELLED_SENT]: [
+        Order_status.CANCELLED,
+        Order_status.CLOSED,
+      ],
       [Order_status.CLOSED]: [Order_status.WAITING],
     };
 
@@ -361,7 +420,11 @@ export class OrderServiceService implements OnModuleInit {
   private async resolveHolderFromState(
     branchId: string | null | undefined,
     courierId: string | null | undefined,
-  ): Promise<{ holder_type: OrderHolderType; holder_branch_id: string | null; holder_courier_id: string | null }> {
+  ): Promise<{
+    holder_type: OrderHolderType;
+    holder_branch_id: string | null;
+    holder_courier_id: string | null;
+  }> {
     const normalizedBranchId = branchId ? String(branchId) : null;
     const normalizedCourierId = courierId ? String(courierId) : null;
 
@@ -422,10 +485,16 @@ export class OrderServiceService implements OnModuleInit {
 
   private toUzIsoString(date: Date): string {
     const uzOffsetMs = 5 * 60 * 60 * 1000;
-    return new Date(date.getTime() + uzOffsetMs).toISOString().replace('Z', '+05:00');
+    return new Date(date.getTime() + uzOffsetMs)
+      .toISOString()
+      .replace('Z', '+05:00');
   }
 
-  private normalizePagination(page?: number, limit?: number, fetchAll?: boolean) {
+  private normalizePagination(
+    page?: number,
+    limit?: number,
+    fetchAll?: boolean,
+  ) {
     const DEFAULT_LIMIT = 10;
     const MAX_LIMIT = 100;
     const MAX_FETCH_ALL = 5000;
@@ -440,7 +509,9 @@ export class OrderServiceService implements OnModuleInit {
           : Math.min(parsedLimit, MAX_LIMIT);
 
     const normalizedPage =
-      Number.isFinite(parsedPage) && parsedPage >= 1 ? Math.floor(parsedPage) : 1;
+      Number.isFinite(parsedPage) && parsedPage >= 1
+        ? Math.floor(parsedPage)
+        : 1;
 
     return {
       page: normalizedPage,
@@ -469,7 +540,9 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     const allowedStatuses = new Set(Object.values(Order_status));
-    const invalidValues = flattened.filter((value) => !allowedStatuses.has(value as Order_status));
+    const invalidValues = flattened.filter(
+      (value) => !allowedStatuses.has(value as Order_status),
+    );
     if (invalidValues.length) {
       this.badRequest(`Invalid status value(s): ${invalidValues.join(', ')}`);
     }
@@ -560,7 +633,10 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
-      throw new RpcException({ statusCode: 400, message: 'Sana formati noto‘g‘ri' });
+      throw new RpcException({
+        statusCode: 400,
+        message: 'Sana formati noto‘g‘ri',
+      });
     }
 
     return { start, end };
@@ -584,18 +660,34 @@ export class OrderServiceService implements OnModuleInit {
       timeZone: 'Asia/Tashkent',
       day: '2-digit',
       month: '2-digit',
-    }).format(date).replace('/', '.').replace('/', '.');
+    })
+      .format(date)
+      .replace('/', '.')
+      .replace('/', '.');
   }
 
-  private normalizeRevenuePeriod(period?: string): 'daily' | 'weekly' | 'monthly' | 'yearly' {
+  private normalizeRevenuePeriod(
+    period?: string,
+  ): 'daily' | 'weekly' | 'monthly' | 'yearly' {
     const normalized = String(period ?? 'daily').toLowerCase();
-    if (normalized === 'daily' || normalized === 'weekly' || normalized === 'monthly' || normalized === 'yearly') {
+    if (
+      normalized === 'daily' ||
+      normalized === 'weekly' ||
+      normalized === 'monthly' ||
+      normalized === 'yearly'
+    ) {
       return normalized;
     }
-    throw new RpcException({ statusCode: 400, message: 'period must be one of: daily, weekly, monthly, yearly' });
+    throw new RpcException({
+      statusCode: 400,
+      message: 'period must be one of: daily, weekly, monthly, yearly',
+    });
   }
 
-  private periodStart(date: Date, period: 'daily' | 'weekly' | 'monthly' | 'yearly'): Date {
+  private periodStart(
+    date: Date,
+    period: 'daily' | 'weekly' | 'monthly' | 'yearly',
+  ): Date {
     const d = new Date(date);
     d.setHours(0, 0, 0, 0);
 
@@ -628,7 +720,10 @@ export class OrderServiceService implements OnModuleInit {
     return d;
   }
 
-  private periodKey(date: Date, period: 'daily' | 'weekly' | 'monthly' | 'yearly'): string {
+  private periodKey(
+    date: Date,
+    period: 'daily' | 'weekly' | 'monthly' | 'yearly',
+  ): string {
     const d = this.periodStart(date, period);
     if (period === 'daily') {
       return this.dateKey(d);
@@ -644,7 +739,10 @@ export class OrderServiceService implements OnModuleInit {
     return `Y:${d.getFullYear()}`;
   }
 
-  private periodLabel(date: Date, period: 'daily' | 'weekly' | 'monthly' | 'yearly'): string {
+  private periodLabel(
+    date: Date,
+    period: 'daily' | 'weekly' | 'monthly' | 'yearly',
+  ): string {
     const d = this.periodStart(date, period);
     if (period === 'daily') {
       return this.dateLabel(d);
@@ -672,7 +770,9 @@ export class OrderServiceService implements OnModuleInit {
     if (orderComment?.trim()) parts.push(orderComment.trim());
     if (dtoComment?.trim()) parts.push(dtoComment.trim());
     if ((extraCost ?? 0) > 0) {
-      parts.push(`!!! Bu buyurtmadan qo'shimcha ${extraCost} miqdorda pul ushlab qolingan`);
+      parts.push(
+        `!!! Bu buyurtmadan qo'shimcha ${extraCost} miqdorda pul ushlab qolingan`,
+      );
     }
 
     for (const note of notes) {
@@ -684,7 +784,9 @@ export class OrderServiceService implements OnModuleInit {
 
   private async getPostsByIds(ids: string[]) {
     if (!ids.length) return [];
-    const response = await rmqSend<{ data?: Array<{ id: string; courier_id?: string | null }> }>(
+    const response = await rmqSend<{
+      data?: Array<{ id: string; courier_id?: string | null }>;
+    }>(
       this.logisticsClient,
       { cmd: 'logistics.post.find_by_ids' },
       { ids },
@@ -696,12 +798,20 @@ export class OrderServiceService implements OnModuleInit {
     const limit = 100;
     let page = 1;
     let totalPages = 1;
-    const rows: Array<{ id: string; courier_id?: string | null; updatedAt?: string | Date | null }> = [];
+    const rows: Array<{
+      id: string;
+      courier_id?: string | null;
+      updatedAt?: string | Date | null;
+    }> = [];
 
     while (page <= totalPages) {
       const response = await rmqSend<{
         data?: {
-          data?: Array<{ id: string; courier_id?: string | null; updatedAt?: string | Date | null }>;
+          data?: Array<{
+            id: string;
+            courier_id?: string | null;
+            updatedAt?: string | Date | null;
+          }>;
           totalPages?: number;
         };
       }>(
@@ -720,7 +830,14 @@ export class OrderServiceService implements OnModuleInit {
 
   private async getMarketsByIds(ids: string[]) {
     if (!ids.length) return [];
-    const response = await rmqSend<{ data?: Array<{ id: string; name?: string; tariff_home?: number; tariff_center?: number }> }>(
+    const response = await rmqSend<{
+      data?: Array<{
+        id: string;
+        name?: string;
+        tariff_home?: number;
+        tariff_center?: number;
+      }>;
+    }>(
       this.identityClient,
       { cmd: 'identity.market.find_by_ids' },
       { ids },
@@ -730,7 +847,14 @@ export class OrderServiceService implements OnModuleInit {
 
   private async getCouriersByIds(ids: string[]) {
     if (!ids.length) return [];
-    const response = await rmqSend<{ data?: Array<{ id: string; name?: string; tariff_home?: number; tariff_center?: number }> }>(
+    const response = await rmqSend<{
+      data?: Array<{
+        id: string;
+        name?: string;
+        tariff_home?: number;
+        tariff_center?: number;
+      }>;
+    }>(
       this.identityClient,
       { cmd: 'identity.courier.find_by_ids' },
       { ids },
@@ -742,7 +866,12 @@ export class OrderServiceService implements OnModuleInit {
     const limit = 200;
     let page = 1;
     let totalPages = 1;
-    const items: Array<{ id?: string; name?: string; username?: string; market_id?: string }> = [];
+    const items: Array<{
+      id?: string;
+      name?: string;
+      username?: string;
+      market_id?: string;
+    }> = [];
 
     while (page <= totalPages) {
       const response = await rmqSend<any>(
@@ -800,6 +929,59 @@ export class OrderServiceService implements OnModuleInit {
     );
   }
 
+  /**
+   * Enqueue an operator-commission event for finance-service. Called from the
+   * central status-change path (writeOrderChanges) inside its transaction.
+   *
+   * Sold-ish state (SOLD/PAID/PARTLY_PAID) → record the earning.
+   * Rollback to WAITING → remove it.
+   * Other transitions → no event.
+   *
+   * Only orders with an operator_id are relevant; admin-created orders have
+   * no operator and earn no commission. finance-service computes the amount
+   * from the operator's commission config and dedupes on order_id.
+   */
+  private async enqueueOperatorEarning(
+    order: Order,
+    oldStatus: Order_status,
+    manager: EntityManager,
+  ): Promise<void> {
+    if (!order.operator_id) {
+      return;
+    }
+
+    const soldStates = [
+      Order_status.SOLD,
+      Order_status.PAID,
+      Order_status.PARTLY_PAID,
+    ];
+    const enteredSold =
+      soldStates.includes(order.status) && !soldStates.includes(oldStatus);
+    const leftSold =
+      order.status === Order_status.WAITING && soldStates.includes(oldStatus);
+
+    if (enteredSold) {
+      await this.outbox.enqueue(
+        'FINANCE',
+        'finance.operator.earning.record',
+        {
+          order_id: String(order.id),
+          operator_id: String(order.operator_id),
+          market_id: order.market_id ? String(order.market_id) : null,
+          total_price: Number(order.total_price ?? 0),
+        },
+        { manager },
+      );
+    } else if (leftSold) {
+      await this.outbox.enqueue(
+        'FINANCE',
+        'finance.operator.earning.remove',
+        { order_id: String(order.id) },
+        { manager },
+      );
+    }
+  }
+
   private hasRole(requester: { roles?: string[] } | undefined, role: Roles) {
     return (requester?.roles ?? []).some(
       (item) => String(item).toLowerCase() === String(role).toLowerCase(),
@@ -843,7 +1025,8 @@ export class OrderServiceService implements OnModuleInit {
       const orderBranchId = String(order?.branch_id ?? '').trim();
       if (
         !requesterBranchId ||
-        (requesterBranchId !== orderHolderBranchId && requesterBranchId !== orderBranchId)
+        (requesterBranchId !== orderHolderBranchId &&
+          requesterBranchId !== orderBranchId)
       ) {
         this.badRequest('Order is not assigned to this manager branch');
       }
@@ -908,7 +1091,8 @@ export class OrderServiceService implements OnModuleInit {
     id: string,
   ) {
     const isManagerRequester =
-      this.hasRole(requester, Roles.MANAGER) && !this.hasRole(requester, Roles.COURIER);
+      this.hasRole(requester, Roles.MANAGER) &&
+      !this.hasRole(requester, Roles.COURIER);
     const order = await this.findById(id);
     const originalStatus = order.status;
     const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
@@ -943,7 +1127,9 @@ export class OrderServiceService implements OnModuleInit {
       this.badRequest('Order has no post');
     }
 
-    const postRes = await rmqSend<{ data?: { id: string; courier_id?: string | null } }>(
+    const postRes = await rmqSend<{
+      data?: { id: string; courier_id?: string | null };
+    }>(
       this.logisticsClient,
       { cmd: 'logistics.post.find_by_id' },
       { id: String(order.post_id) },
@@ -953,7 +1139,11 @@ export class OrderServiceService implements OnModuleInit {
       this.notFound('Post not found');
     }
 
-    if (isCourier && !isSuperAdmin && String(post.courier_id ?? '') !== String(requester.id)) {
+    if (
+      isCourier &&
+      !isSuperAdmin &&
+      String(post.courier_id ?? '') !== String(requester.id)
+    ) {
       this.badRequest('Order is not assigned to this courier');
     }
 
@@ -963,7 +1153,8 @@ export class OrderServiceService implements OnModuleInit {
       const orderBranchId = String(order?.branch_id ?? '').trim();
       if (
         !requesterBranchId ||
-        (requesterBranchId !== orderHolderBranchId && requesterBranchId !== orderBranchId)
+        (requesterBranchId !== orderHolderBranchId &&
+          requesterBranchId !== orderBranchId)
       ) {
         this.badRequest('Order is not assigned to this manager branch');
       }
@@ -1026,28 +1217,34 @@ export class OrderServiceService implements OnModuleInit {
     const shouldRollbackMarketExtraCost =
       !!marketExtraCost &&
       Number(marketExtraCost.amount ?? 0) > 0 &&
-      (
-        [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID].includes(originalStatus)
-          ? Number.isFinite(soldAt) &&
-            this.isNearInTime(new Date(soldAt), marketExtraCostCreatedAt)
-          : [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
-            ? this.isNearInTime(orderUpdatedAt, marketExtraCostCreatedAt)
-            : false
-      );
+      ([
+        Order_status.SOLD,
+        Order_status.PAID,
+        Order_status.PARTLY_PAID,
+      ].includes(originalStatus)
+        ? Number.isFinite(soldAt) &&
+          this.isNearInTime(new Date(soldAt), marketExtraCostCreatedAt)
+        : [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
+          ? this.isNearInTime(orderUpdatedAt, marketExtraCostCreatedAt)
+          : false);
     const shouldRollbackCourierExtraCost =
       !!courierExtraCost &&
       Number(courierExtraCost.amount ?? 0) > 0 &&
-      (
-        [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID].includes(originalStatus)
-          ? Number.isFinite(soldAt) &&
-            this.isNearInTime(new Date(soldAt), courierExtraCostCreatedAt)
-          : [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
-            ? this.isNearInTime(orderUpdatedAt, courierExtraCostCreatedAt)
-            : false
-      );
+      ([
+        Order_status.SOLD,
+        Order_status.PAID,
+        Order_status.PARTLY_PAID,
+      ].includes(originalStatus)
+        ? Number.isFinite(soldAt) &&
+          this.isNearInTime(new Date(soldAt), courierExtraCostCreatedAt)
+        : [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
+          ? this.isNearInTime(orderUpdatedAt, courierExtraCostCreatedAt)
+          : false);
 
     if (
-      [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID].includes(originalStatus)
+      [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID].includes(
+        originalStatus,
+      )
     ) {
       if (shouldRollbackMarketExtraCost) {
         await this.updateCashboxBalance({
@@ -1218,10 +1415,11 @@ export class OrderServiceService implements OnModuleInit {
         source_type: Source_type.CORRECTION,
         source_id: String(order.id),
         created_by: String(requester.id),
-        comment:
-          [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
-            ? "Bekor qilingan buyurtmaga yozilgan qo'shimcha xarajat orqaga qaytarildi"
-            : "Qo'shimcha xarajat orqaga qaytarildi",
+        comment: [Order_status.CANCELLED, Order_status.CLOSED].includes(
+          originalStatus,
+        )
+          ? "Bekor qilingan buyurtmaga yozilgan qo'shimcha xarajat orqaga qaytarildi"
+          : "Qo'shimcha xarajat orqaga qaytarildi",
       });
     }
 
@@ -1237,10 +1435,11 @@ export class OrderServiceService implements OnModuleInit {
         source_type: Source_type.CORRECTION,
         source_id: String(order.id),
         created_by: String(requester.id),
-        comment:
-          [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
-            ? "Bekor qilingan buyurtmaga yozilgan qo'shimcha xarajat orqaga qaytarildi"
-            : "Qo'shimcha xarajat orqaga qaytarildi",
+        comment: [Order_status.CANCELLED, Order_status.CLOSED].includes(
+          originalStatus,
+        )
+          ? "Bekor qilingan buyurtmaga yozilgan qo'shimcha xarajat orqaga qaytarildi"
+          : "Qo'shimcha xarajat orqaga qaytarildi",
       });
     }
 
@@ -1248,17 +1447,33 @@ export class OrderServiceService implements OnModuleInit {
       isSuperAdmin &&
       [Order_status.PAID, Order_status.PARTLY_PAID].includes(originalStatus)
     ) {
-      await this.updateFull(id, {
-        status: Order_status.WAITING,
-        paid_amount: 0,
-        sold_at: null,
-      }, { id: requester.id, roles: requester.roles, note: 'Rollback to waiting' });
+      await this.updateFull(
+        id,
+        {
+          status: Order_status.WAITING,
+          paid_amount: 0,
+          sold_at: null,
+        },
+        {
+          id: requester.id,
+          roles: requester.roles,
+          note: 'Rollback to waiting',
+        },
+      );
     } else {
-      await this.updateFull(id, {
-        status: Order_status.WAITING,
-        to_be_paid: 0,
-        sold_at: null,
-      }, { id: requester.id, roles: requester.roles, note: 'Rollback to waiting' });
+      await this.updateFull(
+        id,
+        {
+          status: Order_status.WAITING,
+          to_be_paid: 0,
+          sold_at: null,
+        },
+        {
+          id: requester.id,
+          roles: requester.roles,
+          note: 'Rollback to waiting',
+        },
+      );
     }
 
     return successRes({}, 200, 'Order WAITING holatiga qaytarildi');
@@ -1303,7 +1518,9 @@ export class OrderServiceService implements OnModuleInit {
           from_status: order.status,
           to_status: order.status,
           changed_by: String(requester?.id ?? 'system'),
-          changed_by_role: requester?.id ? this.toTrackingRole(requester.roles) : 'system',
+          changed_by_role: requester?.id
+            ? this.toTrackingRole(requester.roles)
+            : 'system',
           note: `Return initiated: ${reason}`,
         },
         trackingRepo,
@@ -1328,7 +1545,7 @@ export class OrderServiceService implements OnModuleInit {
   ) {
     const order = await this.findById(id);
     if (order.status === Order_status.RETURNED_TO_MARKET) {
-      this.badRequest("Order allaqachon RETURNED_TO_MARKET holatida");
+      this.badRequest('Order allaqachon RETURNED_TO_MARKET holatida');
     }
 
     const receivedReturnBatchItem = await this.transferBatchItemRepo
@@ -1340,14 +1557,22 @@ export class OrderServiceService implements OnModuleInit {
       )
       .where('item.order_id = :orderId', { orderId: String(order.id) })
       .andWhere('item.is_deleted = false')
-      .andWhere('batch.direction = :direction', { direction: BranchTransferDirection.RETURN })
-      .andWhere('batch.status = :status', { status: BranchTransferBatchStatus.RECEIVED })
-      .andWhere('batch.destination_branch_id = :branchId', { branchId: String(order.branch_id ?? '') })
+      .andWhere('batch.direction = :direction', {
+        direction: BranchTransferDirection.RETURN,
+      })
+      .andWhere('batch.status = :status', {
+        status: BranchTransferBatchStatus.RECEIVED,
+      })
+      .andWhere('batch.destination_branch_id = :branchId', {
+        branchId: String(order.branch_id ?? ''),
+      })
       .select(['item.id'])
       .getRawOne();
 
     if (!receivedReturnBatchItem) {
-      this.badRequest("Order return paketda filialga qabul qilingan bo'lishi kerak");
+      this.badRequest(
+        "Order return paketda filialga qabul qilingan bo'lishi kerak",
+      );
     }
 
     const oldStatus = order.status;
@@ -1368,7 +1593,9 @@ export class OrderServiceService implements OnModuleInit {
           from_status: oldStatus,
           to_status: Order_status.RETURNED_TO_MARKET,
           changed_by: String(requester?.id ?? 'system'),
-          changed_by_role: requester?.id ? this.toTrackingRole(requester.roles) : 'system',
+          changed_by_role: requester?.id
+            ? this.toTrackingRole(requester.roles)
+            : 'system',
           note: `Xodim ${String(requester?.id ?? 'unknown')} market egasiga topshirdi`,
         },
         trackingRepo,
@@ -1409,7 +1636,11 @@ export class OrderServiceService implements OnModuleInit {
 
     try {
       // Use explicit insert so order_id is always written and never treated as DEFAULT/null.
-      await this.orderItemRepo.createQueryBuilder().insert().values(normalizedItems).execute();
+      await this.orderItemRepo
+        .createQueryBuilder()
+        .insert()
+        .values(normalizedItems)
+        .execute();
     } catch (error) {
       this.handleDbError(error);
     }
@@ -1417,40 +1648,49 @@ export class OrderServiceService implements OnModuleInit {
     return normalizedItems.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
   }
 
-  async create(dto: {
-    market_id: string;
-    customer_id: string;
-    where_deliver?: Where_deliver;
-    total_price?: number;
-    to_be_paid?: number;
-    paid_amount?: number;
-    status?: Order_status;
-    comment?: string | null;
-    operator?: string | null;
-    operator_id?: string | null;
-    post_id?: string | null;
-    canceled_post_id?: string | null;
-    sold_at?: string | null;
-    branch_id?: string | null;
-    current_batch_id?: string | null;
-    courier_id?: string | null;
-    assigned_at?: string | Date | null;
-    return_reason?: string | null;
-    district_id?: string | null;
-    region_id?: string | null;
-    address?: string | null;
-    qr_code_token?: string | null;
-    parent_order_id?: string | null;
-    external_id?: string | null;
-    source?: Order_source;
-    items?: Array<{ product_id: string; quantity?: number }>;
-  }, requester?: { id: string; roles?: string[] }) {
-    const roles = new Set((requester?.roles ?? []).map((role) => String(role).toLowerCase()));
+  async create(
+    dto: {
+      market_id: string;
+      customer_id: string;
+      where_deliver?: Where_deliver;
+      total_price?: number;
+      to_be_paid?: number;
+      paid_amount?: number;
+      status?: Order_status;
+      comment?: string | null;
+      operator?: string | null;
+      operator_id?: string | null;
+      post_id?: string | null;
+      canceled_post_id?: string | null;
+      sold_at?: string | null;
+      branch_id?: string | null;
+      current_batch_id?: string | null;
+      courier_id?: string | null;
+      assigned_at?: string | Date | null;
+      return_reason?: string | null;
+      district_id?: string | null;
+      region_id?: string | null;
+      address?: string | null;
+      qr_code_token?: string | null;
+      parent_order_id?: string | null;
+      external_id?: string | null;
+      source?: Order_source;
+      items?: Array<{ product_id: string; quantity?: number }>;
+    },
+    requester?: { id: string; roles?: string[] },
+  ) {
+    const roles = new Set(
+      (requester?.roles ?? []).map((role) => String(role).toLowerCase()),
+    );
     const isOperatorRequester =
       roles.has(Roles.REGISTRATOR) || roles.has(Roles.MARKET_OPERATOR);
-    const operatorId = dto.operator_id ?? (isOperatorRequester ? requester?.id ?? null : null);
+    const operatorId =
+      dto.operator_id ?? (isOperatorRequester ? (requester?.id ?? null) : null);
 
-    const resolvedBranchId = await this.resolveBranchIdForOrder(dto.branch_id, requester);
+    const resolvedBranchId = await this.resolveBranchIdForOrder(
+      dto.branch_id,
+      requester,
+    );
     const resolvedHolder = await this.resolveHolderFromState(
       resolvedBranchId,
       dto.courier_id ?? null,
@@ -1510,12 +1750,22 @@ export class OrderServiceService implements OnModuleInit {
         order_id: saved.id,
       }));
       if (normalizedItems.length) {
-        await orderItemRepo.createQueryBuilder().insert().values(normalizedItems).execute();
+        await orderItemRepo
+          .createQueryBuilder()
+          .insert()
+          .values(normalizedItems)
+          .execute();
       }
 
-      const productQuantity = normalizedItems.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
+      const productQuantity = normalizedItems.reduce(
+        (sum, item) => sum + (item.quantity ?? 1),
+        0,
+      );
       if (saved.product_quantity !== productQuantity) {
-        await orderRepo.update({ id: saved.id }, { product_quantity: productQuantity });
+        await orderRepo.update(
+          { id: saved.id },
+          { product_quantity: productQuantity },
+        );
       }
 
       await this.createTrackingEvent(
@@ -1524,7 +1774,9 @@ export class OrderServiceService implements OnModuleInit {
           from_status: null,
           to_status: this.mapInitialStatusForTracking(saved.status),
           changed_by: String(requester?.id ?? 'system'),
-          changed_by_role: requester?.id ? this.toTrackingRole(requester.roles) : 'system',
+          changed_by_role: requester?.id
+            ? this.toTrackingRole(requester.roles)
+            : 'system',
           note: 'Order created',
         },
         trackingRepo,
@@ -1540,7 +1792,9 @@ export class OrderServiceService implements OnModuleInit {
           from_courier_id: null,
           to_courier_id: resolvedHolder.holder_courier_id,
           changed_by: String(requester?.id ?? 'system'),
-          changed_by_role: requester?.id ? this.toTrackingRole(requester.roles) : 'system',
+          changed_by_role: requester?.id
+            ? this.toTrackingRole(requester.roles)
+            : 'system',
           note: 'Initial custody assigned',
         },
         custodyRepo,
@@ -1646,7 +1900,9 @@ export class OrderServiceService implements OnModuleInit {
       qb.andWhere('order.post_id IN (:...post_ids)', { post_ids });
     }
     if (canceled_post_id) {
-      qb.andWhere('order.canceled_post_id = :canceled_post_id', { canceled_post_id });
+      qb.andWhere('order.canceled_post_id = :canceled_post_id', {
+        canceled_post_id,
+      });
     }
     if (qr_code_token) {
       qb.andWhere('order.qr_code_token = :qr_code_token', { qr_code_token });
@@ -1654,10 +1910,14 @@ export class OrderServiceService implements OnModuleInit {
     if (statusFilter?.length) {
       qb.andWhere('order.status IN (:...statuses)', { statuses: statusFilter });
     } else if (exclude_statuses?.length) {
-      qb.andWhere('order.status NOT IN (:...exclude_statuses)', { exclude_statuses });
+      qb.andWhere('order.status NOT IN (:...exclude_statuses)', {
+        exclude_statuses,
+      });
     }
     if (typeof return_requested === 'boolean') {
-      qb.andWhere('order.return_requested = :return_requested', { return_requested });
+      qb.andWhere('order.return_requested = :return_requested', {
+        return_requested,
+      });
     }
     if (region_id) {
       qb.andWhere('order.region_id = :region_id', { region_id });
@@ -1691,24 +1951,32 @@ export class OrderServiceService implements OnModuleInit {
       });
     }
     if (excludeSourceFilters.length) {
-      qb.andWhere('order.source NOT IN (:...excludeSourceFilters)', { excludeSourceFilters });
+      qb.andWhere('order.source NOT IN (:...excludeSourceFilters)', {
+        excludeSourceFilters,
+      });
     }
     if (courier) {
       qb.andWhere(
         new Brackets((nested) => {
           nested
-            .where('order.operator ILIKE :courierLike', { courierLike: `%${courier}%` })
+            .where('order.operator ILIKE :courierLike', {
+              courierLike: `%${courier}%`,
+            })
             .orWhere('order.post_id = :courierId', { courierId: courier });
         }),
       );
     }
     if (courier_ids?.length) {
-      const normalizedCourierIds = courier_ids.map((id) => String(id)).filter(Boolean);
+      const normalizedCourierIds = courier_ids
+        .map((id) => String(id))
+        .filter(Boolean);
       if (normalizedCourierIds.length) {
         qb.andWhere(
           new Brackets((nested) => {
             nested
-              .where('order.courier_id IN (:...courier_ids)', { courier_ids: normalizedCourierIds })
+              .where('order.courier_id IN (:...courier_ids)', {
+                courier_ids: normalizedCourierIds,
+              })
               .orWhere('order.holder_courier_id IN (:...courier_ids)', {
                 courier_ids: normalizedCourierIds,
               });
@@ -1719,14 +1987,20 @@ export class OrderServiceService implements OnModuleInit {
     if (start_day) {
       const startDate = new Date(start_day);
       if (Number.isNaN(startDate.getTime())) {
-        throw new RpcException({ statusCode: 400, message: 'start_day noto\'g\'ri sana formatida' });
+        throw new RpcException({
+          statusCode: 400,
+          message: "start_day noto'g'ri sana formatida",
+        });
       }
       qb.andWhere('order.createdAt >= :startDate', { startDate });
     }
     if (end_day) {
       const endDate = new Date(end_day);
       if (Number.isNaN(endDate.getTime())) {
-        throw new RpcException({ statusCode: 400, message: 'end_day noto\'g\'ri sana formatida' });
+        throw new RpcException({
+          statusCode: 400,
+          message: "end_day noto'g'ri sana formatida",
+        });
       }
       if (!end_day.includes('T')) {
         endDate.setHours(23, 59, 59, 999);
@@ -1772,7 +2046,9 @@ export class OrderServiceService implements OnModuleInit {
       qb.andWhere('order.branch_id = :branch_id', { branch_id });
     }
     if (exclude_branch_source) {
-      qb.andWhere('order.source != :branch_source', { branch_source: Order_source.BRANCH });
+      qb.andWhere('order.source != :branch_source', {
+        branch_source: Order_source.BRANCH,
+      });
     }
 
     let rows: Array<{
@@ -1805,7 +2081,9 @@ export class OrderServiceService implements OnModuleInit {
       branch_id,
       status: Order_status.NEW,
       unbatched_only: true,
-      ...(exclude_branch_source ? { exclude_sources: [Order_source.BRANCH] } : {}),
+      ...(exclude_branch_source
+        ? { exclude_sources: [Order_source.BRANCH] }
+        : {}),
       page,
       limit,
     });
@@ -1865,7 +2143,9 @@ export class OrderServiceService implements OnModuleInit {
     return fieldPath.split('.').reduce((acc, key) => acc?.[key], obj);
   }
 
-  private async getIntegrationById(integrationId: string): Promise<Record<string, any>> {
+  private async getIntegrationById(
+    integrationId: string,
+  ): Promise<Record<string, any>> {
     const response = await rmqSend<{ data?: Record<string, any> }>(
       this.integrationClient,
       { cmd: 'integration.find_by_id' },
@@ -1880,7 +2160,9 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   private async getDefaultDistrictId(): Promise<string> {
-    const response = await rmqSend<{ data?: { items?: Array<{ id: string }> } | Array<{ id: string }> }>(
+    const response = await rmqSend<{
+      data?: { items?: Array<{ id: string }> } | Array<{ id: string }>;
+    }>(
       this.logisticsClient,
       { cmd: 'logistics.district.find_all' },
       { query: { page: 1, limit: 1 } },
@@ -1888,7 +2170,7 @@ export class OrderServiceService implements OnModuleInit {
 
     const rows = Array.isArray(response?.data)
       ? response.data
-      : (response?.data as any)?.items ?? [];
+      : ((response?.data as any)?.items ?? []);
 
     const districtId = rows?.[0]?.id ? String(rows[0].id) : '';
     if (!districtId) {
@@ -1897,8 +2179,12 @@ export class OrderServiceService implements OnModuleInit {
     return districtId;
   }
 
-  private async resolveDistrictId(externalDistrictValue: unknown, fallbackDistrictId: string): Promise<string> {
-    const raw = externalDistrictValue == null ? '' : String(externalDistrictValue).trim();
+  private async resolveDistrictId(
+    externalDistrictValue: unknown,
+    fallbackDistrictId: string,
+  ): Promise<string> {
+    const raw =
+      externalDistrictValue == null ? '' : String(externalDistrictValue).trim();
     if (!raw) return fallbackDistrictId;
 
     const bySato = await rmqSend<{ data?: { id?: string } }>(
@@ -1922,7 +2208,12 @@ export class OrderServiceService implements OnModuleInit {
     return fallbackDistrictId;
   }
 
-  private async queueExternalStatusSync(order: Order, action: 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting', old_status: string, new_status: string) {
+  private async queueExternalStatusSync(
+    order: Order,
+    action: 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting',
+    old_status: string,
+    new_status: string,
+  ) {
     if (!order.external_id || !order.operator?.startsWith('external_')) {
       return;
     }
@@ -1941,12 +2232,18 @@ export class OrderServiceService implements OnModuleInit {
     ).catch(() => undefined);
   }
 
-  private resolveSyncAction(oldStatus: string, newStatus: string): 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting' | null {
+  private resolveSyncAction(
+    oldStatus: string,
+    newStatus: string,
+  ): 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting' | null {
     if (newStatus === Order_status.CANCELLED) {
       return 'canceled';
     }
 
-    if (newStatus === Order_status.PAID || newStatus === Order_status.PARTLY_PAID) {
+    if (
+      newStatus === Order_status.PAID ||
+      newStatus === Order_status.PARTLY_PAID
+    ) {
       return 'paid';
     }
 
@@ -1973,7 +2270,9 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   async receiveNewOrders(orderIds: string[], search?: string) {
-    const uniqueOrderIds = Array.from(new Set((orderIds ?? []).filter(Boolean)));
+    const uniqueOrderIds = Array.from(
+      new Set((orderIds ?? []).filter(Boolean)),
+    );
     if (!uniqueOrderIds.length) {
       this.badRequest('order_ids is required');
     }
@@ -1992,8 +2291,12 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     // 2. Validate customers via RMQ (batch)
-    const customerIds = [...new Set(orders.map((o) => o.customer_id).filter(Boolean))];
-    const customersRes = await rmqSend<{ data: Array<{ id: string; name?: string; phone_number?: string }> }>(
+    const customerIds = [
+      ...new Set(orders.map((o) => o.customer_id).filter(Boolean)),
+    ];
+    const customersRes = await rmqSend<{
+      data: Array<{ id: string; name?: string; phone_number?: string }>;
+    }>(
       this.identityClient,
       { cmd: 'identity.customer.find_by_ids' },
       { ids: customerIds },
@@ -2030,8 +2333,16 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     // 5. Fetch district data via RMQ (batch) to get assigned_region
-    const districtIds = [...new Set(orders.map((o) => o.district_id).filter(Boolean) as string[])];
-    const districtsRes = await rmqSend<{ data: Array<{ id: string; assigned_region?: string; assignedToRegion?: { id: string } }> }>(
+    const districtIds = [
+      ...new Set(orders.map((o) => o.district_id).filter(Boolean) as string[]),
+    ];
+    const districtsRes = await rmqSend<{
+      data: Array<{
+        id: string;
+        assigned_region?: string;
+        assignedToRegion?: { id: string };
+      }>;
+    }>(
       this.logisticsClient,
       { cmd: 'logistics.district.find_by_ids' },
       { ids: districtIds },
@@ -2041,14 +2352,21 @@ export class OrderServiceService implements OnModuleInit {
     );
 
     // 6. Build payload for logistics post assignment
-    const logisticsPayload: Array<{ order_id: string; assigned_region: string; total_price: number }> = [];
+    const logisticsPayload: Array<{
+      order_id: string;
+      assigned_region: string;
+      total_price: number;
+    }> = [];
     for (const order of orders) {
       const district = districtMap.get(order.district_id!);
-      const assignedRegion = district?.assigned_region
-        ?? (district?.assignedToRegion as { id?: string } | undefined)?.id
-        ?? null;
+      const assignedRegion =
+        district?.assigned_region ??
+        (district?.assignedToRegion as { id?: string } | undefined)?.id ??
+        null;
       if (!assignedRegion) {
-        this.notFound(`District/assigned region not found for order #${order.id}`);
+        this.notFound(
+          `District/assigned region not found for order #${order.id}`,
+        );
       }
       logisticsPayload.push({
         order_id: order.id,
@@ -2123,7 +2441,8 @@ export class OrderServiceService implements OnModuleInit {
       }
       throw new RpcException({
         statusCode: 500,
-        message: error instanceof Error ? error.message : 'Internal server error',
+        message:
+          error instanceof Error ? error.message : 'Internal server error',
       });
     } finally {
       await queryRunner.release();
@@ -2133,13 +2452,20 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   async receiveExternalOrders(dto: { integration_id: string; orders: any[] }) {
-    const integration = await this.getIntegrationById(String(dto.integration_id));
+    const integration = await this.getIntegrationById(
+      String(dto.integration_id),
+    );
     if (integration?.is_active === false) {
       this.badRequest('Integration is inactive');
     }
 
-    const fieldMapping = (integration?.field_mapping ?? {}) as Record<string, string>;
-    const marketId = integration?.market_id ? String(integration.market_id) : '';
+    const fieldMapping = (integration?.field_mapping ?? {}) as Record<
+      string,
+      string
+    >;
+    const marketId = integration?.market_id
+      ? String(integration.market_id)
+      : '';
     if (!marketId) {
       this.badRequest('integration.market_id is required');
     }
@@ -2150,11 +2476,18 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     const fallbackDistrictId = await this.getDefaultDistrictId();
-    const created: Array<{ id: string; external_id: string | null; status: Order_status }> = [];
+    const created: Array<{
+      id: string;
+      external_id: string | null;
+      status: Order_status;
+    }> = [];
     const skipped: Array<{ external_id: string | null; reason: string }> = [];
 
     for (const ext of items) {
-      const externalIdRaw = this.getFieldValue(ext, fieldMapping.id_field ?? 'id');
+      const externalIdRaw = this.getFieldValue(
+        ext,
+        fieldMapping.id_field ?? 'id',
+      );
       const externalId = externalIdRaw == null ? null : String(externalIdRaw);
       const operator = `external_${integration.slug}`;
 
@@ -2173,9 +2506,14 @@ export class OrderServiceService implements OnModuleInit {
       }
 
       const customerName = String(
-        this.getFieldValue(ext, fieldMapping.customer_name_field ?? 'full_name') ?? 'External customer',
+        this.getFieldValue(
+          ext,
+          fieldMapping.customer_name_field ?? 'full_name',
+        ) ?? 'External customer',
       );
-      const phoneRaw = String(this.getFieldValue(ext, fieldMapping.phone_field ?? 'phone') ?? '');
+      const phoneRaw = String(
+        this.getFieldValue(ext, fieldMapping.phone_field ?? 'phone') ?? '',
+      );
       const normalizedDigits = phoneRaw.replace(/\D/g, '');
       const phone =
         normalizedDigits.length === 12 && normalizedDigits.startsWith('998')
@@ -2188,9 +2526,18 @@ export class OrderServiceService implements OnModuleInit {
         continue;
       }
 
-      const districtExternal = this.getFieldValue(ext, fieldMapping.district_code_field ?? 'district');
-      const districtId = await this.resolveDistrictId(districtExternal, fallbackDistrictId);
-      const regionExternal = this.getFieldValue(ext, fieldMapping.region_code_field ?? 'region');
+      const districtExternal = this.getFieldValue(
+        ext,
+        fieldMapping.district_code_field ?? 'district',
+      );
+      const districtId = await this.resolveDistrictId(
+        districtExternal,
+        fallbackDistrictId,
+      );
+      const regionExternal = this.getFieldValue(
+        ext,
+        fieldMapping.region_code_field ?? 'region',
+      );
 
       const customerResponse = await rmqSend<{ data?: { id?: string } }>(
         this.identityClient,
@@ -2201,24 +2548,47 @@ export class OrderServiceService implements OnModuleInit {
             name: customerName,
             phone_number: phone,
             district_id: districtId,
-            extra_number: this.getFieldValue(ext, fieldMapping.extra_phone_field ?? 'additional_phone') ?? undefined,
-            address: this.getFieldValue(ext, fieldMapping.address_field ?? 'address') ?? undefined,
+            extra_number:
+              this.getFieldValue(
+                ext,
+                fieldMapping.extra_phone_field ?? 'additional_phone',
+              ) ?? undefined,
+            address:
+              this.getFieldValue(
+                ext,
+                fieldMapping.address_field ?? 'address',
+              ) ?? undefined,
           },
         },
       );
 
-      const customerId = customerResponse?.data?.id ? String(customerResponse.data.id) : '';
+      const customerId = customerResponse?.data?.id
+        ? String(customerResponse.data.id)
+        : '';
       if (!customerId) {
-        skipped.push({ external_id: externalId, reason: 'customer_create_failed' });
+        skipped.push({
+          external_id: externalId,
+          reason: 'customer_create_failed',
+        });
         continue;
       }
 
-      const totalPrice = Number(this.getFieldValue(ext, fieldMapping.total_price_field ?? 'total_price') ?? 0);
+      const totalPrice = Number(
+        this.getFieldValue(
+          ext,
+          fieldMapping.total_price_field ?? 'total_price',
+        ) ?? 0,
+      );
       const deliveryPrice = Number(
-        this.getFieldValue(ext, fieldMapping.delivery_price_field ?? 'delivery_price') ?? 0,
+        this.getFieldValue(
+          ext,
+          fieldMapping.delivery_price_field ?? 'delivery_price',
+        ) ?? 0,
       );
       const finalPrice = Math.max(totalPrice, 0) + Math.max(deliveryPrice, 0);
-      const qrCode = this.getFieldValue(ext, fieldMapping.qr_code_field ?? 'qr_code') ?? this.generateCustomToken();
+      const qrCode =
+        this.getFieldValue(ext, fieldMapping.qr_code_field ?? 'qr_code') ??
+        this.generateCustomToken();
 
       const createdOrder = await this.create({
         market_id: marketId,
@@ -2228,11 +2598,15 @@ export class OrderServiceService implements OnModuleInit {
         to_be_paid: 0,
         paid_amount: 0,
         status: Order_status.RECEIVED,
-        comment: this.getFieldValue(ext, fieldMapping.comment_field ?? 'comment') ?? null,
+        comment:
+          this.getFieldValue(ext, fieldMapping.comment_field ?? 'comment') ??
+          null,
         operator,
         district_id: districtId,
         region_id: regionExternal == null ? null : String(regionExternal),
-        address: this.getFieldValue(ext, fieldMapping.address_field ?? 'address') ?? null,
+        address:
+          this.getFieldValue(ext, fieldMapping.address_field ?? 'address') ??
+          null,
         qr_code_token: qrCode == null ? null : String(qrCode),
         external_id: externalId,
         source: Order_source.EXTERNAL,
@@ -2273,7 +2647,9 @@ export class OrderServiceService implements OnModuleInit {
       this.badRequest('Order has no post');
     }
 
-    const postRes = await rmqSend<{ data?: { id: string; courier_id?: string | null } }>(
+    const postRes = await rmqSend<{
+      data?: { id: string; courier_id?: string | null };
+    }>(
       this.logisticsClient,
       { cmd: 'logistics.post.find_by_id' },
       { id: String(order.post_id) },
@@ -2281,7 +2657,8 @@ export class OrderServiceService implements OnModuleInit {
     const post = postRes?.data;
     const actorCourierId = this.resolveActorCourierId(requester, order, post);
     const isManagerRequester =
-      this.hasRole(requester, Roles.MANAGER) && !this.hasRole(requester, Roles.COURIER);
+      this.hasRole(requester, Roles.MANAGER) &&
+      !this.hasRole(requester, Roles.COURIER);
 
     const [market, courier] = await Promise.all([
       this.getMarketsByIds([String(order.market_id)]).then((rows) => rows[0]),
@@ -2296,7 +2673,9 @@ export class OrderServiceService implements OnModuleInit {
 
     const [marketCashbox, courierCashbox] = await Promise.all([
       this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
-      this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER).catch(() => null),
+      this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER).catch(
+        () => null,
+      ),
     ]);
     if (!marketCashbox) {
       this.notFound('Market cashbox not found');
@@ -2307,7 +2686,7 @@ export class OrderServiceService implements OnModuleInit {
 
     const marketBalanceBefore = Number(marketCashbox.balance ?? 0);
 
-      const marketTariff =
+    const marketTariff =
       order.where_deliver === Where_deliver.CENTER
         ? Number(market.tariff_center ?? 0)
         : Number(market.tariff_home ?? 0);
@@ -2341,7 +2720,9 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     const netToBePaid = Math.max(Number(toBePaid) || 0, 0);
-    const requestedPaidAmount = Number(dto?.paidAmount ?? order.paid_amount ?? 0);
+    const requestedPaidAmount = Number(
+      dto?.paidAmount ?? order.paid_amount ?? 0,
+    );
     if (!Number.isFinite(requestedPaidAmount) || requestedPaidAmount < 0) {
       this.badRequest('paidAmount must be a non-negative number');
     }
@@ -2352,7 +2733,8 @@ export class OrderServiceService implements OnModuleInit {
     }
     const currentPaid = Math.min(Math.max(requestedPaidAmount, 0), netToBePaid);
     const remainingBeforeDebt = netToBePaid - currentPaid;
-    const debtBeforeSale = marketBalanceBefore < 0 ? Math.abs(marketBalanceBefore) : 0;
+    const debtBeforeSale =
+      marketBalanceBefore < 0 ? Math.abs(marketBalanceBefore) : 0;
     const autoPay = Math.min(remainingBeforeDebt, debtBeforeSale);
     const paidAfter = Math.min(netToBePaid, currentPaid + autoPay);
     const remaining = Math.max(netToBePaid - paidAfter, 0);
@@ -2543,7 +2925,8 @@ export class OrderServiceService implements OnModuleInit {
       this.handleDbError(error);
       throw new RpcException({
         statusCode: 500,
-        message: error instanceof Error ? error.message : 'Internal server error',
+        message:
+          error instanceof Error ? error.message : 'Internal server error',
       });
     } finally {
       await queryRunner.release();
@@ -2555,7 +2938,12 @@ export class OrderServiceService implements OnModuleInit {
       const updated = await this.findById(id);
       const action = this.resolveSyncAction(Order_status.WAITING, nextStatus);
       if (action) {
-        void this.queueExternalStatusSync(updated, action, Order_status.WAITING, nextStatus);
+        void this.queueExternalStatusSync(
+          updated,
+          action,
+          Order_status.WAITING,
+          nextStatus,
+        );
       }
     } catch {
       // External sync is best-effort.
@@ -2570,7 +2958,8 @@ export class OrderServiceService implements OnModuleInit {
     dto: { comment?: string; extraCost?: number },
   ) {
     const isManagerRequester =
-      this.hasRole(requester, Roles.MANAGER) && !this.hasRole(requester, Roles.COURIER);
+      this.hasRole(requester, Roles.MANAGER) &&
+      !this.hasRole(requester, Roles.COURIER);
     const order = await this.findById(id);
     if (order.status !== Order_status.WAITING) {
       this.badRequest('Order not found or not in waiting status');
@@ -2579,7 +2968,9 @@ export class OrderServiceService implements OnModuleInit {
       this.badRequest('Order has no post');
     }
 
-    const postRes = await rmqSend<{ data?: { id: string; courier_id?: string | null } }>(
+    const postRes = await rmqSend<{
+      data?: { id: string; courier_id?: string | null };
+    }>(
       this.logisticsClient,
       { cmd: 'logistics.post.find_by_id' },
       { id: String(order.post_id) },
@@ -2635,11 +3026,15 @@ export class OrderServiceService implements OnModuleInit {
       await Promise.all(ops);
     }
 
-    await this.updateFull(id, {
-      status: Order_status.CANCELLED,
-      comment: finalComment || null,
-      sold_at: null,
-    }, { id: requester.id, roles: requester.roles, note: 'Order canceled' });
+    await this.updateFull(
+      id,
+      {
+        status: Order_status.CANCELLED,
+        comment: finalComment || null,
+        sold_at: null,
+      },
+      { id: requester.id, roles: requester.roles, note: 'Order canceled' },
+    );
 
     return successRes({ id }, 200, 'Order canceled');
   }
@@ -2662,7 +3057,9 @@ export class OrderServiceService implements OnModuleInit {
       this.badRequest('Order has no post');
     }
 
-    const postRes = await rmqSend<{ data?: { id: string; courier_id?: string | null } }>(
+    const postRes = await rmqSend<{
+      data?: { id: string; courier_id?: string | null };
+    }>(
       this.logisticsClient,
       { cmd: 'logistics.post.find_by_id' },
       { id: String(order.post_id) },
@@ -2679,7 +3076,11 @@ export class OrderServiceService implements OnModuleInit {
       { id: requester.id, roles: requester.roles, note: trackingNote },
     );
 
-    return successRes({ id }, 200, "Order WAITING_CUSTOMER holatiga o'tkazildi");
+    return successRes(
+      { id },
+      200,
+      "Order WAITING_CUSTOMER holatiga o'tkazildi",
+    );
   }
 
   async partlySellOrder(
@@ -2693,7 +3094,8 @@ export class OrderServiceService implements OnModuleInit {
     },
   ) {
     const isManagerRequester =
-      this.hasRole(requester, Roles.MANAGER) && !this.hasRole(requester, Roles.COURIER);
+      this.hasRole(requester, Roles.MANAGER) &&
+      !this.hasRole(requester, Roles.COURIER);
     const order = await this.findById(id);
     const oldTotalPrice = Number(order.total_price ?? 0);
     if (order.status !== Order_status.WAITING) {
@@ -2703,7 +3105,9 @@ export class OrderServiceService implements OnModuleInit {
       this.badRequest('Order has no post');
     }
 
-    const postRes = await rmqSend<{ data?: { id: string; courier_id?: string | null } }>(
+    const postRes = await rmqSend<{
+      data?: { id: string; courier_id?: string | null };
+    }>(
       this.logisticsClient,
       { cmd: 'logistics.post.find_by_id' },
       { id: String(order.post_id) },
@@ -2733,7 +3137,9 @@ export class OrderServiceService implements OnModuleInit {
 
     const [marketCashbox, courierCashbox] = await Promise.all([
       this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
-      this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER).catch(() => null),
+      this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER).catch(
+        () => null,
+      ),
     ]);
     if (!marketCashbox) {
       this.notFound('Market cashbox not found');
@@ -2761,7 +3167,7 @@ export class OrderServiceService implements OnModuleInit {
       order.comment,
       dto?.comment,
       extraCost,
-      ["Buyurtma arzonroqqa sotildi!"],
+      ['Buyurtma arzonroqqa sotildi!'],
     );
 
     const existingItems = await this.orderItemRepo.find({
@@ -2769,7 +3175,10 @@ export class OrderServiceService implements OnModuleInit {
       order: { createdAt: 'ASC' },
     });
 
-    const oldQty = existingItems.reduce((sum, item) => sum + Number(item.quantity ?? 0), 0);
+    const oldQty = existingItems.reduce(
+      (sum, item) => sum + Number(item.quantity ?? 0),
+      0,
+    );
     const newQty = dto.order_item_info.reduce((sum, item) => {
       const qty = Number(item.quantity ?? 0);
       if (!Number.isFinite(qty) || qty < 0) {
@@ -2787,10 +3196,14 @@ export class OrderServiceService implements OnModuleInit {
         (item) => String(item.product_id) === String(existingItem.product_id),
       );
       if (!dtoItem) {
-        this.notFound(`Product not found in request: ${existingItem.product_id}`);
+        this.notFound(
+          `Product not found in request: ${existingItem.product_id}`,
+        );
       }
       if (Number(dtoItem.quantity) > Number(existingItem.quantity)) {
-        this.badRequest(`Quantity cannot exceed original amount for product ${existingItem.product_id}`);
+        this.badRequest(
+          `Quantity cannot exceed original amount for product ${existingItem.product_id}`,
+        );
       }
     }
 
@@ -2815,7 +3228,10 @@ export class OrderServiceService implements OnModuleInit {
           ? { product_id: String(existingItem.product_id), quantity: diff }
           : null;
       })
-      .filter((item): item is { product_id: string; quantity: number } => item !== null);
+      .filter(
+        (item): item is { product_id: string; quantity: number } =>
+          item !== null,
+      );
 
     for (const existingItem of existingItems) {
       const dtoItem = dto.order_item_info.find(
@@ -2956,7 +3372,8 @@ export class OrderServiceService implements OnModuleInit {
       netToBePaid,
     );
     const remainingBeforeDebt = netToBePaid - currentPaid;
-    const debtBeforeSale = marketBalanceBefore < 0 ? Math.abs(marketBalanceBefore) : 0;
+    const debtBeforeSale =
+      marketBalanceBefore < 0 ? Math.abs(marketBalanceBefore) : 0;
     const autoPay = Math.min(remainingBeforeDebt, debtBeforeSale);
     const paidAfter = Math.min(netToBePaid, currentPaid + autoPay);
     const remainingAfter = netToBePaid - paidAfter;
@@ -2991,29 +3408,36 @@ export class OrderServiceService implements OnModuleInit {
       await Promise.all(ops);
     }
 
-    await this.updateFull(id, {
-      status:
-        remainingAfter === 0 && paidAfter > 0
-          ? Order_status.PAID
-          : paidAfter > 0
-            ? Order_status.PARTLY_PAID
-            : Order_status.SOLD,
-      to_be_paid: netToBePaid,
-      paid_amount: paidAfter,
-      sold_at: order.sold_at ?? String(Date.now()),
-      total_price: price,
-      market_tariff: order.market_tariff ?? marketTariff,
-      courier_tariff: order.courier_tariff ?? courierTariff,
-      return_requested: false,
-      comment: finalComment || null,
-    }, { id: requester.id, roles: requester.roles, note: 'Order partly sold' });
+    await this.updateFull(
+      id,
+      {
+        status:
+          remainingAfter === 0 && paidAfter > 0
+            ? Order_status.PAID
+            : paidAfter > 0
+              ? Order_status.PARTLY_PAID
+              : Order_status.SOLD,
+        to_be_paid: netToBePaid,
+        paid_amount: paidAfter,
+        sold_at: order.sold_at ?? String(Date.now()),
+        total_price: price,
+        market_tariff: order.market_tariff ?? marketTariff,
+        courier_tariff: order.courier_tariff ?? courierTariff,
+        return_requested: false,
+        comment: finalComment || null,
+      },
+      { id: requester.id, roles: requester.roles, note: 'Order partly sold' },
+    );
 
     const refreshedOrder = await this.findById(id);
     refreshedOrder.product_quantity = newQty;
     await this.orderRepo.save(refreshedOrder);
 
     if (cancelledItems.length > 0) {
-      const cancelledQty = cancelledItems.reduce((sum, item) => sum + item.quantity, 0);
+      const cancelledQty = cancelledItems.reduce(
+        (sum, item) => sum + item.quantity,
+        0,
+      );
       const cancelledTotalPrice = Math.max(oldTotalPrice - price, 0);
 
       await this.create({
@@ -3024,7 +3448,7 @@ export class OrderServiceService implements OnModuleInit {
         to_be_paid: 0,
         paid_amount: 0,
         status: Order_status.CANCELLED,
-        comment: "Qisman bekor qilingan mahsulotlar",
+        comment: 'Qisman bekor qilingan mahsulotlar',
         operator: order.operator ?? null,
         post_id: order.post_id ?? null,
         canceled_post_id: order.canceled_post_id ?? null,
@@ -3093,7 +3517,9 @@ export class OrderServiceService implements OnModuleInit {
       .createQueryBuilder('b')
       .where('b.is_deleted = false')
       .andWhere('b.status IN (:...active)', { active: activeBatchStatuses })
-      .andWhere('(b.source_branch_id = :id OR b.destination_branch_id = :id)', { id })
+      .andWhere('(b.source_branch_id = :id OR b.destination_branch_id = :id)', {
+        id,
+      })
       .getCount();
 
     return successRes(
@@ -3283,22 +3709,14 @@ export class OrderServiceService implements OnModuleInit {
           : order.return_requested,
       comment: dto.comment ?? order.comment,
       operator: dto.operator ?? order.operator,
-      post_id:
-        typeof dto.post_id !== 'undefined'
-          ? dto.post_id
-          : order.post_id,
+      post_id: typeof dto.post_id !== 'undefined' ? dto.post_id : order.post_id,
       canceled_post_id:
         typeof dto.canceled_post_id !== 'undefined'
           ? dto.canceled_post_id
           : order.canceled_post_id,
-      sold_at:
-        typeof dto.sold_at !== 'undefined'
-          ? dto.sold_at
-          : order.sold_at,
+      sold_at: typeof dto.sold_at !== 'undefined' ? dto.sold_at : order.sold_at,
       branch_id:
-        typeof dto.branch_id !== 'undefined'
-          ? dto.branch_id
-          : order.branch_id,
+        typeof dto.branch_id !== 'undefined' ? dto.branch_id : order.branch_id,
       current_batch_id:
         typeof dto.current_batch_id !== 'undefined'
           ? dto.current_batch_id
@@ -3327,9 +3745,13 @@ export class OrderServiceService implements OnModuleInit {
     });
 
     const shouldRecalculateHolder =
-      typeof dto.branch_id !== 'undefined' || typeof dto.courier_id !== 'undefined';
+      typeof dto.branch_id !== 'undefined' ||
+      typeof dto.courier_id !== 'undefined';
     if (shouldRecalculateHolder) {
-      const resolvedHolder = await this.resolveHolderFromState(order.branch_id, order.courier_id);
+      const resolvedHolder = await this.resolveHolderFromState(
+        order.branch_id,
+        order.courier_id,
+      );
       order.holder_type = resolvedHolder.holder_type;
       order.holder_branch_id = resolvedHolder.holder_branch_id;
       order.holder_courier_id = resolvedHolder.holder_courier_id;
@@ -3337,20 +3759,30 @@ export class OrderServiceService implements OnModuleInit {
 
     const custodyChanged =
       previousHolderType !== order.holder_type ||
-      String(previousHolderBranchId ?? '') !== String(order.holder_branch_id ?? '') ||
-      String(previousHolderCourierId ?? '') !== String(order.holder_courier_id ?? '');
+      String(previousHolderBranchId ?? '') !==
+        String(order.holder_branch_id ?? '') ||
+      String(previousHolderCourierId ?? '') !==
+        String(order.holder_courier_id ?? '');
 
     if (custodyChanged) {
       order.last_handover_at = new Date();
       order.last_handover_by = requester?.id ? String(requester.id) : null;
     }
 
-    if (oldStatus !== order.status && !this.isValidStatusTransition(oldStatus, order.status)) {
-      this.badRequest(`Invalid status transition: ${oldStatus} -> ${order.status}`);
+    if (
+      oldStatus !== order.status &&
+      !this.isValidStatusTransition(oldStatus, order.status)
+    ) {
+      this.badRequest(
+        `Invalid status transition: ${oldStatus} -> ${order.status}`,
+      );
     }
 
     if (dto.items) {
-      order.product_quantity = await this.replaceOrderItems(order.id, dto.items);
+      order.product_quantity = await this.replaceOrderItems(
+        order.id,
+        dto.items,
+      );
     }
 
     // Prevent TypeORM cascade on stale one-to-many relation from nulling order_id.
@@ -3369,7 +3801,9 @@ export class OrderServiceService implements OnModuleInit {
             from_status: oldStatus,
             to_status: order.status,
             changed_by: String(requester?.id ?? 'system'),
-            changed_by_role: requester?.id ? this.toTrackingRole(requester.roles) : 'system',
+            changed_by_role: requester?.id
+              ? this.toTrackingRole(requester.roles)
+              : 'system',
             note: requester?.note ?? null,
           },
           trackingRepo,
@@ -3387,7 +3821,9 @@ export class OrderServiceService implements OnModuleInit {
             from_courier_id: previousHolderCourierId ?? null,
             to_courier_id: order.holder_courier_id ?? null,
             changed_by: String(requester?.id ?? 'system'),
-            changed_by_role: requester?.id ? this.toTrackingRole(requester.roles) : 'system',
+            changed_by_role: requester?.id
+              ? this.toTrackingRole(requester.roles)
+              : 'system',
             note: requester?.note ?? 'Order custody changed',
           },
           custodyRepo,
@@ -3397,6 +3833,14 @@ export class OrderServiceService implements OnModuleInit {
       // Atomic search index update: enqueue the outbox event in the same
       // transaction so the search publisher only sees committed state.
       await this.syncOrderToSearch(order, manager);
+
+      // Operator commission: enqueue an earning event when the order enters a
+      // sold state, or a removal when it rolls back out of one. Enqueued in
+      // this transaction so the event is durable iff the order change commits;
+      // finance-service dedupes on order_id, so re-delivery is safe.
+      if (oldStatus !== order.status) {
+        await this.enqueueOperatorEarning(order, oldStatus, manager);
+      }
     };
 
     if (externalManager) {
@@ -3430,7 +3874,12 @@ export class OrderServiceService implements OnModuleInit {
     if (oldStatus !== newStatus) {
       const action = this.resolveSyncAction(oldStatus, newStatus);
       if (action) {
-        void this.queueExternalStatusSync(updated, action, oldStatus, newStatus);
+        void this.queueExternalStatusSync(
+          updated,
+          action,
+          oldStatus,
+          newStatus,
+        );
       }
     }
     return updated;
@@ -3446,9 +3895,12 @@ export class OrderServiceService implements OnModuleInit {
     const isMarket = this.hasRole(requester, Roles.MARKET);
 
     if (order.status === Order_status.CREATED) {
-      const isOwnerMarket = isMarket && requesterId === String(order.market_id ?? '');
+      const isOwnerMarket =
+        isMarket && requesterId === String(order.market_id ?? '');
       if (!isOwnerMarket) {
-        this.forbidden("Faqat order egasi bo'lgan market 'created' holatdagi buyurtmani o‘chira oladi");
+        this.forbidden(
+          "Faqat order egasi bo'lgan market 'created' holatdagi buyurtmani o‘chira oladi",
+        );
       }
     } else if (order.status === Order_status.NEW) {
       const canDeleteNew = isSuperAdmin || isAdmin || isRegistrator || isMarket;
@@ -3459,10 +3911,14 @@ export class OrderServiceService implements OnModuleInit {
       }
     } else if (order.status === Order_status.RECEIVED) {
       if (!isSuperAdmin) {
-        this.forbidden("Faqat superadmin 'received' holatdagi buyurtmani o‘chira oladi");
+        this.forbidden(
+          "Faqat superadmin 'received' holatdagi buyurtmani o‘chira oladi",
+        );
       }
     } else {
-      this.badRequest("Faqat 'created', 'new' yoki 'received' holatdagi buyurtmani o‘chirish mumkin");
+      this.badRequest(
+        "Faqat 'created', 'new' yoki 'received' holatdagi buyurtmani o‘chirish mumkin",
+      );
     }
 
     await this.dataSource.transaction(async (tx) => {
@@ -3487,34 +3943,70 @@ export class OrderServiceService implements OnModuleInit {
   private async enrichOrders(rows: Order[]) {
     if (!rows.length) return [];
 
-    const marketIds = [...new Set(rows.map((r) => r.market_id).filter(Boolean))];
-    const customerIds = [...new Set(rows.map((r) => r.customer_id).filter(Boolean))];
-    const districtIds = [...new Set(rows.map((r) => r.district_id).filter(Boolean) as string[])];
-    const regionIds = [...new Set(rows.map((r) => r.region_id).filter(Boolean) as string[])];
-    const productIds = [...new Set(
-      rows.flatMap((r) => r.items ?? []).map((i) => i.product_id).filter(Boolean),
-    )];
+    const marketIds = [
+      ...new Set(rows.map((r) => r.market_id).filter(Boolean)),
+    ];
+    const customerIds = [
+      ...new Set(rows.map((r) => r.customer_id).filter(Boolean)),
+    ];
+    const districtIds = [
+      ...new Set(rows.map((r) => r.district_id).filter(Boolean) as string[]),
+    ];
+    const regionIds = [
+      ...new Set(rows.map((r) => r.region_id).filter(Boolean) as string[]),
+    ];
+    const productIds = [
+      ...new Set(
+        rows
+          .flatMap((r) => r.items ?? [])
+          .map((i) => i.product_id)
+          .filter(Boolean),
+      ),
+    ];
 
-    const [marketsRes, customersRes, districtsRes, regionsRes, productsRes] = await Promise.all([
-      marketIds.length
-        ? rmqSend<{ data: Array<{id: string; [key: string]: any}> }>(this.identityClient, { cmd: 'identity.market.find_by_ids' }, { ids: marketIds }).catch(() => ({ data: [] }))
-        : { data: [] as Array<{id: string; [key: string]: any}> },
-      customerIds.length
-        ? rmqSend<{ data: Array<{id: string; [key: string]: any}> }>(this.identityClient, { cmd: 'identity.customer.find_by_ids' }, { ids: customerIds }).catch(() => ({ data: [] }))
-        : { data: [] as Array<{id: string; [key: string]: any}> },
-      districtIds.length
-        ? rmqSend<{ data: Array<{id: string; [key: string]: any}> }>(this.logisticsClient, { cmd: 'logistics.district.find_by_ids' }, { ids: districtIds }).catch(() => ({ data: [] }))
-        : { data: [] as Array<{id: string; [key: string]: any}> },
-      regionIds.length
-        ? rmqSend<{ data: Array<{id: string; [key: string]: any}> }>(this.logisticsClient, { cmd: 'logistics.region.find_by_ids' }, { ids: regionIds }).catch(() => ({ data: [] }))
-        : { data: [] as Array<{id: string; [key: string]: any}> },
-      productIds.length
-        ? rmqSend<{ data: Array<{id: string; [key: string]: any}> }>(this.catalogClient, { cmd: 'catalog.product.find_by_ids' }, { ids: productIds }).catch(() => ({ data: [] }))
-        : { data: [] },
-    ]);
+    const [marketsRes, customersRes, districtsRes, regionsRes, productsRes] =
+      await Promise.all([
+        marketIds.length
+          ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
+              this.identityClient,
+              { cmd: 'identity.market.find_by_ids' },
+              { ids: marketIds },
+            ).catch(() => ({ data: [] }))
+          : { data: [] as Array<{ id: string; [key: string]: any }> },
+        customerIds.length
+          ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
+              this.identityClient,
+              { cmd: 'identity.customer.find_by_ids' },
+              { ids: customerIds },
+            ).catch(() => ({ data: [] }))
+          : { data: [] as Array<{ id: string; [key: string]: any }> },
+        districtIds.length
+          ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
+              this.logisticsClient,
+              { cmd: 'logistics.district.find_by_ids' },
+              { ids: districtIds },
+            ).catch(() => ({ data: [] }))
+          : { data: [] as Array<{ id: string; [key: string]: any }> },
+        regionIds.length
+          ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
+              this.logisticsClient,
+              { cmd: 'logistics.region.find_by_ids' },
+              { ids: regionIds },
+            ).catch(() => ({ data: [] }))
+          : { data: [] as Array<{ id: string; [key: string]: any }> },
+        productIds.length
+          ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
+              this.catalogClient,
+              { cmd: 'catalog.product.find_by_ids' },
+              { ids: productIds },
+            ).catch(() => ({ data: [] }))
+          : { data: [] },
+      ]);
 
-    const toMap = (arr: Array<{id: string; [key: string]: any}>) =>
-      new Map(arr.map((item): [string, typeof item] => [String(item.id), item]));
+    const toMap = (arr: Array<{ id: string; [key: string]: any }>) =>
+      new Map(
+        arr.map((item): [string, typeof item] => [String(item.id), item]),
+      );
 
     const marketMap = toMap(marketsRes?.data ?? []);
     const customerMap = toMap(customersRes?.data ?? []);
@@ -3524,23 +4016,29 @@ export class OrderServiceService implements OnModuleInit {
 
     return rows.map((row) => ({
       ...row,
-      market: row.market_id ? marketMap.get(row.market_id) ?? null : null,
+      market: row.market_id ? (marketMap.get(row.market_id) ?? null) : null,
       customer: row.customer_id
         ? {
             ...(customerMap.get(row.customer_id) ?? null),
-            district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
+            district: row.district_id
+              ? (districtMap.get(row.district_id) ?? null)
+              : null,
             region: row.region_id
               ? this.stripRegionDistricts(regionMap.get(row.region_id) ?? null)
               : null,
           }
         : null,
-      district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
+      district: row.district_id
+        ? (districtMap.get(row.district_id) ?? null)
+        : null,
       region: row.region_id
         ? this.stripRegionDistricts(regionMap.get(row.region_id) ?? null)
         : null,
       items: (row.items ?? []).map((item) => ({
         ...item,
-        product: item.product_id ? productMap.get(item.product_id) ?? null : null,
+        product: item.product_id
+          ? (productMap.get(item.product_id) ?? null)
+          : null,
       })),
     }));
   }
@@ -3606,19 +4104,29 @@ export class OrderServiceService implements OnModuleInit {
     return enriched[0] ?? order;
   }
 
-  async findNewMarketsEnriched(branch_id?: string, exclude_branch_source = false) {
+  async findNewMarketsEnriched(
+    branch_id?: string,
+    exclude_branch_source = false,
+  ) {
     const rows = await this.findNewMarkets(branch_id, exclude_branch_source);
     const marketIds = rows.map((r) => r.market_id).filter(Boolean);
 
     if (!marketIds.length) return rows;
 
-    const marketsRes = await rmqSend<{ data: Array<{id: string; [key: string]: any}> }>(
+    const marketsRes = await rmqSend<{
+      data: Array<{ id: string; [key: string]: any }>;
+    }>(
       this.identityClient,
       { cmd: 'identity.market.find_by_ids' },
       { ids: marketIds },
-    ).catch(() => ({ data: [] as Array<{id: string; [key: string]: any}> }));
+    ).catch(() => ({ data: [] as Array<{ id: string; [key: string]: any }> }));
 
-    const marketMap = new Map((marketsRes?.data ?? []).map((m): [string, typeof m] => [String(m.id), m]));
+    const marketMap = new Map(
+      (marketsRes?.data ?? []).map((m): [string, typeof m] => [
+        String(m.id),
+        m,
+      ]),
+    );
 
     return rows.map((row) => ({
       ...row,
@@ -3657,40 +4165,47 @@ export class OrderServiceService implements OnModuleInit {
     const startMs = String(start.getTime());
     const endMs = String(end.getTime());
 
-    const [acceptedCount, cancelled, soldAndPaid, soldOrders] = await Promise.all([
-      this.orderRepo.count({
-        where: {
-          isDeleted: false,
-          createdAt: Between(start, end),
-        },
-      }),
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-        .andWhere('o.status = :status', { status: Order_status.CANCELLED })
-        .getCount(),
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-        .getCount(),
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-        .getMany(),
-    ]);
+    const [acceptedCount, cancelled, soldAndPaid, soldOrders] =
+      await Promise.all([
+        this.orderRepo.count({
+          where: {
+            isDeleted: false,
+            createdAt: Between(start, end),
+          },
+        }),
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+          .andWhere('o.status = :status', { status: Order_status.CANCELLED })
+          .getCount(),
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
+          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+          .getCount(),
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
+          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+          .getMany(),
+      ]);
 
-    const marketIds = [...new Set(soldOrders.map((o) => o.market_id).filter(Boolean))];
-    const postIds = [...new Set(soldOrders.map((o) => o.post_id).filter(Boolean) as string[])];
+    const marketIds = [
+      ...new Set(soldOrders.map((o) => o.market_id).filter(Boolean)),
+    ];
+    const postIds = [
+      ...new Set(soldOrders.map((o) => o.post_id).filter(Boolean) as string[]),
+    ];
     const [markets, posts] = await Promise.all([
       this.getMarketsByIds(marketIds),
       this.getPostsByIds(postIds),
     ]);
-    const courierIds = [...new Set(posts.map((p) => p.courier_id).filter(Boolean) as string[])];
+    const courierIds = [
+      ...new Set(posts.map((p) => p.courier_id).filter(Boolean) as string[]),
+    ];
     const couriers = await this.getCouriersByIds(courierIds);
 
     const marketMap = new Map(markets.map((m) => [String(m.id), m]));
@@ -3700,12 +4215,17 @@ export class OrderServiceService implements OnModuleInit {
     let profit = 0;
     for (const order of soldOrders) {
       const market = marketMap.get(String(order.market_id));
-      const courierId = order.post_id ? postMap.get(String(order.post_id))?.courier_id : null;
+      const courierId = order.post_id
+        ? postMap.get(String(order.post_id))?.courier_id
+        : null;
       const courier = courierId ? courierMap.get(String(courierId)) : null;
       if (order.where_deliver === Where_deliver.ADDRESS) {
-        profit += Number(market?.tariff_home ?? 0) - Number(courier?.tariff_home ?? 0);
+        profit +=
+          Number(market?.tariff_home ?? 0) - Number(courier?.tariff_home ?? 0);
       } else {
-        profit += Number(market?.tariff_center ?? 0) - Number(courier?.tariff_center ?? 0);
+        profit +=
+          Number(market?.tariff_center ?? 0) -
+          Number(courier?.tariff_center ?? 0);
       }
     }
 
@@ -3746,15 +4266,24 @@ export class OrderServiceService implements OnModuleInit {
       .groupBy('o.market_id')
       .getRawMany<{ market_id: string; sold: string }>();
 
-    const totalsMap = new Map(totalsRaw.map((r) => [String(r.market_id), Number(r.total)]));
-    const soldsMap = new Map(soldsRaw.map((r) => [String(r.market_id), Number(r.sold)]));
-    const marketIds = Array.from(new Set([...totalsMap.keys(), ...soldsMap.keys()]));
+    const totalsMap = new Map(
+      totalsRaw.map((r) => [String(r.market_id), Number(r.total)]),
+    );
+    const soldsMap = new Map(
+      soldsRaw.map((r) => [String(r.market_id), Number(r.sold)]),
+    );
+    const marketIds = Array.from(
+      new Set([...totalsMap.keys(), ...soldsMap.keys()]),
+    );
     const markets = await this.getMarketsByIds(marketIds);
 
     const result = markets.map((market) => {
       const totalOrders = totalsMap.get(String(market.id)) ?? 0;
       const soldOrders = soldsMap.get(String(market.id)) ?? 0;
-      const sellingRate = totalOrders > 0 ? Number(((soldOrders * 100) / totalOrders).toFixed(2)) : 0;
+      const sellingRate =
+        totalOrders > 0
+          ? Number(((soldOrders * 100) / totalOrders).toFixed(2))
+          : 0;
       return { market, totalOrders, soldOrders, sellingRate };
     });
 
@@ -3796,25 +4325,45 @@ export class OrderServiceService implements OnModuleInit {
     const postMap = new Map<string, { id: string; courier_id?: string | null }>(
       posts.map((post) => [String(post.id), post]),
     );
-    const courierIds = [...new Set(posts.map((post) => post.courier_id).filter(Boolean) as string[])];
+    const courierIds = [
+      ...new Set(
+        posts.map((post) => post.courier_id).filter(Boolean) as string[],
+      ),
+    ];
     const couriers = await this.getCouriersByIds(courierIds);
 
     const statsByCourier = new Map<string, { total: number; sold: number }>();
     for (const order of orders) {
-      const courierId = order.post_id ? postMap.get(String(order.post_id))?.courier_id : null;
+      const courierId = order.post_id
+        ? postMap.get(String(order.post_id))?.courier_id
+        : null;
       if (!courierId) continue;
-      const current = statsByCourier.get(String(courierId)) ?? { total: 0, sold: 0 };
+      const current = statsByCourier.get(String(courierId)) ?? {
+        total: 0,
+        sold: 0,
+      };
       current.total += 1;
       const soldAt = order.sold_at ? Number(order.sold_at) : null;
-      if (soldStatuses.includes(order.status) && soldAt && soldAt >= startMs && soldAt <= endMs) {
+      if (
+        soldStatuses.includes(order.status) &&
+        soldAt &&
+        soldAt >= startMs &&
+        soldAt <= endMs
+      ) {
         current.sold += 1;
       }
       statsByCourier.set(String(courierId), current);
     }
 
     const result = couriers.map((courier) => {
-      const stats = statsByCourier.get(String(courier.id)) ?? { total: 0, sold: 0 };
-      const successRate = stats.total > 0 ? Number(((stats.sold * 100) / stats.total).toFixed(2)) : 0;
+      const stats = statsByCourier.get(String(courier.id)) ?? {
+        total: 0,
+        sold: 0,
+      };
+      const successRate =
+        stats.total > 0
+          ? Number(((stats.sold * 100) / stats.total).toFixed(2))
+          : 0;
       return {
         courier,
         totalOrders: stats.total,
@@ -3844,9 +4393,15 @@ export class OrderServiceService implements OnModuleInit {
       .andWhere('o.market_id IS NOT NULL')
       .setParameter('statuses', soldStatuses)
       .groupBy('o.market_id')
-      .getRawMany<{ market_id: string; total_orders: string; successful_orders: string }>();
+      .getRawMany<{
+        market_id: string;
+        total_orders: string;
+        successful_orders: string;
+      }>();
 
-    const markets = await this.getMarketsByIds(totalsRaw.map((r) => String(r.market_id)));
+    const markets = await this.getMarketsByIds(
+      totalsRaw.map((r) => String(r.market_id)),
+    );
     const marketMap = new Map(markets.map((m) => [String(m.id), m]));
 
     const result = totalsRaw
@@ -3854,7 +4409,10 @@ export class OrderServiceService implements OnModuleInit {
       .map((row) => {
         const totalOrders = Number(row.total_orders);
         const successfulOrders = Number(row.successful_orders);
-        const successRate = totalOrders > 0 ? Number(((successfulOrders * 100) / totalOrders).toFixed(2)) : 0;
+        const successRate =
+          totalOrders > 0
+            ? Number(((successfulOrders * 100) / totalOrders).toFixed(2))
+            : 0;
         const market = marketMap.get(String(row.market_id));
         return {
           market_id: row.market_id,
@@ -3886,15 +4444,22 @@ export class OrderServiceService implements OnModuleInit {
       ...new Set(orders.map((o) => o.post_id).filter(Boolean) as string[]),
     ]);
     const postMap = new Map(posts.map((p) => [String(p.id), p]));
-    const courierIds = [...new Set(posts.map((p) => p.courier_id).filter(Boolean) as string[])];
+    const courierIds = [
+      ...new Set(posts.map((p) => p.courier_id).filter(Boolean) as string[]),
+    ];
     const couriers = await this.getCouriersByIds(courierIds);
     const courierMap = new Map(couriers.map((c) => [String(c.id), c]));
 
     const stats = new Map<string, { total: number; successful: number }>();
     for (const order of orders) {
-      const courierId = order.post_id ? postMap.get(String(order.post_id))?.courier_id : null;
+      const courierId = order.post_id
+        ? postMap.get(String(order.post_id))?.courier_id
+        : null;
       if (!courierId) continue;
-      const current = stats.get(String(courierId)) ?? { total: 0, successful: 0 };
+      const current = stats.get(String(courierId)) ?? {
+        total: 0,
+        successful: 0,
+      };
       current.total += 1;
       if (soldStatuses.includes(order.status)) {
         current.successful += 1;
@@ -3905,7 +4470,10 @@ export class OrderServiceService implements OnModuleInit {
     return Array.from(stats.entries())
       .map(([courierId, current]) => {
         const courier = courierMap.get(courierId);
-        const successRate = current.total > 0 ? Number(((current.successful * 100) / current.total).toFixed(2)) : 0;
+        const successRate =
+          current.total > 0
+            ? Number(((current.successful * 100) / current.total).toFixed(2))
+            : 0;
         return {
           courier_id: courierId,
           courier_name: courier?.name ?? null,
@@ -3937,7 +4505,11 @@ export class OrderServiceService implements OnModuleInit {
       .andWhere('o.operator_id IS NOT NULL')
       .setParameter('statuses', soldStatuses)
       .groupBy('o.operator_id')
-      .getRawMany<{ operator_id: string; total_orders: string; successful_orders: string }>();
+      .getRawMany<{
+        operator_id: string;
+        total_orders: string;
+        successful_orders: string;
+      }>();
 
     if (!rows.length) {
       return [];
@@ -3977,14 +4549,20 @@ export class OrderServiceService implements OnModuleInit {
       .slice(0, limit);
   }
 
-  async getCourierStat(courierId: string, startDate?: string, endDate?: string) {
+  async getCourierStat(
+    courierId: string,
+    startDate?: string,
+    endDate?: string,
+  ) {
     const { start, end } = this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
     const startMs = String(start.getTime());
     const endMs = String(end.getTime());
-    const courierPosts = (await this.getAllPostsForAnalytics()).filter((post) => {
-      return String(post.courier_id) === String(courierId);
-    });
+    const courierPosts = (await this.getAllPostsForAnalytics()).filter(
+      (post) => {
+        return String(post.courier_id) === String(courierId);
+      },
+    );
 
     const postIds = courierPosts.map((post) => post.id);
     if (!postIds.length) {
@@ -3997,47 +4575,52 @@ export class OrderServiceService implements OnModuleInit {
       };
     }
 
-    const [totalOrders, soldOrders, canceledOrders, soldOrderEntities] = await Promise.all([
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.post_id IN (:...postIds)', { postIds })
-        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-        .getCount(),
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.post_id IN (:...postIds)', { postIds })
-        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-        .getCount(),
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.post_id IN (:...postIds)', { postIds })
-        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-        .andWhere('o.status = :status', { status: Order_status.CANCELLED })
-        .getCount(),
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.post_id IN (:...postIds)', { postIds })
-        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-        .getMany(),
-    ]);
+    const [totalOrders, soldOrders, canceledOrders, soldOrderEntities] =
+      await Promise.all([
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.post_id IN (:...postIds)', { postIds })
+          .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+          .getCount(),
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.post_id IN (:...postIds)', { postIds })
+          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
+          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+          .getCount(),
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.post_id IN (:...postIds)', { postIds })
+          .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+          .andWhere('o.status = :status', { status: Order_status.CANCELLED })
+          .getCount(),
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.post_id IN (:...postIds)', { postIds })
+          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
+          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+          .getMany(),
+      ]);
 
     const couriers = await this.getCouriersByIds([courierId]);
     const courier = couriers[0];
 
     let profit = 0;
     for (const order of soldOrderEntities) {
-      profit += order.where_deliver === Where_deliver.ADDRESS
-        ? Number(courier?.tariff_home ?? 0)
-        : Number(courier?.tariff_center ?? 0);
+      profit +=
+        order.where_deliver === Where_deliver.ADDRESS
+          ? Number(courier?.tariff_home ?? 0)
+          : Number(courier?.tariff_center ?? 0);
     }
 
-    const successRate = totalOrders > 0 ? Number(((soldOrders * 100) / totalOrders).toFixed(2)) : 0;
+    const successRate =
+      totalOrders > 0
+        ? Number(((soldOrders * 100) / totalOrders).toFixed(2))
+        : 0;
 
     return {
       totalOrders,
@@ -4097,8 +4680,14 @@ export class OrderServiceService implements OnModuleInit {
         .getMany(),
     ]);
 
-    const profit = soldOrderEntities.reduce((sum, order) => sum + Number(order.to_be_paid ?? 0), 0);
-    const successRate = allOrders.length > 0 ? Number(((soldOrders * 100) / allOrders.length).toFixed(2)) : 0;
+    const profit = soldOrderEntities.reduce(
+      (sum, order) => sum + Number(order.to_be_paid ?? 0),
+      0,
+    );
+    const successRate =
+      allOrders.length > 0
+        ? Number(((soldOrders * 100) / allOrders.length).toFixed(2))
+        : 0;
 
     return {
       totalOrders: allOrders.length,
@@ -4109,7 +4698,11 @@ export class OrderServiceService implements OnModuleInit {
     };
   }
 
-  async getRevenueStats(startDate?: string, endDate?: string, period = 'daily') {
+  async getRevenueStats(
+    startDate?: string,
+    endDate?: string,
+    period = 'daily',
+  ) {
     const normalizedPeriod = this.normalizeRevenuePeriod(period);
     const { start, end } = this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
@@ -4124,7 +4717,10 @@ export class OrderServiceService implements OnModuleInit {
       .select(['o.id', 'o.total_price', 'o.sold_at'])
       .getMany();
 
-    const buckets = new Map<string, { period: string; label: string; ordersCount: number; revenue: number }>();
+    const buckets = new Map<
+      string,
+      { period: string; label: string; ordersCount: number; revenue: number }
+    >();
     let cursor = this.periodStart(start, normalizedPeriod);
     const endCursor = this.periodStart(end, normalizedPeriod);
 
@@ -4164,14 +4760,23 @@ export class OrderServiceService implements OnModuleInit {
     };
   }
 
-  private transferTokenPrefix(direction: BranchTransferDirection): 'BTB' | 'BTR' {
+  private transferTokenPrefix(
+    direction: BranchTransferDirection,
+  ): 'BTB' | 'BTR' {
     return direction === BranchTransferDirection.RETURN ? 'BTR' : 'BTB';
   }
 
   private normalizeTransferDirection(value?: string): BranchTransferDirection {
-    const normalized = String(value ?? '').trim().toUpperCase();
-    if (normalized !== BranchTransferDirection.FORWARD && normalized !== BranchTransferDirection.RETURN) {
-      this.badRequest(`direction must be one of: ${BranchTransferDirection.FORWARD}, ${BranchTransferDirection.RETURN}`);
+    const normalized = String(value ?? '')
+      .trim()
+      .toUpperCase();
+    if (
+      normalized !== BranchTransferDirection.FORWARD &&
+      normalized !== BranchTransferDirection.RETURN
+    ) {
+      this.badRequest(
+        `direction must be one of: ${BranchTransferDirection.FORWARD}, ${BranchTransferDirection.RETURN}`,
+      );
     }
     return normalized as BranchTransferDirection;
   }
@@ -4199,8 +4804,11 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   private isDuplicateMessageError(error: unknown): boolean {
-    const code = (error as { code?: string; driverError?: { code?: string } } | null)?.code;
-    const driverCode = (error as { driverError?: { code?: string } } | null)?.driverError?.code;
+    const code = (
+      error as { code?: string; driverError?: { code?: string } } | null
+    )?.code;
+    const driverCode = (error as { driverError?: { code?: string } } | null)
+      ?.driverError?.code;
     return code === '23505' || driverCode === '23505';
   }
 
@@ -4210,7 +4818,8 @@ export class OrderServiceService implements OnModuleInit {
   ): Promise<string> {
     const prefix = this.transferTokenPrefix(direction);
     for (let attempt = 0; attempt < 12; attempt += 1) {
-      const suffix = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`.toLowerCase();
+      const suffix =
+        `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 8)}`.toLowerCase();
       const candidate = `${prefix}-${suffix}`;
       const exists = await repo.findOne({
         where: {
@@ -4223,7 +4832,10 @@ export class OrderServiceService implements OnModuleInit {
         return candidate;
       }
     }
-    throw new RpcException({ statusCode: 500, message: 'QR token generate failed' });
+    throw new RpcException({
+      statusCode: 500,
+      message: 'QR token generate failed',
+    });
   }
 
   private async listBatchesWithItems(batchIds: string[]) {
@@ -4267,14 +4879,18 @@ export class OrderServiceService implements OnModuleInit {
     requester_id?: string;
   }) {
     const sourceBranchId = String(input?.source_branch_id ?? '').trim();
-    const destinationBranchId = String(input?.destination_branch_id ?? '').trim();
+    const destinationBranchId = String(
+      input?.destination_branch_id ?? '',
+    ).trim();
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
     const direction = this.normalizeTransferDirection(input?.direction);
     const requestKey = this.normalizeTransferRequestKey(input?.request_key);
     const maxRegionalPendingBatches = 13;
 
     if (!sourceBranchId || !destinationBranchId) {
-      this.badRequest('source_branch_id and destination_branch_id are required');
+      this.badRequest(
+        'source_branch_id and destination_branch_id are required',
+      );
     }
 
     const existing = await this.transferBatchRepo.find({
@@ -4292,7 +4908,9 @@ export class OrderServiceService implements OnModuleInit {
     });
 
     if (existing.length) {
-      const existingList = await this.listBatchesWithItems(existing.map((batch) => String(batch.id)));
+      const existingList = await this.listBatchesWithItems(
+        existing.map((batch) => String(batch.id)),
+      );
       return successRes(
         {
           idempotent: true,
@@ -4304,7 +4922,11 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     const selectedOrderIds = Array.from(
-      new Set((input?.order_ids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean)),
+      new Set(
+        (input?.order_ids ?? [])
+          .map((id) => String(id ?? '').trim())
+          .filter(Boolean),
+      ),
     );
     const whereClause: {
       branch_id: string;
@@ -4328,11 +4950,18 @@ export class OrderServiceService implements OnModuleInit {
       order: { createdAt: 'ASC' },
     });
 
-    if (selectedOrderIds.length && unassignedOrders.length !== selectedOrderIds.length) {
-      this.badRequest('Some orders are not found, not NEW, or already assigned to another batch');
+    if (
+      selectedOrderIds.length &&
+      unassignedOrders.length !== selectedOrderIds.length
+    ) {
+      this.badRequest(
+        'Some orders are not found, not NEW, or already assigned to another batch',
+      );
     }
 
-    const candidateOrders = unassignedOrders.filter((order) => Boolean(order.region_id));
+    const candidateOrders = unassignedOrders.filter((order) =>
+      Boolean(order.region_id),
+    );
     if (!candidateOrders.length) {
       this.badRequest('Unassigned orders for transfer not found');
     }
@@ -4350,8 +4979,12 @@ export class OrderServiceService implements OnModuleInit {
     await queryRunner.startTransaction();
     try {
       const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
-      const batchItemRepo = queryRunner.manager.getRepository(BranchTransferBatchItem);
-      const batchHistoryRepo = queryRunner.manager.getRepository(BranchTransferBatchHistory);
+      const batchItemRepo = queryRunner.manager.getRepository(
+        BranchTransferBatchItem,
+      );
+      const batchHistoryRepo = queryRunner.manager.getRepository(
+        BranchTransferBatchHistory,
+      );
       const orderRepo = queryRunner.manager.getRepository(Order);
 
       const pendingBatches = await batchRepo.find({
@@ -4373,15 +5006,25 @@ export class OrderServiceService implements OnModuleInit {
         }
       }
 
-      const missingRegionIds = Array.from(grouped.keys()).filter((regionId) => !batchByRegion.has(regionId));
+      const missingRegionIds = Array.from(grouped.keys()).filter(
+        (regionId) => !batchByRegion.has(regionId),
+      );
       const currentPendingRegionsCount = batchByRegion.size;
-      if (currentPendingRegionsCount + missingRegionIds.length > maxRegionalPendingBatches) {
-        this.badRequest(`Maximum ${maxRegionalPendingBatches} ta pending transfer batch bo‘lishi mumkin`);
+      if (
+        currentPendingRegionsCount + missingRegionIds.length >
+        maxRegionalPendingBatches
+      ) {
+        this.badRequest(
+          `Maximum ${maxRegionalPendingBatches} ta pending transfer batch bo‘lishi mumkin`,
+        );
       }
 
       const newBatchEntities: BranchTransferBatch[] = [];
       for (const regionId of missingRegionIds) {
-        const qrToken = await this.generateTransferQrToken(batchRepo, direction);
+        const qrToken = await this.generateTransferQrToken(
+          batchRepo,
+          direction,
+        );
         newBatchEntities.push(
           batchRepo.create({
             qr_code_token: qrToken,
@@ -4403,7 +5046,9 @@ export class OrderServiceService implements OnModuleInit {
         );
       }
 
-      const savedNewBatches = newBatchEntities.length ? await batchRepo.save(newBatchEntities) : [];
+      const savedNewBatches = newBatchEntities.length
+        ? await batchRepo.save(newBatchEntities)
+        : [];
       for (const batch of savedNewBatches) {
         batchByRegion.set(String(batch.target_region_id), batch);
       }
@@ -4415,7 +5060,10 @@ export class OrderServiceService implements OnModuleInit {
       for (const [regionId, orders] of grouped.entries()) {
         const batch = batchByRegion.get(regionId);
         if (!batch) {
-          throw new RpcException({ statusCode: 500, message: 'Batch create failed' });
+          throw new RpcException({
+            statusCode: 500,
+            message: 'Batch create failed',
+          });
         }
         touchedBatchIds.add(String(batch.id));
 
@@ -4436,7 +5084,10 @@ export class OrderServiceService implements OnModuleInit {
           });
         }
 
-        const regionTotalPrice = orders.reduce((sum, order) => sum + Number(order.total_price ?? 0), 0);
+        const regionTotalPrice = orders.reduce(
+          (sum, order) => sum + Number(order.total_price ?? 0),
+          0,
+        );
         batch.order_count = Number(batch.order_count ?? 0) + orders.length;
         batch.total_price = Number(batch.total_price ?? 0) + regionTotalPrice;
         await batchRepo.save(batch);
@@ -4457,7 +5108,9 @@ export class OrderServiceService implements OnModuleInit {
             batch_id: String(batch.id),
             user_id: requesterId,
             action: BranchTransferBatchAction.CREATED,
-            notes: missingRegionIds.includes(regionId) ? '[STEP] BATCH_CREATED' : '[STEP] BATCH_REUSED',
+            notes: missingRegionIds.includes(regionId)
+              ? '[STEP] BATCH_CREATED'
+              : '[STEP] BATCH_REUSED',
           }),
         );
         historyEntities.push(
@@ -4474,7 +5127,9 @@ export class OrderServiceService implements OnModuleInit {
       await batchHistoryRepo.save(historyEntities);
       await queryRunner.commitTransaction();
 
-      const batches = await this.listBatchesWithItems(Array.from(touchedBatchIds));
+      const batches = await this.listBatchesWithItems(
+        Array.from(touchedBatchIds),
+      );
       return successRes(
         {
           idempotent: false,
@@ -4503,7 +5158,11 @@ export class OrderServiceService implements OnModuleInit {
     const requestKey = this.normalizeTransferRequestKey(input?.request_key);
     const direction = BranchTransferDirection.RETURN;
     const orderIds = Array.from(
-      new Set((input?.order_ids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean)),
+      new Set(
+        (input?.order_ids ?? [])
+          .map((id) => String(id ?? '').trim())
+          .filter(Boolean),
+      ),
     );
 
     if (!sourceBranchId) {
@@ -4528,7 +5187,9 @@ export class OrderServiceService implements OnModuleInit {
     });
 
     if (existing.length) {
-      const existingList = await this.listBatchesWithItems(existing.map((batch) => String(batch.id)));
+      const existingList = await this.listBatchesWithItems(
+        existing.map((batch) => String(batch.id)),
+      );
       return successRes(
         {
           idempotent: true,
@@ -4549,12 +5210,18 @@ export class OrderServiceService implements OnModuleInit {
     });
 
     if (orders.length !== orderIds.length) {
-      this.badRequest('Some orders are not found or already assigned to another batch');
+      this.badRequest(
+        'Some orders are not found or already assigned to another batch',
+      );
     }
 
-    const invalidSourceOrder = orders.find((order) => String(order.branch_id ?? '').trim() === sourceBranchId);
+    const invalidSourceOrder = orders.find(
+      (order) => String(order.branch_id ?? '').trim() === sourceBranchId,
+    );
     if (invalidSourceOrder) {
-      this.badRequest('Return batch target branch must be different from source branch');
+      this.badRequest(
+        'Return batch target branch must be different from source branch',
+      );
     }
 
     const groupedByDestinationBranch = new Map<string, Order[]>();
@@ -4573,17 +5240,29 @@ export class OrderServiceService implements OnModuleInit {
     await queryRunner.startTransaction();
     try {
       const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
-      const batchItemRepo = queryRunner.manager.getRepository(BranchTransferBatchItem);
-      const batchHistoryRepo = queryRunner.manager.getRepository(BranchTransferBatchHistory);
+      const batchItemRepo = queryRunner.manager.getRepository(
+        BranchTransferBatchItem,
+      );
+      const batchHistoryRepo = queryRunner.manager.getRepository(
+        BranchTransferBatchHistory,
+      );
       const orderRepo = queryRunner.manager.getRepository(Order);
 
       const newlyCreatedBatchEntities: BranchTransferBatch[] = [];
       const batchByDestinationBranch = new Map<string, BranchTransferBatch>();
-      for (const [destinationBranchId, branchOrders] of groupedByDestinationBranch.entries()) {
-        const totalPrice = branchOrders.reduce((sum, order) => sum + Number(order.total_price ?? 0), 0);
+      for (const [
+        destinationBranchId,
+        branchOrders,
+      ] of groupedByDestinationBranch.entries()) {
+        const totalPrice = branchOrders.reduce(
+          (sum, order) => sum + Number(order.total_price ?? 0),
+          0,
+        );
         const targetRegionId = String(branchOrders[0]?.region_id ?? '').trim();
         if (!targetRegionId) {
-          this.badRequest(`Orders for destination branch ${destinationBranchId} must have region_id`);
+          this.badRequest(
+            `Orders for destination branch ${destinationBranchId} must have region_id`,
+          );
         }
 
         const existingPendingBatch = await batchRepo.findOne({
@@ -4604,11 +5283,17 @@ export class OrderServiceService implements OnModuleInit {
           existingPendingBatch.total_price =
             Number(existingPendingBatch.total_price ?? 0) + totalPrice;
           await batchRepo.save(existingPendingBatch);
-          batchByDestinationBranch.set(destinationBranchId, existingPendingBatch);
+          batchByDestinationBranch.set(
+            destinationBranchId,
+            existingPendingBatch,
+          );
           continue;
         }
 
-        const qrToken = await this.generateTransferQrToken(batchRepo, direction);
+        const qrToken = await this.generateTransferQrToken(
+          batchRepo,
+          direction,
+        );
         const newBatch = batchRepo.create({
           qr_code_token: qrToken,
           request_key: requestKey,
@@ -4634,10 +5319,16 @@ export class OrderServiceService implements OnModuleInit {
       const itemEntities: BranchTransferBatchItem[] = [];
       const historyEntities: BranchTransferBatchHistory[] = [];
 
-      for (const [destinationBranchId, branchOrders] of groupedByDestinationBranch.entries()) {
+      for (const [
+        destinationBranchId,
+        branchOrders,
+      ] of groupedByDestinationBranch.entries()) {
         const batch = batchByDestinationBranch.get(destinationBranchId);
         if (!batch) {
-          throw new RpcException({ statusCode: 500, message: 'Return batch create failed' });
+          throw new RpcException({
+            statusCode: 500,
+            message: 'Return batch create failed',
+          });
         }
 
         const branchOrderIds = branchOrders.map((order) => String(order.id));
@@ -4673,7 +5364,9 @@ export class OrderServiceService implements OnModuleInit {
             batch_id: String(batch.id),
             user_id: requesterId,
             action: BranchTransferBatchAction.CREATED,
-            notes: newlyCreatedBatchEntities.some((created) => String(created.id) === String(batch.id))
+            notes: newlyCreatedBatchEntities.some(
+              (created) => String(created.id) === String(batch.id),
+            )
               ? `[STEP] RETURN_BATCH_CREATED${input?.notes ? ` | ${String(input.notes).trim()}` : ''}`
               : `[STEP] RETURN_BATCH_APPENDED${input?.notes ? ` | ${String(input.notes).trim()}` : ''}`,
           }),
@@ -4692,7 +5385,13 @@ export class OrderServiceService implements OnModuleInit {
       await batchHistoryRepo.save(historyEntities);
       await queryRunner.commitTransaction();
 
-      const affectedBatchIds = [...new Set([...batchByDestinationBranch.values()].map((batch) => String(batch.id)))];
+      const affectedBatchIds = [
+        ...new Set(
+          [...batchByDestinationBranch.values()].map((batch) =>
+            String(batch.id),
+          ),
+        ),
+      ];
       const batches = await this.listBatchesWithItems(affectedBatchIds);
       return successRes(
         {
@@ -4716,7 +5415,11 @@ export class OrderServiceService implements OnModuleInit {
     requester_id?: string;
     notes?: string | null;
   }) {
-    const batchIds = Array.from(new Set((input?.batch_ids ?? []).map((id) => String(id).trim()).filter(Boolean)));
+    const batchIds = Array.from(
+      new Set(
+        (input?.batch_ids ?? []).map((id) => String(id).trim()).filter(Boolean),
+      ),
+    );
     if (!batchIds.length) {
       this.badRequest('batch_ids is required');
     }
@@ -4727,7 +5430,9 @@ export class OrderServiceService implements OnModuleInit {
     await queryRunner.startTransaction();
     try {
       const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
-      const batchHistoryRepo = queryRunner.manager.getRepository(BranchTransferBatchHistory);
+      const batchHistoryRepo = queryRunner.manager.getRepository(
+        BranchTransferBatchHistory,
+      );
       const orderRepo = queryRunner.manager.getRepository(Order);
 
       const now = new Date();
@@ -4763,7 +5468,11 @@ export class OrderServiceService implements OnModuleInit {
       await batchHistoryRepo.save(histories);
 
       await queryRunner.commitTransaction();
-      return successRes({ batch_ids: batchIds }, 200, 'Branch transfer batches cancelled');
+      return successRes(
+        { batch_ids: batchIds },
+        200,
+        'Branch transfer batches cancelled',
+      );
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;
@@ -4784,7 +5493,9 @@ export class OrderServiceService implements OnModuleInit {
 
     const messageId = this.normalizeInboxMessageId(input?.message_id);
     const orderIds = Array.from(
-      new Set((input?.order_ids ?? []).map((id) => String(id).trim()).filter(Boolean)),
+      new Set(
+        (input?.order_ids ?? []).map((id) => String(id).trim()).filter(Boolean),
+      ),
     );
 
     if (!orderIds.length) {
@@ -4795,7 +5506,9 @@ export class OrderServiceService implements OnModuleInit {
     await queryRunner.connect();
     await queryRunner.startTransaction();
     try {
-      const inboxRepo = queryRunner.manager.getRepository(OrderBatchInboxMessage);
+      const inboxRepo = queryRunner.manager.getRepository(
+        OrderBatchInboxMessage,
+      );
       const orderRepo = queryRunner.manager.getRepository(Order);
 
       try {
@@ -4860,10 +5573,7 @@ export class OrderServiceService implements OnModuleInit {
     }
   }
 
-  async bulkRemoveFromBatch(input: {
-    batch_id?: string;
-    message_id?: string;
-  }) {
+  async bulkRemoveFromBatch(input: { batch_id?: string; message_id?: string }) {
     const batchId = String(input?.batch_id ?? '').trim();
     if (!batchId) {
       this.badRequest('batch_id is required');
@@ -4875,7 +5585,9 @@ export class OrderServiceService implements OnModuleInit {
     await queryRunner.connect();
     await queryRunner.startTransaction();
     try {
-      const inboxRepo = queryRunner.manager.getRepository(OrderBatchInboxMessage);
+      const inboxRepo = queryRunner.manager.getRepository(
+        OrderBatchInboxMessage,
+      );
       const orderRepo = queryRunner.manager.getRepository(Order);
 
       try {
@@ -4940,10 +5652,16 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     const userId = String(input?.user_id ?? '').trim() || '0';
-    const actionRaw = String(input?.action ?? BranchTransferBatchAction.CREATED).trim().toUpperCase();
-    const allowedActions = new Set<string>(Object.values(BranchTransferBatchAction));
+    const actionRaw = String(input?.action ?? BranchTransferBatchAction.CREATED)
+      .trim()
+      .toUpperCase();
+    const allowedActions = new Set<string>(
+      Object.values(BranchTransferBatchAction),
+    );
     if (!allowedActions.has(actionRaw)) {
-      this.badRequest(`action must be one of: ${Object.values(BranchTransferBatchAction).join(', ')}`);
+      this.badRequest(
+        `action must be one of: ${Object.values(BranchTransferBatchAction).join(', ')}`,
+      );
     }
 
     const batch = await this.transferBatchRepo.findOne({
@@ -5011,14 +5729,23 @@ export class OrderServiceService implements OnModuleInit {
     limit?: number;
   }) {
     const sourceBranchId = String(input?.source_branch_id ?? '').trim();
-    const destinationBranchId = String(input?.destination_branch_id ?? '').trim();
-    const statusRaw = String(input?.status ?? '').trim().toUpperCase();
-    const directionRaw = String(input?.direction ?? '').trim().toUpperCase();
-    const periodRaw = String(input?.period ?? '').trim().toLowerCase();
+    const destinationBranchId = String(
+      input?.destination_branch_id ?? '',
+    ).trim();
+    const statusRaw = String(input?.status ?? '')
+      .trim()
+      .toUpperCase();
+    const directionRaw = String(input?.direction ?? '')
+      .trim()
+      .toUpperCase();
+    const periodRaw = String(input?.period ?? '')
+      .trim()
+      .toLowerCase();
     const dateRaw = String(input?.date ?? '').trim();
 
     const page = Number(input?.page) > 0 ? Number(input?.page) : 1;
-    const limit = Number(input?.limit) > 0 ? Math.min(Number(input?.limit), 100) : 20;
+    const limit =
+      Number(input?.limit) > 0 ? Math.min(Number(input?.limit), 100) : 20;
     const skip = (page - 1) * limit;
 
     const qb = this.transferBatchRepo
@@ -5026,23 +5753,39 @@ export class OrderServiceService implements OnModuleInit {
       .where('batch.isDeleted = :isDeleted', { isDeleted: false });
 
     if (sourceBranchId) {
-      qb.andWhere('batch.source_branch_id = :sourceBranchId', { sourceBranchId });
+      qb.andWhere('batch.source_branch_id = :sourceBranchId', {
+        sourceBranchId,
+      });
     }
 
     if (destinationBranchId) {
-      qb.andWhere('batch.destination_branch_id = :destinationBranchId', { destinationBranchId });
+      qb.andWhere('batch.destination_branch_id = :destinationBranchId', {
+        destinationBranchId,
+      });
     }
 
     if (statusRaw) {
-      if (!Object.values(BranchTransferBatchStatus).includes(statusRaw as BranchTransferBatchStatus)) {
-        this.badRequest(`status must be one of: ${Object.values(BranchTransferBatchStatus).join(', ')}`);
+      if (
+        !Object.values(BranchTransferBatchStatus).includes(
+          statusRaw as BranchTransferBatchStatus,
+        )
+      ) {
+        this.badRequest(
+          `status must be one of: ${Object.values(BranchTransferBatchStatus).join(', ')}`,
+        );
       }
       qb.andWhere('batch.status = :status', { status: statusRaw });
     }
 
     if (directionRaw) {
-      if (!Object.values(BranchTransferDirection).includes(directionRaw as BranchTransferDirection)) {
-        this.badRequest(`direction must be one of: ${Object.values(BranchTransferDirection).join(', ')}`);
+      if (
+        !Object.values(BranchTransferDirection).includes(
+          directionRaw as BranchTransferDirection,
+        )
+      ) {
+        this.badRequest(
+          `direction must be one of: ${Object.values(BranchTransferDirection).join(', ')}`,
+        );
       }
       qb.andWhere('batch.direction = :direction', { direction: directionRaw });
     }
@@ -5060,7 +5803,8 @@ export class OrderServiceService implements OnModuleInit {
       return new Date(now.getTime() + 5 * 60 * 60 * 1000);
     };
 
-    const uzToUtc = (uzDate: Date) => new Date(uzDate.getTime() - 5 * 60 * 60 * 1000);
+    const uzToUtc = (uzDate: Date) =>
+      new Date(uzDate.getTime() - 5 * 60 * 60 * 1000);
 
     if (dateRaw) {
       const parsedDate = parseDate(dateRaw, 'date');
@@ -5068,15 +5812,18 @@ export class OrderServiceService implements OnModuleInit {
       dayStart.setHours(0, 0, 0, 0);
       const dayEnd = new Date(parsedDate);
       dayEnd.setHours(23, 59, 59, 999);
-      qb.andWhere('batch.createdAt BETWEEN :dayStart AND :dayEnd', { dayStart, dayEnd });
+      qb.andWhere('batch.createdAt BETWEEN :dayStart AND :dayEnd', {
+        dayStart,
+        dayEnd,
+      });
     } else if (periodRaw) {
       const allowedPeriods = new Set(['today', 'week', 'month']);
       if (!allowedPeriods.has(periodRaw)) {
-        this.badRequest("period must be one of: today, week, month");
+        this.badRequest('period must be one of: today, week, month');
       }
 
       const uzNow = getUzNow();
-      let periodStartUz = new Date(uzNow);
+      const periodStartUz = new Date(uzNow);
       periodStartUz.setHours(0, 0, 0, 0);
       let periodEndUz = new Date(uzNow);
       periodEndUz.setHours(23, 59, 59, 999);
@@ -5089,12 +5836,23 @@ export class OrderServiceService implements OnModuleInit {
 
       if (periodRaw === 'month') {
         periodStartUz.setDate(1);
-        periodEndUz = new Date(periodStartUz.getFullYear(), periodStartUz.getMonth() + 1, 0, 23, 59, 59, 999);
+        periodEndUz = new Date(
+          periodStartUz.getFullYear(),
+          periodStartUz.getMonth() + 1,
+          0,
+          23,
+          59,
+          59,
+          999,
+        );
       }
 
       const periodStart = uzToUtc(periodStartUz);
       const periodEnd = uzToUtc(periodEndUz);
-      qb.andWhere('batch.createdAt BETWEEN :periodStart AND :periodEnd', { periodStart, periodEnd });
+      qb.andWhere('batch.createdAt BETWEEN :periodStart AND :periodEnd', {
+        periodStart,
+        periodEnd,
+      });
     }
 
     const [rows, total] = await qb
@@ -5120,15 +5878,17 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     const mappedRows = rows.map((batch) => {
-      const mappedItems = (itemsByBatch.get(String(batch.id)) ?? []).map((item) => ({
-        id: item.id,
-        order_id: item.order_id,
-        snapshot_price: item.snapshot_price,
-        snapshot_market_id: item.snapshot_market_id,
-        sent_at: item.sent_at,
-        createdAt: item.createdAt,
-        updatedAt: item.updatedAt,
-      }));
+      const mappedItems = (itemsByBatch.get(String(batch.id)) ?? []).map(
+        (item) => ({
+          id: item.id,
+          order_id: item.order_id,
+          snapshot_price: item.snapshot_price,
+          snapshot_market_id: item.snapshot_market_id,
+          sent_at: item.sent_at,
+          createdAt: item.createdAt,
+          updatedAt: item.updatedAt,
+        }),
+      );
 
       if (batch.status !== BranchTransferBatchStatus.PENDING) {
         return {
@@ -5181,7 +5941,9 @@ export class OrderServiceService implements OnModuleInit {
             return rowKey === key;
           });
 
-          return firstPending ? String(firstPending.id) === String(candidate.id) : index === 0;
+          return firstPending
+            ? String(firstPending.id) === String(candidate.id)
+            : index === 0;
         })
       : mappedRows;
 
@@ -5206,14 +5968,26 @@ export class OrderServiceService implements OnModuleInit {
     direction?: string;
     side?: 'source' | 'destination' | string;
   }) {
-    const directionRaw = String(input?.direction ?? '').trim().toUpperCase();
-    const sideRaw = String(input?.side ?? 'source').trim().toLowerCase();
-    const side: 'source' | 'destination' = sideRaw === 'destination' ? 'destination' : 'source';
-    const column = side === 'destination' ? 'destination_branch_id' : 'source_branch_id';
+    const directionRaw = String(input?.direction ?? '')
+      .trim()
+      .toUpperCase();
+    const sideRaw = String(input?.side ?? 'source')
+      .trim()
+      .toLowerCase();
+    const side: 'source' | 'destination' =
+      sideRaw === 'destination' ? 'destination' : 'source';
+    const column =
+      side === 'destination' ? 'destination_branch_id' : 'source_branch_id';
 
     if (directionRaw) {
-      if (!Object.values(BranchTransferDirection).includes(directionRaw as BranchTransferDirection)) {
-        this.badRequest(`direction must be one of: ${Object.values(BranchTransferDirection).join(', ')}`);
+      if (
+        !Object.values(BranchTransferDirection).includes(
+          directionRaw as BranchTransferDirection,
+        )
+      ) {
+        this.badRequest(
+          `direction must be one of: ${Object.values(BranchTransferDirection).join(', ')}`,
+        );
       }
     }
 
@@ -5221,9 +5995,14 @@ export class OrderServiceService implements OnModuleInit {
       .createQueryBuilder('batch')
       .select(`batch.${column}`, 'branch_id')
       .addSelect('COUNT(*)::int', 'sent_batches_count')
-      .addSelect('COALESCE(SUM(batch.total_price), 0)::bigint', 'sent_total_price')
+      .addSelect(
+        'COALESCE(SUM(batch.total_price), 0)::bigint',
+        'sent_total_price',
+      )
       .where('batch.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('batch.status = :status', { status: BranchTransferBatchStatus.SENT })
+      .andWhere('batch.status = :status', {
+        status: BranchTransferBatchStatus.SENT,
+      })
       .andWhere(`batch.${column} IS NOT NULL`);
 
     if (directionRaw) {
@@ -5350,7 +6129,11 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     const orderIds = Array.from(
-      new Set((input?.orderIds ?? input?.order_ids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean)),
+      new Set(
+        (input?.orderIds ?? input?.order_ids ?? [])
+          .map((id) => String(id ?? '').trim())
+          .filter(Boolean),
+      ),
     );
     if (!orderIds.length) {
       this.badRequest('orderIds is required');
@@ -5373,14 +6156,23 @@ export class OrderServiceService implements OnModuleInit {
     if (batch.status === BranchTransferBatchStatus.RECEIVED) {
       this.badRequest("Qabul qilingan paketni qayta jo'natib bo'lmaydi");
     }
-    if (![BranchTransferBatchStatus.PENDING, BranchTransferBatchStatus.SENT].includes(batch.status)) {
-      this.badRequest(`Paketni jo'natib bo'lmaydi. Current status: ${batch.status}`);
+    if (
+      ![
+        BranchTransferBatchStatus.PENDING,
+        BranchTransferBatchStatus.SENT,
+      ].includes(batch.status)
+    ) {
+      this.badRequest(
+        `Paketni jo'natib bo'lmaydi. Current status: ${batch.status}`,
+      );
     }
 
     const batchItems = await this.transferBatchItemRepo.find({
       where: { batch_id: batchId, isDeleted: false },
     });
-    const itemByOrderId = new Map(batchItems.map((item) => [String(item.order_id), item]));
+    const itemByOrderId = new Map(
+      batchItems.map((item) => [String(item.order_id), item]),
+    );
     const selectedItems = orderIds
       .map((orderId) => itemByOrderId.get(orderId))
       .filter((item): item is BranchTransferBatchItem => Boolean(item));
@@ -5402,9 +6194,13 @@ export class OrderServiceService implements OnModuleInit {
     const refreshedItems = await this.transferBatchItemRepo.find({
       where: { batch_id: batchId, isDeleted: false },
     });
-    const allSent = refreshedItems.length > 0 && refreshedItems.every((item) => Boolean(item.sent_at));
+    const allSent =
+      refreshedItems.length > 0 &&
+      refreshedItems.every((item) => Boolean(item.sent_at));
 
-    batch.status = allSent ? BranchTransferBatchStatus.SENT : BranchTransferBatchStatus.PENDING;
+    batch.status = allSent
+      ? BranchTransferBatchStatus.SENT
+      : BranchTransferBatchStatus.PENDING;
     batch.sent_at = allSent ? now : null;
     batch.vehicle_plate = vehiclePlate;
     batch.driver_name = driverName;
@@ -5440,19 +6236,21 @@ export class OrderServiceService implements OnModuleInit {
 
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
     const requesterName =
-      String(input?.requester_name ?? '').trim() ||
-      requesterId ||
-      'unknown';
+      String(input?.requester_name ?? '').trim() || requesterId || 'unknown';
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
     try {
       const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
-      const batchItemRepo = queryRunner.manager.getRepository(BranchTransferBatchItem);
+      const batchItemRepo = queryRunner.manager.getRepository(
+        BranchTransferBatchItem,
+      );
       const orderRepo = queryRunner.manager.getRepository(Order);
       const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
-      const historyRepo = queryRunner.manager.getRepository(BranchTransferBatchHistory);
+      const historyRepo = queryRunner.manager.getRepository(
+        BranchTransferBatchHistory,
+      );
 
       const batch = await batchRepo.findOne({
         where: { id: batchId, isDeleted: false },
@@ -5462,7 +6260,7 @@ export class OrderServiceService implements OnModuleInit {
       }
 
       if (batch.status === BranchTransferBatchStatus.RECEIVED) {
-        this.badRequest("Bu paket allaqachon qabul qilingan");
+        this.badRequest('Bu paket allaqachon qabul qilingan');
       }
       if (batch.status === BranchTransferBatchStatus.PENDING) {
         this.badRequest("Hali jo'natilmagan paketni qabul qilib bo'lmaydi");
@@ -5471,7 +6269,9 @@ export class OrderServiceService implements OnModuleInit {
         this.badRequest("Bekor qilingan paketni qabul qilib bo'lmaydi");
       }
       if (batch.status !== BranchTransferBatchStatus.SENT) {
-        this.badRequest(`Paketni qabul qilib bo'lmaydi. Current status: ${batch.status}`);
+        this.badRequest(
+          `Paketni qabul qilib bo'lmaydi. Current status: ${batch.status}`,
+        );
       }
 
       const items = await batchItemRepo.find({
@@ -5503,10 +6303,16 @@ export class OrderServiceService implements OnModuleInit {
         });
 
         const localOrderIds = orders
-          .filter((order) => String(order.region_id ?? '') === String(batch.target_region_id))
+          .filter(
+            (order) =>
+              String(order.region_id ?? '') === String(batch.target_region_id),
+          )
           .map((order) => String(order.id));
         const transitOrderIds = orders
-          .filter((order) => String(order.region_id ?? '') !== String(batch.target_region_id))
+          .filter(
+            (order) =>
+              String(order.region_id ?? '') !== String(batch.target_region_id),
+          )
           .map((order) => String(order.id));
 
         if (localOrderIds.length) {
@@ -5529,10 +6335,12 @@ export class OrderServiceService implements OnModuleInit {
             .execute();
         }
 
-        const ordersById = new Map(orders.map((order) => [String(order.id), order]));
+        const ordersById = new Map(
+          orders.map((order) => [String(order.id), order]),
+        );
         for (const localOrderId of localOrderIds) {
           const order = ordersById.get(String(localOrderId));
-          const fromStatus = order?.status as Order_status | undefined;
+          const fromStatus = order?.status;
           if (!fromStatus) continue;
           if (fromStatus !== Order_status.RECEIVED) {
             await this.createTrackingEvent(
@@ -5581,7 +6389,9 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     const orderIds = Array.isArray(input?.order_ids)
-      ? input.order_ids.map((value) => String(value ?? '').trim()).filter(Boolean)
+      ? input.order_ids
+          .map((value) => String(value ?? '').trim())
+          .filter(Boolean)
       : [];
     if (!orderIds.length) {
       this.badRequest("order_ids bo'sh bo'lmasligi kerak");
@@ -5590,9 +6400,7 @@ export class OrderServiceService implements OnModuleInit {
 
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
     const requesterName =
-      String(input?.requester_name ?? '').trim() ||
-      requesterId ||
-      'unknown';
+      String(input?.requester_name ?? '').trim() || requesterId || 'unknown';
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -5600,10 +6408,14 @@ export class OrderServiceService implements OnModuleInit {
     let remainingOrderIdsForRequeue: string[] = [];
     try {
       const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
-      const batchItemRepo = queryRunner.manager.getRepository(BranchTransferBatchItem);
+      const batchItemRepo = queryRunner.manager.getRepository(
+        BranchTransferBatchItem,
+      );
       const orderRepo = queryRunner.manager.getRepository(Order);
       const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
-      const historyRepo = queryRunner.manager.getRepository(BranchTransferBatchHistory);
+      const historyRepo = queryRunner.manager.getRepository(
+        BranchTransferBatchHistory,
+      );
 
       const batch = await batchRepo.findOne({
         where: { id: batchId, isDeleted: false },
@@ -5613,7 +6425,7 @@ export class OrderServiceService implements OnModuleInit {
       }
 
       if (batch.status === BranchTransferBatchStatus.RECEIVED) {
-        this.badRequest("Bu paket allaqachon qabul qilingan");
+        this.badRequest('Bu paket allaqachon qabul qilingan');
       }
       if (batch.status === BranchTransferBatchStatus.PENDING) {
         this.badRequest("Hali jo'natilmagan paketdan qabul qilib bo'lmaydi");
@@ -5622,27 +6434,41 @@ export class OrderServiceService implements OnModuleInit {
         this.badRequest("Bekor qilingan paketdan qabul qilib bo'lmaydi");
       }
       if (batch.status !== BranchTransferBatchStatus.SENT) {
-        this.badRequest(`Paketdan qabul qilib bo'lmaydi. Current status: ${batch.status}`);
+        this.badRequest(
+          `Paketdan qabul qilib bo'lmaydi. Current status: ${batch.status}`,
+        );
       }
 
       const selectedItems = await batchItemRepo.find({
-        where: { batch_id: batchId, isDeleted: false, order_id: In(uniqueOrderIds) },
+        where: {
+          batch_id: batchId,
+          isDeleted: false,
+          order_id: In(uniqueOrderIds),
+        },
       });
       if (!selectedItems.length) {
         this.badRequest('Berilgan orderlar bu batch ichida topilmadi');
       }
 
-      const selectedOrderIds = selectedItems.map((item) => String(item.order_id));
-      const missingOrderIds = uniqueOrderIds.filter((id) => !selectedOrderIds.includes(id));
+      const selectedOrderIds = selectedItems.map((item) =>
+        String(item.order_id),
+      );
+      const missingOrderIds = uniqueOrderIds.filter(
+        (id) => !selectedOrderIds.includes(id),
+      );
       if (missingOrderIds.length) {
-        this.badRequest(`Quyidagi orderlar batch ichida yo'q: ${missingOrderIds.join(', ')}`);
+        this.badRequest(
+          `Quyidagi orderlar batch ichida yo'q: ${missingOrderIds.join(', ')}`,
+        );
       }
 
       const notSentOrderIds = selectedItems
         .filter((item) => !item.sent_at)
         .map((item) => String(item.order_id));
       if (notSentOrderIds.length) {
-        this.badRequest(`Quyidagi orderlar hali jo'natilmagan: ${notSentOrderIds.join(', ')}`);
+        this.badRequest(
+          `Quyidagi orderlar hali jo'natilmagan: ${notSentOrderIds.join(', ')}`,
+        );
       }
 
       await orderRepo
@@ -5662,10 +6488,12 @@ export class OrderServiceService implements OnModuleInit {
         select: ['id', 'status'],
       });
 
-      const ordersById = new Map(orders.map((order) => [String(order.id), order]));
+      const ordersById = new Map(
+        orders.map((order) => [String(order.id), order]),
+      );
       for (const selectedOrderId of selectedOrderIds) {
         const order = ordersById.get(String(selectedOrderId));
-        const fromStatus = order?.status as Order_status | undefined;
+        const fromStatus = order?.status;
         if (!fromStatus) continue;
         if (fromStatus !== Order_status.RECEIVED) {
           await this.createTrackingEvent(
@@ -5696,7 +6524,9 @@ export class OrderServiceService implements OnModuleInit {
       });
 
       if (remainingItems.length) {
-        const remainingOrderIds = remainingItems.map((item) => String(item.order_id));
+        const remainingOrderIds = remainingItems.map((item) =>
+          String(item.order_id),
+        );
 
         await orderRepo
           .createQueryBuilder()
@@ -5714,7 +6544,9 @@ export class OrderServiceService implements OnModuleInit {
           .update(BranchTransferBatchItem)
           .set({ isDeleted: true })
           .where('batch_id = :batchId', { batchId })
-          .andWhere('order_id IN (:...orderIds)', { orderIds: remainingOrderIds })
+          .andWhere('order_id IN (:...orderIds)', {
+            orderIds: remainingOrderIds,
+          })
           .andWhere('"is_deleted" = false')
           .execute();
 
@@ -5757,7 +6589,11 @@ export class OrderServiceService implements OnModuleInit {
         });
       }
 
-      return successRes(savedBatch, 200, 'Selected transfer batch orders received');
+      return successRes(
+        savedBatch,
+        200,
+        'Selected transfer batch orders received',
+      );
     } catch (error) {
       await queryRunner.rollbackTransaction();
       throw error;
@@ -5779,11 +6615,14 @@ export class OrderServiceService implements OnModuleInit {
 
     const reason = String(input?.reason ?? '').trim();
     if (!reason || reason.length < 10) {
-      this.badRequest("Bekor qilish sababi kamida 10 ta belgidan iborat bo'lishi kerak");
+      this.badRequest(
+        "Bekor qilish sababi kamida 10 ta belgidan iborat bo'lishi kerak",
+      );
     }
 
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
-    const requesterName = String(input?.requester_name ?? '').trim() || requesterId || 'unknown';
+    const requesterName =
+      String(input?.requester_name ?? '').trim() || requesterId || 'unknown';
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -5791,7 +6630,9 @@ export class OrderServiceService implements OnModuleInit {
     try {
       const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
       const orderRepo = queryRunner.manager.getRepository(Order);
-      const historyRepo = queryRunner.manager.getRepository(BranchTransferBatchHistory);
+      const historyRepo = queryRunner.manager.getRepository(
+        BranchTransferBatchHistory,
+      );
 
       const batch = await batchRepo.findOne({
         where: { id: batchId, isDeleted: false },
@@ -5810,7 +6651,9 @@ export class OrderServiceService implements OnModuleInit {
         batch.status !== BranchTransferBatchStatus.PENDING &&
         batch.status !== BranchTransferBatchStatus.SENT
       ) {
-        this.badRequest(`Paketni bekor qilib bo'lmaydi. Current status: ${batch.status}`);
+        this.badRequest(
+          `Paketni bekor qilib bo'lmaydi. Current status: ${batch.status}`,
+        );
       }
 
       batch.status = BranchTransferBatchStatus.CANCELLED;
@@ -5849,14 +6692,18 @@ export class OrderServiceService implements OnModuleInit {
 
     if (typeof payload.where_deliver === 'string') {
       const normalized = payload.where_deliver.toLowerCase();
-      if (normalized === Where_deliver.CENTER || normalized === Where_deliver.ADDRESS) {
+      if (
+        normalized === Where_deliver.CENTER ||
+        normalized === Where_deliver.ADDRESS
+      ) {
         payload.where_deliver = normalized;
       }
     }
 
     if (typeof payload.status === 'string') {
       const normalized = payload.status.toLowerCase();
-      payload.status = normalized === Order_status.CREATED ? Order_status.NEW : normalized;
+      payload.status =
+        normalized === Order_status.CREATED ? Order_status.NEW : normalized;
     }
 
     if (typeof payload.source === 'string') {

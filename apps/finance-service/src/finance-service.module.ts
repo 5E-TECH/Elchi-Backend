@@ -14,6 +14,8 @@ import { Cashbox } from './entities/cashbox.entity';
 import { CashboxHistory } from './entities/cashbox-history.entity';
 import { Shift } from './entities/shift.entity';
 import { UserSalary } from './entities/user-salary.entity';
+import { OperatorEarning } from './entities/operator-earning.entity';
+import { OperatorPayment } from './entities/operator-payment.entity';
 
 @Module({
   imports: [
@@ -28,7 +30,14 @@ import { UserSalary } from './entities/user-salary.entity';
     RmqModule.register({ name: 'IDENTITY' }),
     DatabaseModule,
     ActivityLogModule.forService('finance-service'),
-    TypeOrmModule.forFeature([Cashbox, CashboxHistory, Shift, UserSalary]),
+    TypeOrmModule.forFeature([
+      Cashbox,
+      CashboxHistory,
+      Shift,
+      UserSalary,
+      OperatorEarning,
+      OperatorPayment,
+    ]),
   ],
   controllers: [FinanceServiceController],
   providers: [FinanceServiceService],

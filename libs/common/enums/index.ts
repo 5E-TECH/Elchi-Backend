@@ -9,7 +9,7 @@ export enum Roles {
   MARKET_OPERATOR = 'market_operator',
   MANAGER = 'manager',
   BRANCH = 'branch',
-  INVESTOR = 'investor'
+  INVESTOR = 'investor',
 }
 
 export enum Status {
@@ -33,6 +33,13 @@ export enum PaymentMethod {
 export enum Operation_type {
   INCOME = 'income',
   EXPENSE = 'expense',
+}
+
+export enum Commission_type {
+  // Operator earns a percentage of the order's total_price.
+  PERCENT = 'percent',
+  // Operator earns a flat amount per sold order, regardless of price.
+  FIXED = 'fixed',
 }
 
 export enum Source_type {
