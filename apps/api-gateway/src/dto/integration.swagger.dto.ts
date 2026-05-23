@@ -36,7 +36,10 @@ export class CreateIntegrationRequestDto {
   @IsUrl()
   base_url!: string;
 
-  @ApiProperty({ type: Object, example: { api_key: 'token_here', auth_type: 'api_key' } })
+  @ApiProperty({
+    type: Object,
+    example: { api_key: 'token_here', auth_type: 'api_key' },
+  })
   @IsObject()
   credentials!: Record<string, unknown>;
 
@@ -213,7 +216,10 @@ export class QrSearchRequestDto {
   @IsString()
   endpoint?: string;
 
-  @ApiPropertyOptional({ example: 'POST', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] })
+  @ApiPropertyOptional({
+    example: 'POST',
+    enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  })
   @IsOptional()
   @IsIn(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
   method?: HttpMethod;
@@ -235,7 +241,10 @@ export class ExternalRequestDto {
   @IsString()
   endpoint?: string;
 
-  @ApiPropertyOptional({ example: 'POST', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] })
+  @ApiPropertyOptional({
+    example: 'POST',
+    enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  })
   @IsOptional()
   @IsIn(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
   method?: HttpMethod;
@@ -276,7 +285,10 @@ export class IntegrationHealthcheckRequestDto {
   @IsString()
   endpoint?: string;
 
-  @ApiPropertyOptional({ example: 'GET', enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'] })
+  @ApiPropertyOptional({
+    example: 'GET',
+    enum: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+  })
   @IsOptional()
   @IsIn(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])
   method?: HttpMethod;
@@ -325,7 +337,10 @@ export class FilterSyncHistoryQueryDto {
   @IsString()
   integration_id?: string;
 
-  @ApiPropertyOptional({ example: 'success', enum: ['pending', 'processing', 'success', 'failed'] })
+  @ApiPropertyOptional({
+    example: 'success',
+    enum: ['pending', 'processing', 'success', 'failed'],
+  })
   @IsOptional()
   @IsIn(['pending', 'processing', 'success', 'failed'])
   status?: 'pending' | 'processing' | 'success' | 'failed';
@@ -366,4 +381,23 @@ export class RetrySyncRequestDto {
   @IsOptional()
   @IsString()
   queue_id?: string;
+}
+
+export class DispatchShipmentRequestDto {
+  @ApiProperty({
+    example: '1001',
+    description: 'Internal order id to dispatch',
+  })
+  @IsString()
+  @IsNotEmpty()
+  order_id!: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Flat context interpolated into the provider dispatch body_template ({{field}}). e.g. { customer_phone, total_price, idempotency_key }',
+    example: { customer_phone: '+998901234567', total_price: '150000' },
+  })
+  @IsOptional()
+  @IsObject()
+  context?: Record<string, string>;
 }

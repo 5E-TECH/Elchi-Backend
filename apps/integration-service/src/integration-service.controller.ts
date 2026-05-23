@@ -181,4 +181,20 @@ export class IntegrationServiceController {
       this.integrationService.listShipments(data),
     );
   }
+
+  @MessagePattern({ cmd: 'integration.shipment.dispatch' })
+  dispatchShipment(
+    @Payload()
+    data: {
+      slug?: string;
+      integration_id?: string;
+      order_id: string;
+      context?: Record<string, string>;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.dispatchShipment(data),
+    );
+  }
 }

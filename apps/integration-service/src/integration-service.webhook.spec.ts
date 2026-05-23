@@ -478,3 +478,85 @@ describe('IntegrationServiceService webhook → shipment status (D3)', () => {
     expect(res.shipment).toMatchObject({ outcome: 'no_paths' });
   });
 });
+
+describe('IntegrationServiceService.dispatchShipment (D4)', () => {
+  function dispatchIntegration(overrides: Record<string, unknown> = {}) {
+    return baseIntegration({
+      dispatch_config: {
+        endpoint: '/orders',
+        method: 'POST',
+        use_auth: true,
+        body_template: {
+          external_id: '{{order_id}}',
+          phone: '{{customer_phone}}',
+          cod_amount: '{{total_price}}',
+        },
+        response_paths: {
+          external_ref: 'data.order_id',
+          tracking_number: 'data.tracking_number',
+          status: 'data.status',
+        },
+      },
+      ...overrides,
+    });
+  }
+
+  it('creates a shipment at the provider and records refs', async () => {
+    const { service, shipmentRepo } = makeService(dispatchIntegration());
+    shipmentRepo.findOne.mockResolvedValue(null); // new shipment
+
+    jest.spyOn(service as any, 'executeExternalRequest').mockResolvedValue({
+      data: {
+        raw: {
+          data: { order_id: 'ACME-77', tracking_number: 'TRK-77', status: 'CREATED' },
+        },
+      },
+    });
+
+    const res = await service.dispatchShipment({
+      slug: 'acme-cargo',
+      order_id: '1001',
+      context: { customer_phone: '+998901112233', total_price: '150000' },
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(res.data).toMatchObject({
+      order_id: '1001',
+      external_ref: 'ACME-77',
+      tracking_number: 'TRK-77',
+    });
+    expect(shipmentRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        external_ref: 'ACME-77',
+        tracking_number: 'TRK-77',
+        provider_status: 'CREATED',
+        send_attempts: 1,
+      }),
+    );
+  });
+
+  it('records last_error and bumps attempts when the provider call fails', async () => {
+    const { service, shipmentRepo } = makeService(dispatchIntegration());
+    shipmentRepo.findOne.mockResolvedValue(null);
+
+    jest
+      .spyOn(service as any, 'executeExternalRequest')
+      .mockRejectedValue(new Error('provider 500'));
+
+    await expect(
+      service.dispatchShipment({ slug: 'acme-cargo', order_id: '1001' }),
+    ).rejects.toThrow('provider 500');
+
+    expect(shipmentRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ last_error: 'provider 500', send_attempts: 1 }),
+    );
+  });
+
+  it('rejects when dispatch_config has no endpoint', async () => {
+    const { service } = makeService(baseIntegration()); // no dispatch_config
+
+    await expect(
+      service.dispatchShipment({ slug: 'acme-cargo', order_id: '1001' }),
+    ).rejects.toBeDefined();
+  });
+});

@@ -124,6 +124,38 @@ export class ExternalIntegration extends BaseEntity {
     event?: string;
   } | null;
 
+  /**
+   * Outbound dispatch config — how to create a shipment at this provider.
+   * The request body/query are templates interpolated from a flat context
+   * (order fields) via {{field}}; response_paths say where the provider's
+   * order id / tracking number / status live in the create response.
+   *   {
+   *     "endpoint": "/orders", "method": "POST", "use_auth": true,
+   *     "headers": { "Idempotency-Key": "{{idempotency_key}}" },
+   *     "body_template": { "external_id": "{{order_id}}",
+   *                        "receiver": { "phone": "{{customer_phone}}" },
+   *                        "cod_amount": "{{total_price}}" },
+   *     "response_paths": { "external_ref": "data.order_id",
+   *                         "tracking_number": "data.tracking_number",
+   *                         "status": "data.status" }
+   *   }
+   */
+  @Column({ type: 'jsonb', nullable: true })
+  dispatch_config!: {
+    endpoint?: string;
+    method?: string;
+    use_auth?: boolean;
+    headers?: Record<string, string>;
+    query_template?: Record<string, unknown>;
+    body_template?: Record<string, unknown>;
+    response_paths?: {
+      external_ref?: string;
+      tracking_number?: string;
+      status?: string;
+    };
+    timeout_ms?: number;
+  } | null;
+
   @Column({ type: 'timestamptz', nullable: true })
   last_sync_at!: Date | null;
 

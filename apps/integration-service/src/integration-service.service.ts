@@ -2140,4 +2140,121 @@ export class IntegrationServiceService {
     }
     return null;
   }
+
+  /**
+   * Outbound: create a shipment for an order at the provider.
+   *
+   * Provider-agnostic — the request is built from the integration's
+   * dispatch_config templates interpolated with `context` (flat order fields
+   * the caller supplies; integration-service never imports the order schema).
+   * On success we record external_ref + tracking on the shipment; on failure
+   * we stamp last_error and bump send_attempts so a retry/redispatch is
+   * visible. Idempotent at the provider via an Idempotency-Key header the
+   * caller can template in.
+   */
+  async dispatchShipment(input: {
+    slug?: string;
+    integration_id?: string;
+    order_id: string;
+    context?: Record<string, string>;
+  }) {
+    const orderId = String(input.order_id);
+    const integration = await this.integrationRepo.findOne({
+      where: input.integration_id
+        ? { id: String(input.integration_id), isDeleted: false }
+        : { slug: String(input.slug ?? ''), isDeleted: false },
+    });
+    if (!integration) {
+      this.notFound('integration not found for dispatch');
+    }
+
+    const cfg = integration.dispatch_config;
+    if (!cfg?.endpoint) {
+      this.badRequest('dispatch_config.endpoint is required for this provider');
+    }
+
+    const ctx: Record<string, string> = { order_id: orderId, ...(input.context ?? {}) };
+    const method = (cfg.method ?? 'POST').toUpperCase() as HttpMethod;
+    const body = this.interpolate(cfg.body_template ?? {}, ctx) as Record<
+      string,
+      unknown
+    >;
+    const params = this.interpolate(cfg.query_template ?? {}, ctx) as Record<
+      string,
+      unknown
+    >;
+    const headers = this.interpolate(cfg.headers ?? {}, ctx) as Record<
+      string,
+      string
+    >;
+
+    try {
+      const result = await this.executeExternalRequest({
+        slug: integration.slug,
+        endpoint: cfg.endpoint,
+        method,
+        params,
+        body,
+        headers,
+        use_auth: cfg.use_auth ?? true,
+        timeout_ms: cfg.timeout_ms ?? 30_000,
+      });
+
+      const raw = (result?.data as { raw?: unknown })?.raw ?? null;
+      const paths = cfg.response_paths ?? {};
+      const externalRef = paths.external_ref
+        ? this.stringifyPath(this.extractPath(raw, paths.external_ref))
+        : null;
+      const trackingNumber = paths.tracking_number
+        ? this.stringifyPath(this.extractPath(raw, paths.tracking_number))
+        : null;
+      const providerStatus = paths.status
+        ? this.stringifyPath(this.extractPath(raw, paths.status))
+        : null;
+
+      await this.upsertShipment({
+        order_id: orderId,
+        integration_id: String(integration.id),
+        provider_slug: integration.slug,
+        external_ref: externalRef,
+        tracking_number: trackingNumber,
+        provider_status: providerStatus ?? undefined,
+        last_request_id: ctx.idempotency_key ?? null,
+        last_error: null,
+        increment_attempt: true,
+      });
+
+      await this.activityLog.log({
+        entity_type: 'ProviderShipment',
+        entity_id: orderId,
+        action: ActivityAction.EXTERNAL_SYNC,
+        new_value: {
+          provider: integration.slug,
+          external_ref: externalRef,
+          tracking_number: trackingNumber,
+        },
+        metadata: { dispatch: true },
+      });
+
+      return successRes(
+        { order_id: orderId, external_ref: externalRef, tracking_number: trackingNumber },
+        201,
+        'shipment dispatched',
+      );
+    } catch (error) {
+      const message =
+        error instanceof RpcException
+          ? JSON.stringify((error as RpcException).getError())
+          : (error as Error).message;
+      // Record the failure on the shipment so operators can see + redispatch.
+      await this.upsertShipment({
+        order_id: orderId,
+        integration_id: String(integration.id),
+        provider_slug: integration.slug,
+        last_error: message,
+        increment_attempt: true,
+      });
+      throw error;
+    }
+  }
 }
