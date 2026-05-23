@@ -2,7 +2,11 @@ import { Module } from '@nestjs/common';
 import { ApiGatewayController } from './api-gateway.controller';
 import { ApiGatewayService } from './api-gateway.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { AppLoggerModule, RmqModule, gatewayValidationSchema } from '@app/common';
+import {
+  AppLoggerModule,
+  RmqModule,
+  gatewayValidationSchema,
+} from '@app/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';

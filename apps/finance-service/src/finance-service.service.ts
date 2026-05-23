@@ -2208,11 +2208,14 @@ export class FinanceServiceService implements OnModuleInit {
     if (!type || !Number.isFinite(value) || value <= 0) {
       return 0;
     }
-    if (type === Commission_type.PERCENT) {
+    // `type` arrives as a raw string from identity; narrow to the enum for a
+    // type-safe comparison.
+    const commissionType = type as Commission_type;
+    if (commissionType === Commission_type.PERCENT) {
       const price = Number.isFinite(totalPrice) ? Math.max(totalPrice, 0) : 0;
       return Math.max((price * value) / 100, 0);
     }
-    if (type === Commission_type.FIXED) {
+    if (commissionType === Commission_type.FIXED) {
       return Math.max(value, 0);
     }
     return 0;
@@ -2303,7 +2306,11 @@ export class FinanceServiceService implements OnModuleInit {
         );
         if (existing) {
           await queryRunner.commitTransaction();
-          return this.successRes(existing, 200, 'ledger entry already recorded');
+          return this.successRes(
+            existing,
+            200,
+            'ledger entry already recorded',
+          );
         }
       }
 

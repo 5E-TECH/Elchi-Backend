@@ -555,7 +555,10 @@ export class RecordFinancialBalanceRequestDto {
   @IsNumber()
   amount!: number;
 
-  @ApiProperty({ enum: FinancialSource_type, example: FinancialSource_type.MANUAL_EXPENSE })
+  @ApiProperty({
+    enum: FinancialSource_type,
+    example: FinancialSource_type.MANUAL_EXPENSE,
+  })
   @IsEnum(FinancialSource_type)
   source_type!: FinancialSource_type;
 
@@ -565,7 +568,10 @@ export class RecordFinancialBalanceRequestDto {
   @Matches(/^\d+$/)
   order_id?: string;
 
-  @ApiPropertyOptional({ example: '7', description: 'Linked user id (market/courier/employee)' })
+  @ApiPropertyOptional({
+    example: '7',
+    description: 'Linked user id (market/courier/employee)',
+  })
   @IsOptional()
   @IsString()
   @Matches(/^\d+$/)

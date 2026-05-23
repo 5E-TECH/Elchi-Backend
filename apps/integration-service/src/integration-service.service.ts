@@ -1892,7 +1892,10 @@ export class IntegrationServiceService {
       entity_id: shipment.order_id,
       action: ActivityAction.EXTERNAL_SYNC,
       old_value: { internal_status: shipment.internal_status },
-      new_value: { internal_status: mapped.status, provider_status: providerStatus },
+      new_value: {
+        internal_status: mapped.status,
+        provider_status: providerStatus,
+      },
       metadata: { provider: integration.slug, action: mapped.action ?? null },
     });
 
@@ -1949,10 +1952,15 @@ export class IntegrationServiceService {
   }
 
   private stringifyPath(value: unknown): string | null {
-    if (value === null || value === undefined) return null;
-    if (typeof value === 'object') return null;
-    const s = String(value).trim();
-    return s.length > 0 ? s : null;
+    if (typeof value === 'string') {
+      const s = value.trim();
+      return s.length > 0 ? s : null;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+    // Objects, arrays, null, undefined, symbols, functions → not a scalar path.
+    return null;
   }
 
   private async saveWebhookLog(data: {
@@ -1976,9 +1984,7 @@ export class IntegrationServiceService {
     } catch (err) {
       // Unique violation on (integration_id, delivery_id) = concurrent replay;
       // not fatal. Any other failure must not break the webhook response.
-      this.logger.warn(
-        `webhook log write failed: ${(err as Error).message}`,
-      );
+      this.logger.warn(`webhook log write failed: ${(err as Error).message}`);
       return null;
     }
   }
@@ -1996,7 +2002,7 @@ export class IntegrationServiceService {
   private tryParseJson(body: string): Record<string, unknown> | null {
     if (!body.trim()) return null;
     try {
-      const parsed = JSON.parse(body);
+      const parsed: unknown = JSON.parse(body);
       return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
         ? (parsed as Record<string, unknown>)
         : { value: parsed };
@@ -2010,11 +2016,13 @@ export class IntegrationServiceService {
     headers: Record<string, string>,
   ): string | null {
     const fromHeader =
-      headers['x-event'] ?? headers['x-event-type'] ?? headers['x-webhook-event'];
-    if (fromHeader) return String(fromHeader);
+      headers['x-event'] ??
+      headers['x-event-type'] ??
+      headers['x-webhook-event'];
+    if (fromHeader) return fromHeader;
     const candidate =
       parsed?.['event'] ?? parsed?.['event_type'] ?? parsed?.['type'];
-    return candidate != null ? String(candidate) : null;
+    return this.stringifyPath(candidate);
   }
 
   private truncateBody(body: string, max = 20_000): string {
@@ -2130,7 +2138,8 @@ export class IntegrationServiceService {
     const take = Math.min(Math.max(Number(input.limit ?? 50), 1), 200);
     const skip = Math.max(Number(input.offset ?? 0), 0);
     const where: Record<string, unknown> = { isDeleted: false };
-    if (input.integration_id) where.integration_id = String(input.integration_id);
+    if (input.integration_id)
+      where.integration_id = String(input.integration_id);
     if (input.internal_status) where.internal_status = input.internal_status;
 
     const [rows, total] = await this.shipmentRepo.findAndCount({
@@ -2139,7 +2148,11 @@ export class IntegrationServiceService {
       take,
       skip,
     });
-    return successRes({ rows, total, limit: take, offset: skip }, 200, 'shipments');
+    return successRes(
+      { rows, total, limit: take, offset: skip },
+      200,
+      'shipments',
+    );
   }
 
   /**
@@ -2196,7 +2209,10 @@ export class IntegrationServiceService {
       this.badRequest('dispatch_config.endpoint is required for this provider');
     }
 
-    const ctx: Record<string, string> = { order_id: orderId, ...(input.context ?? {}) };
+    const ctx: Record<string, string> = {
+      order_id: orderId,
+      ...(input.context ?? {}),
+    };
     const method = (cfg.method ?? 'POST').toUpperCase() as HttpMethod;
     const body = this.interpolate(cfg.body_template ?? {}, ctx) as Record<
       string,
@@ -2260,14 +2276,18 @@ export class IntegrationServiceService {
       });
 
       return successRes(
-        { order_id: orderId, external_ref: externalRef, tracking_number: trackingNumber },
+        {
+          order_id: orderId,
+          external_ref: externalRef,
+          tracking_number: trackingNumber,
+        },
         201,
         'shipment dispatched',
       );
     } catch (error) {
       const message =
         error instanceof RpcException
-          ? JSON.stringify((error as RpcException).getError())
+          ? JSON.stringify(error.getError())
           : (error as Error).message;
       // Record the failure on the shipment so operators can see + redispatch.
       await this.upsertShipment({

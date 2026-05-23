@@ -159,7 +159,23 @@ export class IntegrationServiceController {
 
   // --- Provider shipments ---
   @MessagePattern({ cmd: 'integration.shipment.upsert' })
-  upsertShipment(@Payload() data: any, @Ctx() context: RmqContext) {
+  upsertShipment(
+    @Payload()
+    data: {
+      order_id: string;
+      integration_id: string;
+      provider_slug?: string | null;
+      external_ref?: string | null;
+      tracking_number?: string | null;
+      provider_status?: string | null;
+      internal_status?: string | null;
+      last_request_id?: string | null;
+      meta?: Record<string, unknown> | null;
+      increment_attempt?: boolean;
+      last_error?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.integrationService.upsertShipment(data),
     );
@@ -176,7 +192,16 @@ export class IntegrationServiceController {
   }
 
   @MessagePattern({ cmd: 'integration.shipment.list' })
-  listShipments(@Payload() data: any, @Ctx() context: RmqContext) {
+  listShipments(
+    @Payload()
+    data: {
+      integration_id?: string;
+      internal_status?: string;
+      limit?: number;
+      offset?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.integrationService.listShipments(data),
     );

@@ -979,7 +979,8 @@ export class FinanceGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Record a manual financial ledger entry (income/expense/bills/salary/correction)',
+    summary:
+      'Record a manual financial ledger entry (income/expense/bills/salary/correction)',
   })
   @ApiBody({ type: RecordFinancialBalanceRequestDto })
   recordFinancialBalance(
@@ -996,7 +997,9 @@ export class FinanceGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'List financial balance ledger entries + current balance' })
+  @ApiOperation({
+    summary: 'List financial balance ledger entries + current balance',
+  })
   @ApiQuery({ name: 'source_type', required: false })
   @ApiQuery({ name: 'from_date', required: false })
   @ApiQuery({ name: 'to_date', required: false })
