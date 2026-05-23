@@ -30,6 +30,9 @@ jest.mock('./entities/sync-history.entity', () => ({
 jest.mock('./entities/provider-webhook-log.entity', () => ({
   ProviderWebhookLog: class ProviderWebhookLog {},
 }));
+jest.mock('./entities/provider-shipment.entity', () => ({
+  ProviderShipment: class ProviderShipment {},
+}));
 
 const SECRET = 'provider-shared-secret';
 const BODY = JSON.stringify({ event: 'package.delivered', order_id: '1001' });
@@ -45,6 +48,12 @@ function makeService(integration: Record<string, unknown> | null) {
   };
   const syncQueueRepo: any = {};
   const syncHistoryRepo: any = {};
+  const shipmentRepo: any = {
+    findOne: jest.fn().mockResolvedValue(null),
+    findAndCount: jest.fn(),
+    create: jest.fn((dto: any) => ({ ...dto })),
+    save: jest.fn(async (e: any) => ({ id: 'shp1', ...e })),
+  };
   const activityLog: any = { log: jest.fn().mockResolvedValue(undefined) };
   const noClient: any = {};
 
@@ -53,13 +62,14 @@ function makeService(integration: Record<string, unknown> | null) {
     syncQueueRepo,
     syncHistoryRepo,
     webhookLogRepo,
+    shipmentRepo,
     activityLog,
     noClient,
     noClient,
     noClient,
     noClient,
   );
-  return { service, integrationRepo, webhookLogRepo, activityLog };
+  return { service, integrationRepo, webhookLogRepo, shipmentRepo, activityLog };
 }
 
 function baseIntegration(overrides: Record<string, unknown> = {}) {
@@ -231,5 +241,107 @@ describe('IntegrationServiceService.receiveWebhook', () => {
     expect(webhookLogRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({ event_type: 'package.delivered' }),
     );
+  });
+});
+
+describe('IntegrationServiceService provider shipments', () => {
+  it('creates a shipment on first upsert', async () => {
+    const { service, shipmentRepo } = makeService(baseIntegration());
+    shipmentRepo.findOne.mockResolvedValueOnce(null);
+
+    const res = await service.upsertShipment({
+      order_id: '1001',
+      integration_id: '5',
+      provider_slug: 'acme-cargo',
+      external_ref: 'ACME-9',
+      tracking_number: 'TRK-9',
+      provider_status: 'CREATED',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(shipmentRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        order_id: '1001',
+        external_ref: 'ACME-9',
+        tracking_number: 'TRK-9',
+        provider_status: 'CREATED',
+      }),
+    );
+  });
+
+  it('updates the existing shipment row (idempotent on order_id)', async () => {
+    const { service, shipmentRepo } = makeService(baseIntegration());
+    const existing = {
+      id: 'shp1',
+      order_id: '1001',
+      integration_id: '5',
+      send_attempts: 1,
+      external_ref: 'ACME-9',
+    };
+    shipmentRepo.findOne.mockResolvedValueOnce(existing);
+
+    await service.upsertShipment({
+      order_id: '1001',
+      integration_id: '5',
+      provider_status: 'DELIVERED',
+      increment_attempt: true,
+    });
+
+    const saved = shipmentRepo.save.mock.calls[0][0];
+    expect(saved.id).toBe('shp1'); // same row, not a new one
+    expect(saved.provider_status).toBe('DELIVERED');
+    expect(saved.send_attempts).toBe(2); // incremented
+    expect(saved.external_ref).toBe('ACME-9'); // untouched field preserved
+  });
+
+  it('finds a shipment by external_ref, falling back to tracking_number', async () => {
+    const { service, shipmentRepo } = makeService(baseIntegration());
+    shipmentRepo.findOne
+      .mockResolvedValueOnce(null) // external_ref miss
+      .mockResolvedValueOnce({ id: 'shp1', tracking_number: 'TRK-9' }); // tracking hit
+
+    const found = await service.findShipmentByRef({
+      external_ref: 'missing',
+      tracking_number: 'TRK-9',
+    });
+    expect(found).toMatchObject({ id: 'shp1' });
+  });
+
+  describe('mapProviderStatus', () => {
+    const integration = {
+      inbound_status_mapping: {
+        DELIVERED: { status: 'sold', action: 'sell' },
+        CANCELLED: { status: 'cancelled', action: 'cancel' },
+        IN_TRANSIT: { status: 'waiting' },
+      },
+    } as any;
+
+    it('maps a known terminal status to internal status + action', () => {
+      const { service } = makeService(baseIntegration());
+      expect(service.mapProviderStatus(integration, 'DELIVERED')).toEqual({
+        status: 'sold',
+        action: 'sell',
+      });
+    });
+
+    it('maps an intermediate status with no action', () => {
+      const { service } = makeService(baseIntegration());
+      expect(service.mapProviderStatus(integration, 'IN_TRANSIT')).toEqual({
+        status: 'waiting',
+      });
+    });
+
+    it('is case-insensitive on the provider code', () => {
+      const { service } = makeService(baseIntegration());
+      expect(service.mapProviderStatus(integration, 'delivered')).toEqual({
+        status: 'sold',
+        action: 'sell',
+      });
+    });
+
+    it('returns null for an unmapped status', () => {
+      const { service } = makeService(baseIntegration());
+      expect(service.mapProviderStatus(integration, 'WEIRD')).toBeNull();
+    });
   });
 });

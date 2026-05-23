@@ -15,6 +15,7 @@ import { ExternalIntegration } from './entities/external-integration.entity';
 import { SyncQueue } from './entities/sync-queue.entity';
 import { SyncHistory } from './entities/sync-history.entity';
 import { ProviderWebhookLog } from './entities/provider-webhook-log.entity';
+import { ProviderShipment } from './entities/provider-shipment.entity';
 import { SyncQueueScheduler } from './sync-queue.scheduler';
 
 @Module({
@@ -38,6 +39,7 @@ import { SyncQueueScheduler } from './sync-queue.scheduler';
       SyncQueue,
       SyncHistory,
       ProviderWebhookLog,
+      ProviderShipment,
     ]),
   ],
   controllers: [IntegrationServiceController],

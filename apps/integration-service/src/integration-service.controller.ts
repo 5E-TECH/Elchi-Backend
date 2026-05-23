@@ -156,4 +156,29 @@ export class IntegrationServiceController {
       this.integrationService.receiveWebhook(data),
     );
   }
+
+  // --- Provider shipments ---
+  @MessagePattern({ cmd: 'integration.shipment.upsert' })
+  upsertShipment(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.upsertShipment(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.shipment.get' })
+  getShipment(
+    @Payload() data: { order_id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.getShipmentByOrder(data.order_id),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.shipment.list' })
+  listShipments(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listShipments(data),
+    );
+  }
 }

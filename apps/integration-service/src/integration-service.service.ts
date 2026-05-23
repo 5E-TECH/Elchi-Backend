@@ -15,6 +15,7 @@ import { ExternalIntegration } from './entities/external-integration.entity';
 import { SyncQueue } from './entities/sync-queue.entity';
 import { SyncHistory } from './entities/sync-history.entity';
 import { ProviderWebhookLog } from './entities/provider-webhook-log.entity';
+import { ProviderShipment } from './entities/provider-shipment.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -122,6 +123,8 @@ export class IntegrationServiceService {
     @InjectRepository(SyncHistory) private readonly syncHistoryRepo: Repository<SyncHistory>,
     @InjectRepository(ProviderWebhookLog)
     private readonly webhookLogRepo: Repository<ProviderWebhookLog>,
+    @InjectRepository(ProviderShipment)
+    private readonly shipmentRepo: Repository<ProviderShipment>,
     private readonly activityLog: ActivityLogService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
@@ -1853,5 +1856,148 @@ export class IntegrationServiceService {
 
   private truncateBody(body: string, max = 20_000): string {
     return body.length > max ? body.slice(0, max) : body;
+  }
+
+  // ===========================================================================
+  // Provider shipments (order ↔ external shipment tracking)
+  // ===========================================================================
+
+  /**
+   * Create or update the shipment row for an order (upsert on order_id).
+   * Used by outbound dispatch (after creating a shipment at the provider) and
+   * by reconcile/webhook updates. One shipment per order — a re-dispatch to a
+   * different provider overwrites the provider fields on the same row.
+   */
+  async upsertShipment(input: {
+    order_id: string;
+    integration_id: string;
+    provider_slug?: string | null;
+    external_ref?: string | null;
+    tracking_number?: string | null;
+    provider_status?: string | null;
+    internal_status?: string | null;
+    last_request_id?: string | null;
+    meta?: Record<string, unknown> | null;
+    increment_attempt?: boolean;
+    last_error?: string | null;
+  }) {
+    const orderId = String(input.order_id);
+    let shipment = await this.shipmentRepo.findOne({
+      where: { order_id: orderId },
+    });
+
+    if (!shipment) {
+      shipment = this.shipmentRepo.create({
+        order_id: orderId,
+        integration_id: String(input.integration_id),
+        send_attempts: 0,
+      });
+    }
+
+    shipment.integration_id = String(input.integration_id);
+    if (input.provider_slug !== undefined)
+      shipment.provider_slug = input.provider_slug;
+    if (input.external_ref !== undefined)
+      shipment.external_ref = input.external_ref;
+    if (input.tracking_number !== undefined)
+      shipment.tracking_number = input.tracking_number;
+    if (input.provider_status !== undefined) {
+      shipment.provider_status = input.provider_status;
+      shipment.status_changed_at = new Date();
+    }
+    if (input.internal_status !== undefined)
+      shipment.internal_status = input.internal_status;
+    if (input.last_request_id !== undefined)
+      shipment.last_request_id = input.last_request_id;
+    if (input.meta !== undefined) shipment.meta = input.meta;
+    if (input.last_error !== undefined) shipment.last_error = input.last_error;
+    if (input.increment_attempt) {
+      shipment.send_attempts = Number(shipment.send_attempts ?? 0) + 1;
+    }
+
+    const saved = await this.shipmentRepo.save(shipment);
+    return successRes(saved, 200, 'shipment upserted');
+  }
+
+  async getShipmentByOrder(order_id: string) {
+    const shipment = await this.shipmentRepo.findOne({
+      where: { order_id: String(order_id) },
+    });
+    if (!shipment) {
+      return successRes(null, 200, 'no shipment for order');
+    }
+    return successRes(shipment, 200, 'shipment found');
+  }
+
+  /**
+   * Look up a shipment from a webhook payload — providers reference an order
+   * by either their own id (external_ref) or the tracking number.
+   */
+  async findShipmentByRef(input: {
+    external_ref?: string | null;
+    tracking_number?: string | null;
+    integration_id?: string | null;
+  }): Promise<ProviderShipment | null> {
+    const { external_ref, tracking_number, integration_id } = input;
+    if (external_ref) {
+      const byRef = await this.shipmentRepo.findOne({
+        where: integration_id
+          ? { external_ref, integration_id: String(integration_id) }
+          : { external_ref },
+      });
+      if (byRef) return byRef;
+    }
+    if (tracking_number) {
+      const byTracking = await this.shipmentRepo.findOne({
+        where: integration_id
+          ? { tracking_number, integration_id: String(integration_id) }
+          : { tracking_number },
+      });
+      if (byTracking) return byTracking;
+    }
+    return null;
+  }
+
+  async listShipments(input: {
+    integration_id?: string;
+    internal_status?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const take = Math.min(Math.max(Number(input.limit ?? 50), 1), 200);
+    const skip = Math.max(Number(input.offset ?? 0), 0);
+    const where: Record<string, unknown> = { isDeleted: false };
+    if (input.integration_id) where.integration_id = String(input.integration_id);
+    if (input.internal_status) where.internal_status = input.internal_status;
+
+    const [rows, total] = await this.shipmentRepo.findAndCount({
+      where,
+      order: { updatedAt: 'DESC', id: 'DESC' },
+      take,
+      skip,
+    });
+    return successRes({ rows, total, limit: take, offset: skip }, 200, 'shipments');
+  }
+
+  /**
+   * Map a provider's raw status string to our internal handling using the
+   * integration's inbound_status_mapping. Case-insensitive on the provider
+   * code. Returns null when the provider status isn't mapped (caller decides
+   * whether that's an intermediate status to ignore or a config gap to log).
+   */
+  mapProviderStatus(
+    integration: Pick<ExternalIntegration, 'inbound_status_mapping'>,
+    providerStatus: string,
+  ): { status?: string; action?: string } | null {
+    const mapping = integration.inbound_status_mapping ?? {};
+    if (!providerStatus) return null;
+
+    // Exact match first, then case-insensitive.
+    if (mapping[providerStatus]) return mapping[providerStatus];
+    const upper = providerStatus.toUpperCase();
+    for (const [key, value] of Object.entries(mapping)) {
+      if (key.toUpperCase() === upper) return value;
+    }
+    return null;
   }
 }
