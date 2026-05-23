@@ -3105,6 +3105,109 @@ export class OrderServiceService implements OnModuleInit {
     );
   }
 
+  /**
+   * Apply a terminal status reported by an external delivery provider.
+   *
+   * STATUS-ONLY by design: this moves the order to the mapped status and
+   * records a tracking event, but performs NO cashbox / profit / commission
+   * movement. Provider-delivered orders settle financially via a separate
+   * provider-reconciliation flow (the provider collects COD and remits to us),
+   * which is intentionally not modelled here. We therefore bypass the finance
+   * emit path (enqueueFinanceOnStatusChange) entirely.
+   *
+   * action → status: sell → SOLD, cancel → CANCELLED, return → CLOSED.
+   * Idempotent: an order already in (or past) the target terminal state is a
+   * no-op, so a duplicate or out-of-order webhook can't double-apply.
+   */
+  async markByProvider(input: {
+    order_id: string;
+    action: 'sell' | 'cancel' | 'return';
+    provider_slug?: string | null;
+    external_ref?: string | null;
+  }) {
+    const order = await this.findById(input.order_id);
+    const oldStatus = order.status;
+
+    const targetStatus =
+      input.action === 'sell'
+        ? Order_status.SOLD
+        : input.action === 'cancel'
+          ? Order_status.CANCELLED
+          : Order_status.CLOSED;
+
+    // Idempotency: skip if the order is already in a terminal state that the
+    // action would (re)apply. Selling an already-sold order, cancelling an
+    // already-cancelled one, etc., is a no-op.
+    const soldStates = [
+      Order_status.SOLD,
+      Order_status.PAID,
+      Order_status.PARTLY_PAID,
+    ];
+    const cancelStates = [
+      Order_status.CANCELLED,
+      Order_status.CANCELLED_SENT,
+      Order_status.CLOSED,
+    ];
+    const alreadyApplied =
+      (input.action === 'sell' && soldStates.includes(oldStatus)) ||
+      (input.action === 'cancel' && cancelStates.includes(oldStatus)) ||
+      (input.action === 'return' && oldStatus === Order_status.CLOSED);
+
+    if (alreadyApplied) {
+      return successRes(
+        { id: order.id, status: oldStatus, skipped: true },
+        200,
+        'order already in target state (idempotent)',
+      );
+    }
+
+    const note =
+      `Provider ${input.provider_slug ?? 'external'} → ${input.action}` +
+      (input.external_ref ? ` (ref: ${input.external_ref})` : '');
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const orderRepo = queryRunner.manager.getRepository(Order);
+      const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+
+      order.status = targetStatus;
+      if (input.action === 'sell') {
+        order.sold_at = order.sold_at ?? String(Date.now());
+      }
+      await orderRepo.save(order);
+
+      await this.createTrackingEvent(
+        {
+          order_id: order.id,
+          from_status: oldStatus,
+          to_status: targetStatus,
+          changed_by: 'system',
+          changed_by_role: 'system',
+          note,
+        },
+        trackingRepo,
+      );
+
+      // Keep search in sync; deliberately NO finance emit (status-only).
+      await this.syncOrderToSearch(order, queryRunner.manager);
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.handleDbError(error);
+    } finally {
+      await queryRunner.release();
+    }
+
+    const updated = await this.findById(order.id);
+    return successRes(
+      { id: updated.id, status: updated.status },
+      200,
+      `order marked ${input.action} by provider`,
+    );
+  }
+
   async partlySellOrder(
     requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,

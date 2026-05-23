@@ -1896,6 +1896,29 @@ export class IntegrationServiceService {
       metadata: { provider: integration.slug, action: mapped.action ?? null },
     });
 
+    // Terminal action (sell/cancel/return) → drive the order's status. The
+    // order side is status-only (no cashbox) and idempotent, so a best-effort
+    // call is safe: if it fails, the shipment status is already recorded and a
+    // later webhook / reconcile re-drives it. Never let it fail the webhook.
+    if (mapped.action && ['sell', 'cancel', 'return'].includes(mapped.action)) {
+      try {
+        await this.rmqRequest(
+          this.orderClient,
+          { cmd: 'order.provider.mark' },
+          {
+            order_id: shipment.order_id,
+            action: mapped.action,
+            provider_slug: integration.slug,
+            external_ref: shipment.external_ref,
+          },
+        );
+      } catch (err) {
+        this.logger.warn(
+          `order.provider.mark failed for order ${shipment.order_id}: ${(err as Error).message}`,
+        );
+      }
+    }
+
     return {
       outcome: 'updated',
       internal_status: mapped.status,

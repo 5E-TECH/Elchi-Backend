@@ -560,3 +560,78 @@ describe('IntegrationServiceService.dispatchShipment (D4)', () => {
     ).rejects.toBeDefined();
   });
 });
+
+describe('IntegrationServiceService webhook → order terminal action (D3b)', () => {
+  const PAYLOAD = JSON.stringify({
+    event: 'package.delivered',
+    data: { order_id: 'ACME-9', tracking: 'TRK-9', status: { code: 'DELIVERED' } },
+  });
+
+  function trackingIntegration() {
+    return baseIntegration({
+      webhook_payload_paths: {
+        external_ref: 'data.order_id',
+        tracking_number: 'data.tracking',
+        status: 'data.status.code',
+        event: 'event',
+      },
+      inbound_status_mapping: {
+        DELIVERED: { status: 'sold', action: 'sell' },
+      },
+    });
+  }
+
+  it('calls order.provider.mark with the terminal action', async () => {
+    const { service, shipmentRepo } = makeService(trackingIntegration());
+    shipmentRepo.findOne.mockResolvedValue({
+      id: 'shp1',
+      order_id: '1001',
+      integration_id: '5',
+      internal_status: 'waiting',
+      external_ref: 'ACME-9',
+      send_attempts: 0,
+    });
+    const rmqSpy = jest
+      .spyOn(service as any, 'rmqRequest')
+      .mockResolvedValue({ statusCode: 200 });
+
+    const sig = computeHmacSignature(PAYLOAD, SECRET);
+    const res = await service.receiveWebhook(
+      bodyToInput('acme-cargo', PAYLOAD, { 'x-signature': sig, 'x-delivery-id': 'o1' }),
+    );
+
+    expect(res.ok).toBe(true);
+    expect(rmqSpy).toHaveBeenCalledWith(
+      expect.anything(),
+      { cmd: 'order.provider.mark' },
+      expect.objectContaining({
+        order_id: '1001',
+        action: 'sell',
+        provider_slug: 'acme-cargo',
+      }),
+    );
+  });
+
+  it('still returns 200 when order.provider.mark fails', async () => {
+    const { service, shipmentRepo } = makeService(trackingIntegration());
+    shipmentRepo.findOne.mockResolvedValue({
+      id: 'shp1',
+      order_id: '1001',
+      integration_id: '5',
+      internal_status: 'waiting',
+      external_ref: 'ACME-9',
+      send_attempts: 0,
+    });
+    jest
+      .spyOn(service as any, 'rmqRequest')
+      .mockRejectedValue(new Error('order-service down'));
+
+    const sig = computeHmacSignature(PAYLOAD, SECRET);
+    const res = await service.receiveWebhook(
+      bodyToInput('acme-cargo', PAYLOAD, { 'x-signature': sig, 'x-delivery-id': 'o2' }),
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.shipment).toMatchObject({ outcome: 'updated', action: 'sell' });
+  });
+});
