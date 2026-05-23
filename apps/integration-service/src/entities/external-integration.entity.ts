@@ -107,6 +107,23 @@ export class ExternalIntegration extends BaseEntity {
     { status?: string; action?: string }
   > | null;
 
+  /**
+   * Dot-paths telling us where to read shipment fields out of a webhook
+   * payload, so the framework stays provider-agnostic:
+   *   { "external_ref": "data.order_id",
+   *     "tracking_number": "data.tracking",
+   *     "status": "data.status.code",
+   *     "event": "event" }
+   * Each provider's payload shape is config, not code.
+   */
+  @Column({ type: 'jsonb', nullable: true })
+  webhook_payload_paths!: {
+    external_ref?: string;
+    tracking_number?: string;
+    status?: string;
+    event?: string;
+  } | null;
+
   @Column({ type: 'timestamptz', nullable: true })
   last_sync_at!: Date | null;
 

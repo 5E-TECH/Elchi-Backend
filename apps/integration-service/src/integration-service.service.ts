@@ -1771,9 +1771,6 @@ export class IntegrationServiceService {
       trace_id: input.trace_id ?? null,
     });
 
-    // Routing/processing (shipment status application) lands in a follow-up.
-    // For now the verified event is durably logged; record an audit entry so
-    // operators can see inbound traffic immediately.
     await this.activityLog.log({
       entity_type: 'ProviderWebhook',
       entity_id: log?.id ?? deliveryId ?? integration.slug,
@@ -1782,6 +1779,15 @@ export class IntegrationServiceService {
       metadata: { delivery_id: deliveryId },
     });
 
+    // Apply the event to the linked shipment (status tracking). Best-effort:
+    // a payload we can't map, or an order we don't have a shipment for, is
+    // logged but never fails the webhook — the provider still gets a 200 and
+    // the raw event stays in the log for replay.
+    const applied = await this.applyWebhookToShipment(integration, parsed);
+    if (log?.id) {
+      await this.markWebhookProcessed(log.id, applied.outcome);
+    }
+
     return {
       ok: true,
       code: 200,
@@ -1789,7 +1795,141 @@ export class IntegrationServiceService {
       event_type: eventType,
       delivery_id: deliveryId,
       log_id: log?.id ?? null,
+      shipment: applied,
     };
+  }
+
+  /**
+   * Resolve a webhook payload to a shipment status update. Returns an outcome
+   * tag (rather than throwing) so the caller can record it on the log without
+   * the webhook failing.
+   *
+   * Steps: read the configured payload paths → find the shipment by
+   * external_ref/tracking → map the provider status → persist the new status.
+   * A terminal action (sell/cancel/return) is surfaced in the outcome for the
+   * order-driving step (D3b) but not acted upon here.
+   */
+  private async applyWebhookToShipment(
+    integration: ExternalIntegration,
+    parsed: Record<string, unknown> | null,
+  ): Promise<{
+    outcome:
+      | 'no_paths'
+      | 'no_status'
+      | 'no_shipment'
+      | 'unmapped'
+      | 'unchanged'
+      | 'updated';
+    internal_status?: string;
+    action?: string;
+    order_id?: string;
+  }> {
+    const paths = integration.webhook_payload_paths;
+    if (!paths || !parsed) return { outcome: 'no_paths' };
+
+    const providerStatus = paths.status
+      ? this.stringifyPath(this.extractPath(parsed, paths.status))
+      : null;
+    if (!providerStatus) return { outcome: 'no_status' };
+
+    const externalRef = paths.external_ref
+      ? this.stringifyPath(this.extractPath(parsed, paths.external_ref))
+      : null;
+    const trackingNumber = paths.tracking_number
+      ? this.stringifyPath(this.extractPath(parsed, paths.tracking_number))
+      : null;
+
+    const shipment = await this.findShipmentByRef({
+      external_ref: externalRef,
+      tracking_number: trackingNumber,
+      integration_id: String(integration.id),
+    });
+    if (!shipment) {
+      this.logger.warn(
+        `webhook for ${integration.slug}: no shipment for ref=${externalRef} tracking=${trackingNumber}`,
+      );
+      return { outcome: 'no_shipment' };
+    }
+
+    const mapped = this.mapProviderStatus(integration, providerStatus);
+    if (!mapped?.status) {
+      // Record the raw provider status even when unmapped, so operators can
+      // see what the carrier reported and extend the mapping.
+      await this.upsertShipment({
+        order_id: shipment.order_id,
+        integration_id: String(integration.id),
+        provider_status: providerStatus,
+        tracking_number: trackingNumber ?? undefined,
+      });
+      return { outcome: 'unmapped', order_id: shipment.order_id };
+    }
+
+    // Idempotent: if the internal status is unchanged, just refresh the raw
+    // provider status and stop — no churn, no duplicate order-driving.
+    if (shipment.internal_status === mapped.status) {
+      await this.upsertShipment({
+        order_id: shipment.order_id,
+        integration_id: String(integration.id),
+        provider_status: providerStatus,
+      });
+      return {
+        outcome: 'unchanged',
+        internal_status: mapped.status,
+        order_id: shipment.order_id,
+      };
+    }
+
+    await this.upsertShipment({
+      order_id: shipment.order_id,
+      integration_id: String(integration.id),
+      provider_status: providerStatus,
+      internal_status: mapped.status,
+      tracking_number: trackingNumber ?? undefined,
+    });
+
+    await this.activityLog.log({
+      entity_type: 'ProviderShipment',
+      entity_id: shipment.order_id,
+      action: ActivityAction.EXTERNAL_SYNC,
+      old_value: { internal_status: shipment.internal_status },
+      new_value: { internal_status: mapped.status, provider_status: providerStatus },
+      metadata: { provider: integration.slug, action: mapped.action ?? null },
+    });
+
+    return {
+      outcome: 'updated',
+      internal_status: mapped.status,
+      action: mapped.action,
+      order_id: shipment.order_id,
+    };
+  }
+
+  private async markWebhookProcessed(
+    logId: string,
+    outcome: string,
+  ): Promise<void> {
+    // Surface diagnostic outcomes (couldn't attach / map) in `error` so they
+    // stand out in the log; a clean apply leaves error NULL.
+    const diagnostic = ['no_paths', 'no_status', 'no_shipment', 'unmapped'];
+    try {
+      await this.webhookLogRepo.update(
+        { id: logId },
+        {
+          status: 'processed',
+          processed_at: new Date(),
+          error: diagnostic.includes(outcome) ? `apply: ${outcome}` : null,
+        },
+      );
+    } catch {
+      // Non-fatal — the webhook already succeeded.
+    }
+  }
+
+  private stringifyPath(value: unknown): string | null {
+    if (value === null || value === undefined) return null;
+    if (typeof value === 'object') return null;
+    const s = String(value).trim();
+    return s.length > 0 ? s : null;
   }
 
   private async saveWebhookLog(data: {

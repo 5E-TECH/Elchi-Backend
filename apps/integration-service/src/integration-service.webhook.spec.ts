@@ -45,6 +45,7 @@ function makeService(integration: Record<string, unknown> | null) {
     findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn((dto: any) => dto),
     save: jest.fn(async (e: any) => ({ id: 'log1', ...e })),
+    update: jest.fn().mockResolvedValue(undefined),
   };
   const syncQueueRepo: any = {};
   const syncHistoryRepo: any = {};
@@ -343,5 +344,137 @@ describe('IntegrationServiceService provider shipments', () => {
       const { service } = makeService(baseIntegration());
       expect(service.mapProviderStatus(integration, 'WEIRD')).toBeNull();
     });
+  });
+});
+
+describe('IntegrationServiceService webhook → shipment status (D3)', () => {
+  const PAYLOAD = JSON.stringify({
+    event: 'package.delivered',
+    data: { order_id: 'ACME-9', tracking: 'TRK-9', status: { code: 'DELIVERED' } },
+  });
+
+  function trackingIntegration(overrides: Record<string, unknown> = {}) {
+    return baseIntegration({
+      webhook_payload_paths: {
+        external_ref: 'data.order_id',
+        tracking_number: 'data.tracking',
+        status: 'data.status.code',
+        event: 'event',
+      },
+      inbound_status_mapping: {
+        DELIVERED: { status: 'sold', action: 'sell' },
+        IN_TRANSIT: { status: 'waiting' },
+      },
+      ...overrides,
+    });
+  }
+
+  it('maps the provider status and updates the shipment', async () => {
+    const { service, shipmentRepo } = makeService(trackingIntegration());
+    const shipment = {
+      id: 'shp1',
+      order_id: '1001',
+      integration_id: '5',
+      internal_status: 'waiting',
+      send_attempts: 0,
+    };
+    // findShipmentByRef (external_ref hit) + upsert lookup both return it
+    shipmentRepo.findOne.mockResolvedValue(shipment);
+
+    const sig = computeHmacSignature(PAYLOAD, SECRET);
+    const res = await service.receiveWebhook(
+      bodyToInput('acme-cargo', PAYLOAD, {
+        'x-signature': sig,
+        'x-delivery-id': 'd1',
+      }),
+    );
+
+    expect(res.shipment).toMatchObject({
+      outcome: 'updated',
+      internal_status: 'sold',
+      action: 'sell',
+      order_id: '1001',
+    });
+    expect(shipmentRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ internal_status: 'sold', provider_status: 'DELIVERED' }),
+    );
+  });
+
+  it('is idempotent when the internal status is unchanged', async () => {
+    const { service, shipmentRepo } = makeService(trackingIntegration());
+    const shipment = {
+      id: 'shp1',
+      order_id: '1001',
+      integration_id: '5',
+      internal_status: 'sold', // already sold
+      send_attempts: 0,
+    };
+    shipmentRepo.findOne.mockResolvedValue(shipment);
+
+    const sig = computeHmacSignature(PAYLOAD, SECRET);
+    const res = await service.receiveWebhook(
+      bodyToInput('acme-cargo', PAYLOAD, {
+        'x-signature': sig,
+        'x-delivery-id': 'd2',
+      }),
+    );
+
+    expect(res.shipment).toMatchObject({ outcome: 'unchanged' });
+  });
+
+  it('reports no_shipment when the order has no shipment row', async () => {
+    const { service, shipmentRepo } = makeService(trackingIntegration());
+    shipmentRepo.findOne.mockResolvedValue(null); // no shipment found
+
+    const sig = computeHmacSignature(PAYLOAD, SECRET);
+    const res = await service.receiveWebhook(
+      bodyToInput('acme-cargo', PAYLOAD, {
+        'x-signature': sig,
+        'x-delivery-id': 'd3',
+      }),
+    );
+
+    expect(res.shipment).toMatchObject({ outcome: 'no_shipment' });
+    // Webhook still succeeds (200) — provider gets an ack
+    expect(res.ok).toBe(true);
+  });
+
+  it('records the raw status but reports unmapped for an unknown provider status', async () => {
+    const { service, shipmentRepo } = makeService(trackingIntegration());
+    const shipment = {
+      id: 'shp1',
+      order_id: '1001',
+      integration_id: '5',
+      internal_status: 'waiting',
+      send_attempts: 0,
+    };
+    shipmentRepo.findOne.mockResolvedValue(shipment);
+
+    const body = JSON.stringify({
+      event: 'package.weird',
+      data: { order_id: 'ACME-9', tracking: 'TRK-9', status: { code: 'WAREHOUSE_X' } },
+    });
+    const sig = computeHmacSignature(body, SECRET);
+    const res = await service.receiveWebhook(
+      bodyToInput('acme-cargo', body, { 'x-signature': sig, 'x-delivery-id': 'd4' }),
+    );
+
+    expect(res.shipment).toMatchObject({ outcome: 'unmapped' });
+    expect(shipmentRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ provider_status: 'WAREHOUSE_X' }),
+    );
+  });
+
+  it('reports no_paths when the integration has no payload paths configured', async () => {
+    const { service } = makeService(baseIntegration()); // no webhook_payload_paths
+    const sig = computeHmacSignature(PAYLOAD, SECRET);
+    const res = await service.receiveWebhook(
+      bodyToInput('acme-cargo', PAYLOAD, {
+        'x-signature': sig,
+        'x-delivery-id': 'd5',
+      }),
+    );
+
+    expect(res.shipment).toMatchObject({ outcome: 'no_paths' });
   });
 });
