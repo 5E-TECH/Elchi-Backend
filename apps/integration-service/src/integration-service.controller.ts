@@ -138,4 +138,22 @@ export class IntegrationServiceController {
       this.integrationService.getQueueStatus(),
     );
   }
+
+  // --- Inbound webhooks ---
+  @MessagePattern({ cmd: 'integration.webhook.receive' })
+  receiveWebhook(
+    @Payload()
+    data: {
+      slug: string;
+      raw_body_base64?: string;
+      raw_body?: string;
+      headers?: Record<string, string>;
+      trace_id?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.receiveWebhook(data),
+    );
+  }
 }

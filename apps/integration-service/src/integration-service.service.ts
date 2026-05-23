@@ -4,10 +4,17 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Between, IsNull, LessThanOrEqual, Repository } from 'typeorm';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
-import { Order_status } from '@app/common';
+import {
+  ActivityAction,
+  ActivityLogService,
+  HmacAlgorithm,
+  Order_status,
+  verifyHmacSignature,
+} from '@app/common';
 import { ExternalIntegration } from './entities/external-integration.entity';
 import { SyncQueue } from './entities/sync-queue.entity';
 import { SyncHistory } from './entities/sync-history.entity';
+import { ProviderWebhookLog } from './entities/provider-webhook-log.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -113,6 +120,9 @@ export class IntegrationServiceService {
     @InjectRepository(ExternalIntegration) private readonly integrationRepo: Repository<ExternalIntegration>,
     @InjectRepository(SyncQueue) private readonly syncQueueRepo: Repository<SyncQueue>,
     @InjectRepository(SyncHistory) private readonly syncHistoryRepo: Repository<SyncHistory>,
+    @InjectRepository(ProviderWebhookLog)
+    private readonly webhookLogRepo: Repository<ProviderWebhookLog>,
+    private readonly activityLog: ActivityLogService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
@@ -1613,5 +1623,235 @@ export class IntegrationServiceService {
     }
 
     return this.processPendingSyncQueue(Math.max(1, rows.length), integration_id);
+  }
+
+  // ===========================================================================
+  // Inbound webhooks (provider → Elchi)
+  // ===========================================================================
+
+  /**
+   * Receive and authenticate an inbound webhook from any provider.
+   *
+   * Provider-agnostic: the integration is resolved by slug, its webhook config
+   * (secret, signature header/scheme, id header) drives verification, and the
+   * result is logged for audit + replay protection. This is the single entry
+   * point all carriers/marketplaces call back into.
+   *
+   * Returns a small status object; the caller (gateway) maps it to an HTTP
+   * code. We deliberately return 200-style success even when processing of a
+   * verified event fails downstream — the event is logged and can be replayed
+   * — but signature failures return an auth error so a misconfigured or
+   * malicious sender gets a clear rejection and the event never enters the
+   * processing path.
+   */
+  async receiveWebhook(input: {
+    slug: string;
+    raw_body_base64?: string;
+    raw_body?: string;
+    headers?: Record<string, string>;
+    trace_id?: string | null;
+  }) {
+    const slug = String(input.slug ?? '').trim();
+    const headers = this.lowercaseHeaders(input.headers);
+    const rawBody = input.raw_body_base64
+      ? Buffer.from(input.raw_body_base64, 'base64')
+      : Buffer.from(input.raw_body ?? '', 'utf8');
+
+    const integration = slug
+      ? await this.integrationRepo.findOne({
+          where: { slug, isDeleted: false },
+        })
+      : null;
+
+    if (!integration) {
+      // Unknown provider — log with no integration_id so abuse is visible,
+      // then reject. Don't reveal whether the slug exists.
+      await this.saveWebhookLog({
+        integration_id: null,
+        provider_slug: slug || null,
+        delivery_id: null,
+        event_type: null,
+        signature_valid: false,
+        status: 'rejected',
+        raw_body: this.truncateBody(rawBody.toString('utf8')),
+        parsed_payload: null,
+        error: 'integration not found',
+        trace_id: input.trace_id ?? null,
+      });
+      return { ok: false, code: 401, reason: 'unknown_provider' };
+    }
+
+    const secret = this.decryptCredential(integration.webhook_secret);
+    if (!secret) {
+      await this.saveWebhookLog({
+        integration_id: String(integration.id),
+        provider_slug: integration.slug,
+        delivery_id: null,
+        event_type: null,
+        signature_valid: false,
+        status: 'rejected',
+        raw_body: this.truncateBody(rawBody.toString('utf8')),
+        parsed_payload: null,
+        error: 'webhook_secret not configured',
+        trace_id: input.trace_id ?? null,
+      });
+      return { ok: false, code: 401, reason: 'not_configured' };
+    }
+
+    const signatureHeader = (
+      integration.webhook_signature_header ?? 'x-signature'
+    ).toLowerCase();
+    const signature = headers[signatureHeader] ?? '';
+    const algorithm = (integration.webhook_algorithm ??
+      'sha256') as HmacAlgorithm;
+
+    const verification = verifyHmacSignature({
+      rawBody,
+      signature,
+      secret,
+      previousSecret: this.decryptCredential(
+        integration.webhook_secret_previous,
+      ),
+      stripPrefix: integration.webhook_signature_prefix ?? undefined,
+      algorithm,
+    });
+
+    const deliveryId = integration.webhook_id_header
+      ? (headers[integration.webhook_id_header.toLowerCase()] ?? null)
+      : null;
+    const parsed = this.tryParseJson(rawBody.toString('utf8'));
+    const eventType = this.extractEventType(parsed, headers);
+
+    if (!verification.valid) {
+      await this.saveWebhookLog({
+        integration_id: String(integration.id),
+        provider_slug: integration.slug,
+        delivery_id: deliveryId,
+        event_type: eventType,
+        signature_valid: false,
+        status: 'rejected',
+        raw_body: this.truncateBody(rawBody.toString('utf8')),
+        parsed_payload: parsed,
+        error: `signature ${verification.reason ?? 'invalid'}`,
+        trace_id: input.trace_id ?? null,
+      });
+      this.logger.warn(
+        `webhook signature rejected for ${integration.slug}: ${verification.reason}`,
+      );
+      return { ok: false, code: 401, reason: 'invalid_signature' };
+    }
+
+    // Replay protection: if this provider sends a delivery id and we've
+    // already logged it, treat as an idempotent re-delivery.
+    if (deliveryId) {
+      const existing = await this.webhookLogRepo.findOne({
+        where: {
+          integration_id: String(integration.id),
+          delivery_id: deliveryId,
+        },
+      });
+      if (existing) {
+        return { ok: true, code: 200, reason: 'duplicate', replay: true };
+      }
+    }
+
+    const log = await this.saveWebhookLog({
+      integration_id: String(integration.id),
+      provider_slug: integration.slug,
+      delivery_id: deliveryId,
+      event_type: eventType,
+      signature_valid: true,
+      status: 'verified',
+      raw_body: this.truncateBody(rawBody.toString('utf8')),
+      parsed_payload: parsed,
+      error: null,
+      trace_id: input.trace_id ?? null,
+    });
+
+    // Routing/processing (shipment status application) lands in a follow-up.
+    // For now the verified event is durably logged; record an audit entry so
+    // operators can see inbound traffic immediately.
+    await this.activityLog.log({
+      entity_type: 'ProviderWebhook',
+      entity_id: log?.id ?? deliveryId ?? integration.slug,
+      action: ActivityAction.WEBHOOK_RECEIVED,
+      new_value: { event_type: eventType, provider: integration.slug },
+      metadata: { delivery_id: deliveryId },
+    });
+
+    return {
+      ok: true,
+      code: 200,
+      reason: 'accepted',
+      event_type: eventType,
+      delivery_id: deliveryId,
+      log_id: log?.id ?? null,
+    };
+  }
+
+  private async saveWebhookLog(data: {
+    integration_id: string | null;
+    provider_slug: string | null;
+    delivery_id: string | null;
+    event_type: string | null;
+    signature_valid: boolean;
+    status: ProviderWebhookLog['status'];
+    raw_body: string | null;
+    parsed_payload: Record<string, unknown> | null;
+    error: string | null;
+    trace_id: string | null;
+  }): Promise<ProviderWebhookLog | null> {
+    try {
+      const entity = this.webhookLogRepo.create({
+        ...data,
+        processed_at: data.status === 'processed' ? new Date() : null,
+      });
+      return await this.webhookLogRepo.save(entity);
+    } catch (err) {
+      // Unique violation on (integration_id, delivery_id) = concurrent replay;
+      // not fatal. Any other failure must not break the webhook response.
+      this.logger.warn(
+        `webhook log write failed: ${(err as Error).message}`,
+      );
+      return null;
+    }
+  }
+
+  private lowercaseHeaders(
+    headers?: Record<string, string>,
+  ): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(headers ?? {})) {
+      out[k.toLowerCase()] = v;
+    }
+    return out;
+  }
+
+  private tryParseJson(body: string): Record<string, unknown> | null {
+    if (!body.trim()) return null;
+    try {
+      const parsed = JSON.parse(body);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : { value: parsed };
+    } catch {
+      return null;
+    }
+  }
+
+  private extractEventType(
+    parsed: Record<string, unknown> | null,
+    headers: Record<string, string>,
+  ): string | null {
+    const fromHeader =
+      headers['x-event'] ?? headers['x-event-type'] ?? headers['x-webhook-event'];
+    if (fromHeader) return String(fromHeader);
+    const candidate =
+      parsed?.['event'] ?? parsed?.['event_type'] ?? parsed?.['type'];
+    return candidate != null ? String(candidate) : null;
+  }
+
+  private truncateBody(body: string, max = 20_000): string {
+    return body.length > max ? body.slice(0, max) : body;
   }
 }

@@ -65,6 +65,48 @@ export class ExternalIntegration extends BaseEntity {
   @Column({ type: 'jsonb', nullable: true })
   status_sync_config!: Record<string, any> | null;
 
+  // --- Inbound webhook config (provider → Elchi callbacks) ---
+
+  /** Shared secret for verifying inbound webhook HMAC. AES-encrypted at rest. */
+  @Column({ type: 'varchar', nullable: true })
+  webhook_secret!: string | null;
+
+  /** Previous secret, accepted during a rotation window. AES-encrypted. */
+  @Column({ type: 'varchar', nullable: true })
+  webhook_secret_previous!: string | null;
+
+  /** Header carrying the signature, e.g. 'x-signature'. Default applied in code. */
+  @Column({ type: 'varchar', nullable: true })
+  webhook_signature_header!: string | null;
+
+  /** Optional signature prefix to strip, e.g. 'sha256='. */
+  @Column({ type: 'varchar', nullable: true })
+  webhook_signature_prefix!: string | null;
+
+  /** HMAC algorithm: 'sha256' (default) | 'sha512' | 'sha1'. */
+  @Column({ type: 'varchar', nullable: true })
+  webhook_algorithm!: string | null;
+
+  /**
+   * Header carrying a unique delivery/event id used for replay protection
+   * (e.g. 'x-delivery-id'). When absent, replay protection is best-effort.
+   */
+  @Column({ type: 'varchar', nullable: true })
+  webhook_id_header!: string | null;
+
+  /**
+   * Inbound status mapping: provider status code → internal handling.
+   * e.g. { "DELIVERED": { "status": "sold", "action": "sell" },
+   *        "CANCELLED": { "status": "cancelled", "action": "cancel" } }
+   * `action` (sell/cancel/return) marks a terminal transition; absent action
+   * means an intermediate status that's only recorded, not acted upon.
+   */
+  @Column({ type: 'jsonb', nullable: true })
+  inbound_status_mapping!: Record<
+    string,
+    { status?: string; action?: string }
+  > | null;
+
   @Column({ type: 'timestamptz', nullable: true })
   last_sync_at!: Date | null;
 

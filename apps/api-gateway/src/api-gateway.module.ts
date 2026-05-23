@@ -21,6 +21,7 @@ import { FinanceGatewayController } from './finance-gateway.controller';
 import { AnalyticsGatewayController } from './analytics-gateway.controller';
 import { NotificationGatewayController } from './notification-gateway.controller';
 import { IntegrationGatewayController } from './integration-gateway.controller';
+import { WebhookGatewayController } from './webhook-gateway.controller';
 import { InvestorGatewayController } from './investor-gateway.controller';
 import { BranchGatewayController } from './branch-gateway.controller';
 import { FileGatewayController } from './file-gateway.controller';
@@ -88,6 +89,7 @@ import type { StringValue } from 'ms';
     FinanceGatewayController,
     NotificationGatewayController,
     IntegrationGatewayController,
+    WebhookGatewayController,
     InvestorGatewayController,
     BranchGatewayController,
     FileGatewayController,

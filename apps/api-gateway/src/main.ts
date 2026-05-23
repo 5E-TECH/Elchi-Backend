@@ -23,7 +23,10 @@ async function bootstrap() {
 
   const app = await NestFactory.create<NestExpressApplication>(
     ApiGatewayModule,
-    { bufferLogs: true },
+    // rawBody: true exposes req.rawBody (Buffer) so inbound provider webhooks
+    // can be HMAC-verified against the exact bytes received, before JSON
+    // re-serialisation could change them.
+    { bufferLogs: true, rawBody: true },
   );
   app.enableShutdownHooks();
   // Replace the built-in Nest logger with Pino so every line (incl. ones
