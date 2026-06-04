@@ -1,9 +1,11 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsArray,
   IsBoolean,
   IsIn,
   IsInt,
   IsNotEmpty,
+  IsNumber,
   IsObject,
   IsOptional,
   IsString,
@@ -400,4 +402,35 @@ export class DispatchShipmentRequestDto {
   @IsOptional()
   @IsObject()
   context?: Record<string, string>;
+}
+
+export class CreateRemittanceRequestDto {
+  @ApiProperty({
+    example: 1500000,
+    description: 'Total amount the provider remitted',
+  })
+  @IsNumber()
+  @Min(1)
+  amount!: number;
+
+  @ApiPropertyOptional({ example: 'PAY-2026-06-04-001' })
+  @IsOptional()
+  @IsString()
+  reference?: string;
+
+  @ApiPropertyOptional({ example: 'Iyun oyi COD hisob-kitobi' })
+  @IsOptional()
+  @IsString()
+  note?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'Specific order ids to settle. Omit to settle pending receivables oldest-first up to amount.',
+    example: ['1001', '1002'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  order_ids?: string[];
 }

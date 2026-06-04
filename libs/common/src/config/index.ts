@@ -7,6 +7,9 @@ export const gatewayValidationSchema = Joi.object({
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
   RABBITMQ_ORDER_QUEUE: Joi.string().required(),
+  // Gateway's own consumer queue for realtime.notify → socket.io push. Optional:
+  // when unset the hybrid consumer is skipped and only client↔client chat works.
+  RABBITMQ_GATEWAY_QUEUE: Joi.string().optional(),
   RABBITMQ_CATALOG_QUEUE: Joi.string().required(),
   RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
   RABBITMQ_FINANCE_QUEUE: Joi.string().required(),
