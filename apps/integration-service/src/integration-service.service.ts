@@ -163,6 +163,12 @@ export class IntegrationServiceService {
     String(process.env.INTEGRATION_ALLOW_PRIVATE_HOSTS ?? '').toLowerCase() ===
     'true';
 
+  // When true, reject signature-valid webhooks that carry no delivery id (for
+  // providers that declared a webhook_id_header) — forces replay protection on.
+  private readonly requireDeliveryId =
+    String(process.env.INTEGRATION_REQUIRE_DELIVERY_ID ?? '').toLowerCase() ===
+    'true';
+
   /**
    * SSRF guard for every outbound request to an operator-configured URL. Rejects
    * non-http(s) schemes and hosts that resolve to non-public addresses
@@ -1799,6 +1805,30 @@ export class IntegrationServiceService {
         `webhook signature rejected for ${integration.slug}: ${verification.reason}`,
       );
       return { ok: false, code: 401, reason: 'invalid_signature' };
+    }
+
+    // Replay protection depends on a per-delivery id. Surface (and optionally
+    // enforce) its absence so a provider silently shipping no delivery id can't
+    // leave replay protection quietly disabled.
+    if (!deliveryId) {
+      if (this.requireDeliveryId && integration.webhook_id_header) {
+        await this.saveWebhookLog({
+          integration_id: String(integration.id),
+          provider_slug: integration.slug,
+          delivery_id: null,
+          event_type: eventType,
+          signature_valid: true,
+          status: 'rejected',
+          raw_body: this.truncateBody(rawBody.toString('utf8')),
+          parsed_payload: parsed,
+          error: `missing delivery id header '${integration.webhook_id_header}'`,
+          trace_id: input.trace_id ?? null,
+        });
+        return { ok: false, code: 400, reason: 'missing_delivery_id' };
+      }
+      this.logger.warn(
+        `webhook for ${integration.slug} has no delivery id — replay protection inactive for this event`,
+      );
     }
 
     // Replay protection: if this provider sends a delivery id and we've

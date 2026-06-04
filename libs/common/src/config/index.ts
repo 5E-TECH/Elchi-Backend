@@ -128,6 +128,15 @@ export const integrationValidationSchema = Joi.object({
     .description(
       'Dev/testing only. Set true to allow integrations to call private/loopback hosts. Keep false in production.',
     ),
+  // When true, reject signature-valid webhooks lacking a delivery id (for
+  // providers that declared a webhook_id_header) so replay protection is always on.
+  INTEGRATION_REQUIRE_DELIVERY_ID: Joi.boolean()
+    .truthy('true', '1', 'yes')
+    .falsy('false', '0', 'no')
+    .default(false)
+    .description(
+      'Enforce that webhook deliveries carry the configured id header (replay protection). Default false (warn only).',
+    ),
   // Sync queue scheduler. The processor itself is HA-safe (pg_try_advisory_lock
   // inside processPendingSyncQueue), so multiple replicas can run the cron
   // safely — only one will hold the lock per tick.
