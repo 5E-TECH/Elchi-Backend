@@ -1005,8 +1005,8 @@ export class OrderServiceService implements OnModuleInit {
         : Number(market.tariff_home ?? 0);
     const courierTariff =
       order.where_deliver === Where_deliver.CENTER
-        ? Number(courier.tariff_center ?? 0)
-        : Number(courier.tariff_home ?? 0);
+        ? Number(courier?.tariff_center ?? 0)
+        : Number(courier?.tariff_home ?? 0);
     const rollbackComment = `[ROLLBACK] ${order.comment || ''}`.trim();
     const totalPrice = Number(order.total_price ?? 0);
     const [marketExtraCost, courierExtraCost] = await Promise.all([
