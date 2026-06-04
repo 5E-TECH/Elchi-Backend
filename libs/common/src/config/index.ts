@@ -91,7 +91,12 @@ export const notificationValidationSchema = Joi.object({
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_NOTIFICATION_QUEUE: Joi.string().required(),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
+  RABBITMQ_ORDER_QUEUE: Joi.string().required(),
   TELEGRAM_BOT_TOKEN: Joi.string().optional(),
+  // Order-create bot (PCS order_create-bot parity). Both optional — the bot
+  // stays disabled when ORDER_BOT_TOKEN is unset.
+  ORDER_BOT_TOKEN: Joi.string().optional(),
+  ORDER_BOT_WEBAPP_URL: Joi.string().uri().optional(),
 });
 
 export const integrationValidationSchema = Joi.object({
