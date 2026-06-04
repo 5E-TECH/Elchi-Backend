@@ -2,6 +2,7 @@ export * from './common.module';
 export * from './common.service';
 
 export * from './database/base.entity';
+export * from './database/numeric.transformer';
 export * from './config';
 
 export * from './rmq/rmq.service';

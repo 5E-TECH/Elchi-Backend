@@ -2,6 +2,7 @@ import { Entity, Column } from 'typeorm';
 import {
   BaseEntity,
   Commission_type,
+  numericTransformer,
   Roles,
   Status,
   Where_deliver,
@@ -96,6 +97,14 @@ export class User extends BaseEntity {
   @Column({ type: 'enum', enum: Commission_type, nullable: true })
   commission_type: Commission_type | null;
 
-  @Column({ type: 'float', nullable: true })
+  // Dual-purpose: a percentage when commission_type=PERCENT, a flat money
+  // amount when FIXED — so it must hold money-sized values, hence numeric(14,2).
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   commission_value: number | null;
 }

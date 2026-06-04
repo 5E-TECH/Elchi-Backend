@@ -1,5 +1,5 @@
 import { Column, Entity, Index, Unique } from 'typeorm';
-import { BaseEntity } from '@app/common';
+import { BaseEntity, numericTransformer } from '@app/common';
 
 /**
  * Per-order commission earned by the operator who created the order.
@@ -27,16 +27,35 @@ export class OperatorEarning extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   market_id!: string | null;
 
-  @Column({ type: 'float', default: 0 })
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    default: 0,
+    transformer: numericTransformer,
+  })
   amount!: number;
 
   /** Snapshot of how the amount was derived, for audit/debugging. */
   @Column({ type: 'varchar', length: 16, nullable: true })
   commission_type!: string | null;
 
-  @Column({ type: 'float', nullable: true })
+  // Dual-purpose snapshot (percent or fixed money) → money-sized numeric.
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   commission_value!: number | null;
 
-  @Column({ type: 'float', nullable: true })
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   order_total_price!: number | null;
 }
