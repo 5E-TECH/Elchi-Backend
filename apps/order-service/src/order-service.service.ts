@@ -1157,29 +1157,9 @@ export class OrderServiceService implements OnModuleInit {
       this.badRequest('Rollback uchun ruxsat yo‘q');
     }
 
-    if (!order.post_id) {
-      this.badRequest('Order has no post');
-    }
-
-    const postRes = await rmqSend<{
-      data?: { id: string; courier_id?: string | null };
-    }>(
-      this.logisticsClient,
-      { cmd: 'logistics.post.find_by_id' },
-      { id: String(order.post_id) },
-    ).catch(() => ({ data: undefined }));
-    const post = postRes?.data;
-    if (!post) {
-      this.notFound('Post not found');
-    }
-
-    if (
-      isCourier &&
-      !isSuperAdmin &&
-      String(post.courier_id ?? '') !== String(requester.id)
-    ) {
-      this.badRequest('Order is not assigned to this courier');
-    }
+    // Merge note (dev↔shodiyor): post is optional (a manager can roll back an
+    // order that isn't on a courier post yet), but a courier may only roll back
+    // a post assigned to them. Both actor checks are kept.
     const postRes = order.post_id
       ? await rmqSend<{ data?: { id: string; courier_id?: string | null } }>(
           this.logisticsClient,
@@ -1188,6 +1168,14 @@ export class OrderServiceService implements OnModuleInit {
         ).catch(() => ({ data: undefined }))
       : { data: undefined };
     const post = postRes?.data;
+
+    if (
+      isCourier &&
+      !isSuperAdmin &&
+      String(post?.courier_id ?? '') !== String(requester.id)
+    ) {
+      this.badRequest('Order is not assigned to this courier');
+    }
 
     if (isManager && !isSuperAdmin) {
       const requesterBranchId = String(requester?.branch_id ?? '').trim();
