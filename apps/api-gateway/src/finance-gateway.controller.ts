@@ -358,7 +358,6 @@ export class FinanceGatewayController {
     );
     const ownCashbox =
       ownCashboxResponse?.data?.cashbox ?? ownCashboxResponse?.data ?? null;
-    const kassa = Number(ownCashbox?.balance ?? 0);
 
     const managerProfileRes = await this.sendIdentity<{
       data?: Record<string, any>;
@@ -781,9 +780,6 @@ export class FinanceGatewayController {
     const isManager = this.isManager(req?.user);
     let receiverBranchId = '';
     if (isManager) {
-      const courierResponse = await this.sendIdentity<{
-        data?: Record<string, any>;
-      }>({ cmd: 'identity.user.find_by_id' }, { id: dto.courier_id });
       receiverBranchId =
         this.extractBranchId(req.user) ||
         (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
