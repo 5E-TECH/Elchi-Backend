@@ -1,5 +1,24 @@
 import * as Joi from 'joi';
 
+/**
+ * Reject obviously low-entropy / placeholder secrets at boot. A 32+ char random
+ * hex/base64 secret easily passes; the doc-placeholder values and repeated
+ * characters do not. Fail-fast beats a weak AES key silently shipping.
+ */
+const rejectWeakSecret: Joi.CustomValidator<string> = (value, helpers) => {
+  const v = String(value);
+  if (/replace|changeme|example|your[_-]?secret|^secret$|^password$/i.test(v)) {
+    return helpers.error('any.invalid');
+  }
+  if (/^(.)\1+$/.test(v)) {
+    return helpers.error('any.invalid'); // all the same character
+  }
+  if (new Set(v).size < 10) {
+    return helpers.error('any.invalid'); // too few distinct characters
+  }
+  return value;
+};
+
 export const gatewayValidationSchema = Joi.object({
   PORT: Joi.number().default(2004),
   ACCESS_TOKEN_KEY: Joi.string().required(),
@@ -109,12 +128,18 @@ export const integrationValidationSchema = Joi.object({
   RABBITMQ_INTEGRATION_QUEUE: Joi.string().required(),
   INTEGRATION_CREDENTIAL_SECRET: Joi.string()
     .min(32)
+    .custom(rejectWeakSecret, 'weak-secret check')
     .required()
     .description(
-      'Primary secret used to AES-encrypt external integration credentials in DB. Must be >=32 chars of random entropy.',
-    ),
+      'Primary secret used to AES-encrypt external integration credentials in DB. Must be >=32 chars of random entropy (openssl rand -hex 32), not a passphrase/placeholder.',
+    )
+    .messages({
+      'any.invalid':
+        'INTEGRATION_CREDENTIAL_SECRET looks weak/placeholder. Use: openssl rand -hex 32',
+    }),
   INTEGRATION_CREDENTIAL_SECRET_PREVIOUS: Joi.string()
     .min(32)
+    .custom(rejectWeakSecret, 'weak-secret check')
     .optional()
     .description(
       'Optional previous secret. During rotation: set both vars, then trigger a re-encrypt pass; rows decrypted with the previous key are re-encrypted with the primary on next save. Remove this var once all rows are migrated.',
