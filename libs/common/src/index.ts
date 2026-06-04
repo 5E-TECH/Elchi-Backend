@@ -34,6 +34,8 @@ export * from './soft-delete/soft-delete.helper';
 export * from './database/database.module';
 export * from './enums';
 
+export * from './security/ssrf';
+
 export * from './filters/rpc-exception.filter';
 export * from './filters/all-exceptions.filter';
 

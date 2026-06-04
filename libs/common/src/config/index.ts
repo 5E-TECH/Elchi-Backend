@@ -119,6 +119,15 @@ export const integrationValidationSchema = Joi.object({
     .description(
       'Optional previous secret. During rotation: set both vars, then trigger a re-encrypt pass; rows decrypted with the previous key are re-encrypted with the primary on next save. Remove this var once all rows are migrated.',
     ),
+  // SSRF guard escape hatch. When true, outbound integration requests may target
+  // private/loopback/metadata hosts (dev/testing only). Default false.
+  INTEGRATION_ALLOW_PRIVATE_HOSTS: Joi.boolean()
+    .truthy('true', '1', 'yes')
+    .falsy('false', '0', 'no')
+    .default(false)
+    .description(
+      'Dev/testing only. Set true to allow integrations to call private/loopback hosts. Keep false in production.',
+    ),
   // Sync queue scheduler. The processor itself is HA-safe (pg_try_advisory_lock
   // inside processPendingSyncQueue), so multiple replicas can run the cron
   // safely — only one will hold the lock per tick.

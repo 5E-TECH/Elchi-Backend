@@ -16,6 +16,8 @@ import {
   HmacAlgorithm,
   Order_status,
   verifyHmacSignature,
+  assertPublicUrl,
+  SsrfBlockedError,
 } from '@app/common';
 import { ExternalIntegration } from './entities/external-integration.entity';
 import { SyncQueue } from './entities/sync-queue.entity';
@@ -155,6 +157,29 @@ export class IntegrationServiceService {
     throw new RpcException(errorRes(message, 404));
   }
 
+  // Dev/testing escape hatch for talking to local providers. Off by default so
+  // production blocks private/loopback/metadata targets.
+  private readonly allowPrivateHosts =
+    String(process.env.INTEGRATION_ALLOW_PRIVATE_HOSTS ?? '').toLowerCase() ===
+    'true';
+
+  /**
+   * SSRF guard for every outbound request to an operator-configured URL. Rejects
+   * non-http(s) schemes and hosts that resolve to non-public addresses
+   * (loopback, private ranges, link-local, cloud metadata). Used both at
+   * config time (create/update) and right before each fetch.
+   */
+  private async assertOutboundUrlSafe(url: string): Promise<void> {
+    try {
+      await assertPublicUrl(url, { allowPrivate: this.allowPrivateHosts });
+    } catch (error) {
+      if (error instanceof SsrfBlockedError) {
+        this.badRequest(`Blocked outbound URL: ${error.message}`);
+      }
+      throw error;
+    }
+  }
+
   private extractPath(source: unknown, path?: string): unknown {
     if (!path || !path.trim()) {
       return source;
@@ -250,6 +275,7 @@ export class IntegrationServiceService {
         ? this.interpolate(authConfig.login_payload_template, context)
         : { username: integration.username, password: decryptedPassword };
 
+    await this.assertOutboundUrlSafe(integration.auth_url);
     try {
       const response = await fetch(integration.auth_url, {
         method,
@@ -687,6 +713,7 @@ export class IntegrationServiceService {
             ).toString()}`
           : '';
       const finalUrl = `${url}${query}`;
+      await this.assertOutboundUrlSafe(finalUrl);
 
       const response = await fetch(finalUrl, {
         method,
@@ -793,6 +820,13 @@ export class IntegrationServiceService {
       ...(authUrl ? { auth_url: authUrl } : {}),
       auth_type: authType,
     };
+
+    // Defense-in-depth: reject private/loopback/metadata targets at config time,
+    // not only at request time.
+    await this.assertOutboundUrlSafe(baseUrl);
+    if (authUrl) {
+      await this.assertOutboundUrlSafe(authUrl);
+    }
 
     const entity = this.integrationRepo.create({
       name: name || slug,
@@ -989,6 +1023,13 @@ export class IntegrationServiceService {
     if (typeof dto.auth_type !== 'undefined') {
       row.auth_type = dto.auth_type === 'login' ? 'login' : 'api_key';
     }
+    // Re-validate the effective outbound URLs after the merge (config-time SSRF).
+    if (row.api_url) {
+      await this.assertOutboundUrlSafe(row.api_url);
+    }
+    if (row.auth_url) {
+      await this.assertOutboundUrlSafe(row.auth_url);
+    }
     const saved = await this.integrationRepo.save(row);
     const [enriched] = await this.attachMarkets([saved as any]);
     return successRes(this.sanitizeIntegrationRow(enriched), 200, 'integration updated');
@@ -1051,6 +1092,7 @@ export class IntegrationServiceService {
     }
 
     const startedAt = Date.now();
+    await this.assertOutboundUrlSafe(url);
     try {
       const response = await fetch(url, {
         method,
