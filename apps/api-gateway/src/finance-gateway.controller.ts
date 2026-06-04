@@ -358,6 +358,7 @@ export class FinanceGatewayController {
     );
     const ownCashbox =
       ownCashboxResponse?.data?.cashbox ?? ownCashboxResponse?.data ?? null;
+    const kassa = Number(ownCashbox?.balance ?? 0);
 
     const managerProfileRes = await this.sendIdentity<{
       data?: Record<string, any>;
@@ -784,6 +785,9 @@ export class FinanceGatewayController {
       if (!receiverBranchId) {
         throw new ForbiddenException("Managerning branch'i topilmadi");
       }
+      const courierResponse = await this.sendIdentity<{
+        data?: Record<string, any>;
+      }>({ cmd: 'identity.user.find_by_id' }, { id: dto.courier_id });
       const courier = courierResponse?.data;
       if (!courier) {
         throw new ForbiddenException('Courier topilmadi');
