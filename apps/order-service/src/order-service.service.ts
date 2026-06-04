@@ -3202,7 +3202,13 @@ export class OrderServiceService implements OnModuleInit {
 
     const updated = await this.findById(order.id);
     return successRes(
-      { id: updated.id, status: updated.status },
+      {
+        id: updated.id,
+        status: updated.status,
+        // Surfaced for provider COD reconciliation (integration-service records
+        // the receivable from this amount on a provider 'sell').
+        total_price: Number(updated.total_price ?? 0),
+      },
       200,
       `order marked ${input.action} by provider`,
     );
@@ -6851,5 +6857,141 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     return payload;
+  }
+
+  /**
+   * Gather render-ready order data for label / receipt printing.
+   *
+   * The order schema only stores foreign-key ids, so this resolves the
+   * customer + market (identity), district + region (logistics) and product
+   * names (catalog) in batch, then returns a flat row per order. Relations are
+   * resolved best-effort: any cross-service miss falls back to '-' / '' so the
+   * print job never fails on partial data. Rows preserve the requested id
+   * order and silently skip ids that match no (non-deleted) order.
+   */
+  async findOrdersForPrint(orderIds: string[]) {
+    const ids = [
+      ...new Set((orderIds ?? []).map((x) => String(x)).filter(Boolean)),
+    ];
+    if (!ids.length) {
+      return successRes([], 200);
+    }
+
+    const orders = await this.orderRepo.find({
+      where: { id: In(ids), isDeleted: false },
+      relations: { items: true },
+    });
+    if (!orders.length) {
+      return successRes([], 200);
+    }
+
+    const uniq = (xs: Array<string | null | undefined>) => [
+      ...new Set(xs.filter((x): x is string => Boolean(x)).map(String)),
+    ];
+    const customerIds = uniq(orders.map((o) => o.customer_id));
+    const marketIds = uniq(orders.map((o) => o.market_id));
+    const districtIds = uniq(orders.map((o) => o.district_id));
+    const regionIds = uniq(orders.map((o) => o.region_id));
+    const productIds = uniq(
+      orders.flatMap((o) => (o.items ?? []).map((i) => i.product_id)),
+    );
+
+    const safeSend = <T>(
+      client: ClientProxy,
+      cmd: string,
+      payloadIds: string[],
+    ): Promise<{ data: T[] }> =>
+      payloadIds.length
+        ? rmqSend<{ data: T[] }>(client, { cmd }, { ids: payloadIds }).catch(
+            () => ({ data: [] as T[] }),
+          )
+        : Promise.resolve({ data: [] as T[] });
+
+    type NamedPhone = {
+      id: string;
+      name?: string;
+      phone_number?: string;
+      extra_number?: string | null;
+      address?: string | null;
+    };
+    type Named = { id: string; name?: string };
+
+    const [customersRes, marketsRes, districtsRes, regionsRes, productsRes] =
+      await Promise.all([
+        safeSend<NamedPhone>(
+          this.identityClient,
+          'identity.customer.find_by_ids',
+          customerIds,
+        ),
+        safeSend<NamedPhone>(
+          this.identityClient,
+          'identity.market.find_by_ids',
+          marketIds,
+        ),
+        safeSend<Named>(
+          this.logisticsClient,
+          'logistics.district.find_by_ids',
+          districtIds,
+        ),
+        safeSend<Named>(
+          this.logisticsClient,
+          'logistics.region.find_by_ids',
+          regionIds,
+        ),
+        safeSend<Named>(
+          this.catalogClient,
+          'catalog.product.find_by_ids',
+          productIds,
+        ),
+      ]);
+
+    const toMap = <T extends { id: string }>(rows: T[] | undefined) =>
+      new Map((rows ?? []).map((r) => [String(r.id), r]));
+    const customerMap = toMap(customersRes?.data);
+    const marketMap = toMap(marketsRes?.data);
+    const districtMap = toMap(districtsRes?.data);
+    const regionMap = toMap(regionsRes?.data);
+    const productMap = toMap(productsRes?.data);
+    const orderMap = new Map(orders.map((o) => [String(o.id), o]));
+
+    const rows = ids
+      .map((id) => orderMap.get(id))
+      .filter((o): o is Order => Boolean(o))
+      .map((order) => {
+        const customer = customerMap.get(String(order.customer_id));
+        const market = marketMap.get(String(order.market_id));
+        const district = order.district_id
+          ? districtMap.get(String(order.district_id))
+          : undefined;
+        const region = order.region_id
+          ? regionMap.get(String(order.region_id))
+          : undefined;
+        return {
+          id: String(order.id),
+          order_number: String(order.id),
+          qr_code_token: order.qr_code_token ?? '',
+          created_at: order.createdAt
+            ? new Date(order.createdAt).getTime()
+            : Date.now(),
+          where_deliver: order.where_deliver,
+          total_price: Number(order.total_price ?? 0),
+          comment: order.comment ?? '',
+          address: order.address ?? '',
+          customer_name: customer?.name ?? 'N/A',
+          customer_phone: customer?.phone_number ?? '',
+          extra_number: customer?.extra_number ?? '',
+          region_name: region?.name ?? '',
+          district_name: district?.name ?? 'N/A',
+          market_name: market?.name ?? 'N/A',
+          market_phone: market?.phone_number ?? '',
+          operator: order.operator ?? '',
+          products: (order.items ?? []).map((i) => ({
+            name: productMap.get(String(i.product_id))?.name ?? 'N/A',
+            quantity: i.quantity ?? 1,
+          })),
+        };
+      });
+
+    return successRes(rows, 200);
   }
 }

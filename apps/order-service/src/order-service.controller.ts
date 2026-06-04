@@ -941,4 +941,16 @@ export class OrderServiceController {
       this.orderService.markByProvider(data),
     );
   }
+
+  // Enriched, render-ready rows for label / receipt printing (gateway renders
+  // the PDF/HTML). Cross-service batch resolution lives in the service layer.
+  @MessagePattern({ cmd: 'order.print.find' })
+  findOrdersForPrint(
+    @Payload() data: { order_ids: string[] },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findOrdersForPrint(data?.order_ids ?? []),
+    );
+  }
 }
