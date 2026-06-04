@@ -27,6 +27,7 @@ describe('OrderServiceService transfer batch scan', () => {
       {} as any, // financeClient
       {} as any, // integrationClient
       {} as any, // branchClient
+      {} as any, // fileClient
       {} as any, // outbox
     );
 

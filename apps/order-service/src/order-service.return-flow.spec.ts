@@ -76,6 +76,7 @@ describe('OrderServiceService return flow', () => {
       {} as any, // financeClient
       {} as any, // integrationClient
       {} as any, // branchClient
+      {} as any, // fileClient
       outbox as any, // outbox
     );
 

@@ -63,6 +63,7 @@ function createService() {
     nullClient as any, // financeClient
     nullClient as any, // integrationClient
     nullClient as any, // branchClient
+    nullClient as any, // fileClient
     outbox as any, // outbox
   );
 

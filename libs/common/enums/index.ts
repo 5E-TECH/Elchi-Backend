@@ -69,6 +69,25 @@ export enum FinancialSource_type {
   BILLS = 'bills', // Invoices / utility bills
 }
 
+/**
+ * Situations in which a market may require a courier to attach file proof
+ * (image/video) for an order operation. A market stores a SET of enabled
+ * conditions (admins.expense_proof_conditions). When a sell/cancel operation
+ * matches ANY enabled condition, proof becomes mandatory — otherwise the whole
+ * operation is rejected. Empty/none = proof never required for that market.
+ *
+ * The catalog is intentionally extensible: add a new condition here and teach
+ * the order-service evaluator (matchExpenseProofConditions) when it applies.
+ */
+export enum ExpenseProofCondition {
+  SELL_ANY = 'sell_any', // har qanday sotuvda
+  SELL_EXTRA_COST = 'sell_extra_cost', // sotishda qo'shimcha xarajat yozilganda
+  SELL_ZERO_TOTAL = 'sell_zero_total', // 0 summali buyurtma sotilganda
+  CANCEL_ANY = 'cancel_any', // har qanday bekor qilishda
+  CANCEL_EXTRA_COST = 'cancel_extra_cost', // bekor qilishda qo'shimcha xarajat yozilganda
+  CANCEL_ZERO_TOTAL = 'cancel_zero_total', // 0 summali buyurtma bekor qilinganda
+}
+
 export enum Order_status {
   CREATED = 'created',
   NEW = 'new',

@@ -79,6 +79,13 @@ export class Order extends BaseEntity {
   @Column({ type: 'boolean', default: false })
   return_requested!: boolean;
 
+  // MinIO object keys of proof files (image/video) attached to the most recent
+  // proof-required sell/cancel operation on this order. Covers proof conditions
+  // that produce no expense (e.g. cancelling a zero-total order). Expense-bearing
+  // proofs are additionally stored on the matching cashbox_history row.
+  @Column({ type: 'jsonb', nullable: true })
+  proof_files!: string[] | null;
+
   @Column({ type: 'bigint', nullable: true })
   sold_at!: string | null;
 

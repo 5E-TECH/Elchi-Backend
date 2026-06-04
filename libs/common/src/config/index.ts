@@ -79,6 +79,7 @@ export const orderValidationSchema = Joi.object({
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
   RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
   RABBITMQ_CATALOG_QUEUE: Joi.string().required(),
+  RABBITMQ_FILE_QUEUE: Joi.string().required(),
 });
 
 export const catalogValidationSchema = Joi.object({

@@ -938,6 +938,7 @@ export class UserServiceService implements OnModuleInit {
       tariff_home: dto.tariff_home,
       tariff_center: dto.tariff_center,
       add_order: dto.add_order ?? false,
+      expense_proof_conditions: dto.expense_proof_conditions ?? null,
       default_tariff: dto.default_tariff,
       isDeleted: false,
     });
@@ -1111,6 +1112,13 @@ export class UserServiceService implements OnModuleInit {
 
     if (typeof dto.add_order !== 'undefined') {
       market.add_order = dto.add_order;
+    }
+
+    if (typeof dto.expense_proof_conditions !== 'undefined') {
+      // De-dupe; empty array clears the policy (proof never required).
+      market.expense_proof_conditions = Array.from(
+        new Set(dto.expense_proof_conditions),
+      );
     }
 
     const saved = await this.users.save(market);

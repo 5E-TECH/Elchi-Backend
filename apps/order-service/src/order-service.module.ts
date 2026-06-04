@@ -38,6 +38,7 @@ import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.ent
     RmqModule.register({ name: 'FINANCE' }),
     RmqModule.register({ name: 'INTEGRATION' }),
     RmqModule.register({ name: 'BRANCH' }),
+    RmqModule.register({ name: 'FILE' }),
     DatabaseModule,
     IdempotencyModule.forService(),
     OutboxModule.forService({

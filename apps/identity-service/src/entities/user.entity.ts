@@ -2,6 +2,7 @@ import { Entity, Column } from 'typeorm';
 import {
   BaseEntity,
   Commission_type,
+  ExpenseProofCondition,
   numericTransformer,
   Roles,
   Status,
@@ -78,6 +79,13 @@ export class User extends BaseEntity {
 
   @Column({ type: 'boolean', default: false })
   add_order: boolean;
+
+  // Per-market proof policy: the SET of situations in which a courier MUST
+  // attach file proof (image/video) for a sell/cancel operation of this
+  // market's orders. NULL / empty = proof never required. See
+  // ExpenseProofCondition for the catalog of supported conditions.
+  @Column({ type: 'jsonb', nullable: true })
+  expense_proof_conditions: ExpenseProofCondition[] | null;
 
   @Column({
     type: 'enum',

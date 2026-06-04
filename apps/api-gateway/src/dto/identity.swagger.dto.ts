@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  IsArray,
   IsEnum,
   IsNumber,
   IsOptional,
@@ -10,6 +11,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import { ExpenseProofCondition } from '@app/common';
 
 export class CreateAdminRequestDto {
   @ApiProperty({ example: 'Admin User' })
@@ -175,6 +177,21 @@ export class CreateMarketRequestDto {
   @IsOptional()
   @IsBoolean()
   add_order?: boolean;
+
+  @ApiPropertyOptional({
+    isArray: true,
+    enum: ExpenseProofCondition,
+    description:
+      'Isbot (rasm/video) majburiy bo‘ladigan vaziyatlar to‘plami. Bo‘sh = isbot talab qilinmaydi.',
+    example: [
+      ExpenseProofCondition.CANCEL_EXTRA_COST,
+      ExpenseProofCondition.CANCEL_ZERO_TOTAL,
+    ],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsEnum(ExpenseProofCondition, { each: true })
+  expense_proof_conditions?: ExpenseProofCondition[];
 }
 
 export class CreateCourierRequestDto {
@@ -323,6 +340,23 @@ export class UpdateMarketAddOrderRequestDto {
   @ApiProperty({ example: true })
   @IsBoolean()
   add_order!: boolean;
+}
+
+export class UpdateMarketExpenseProofRequestDto {
+  @ApiProperty({
+    isArray: true,
+    enum: ExpenseProofCondition,
+    description:
+      'Isbot (rasm/video) majburiy bo‘ladigan vaziyatlar to‘plami. Bo‘sh massiv = isbotni butunlay o‘chiradi.',
+    example: [
+      ExpenseProofCondition.CANCEL_EXTRA_COST,
+      ExpenseProofCondition.CANCEL_ZERO_TOTAL,
+      ExpenseProofCondition.SELL_EXTRA_COST,
+    ],
+  })
+  @IsArray()
+  @IsEnum(ExpenseProofCondition, { each: true })
+  expense_proof_conditions!: ExpenseProofCondition[];
 }
 
 export class UpdateUserStatusRequestDto {

@@ -233,7 +233,12 @@ export class OrderServiceController {
     @Payload()
     data: {
       id: string;
-      dto: { comment?: string; extraCost?: number; paidAmount?: number };
+      dto: {
+        comment?: string;
+        extraCost?: number;
+        paidAmount?: number;
+        proofFileKeys?: string[];
+      };
       requester: { id: string; roles?: string[] };
       request_id?: string;
     },
@@ -249,7 +254,7 @@ export class OrderServiceController {
     @Payload()
     data: {
       id: string;
-      dto: { comment?: string; extraCost?: number };
+      dto: { comment?: string; extraCost?: number; proofFileKeys?: string[] };
       requester: { id: string; roles?: string[] };
       request_id?: string;
     },
@@ -294,6 +299,7 @@ export class OrderServiceController {
         totalPrice: number;
         extraCost?: number;
         comment?: string;
+        proofFileKeys?: string[];
       };
       requester: { id: string; roles?: string[] };
       request_id?: string;

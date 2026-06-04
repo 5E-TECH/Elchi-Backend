@@ -41,6 +41,11 @@ export class FileServiceController {
     return this.executeAndAck(context, () => this.fileService.getUrl(data));
   }
 
+  @MessagePattern({ cmd: 'file.exists' })
+  exists(@Payload() data: { key?: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.fileService.exists(data));
+  }
+
   @MessagePattern({ cmd: 'file.delete' })
   remove(@Payload() data: DeleteFileDto, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.fileService.remove(data));
