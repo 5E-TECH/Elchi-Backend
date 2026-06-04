@@ -984,18 +984,18 @@ export class OrderServiceService implements OnModuleInit {
     if (!market) {
       this.notFound('Market not found');
     }
-    if (!courier) {
+    if (!courier && !isManagerRequester) {
       this.notFound('Courier not found');
     }
 
     const [marketCashbox, courierCashbox] = await Promise.all([
       this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
-      this.getCashboxByUser(courierId, Cashbox_type.FOR_COURIER),
+      this.getCashboxByUser(courierId, Cashbox_type.FOR_COURIER).catch(() => null),
     ]);
     if (!marketCashbox) {
       this.notFound('Market cashbox not found');
     }
-    if (!courierCashbox) {
+    if (!courierCashbox && !isManagerRequester) {
       this.notFound('Courier cashbox not found');
     }
 
@@ -1065,7 +1065,7 @@ export class OrderServiceService implements OnModuleInit {
         });
       }
 
-      if (shouldRollbackCourierExtraCost) {
+      if (shouldRollbackCourierExtraCost && courierCashbox) {
         await this.updateCashboxBalance({
           user_id: courierId,
           cashbox_type: Cashbox_type.FOR_COURIER,
@@ -1081,18 +1081,18 @@ export class OrderServiceService implements OnModuleInit {
 
     if ([Order_status.SOLD, Order_status.PAID].includes(order.status)) {
       if (totalPrice === 0) {
-        await Promise.all([
-          this.updateCashboxBalance({
-            user_id: String(order.market_id),
-            cashbox_type: Cashbox_type.FOR_MARKET,
-            amount: marketTariff,
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.CORRECTION,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: rollbackComment,
-          }),
-          this.updateCashboxBalance({
+        await this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: marketTariff,
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.CORRECTION,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: rollbackComment,
+        });
+        if (courierCashbox) {
+          await this.updateCashboxBalance({
             user_id: courierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             amount: courierTariff,
@@ -1101,21 +1101,21 @@ export class OrderServiceService implements OnModuleInit {
             source_id: String(order.id),
             created_by: String(requester.id),
             comment: rollbackComment,
-          }),
-        ]);
+          });
+        }
       } else if (totalPrice < courierTariff) {
-        await Promise.all([
-          this.updateCashboxBalance({
-            user_id: String(order.market_id),
-            cashbox_type: Cashbox_type.FOR_MARKET,
-            amount: Math.max(marketTariff - totalPrice, 0),
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.CORRECTION,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: rollbackComment,
-          }),
-          this.updateCashboxBalance({
+        await this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Math.max(marketTariff - totalPrice, 0),
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.CORRECTION,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: rollbackComment,
+        });
+        if (courierCashbox) {
+          await this.updateCashboxBalance({
             user_id: courierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             amount: Math.max(courierTariff - totalPrice, 0),
@@ -1124,22 +1124,22 @@ export class OrderServiceService implements OnModuleInit {
             source_id: String(order.id),
             created_by: String(requester.id),
             comment: rollbackComment,
-          }),
-        ]);
+          });
+        }
       } else if (totalPrice < marketTariff) {
         const courierToBePaid = totalPrice - courierTariff;
-        await Promise.all([
-          this.updateCashboxBalance({
-            user_id: String(order.market_id),
-            cashbox_type: Cashbox_type.FOR_MARKET,
-            amount: Math.max(marketTariff - totalPrice, 0),
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.CORRECTION,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: rollbackComment,
-          }),
-          this.updateCashboxBalance({
+        await this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Math.max(marketTariff - totalPrice, 0),
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.CORRECTION,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: rollbackComment,
+        });
+        if (courierCashbox) {
+          await this.updateCashboxBalance({
             user_id: courierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             amount: Math.max(courierToBePaid, 0),
@@ -1148,26 +1148,26 @@ export class OrderServiceService implements OnModuleInit {
             source_id: String(order.id),
             created_by: String(requester.id),
             comment: rollbackComment,
-          }),
-        ]);
+          });
+        }
       } else {
         const toBePaid =
           originalStatus === Order_status.PAID
             ? Number(order.paid_amount ?? 0)
             : totalPrice - marketTariff;
         const courierToBePaid = totalPrice - courierTariff;
-        await Promise.all([
-          this.updateCashboxBalance({
-            user_id: String(order.market_id),
-            cashbox_type: Cashbox_type.FOR_MARKET,
-            amount: Math.max(toBePaid, 0),
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.CORRECTION,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: rollbackComment,
-          }),
-          this.updateCashboxBalance({
+        await this.updateCashboxBalance({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Math.max(toBePaid, 0),
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.CORRECTION,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: rollbackComment,
+        });
+        if (courierCashbox) {
+          await this.updateCashboxBalance({
             user_id: courierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             amount: Math.max(courierToBePaid, 0),
@@ -1176,8 +1176,8 @@ export class OrderServiceService implements OnModuleInit {
             source_id: String(order.id),
             created_by: String(requester.id),
             comment: rollbackComment,
-          }),
-        ]);
+          });
+        }
       }
     }
 
@@ -1185,18 +1185,18 @@ export class OrderServiceService implements OnModuleInit {
       const marketDiff = Number(order.paid_amount ?? 0);
       const courierDiff = Math.max(totalPrice - courierTariff, 0);
 
-      await Promise.all([
-        this.updateCashboxBalance({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: marketDiff,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.CORRECTION,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: rollbackComment,
-        }),
-        this.updateCashboxBalance({
+      await this.updateCashboxBalance({
+        user_id: String(order.market_id),
+        cashbox_type: Cashbox_type.FOR_MARKET,
+        amount: marketDiff,
+        operation_type: Operation_type.EXPENSE,
+        source_type: Source_type.CORRECTION,
+        source_id: String(order.id),
+        created_by: String(requester.id),
+        comment: rollbackComment,
+      });
+      if (courierCashbox) {
+        await this.updateCashboxBalance({
           user_id: courierId,
           cashbox_type: Cashbox_type.FOR_COURIER,
           amount: courierDiff,
@@ -1205,8 +1205,8 @@ export class OrderServiceService implements OnModuleInit {
           source_id: String(order.id),
           created_by: String(requester.id),
           comment: rollbackComment,
-        }),
-      ]);
+        });
+      }
     }
 
     if (
@@ -1230,6 +1230,7 @@ export class OrderServiceService implements OnModuleInit {
 
     if (
       shouldRollbackCourierExtraCost &&
+      courierCashbox &&
       [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
     ) {
       await this.updateCashboxBalance({
