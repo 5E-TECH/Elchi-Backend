@@ -676,7 +676,6 @@ export class OrderGatewayController {
 
     const resolvedMarketId = isMarket && requesterId ? requesterId : market_id;
     let resolvedBranchId = branch_id;
-    let managerCourierIds: string[] | undefined;
 
     if (isBranchScopedRequester && req?.user) {
       const assignment = await this.resolveBranchAssignment(req.user);
@@ -685,21 +684,6 @@ export class OrderGatewayController {
       }
       resolvedBranchId = String(assignment.branch_id);
 
-      const isManagerRequester = normalizedRoles.includes(RoleEnum.MANAGER);
-      if (isManagerRequester) {
-        const branchUsersResponse = await this.sendBranchWithTimeout(
-          { cmd: 'branch.user.find_by_branch' },
-          {
-            branch_id: resolvedBranchId,
-            requester: { id: req.user.sub, roles: req.user.roles ?? [] },
-          },
-        );
-        const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
-        managerCourierIds = branchUsers
-          .filter((item: any) => String(item?.role ?? '').toUpperCase() === 'COURIER')
-          .map((item: any) => String(item?.user_id ?? ''))
-          .filter(Boolean);
-      }
     }
 
     const pagination = this.parsePaginationQuery(page, limit);
@@ -718,7 +702,6 @@ export class OrderGatewayController {
         region_id,
         district_id,
         branch_id: resolvedBranchId,
-        courier_ids: managerCourierIds,
         source,
         page: pagination.page,
         limit: pagination.limit,
