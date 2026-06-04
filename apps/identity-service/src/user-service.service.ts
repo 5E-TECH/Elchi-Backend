@@ -16,7 +16,11 @@ import { CreateCustomerDto } from './dto/create-customer.dto';
 import { CreateManagerDto } from './dto/create-manager.dto';
 import { UserFilterQuery } from './contracts/user.payloads';
 import { Cashbox_type, Roles, Status, rmqSend } from '@app/common';
-import { catchError, errorRes, successRes } from '../../../libs/common/helpers/response';
+import {
+  catchError,
+  errorRes,
+  successRes,
+} from '../../../libs/common/helpers/response';
 import { RequesterContext } from './contracts/user.payloads';
 
 @Injectable()
@@ -130,12 +134,20 @@ export class UserServiceService implements OnModuleInit {
     throw new RpcException(errorRes(message, 403));
   }
 
-  private hasRole(requester: RequesterContext | undefined, role: Roles): boolean {
+  private hasRole(
+    requester: RequesterContext | undefined,
+    role: Roles,
+  ): boolean {
     return requester?.roles?.includes(role) ?? false;
   }
 
-  private isSelfRequester(requester: RequesterContext | undefined, targetUserId: string): boolean {
-    return Boolean(requester?.id && String(requester.id) === String(targetUserId));
+  private isSelfRequester(
+    requester: RequesterContext | undefined,
+    targetUserId: string,
+  ): boolean {
+    return Boolean(
+      requester?.id && String(requester.id) === String(targetUserId),
+    );
   }
 
   private assertRequesterCanCreateAdmin(requester?: RequesterContext) {
@@ -210,7 +222,9 @@ export class UserServiceService implements OnModuleInit {
       );
 
       if (!allowedUserIds.has(String(targetUserId).trim())) {
-        this.forbidden("Manager faqat o'zi boshqaradigan userlarni yangilay oladi");
+        this.forbidden(
+          "Manager faqat o'zi boshqaradigan userlarni yangilay oladi",
+        );
       }
       return;
     }
@@ -220,7 +234,8 @@ export class UserServiceService implements OnModuleInit {
 
   private normalizeQuery(query: UserFilterQuery = {}) {
     const page = Number(query.page) > 0 ? Number(query.page) : 1;
-    const limit = Number(query.limit) > 0 ? Math.min(Number(query.limit), 100) : 10;
+    const limit =
+      Number(query.limit) > 0 ? Math.min(Number(query.limit), 100) : 10;
 
     return {
       search: query.search?.trim(),
@@ -272,7 +287,9 @@ export class UserServiceService implements OnModuleInit {
     }
   }
 
-  private async getRegionsByIds(regionIds: string[]): Promise<Map<string, unknown>> {
+  private async getRegionsByIds(
+    regionIds: string[],
+  ): Promise<Map<string, unknown>> {
     if (!regionIds.length) {
       return new Map();
     }
@@ -296,7 +313,9 @@ export class UserServiceService implements OnModuleInit {
     return new Map(resolved);
   }
 
-  private async getRegionById(regionId?: string | null): Promise<unknown | null> {
+  private async getRegionById(
+    regionId?: string | null,
+  ): Promise<unknown | null> {
     if (!regionId) {
       return null;
     }
@@ -332,8 +351,12 @@ export class UserServiceService implements OnModuleInit {
     }
   }
 
-  private shouldAttachBranchRelation(role: Roles | string | null | undefined): boolean {
-    const normalized = String(role ?? '').trim().toLowerCase();
+  private shouldAttachBranchRelation(
+    role: Roles | string | null | undefined,
+  ): boolean {
+    const normalized = String(role ?? '')
+      .trim()
+      .toLowerCase();
     return (
       normalized === Roles.MANAGER ||
       normalized === Roles.COURIER ||
@@ -374,7 +397,9 @@ export class UserServiceService implements OnModuleInit {
               type: safe.role,
               sourceId: safe.id,
               title: safe.name,
-              content: [safe.phone_number, safe.username].filter(Boolean).join(' '),
+              content: [safe.phone_number, safe.username]
+                .filter(Boolean)
+                .join(' '),
               tags: ['identity', safe.role, safe.status].filter(Boolean),
               metadata: {
                 role: safe.role,
@@ -430,7 +455,9 @@ export class UserServiceService implements OnModuleInit {
       if (error instanceof RpcException) {
         const payload = (error as any).error;
         const message =
-          typeof payload === 'object' && payload?.message ? String(payload.message) : error.message;
+          typeof payload === 'object' && payload?.message
+            ? String(payload.message)
+            : error.message;
         if (message.includes('Cashbox already exists')) {
           return;
         }
@@ -446,11 +473,17 @@ export class UserServiceService implements OnModuleInit {
   async onModuleInit() {
     const config = {
       ADMIN_NAME: this.configService.get<string>('SUPERADMIN_NAME'),
-      ADMIN_PHONE_NUMBER: this.configService.get<string>('SUPERADMIN_PHONE_NUMBER'),
+      ADMIN_PHONE_NUMBER: this.configService.get<string>(
+        'SUPERADMIN_PHONE_NUMBER',
+      ),
       ADMIN_PASSWORD: this.configService.get<string>('SUPERADMIN_PASSWORD'),
     };
 
-    if (!config.ADMIN_NAME || !config.ADMIN_PHONE_NUMBER || !config.ADMIN_PASSWORD) {
+    if (
+      !config.ADMIN_NAME ||
+      !config.ADMIN_PHONE_NUMBER ||
+      !config.ADMIN_PASSWORD
+    ) {
       throw new RpcException(
         errorRes(
           'SUPERADMIN_NAME, SUPERADMIN_PHONE_NUMBER, SUPERADMIN_PASSWORD .env da bo‘lishi shart',
@@ -547,7 +580,11 @@ export class UserServiceService implements OnModuleInit {
     return this.updateUser(id, dto);
   }
 
-  async updateUser(id: string, dto: UpdateUserDto, requester?: RequesterContext) {
+  async updateUser(
+    id: string,
+    dto: UpdateUserDto,
+    requester?: RequesterContext,
+  ) {
     const admin = await this.users.findOne({
       where: { id, isDeleted: false },
     });
@@ -559,7 +596,8 @@ export class UserServiceService implements OnModuleInit {
 
     const requesterIsSelf = this.isSelfRequester(requester, id);
     const requesterIsPrivileged =
-      this.hasRole(requester, Roles.SUPERADMIN) || this.hasRole(requester, Roles.ADMIN);
+      this.hasRole(requester, Roles.SUPERADMIN) ||
+      this.hasRole(requester, Roles.ADMIN);
 
     if (dto.phone_number && dto.phone_number !== admin.phone_number) {
       await this.ensurePhoneUnique(dto.phone_number, id);
@@ -586,11 +624,17 @@ export class UserServiceService implements OnModuleInit {
       admin.payment_day = dto.payment_day;
     }
 
-    if (typeof dto.tariff_home !== 'undefined' && (requesterIsPrivileged || !requesterIsSelf)) {
+    if (
+      typeof dto.tariff_home !== 'undefined' &&
+      (requesterIsPrivileged || !requesterIsSelf)
+    ) {
       admin.tariff_home = dto.tariff_home;
     }
 
-    if (typeof dto.tariff_center !== 'undefined' && (requesterIsPrivileged || !requesterIsSelf)) {
+    if (
+      typeof dto.tariff_center !== 'undefined' &&
+      (requesterIsPrivileged || !requesterIsSelf)
+    ) {
       admin.tariff_center = dto.tariff_center;
     }
 
@@ -598,8 +642,29 @@ export class UserServiceService implements OnModuleInit {
       admin.add_order = dto.add_order;
     }
 
-    if (typeof dto.default_tariff !== 'undefined' && (requesterIsPrivileged || !requesterIsSelf)) {
+    if (
+      typeof dto.default_tariff !== 'undefined' &&
+      (requesterIsPrivileged || !requesterIsSelf)
+    ) {
       admin.default_tariff = dto.default_tariff;
+    }
+
+    // Commission config: only an admin/superadmin may set it, never self-edit
+    // (an operator must not raise their own commission).
+    if (
+      typeof dto.commission_type !== 'undefined' &&
+      requesterIsPrivileged &&
+      !requesterIsSelf
+    ) {
+      admin.commission_type = dto.commission_type;
+    }
+
+    if (
+      typeof dto.commission_value !== 'undefined' &&
+      requesterIsPrivileged &&
+      !requesterIsSelf
+    ) {
+      admin.commission_value = dto.commission_value;
     }
 
     const saved = await this.users.save(admin);
@@ -628,7 +693,10 @@ export class UserServiceService implements OnModuleInit {
       try {
         await lastValueFrom(
           this.catalogClient
-            .send({ cmd: 'catalog.product.delete_by_market' }, { user_id: admin.id })
+            .send(
+              { cmd: 'catalog.product.delete_by_market' },
+              { user_id: admin.id },
+            )
             .pipe(timeout(5000)),
         );
       } catch {
@@ -636,15 +704,13 @@ export class UserServiceService implements OnModuleInit {
           errorRes('Marketga tegishli productlarni o‘chirishda xatolik', 502),
         );
       }
-      
     }
 
     const ts = Date.now();
     const deletedPhone = `${admin.phone_number}-d${ts % 100000}`.slice(0, 20);
-    const deletedUsername =
-      admin.username?.length
-        ? `${admin.username}#del#${ts % 100000}`.slice(0, 60)
-        : null;
+    const deletedUsername = admin.username?.length
+      ? `${admin.username}#del#${ts % 100000}`.slice(0, 60)
+      : null;
 
     admin.isDeleted = true;
     admin.status = Status.INACTIVE;
@@ -683,10 +749,9 @@ export class UserServiceService implements OnModuleInit {
 
     const safeUser = this.sanitize(user);
     const profileRegion = await this.getRegionById(safeUser.region_id);
-    const profileBranch =
-      this.shouldAttachBranchRelation(safeUser.role)
-        ? await this.getUserBranchAssignment(String(safeUser.id), safeUser.role as Roles)
-        : null;
+    const profileBranch = this.shouldAttachBranchRelation(safeUser.role)
+      ? await this.getUserBranchAssignment(String(safeUser.id), safeUser.role)
+      : null;
 
     return successRes({
       ...safeUser,
@@ -711,20 +776,27 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async findAllAdmins(query: UserFilterQuery = {}) {
-    const { search, role, status, region_id, user_ids, page, limit, skip } = this.normalizeQuery(query);
+    const { search, role, status, region_id, user_ids, page, limit, skip } =
+      this.normalizeQuery(query);
 
     const baseQb = this.users
       .createQueryBuilder('admin')
       .where('admin.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('admin.role != :superadminRole', { superadminRole: Roles.SUPERADMIN })
-      .andWhere('admin.role != :customerRole', { customerRole: Roles.CUSTOMER });
+      .andWhere('admin.role != :superadminRole', {
+        superadminRole: Roles.SUPERADMIN,
+      })
+      .andWhere('admin.role != :customerRole', {
+        customerRole: Roles.CUSTOMER,
+      });
 
     if (search) {
       baseQb.andWhere(
         new Brackets((nested) => {
           nested
             .where('admin.name ILIKE :search', { search: `%${search}%` })
-            .orWhere('admin.phone_number ILIKE :search', { search: `%${search}%` })
+            .orWhere('admin.phone_number ILIKE :search', {
+              search: `%${search}%`,
+            })
             .orWhere('admin.username ILIKE :search', { search: `%${search}%` });
         }),
       );
@@ -755,15 +827,14 @@ export class UserServiceService implements OnModuleInit {
       .getManyAndCount();
 
     const [totalMarket, totalEmployees, totalUsers] = await Promise.all([
-      baseQb.clone().andWhere('admin.role = :marketRole', { marketRole: Roles.MARKET }).getCount(),
+      baseQb
+        .clone()
+        .andWhere('admin.role = :marketRole', { marketRole: Roles.MARKET })
+        .getCount(),
       baseQb
         .clone()
         .andWhere('admin.role IN (:...employeeRoles)', {
-          employeeRoles: [
-            Roles.ADMIN,
-            Roles.REGISTRATOR,
-            Roles.COURIER,
-          ],
+          employeeRoles: [Roles.ADMIN, Roles.REGISTRATOR, Roles.COURIER],
         })
         .getCount(),
       baseQb.clone().getCount(),
@@ -784,7 +855,8 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async findAllCouriers(query: UserFilterQuery = {}) {
-    const { search, status, region_id, page, limit, skip } = this.normalizeQuery(query);
+    const { search, status, region_id, page, limit, skip } =
+      this.normalizeQuery(query);
 
     const qb = this.users
       .createQueryBuilder('courier')
@@ -796,8 +868,12 @@ export class UserServiceService implements OnModuleInit {
         new Brackets((nested) => {
           nested
             .where('courier.name ILIKE :search', { search: `%${search}%` })
-            .orWhere('courier.phone_number ILIKE :search', { search: `%${search}%` })
-            .orWhere('courier.username ILIKE :search', { search: `%${search}%` });
+            .orWhere('courier.phone_number ILIKE :search', {
+              search: `%${search}%`,
+            })
+            .orWhere('courier.username ILIKE :search', {
+              search: `%${search}%`,
+            });
         }),
       );
     }
@@ -828,7 +904,7 @@ export class UserServiceService implements OnModuleInit {
     return successRes({
       items: rows.map((row) => ({
         ...this.sanitize(row),
-        region: row.region_id ? regionsById.get(row.region_id) ?? null : null,
+        region: row.region_id ? (regionsById.get(row.region_id) ?? null) : null,
       })),
       meta: {
         page,
@@ -951,9 +1027,7 @@ export class UserServiceService implements OnModuleInit {
 
   async createCustomer(dto: CreateCustomerDto) {
     const existing = await this.users.findOne({
-      where: [
-        { phone_number: dto.phone_number, isDeleted: false },
-      ],
+      where: [{ phone_number: dto.phone_number, isDeleted: false }],
     });
 
     if (existing) {
@@ -961,7 +1035,11 @@ export class UserServiceService implements OnModuleInit {
         this.conflict('Bu telefon raqam boshqa rolda allaqachon mavjud');
       }
 
-      return successRes(this.sanitize(existing), 200, 'Customer allaqachon mavjud');
+      return successRes(
+        this.sanitize(existing),
+        200,
+        'Customer allaqachon mavjud',
+      );
     }
 
     const generatedPassword = `cust_${Math.random().toString(36).slice(2, 12)}`;
@@ -1062,10 +1140,9 @@ export class UserServiceService implements OnModuleInit {
 
     const ts = Date.now();
     const deletedPhone = `${market.phone_number}-d${ts % 100000}`.slice(0, 20);
-    const deletedUsername =
-      market.username?.length
-        ? `${market.username}#del#${ts % 100000}`.slice(0, 60)
-        : null;
+    const deletedUsername = market.username?.length
+      ? `${market.username}#del#${ts % 100000}`.slice(0, 60)
+      : null;
 
     market.isDeleted = true;
     market.status = Status.INACTIVE;
@@ -1100,7 +1177,9 @@ export class UserServiceService implements OnModuleInit {
 
     // Backward compatible, but still restricts to expected token-like shape.
     if (!/^group_token-[a-z0-9]{14,64}$/i.test(token)) {
-      throw new RpcException(errorRes('market_tg_token format is invalid', 400));
+      throw new RpcException(
+        errorRes('market_tg_token format is invalid', 400),
+      );
     }
 
     const market = await this.users.findOne({
@@ -1175,8 +1254,12 @@ export class UserServiceService implements OnModuleInit {
         new Brackets((nested) => {
           nested
             .where('market.name ILIKE :search', { search: `%${search}%` })
-            .orWhere('market.phone_number ILIKE :search', { search: `%${search}%` })
-            .orWhere('market.username ILIKE :search', { search: `%${search}%` });
+            .orWhere('market.phone_number ILIKE :search', {
+              search: `%${search}%`,
+            })
+            .orWhere('market.username ILIKE :search', {
+              search: `%${search}%`,
+            });
         }),
       );
     }
@@ -1305,7 +1388,11 @@ export class UserServiceService implements OnModuleInit {
     });
   }
 
-  async createUserForAuth(username: string, password: string, phone_number?: string) {
+  async createUserForAuth(
+    username: string,
+    password: string,
+    phone_number?: string,
+  ) {
     await this.ensureUsernameUnique(username);
     await this.ensurePhoneUnique(phone_number ?? username);
 

@@ -9,7 +9,7 @@ export enum Roles {
   MARKET_OPERATOR = 'market_operator',
   MANAGER = 'manager',
   BRANCH = 'branch',
-  INVESTOR = 'investor'
+  INVESTOR = 'investor',
 }
 
 export enum Status {
@@ -35,6 +35,13 @@ export enum Operation_type {
   EXPENSE = 'expense',
 }
 
+export enum Commission_type {
+  // Operator earns a percentage of the order's total_price.
+  PERCENT = 'percent',
+  // Operator earns a flat amount per sold order, regardless of price.
+  FIXED = 'fixed',
+}
+
 export enum Source_type {
   COURIER_PAYMENT = 'courier_payment',
   BRANCH_TO_MAIN = 'branch_to_main',
@@ -47,6 +54,19 @@ export enum Source_type {
   CANCEL = 'cancel',
   EXTRA_COST = 'extra_cost',
   BILLS = 'bills',
+}
+
+/**
+ * Source of a financial_balance_history ledger entry — the company-wide
+ * profit/position ledger, distinct from per-cashbox Source_type movements.
+ */
+export enum FinancialSource_type {
+  SELL_PROFIT = 'sell_profit', // Net profit from a sold order (market tariff - courier tariff)
+  MANUAL_INCOME = 'manual_income', // Manually recorded income
+  MANUAL_EXPENSE = 'manual_expense', // Manually recorded expense
+  SALARY = 'salary', // Salary paid out
+  CORRECTION = 'correction', // Adjustment / rollback
+  BILLS = 'bills', // Invoices / utility bills
 }
 
 export enum Order_status {

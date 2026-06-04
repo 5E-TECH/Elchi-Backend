@@ -252,3 +252,78 @@ describe('Order tracking lifecycle', () => {
     expect(payload.assigned_at).toBeInstanceOf(Date);
   });
 });
+
+describe('markByProvider (status-only provider transition)', () => {
+  it('sell → SOLD with a tracking event, no finance emit', async () => {
+    const { service, orderRepo, trackingRepo, queryRunner } = createService();
+    const order = { id: '500', status: Order_status.WAITING, sold_at: null };
+    jest
+      .spyOn(service, 'findById')
+      .mockResolvedValueOnce(order as any)
+      .mockResolvedValueOnce({ ...order, status: Order_status.SOLD } as any);
+    orderRepo.save.mockResolvedValue(order);
+
+    const res = await service.markByProvider({
+      order_id: '500',
+      action: 'sell',
+      provider_slug: 'acme-cargo',
+      external_ref: 'ACME-9',
+    });
+
+    expect(queryRunner.commitTransaction).toHaveBeenCalled();
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ status: Order_status.SOLD }),
+    );
+    expect(trackingRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        to_status: Order_status.SOLD,
+        changed_by_role: 'system',
+      }),
+    );
+    expect(res.data).toMatchObject({ status: Order_status.SOLD });
+  });
+
+  it('cancel → CANCELLED', async () => {
+    const { service, orderRepo } = createService();
+    const order = { id: '501', status: Order_status.ON_THE_ROAD, sold_at: null };
+    jest
+      .spyOn(service, 'findById')
+      .mockResolvedValueOnce(order as any)
+      .mockResolvedValueOnce({ ...order, status: Order_status.CANCELLED } as any);
+    orderRepo.save.mockResolvedValue(order);
+
+    const res = await service.markByProvider({ order_id: '501', action: 'cancel' });
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ status: Order_status.CANCELLED }),
+    );
+    expect(res.data).toMatchObject({ status: Order_status.CANCELLED });
+  });
+
+  it('return → CLOSED', async () => {
+    const { service, orderRepo } = createService();
+    const order = { id: '502', status: Order_status.WAITING, sold_at: null };
+    jest
+      .spyOn(service, 'findById')
+      .mockResolvedValueOnce(order as any)
+      .mockResolvedValueOnce({ ...order, status: Order_status.CLOSED } as any);
+    orderRepo.save.mockResolvedValue(order);
+
+    const res = await service.markByProvider({ order_id: '502', action: 'return' });
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ status: Order_status.CLOSED }),
+    );
+    expect(res.data).toMatchObject({ status: Order_status.CLOSED });
+  });
+
+  it('is idempotent — selling an already-sold order is a no-op', async () => {
+    const { service, orderRepo, queryRunner } = createService();
+    const order = { id: '503', status: Order_status.SOLD, sold_at: '123' };
+    jest.spyOn(service, 'findById').mockResolvedValueOnce(order as any);
+
+    const res = await service.markByProvider({ order_id: '503', action: 'sell' });
+
+    expect(res.data).toMatchObject({ skipped: true, status: Order_status.SOLD });
+    expect(orderRepo.save).not.toHaveBeenCalled();
+    expect(queryRunner.startTransaction).not.toHaveBeenCalled();
+  });
+});

@@ -2,7 +2,11 @@ import { Module } from '@nestjs/common';
 import { ApiGatewayController } from './api-gateway.controller';
 import { ApiGatewayService } from './api-gateway.service';
 import { ConfigModule, ConfigService } from '@nestjs/config';
-import { AppLoggerModule, RmqModule, gatewayValidationSchema } from '@app/common';
+import {
+  AppLoggerModule,
+  RmqModule,
+  gatewayValidationSchema,
+} from '@app/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
 import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
@@ -21,10 +25,15 @@ import { FinanceGatewayController } from './finance-gateway.controller';
 import { AnalyticsGatewayController } from './analytics-gateway.controller';
 import { NotificationGatewayController } from './notification-gateway.controller';
 import { IntegrationGatewayController } from './integration-gateway.controller';
+import { WebhookGatewayController } from './webhook-gateway.controller';
 import { InvestorGatewayController } from './investor-gateway.controller';
 import { BranchGatewayController } from './branch-gateway.controller';
 import { FileGatewayController } from './file-gateway.controller';
 import { ScanGatewayController } from './scan-gateway.controller';
+import { PrinterGatewayController } from './printer-gateway.controller';
+import { ExcelGatewayController } from './excel-gateway.controller';
+import { RealtimeGateway } from './realtime/realtime.gateway';
+import { RealtimeController } from './realtime/realtime.controller';
 import type { StringValue } from 'ms';
 
 @Module({
@@ -88,11 +97,15 @@ import type { StringValue } from 'ms';
     FinanceGatewayController,
     NotificationGatewayController,
     IntegrationGatewayController,
+    WebhookGatewayController,
     InvestorGatewayController,
     BranchGatewayController,
     FileGatewayController,
     ScanGatewayController,
     AnalyticsGatewayController,
+    PrinterGatewayController,
+    ExcelGatewayController,
+    RealtimeController,
     HealthController,
     // TODO: Qolgan gateway controllerlarni qo'shish
     // FinanceGatewayController,
@@ -110,6 +123,7 @@ import type { StringValue } from 'ms';
     JwtAuthGuard,
     RolesGuard,
     SelfGuard,
+    RealtimeGateway,
     { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })

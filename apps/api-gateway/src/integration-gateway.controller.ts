@@ -8,6 +8,7 @@ import {
   Patch,
   Post,
   Query,
+  Req,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
@@ -16,6 +17,7 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiOperation,
+  ApiParam,
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
@@ -25,6 +27,8 @@ import { RolesGuard } from './auth/roles.guard';
 import {
   CreateSyncQueueRequestDto,
   CreateIntegrationRequestDto,
+  CreateRemittanceRequestDto,
+  DispatchShipmentRequestDto,
   ExternalRequestDto,
   FilterSyncHistoryQueryDto,
   IntegrationHealthcheckRequestDto,
@@ -39,7 +43,9 @@ import {
 @Controller('integrations')
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class IntegrationGatewayController {
-  constructor(@Inject('INTEGRATION') private readonly integrationClient: ClientProxy) {}
+  constructor(
+    @Inject('INTEGRATION') private readonly integrationClient: ClientProxy,
+  ) {}
 
   @Get()
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
@@ -47,8 +53,18 @@ export class IntegrationGatewayController {
   @ApiQuery({ name: 'is_active', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, enum: ['active', 'inactive'] })
   @ApiQuery({ name: 'market_id', required: false, type: String })
-  @ApiQuery({ name: 'from_date', required: false, type: String, example: '2026-03-01' })
-  @ApiQuery({ name: 'to_date', required: false, type: String, example: '2026-03-31' })
+  @ApiQuery({
+    name: 'from_date',
+    required: false,
+    type: String,
+    example: '2026-03-01',
+  })
+  @ApiQuery({
+    name: 'to_date',
+    required: false,
+    type: String,
+    example: '2026-03-31',
+  })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   findAll(
@@ -60,7 +76,8 @@ export class IntegrationGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    const normalizedStatus = typeof status === 'string' ? status.toLowerCase() : undefined;
+    const normalizedStatus =
+      typeof status === 'string' ? status.toLowerCase() : undefined;
     const statusToIsActive =
       normalizedStatus === 'active'
         ? true
@@ -89,7 +106,9 @@ export class IntegrationGatewayController {
 
   @Get('sync/history')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiOperation({ summary: 'Sync history list (pagination/filter/success rate)' })
+  @ApiOperation({
+    summary: 'Sync history list (pagination/filter/success rate)',
+  })
   syncHistory(@Query() query: FilterSyncHistoryQueryDto) {
     return this.integrationClient.send(
       { cmd: 'integration.sync.history' },
@@ -109,7 +128,10 @@ export class IntegrationGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Get integration by id' })
   findById(@Param('id') id: string) {
-    return this.integrationClient.send({ cmd: 'integration.find_by_id' }, { id });
+    return this.integrationClient.send(
+      { cmd: 'integration.find_by_id' },
+      { id },
+    );
   }
 
   @Patch(':id')
@@ -117,7 +139,10 @@ export class IntegrationGatewayController {
   @ApiOperation({ summary: 'Update integration' })
   @ApiBody({ type: UpdateIntegrationRequestDto })
   update(@Param('id') id: string, @Body() dto: UpdateIntegrationRequestDto) {
-    return this.integrationClient.send({ cmd: 'integration.update' }, { id, dto });
+    return this.integrationClient.send(
+      { cmd: 'integration.update' },
+      { id, dto },
+    );
   }
 
   @Delete(':id')
@@ -178,10 +203,7 @@ export class IntegrationGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Start sync processing for integration' })
   @ApiBody({ type: StartSyncRequestDto, required: false })
-  startSync(
-    @Param('id') id: string,
-    @Body() dto: StartSyncRequestDto = {},
-  ) {
+  startSync(@Param('id') id: string, @Body() dto: StartSyncRequestDto = {}) {
     return this.integrationClient.send(
       { cmd: 'integration.sync.process' },
       { integration_id: id, limit: dto.limit ?? 20 },
@@ -206,10 +228,7 @@ export class IntegrationGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Retry failed sync jobs for integration' })
   @ApiBody({ type: RetrySyncRequestDto, required: false })
-  retrySync(
-    @Param('id') id: string,
-    @Body() dto: RetrySyncRequestDto = {},
-  ) {
+  retrySync(@Param('id') id: string, @Body() dto: RetrySyncRequestDto = {}) {
     return this.integrationClient.send(
       { cmd: 'integration.sync.retry' },
       { integration_id: id, queue_id: dto.queue_id },
@@ -234,7 +253,10 @@ export class IntegrationGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiOperation({ summary: 'Universal external request (any endpoint/method)' })
   @ApiBody({ type: ExternalRequestDto })
-  externalRequest(@Param('slug') slug: string, @Body() dto: ExternalRequestDto) {
+  externalRequest(
+    @Param('slug') slug: string,
+    @Body() dto: ExternalRequestDto,
+  ) {
     return this.integrationClient.send(
       { cmd: 'integration.external.request' },
       {
@@ -244,4 +266,95 @@ export class IntegrationGatewayController {
     );
   }
 
+  @Post(':slug/dispatch')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiOperation({
+    summary: 'Dispatch an order to this provider (create a shipment)',
+  })
+  @ApiBody({ type: DispatchShipmentRequestDto })
+  dispatchShipment(
+    @Param('slug') slug: string,
+    @Body() dto: DispatchShipmentRequestDto,
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.shipment.dispatch' },
+      { slug, order_id: dto.order_id, context: dto.context },
+    );
+  }
+
+  @Get('shipments/:order_id')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiOperation({ summary: 'Get the provider shipment for an order' })
+  getShipment(@Param('order_id') orderId: string) {
+    return this.integrationClient.send(
+      { cmd: 'integration.shipment.get' },
+      { order_id: orderId },
+    );
+  }
+
+  // ===== Provider COD reconciliation =====
+
+  @Get('receivables')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'List provider COD receivables' })
+  @ApiQuery({ name: 'integration_id', required: false, type: String })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['pending', 'settled', 'cancelled'],
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  listReceivables(
+    @Query('integration_id') integration_id?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.receivable.list' },
+      {
+        integration_id,
+        status,
+        page: page ? Number(page) : undefined,
+        limit: limit ? Number(limit) : undefined,
+      },
+    );
+  }
+
+  @Get(':id/receivable-balance')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: "Provider's outstanding COD balance" })
+  @ApiParam({ name: 'id', description: 'Integration id' })
+  getReceivableBalance(@Param('id') id: string) {
+    return this.integrationClient.send(
+      { cmd: 'integration.receivable.balance' },
+      { integration_id: id },
+    );
+  }
+
+  @Post(':id/remittances')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary: 'Record a provider remittance and settle receivables',
+  })
+  @ApiParam({ name: 'id', description: 'Integration id' })
+  @ApiBody({ type: CreateRemittanceRequestDto })
+  createRemittance(
+    @Param('id') id: string,
+    @Body() dto: CreateRemittanceRequestDto,
+    @Req() req: { user?: { sub?: string } },
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.remittance.create' },
+      {
+        integration_id: id,
+        amount: dto.amount,
+        reference: dto.reference ?? null,
+        note: dto.note ?? null,
+        order_ids: dto.order_ids ?? undefined,
+        created_by: req.user?.sub ?? null,
+      },
+    );
+  }
 }

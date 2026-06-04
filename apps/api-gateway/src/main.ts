@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ValidationPipe } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import basicAuth from 'express-basic-auth';
@@ -23,7 +24,10 @@ async function bootstrap() {
 
   const app = await NestFactory.create<NestExpressApplication>(
     ApiGatewayModule,
-    { bufferLogs: true },
+    // rawBody: true exposes req.rawBody (Buffer) so inbound provider webhooks
+    // can be HMAC-verified against the exact bytes received, before JSON
+    // re-serialisation could change them.
+    { bufferLogs: true, rawBody: true },
   );
   app.enableShutdownHooks();
   // Replace the built-in Nest logger with Pino so every line (incl. ones
@@ -187,6 +191,22 @@ async function bootstrap() {
   };
   process.on('SIGTERM', shutdown);
   process.on('SIGINT', shutdown);
+
+  // Hybrid RMQ consumer: lets any service push to socket.io clients by emitting
+  // { cmd: 'realtime.notify' } to the gateway queue (see realtime.controller).
+  const gatewayQueue = process.env.RABBITMQ_GATEWAY_QUEUE;
+  if (gatewayQueue) {
+    app.connectMicroservice<MicroserviceOptions>({
+      transport: Transport.RMQ,
+      options: {
+        urls: [process.env.RABBITMQ_URI!],
+        queue: gatewayQueue,
+        noAssert: true,
+        queueOptions: { durable: true },
+      },
+    });
+    await app.startAllMicroservices();
+  }
 
   // AWS va Docker interfeyslari uchun 0.0.0.0 majburiy
   const port = Number(process.env.PORT || 3004);

@@ -1,13 +1,32 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, IsNull, LessThanOrEqual, Repository } from 'typeorm';
+import {
+  Between,
+  In,
+  IsNull,
+  LessThanOrEqual,
+  Repository,
+} from 'typeorm';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
-import { Order_status } from '@app/common';
+import {
+  ActivityAction,
+  ActivityLogService,
+  HmacAlgorithm,
+  Order_status,
+  verifyHmacSignature,
+} from '@app/common';
 import { ExternalIntegration } from './entities/external-integration.entity';
 import { SyncQueue } from './entities/sync-queue.entity';
 import { SyncHistory } from './entities/sync-history.entity';
+import { ProviderWebhookLog } from './entities/provider-webhook-log.entity';
+import { ProviderShipment } from './entities/provider-shipment.entity';
+import {
+  ProviderReceivable,
+  ReceivableStatus,
+} from './entities/provider-receivable.entity';
+import { ProviderRemittance } from './entities/provider-remittance.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -113,6 +132,15 @@ export class IntegrationServiceService {
     @InjectRepository(ExternalIntegration) private readonly integrationRepo: Repository<ExternalIntegration>,
     @InjectRepository(SyncQueue) private readonly syncQueueRepo: Repository<SyncQueue>,
     @InjectRepository(SyncHistory) private readonly syncHistoryRepo: Repository<SyncHistory>,
+    @InjectRepository(ProviderWebhookLog)
+    private readonly webhookLogRepo: Repository<ProviderWebhookLog>,
+    @InjectRepository(ProviderShipment)
+    private readonly shipmentRepo: Repository<ProviderShipment>,
+    @InjectRepository(ProviderReceivable)
+    private readonly receivableRepo: Repository<ProviderReceivable>,
+    @InjectRepository(ProviderRemittance)
+    private readonly remittanceRepo: Repository<ProviderRemittance>,
+    private readonly activityLog: ActivityLogService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
@@ -1613,5 +1641,943 @@ export class IntegrationServiceService {
     }
 
     return this.processPendingSyncQueue(Math.max(1, rows.length), integration_id);
+  }
+
+  // ===========================================================================
+  // Inbound webhooks (provider → Elchi)
+  // ===========================================================================
+
+  /**
+   * Receive and authenticate an inbound webhook from any provider.
+   *
+   * Provider-agnostic: the integration is resolved by slug, its webhook config
+   * (secret, signature header/scheme, id header) drives verification, and the
+   * result is logged for audit + replay protection. This is the single entry
+   * point all carriers/marketplaces call back into.
+   *
+   * Returns a small status object; the caller (gateway) maps it to an HTTP
+   * code. We deliberately return 200-style success even when processing of a
+   * verified event fails downstream — the event is logged and can be replayed
+   * — but signature failures return an auth error so a misconfigured or
+   * malicious sender gets a clear rejection and the event never enters the
+   * processing path.
+   */
+  async receiveWebhook(input: {
+    slug: string;
+    raw_body_base64?: string;
+    raw_body?: string;
+    headers?: Record<string, string>;
+    trace_id?: string | null;
+  }) {
+    const slug = String(input.slug ?? '').trim();
+    const headers = this.lowercaseHeaders(input.headers);
+    const rawBody = input.raw_body_base64
+      ? Buffer.from(input.raw_body_base64, 'base64')
+      : Buffer.from(input.raw_body ?? '', 'utf8');
+
+    const integration = slug
+      ? await this.integrationRepo.findOne({
+          where: { slug, isDeleted: false },
+        })
+      : null;
+
+    if (!integration) {
+      // Unknown provider — log with no integration_id so abuse is visible,
+      // then reject. Don't reveal whether the slug exists.
+      await this.saveWebhookLog({
+        integration_id: null,
+        provider_slug: slug || null,
+        delivery_id: null,
+        event_type: null,
+        signature_valid: false,
+        status: 'rejected',
+        raw_body: this.truncateBody(rawBody.toString('utf8')),
+        parsed_payload: null,
+        error: 'integration not found',
+        trace_id: input.trace_id ?? null,
+      });
+      return { ok: false, code: 401, reason: 'unknown_provider' };
+    }
+
+    const secret = this.decryptCredential(integration.webhook_secret);
+    if (!secret) {
+      await this.saveWebhookLog({
+        integration_id: String(integration.id),
+        provider_slug: integration.slug,
+        delivery_id: null,
+        event_type: null,
+        signature_valid: false,
+        status: 'rejected',
+        raw_body: this.truncateBody(rawBody.toString('utf8')),
+        parsed_payload: null,
+        error: 'webhook_secret not configured',
+        trace_id: input.trace_id ?? null,
+      });
+      return { ok: false, code: 401, reason: 'not_configured' };
+    }
+
+    const signatureHeader = (
+      integration.webhook_signature_header ?? 'x-signature'
+    ).toLowerCase();
+    const signature = headers[signatureHeader] ?? '';
+    const algorithm = (integration.webhook_algorithm ??
+      'sha256') as HmacAlgorithm;
+
+    const verification = verifyHmacSignature({
+      rawBody,
+      signature,
+      secret,
+      previousSecret: this.decryptCredential(
+        integration.webhook_secret_previous,
+      ),
+      stripPrefix: integration.webhook_signature_prefix ?? undefined,
+      algorithm,
+    });
+
+    const deliveryId = integration.webhook_id_header
+      ? (headers[integration.webhook_id_header.toLowerCase()] ?? null)
+      : null;
+    const parsed = this.tryParseJson(rawBody.toString('utf8'));
+    const eventType = this.extractEventType(parsed, headers);
+
+    if (!verification.valid) {
+      await this.saveWebhookLog({
+        integration_id: String(integration.id),
+        provider_slug: integration.slug,
+        delivery_id: deliveryId,
+        event_type: eventType,
+        signature_valid: false,
+        status: 'rejected',
+        raw_body: this.truncateBody(rawBody.toString('utf8')),
+        parsed_payload: parsed,
+        error: `signature ${verification.reason ?? 'invalid'}`,
+        trace_id: input.trace_id ?? null,
+      });
+      this.logger.warn(
+        `webhook signature rejected for ${integration.slug}: ${verification.reason}`,
+      );
+      return { ok: false, code: 401, reason: 'invalid_signature' };
+    }
+
+    // Replay protection: if this provider sends a delivery id and we've
+    // already logged it, treat as an idempotent re-delivery.
+    if (deliveryId) {
+      const existing = await this.webhookLogRepo.findOne({
+        where: {
+          integration_id: String(integration.id),
+          delivery_id: deliveryId,
+        },
+      });
+      if (existing) {
+        return { ok: true, code: 200, reason: 'duplicate', replay: true };
+      }
+    }
+
+    const log = await this.saveWebhookLog({
+      integration_id: String(integration.id),
+      provider_slug: integration.slug,
+      delivery_id: deliveryId,
+      event_type: eventType,
+      signature_valid: true,
+      status: 'verified',
+      raw_body: this.truncateBody(rawBody.toString('utf8')),
+      parsed_payload: parsed,
+      error: null,
+      trace_id: input.trace_id ?? null,
+    });
+
+    await this.activityLog.log({
+      entity_type: 'ProviderWebhook',
+      entity_id: log?.id ?? deliveryId ?? integration.slug,
+      action: ActivityAction.WEBHOOK_RECEIVED,
+      new_value: { event_type: eventType, provider: integration.slug },
+      metadata: { delivery_id: deliveryId },
+    });
+
+    // Apply the event to the linked shipment (status tracking). Best-effort:
+    // a payload we can't map, or an order we don't have a shipment for, is
+    // logged but never fails the webhook — the provider still gets a 200 and
+    // the raw event stays in the log for replay.
+    const applied = await this.applyWebhookToShipment(integration, parsed);
+    if (log?.id) {
+      await this.markWebhookProcessed(log.id, applied.outcome);
+    }
+
+    return {
+      ok: true,
+      code: 200,
+      reason: 'accepted',
+      event_type: eventType,
+      delivery_id: deliveryId,
+      log_id: log?.id ?? null,
+      shipment: applied,
+    };
+  }
+
+  /**
+   * Resolve a webhook payload to a shipment status update. Returns an outcome
+   * tag (rather than throwing) so the caller can record it on the log without
+   * the webhook failing.
+   *
+   * Steps: read the configured payload paths → find the shipment by
+   * external_ref/tracking → map the provider status → persist the new status.
+   * A terminal action (sell/cancel/return) is surfaced in the outcome for the
+   * order-driving step (D3b) but not acted upon here.
+   */
+  private async applyWebhookToShipment(
+    integration: ExternalIntegration,
+    parsed: Record<string, unknown> | null,
+  ): Promise<{
+    outcome:
+      | 'no_paths'
+      | 'no_status'
+      | 'no_shipment'
+      | 'unmapped'
+      | 'unchanged'
+      | 'updated';
+    internal_status?: string;
+    action?: string;
+    order_id?: string;
+  }> {
+    const paths = integration.webhook_payload_paths;
+    if (!paths || !parsed) return { outcome: 'no_paths' };
+
+    const providerStatus = paths.status
+      ? this.stringifyPath(this.extractPath(parsed, paths.status))
+      : null;
+    if (!providerStatus) return { outcome: 'no_status' };
+
+    const externalRef = paths.external_ref
+      ? this.stringifyPath(this.extractPath(parsed, paths.external_ref))
+      : null;
+    const trackingNumber = paths.tracking_number
+      ? this.stringifyPath(this.extractPath(parsed, paths.tracking_number))
+      : null;
+
+    const shipment = await this.findShipmentByRef({
+      external_ref: externalRef,
+      tracking_number: trackingNumber,
+      integration_id: String(integration.id),
+    });
+    if (!shipment) {
+      this.logger.warn(
+        `webhook for ${integration.slug}: no shipment for ref=${externalRef} tracking=${trackingNumber}`,
+      );
+      return { outcome: 'no_shipment' };
+    }
+
+    const mapped = this.mapProviderStatus(integration, providerStatus);
+    if (!mapped?.status) {
+      // Record the raw provider status even when unmapped, so operators can
+      // see what the carrier reported and extend the mapping.
+      await this.upsertShipment({
+        order_id: shipment.order_id,
+        integration_id: String(integration.id),
+        provider_status: providerStatus,
+        tracking_number: trackingNumber ?? undefined,
+      });
+      return { outcome: 'unmapped', order_id: shipment.order_id };
+    }
+
+    // Idempotent: if the internal status is unchanged, just refresh the raw
+    // provider status and stop — no churn, no duplicate order-driving.
+    if (shipment.internal_status === mapped.status) {
+      await this.upsertShipment({
+        order_id: shipment.order_id,
+        integration_id: String(integration.id),
+        provider_status: providerStatus,
+      });
+      return {
+        outcome: 'unchanged',
+        internal_status: mapped.status,
+        order_id: shipment.order_id,
+      };
+    }
+
+    await this.upsertShipment({
+      order_id: shipment.order_id,
+      integration_id: String(integration.id),
+      provider_status: providerStatus,
+      internal_status: mapped.status,
+      tracking_number: trackingNumber ?? undefined,
+    });
+
+    await this.activityLog.log({
+      entity_type: 'ProviderShipment',
+      entity_id: shipment.order_id,
+      action: ActivityAction.EXTERNAL_SYNC,
+      old_value: { internal_status: shipment.internal_status },
+      new_value: {
+        internal_status: mapped.status,
+        provider_status: providerStatus,
+      },
+      metadata: { provider: integration.slug, action: mapped.action ?? null },
+    });
+
+    // Terminal action (sell/cancel/return) → drive the order's status. The
+    // order side is status-only (no cashbox) and idempotent, so a best-effort
+    // call is safe: if it fails, the shipment status is already recorded and a
+    // later webhook / reconcile re-drives it. Never let it fail the webhook.
+    if (mapped.action && ['sell', 'cancel', 'return'].includes(mapped.action)) {
+      let markResult: { data?: { total_price?: number } } | null = null;
+      try {
+        markResult = await this.rmqRequest<{
+          data?: { total_price?: number };
+        }>(this.orderClient, { cmd: 'order.provider.mark' }, {
+          order_id: shipment.order_id,
+          action: mapped.action,
+          provider_slug: integration.slug,
+          external_ref: shipment.external_ref,
+        });
+      } catch (err) {
+        this.logger.warn(
+          `order.provider.mark failed for order ${shipment.order_id}: ${(err as Error).message}`,
+        );
+      }
+
+      // COD reconciliation: a provider 'sell' creates a receivable (the COD it
+      // collected is owed back to Elchi); a 'cancel'/'return' voids any pending
+      // receivable. Best-effort — never fail the webhook over it.
+      try {
+        if (mapped.action === 'sell') {
+          await this.recordProviderReceivable({
+            integration_id: String(integration.id),
+            order_id: shipment.order_id,
+            provider_slug: integration.slug,
+            external_ref: shipment.external_ref,
+            amount: Number(markResult?.data?.total_price ?? 0),
+          });
+        } else {
+          await this.cancelProviderReceivable(
+            String(integration.id),
+            shipment.order_id,
+          );
+        }
+      } catch (err) {
+        this.logger.warn(
+          `provider receivable update failed for order ${shipment.order_id}: ${(err as Error).message}`,
+        );
+      }
+    }
+
+    return {
+      outcome: 'updated',
+      internal_status: mapped.status,
+      action: mapped.action,
+      order_id: shipment.order_id,
+    };
+  }
+
+  private async markWebhookProcessed(
+    logId: string,
+    outcome: string,
+  ): Promise<void> {
+    // Surface diagnostic outcomes (couldn't attach / map) in `error` so they
+    // stand out in the log; a clean apply leaves error NULL.
+    const diagnostic = ['no_paths', 'no_status', 'no_shipment', 'unmapped'];
+    try {
+      await this.webhookLogRepo.update(
+        { id: logId },
+        {
+          status: 'processed',
+          processed_at: new Date(),
+          error: diagnostic.includes(outcome) ? `apply: ${outcome}` : null,
+        },
+      );
+    } catch {
+      // Non-fatal — the webhook already succeeded.
+    }
+  }
+
+  private stringifyPath(value: unknown): string | null {
+    if (typeof value === 'string') {
+      const s = value.trim();
+      return s.length > 0 ? s : null;
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return String(value);
+    }
+    // Objects, arrays, null, undefined, symbols, functions → not a scalar path.
+    return null;
+  }
+
+  private async saveWebhookLog(data: {
+    integration_id: string | null;
+    provider_slug: string | null;
+    delivery_id: string | null;
+    event_type: string | null;
+    signature_valid: boolean;
+    status: ProviderWebhookLog['status'];
+    raw_body: string | null;
+    parsed_payload: Record<string, unknown> | null;
+    error: string | null;
+    trace_id: string | null;
+  }): Promise<ProviderWebhookLog | null> {
+    try {
+      const entity = this.webhookLogRepo.create({
+        ...data,
+        processed_at: data.status === 'processed' ? new Date() : null,
+      });
+      return await this.webhookLogRepo.save(entity);
+    } catch (err) {
+      // Unique violation on (integration_id, delivery_id) = concurrent replay;
+      // not fatal. Any other failure must not break the webhook response.
+      this.logger.warn(`webhook log write failed: ${(err as Error).message}`);
+      return null;
+    }
+  }
+
+  private lowercaseHeaders(
+    headers?: Record<string, string>,
+  ): Record<string, string> {
+    const out: Record<string, string> = {};
+    for (const [k, v] of Object.entries(headers ?? {})) {
+      out[k.toLowerCase()] = v;
+    }
+    return out;
+  }
+
+  private tryParseJson(body: string): Record<string, unknown> | null {
+    if (!body.trim()) return null;
+    try {
+      const parsed: unknown = JSON.parse(body);
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+        ? (parsed as Record<string, unknown>)
+        : { value: parsed };
+    } catch {
+      return null;
+    }
+  }
+
+  private extractEventType(
+    parsed: Record<string, unknown> | null,
+    headers: Record<string, string>,
+  ): string | null {
+    const fromHeader =
+      headers['x-event'] ??
+      headers['x-event-type'] ??
+      headers['x-webhook-event'];
+    if (fromHeader) return fromHeader;
+    const candidate =
+      parsed?.['event'] ?? parsed?.['event_type'] ?? parsed?.['type'];
+    return this.stringifyPath(candidate);
+  }
+
+  private truncateBody(body: string, max = 20_000): string {
+    return body.length > max ? body.slice(0, max) : body;
+  }
+
+  // ===========================================================================
+  // Provider shipments (order ↔ external shipment tracking)
+  // ===========================================================================
+
+  /**
+   * Create or update the shipment row for an order (upsert on order_id).
+   * Used by outbound dispatch (after creating a shipment at the provider) and
+   * by reconcile/webhook updates. One shipment per order — a re-dispatch to a
+   * different provider overwrites the provider fields on the same row.
+   */
+  async upsertShipment(input: {
+    order_id: string;
+    integration_id: string;
+    provider_slug?: string | null;
+    external_ref?: string | null;
+    tracking_number?: string | null;
+    provider_status?: string | null;
+    internal_status?: string | null;
+    last_request_id?: string | null;
+    meta?: Record<string, unknown> | null;
+    increment_attempt?: boolean;
+    last_error?: string | null;
+  }) {
+    const orderId = String(input.order_id);
+    let shipment = await this.shipmentRepo.findOne({
+      where: { order_id: orderId },
+    });
+
+    if (!shipment) {
+      shipment = this.shipmentRepo.create({
+        order_id: orderId,
+        integration_id: String(input.integration_id),
+        send_attempts: 0,
+      });
+    }
+
+    shipment.integration_id = String(input.integration_id);
+    if (input.provider_slug !== undefined)
+      shipment.provider_slug = input.provider_slug;
+    if (input.external_ref !== undefined)
+      shipment.external_ref = input.external_ref;
+    if (input.tracking_number !== undefined)
+      shipment.tracking_number = input.tracking_number;
+    if (input.provider_status !== undefined) {
+      shipment.provider_status = input.provider_status;
+      shipment.status_changed_at = new Date();
+    }
+    if (input.internal_status !== undefined)
+      shipment.internal_status = input.internal_status;
+    if (input.last_request_id !== undefined)
+      shipment.last_request_id = input.last_request_id;
+    if (input.meta !== undefined) shipment.meta = input.meta;
+    if (input.last_error !== undefined) shipment.last_error = input.last_error;
+    if (input.increment_attempt) {
+      shipment.send_attempts = Number(shipment.send_attempts ?? 0) + 1;
+    }
+
+    const saved = await this.shipmentRepo.save(shipment);
+    return successRes(saved, 200, 'shipment upserted');
+  }
+
+  async getShipmentByOrder(order_id: string) {
+    const shipment = await this.shipmentRepo.findOne({
+      where: { order_id: String(order_id) },
+    });
+    if (!shipment) {
+      return successRes(null, 200, 'no shipment for order');
+    }
+    return successRes(shipment, 200, 'shipment found');
+  }
+
+  /**
+   * Look up a shipment from a webhook payload — providers reference an order
+   * by either their own id (external_ref) or the tracking number.
+   */
+  async findShipmentByRef(input: {
+    external_ref?: string | null;
+    tracking_number?: string | null;
+    integration_id?: string | null;
+  }): Promise<ProviderShipment | null> {
+    const { external_ref, tracking_number, integration_id } = input;
+    if (external_ref) {
+      const byRef = await this.shipmentRepo.findOne({
+        where: integration_id
+          ? { external_ref, integration_id: String(integration_id) }
+          : { external_ref },
+      });
+      if (byRef) return byRef;
+    }
+    if (tracking_number) {
+      const byTracking = await this.shipmentRepo.findOne({
+        where: integration_id
+          ? { tracking_number, integration_id: String(integration_id) }
+          : { tracking_number },
+      });
+      if (byTracking) return byTracking;
+    }
+    return null;
+  }
+
+  async listShipments(input: {
+    integration_id?: string;
+    internal_status?: string;
+    limit?: number;
+    offset?: number;
+  }) {
+    const take = Math.min(Math.max(Number(input.limit ?? 50), 1), 200);
+    const skip = Math.max(Number(input.offset ?? 0), 0);
+    const where: Record<string, unknown> = { isDeleted: false };
+    if (input.integration_id)
+      where.integration_id = String(input.integration_id);
+    if (input.internal_status) where.internal_status = input.internal_status;
+
+    const [rows, total] = await this.shipmentRepo.findAndCount({
+      where,
+      order: { updatedAt: 'DESC', id: 'DESC' },
+      take,
+      skip,
+    });
+    return successRes(
+      { rows, total, limit: take, offset: skip },
+      200,
+      'shipments',
+    );
+  }
+
+  /**
+   * Map a provider's raw status string to our internal handling using the
+   * integration's inbound_status_mapping. Case-insensitive on the provider
+   * code. Returns null when the provider status isn't mapped (caller decides
+   * whether that's an intermediate status to ignore or a config gap to log).
+   */
+  mapProviderStatus(
+    integration: Pick<ExternalIntegration, 'inbound_status_mapping'>,
+    providerStatus: string,
+  ): { status?: string; action?: string } | null {
+    const mapping = integration.inbound_status_mapping ?? {};
+    if (!providerStatus) return null;
+
+    // Exact match first, then case-insensitive.
+    if (mapping[providerStatus]) return mapping[providerStatus];
+    const upper = providerStatus.toUpperCase();
+    for (const [key, value] of Object.entries(mapping)) {
+      if (key.toUpperCase() === upper) return value;
+    }
+    return null;
+  }
+
+  /**
+   * Outbound: create a shipment for an order at the provider.
+   *
+   * Provider-agnostic — the request is built from the integration's
+   * dispatch_config templates interpolated with `context` (flat order fields
+   * the caller supplies; integration-service never imports the order schema).
+   * On success we record external_ref + tracking on the shipment; on failure
+   * we stamp last_error and bump send_attempts so a retry/redispatch is
+   * visible. Idempotent at the provider via an Idempotency-Key header the
+   * caller can template in.
+   */
+  async dispatchShipment(input: {
+    slug?: string;
+    integration_id?: string;
+    order_id: string;
+    context?: Record<string, string>;
+  }) {
+    const orderId = String(input.order_id);
+    const integration = await this.integrationRepo.findOne({
+      where: input.integration_id
+        ? { id: String(input.integration_id), isDeleted: false }
+        : { slug: String(input.slug ?? ''), isDeleted: false },
+    });
+    if (!integration) {
+      this.notFound('integration not found for dispatch');
+    }
+
+    const cfg = integration.dispatch_config;
+    if (!cfg?.endpoint) {
+      this.badRequest('dispatch_config.endpoint is required for this provider');
+    }
+
+    const ctx: Record<string, string> = {
+      order_id: orderId,
+      ...(input.context ?? {}),
+    };
+    const method = (cfg.method ?? 'POST').toUpperCase() as HttpMethod;
+    const body = this.interpolate(cfg.body_template ?? {}, ctx) as Record<
+      string,
+      unknown
+    >;
+    const params = this.interpolate(cfg.query_template ?? {}, ctx) as Record<
+      string,
+      unknown
+    >;
+    const headers = this.interpolate(cfg.headers ?? {}, ctx) as Record<
+      string,
+      string
+    >;
+
+    try {
+      const result = await this.executeExternalRequest({
+        slug: integration.slug,
+        endpoint: cfg.endpoint,
+        method,
+        params,
+        body,
+        headers,
+        use_auth: cfg.use_auth ?? true,
+        timeout_ms: cfg.timeout_ms ?? 30_000,
+      });
+
+      const raw = (result?.data as { raw?: unknown })?.raw ?? null;
+      const paths = cfg.response_paths ?? {};
+      const externalRef = paths.external_ref
+        ? this.stringifyPath(this.extractPath(raw, paths.external_ref))
+        : null;
+      const trackingNumber = paths.tracking_number
+        ? this.stringifyPath(this.extractPath(raw, paths.tracking_number))
+        : null;
+      const providerStatus = paths.status
+        ? this.stringifyPath(this.extractPath(raw, paths.status))
+        : null;
+
+      await this.upsertShipment({
+        order_id: orderId,
+        integration_id: String(integration.id),
+        provider_slug: integration.slug,
+        external_ref: externalRef,
+        tracking_number: trackingNumber,
+        provider_status: providerStatus ?? undefined,
+        last_request_id: ctx.idempotency_key ?? null,
+        last_error: null,
+        increment_attempt: true,
+      });
+
+      await this.activityLog.log({
+        entity_type: 'ProviderShipment',
+        entity_id: orderId,
+        action: ActivityAction.EXTERNAL_SYNC,
+        new_value: {
+          provider: integration.slug,
+          external_ref: externalRef,
+          tracking_number: trackingNumber,
+        },
+        metadata: { dispatch: true },
+      });
+
+      return successRes(
+        {
+          order_id: orderId,
+          external_ref: externalRef,
+          tracking_number: trackingNumber,
+        },
+        201,
+        'shipment dispatched',
+      );
+    } catch (error) {
+      const message =
+        error instanceof RpcException
+          ? JSON.stringify(error.getError())
+          : (error as Error).message;
+      // Record the failure on the shipment so operators can see + redispatch.
+      await this.upsertShipment({
+        order_id: orderId,
+        integration_id: String(integration.id),
+        provider_slug: integration.slug,
+        last_error: message,
+        increment_attempt: true,
+      });
+      throw error;
+    }
+  }
+
+  // ==================== Provider COD reconciliation ====================
+
+  /**
+   * Record (idempotently) the COD a provider owes Elchi after delivering an
+   * order. Called best-effort from the webhook 'sell' path. No-ops on amount
+   * <= 0 or when an active receivable already exists for the (integration,
+   * order) pair. A previously CANCELLED receivable is revived to PENDING.
+   */
+  async recordProviderReceivable(input: {
+    integration_id: string;
+    order_id: string;
+    provider_slug?: string | null;
+    external_ref?: string | null;
+    amount: number;
+  }): Promise<ProviderReceivable | null> {
+    const amount = Number(input.amount ?? 0);
+    if (!input.integration_id || !input.order_id || !(amount > 0)) {
+      return null;
+    }
+
+    const existing = await this.receivableRepo.findOne({
+      where: {
+        integration_id: String(input.integration_id),
+        order_id: String(input.order_id),
+        isDeleted: false,
+      },
+    });
+
+    if (existing) {
+      // Already settled → leave it. Pending → keep amount in sync. Cancelled →
+      // the delivery happened again, revive it.
+      if (existing.status === ReceivableStatus.SETTLED) {
+        return existing;
+      }
+      existing.status = ReceivableStatus.PENDING;
+      existing.amount = amount.toFixed(2);
+      existing.provider_slug = input.provider_slug ?? existing.provider_slug;
+      existing.external_ref = input.external_ref ?? existing.external_ref;
+      existing.remittance_id = null;
+      existing.settled_at = null;
+      return this.receivableRepo.save(existing);
+    }
+
+    const created = this.receivableRepo.create({
+      integration_id: String(input.integration_id),
+      order_id: String(input.order_id),
+      provider_slug: input.provider_slug ?? null,
+      external_ref: input.external_ref ?? null,
+      amount: amount.toFixed(2),
+      status: ReceivableStatus.PENDING,
+    });
+    return this.receivableRepo.save(created);
+  }
+
+  /**
+   * Cancel a still-pending receivable — the delivery was reversed (cancel /
+   * return), so the provider no longer owes for it. Settled rows are untouched
+   * (the money already came in; a reversal there is a finance correction).
+   */
+  async cancelProviderReceivable(
+    integration_id: string,
+    order_id: string,
+  ): Promise<void> {
+    const row = await this.receivableRepo.findOne({
+      where: {
+        integration_id: String(integration_id),
+        order_id: String(order_id),
+        status: ReceivableStatus.PENDING,
+        isDeleted: false,
+      },
+    });
+    if (row) {
+      row.status = ReceivableStatus.CANCELLED;
+      await this.receivableRepo.save(row);
+    }
+  }
+
+  async listReceivables(query: {
+    integration_id?: string;
+    status?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const limit = query.limit && query.limit > 0 ? query.limit : 20;
+    const where: Record<string, unknown> = { isDeleted: false };
+    if (query.integration_id) {
+      where.integration_id = String(query.integration_id);
+    }
+    if (query.status) {
+      where.status = query.status as ReceivableStatus;
+    }
+
+    const [items, total] = await this.receivableRepo.findAndCount({
+      where,
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    return successRes(
+      {
+        items,
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
+      },
+      200,
+      'Provider receivables',
+    );
+  }
+
+  /** Outstanding (pending) COD total a provider still owes. */
+  async getProviderBalance(integration_id: string) {
+    if (!integration_id) {
+      this.badRequest('integration_id is required');
+    }
+    const raw = await this.receivableRepo
+      .createQueryBuilder('r')
+      .select('COALESCE(SUM(r.amount), 0)', 'sum')
+      .addSelect('COUNT(r.id)', 'count')
+      .where('r.integration_id = :id', { id: String(integration_id) })
+      .andWhere('r.is_deleted = false')
+      .andWhere('r.status = :status', { status: ReceivableStatus.PENDING })
+      .getRawOne<{ sum: string; count: string }>();
+
+    return successRes(
+      {
+        integration_id: String(integration_id),
+        outstanding_amount: Number(raw?.sum ?? 0),
+        outstanding_count: Number(raw?.count ?? 0),
+      },
+      200,
+      'Provider outstanding balance',
+    );
+  }
+
+  /**
+   * Record a remittance from a provider and settle pending receivables against
+   * it. If `order_ids` is given only those are settled; otherwise pending
+   * receivables are settled oldest-first up to `amount`. Reconciliation only —
+   * does not post to a cashbox.
+   */
+  async createRemittance(input: {
+    integration_id: string;
+    amount: number;
+    reference?: string | null;
+    note?: string | null;
+    order_ids?: string[];
+    created_by?: string | null;
+  }) {
+    const integrationId = String(input.integration_id ?? '').trim();
+    const amount = Number(input.amount ?? 0);
+    if (!integrationId) {
+      this.badRequest('integration_id is required');
+    }
+    if (!(amount > 0)) {
+      this.badRequest('amount must be greater than 0');
+    }
+
+    const integration = await this.integrationRepo.findOne({
+      where: { id: integrationId, isDeleted: false },
+    });
+    if (!integration) {
+      this.notFound('Integration not found');
+    }
+
+    return this.receivableRepo.manager.transaction(async (manager) => {
+      const receivableRepo = manager.getRepository(ProviderReceivable);
+      const remittanceRepo = manager.getRepository(ProviderRemittance);
+
+      const orderIds = (input.order_ids ?? [])
+        .map((x) => String(x))
+        .filter(Boolean);
+
+      const where: Record<string, unknown> = {
+        integration_id: integrationId,
+        status: ReceivableStatus.PENDING,
+        isDeleted: false,
+      };
+      if (orderIds.length) {
+        where.order_id = In(orderIds);
+      }
+
+      const pending = await receivableRepo.find({
+        where,
+        order: { createdAt: 'ASC' },
+      });
+
+      const remittance = await remittanceRepo.save(
+        remittanceRepo.create({
+          integration_id: integrationId,
+          amount: amount.toFixed(2),
+          reference: input.reference ?? null,
+          note: input.note ?? null,
+          created_by: input.created_by ?? null,
+          settled_count: 0,
+        }),
+      );
+
+      let remaining = amount;
+      let settledCount = 0;
+      let settledAmount = 0;
+      const now = new Date();
+
+      for (const row of pending) {
+        const rowAmount = Number(row.amount);
+        // When settling by explicit ids, settle each in full. Otherwise stop
+        // once the remitted amount is exhausted (FIFO, full rows only).
+        if (!orderIds.length && rowAmount > remaining) {
+          break;
+        }
+        row.status = ReceivableStatus.SETTLED;
+        row.remittance_id = remittance.id;
+        row.settled_at = now;
+        await receivableRepo.save(row);
+        remaining -= rowAmount;
+        settledAmount += rowAmount;
+        settledCount += 1;
+      }
+
+      remittance.settled_count = settledCount;
+      await remittanceRepo.save(remittance);
+
+      return successRes(
+        {
+          remittance_id: remittance.id,
+          integration_id: integrationId,
+          remitted_amount: amount,
+          settled_amount: settledAmount,
+          settled_count: settledCount,
+          unapplied_amount: Number((amount - settledAmount).toFixed(2)),
+        },
+        201,
+        'Remittance recorded',
+      );
+    });
   }
 }

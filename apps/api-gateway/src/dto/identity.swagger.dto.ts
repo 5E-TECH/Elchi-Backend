@@ -111,6 +111,25 @@ export class UpdateAdminRequestDto {
   @IsOptional()
   @IsString()
   region_id?: string;
+
+  @ApiPropertyOptional({
+    example: 'percent',
+    enum: ['percent', 'fixed'],
+    description:
+      'Operator commission type. percent → % of order total_price; fixed → flat per sold order.',
+  })
+  @IsOptional()
+  @IsEnum(['percent', 'fixed'])
+  commission_type?: string;
+
+  @ApiPropertyOptional({
+    example: 5,
+    description: 'Commission value (percent number or fixed amount).',
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  commission_value?: number;
 }
 
 export class CreateMarketRequestDto {
@@ -133,7 +152,10 @@ export class CreateMarketRequestDto {
   @MinLength(4)
   password!: string;
 
-  @ApiPropertyOptional({ example: 10000, description: 'Optional, default is 0' })
+  @ApiPropertyOptional({
+    example: 10000,
+    description: 'Optional, default is 0',
+  })
   @IsOptional()
   @IsNumber()
   @Min(0)
@@ -158,7 +180,8 @@ export class CreateMarketRequestDto {
 export class CreateCourierRequestDto {
   @ApiPropertyOptional({
     example: '12',
-    description: "Branch ID (manager flowda avtomatik aniqlanadi, yuborish shart emas)",
+    description:
+      'Branch ID (manager flowda avtomatik aniqlanadi, yuborish shart emas)',
   })
   @IsOptional()
   @IsString()
@@ -178,7 +201,10 @@ export class CreateCourierRequestDto {
   @MinLength(4)
   password!: string;
 
-  @ApiPropertyOptional({ example: 2000000, description: 'Optional, default is 0' })
+  @ApiPropertyOptional({
+    example: 2000000,
+    description: 'Optional, default is 0',
+  })
   @IsOptional()
   @IsNumber()
   @Min(0)
@@ -394,6 +420,10 @@ export class DeleteEntityResponseDto {
   @ApiProperty({ example: 'O‘chirildi' })
   message!: string;
 
-  @ApiProperty({ type: 'object', additionalProperties: false, example: { id: '1' } })
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: false,
+    example: { id: '1' },
+  })
   data!: Record<string, unknown>;
 }

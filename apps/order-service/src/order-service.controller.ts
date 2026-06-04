@@ -1,5 +1,10 @@
 import { Controller } from '@nestjs/common';
-import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
+import {
+  Ctx,
+  MessagePattern,
+  Payload,
+  RmqContext,
+} from '@nestjs/microservices';
 import {
   RmqService,
   executeAndAck,
@@ -123,15 +128,16 @@ export class OrderServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.orderService.findAll(data.query));
+    return this.executeAndAck(context, () =>
+      this.orderService.findAll(data.query),
+    );
   }
 
   @MessagePattern({ cmd: 'order.find_by_id' })
-  findById(
-    @Payload() data: { id: string },
-    @Ctx() context: RmqContext,
-  ) {
-    return this.executeAndAck(context, () => this.orderService.findById(data.id));
+  findById(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findById(data.id),
+    );
   }
 
   @MessagePattern({ cmd: 'order.branch_can_delete' })
@@ -145,11 +151,10 @@ export class OrderServiceController {
   }
 
   @MessagePattern({ cmd: 'order.find_by_qr' })
-  findByQr(
-    @Payload() data: { token: string },
-    @Ctx() context: RmqContext,
-  ) {
-    return this.executeAndAck(context, () => this.orderService.findByQrCode(data.token));
+  findByQr(@Payload() data: { token: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findByQrCode(data.token),
+    );
   }
 
   @MessagePattern({ cmd: 'order.find_by_qr_enriched' })
@@ -157,32 +162,36 @@ export class OrderServiceController {
     @Payload() data: { token: string },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.orderService.findByQrCodeEnriched(data.token));
+    return this.executeAndAck(context, () =>
+      this.orderService.findByQrCodeEnriched(data.token),
+    );
   }
 
   @MessagePattern({ cmd: 'order.tracking' })
-  tracking(
-    @Payload() data: { id: string },
-    @Ctx() context: RmqContext,
-  ) {
-    return this.executeAndAck(context, () => this.orderService.getTrackingByOrderId(data.id));
+  tracking(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getTrackingByOrderId(data.id),
+    );
   }
 
   @MessagePattern({ cmd: 'order.custody_history' })
-  custodyHistory(
-    @Payload() data: { id: string },
-    @Ctx() context: RmqContext,
-  ) {
-    return this.executeAndAck(context, () => this.orderService.getCustodyHistoryByOrderId(data.id));
+  custodyHistory(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getCustodyHistoryByOrderId(data.id),
+    );
   }
 
   @MessagePattern({ cmd: 'order.find_new_markets' })
   findNewMarkets(
-    @Payload() data: { branch_id?: string; exclude_branch_source?: boolean } | undefined,
+    @Payload()
+    data: { branch_id?: string; exclude_branch_source?: boolean } | undefined,
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.findNewMarkets(data?.branch_id, Boolean(data?.exclude_branch_source)),
+      this.orderService.findNewMarkets(
+        data?.branch_id,
+        Boolean(data?.exclude_branch_source),
+      ),
     );
   }
 
@@ -266,7 +275,12 @@ export class OrderServiceController {
       context,
       'order.could_not_deliver',
       data.request_id,
-      () => this.orderService.couldNotDeliverOrder(data.requester, data.id, data.dto ?? {}),
+      () =>
+        this.orderService.couldNotDeliverOrder(
+          data.requester,
+          data.id,
+          data.dto ?? {},
+        ),
     );
   }
 
@@ -290,7 +304,8 @@ export class OrderServiceController {
       context,
       'order.partly_sell',
       data.request_id,
-      () => this.orderService.partlySellOrder(data.requester, data.id, data.dto),
+      () =>
+        this.orderService.partlySellOrder(data.requester, data.id, data.dto),
     );
   }
 
@@ -485,7 +500,8 @@ export class OrderServiceController {
 
   @MessagePattern({ cmd: 'order.delete' })
   remove(
-    @Payload() data: { id: string; requester?: { id?: string; roles?: string[] } },
+    @Payload()
+    data: { id: string; requester?: { id?: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -517,7 +533,8 @@ export class OrderServiceController {
 
   @MessagePattern({ cmd: 'order.find_new_markets_enriched' })
   findNewMarketsEnriched(
-    @Payload() data: { branch_id?: string; exclude_branch_source?: boolean } | undefined,
+    @Payload()
+    data: { branch_id?: string; exclude_branch_source?: boolean } | undefined,
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -563,7 +580,11 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () => {
       const normalized = this.orderService.normalizeUpdatePayload(data.dto);
-      return this.orderService.updateFull(data.id, normalized as any, data.requester);
+      return this.orderService.updateFull(
+        data.id,
+        normalized as any,
+        data.requester,
+      );
     });
   }
 
@@ -629,21 +650,31 @@ export class OrderServiceController {
 
   @MessagePattern({ cmd: 'order.analytics.courier_stat' })
   analyticsCourierStat(
-    @Payload() data: { requester: { id: string }; startDate?: string; endDate?: string },
+    @Payload()
+    data: { requester: { id: string }; startDate?: string; endDate?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getCourierStat(data.requester.id, data.startDate, data.endDate),
+      this.orderService.getCourierStat(
+        data.requester.id,
+        data.startDate,
+        data.endDate,
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'order.analytics.market_stat' })
   analyticsMarketStat(
-    @Payload() data: { requester: { id: string }; startDate?: string; endDate?: string },
+    @Payload()
+    data: { requester: { id: string }; startDate?: string; endDate?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getMarketStat(data.requester.id, data.startDate, data.endDate),
+      this.orderService.getMarketStat(
+        data.requester.id,
+        data.startDate,
+        data.endDate,
+      ),
     );
   }
 
@@ -653,7 +684,11 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getRevenueStats(data.startDate, data.endDate, data.period),
+      this.orderService.getRevenueStats(
+        data.startDate,
+        data.endDate,
+        data.period,
+      ),
     );
   }
 
@@ -730,7 +765,9 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.findBranchTransferBatchById(data?.id ?? data?.batch_id ?? ''),
+      this.orderService.findBranchTransferBatchById(
+        data?.id ?? data?.batch_id ?? '',
+      ),
     );
   }
 
@@ -794,7 +831,9 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.findRemainingBranchTransferBatchItems(data?.id ?? data?.batch_id ?? ''),
+      this.orderService.findRemainingBranchTransferBatchItems(
+        data?.id ?? data?.batch_id ?? '',
+      ),
     );
   }
 
@@ -851,7 +890,9 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.findBranchTransferBatchByQrToken(String(data?.token ?? '').trim()),
+      this.orderService.findBranchTransferBatchByQrToken(
+        String(data?.token ?? '').trim(),
+      ),
     );
   }
 
@@ -881,6 +922,36 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.bulkRemoveFromBatch(data),
+    );
+  }
+
+  // Status-only terminal transition reported by an external delivery provider
+  // (no cashbox movement — see OrderServiceService.markByProvider).
+  @MessagePattern({ cmd: 'order.provider.mark' })
+  markByProvider(
+    @Payload()
+    data: {
+      order_id: string;
+      action: 'sell' | 'cancel' | 'return';
+      provider_slug?: string | null;
+      external_ref?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.markByProvider(data),
+    );
+  }
+
+  // Enriched, render-ready rows for label / receipt printing (gateway renders
+  // the PDF/HTML). Cross-service batch resolution lives in the service layer.
+  @MessagePattern({ cmd: 'order.print.find' })
+  findOrdersForPrint(
+    @Payload() data: { order_ids: string[] },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findOrdersForPrint(data?.order_ids ?? []),
     );
   }
 }

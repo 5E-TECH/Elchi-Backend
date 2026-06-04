@@ -138,4 +138,134 @@ export class IntegrationServiceController {
       this.integrationService.getQueueStatus(),
     );
   }
+
+  // --- Inbound webhooks ---
+  @MessagePattern({ cmd: 'integration.webhook.receive' })
+  receiveWebhook(
+    @Payload()
+    data: {
+      slug: string;
+      raw_body_base64?: string;
+      raw_body?: string;
+      headers?: Record<string, string>;
+      trace_id?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.receiveWebhook(data),
+    );
+  }
+
+  // --- Provider shipments ---
+  @MessagePattern({ cmd: 'integration.shipment.upsert' })
+  upsertShipment(
+    @Payload()
+    data: {
+      order_id: string;
+      integration_id: string;
+      provider_slug?: string | null;
+      external_ref?: string | null;
+      tracking_number?: string | null;
+      provider_status?: string | null;
+      internal_status?: string | null;
+      last_request_id?: string | null;
+      meta?: Record<string, unknown> | null;
+      increment_attempt?: boolean;
+      last_error?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.upsertShipment(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.shipment.get' })
+  getShipment(
+    @Payload() data: { order_id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.getShipmentByOrder(data.order_id),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.shipment.list' })
+  listShipments(
+    @Payload()
+    data: {
+      integration_id?: string;
+      internal_status?: string;
+      limit?: number;
+      offset?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listShipments(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.shipment.dispatch' })
+  dispatchShipment(
+    @Payload()
+    data: {
+      slug?: string;
+      integration_id?: string;
+      order_id: string;
+      context?: Record<string, string>;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.dispatchShipment(data),
+    );
+  }
+
+  // ===== Provider COD reconciliation =====
+
+  @MessagePattern({ cmd: 'integration.receivable.list' })
+  listReceivables(
+    @Payload()
+    data: {
+      integration_id?: string;
+      status?: string;
+      page?: number;
+      limit?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listReceivables(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.receivable.balance' })
+  getProviderBalance(
+    @Payload() data: { integration_id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.getProviderBalance(data.integration_id),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.remittance.create' })
+  createRemittance(
+    @Payload()
+    data: {
+      integration_id: string;
+      amount: number;
+      reference?: string | null;
+      note?: string | null;
+      order_ids?: string[];
+      created_by?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.createRemittance(data),
+    );
+  }
 }

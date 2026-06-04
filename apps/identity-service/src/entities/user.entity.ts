@@ -1,5 +1,11 @@
 import { Entity, Column } from 'typeorm';
-import { BaseEntity, Roles, Status, Where_deliver } from '@app/common';
+import {
+  BaseEntity,
+  Commission_type,
+  Roles,
+  Status,
+  Where_deliver,
+} from '@app/common';
 
 @Entity({ name: 'admins', schema: 'identity_schema' })
 export class User extends BaseEntity {
@@ -79,4 +85,17 @@ export class User extends BaseEntity {
     nullable: true,
   })
   default_tariff: Where_deliver | null;
+
+  /**
+   * Operator commission config. When an order created by this operator is
+   * sold, finance-service records an OperatorEarning. NULL commission_type
+   * (or zero value) means this user earns no per-order commission.
+   *   PERCENT → earning = total_price * commission_value / 100
+   *   FIXED   → earning = commission_value (flat, per sold order)
+   */
+  @Column({ type: 'enum', enum: Commission_type, nullable: true })
+  commission_type: Commission_type | null;
+
+  @Column({ type: 'float', nullable: true })
+  commission_value: number | null;
 }

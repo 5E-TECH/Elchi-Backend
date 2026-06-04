@@ -2,20 +2,59 @@ import { FinanceServiceService } from './finance-service.service';
 
 const captureExceptionMock = jest.fn();
 
+const rmqSendMock = jest.fn();
+
 jest.mock('@app/common', () => ({
-  Cashbox_type: { MAIN: 'main', FOR_COURIER: 'for_courier', FOR_MARKET: 'for_market' },
+  Cashbox_type: {
+    MAIN: 'main',
+    FOR_COURIER: 'for_courier',
+    FOR_MARKET: 'for_market',
+  },
   Operation_type: { INCOME: 'income', EXPENSE: 'expense' },
-  Source_type: { SELL: 'sell', COURIER_PAYMENT: 'courier_payment', MARKET_PAYMENT: 'market_payment', EXTRA_COST: 'extra_cost' },
-  PaymentMethod: { CASH: 'cash', CARD: 'card', CLICK_TO_MARKET: 'click_to_market' },
+  Source_type: {
+    SELL: 'sell',
+    COURIER_PAYMENT: 'courier_payment',
+    MARKET_PAYMENT: 'market_payment',
+    EXTRA_COST: 'extra_cost',
+  },
+  PaymentMethod: {
+    CASH: 'cash',
+    CARD: 'card',
+    CLICK_TO_MARKET: 'click_to_market',
+  },
+  Commission_type: { PERCENT: 'percent', FIXED: 'fixed' },
+  ActivityAction: {
+    CREATED: 'created',
+    DELETED: 'deleted',
+    UPDATED: 'updated',
+    PAYMENT: 'payment',
+  },
   captureException: (...args: any[]) => captureExceptionMock(...args),
+  rmqSend: (...args: any[]) => rmqSendMock(...args),
 }));
 
 // Shape stub for entity classes — Jest doesn't need real metadata when we
 // only assert on save() inputs, not TypeORM behaviour itself.
 jest.mock('./entities/cashbox.entity', () => ({ Cashbox: class Cashbox {} }));
-jest.mock('./entities/cashbox-history.entity', () => ({ CashboxHistory: class CashboxHistory {} }));
-jest.mock('./entities/shift.entity', () => ({ Shift: class Shift {}, ShiftStatus: { OPEN: 'open', CLOSED: 'closed' } }));
-jest.mock('./entities/user-salary.entity', () => ({ UserSalary: class UserSalary {} }));
+jest.mock('./entities/cashbox-history.entity', () => ({
+  CashboxHistory: class CashboxHistory {},
+}));
+jest.mock('./entities/shift.entity', () => ({
+  Shift: class Shift {},
+  ShiftStatus: { OPEN: 'open', CLOSED: 'closed' },
+}));
+jest.mock('./entities/user-salary.entity', () => ({
+  UserSalary: class UserSalary {},
+}));
+jest.mock('./entities/operator-earning.entity', () => ({
+  OperatorEarning: class OperatorEarning {},
+}));
+jest.mock('./entities/operator-payment.entity', () => ({
+  OperatorPayment: class OperatorPayment {},
+}));
+jest.mock('./entities/financial-balance-history.entity', () => ({
+  FinancialBalanceHistory: class FinancialBalanceHistory {},
+}));
 
 interface MockManager {
   findOne: jest.Mock;
@@ -30,6 +69,7 @@ interface MockQueryRunner {
   commitTransaction: jest.Mock;
   rollbackTransaction: jest.Mock;
   release: jest.Mock;
+  query: jest.Mock;
 }
 
 function makeQueryRunner(manager: MockManager): MockQueryRunner {
@@ -40,6 +80,7 @@ function makeQueryRunner(manager: MockManager): MockQueryRunner {
     commitTransaction: jest.fn().mockResolvedValue(undefined),
     rollbackTransaction: jest.fn().mockResolvedValue(undefined),
     release: jest.fn().mockResolvedValue(undefined),
+    query: jest.fn().mockResolvedValue(undefined),
   };
 }
 
@@ -62,6 +103,28 @@ function makeService(manager: MockManager) {
   const historyRepo: any = {};
   const shiftRepo: any = { findOne: jest.fn(), save: jest.fn() };
   const salaryRepo: any = {};
+  const earningRepo: any = {
+    findOne: jest.fn(),
+    save: jest.fn(async (entity: any) => ({ id: 'e1', ...entity })),
+    create: jest.fn((dto: any) => dto),
+    createQueryBuilder: jest.fn(),
+    findAndCount: jest.fn(),
+  };
+  const paymentRepo: any = {
+    findOne: jest.fn(),
+    save: jest.fn(async (entity: any) => ({ id: 'p1', ...entity })),
+    create: jest.fn((dto: any) => dto),
+    createQueryBuilder: jest.fn(),
+    findAndCount: jest.fn(),
+  };
+  const financialHistoryRepo: any = {
+    findOne: jest.fn(),
+    findAndCount: jest.fn(),
+  };
+  const activityLog: any = {
+    log: jest.fn().mockResolvedValue(undefined),
+    logChange: jest.fn().mockResolvedValue(undefined),
+  };
   const orderClient: any = {};
   const identityClient: any = {};
 
@@ -70,12 +133,25 @@ function makeService(manager: MockManager) {
     historyRepo,
     shiftRepo,
     salaryRepo,
+    earningRepo,
+    paymentRepo,
+    financialHistoryRepo,
     dataSource,
+    activityLog,
     orderClient,
     identityClient,
   );
 
-  return { service, queryRunner, dataSource, cashboxRepo };
+  return {
+    service,
+    queryRunner,
+    dataSource,
+    cashboxRepo,
+    earningRepo,
+    paymentRepo,
+    financialHistoryRepo,
+    activityLog,
+  };
 }
 
 describe('FinanceServiceService.updateBalance', () => {
@@ -149,9 +225,15 @@ describe('FinanceServiceService.updateBalance', () => {
       save: jest
         .fn()
         // 1st save: cashbox with updated balance
-        .mockImplementationOnce(async (entity: any) => ({ ...entity, id: '10' }))
+        .mockImplementationOnce(async (entity: any) => ({
+          ...entity,
+          id: '10',
+        }))
         // 2nd save: history row
-        .mockImplementationOnce(async (entity: any) => ({ ...entity, id: 'h-new' })),
+        .mockImplementationOnce(async (entity: any) => ({
+          ...entity,
+          id: 'h-new',
+        })),
     });
 
     const { service, queryRunner } = makeService(manager);
@@ -172,6 +254,12 @@ describe('FinanceServiceService.updateBalance', () => {
     // Income increases balance_cash by amount
     const savedCashbox = manager.save.mock.calls[0][0];
     expect(savedCashbox.balance_cash).toBe(500);
+    // History row snapshots the cash/card split after the operation, not just
+    // the total — cash payment leaves 500 in cash, 0 on card.
+    const savedHistory = manager.save.mock.calls[1][0];
+    expect(savedHistory.balance_after).toBe(500);
+    expect(savedHistory.balance_cash_after).toBe(500);
+    expect(savedHistory.balance_card_after).toBe(0);
     expect(res.statusCode).toBe(200);
   });
 
@@ -215,7 +303,10 @@ describe('FinanceServiceService.updateBalance', () => {
     };
 
     const manager = makeManager({
-      findOne: jest.fn().mockResolvedValueOnce(cashbox).mockResolvedValueOnce(null),
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce(cashbox)
+        .mockResolvedValueOnce(null),
     });
 
     const { service } = makeService(manager);
@@ -244,7 +335,10 @@ describe('FinanceServiceService.updateBalance', () => {
     };
 
     const manager = makeManager({
-      findOne: jest.fn().mockResolvedValueOnce(cashbox).mockResolvedValueOnce(null),
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce(cashbox)
+        .mockResolvedValueOnce(null),
       save: jest.fn().mockRejectedValueOnce(new Error('db blip')),
     });
 
@@ -262,5 +356,312 @@ describe('FinanceServiceService.updateBalance', () => {
 
     expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
     expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+  });
+});
+
+describe('FinanceServiceService operator earnings & payments', () => {
+  beforeEach(() => {
+    captureExceptionMock.mockReset();
+    rmqSendMock.mockReset();
+  });
+
+  it('records a PERCENT commission earning for a sold order', async () => {
+    const manager = makeManager();
+    const { service, earningRepo, activityLog } = makeService(manager);
+
+    // identity returns the operator's commission config
+    rmqSendMock.mockResolvedValueOnce({
+      data: { commission_type: 'percent', commission_value: 5 },
+    });
+    earningRepo.findOne.mockResolvedValueOnce(null); // no existing earning
+
+    const res = await service.recordOperatorEarning({
+      order_id: '1001',
+      operator_id: '42',
+      market_id: '7',
+      total_price: 200000,
+    });
+
+    expect(res.statusCode).toBe(201);
+    // 5% of 200000 = 10000
+    expect(earningRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: 10000,
+        operator_id: '42',
+        order_id: '1001',
+      }),
+    );
+    expect(activityLog.log).toHaveBeenCalled();
+  });
+
+  it('records a FIXED commission regardless of total_price', async () => {
+    const manager = makeManager();
+    const { service, earningRepo } = makeService(manager);
+
+    rmqSendMock.mockResolvedValueOnce({
+      data: { commission_type: 'fixed', commission_value: 3000 },
+    });
+    earningRepo.findOne.mockResolvedValueOnce(null);
+
+    await service.recordOperatorEarning({
+      order_id: '1002',
+      operator_id: '42',
+      total_price: 999999,
+    });
+
+    expect(earningRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 3000 }),
+    );
+  });
+
+  it('skips earning when the operator has no commission config', async () => {
+    const manager = makeManager();
+    const { service, earningRepo } = makeService(manager);
+
+    rmqSendMock.mockResolvedValueOnce({
+      data: { commission_type: null, commission_value: 0 },
+    });
+
+    const res = await service.recordOperatorEarning({
+      order_id: '1003',
+      operator_id: '42',
+      total_price: 200000,
+    });
+
+    expect(res.message).toMatch(/skipped/);
+    expect(earningRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('skips earning for orders with no operator', async () => {
+    const manager = makeManager();
+    const { service, earningRepo } = makeService(manager);
+
+    const res = await service.recordOperatorEarning({
+      order_id: '1004',
+      operator_id: null,
+      total_price: 200000,
+    });
+
+    expect(res.message).toMatch(/no operator/);
+    expect(rmqSendMock).not.toHaveBeenCalled();
+    expect(earningRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('updates an existing earning instead of inserting a duplicate (idempotent)', async () => {
+    const manager = makeManager();
+    const { service, earningRepo } = makeService(manager);
+
+    rmqSendMock.mockResolvedValueOnce({
+      data: { commission_type: 'percent', commission_value: 10 },
+    });
+    earningRepo.findOne.mockResolvedValueOnce({
+      id: 'e9',
+      order_id: '1005',
+      amount: 5000,
+    });
+
+    const res = await service.recordOperatorEarning({
+      order_id: '1005',
+      operator_id: '42',
+      total_price: 100000,
+    });
+
+    expect(res.message).toMatch(/updated/);
+    // 10% of 100000 = 10000 overwrites the prior 5000
+    expect(earningRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'e9', amount: 10000 }),
+    );
+  });
+
+  it('soft-removes an earning on rollback', async () => {
+    const manager = makeManager();
+    const { service, earningRepo, activityLog } = makeService(manager);
+
+    earningRepo.findOne.mockResolvedValueOnce({
+      id: 'e7',
+      order_id: '1006',
+      amount: 8000,
+    });
+
+    const res = await service.removeOperatorEarning({ order_id: '1006' });
+
+    expect(res.statusCode).toBe(200);
+    expect(earningRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'e7', isDeleted: true }),
+    );
+    expect(activityLog.log).toHaveBeenCalled();
+  });
+
+  it('computes operator balance as earned - paid', async () => {
+    const manager = makeManager();
+    const { service, earningRepo, paymentRepo } = makeService(manager);
+
+    earningRepo.createQueryBuilder.mockReturnValue({
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({ total: '50000' }),
+    });
+    paymentRepo.createQueryBuilder.mockReturnValue({
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({ total: '20000' }),
+    });
+
+    const res = await service.findOperatorBalance({ operator_id: '42' });
+
+    expect(res.data).toMatchObject({
+      earned: 50000,
+      paid: 20000,
+      balance: 30000,
+    });
+  });
+
+  it('records an operator payment', async () => {
+    const manager = makeManager();
+    const { service, paymentRepo, activityLog } = makeService(manager);
+
+    const res = await service.createOperatorPayment({
+      operator_id: '42',
+      amount: 15000,
+      paid_by_id: '1',
+      note: 'monthly',
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(paymentRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ amount: 15000, operator_id: '42' }),
+    );
+    expect(activityLog.log).toHaveBeenCalled();
+  });
+
+  it('rejects a non-positive payment amount', async () => {
+    const manager = makeManager();
+    const { service } = makeService(manager);
+
+    await expect(
+      service.createOperatorPayment({ operator_id: '42', amount: 0 }),
+    ).rejects.toBeTruthy();
+  });
+});
+
+describe('FinanceServiceService financial balance ledger', () => {
+  beforeEach(() => {
+    captureExceptionMock.mockReset();
+    rmqSendMock.mockReset();
+  });
+
+  it('appends a ledger entry with running balance from the previous row', async () => {
+    const manager = makeManager({
+      findOne: jest
+        .fn()
+        // idempotency check (order_id present) → none
+        .mockResolvedValueOnce(null)
+        // last row → previous balance 100000
+        .mockResolvedValueOnce({ balance_after: 100000 }),
+      create: jest.fn((_e: any, dto: any) => dto),
+      save: jest.fn(async (e: any) => ({ id: 'fbh1', ...e })),
+    });
+    const { service, queryRunner, activityLog } = makeService(manager);
+
+    const res = await service.recordFinancialBalance({
+      amount: 25000,
+      source_type: 'sell_profit' as any,
+      order_id: '1001',
+    });
+
+    expect(res.statusCode).toBe(201);
+    // balance_before = 100000, balance_after = 125000
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: 25000,
+        balance_before: 100000,
+        balance_after: 125000,
+      }),
+    );
+    // advisory lock acquired before reading the running total
+    expect(queryRunner.query).toHaveBeenCalledWith(
+      expect.stringContaining('pg_advisory_xact_lock'),
+      expect.anything(),
+    );
+    expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+    expect(activityLog.log).toHaveBeenCalled();
+  });
+
+  it('starts the ledger at 0 when there is no prior row', async () => {
+    const manager = makeManager({
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce(null) // no order_id idempotency hit
+        .mockResolvedValueOnce(null), // no previous row
+      create: jest.fn((_e: any, dto: any) => dto),
+      save: jest.fn(async (e: any) => ({ id: 'fbh1', ...e })),
+    });
+    const { service } = makeService(manager);
+
+    await service.recordFinancialBalance({
+      amount: -40000,
+      source_type: 'manual_expense' as any,
+    });
+
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: -40000,
+        balance_before: 0,
+        balance_after: -40000,
+      }),
+    );
+  });
+
+  it('is idempotent for order-linked entries — returns existing row', async () => {
+    const manager = makeManager({
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce({ id: 'fbh-old', balance_after: 5000 }),
+      create: jest.fn(),
+      save: jest.fn(),
+    });
+    const { service, queryRunner } = makeService(manager);
+
+    const res = await service.recordFinancialBalance({
+      amount: 25000,
+      source_type: 'sell_profit' as any,
+      order_id: '1001',
+    });
+
+    expect(res.message).toMatch(/already recorded/);
+    expect(manager.save).not.toHaveBeenCalled();
+    expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('skips a zero-amount entry without opening a transaction', async () => {
+    const manager = makeManager();
+    const { service, dataSource } = makeService(manager);
+
+    const res = await service.recordFinancialBalance({
+      amount: 0,
+      source_type: 'correction' as any,
+    });
+
+    expect(res.message).toMatch(/zero amount/);
+    expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+  });
+
+  it('returns history rows plus the current balance', async () => {
+    const manager = makeManager();
+    const { service, financialHistoryRepo } = makeService(manager);
+
+    financialHistoryRepo.findAndCount.mockResolvedValue([
+      [{ id: '2', amount: 25000 }, { id: '1', amount: 100000 }],
+      2,
+    ]);
+    financialHistoryRepo.findOne.mockResolvedValue({ balance_after: 125000 });
+
+    const res = await service.findFinancialBalanceHistory({ limit: 10 });
+
+    expect(res.data.total).toBe(2);
+    expect(res.data.currentBalance).toBe(125000);
+    expect(res.data.rows).toHaveLength(2);
   });
 });
