@@ -73,7 +73,14 @@ export class FinanceServiceController {
 
   @MessagePattern({ cmd: 'finance.cashbox.my' })
   myCashbox(
-    @Payload() data: { user_id: string; roles?: string[]; fromDate?: string; toDate?: string },
+    @Payload()
+    data: {
+      user_id: string;
+      branch_id?: string | null;
+      roles?: string[];
+      fromDate?: string;
+      toDate?: string;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () => this.financeService.myCashbox(data));
