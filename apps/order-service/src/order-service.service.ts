@@ -1119,6 +1119,19 @@ export class OrderServiceService implements OnModuleInit {
     );
   }
 
+  /**
+   * Normalize a courier id, treating the '0' sentinel (and blanks) as "no
+   * courier". Unassigned posts are created with courier_id='0' (see
+   * logistics-service), and '0' is truthy in JS — without this, an unassigned
+   * order would resolve its actor courier to the non-existent user '0', so the
+   * courier-side cashbox movement was silently skipped and the SELL_PROFIT
+   * ledger over/under-counted. Normalizing lets the manager fallback take over.
+   */
+  private normalizeCourierId(value?: string | null): string {
+    const normalized = String(value ?? '').trim();
+    return normalized === '0' ? '' : normalized;
+  }
+
   private resolveActorCourierId(
     requester: { id: string; roles?: string[]; branch_id?: string | null },
     order: {
@@ -1132,9 +1145,9 @@ export class OrderServiceService implements OnModuleInit {
     const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
     const isCourier = this.hasRole(requester, Roles.COURIER);
     const isManager = this.hasRole(requester, Roles.MANAGER);
-    const postCourierId = String(post?.courier_id ?? '').trim();
-    const holderCourierId = String(order?.holder_courier_id ?? '').trim();
-    const orderCourierId = String(order?.courier_id ?? '').trim();
+    const postCourierId = this.normalizeCourierId(post?.courier_id);
+    const holderCourierId = this.normalizeCourierId(order?.holder_courier_id);
+    const orderCourierId = this.normalizeCourierId(order?.courier_id);
     const resolvedCourierId = postCourierId || holderCourierId || orderCourierId;
 
     if (isCourier) {
