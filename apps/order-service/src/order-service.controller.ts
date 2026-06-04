@@ -300,6 +300,7 @@ export class OrderServiceController {
     data: {
       id: string;
       requester: { id: string; roles?: string[] };
+      dto?: { target_status?: 'waiting' | 'cancelled' | 'cancelled_sent' };
       request_id?: string;
     },
     @Ctx() context: RmqContext,
@@ -308,7 +309,7 @@ export class OrderServiceController {
       context,
       'order.rollback_waiting',
       data.request_id,
-      () => this.orderService.rollbackOrderToWaiting(data.requester, data.id),
+      () => this.orderService.rollbackOrderToWaiting(data.requester, data.id, data.dto),
     );
   }
 
