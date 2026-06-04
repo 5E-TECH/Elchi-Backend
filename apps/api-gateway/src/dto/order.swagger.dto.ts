@@ -461,6 +461,23 @@ export class InitiateOrderReturnRequestDto {
   reason!: string;
 }
 
+export enum RollbackOrderTargetStatusDto {
+  WAITING = 'waiting',
+  CANCELLED = 'cancelled',
+  CANCELLED_SENT = 'cancelled_sent',
+}
+
+export class RollbackOrderRequestDto {
+  @ApiPropertyOptional({
+    enum: RollbackOrderTargetStatusDto,
+    example: RollbackOrderTargetStatusDto.WAITING,
+    description: "Rollback target status. Default: 'waiting'",
+  })
+  @IsOptional()
+  @IsEnum(RollbackOrderTargetStatusDto)
+  target_status?: RollbackOrderTargetStatusDto;
+}
+
 export class CreateOrderByTelegramBotRequestDto {
   @ApiProperty({ example: 'Ali Valiyev' })
   @IsNotEmpty()

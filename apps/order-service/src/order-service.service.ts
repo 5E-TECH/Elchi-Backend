@@ -819,12 +819,13 @@ export class OrderServiceService implements OnModuleInit {
     const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
     const isCourier = this.hasRole(requester, Roles.COURIER);
     const isManager = this.hasRole(requester, Roles.MANAGER);
+    const postCourierId = String(post?.courier_id ?? '').trim();
+    const holderCourierId = String(order?.holder_courier_id ?? '').trim();
+    const orderCourierId = String(order?.courier_id ?? '').trim();
+    const resolvedCourierId = postCourierId || holderCourierId || orderCourierId;
 
     if (isCourier) {
       const requesterId = String(requester.id ?? '').trim();
-      const postCourierId = String(post?.courier_id ?? '').trim();
-      const holderCourierId = String(order?.holder_courier_id ?? '').trim();
-      const orderCourierId = String(order?.courier_id ?? '').trim();
       const isAssignedToRequester =
         requesterId &&
         (postCourierId === requesterId ||
@@ -847,16 +848,14 @@ export class OrderServiceService implements OnModuleInit {
       ) {
         this.badRequest('Order is not assigned to this manager branch');
       }
-      const postCourierId = String(post?.courier_id ?? '').trim();
-      return postCourierId || String(requester.id);
+      return resolvedCourierId || String(requester.id);
     }
 
     if (isSuperAdmin) {
-      const postCourierId = String(post?.courier_id ?? '').trim();
-      if (!postCourierId) {
-        this.badRequest('Post has no courier assigned');
+      if (!resolvedCourierId) {
+        this.badRequest('Order has no courier assigned');
       }
-      return postCourierId;
+      return resolvedCourierId;
     }
 
     this.badRequest('Forbidden resource');
@@ -906,7 +905,16 @@ export class OrderServiceService implements OnModuleInit {
   async rollbackOrderToWaiting(
     requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,
+    dto?: { target_status?: 'waiting' | 'cancelled' | 'cancelled_sent' },
   ) {
+    const rollbackTarget = String(dto?.target_status ?? 'waiting').trim().toLowerCase() as
+      | 'waiting'
+      | 'cancelled'
+      | 'cancelled_sent';
+    if (!['waiting', 'cancelled', 'cancelled_sent'].includes(rollbackTarget)) {
+      this.badRequest(`Invalid rollback target: ${String(dto?.target_status ?? '')}`);
+    }
+
     const isManagerRequester =
       this.hasRole(requester, Roles.MANAGER) && !this.hasRole(requester, Roles.COURIER);
     const order = await this.findById(id);
@@ -914,6 +922,10 @@ export class OrderServiceService implements OnModuleInit {
     const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
     const isCourier = this.hasRole(requester, Roles.COURIER);
     const isManager = this.hasRole(requester, Roles.MANAGER);
+
+    if (rollbackTarget === 'cancelled_sent' && !isCourier) {
+      this.badRequest("cancelled_sent rollback faqat courier uchun ruxsat etilgan");
+    }
 
     if (
       isCourier &&
@@ -939,23 +951,14 @@ export class OrderServiceService implements OnModuleInit {
       this.badRequest('Rollback uchun ruxsat yo‘q');
     }
 
-    if (!order.post_id) {
-      this.badRequest('Order has no post');
-    }
-
-    const postRes = await rmqSend<{ data?: { id: string; courier_id?: string | null } }>(
-      this.logisticsClient,
-      { cmd: 'logistics.post.find_by_id' },
-      { id: String(order.post_id) },
-    ).catch(() => ({ data: undefined }));
+    const postRes = order.post_id
+      ? await rmqSend<{ data?: { id: string; courier_id?: string | null } }>(
+          this.logisticsClient,
+          { cmd: 'logistics.post.find_by_id' },
+          { id: String(order.post_id) },
+        ).catch(() => ({ data: undefined }))
+      : { data: undefined };
     const post = postRes?.data;
-    if (!post) {
-      this.notFound('Post not found');
-    }
-
-    if (isCourier && !isSuperAdmin && String(post.courier_id ?? '') !== String(requester.id)) {
-      this.badRequest('Order is not assigned to this courier');
-    }
 
     if (isManager && !isSuperAdmin) {
       const requesterBranchId = String(requester?.branch_id ?? '').trim();
@@ -969,7 +972,7 @@ export class OrderServiceService implements OnModuleInit {
       }
     }
 
-    const courierId = String(post.courier_id ?? '');
+    const courierId = this.resolveActorCourierId(requester, order, post);
     if (!courierId) {
       this.notFound('Courier not found');
     }
@@ -1259,6 +1262,37 @@ export class OrderServiceService implements OnModuleInit {
         to_be_paid: 0,
         sold_at: null,
       }, { id: requester.id, roles: requester.roles, note: 'Rollback to waiting' });
+    }
+
+    if (rollbackTarget === 'cancelled') {
+      await this.updateFull(id, {
+        status: Order_status.CANCELLED,
+        canceled_post_id: null,
+        return_requested: false,
+        sold_at: null,
+      }, { id: requester.id, roles: requester.roles, note: 'Rollback to cancelled' });
+
+      return successRes({}, 200, 'Order CANCELLED holatiga qaytarildi');
+    }
+
+    if (rollbackTarget === 'cancelled_sent') {
+      await this.updateFull(id, {
+        status: Order_status.CANCELLED,
+        canceled_post_id: null,
+        return_requested: false,
+        sold_at: null,
+      }, { id: requester.id, roles: requester.roles, note: 'Rollback to cancelled_sent' });
+
+      await rmqSend(
+        this.logisticsClient,
+        { cmd: 'logistics.post.cancel.create' },
+        {
+          dto: { order_ids: [String(id)] },
+          requester: { id: String(requester.id), roles: requester.roles ?? [] },
+        },
+      );
+
+      return successRes({}, 200, "Order bekor qilinib pochtaga qo'shildi");
     }
 
     return successRes({}, 200, 'Order WAITING holatiga qaytarildi');
