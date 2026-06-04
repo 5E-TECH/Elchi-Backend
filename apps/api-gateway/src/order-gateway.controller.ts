@@ -34,6 +34,7 @@ import {
   CreateOrderRequestDto,
   OrdersArrayDto,
   PartlySellOrderRequestDto,
+  RollbackOrderRequestDto,
   ScanAssignOrderRequestDto,
   SellOrderRequestDto,
   UpdateOrderByIdRequestDto,
@@ -1205,10 +1206,12 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER, RoleEnum.MANAGER, RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Rollback sold/cancelled order to waiting' })
+  @ApiOperation({ summary: 'Rollback sold/cancelled order to waiting/cancelled/cancelled_sent' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
+  @ApiBody({ type: RollbackOrderRequestDto, required: false })
   rollbackOrder(
     @Param('id') id: string,
+    @Body() dto: RollbackOrderRequestDto,
     @Req() req: { user: JwtUser },
   ) {
     return firstValueFrom(
@@ -1222,6 +1225,7 @@ export class OrderGatewayController {
               roles: this.normalizeRoles(req.user.roles),
               branch_id: req.user.branch_id ?? null,
             },
+            dto,
             request_id: randomUUID(),
           },
         )

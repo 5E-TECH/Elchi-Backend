@@ -99,6 +99,7 @@ export class FinanceServiceController {
     @Payload()
     data: {
       user_id: string;
+      branch_id?: string | null;
       roles?: string[];
       fromDate?: string;
       toDate?: string;

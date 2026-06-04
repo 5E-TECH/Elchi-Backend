@@ -1278,6 +1278,7 @@ export class FinanceServiceService implements OnModuleInit {
 
   async myCashbox(data: {
     user_id: string;
+    branch_id?: string | null;
     roles?: string[];
     fromDate?: string;
     toDate?: string;
@@ -1285,17 +1286,25 @@ export class FinanceServiceService implements OnModuleInit {
     try {
       this.assertBigIntId(data.user_id, 'user_id');
       const roles = (data.roles ?? []).map((r) => r.toLowerCase());
+      const isManager = roles.includes('manager') && !roles.includes('superadmin') && !roles.includes('admin');
       const cashboxType = roles.includes('market')
         ? Cashbox_type.FOR_MARKET
-        : Cashbox_type.FOR_COURIER;
+        : isManager
+          ? Cashbox_type.BRANCH
+          : Cashbox_type.FOR_COURIER;
+      const targetUserId =
+        cashboxType === Cashbox_type.BRANCH ? String(data.branch_id ?? '').trim() : data.user_id;
+      if (cashboxType === Cashbox_type.BRANCH && !targetUserId) {
+        throw new BadRequestException('Manager uchun branch_id majburiy');
+      }
       let cashbox = await this.cashboxRepo.findOne({
-        where: { user_id: data.user_id, cashbox_type: cashboxType },
+        where: { user_id: targetUserId, cashbox_type: cashboxType },
         order: { createdAt: 'DESC' },
       });
 
       if (!cashbox) {
         const created = this.cashboxRepo.create({
-          user_id: data.user_id,
+          user_id: targetUserId,
           cashbox_type: cashboxType,
           balance: 0,
           balance_cash: 0,
@@ -1305,7 +1314,7 @@ export class FinanceServiceService implements OnModuleInit {
       }
 
       return this.getCashboxByUserId({
-        id: data.user_id,
+        id: targetUserId,
         cashbox_type: cashboxType,
         fromDate: data.fromDate,
         toDate: data.toDate,
