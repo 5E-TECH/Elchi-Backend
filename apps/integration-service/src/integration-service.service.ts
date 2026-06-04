@@ -1,7 +1,13 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, IsNull, LessThanOrEqual, Repository } from 'typeorm';
+import {
+  Between,
+  In,
+  IsNull,
+  LessThanOrEqual,
+  Repository,
+} from 'typeorm';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
 import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
 import {
@@ -16,6 +22,11 @@ import { SyncQueue } from './entities/sync-queue.entity';
 import { SyncHistory } from './entities/sync-history.entity';
 import { ProviderWebhookLog } from './entities/provider-webhook-log.entity';
 import { ProviderShipment } from './entities/provider-shipment.entity';
+import {
+  ProviderReceivable,
+  ReceivableStatus,
+} from './entities/provider-receivable.entity';
+import { ProviderRemittance } from './entities/provider-remittance.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -125,6 +136,10 @@ export class IntegrationServiceService {
     private readonly webhookLogRepo: Repository<ProviderWebhookLog>,
     @InjectRepository(ProviderShipment)
     private readonly shipmentRepo: Repository<ProviderShipment>,
+    @InjectRepository(ProviderReceivable)
+    private readonly receivableRepo: Repository<ProviderReceivable>,
+    @InjectRepository(ProviderRemittance)
+    private readonly remittanceRepo: Repository<ProviderRemittance>,
     private readonly activityLog: ActivityLogService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
@@ -1904,20 +1919,43 @@ export class IntegrationServiceService {
     // call is safe: if it fails, the shipment status is already recorded and a
     // later webhook / reconcile re-drives it. Never let it fail the webhook.
     if (mapped.action && ['sell', 'cancel', 'return'].includes(mapped.action)) {
+      let markResult: { data?: { total_price?: number } } | null = null;
       try {
-        await this.rmqRequest(
-          this.orderClient,
-          { cmd: 'order.provider.mark' },
-          {
-            order_id: shipment.order_id,
-            action: mapped.action,
-            provider_slug: integration.slug,
-            external_ref: shipment.external_ref,
-          },
-        );
+        markResult = await this.rmqRequest<{
+          data?: { total_price?: number };
+        }>(this.orderClient, { cmd: 'order.provider.mark' }, {
+          order_id: shipment.order_id,
+          action: mapped.action,
+          provider_slug: integration.slug,
+          external_ref: shipment.external_ref,
+        });
       } catch (err) {
         this.logger.warn(
           `order.provider.mark failed for order ${shipment.order_id}: ${(err as Error).message}`,
+        );
+      }
+
+      // COD reconciliation: a provider 'sell' creates a receivable (the COD it
+      // collected is owed back to Elchi); a 'cancel'/'return' voids any pending
+      // receivable. Best-effort — never fail the webhook over it.
+      try {
+        if (mapped.action === 'sell') {
+          await this.recordProviderReceivable({
+            integration_id: String(integration.id),
+            order_id: shipment.order_id,
+            provider_slug: integration.slug,
+            external_ref: shipment.external_ref,
+            amount: Number(markResult?.data?.total_price ?? 0),
+          });
+        } else {
+          await this.cancelProviderReceivable(
+            String(integration.id),
+            shipment.order_id,
+          );
+        }
+      } catch (err) {
+        this.logger.warn(
+          `provider receivable update failed for order ${shipment.order_id}: ${(err as Error).message}`,
         );
       }
     }
@@ -2299,5 +2337,247 @@ export class IntegrationServiceService {
       });
       throw error;
     }
+  }
+
+  // ==================== Provider COD reconciliation ====================
+
+  /**
+   * Record (idempotently) the COD a provider owes Elchi after delivering an
+   * order. Called best-effort from the webhook 'sell' path. No-ops on amount
+   * <= 0 or when an active receivable already exists for the (integration,
+   * order) pair. A previously CANCELLED receivable is revived to PENDING.
+   */
+  async recordProviderReceivable(input: {
+    integration_id: string;
+    order_id: string;
+    provider_slug?: string | null;
+    external_ref?: string | null;
+    amount: number;
+  }): Promise<ProviderReceivable | null> {
+    const amount = Number(input.amount ?? 0);
+    if (!input.integration_id || !input.order_id || !(amount > 0)) {
+      return null;
+    }
+
+    const existing = await this.receivableRepo.findOne({
+      where: {
+        integration_id: String(input.integration_id),
+        order_id: String(input.order_id),
+        isDeleted: false,
+      },
+    });
+
+    if (existing) {
+      // Already settled → leave it. Pending → keep amount in sync. Cancelled →
+      // the delivery happened again, revive it.
+      if (existing.status === ReceivableStatus.SETTLED) {
+        return existing;
+      }
+      existing.status = ReceivableStatus.PENDING;
+      existing.amount = amount.toFixed(2);
+      existing.provider_slug = input.provider_slug ?? existing.provider_slug;
+      existing.external_ref = input.external_ref ?? existing.external_ref;
+      existing.remittance_id = null;
+      existing.settled_at = null;
+      return this.receivableRepo.save(existing);
+    }
+
+    const created = this.receivableRepo.create({
+      integration_id: String(input.integration_id),
+      order_id: String(input.order_id),
+      provider_slug: input.provider_slug ?? null,
+      external_ref: input.external_ref ?? null,
+      amount: amount.toFixed(2),
+      status: ReceivableStatus.PENDING,
+    });
+    return this.receivableRepo.save(created);
+  }
+
+  /**
+   * Cancel a still-pending receivable — the delivery was reversed (cancel /
+   * return), so the provider no longer owes for it. Settled rows are untouched
+   * (the money already came in; a reversal there is a finance correction).
+   */
+  async cancelProviderReceivable(
+    integration_id: string,
+    order_id: string,
+  ): Promise<void> {
+    const row = await this.receivableRepo.findOne({
+      where: {
+        integration_id: String(integration_id),
+        order_id: String(order_id),
+        status: ReceivableStatus.PENDING,
+        isDeleted: false,
+      },
+    });
+    if (row) {
+      row.status = ReceivableStatus.CANCELLED;
+      await this.receivableRepo.save(row);
+    }
+  }
+
+  async listReceivables(query: {
+    integration_id?: string;
+    status?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const limit = query.limit && query.limit > 0 ? query.limit : 20;
+    const where: Record<string, unknown> = { isDeleted: false };
+    if (query.integration_id) {
+      where.integration_id = String(query.integration_id);
+    }
+    if (query.status) {
+      where.status = query.status as ReceivableStatus;
+    }
+
+    const [items, total] = await this.receivableRepo.findAndCount({
+      where,
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    return successRes(
+      {
+        items,
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
+      },
+      200,
+      'Provider receivables',
+    );
+  }
+
+  /** Outstanding (pending) COD total a provider still owes. */
+  async getProviderBalance(integration_id: string) {
+    if (!integration_id) {
+      this.badRequest('integration_id is required');
+    }
+    const raw = await this.receivableRepo
+      .createQueryBuilder('r')
+      .select('COALESCE(SUM(r.amount), 0)', 'sum')
+      .addSelect('COUNT(r.id)', 'count')
+      .where('r.integration_id = :id', { id: String(integration_id) })
+      .andWhere('r.is_deleted = false')
+      .andWhere('r.status = :status', { status: ReceivableStatus.PENDING })
+      .getRawOne<{ sum: string; count: string }>();
+
+    return successRes(
+      {
+        integration_id: String(integration_id),
+        outstanding_amount: Number(raw?.sum ?? 0),
+        outstanding_count: Number(raw?.count ?? 0),
+      },
+      200,
+      'Provider outstanding balance',
+    );
+  }
+
+  /**
+   * Record a remittance from a provider and settle pending receivables against
+   * it. If `order_ids` is given only those are settled; otherwise pending
+   * receivables are settled oldest-first up to `amount`. Reconciliation only —
+   * does not post to a cashbox.
+   */
+  async createRemittance(input: {
+    integration_id: string;
+    amount: number;
+    reference?: string | null;
+    note?: string | null;
+    order_ids?: string[];
+    created_by?: string | null;
+  }) {
+    const integrationId = String(input.integration_id ?? '').trim();
+    const amount = Number(input.amount ?? 0);
+    if (!integrationId) {
+      this.badRequest('integration_id is required');
+    }
+    if (!(amount > 0)) {
+      this.badRequest('amount must be greater than 0');
+    }
+
+    const integration = await this.integrationRepo.findOne({
+      where: { id: integrationId, isDeleted: false },
+    });
+    if (!integration) {
+      this.notFound('Integration not found');
+    }
+
+    return this.receivableRepo.manager.transaction(async (manager) => {
+      const receivableRepo = manager.getRepository(ProviderReceivable);
+      const remittanceRepo = manager.getRepository(ProviderRemittance);
+
+      const orderIds = (input.order_ids ?? [])
+        .map((x) => String(x))
+        .filter(Boolean);
+
+      const where: Record<string, unknown> = {
+        integration_id: integrationId,
+        status: ReceivableStatus.PENDING,
+        isDeleted: false,
+      };
+      if (orderIds.length) {
+        where.order_id = In(orderIds);
+      }
+
+      const pending = await receivableRepo.find({
+        where,
+        order: { createdAt: 'ASC' },
+      });
+
+      const remittance = await remittanceRepo.save(
+        remittanceRepo.create({
+          integration_id: integrationId,
+          amount: amount.toFixed(2),
+          reference: input.reference ?? null,
+          note: input.note ?? null,
+          created_by: input.created_by ?? null,
+          settled_count: 0,
+        }),
+      );
+
+      let remaining = amount;
+      let settledCount = 0;
+      let settledAmount = 0;
+      const now = new Date();
+
+      for (const row of pending) {
+        const rowAmount = Number(row.amount);
+        // When settling by explicit ids, settle each in full. Otherwise stop
+        // once the remitted amount is exhausted (FIFO, full rows only).
+        if (!orderIds.length && rowAmount > remaining) {
+          break;
+        }
+        row.status = ReceivableStatus.SETTLED;
+        row.remittance_id = remittance.id;
+        row.settled_at = now;
+        await receivableRepo.save(row);
+        remaining -= rowAmount;
+        settledAmount += rowAmount;
+        settledCount += 1;
+      }
+
+      remittance.settled_count = settledCount;
+      await remittanceRepo.save(remittance);
+
+      return successRes(
+        {
+          remittance_id: remittance.id,
+          integration_id: integrationId,
+          remitted_amount: amount,
+          settled_amount: settledAmount,
+          settled_count: settledCount,
+          unapplied_amount: Number((amount - settledAmount).toFixed(2)),
+        },
+        201,
+        'Remittance recorded',
+      );
+    });
   }
 }

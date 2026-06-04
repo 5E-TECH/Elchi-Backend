@@ -222,4 +222,50 @@ export class IntegrationServiceController {
       this.integrationService.dispatchShipment(data),
     );
   }
+
+  // ===== Provider COD reconciliation =====
+
+  @MessagePattern({ cmd: 'integration.receivable.list' })
+  listReceivables(
+    @Payload()
+    data: {
+      integration_id?: string;
+      status?: string;
+      page?: number;
+      limit?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listReceivables(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.receivable.balance' })
+  getProviderBalance(
+    @Payload() data: { integration_id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.getProviderBalance(data.integration_id),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.remittance.create' })
+  createRemittance(
+    @Payload()
+    data: {
+      integration_id: string;
+      amount: number;
+      reference?: string | null;
+      note?: string | null;
+      order_ids?: string[];
+      created_by?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.createRemittance(data),
+    );
+  }
 }
