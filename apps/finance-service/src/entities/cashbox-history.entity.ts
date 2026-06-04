@@ -13,7 +13,7 @@ import { Cashbox } from './cashbox.entity';
 // not double-write. Partial: NULL source_id (manual adjustments) is exempt.
 @Index(
   'IDX_CASHBOX_HISTORY_IDEMPOTENT',
-  ['cashbox_id', 'source_type', 'source_id', 'operation_type'],
+  ['cashbox_id', 'source_type', 'source_id', 'operation_type', 'dedup_epoch'],
   { unique: true, where: 'source_id IS NOT NULL AND is_deleted = false' },
 )
 export class CashboxHistory extends BaseEntity {
@@ -28,6 +28,15 @@ export class CashboxHistory extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   source_id!: string | null;
+
+  // Per-attempt idempotency discriminator. '' for events that should dedup
+  // purely on (cashbox, source_type, source_id, operation_type) — the default
+  // for all callers except order-service sell/rollback flows, which assign a
+  // fresh timestamp token per attempt so a sell → rollback → sell cycle
+  // re-applies money correctly instead of being deduped against the prior
+  // attempt. Part of IDX_CASHBOX_HISTORY_IDEMPOTENT.
+  @Column({ type: 'varchar', default: '' })
+  dedup_epoch!: string;
 
   @Column({ type: 'bigint', nullable: true })
   source_user_id!: string | null;
@@ -56,6 +65,11 @@ export class CashboxHistory extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   created_by!: string | null;
+
+  // MinIO object keys of proof files (image/video) attached to this expense.
+  // Only populated for EXTRA_COST rows when the market requires expense proof.
+  @Column({ type: 'jsonb', nullable: true })
+  proof_files!: string[] | null;
 
   @Column({ type: 'timestamptz', nullable: true })
   payment_date!: Date | null;

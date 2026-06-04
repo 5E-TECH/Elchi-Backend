@@ -25,6 +25,7 @@ import {
   BranchTransferBatchStatus,
   BranchTransferDirection,
   Cashbox_type,
+  ExpenseProofCondition,
   Operation_type,
   Order_status,
   OutboxService,
@@ -66,6 +67,7 @@ export class OrderServiceService implements OnModuleInit {
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
     @Inject('INTEGRATION') private readonly integrationClient: ClientProxy,
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
+    @Inject('FILE') private readonly fileClient: ClientProxy,
     private readonly outbox: OutboxService,
   ) {}
 
@@ -836,6 +838,7 @@ export class OrderServiceService implements OnModuleInit {
         name?: string;
         tariff_home?: number;
         tariff_center?: number;
+        expense_proof_conditions?: ExpenseProofCondition[] | null;
       }>;
     }>(
       this.identityClient,
@@ -914,6 +917,11 @@ export class OrderServiceService implements OnModuleInit {
       source_user_id?: string;
       comment?: string;
       created_by?: string;
+      proof_files?: string[];
+      // Per-attempt idempotency token (see CashboxHistory.dedup_epoch). Set by
+      // sell/partly-sell/cancel/rollback so a sell → rollback → sell cycle
+      // re-applies money instead of being deduped against the prior attempt.
+      dedup_epoch?: string;
     },
     manager?: EntityManager,
   ) {
@@ -927,6 +935,107 @@ export class OrderServiceService implements OnModuleInit {
       { ...data, payment_method: PaymentMethod.CASH },
       { manager },
     );
+  }
+
+  /**
+   * Compute which proof conditions a given sell/cancel operation satisfies.
+   * The market's enabled set is checked against this; any overlap → proof
+   * required. Extend here (plus the ExpenseProofCondition enum) to add new
+   * situations.
+   */
+  private matchExpenseProofConditions(ctx: {
+    action: 'sell' | 'cancel';
+    extraCost: number;
+    totalPrice: number;
+  }): Set<ExpenseProofCondition> {
+    const matched = new Set<ExpenseProofCondition>();
+    const hasExtra = ctx.extraCost > 0;
+    const isZeroTotal = !(ctx.totalPrice > 0);
+
+    if (ctx.action === 'cancel') {
+      matched.add(ExpenseProofCondition.CANCEL_ANY);
+      if (hasExtra) matched.add(ExpenseProofCondition.CANCEL_EXTRA_COST);
+      if (isZeroTotal) matched.add(ExpenseProofCondition.CANCEL_ZERO_TOTAL);
+    } else {
+      // partly-sell is a sell variant → uses SELL_* conditions
+      matched.add(ExpenseProofCondition.SELL_ANY);
+      if (hasExtra) matched.add(ExpenseProofCondition.SELL_EXTRA_COST);
+      if (isZeroTotal) matched.add(ExpenseProofCondition.SELL_ZERO_TOTAL);
+    }
+    return matched;
+  }
+
+  /**
+   * Enforce a market's configurable proof policy for a sell/cancel operation.
+   * If the operation matches ANY proof condition the market enabled, the courier
+   * MUST attach valid file proof (image/video) — each submitted key must point
+   * to a really-uploaded object (so a fabricated key can't satisfy it). Returns
+   * the validated, de-duplicated proof keys to persist on the order (and on the
+   * expense row, when one exists).
+   *
+   * Throws (rejecting the whole operation) when proof is required but missing or
+   * invalid, per product decision: no proof → no operation.
+   */
+  private async enforceOperationProof(params: {
+    market?: { expense_proof_conditions?: ExpenseProofCondition[] | null };
+    action: 'sell' | 'cancel';
+    extraCost: number;
+    totalPrice: number;
+    proofFileKeys?: string[];
+  }): Promise<string[]> {
+    const { market, action, extraCost, totalPrice, proofFileKeys } = params;
+
+    const keys = Array.from(
+      new Set(
+        (proofFileKeys ?? [])
+          .map((k) => String(k ?? '').trim())
+          .filter((k) => k.length > 0),
+      ),
+    );
+
+    const enabled = Array.isArray(market?.expense_proof_conditions)
+      ? market!.expense_proof_conditions!
+      : [];
+    if (enabled.length === 0) {
+      // Market never requires proof; still persist any keys the courier sent.
+      return keys;
+    }
+
+    const matched = this.matchExpenseProofConditions({
+      action,
+      extraCost,
+      totalPrice,
+    });
+    const required = enabled.some((c) => matched.has(c));
+    if (!required) {
+      return keys;
+    }
+
+    if (keys.length === 0) {
+      this.badRequest(
+        "Bu amal uchun rasm yoki video isbot majburiy. Iltimos, isbot fayl(lar)ini biriktiring.",
+      );
+    }
+
+    // Verify every key actually points to an uploaded object.
+    const checks = await Promise.all(
+      keys.map((key) =>
+        rmqSend<{ data?: { exists?: boolean } }>(
+          this.fileClient,
+          { cmd: 'file.exists' },
+          { key },
+        )
+          .then((res) => Boolean(res?.data?.exists))
+          .catch(() => false),
+      ),
+    );
+    if (checks.some((ok) => !ok)) {
+      this.badRequest(
+        "Isbot fayl topilmadi yoki yuklanmagan. Iltimos, isbotni qaytadan yuklang.",
+      );
+    }
+
+    return keys;
   }
 
   /**
@@ -1217,14 +1326,22 @@ export class OrderServiceService implements OnModuleInit {
       this.notFound('Courier cashbox not found');
     }
 
+    // Prefer the tariffs snapshotted on the order at sale time so the reversal
+    // mirrors the original sale exactly, even if the market/courier tariff has
+    // since changed. Fall back to live tariffs for orders sold before snapshots
+    // were recorded.
     const marketTariff =
-      order.where_deliver === Where_deliver.CENTER
-        ? Number(market.tariff_center ?? 0)
-        : Number(market.tariff_home ?? 0);
+      order.market_tariff != null
+        ? Number(order.market_tariff)
+        : order.where_deliver === Where_deliver.CENTER
+          ? Number(market.tariff_center ?? 0)
+          : Number(market.tariff_home ?? 0);
     const courierTariff =
-      order.where_deliver === Where_deliver.CENTER
-        ? Number(courier?.tariff_center ?? 0)
-        : Number(courier?.tariff_home ?? 0);
+      order.courier_tariff != null
+        ? Number(order.courier_tariff)
+        : order.where_deliver === Where_deliver.CENTER
+          ? Number(courier?.tariff_center ?? 0)
+          : Number(courier?.tariff_home ?? 0);
     const rollbackComment = `[ROLLBACK] ${order.comment || ''}`.trim();
     const totalPrice = Number(order.total_price ?? 0);
     const [marketExtraCost, courierExtraCost] = await Promise.all([
@@ -1271,13 +1388,34 @@ export class OrderServiceService implements OnModuleInit {
           ? this.isNearInTime(orderUpdatedAt, courierExtraCostCreatedAt)
           : false);
 
+    // Per-rollback idempotency epoch on every CORRECTION posting, so a second
+    // rollback of the same order (after a re-sell) is not deduped against the
+    // first rollback's reversal entries. The original SELL/CORRECTION rows are
+    // preserved — only the dedup discriminator differs per attempt.
+    //
+    // A per-posting sequence suffix is appended so that two postings of the same
+    // (cashbox, source_type, operation_type) within ONE rollback (e.g. an
+    // extra-cost reversal plus the main tariff reversal, both CORRECTION/INCOME
+    // on a zero-total order) don't collide on the idempotency index. The
+    // sequence is deterministic per handler run, so an outbox re-delivery still
+    // dedups correctly.
+    const rollbackEpoch = String(Date.now());
+    let rollbackSeq = 0;
+    const pay = (
+      data: Parameters<typeof this.updateCashboxBalance>[0],
+    ): Promise<void> =>
+      this.updateCashboxBalance({
+        ...data,
+        dedup_epoch: `${rollbackEpoch}:${rollbackSeq++}`,
+      });
+
     if (
       [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID].includes(
         originalStatus,
       )
     ) {
       if (shouldRollbackMarketExtraCost) {
-        await this.updateCashboxBalance({
+        await pay({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
           amount: Number(marketExtraCost?.amount ?? 0),
@@ -1290,7 +1428,7 @@ export class OrderServiceService implements OnModuleInit {
       }
 
       if (shouldRollbackCourierExtraCost && courierCashbox) {
-        await this.updateCashboxBalance({
+        await pay({
           user_id: courierId,
           cashbox_type: Cashbox_type.FOR_COURIER,
           amount: Number(courierExtraCost?.amount ?? 0),
@@ -1305,7 +1443,7 @@ export class OrderServiceService implements OnModuleInit {
 
     if ([Order_status.SOLD, Order_status.PAID].includes(order.status)) {
       if (totalPrice === 0) {
-        await this.updateCashboxBalance({
+        await pay({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
           amount: marketTariff,
@@ -1316,7 +1454,7 @@ export class OrderServiceService implements OnModuleInit {
           comment: rollbackComment,
         });
         if (courierCashbox) {
-          await this.updateCashboxBalance({
+          await pay({
             user_id: courierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             amount: courierTariff,
@@ -1328,7 +1466,7 @@ export class OrderServiceService implements OnModuleInit {
           });
         }
       } else if (totalPrice < courierTariff) {
-        await this.updateCashboxBalance({
+        await pay({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
           amount: Math.max(marketTariff - totalPrice, 0),
@@ -1339,7 +1477,7 @@ export class OrderServiceService implements OnModuleInit {
           comment: rollbackComment,
         });
         if (courierCashbox) {
-          await this.updateCashboxBalance({
+          await pay({
             user_id: courierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             amount: Math.max(courierTariff - totalPrice, 0),
@@ -1352,7 +1490,7 @@ export class OrderServiceService implements OnModuleInit {
         }
       } else if (totalPrice < marketTariff) {
         const courierToBePaid = totalPrice - courierTariff;
-        await this.updateCashboxBalance({
+        await pay({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
           amount: Math.max(marketTariff - totalPrice, 0),
@@ -1363,7 +1501,7 @@ export class OrderServiceService implements OnModuleInit {
           comment: rollbackComment,
         });
         if (courierCashbox) {
-          await this.updateCashboxBalance({
+          await pay({
             user_id: courierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             amount: Math.max(courierToBePaid, 0),
@@ -1380,7 +1518,7 @@ export class OrderServiceService implements OnModuleInit {
             ? Number(order.paid_amount ?? 0)
             : totalPrice - marketTariff;
         const courierToBePaid = totalPrice - courierTariff;
-        await this.updateCashboxBalance({
+        await pay({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
           amount: Math.max(toBePaid, 0),
@@ -1391,7 +1529,7 @@ export class OrderServiceService implements OnModuleInit {
           comment: rollbackComment,
         });
         if (courierCashbox) {
-          await this.updateCashboxBalance({
+          await pay({
             user_id: courierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             amount: Math.max(courierToBePaid, 0),
@@ -1409,7 +1547,7 @@ export class OrderServiceService implements OnModuleInit {
       const marketDiff = Number(order.paid_amount ?? 0);
       const courierDiff = Math.max(totalPrice - courierTariff, 0);
 
-      await this.updateCashboxBalance({
+      await pay({
         user_id: String(order.market_id),
         cashbox_type: Cashbox_type.FOR_MARKET,
         amount: marketDiff,
@@ -1420,7 +1558,7 @@ export class OrderServiceService implements OnModuleInit {
         comment: rollbackComment,
       });
       if (courierCashbox) {
-        await this.updateCashboxBalance({
+        await pay({
           user_id: courierId,
           cashbox_type: Cashbox_type.FOR_COURIER,
           amount: courierDiff,
@@ -1437,7 +1575,7 @@ export class OrderServiceService implements OnModuleInit {
       shouldRollbackMarketExtraCost &&
       [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
     ) {
-      await this.updateCashboxBalance({
+      await pay({
         user_id: String(order.market_id),
         cashbox_type: Cashbox_type.FOR_MARKET,
         amount: Number(marketExtraCost.amount),
@@ -1458,7 +1596,7 @@ export class OrderServiceService implements OnModuleInit {
       courierCashbox &&
       [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
     ) {
-      await this.updateCashboxBalance({
+      await pay({
         user_id: courierId,
         cashbox_type: Cashbox_type.FOR_COURIER,
         amount: Number(courierExtraCost.amount),
@@ -2699,7 +2837,12 @@ export class OrderServiceService implements OnModuleInit {
   async sellOrder(
     requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,
-    dto: { comment?: string; extraCost?: number; paidAmount?: number },
+    dto: {
+      comment?: string;
+      extraCost?: number;
+      paidAmount?: number;
+      proofFileKeys?: string[];
+    },
   ) {
     const order = await this.findById(id);
     if (order.status !== Order_status.WAITING) {
@@ -2759,6 +2902,15 @@ export class OrderServiceService implements OnModuleInit {
 
     const totalPrice = Number(order.total_price ?? 0);
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
+    // Reject up front (before the transaction) if this market's proof policy is
+    // triggered by this sell and the courier didn't attach valid file proof.
+    const proofFiles = await this.enforceOperationProof({
+      market,
+      action: 'sell',
+      extraCost,
+      totalPrice,
+      proofFileKeys: dto?.proofFileKeys,
+    });
     const finalComment = this.generateSaleComment(
       order.comment,
       dto?.comment,
@@ -2807,6 +2959,11 @@ export class OrderServiceService implements OnModuleInit {
           ? Order_status.PARTLY_PAID
           : Order_status.SOLD;
 
+    // Per-attempt idempotency epoch (also used as sold_at) so a sell → rollback
+    // → sell cycle re-applies money instead of being deduped against the prior
+    // attempt's cashbox rows. See CashboxHistory.dedup_epoch.
+    const saleEpoch = String(Date.now());
+
     // Atomic block: outbox enqueues for cashbox updates + order status save must
     // commit together. Otherwise a crash between them produces missing finance
     // events or an order in WAITING when the cashboxes were already credited.
@@ -2815,153 +2972,129 @@ export class OrderServiceService implements OnModuleInit {
     await queryRunner.startTransaction();
     try {
       const tx = queryRunner.manager;
+      const pay = (
+        data: Parameters<typeof this.updateCashboxBalance>[0],
+      ): Promise<void> =>
+        this.updateCashboxBalance({ ...data, dedup_epoch: saleEpoch }, tx);
 
       if (totalPrice === 0) {
-        await this.updateCashboxBalance(
-          {
-            user_id: String(order.market_id),
-            cashbox_type: Cashbox_type.FOR_MARKET,
-            amount: marketTariff,
+        await pay({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: marketTariff,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: "0 so'mlik mahsulot sotuvi",
+        });
+        if (courierCashbox) {
+          await pay({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: courierTariff,
             operation_type: Operation_type.EXPENSE,
             source_type: Source_type.SELL,
             source_id: String(order.id),
             created_by: String(requester.id),
             comment: "0 so'mlik mahsulot sotuvi",
-          },
-          tx,
-        );
-        if (courierCashbox) {
-          await this.updateCashboxBalance(
-            {
-              user_id: actorCourierId,
-              cashbox_type: Cashbox_type.FOR_COURIER,
-              amount: courierTariff,
-              operation_type: Operation_type.EXPENSE,
-              source_type: Source_type.SELL,
-              source_id: String(order.id),
-              created_by: String(requester.id),
-              comment: "0 so'mlik mahsulot sotuvi",
-            },
-            tx,
-          );
+          });
         }
       } else if (totalPrice < courierTariff) {
-        await this.updateCashboxBalance(
-          {
-            user_id: String(order.market_id),
-            cashbox_type: Cashbox_type.FOR_MARKET,
-            amount: Math.max(marketTariff - totalPrice, 0),
+        await pay({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Math.max(marketTariff - totalPrice, 0),
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: `${totalPrice} so'mlik mahsulot sotuvi`,
+        });
+        if (courierCashbox) {
+          await pay({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: Math.max(courierTariff - totalPrice, 0),
             operation_type: Operation_type.EXPENSE,
             source_type: Source_type.SELL,
             source_id: String(order.id),
             created_by: String(requester.id),
             comment: `${totalPrice} so'mlik mahsulot sotuvi`,
-          },
-          tx,
-        );
-        if (courierCashbox) {
-          await this.updateCashboxBalance(
-            {
-              user_id: actorCourierId,
-              cashbox_type: Cashbox_type.FOR_COURIER,
-              amount: Math.max(courierTariff - totalPrice, 0),
-              operation_type: Operation_type.EXPENSE,
-              source_type: Source_type.SELL,
-              source_id: String(order.id),
-              created_by: String(requester.id),
-              comment: `${totalPrice} so'mlik mahsulot sotuvi`,
-            },
-            tx,
-          );
+          });
         }
       } else if (totalPrice < marketTariff) {
-        await this.updateCashboxBalance(
-          {
-            user_id: String(order.market_id),
-            cashbox_type: Cashbox_type.FOR_MARKET,
-            amount: Math.max(marketTariff - totalPrice, 0),
-            operation_type: Operation_type.EXPENSE,
+        await pay({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Math.max(marketTariff - totalPrice, 0),
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: `${totalPrice} so'mlik mahsulot sotuvi`,
+        });
+        if (courierCashbox) {
+          await pay({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: Math.max(courierToBePaid, 0),
+            operation_type: Operation_type.INCOME,
             source_type: Source_type.SELL,
             source_id: String(order.id),
             created_by: String(requester.id),
             comment: `${totalPrice} so'mlik mahsulot sotuvi`,
-          },
-          tx,
-        );
-        if (courierCashbox) {
-          await this.updateCashboxBalance(
-            {
-              user_id: actorCourierId,
-              cashbox_type: Cashbox_type.FOR_COURIER,
-              amount: Math.max(courierToBePaid, 0),
-              operation_type: Operation_type.INCOME,
-              source_type: Source_type.SELL,
-              source_id: String(order.id),
-              created_by: String(requester.id),
-              comment: `${totalPrice} so'mlik mahsulot sotuvi`,
-            },
-            tx,
-          );
+          });
         }
       } else {
-        await this.updateCashboxBalance(
-          {
-            user_id: String(order.market_id),
-            cashbox_type: Cashbox_type.FOR_MARKET,
-            amount: Math.max(toBePaid, 0),
+        await pay({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Math.max(toBePaid, 0),
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: finalComment,
+        });
+        if (courierCashbox) {
+          await pay({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: Math.max(courierToBePaid, 0),
             operation_type: Operation_type.INCOME,
             source_type: Source_type.SELL,
             source_id: String(order.id),
             created_by: String(requester.id),
             comment: finalComment,
-          },
-          tx,
-        );
-        if (courierCashbox) {
-          await this.updateCashboxBalance(
-            {
-              user_id: actorCourierId,
-              cashbox_type: Cashbox_type.FOR_COURIER,
-              amount: Math.max(courierToBePaid, 0),
-              operation_type: Operation_type.INCOME,
-              source_type: Source_type.SELL,
-              source_id: String(order.id),
-              created_by: String(requester.id),
-              comment: finalComment,
-            },
-            tx,
-          );
+          });
         }
       }
 
       if (extraCost > 0) {
-        await this.updateCashboxBalance(
-          {
-            user_id: String(order.market_id),
-            cashbox_type: Cashbox_type.FOR_MARKET,
+        await pay({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: extraCost,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.EXTRA_COST,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: finalComment,
+          proof_files: proofFiles.length ? proofFiles : undefined,
+        });
+        if (courierCashbox) {
+          await pay({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
             amount: extraCost,
             operation_type: Operation_type.EXPENSE,
             source_type: Source_type.EXTRA_COST,
             source_id: String(order.id),
             created_by: String(requester.id),
             comment: finalComment,
-          },
-          tx,
-        );
-        if (courierCashbox) {
-          await this.updateCashboxBalance(
-            {
-              user_id: actorCourierId,
-              cashbox_type: Cashbox_type.FOR_COURIER,
-              amount: extraCost,
-              operation_type: Operation_type.EXPENSE,
-              source_type: Source_type.EXTRA_COST,
-              source_id: String(order.id),
-              created_by: String(requester.id),
-              comment: finalComment,
-            },
-            tx,
-          );
+            proof_files: proofFiles.length ? proofFiles : undefined,
+          });
         }
       }
 
@@ -2971,8 +3104,15 @@ export class OrderServiceService implements OnModuleInit {
           status: nextStatus,
           to_be_paid: netToBePaid,
           paid_amount: paidAfter,
-          sold_at: String(Date.now()),
+          sold_at: saleEpoch,
+          // Snapshot the tariffs onto the order so the SELL_PROFIT ledger entry
+          // (market_tariff - courier_tariff) in enqueueFinanceOnStatusChange is
+          // non-zero. Without this the company margin was never recorded for the
+          // normal sale path.
+          market_tariff: order.market_tariff ?? marketTariff,
+          courier_tariff: order.courier_tariff ?? courierTariff,
           comment: finalComment || null,
+          ...(proofFiles.length ? { proof_files: proofFiles } : {}),
         },
         { id: requester.id, roles: requester.roles, note: 'Order sold' },
         tx,
@@ -3017,7 +3157,7 @@ export class OrderServiceService implements OnModuleInit {
   async cancelOrder(
     requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,
-    dto: { comment?: string; extraCost?: number },
+    dto: { comment?: string; extraCost?: number; proofFileKeys?: string[] },
   ) {
     const isManagerRequester =
       this.hasRole(requester, Roles.MANAGER) &&
@@ -3041,26 +3181,64 @@ export class OrderServiceService implements OnModuleInit {
     const actorCourierId = this.resolveActorCourierId(requester, order, post);
 
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
+    const totalPrice = Number(order.total_price ?? 0);
     const finalComment = this.generateSaleComment(
       order.comment,
       dto?.comment,
       extraCost,
     );
 
+    // The market is needed for the proof policy regardless of extra cost, since
+    // some conditions (e.g. cancelling a zero-total order) apply with no expense.
+    const market = await this.getMarketsByIds([
+      String(order.market_id),
+    ]).then((rows) => rows[0]);
+
+    // Reject the cancel up front if this market's proof policy is triggered and
+    // the courier didn't attach valid file proof.
+    const proofFiles = await this.enforceOperationProof({
+      market,
+      action: 'cancel',
+      extraCost,
+      totalPrice,
+      proofFileKeys: dto?.proofFileKeys,
+    });
+
+    // Look up cashboxes (remote reads) before opening the transaction.
+    let courierCashbox: { id: string; balance?: number } | null | undefined;
     if (extraCost > 0) {
-      const [marketCashbox, courierCashbox] = await Promise.all([
+      const [marketCashbox, fetchedCourierCashbox] = await Promise.all([
         this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
         this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER),
       ]);
       if (!marketCashbox) {
         this.notFound('Market cashbox not found');
       }
-      if (!courierCashbox && !isManagerRequester) {
+      if (!fetchedCourierCashbox && !isManagerRequester) {
         this.notFound('Courier cashbox not found');
       }
+      courierCashbox = fetchedCourierCashbox;
+    }
 
-      const ops: Promise<unknown>[] = [
-        this.updateCashboxBalance({
+    // Atomic block: the extra-cost cashbox movements (outbox enqueues) and the
+    // status flip to CANCELLED must commit together — otherwise a crash could
+    // charge the extra cost while leaving the order in WAITING.
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    // Per-attempt idempotency epoch so a cancel → rollback → cancel cycle
+    // re-applies the extra-cost expense instead of being deduped.
+    const cancelEpoch = String(Date.now());
+
+    try {
+      const tx = queryRunner.manager;
+      const pay = (
+        data: Parameters<typeof this.updateCashboxBalance>[0],
+      ): Promise<void> =>
+        this.updateCashboxBalance({ ...data, dedup_epoch: cancelEpoch }, tx);
+
+      if (extraCost > 0) {
+        await pay({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
           amount: extraCost,
@@ -3069,11 +3247,10 @@ export class OrderServiceService implements OnModuleInit {
           source_id: String(order.id),
           created_by: String(requester.id),
           comment: finalComment,
-        }),
-      ];
-      if (courierCashbox) {
-        ops.push(
-          this.updateCashboxBalance({
+          proof_files: proofFiles.length ? proofFiles : undefined,
+        });
+        if (courierCashbox) {
+          await pay({
             user_id: actorCourierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             amount: extraCost,
@@ -3082,21 +3259,58 @@ export class OrderServiceService implements OnModuleInit {
             source_id: String(order.id),
             created_by: String(requester.id),
             comment: finalComment,
-          }),
-        );
+            proof_files: proofFiles.length ? proofFiles : undefined,
+          });
+        }
       }
-      await Promise.all(ops);
+
+      await this.updateFull(
+        id,
+        {
+          status: Order_status.CANCELLED,
+          comment: finalComment || null,
+          sold_at: null,
+          ...(proofFiles.length ? { proof_files: proofFiles } : {}),
+        },
+        { id: requester.id, roles: requester.roles, note: 'Order canceled' },
+        tx,
+      );
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.handleDbError(error);
+      throw new RpcException({
+        statusCode: 500,
+        message:
+          error instanceof Error ? error.message : 'Internal server error',
+      });
+    } finally {
+      await queryRunner.release();
     }
 
-    await this.updateFull(
-      id,
-      {
-        status: Order_status.CANCELLED,
-        comment: finalComment || null,
-        sold_at: null,
-      },
-      { id: requester.id, roles: requester.roles, note: 'Order canceled' },
-    );
+    // Post-commit: external status sync (updateFull skips it when handed an
+    // external manager) — best-effort.
+    try {
+      const updated = await this.findById(id);
+      const action = this.resolveSyncAction(
+        Order_status.WAITING,
+        Order_status.CANCELLED,
+      );
+      if (action) {
+        void this.queueExternalStatusSync(
+          updated,
+          action,
+          Order_status.WAITING,
+          Order_status.CANCELLED,
+        );
+      }
+    } catch {
+      // External sync is best-effort.
+    }
 
     return successRes({ id }, 200, 'Order canceled');
   }
@@ -3262,6 +3476,7 @@ export class OrderServiceService implements OnModuleInit {
       totalPrice: number;
       extraCost?: number;
       comment?: string;
+      proofFileKeys?: string[];
     },
   ) {
     const isManagerRequester =
@@ -3334,6 +3549,15 @@ export class OrderServiceService implements OnModuleInit {
           : Number(courier?.tariff_home ?? 0);
 
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
+    // Partly-sell is a sell variant → evaluated against SELL_* conditions, with
+    // the new (partial) price as the operation total.
+    const proofFiles = await this.enforceOperationProof({
+      market,
+      action: 'sell',
+      extraCost,
+      totalPrice: price,
+      proofFileKeys: dto?.proofFileKeys,
+    });
     const finalComment = this.generateSaleComment(
       order.comment,
       dto?.comment,
@@ -3404,137 +3628,19 @@ export class OrderServiceService implements OnModuleInit {
           item !== null,
       );
 
-    for (const existingItem of existingItems) {
-      const dtoItem = dto.order_item_info.find(
-        (item) => String(item.product_id) === String(existingItem.product_id),
-      );
-      if (!dtoItem) continue;
-
-      const nextQty = Number(dtoItem.quantity);
-      if (nextQty < Number(existingItem.quantity)) {
-        existingItem.quantity = nextQty;
-        await this.orderItemRepo.save(existingItem);
-      }
-    }
-
+    // Compute the payment math up front (pure, no IO) so we can derive the next
+    // status before opening the transaction.
     let toBePaid = 0;
     let courierToBePaid = 0;
-
     if (price === 0) {
-      const ops: Promise<unknown>[] = [
-        this.updateCashboxBalance({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: marketTariff,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: "0 so'mlik mahsulot qisman sotuvi",
-        }),
-      ];
-      if (courierCashbox) {
-        ops.push(
-          this.updateCashboxBalance({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: courierTariff,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: "0 so'mlik mahsulot qisman sotuvi",
-          }),
-        );
-      }
-      await Promise.all(ops);
+      // no toBePaid / courierToBePaid (both expenses applied below)
     } else if (price < courierTariff) {
-      const ops: Promise<unknown>[] = [
-        this.updateCashboxBalance({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Math.max(marketTariff - price, 0),
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: `${price} so'mlik mahsulot qisman sotuvi`,
-        }),
-      ];
-      if (courierCashbox) {
-        ops.push(
-          this.updateCashboxBalance({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: Math.max(courierTariff - price, 0),
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: `${price} so'mlik mahsulot qisman sotuvi`,
-          }),
-        );
-      }
-      await Promise.all(ops);
+      // both expenses
     } else if (price < marketTariff) {
       courierToBePaid = price - courierTariff;
-      const ops: Promise<unknown>[] = [
-        this.updateCashboxBalance({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Math.max(marketTariff - price, 0),
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: `${price} so'mlik mahsulot qisman sotuvi`,
-        }),
-      ];
-      if (courierCashbox) {
-        ops.push(
-          this.updateCashboxBalance({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: Math.max(courierToBePaid, 0),
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: `${price} so'mlik mahsulot qisman sotuvi`,
-          }),
-        );
-      }
-      await Promise.all(ops);
     } else {
       toBePaid = price - marketTariff;
       courierToBePaid = price - courierTariff;
-      const ops: Promise<unknown>[] = [
-        this.updateCashboxBalance({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Math.max(toBePaid, 0),
-          operation_type: Operation_type.INCOME,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: finalComment,
-        }),
-      ];
-      if (courierCashbox) {
-        ops.push(
-          this.updateCashboxBalance({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: Math.max(courierToBePaid, 0),
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: finalComment,
-          }),
-        );
-      }
-      await Promise.all(ops);
     }
 
     const netToBePaid = Math.max(Number(toBePaid) || 0, 0);
@@ -3548,10 +3654,144 @@ export class OrderServiceService implements OnModuleInit {
     const autoPay = Math.min(remainingBeforeDebt, debtBeforeSale);
     const paidAfter = Math.min(netToBePaid, currentPaid + autoPay);
     const remainingAfter = netToBePaid - paidAfter;
+    const nextStatus =
+      remainingAfter === 0 && paidAfter > 0
+        ? Order_status.PAID
+        : paidAfter > 0
+          ? Order_status.PARTLY_PAID
+          : Order_status.SOLD;
 
-    if (extraCost > 0) {
-      const ops: Promise<unknown>[] = [
-        this.updateCashboxBalance({
+    // Per-attempt idempotency epoch so a (partly-)sell → rollback → sell cycle
+    // re-applies money instead of being deduped against the prior attempt.
+    const saleEpoch = String(Date.now());
+
+    // Atomic block: item-quantity reduction, cashbox movements (outbox enqueues)
+    // and the order status flip must commit together. Previously these ran
+    // outside any transaction, so a crash mid-way could move money while leaving
+    // the order in WAITING — and the idempotency layer caches the failure, so it
+    // never auto-recovered. A single connection can't run queries in parallel,
+    // so all enqueues run sequentially here (no Promise.all).
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const tx = queryRunner.manager;
+      const txOrderItemRepo = tx.getRepository(OrderItem);
+      const pay = (
+        data: Parameters<typeof this.updateCashboxBalance>[0],
+      ): Promise<void> =>
+        this.updateCashboxBalance({ ...data, dedup_epoch: saleEpoch }, tx);
+
+      // Persist the reduced quantities for partially-returned line items.
+      for (const existingItem of existingItems) {
+        const dtoItem = dto.order_item_info.find(
+          (item) => String(item.product_id) === String(existingItem.product_id),
+        );
+        if (!dtoItem) continue;
+
+        const nextQty = Number(dtoItem.quantity);
+        if (nextQty < Number(existingItem.quantity)) {
+          existingItem.quantity = nextQty;
+          await txOrderItemRepo.save(existingItem);
+        }
+      }
+
+      if (price === 0) {
+        await pay({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: marketTariff,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: "0 so'mlik mahsulot qisman sotuvi",
+        });
+        if (courierCashbox) {
+          await pay({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: courierTariff,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: "0 so'mlik mahsulot qisman sotuvi",
+          });
+        }
+      } else if (price < courierTariff) {
+        await pay({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Math.max(marketTariff - price, 0),
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: `${price} so'mlik mahsulot qisman sotuvi`,
+        });
+        if (courierCashbox) {
+          await pay({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: Math.max(courierTariff - price, 0),
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: `${price} so'mlik mahsulot qisman sotuvi`,
+          });
+        }
+      } else if (price < marketTariff) {
+        await pay({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Math.max(marketTariff - price, 0),
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: `${price} so'mlik mahsulot qisman sotuvi`,
+        });
+        if (courierCashbox) {
+          await pay({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: Math.max(courierToBePaid, 0),
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: `${price} so'mlik mahsulot qisman sotuvi`,
+          });
+        }
+      } else {
+        await pay({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: Math.max(toBePaid, 0),
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: finalComment,
+        });
+        if (courierCashbox) {
+          await pay({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: Math.max(courierToBePaid, 0),
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: finalComment,
+          });
+        }
+      }
+
+      if (extraCost > 0) {
+        await pay({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
           amount: extraCost,
@@ -3560,11 +3800,10 @@ export class OrderServiceService implements OnModuleInit {
           source_id: String(order.id),
           created_by: String(requester.id),
           comment: finalComment,
-        }),
-      ];
-      if (courierCashbox) {
-        ops.push(
-          this.updateCashboxBalance({
+          proof_files: proofFiles.length ? proofFiles : undefined,
+        });
+        if (courierCashbox) {
+          await pay({
             user_id: actorCourierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             amount: extraCost,
@@ -3573,65 +3812,100 @@ export class OrderServiceService implements OnModuleInit {
             source_id: String(order.id),
             created_by: String(requester.id),
             comment: finalComment,
-          }),
-        );
+            proof_files: proofFiles.length ? proofFiles : undefined,
+          });
+        }
       }
-      await Promise.all(ops);
+
+      await this.updateFull(
+        id,
+        {
+          status: nextStatus,
+          to_be_paid: netToBePaid,
+          paid_amount: paidAfter,
+          sold_at: order.sold_at ?? saleEpoch,
+          total_price: price,
+          market_tariff: order.market_tariff ?? marketTariff,
+          courier_tariff: order.courier_tariff ?? courierTariff,
+          return_requested: false,
+          comment: finalComment || null,
+          ...(proofFiles.length ? { proof_files: proofFiles } : {}),
+        },
+        { id: requester.id, roles: requester.roles, note: 'Order partly sold' },
+        tx,
+      );
+
+      // product_quantity reflects only the sold portion. updateFull's save wrote
+      // the stale (pre-sale) value, so overwrite it within the same tx.
+      await tx
+        .getRepository(Order)
+        .update({ id: String(order.id) }, { product_quantity: newQty });
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.handleDbError(error);
+      throw new RpcException({
+        statusCode: 500,
+        message:
+          error instanceof Error ? error.message : 'Internal server error',
+      });
+    } finally {
+      await queryRunner.release();
     }
 
-    await this.updateFull(
-      id,
-      {
-        status:
-          remainingAfter === 0 && paidAfter > 0
-            ? Order_status.PAID
-            : paidAfter > 0
-              ? Order_status.PARTLY_PAID
-              : Order_status.SOLD,
-        to_be_paid: netToBePaid,
-        paid_amount: paidAfter,
-        sold_at: order.sold_at ?? String(Date.now()),
-        total_price: price,
-        market_tariff: order.market_tariff ?? marketTariff,
-        courier_tariff: order.courier_tariff ?? courierTariff,
-        return_requested: false,
-        comment: finalComment || null,
-      },
-      { id: requester.id, roles: requester.roles, note: 'Order partly sold' },
-    );
+    // Post-commit: external status sync (updateFull skips it when handed an
+    // external manager) — best-effort, DB/search are already consistent.
+    try {
+      const updated = await this.findById(id);
+      const action = this.resolveSyncAction(Order_status.WAITING, nextStatus);
+      if (action) {
+        void this.queueExternalStatusSync(
+          updated,
+          action,
+          Order_status.WAITING,
+          nextStatus,
+        );
+      }
+    } catch {
+      // External sync is best-effort.
+    }
 
-    const refreshedOrder = await this.findById(id);
-    refreshedOrder.product_quantity = newQty;
-    await this.orderRepo.save(refreshedOrder);
-
+    // Spawn the CANCELLED child order capturing the returned line items. The
+    // main sale is already committed; if this fails the financial state stays
+    // correct, so we log and continue rather than fail the whole operation.
     if (cancelledItems.length > 0) {
-      const cancelledQty = cancelledItems.reduce(
-        (sum, item) => sum + item.quantity,
-        0,
-      );
       const cancelledTotalPrice = Math.max(oldTotalPrice - price, 0);
-
-      await this.create({
-        market_id: String(order.market_id),
-        customer_id: String(order.customer_id),
-        where_deliver: order.where_deliver,
-        total_price: cancelledTotalPrice,
-        to_be_paid: 0,
-        paid_amount: 0,
-        status: Order_status.CANCELLED,
-        comment: 'Qisman bekor qilingan mahsulotlar',
-        operator: order.operator ?? null,
-        post_id: order.post_id ?? null,
-        canceled_post_id: order.canceled_post_id ?? null,
-        district_id: order.district_id ?? null,
-        region_id: order.region_id ?? null,
-        address: order.address ?? null,
-        qr_code_token: `CANCEL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
-        parent_order_id: String(order.id),
-        items: cancelledItems,
-      });
-
-      refreshedOrder.product_quantity = newQty;
+      try {
+        await this.create({
+          market_id: String(order.market_id),
+          customer_id: String(order.customer_id),
+          where_deliver: order.where_deliver,
+          total_price: cancelledTotalPrice,
+          to_be_paid: 0,
+          paid_amount: 0,
+          status: Order_status.CANCELLED,
+          comment: 'Qisman bekor qilingan mahsulotlar',
+          operator: order.operator ?? null,
+          post_id: order.post_id ?? null,
+          canceled_post_id: order.canceled_post_id ?? null,
+          district_id: order.district_id ?? null,
+          region_id: order.region_id ?? null,
+          address: order.address ?? null,
+          qr_code_token: `CANCEL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+          parent_order_id: String(order.id),
+          items: cancelledItems,
+        });
+      } catch (childError) {
+        this.logger.error(
+          `Partly-sell ${id}: failed to create cancelled child order: ${
+            (childError as Error)?.message ?? childError
+          }`,
+        );
+      }
     }
 
     return successRes({}, 200, 'Order qisman sotildi');
@@ -3847,6 +4121,7 @@ export class OrderServiceService implements OnModuleInit {
       qr_code_token?: string | null;
       external_id?: string | null;
       source?: Order_source;
+      proof_files?: string[] | null;
       items?: Array<{ product_id: string; quantity?: number }>;
     },
     requester?: { id?: string; roles?: string[]; note?: string | null },
@@ -3913,6 +4188,10 @@ export class OrderServiceService implements OnModuleInit {
           ? dto.external_id
           : order.external_id,
       source: dto.source ?? order.source ?? Order_source.INTERNAL,
+      proof_files:
+        typeof dto.proof_files !== 'undefined'
+          ? dto.proof_files
+          : order.proof_files,
     });
 
     const shouldRecalculateHolder =
@@ -6699,13 +6978,19 @@ export class OrderServiceService implements OnModuleInit {
           String(item.order_id),
         );
 
+        // FORWARD: un-received orders go back to NEW so they re-enter the
+        // assignable pool. RETURN: returning orders must NOT be reset to NEW
+        // (that would drop them into the new-orders flow and reverse their
+        // direction) — only detach them from the batch and keep their status.
+        const remainingUpdate: { current_batch_id: null; status?: Order_status } =
+          batch.direction === BranchTransferDirection.RETURN
+            ? { current_batch_id: null }
+            : { current_batch_id: null, status: Order_status.NEW };
+
         await orderRepo
           .createQueryBuilder()
           .update(Order)
-          .set({
-            current_batch_id: null,
-            status: Order_status.NEW,
-          })
+          .set(remainingUpdate)
           .where('id IN (:...orderIds)', { orderIds: remainingOrderIds })
           .andWhere('"is_deleted" = false')
           .execute();
@@ -6750,14 +7035,25 @@ export class OrderServiceService implements OnModuleInit {
       await queryRunner.commitTransaction();
 
       if (remainingOrderIdsForRequeue.length > 0) {
-        await this.createBranchTransferBatches({
-          source_branch_id: String(batch.source_branch_id),
-          destination_branch_id: String(batch.destination_branch_id),
-          direction: BranchTransferDirection.FORWARD,
-          order_ids: remainingOrderIdsForRequeue,
-          request_key: `fwd_from_partial_receive_${batchId}_${Date.now()}`,
-          requester_id: requesterId,
-        });
+        // Re-batch the un-received orders preserving the original direction —
+        // returns stay returns, forwards stay forwards.
+        if (batch.direction === BranchTransferDirection.RETURN) {
+          await this.createBranchReturnBatches({
+            source_branch_id: String(batch.source_branch_id),
+            order_ids: remainingOrderIdsForRequeue,
+            request_key: `rtn_from_partial_receive_${batchId}_${Date.now()}`,
+            requester_id: requesterId,
+          });
+        } else {
+          await this.createBranchTransferBatches({
+            source_branch_id: String(batch.source_branch_id),
+            destination_branch_id: String(batch.destination_branch_id),
+            direction: BranchTransferDirection.FORWARD,
+            order_ids: remainingOrderIdsForRequeue,
+            request_key: `fwd_from_partial_receive_${batchId}_${Date.now()}`,
+            requester_id: requesterId,
+          });
+        }
       }
 
       return successRes(
