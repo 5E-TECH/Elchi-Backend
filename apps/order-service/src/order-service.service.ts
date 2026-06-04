@@ -6876,6 +6876,8 @@ export class OrderServiceService implements OnModuleInit {
       );
       const orderRepo = queryRunner.manager.getRepository(Order);
       const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+      const custodyRepo =
+        queryRunner.manager.getRepository(OrderCustodyEvent);
       const historyRepo = queryRunner.manager.getRepository(
         BranchTransferBatchHistory,
       );
@@ -6934,31 +6936,50 @@ export class OrderServiceService implements OnModuleInit {
         );
       }
 
+      // Capture prior status + custody BEFORE overwriting, so tracking and
+      // custody events reflect the real previous state. (Previously this was
+      // read AFTER the update, so from_status was always RECEIVED and no
+      // tracking event was ever written.)
+      const priorOrders = await orderRepo.find({
+        where: { id: In(selectedOrderIds), isDeleted: false },
+        select: [
+          'id',
+          'status',
+          'holder_type',
+          'holder_branch_id',
+          'holder_courier_id',
+        ],
+      });
+      const priorById = new Map(
+        priorOrders.map((order) => [String(order.id), order]),
+      );
+
+      const destinationBranchId = String(batch.destination_branch_id);
+      const handoverAt = new Date();
+
       await orderRepo
         .createQueryBuilder()
         .update(Order)
         .set({
           current_batch_id: null,
-          branch_id: String(batch.destination_branch_id),
+          branch_id: destinationBranchId,
           status: Order_status.RECEIVED,
+          // Custody now sits with the receiving branch — the goods physically
+          // arrived. Keeps the holder model in sync with the batch movement.
+          holder_type: OrderHolderType.BRANCH,
+          holder_branch_id: destinationBranchId,
+          holder_courier_id: null,
+          last_handover_at: handoverAt,
+          last_handover_by: requesterId,
         })
         .where('id IN (:...orderIds)', { orderIds: selectedOrderIds })
         .andWhere('"is_deleted" = false')
         .execute();
 
-      const orders = await orderRepo.find({
-        where: { id: In(selectedOrderIds), isDeleted: false },
-        select: ['id', 'status'],
-      });
-
-      const ordersById = new Map(
-        orders.map((order) => [String(order.id), order]),
-      );
       for (const selectedOrderId of selectedOrderIds) {
-        const order = ordersById.get(String(selectedOrderId));
-        const fromStatus = order?.status;
-        if (!fromStatus) continue;
-        if (fromStatus !== Order_status.RECEIVED) {
+        const prior = priorById.get(String(selectedOrderId));
+        const fromStatus = prior?.status;
+        if (fromStatus && fromStatus !== Order_status.RECEIVED) {
           await this.createTrackingEvent(
             {
               order_id: String(selectedOrderId),
@@ -6969,6 +6990,32 @@ export class OrderServiceService implements OnModuleInit {
               note: `Batch #${batchId} dan qabul qilindi`,
             },
             trackingRepo,
+          );
+        }
+
+        // Record the custody handover into the receiving branch.
+        const fromHolderType = prior?.holder_type ?? null;
+        const fromBranchId = prior?.holder_branch_id ?? null;
+        const fromCourierId = prior?.holder_courier_id ?? null;
+        const custodyChanged =
+          fromHolderType !== OrderHolderType.BRANCH ||
+          String(fromBranchId ?? '') !== destinationBranchId ||
+          Boolean(fromCourierId);
+        if (custodyChanged) {
+          await this.createCustodyEvent(
+            {
+              order_id: String(selectedOrderId),
+              from_holder_type: fromHolderType,
+              to_holder_type: OrderHolderType.BRANCH,
+              from_branch_id: fromBranchId,
+              to_branch_id: destinationBranchId,
+              from_courier_id: fromCourierId,
+              to_courier_id: null,
+              changed_by: requesterId,
+              changed_by_role: 'system',
+              note: `Batch #${batchId} dan filialga qabul qilindi`,
+            },
+            custodyRepo,
           );
         }
       }
