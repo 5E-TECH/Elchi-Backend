@@ -483,8 +483,6 @@ export class FinanceGatewayController {
       soldOrdersResponse?.data ??
       [];
 
-    const kassa = Number(ownCashbox?.balance ?? 0);
-
     const berilishiKerak = (Array.isArray(soldOrders) ? soldOrders : []).reduce(
       (sum: number, order: any) => {
         const totalPrice = Number(order?.total_price ?? 0);
@@ -790,10 +788,6 @@ export class FinanceGatewayController {
       if (!receiverBranchId) {
         throw new ForbiddenException("Managerning branch'i topilmadi");
       }
-      const courierResponse = await this.sendIdentity<{ data?: Record<string, any> }>(
-        { cmd: 'identity.user.find_by_id' },
-        { id: dto.courier_id },
-      );
       const courier = courierResponse?.data;
       if (!courier) {
         throw new ForbiddenException('Courier topilmadi');
