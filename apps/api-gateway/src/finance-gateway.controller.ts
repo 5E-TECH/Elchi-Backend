@@ -303,10 +303,14 @@ export class FinanceGatewayController {
 
     const ownCashboxResponse = await this.send(
       { cmd: 'finance.cashbox.my' },
-      { user_id: user.sub, roles: user.roles ?? [], ...query },
+      {
+        user_id: user.sub,
+        branch_id: managerBranchId || null,
+        roles: user.roles ?? [],
+        ...query,
+      },
     );
     const ownCashbox = ownCashboxResponse?.data?.cashbox ?? ownCashboxResponse?.data ?? null;
-    const kassa = Number(ownCashbox?.balance ?? 0);
 
     const managerProfileRes = await this.sendIdentity<{ data?: Record<string, any> }>(
       { cmd: 'identity.user.find_by_id' },
@@ -420,6 +424,8 @@ export class FinanceGatewayController {
       soldOrdersResponse?.data?.items ??
       soldOrdersResponse?.data ??
       [];
+
+    const kassa = Number(ownCashbox?.balance ?? 0);
 
     const berilishiKerak = (Array.isArray(soldOrders) ? soldOrders : []).reduce(
       (sum: number, order: any) => {
@@ -653,9 +659,12 @@ export class FinanceGatewayController {
     @Req() req: { user: JwtUser },
     @Query() query: MainCashboxFilterQueryDto,
   ) {
+    const branchId = this.isManager(req?.user)
+      ? this.extractBranchId(req.user) || (await this.resolveBranchIdByUserId(String(req.user.sub), req.user))
+      : null;
     const response = await this.send(
       { cmd: 'finance.cashbox.my' },
-      { user_id: req.user.sub, roles: req.user.roles ?? [], ...query },
+      { user_id: req.user.sub, branch_id: branchId, roles: req.user.roles ?? [], ...query },
     );
 
     return this.attachCreatedByUsersToHistory(response);
@@ -672,7 +681,14 @@ export class FinanceGatewayController {
     @Body() dto: PaymentFromCourierRequestDto,
   ) {
     const isManager = this.isManager(req?.user);
+    let receiverBranchId = '';
     if (isManager) {
+      receiverBranchId =
+        this.extractBranchId(req.user) ||
+        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
+      if (!receiverBranchId) {
+        throw new ForbiddenException("Managerning branch'i topilmadi");
+      }
       const courierResponse = await this.sendIdentity<{ data?: Record<string, any> }>(
         { cmd: 'identity.user.find_by_id' },
         { id: dto.courier_id },
@@ -707,8 +723,8 @@ export class FinanceGatewayController {
         created_by: req.user.sub,
         ...(isManager
           ? {
-              receiver_user_id: req.user.sub,
-              receiver_cashbox_type: Cashbox_type.FOR_COURIER,
+              receiver_user_id: receiverBranchId,
+              receiver_cashbox_type: Cashbox_type.BRANCH,
             }
           : {}),
       },
@@ -780,7 +796,11 @@ export class FinanceGatewayController {
       });
       const ownHistoryResponse = await this.send(
         { cmd: 'finance.history.find_all' },
-        { ...query, user_id: req.user.sub },
+        {
+          ...query,
+          user_id: settlement.cashbox?.user_id ?? '',
+          cashbox_type: Cashbox_type.BRANCH,
+        },
       );
       const page = Number(query?.page ?? 1);
       const limit = Number(query?.limit ?? 20);
