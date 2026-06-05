@@ -1160,14 +1160,14 @@ export class OrderServiceService implements OnModuleInit {
     // Merge note (dev↔shodiyor): post is optional (a manager can roll back an
     // order that isn't on a courier post yet), but a courier may only roll back
     // a post assigned to them. Both actor checks are kept.
-    const postRes = order.post_id
+    const rollbackPostRes = order.post_id
       ? await rmqSend<{ data?: { id: string; courier_id?: string | null } }>(
           this.logisticsClient,
           { cmd: 'logistics.post.find_by_id' },
           { id: String(order.post_id) },
         ).catch(() => ({ data: undefined }))
       : { data: undefined };
-    const post = postRes?.data;
+    const post = rollbackPostRes?.data;
 
     if (
       isCourier &&
