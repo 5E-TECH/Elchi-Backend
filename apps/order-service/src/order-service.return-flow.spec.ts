@@ -1,19 +1,28 @@
 import { RpcException } from '@nestjs/microservices';
 import { OrderServiceService } from './order-service.service';
 import { Order_status, BranchTransferBatchStatus, BranchTransferDirection } from '@app/common';
-import { Order } from './entities/order.entity';
+import { Order, OrderHolderType } from './entities/order.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
 
 describe('OrderServiceService return flow', () => {
   function makeService(options?: {
     orderStatus?: Order_status;
     hasReceivedReturnBatch?: boolean;
+    branchId?: string;
+    homeBranchId?: string;
+    holderType?: OrderHolderType;
+    holderBranchId?: string | null;
+    returnRequested?: boolean;
   }) {
     const order = {
       id: '101',
       status: options?.orderStatus ?? Order_status.WAITING,
-      branch_id: '10',
-      return_requested: false,
+      branch_id: options?.branchId ?? '10',
+      home_branch_id: options?.homeBranchId ?? '10',
+      holder_type: options?.holderType,
+      holder_branch_id:
+        options?.holderBranchId === undefined ? null : options.holderBranchId,
+      return_requested: options?.returnRequested ?? false,
       return_reason: null,
       isDeleted: false,
     } as any;
@@ -172,5 +181,82 @@ describe('OrderServiceService return flow', () => {
     });
 
     await expectRpc(service.markReturnedToMarket({ id: '9', roles: ['operator'] }, '101'), 400);
+  });
+
+  it('markReturnedToMarket direct path: home-branch courier + return_requested (no batch)', async () => {
+    const { service, orderRepo } = makeService({
+      orderStatus: Order_status.WAITING_CUSTOMER,
+      hasReceivedReturnBatch: false,
+      homeBranchId: '10',
+      holderType: OrderHolderType.COURIER,
+      holderBranchId: '10', // courier belongs to the home branch
+      returnRequested: true,
+    });
+
+    const res: any = await service.markReturnedToMarket(
+      { id: '9', roles: ['manager'] },
+      '101',
+    );
+
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: Order_status.RETURNED_TO_MARKET,
+        return_requested: false,
+      }),
+    );
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('markReturnedToMarket direct path: order held by home branch + return_requested', async () => {
+    const { service, orderRepo } = makeService({
+      orderStatus: Order_status.WAITING_CUSTOMER,
+      hasReceivedReturnBatch: false,
+      homeBranchId: '10',
+      holderType: OrderHolderType.BRANCH,
+      holderBranchId: '10',
+      returnRequested: true,
+    });
+
+    const res: any = await service.markReturnedToMarket(
+      { id: '9', roles: ['manager'] },
+      '101',
+    );
+
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ status: Order_status.RETURNED_TO_MARKET }),
+    );
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('markReturnedToMarket rejects direct handover when courier is not at home branch', async () => {
+    const { service } = makeService({
+      orderStatus: Order_status.WAITING_CUSTOMER,
+      hasReceivedReturnBatch: false,
+      homeBranchId: '10',
+      holderType: OrderHolderType.COURIER,
+      holderBranchId: '99', // courier of a different (non-home) branch
+      returnRequested: true,
+    });
+
+    await expectRpc(
+      service.markReturnedToMarket({ id: '9', roles: ['manager'] }, '101'),
+      400,
+    );
+  });
+
+  it('markReturnedToMarket rejects direct handover without return_requested', async () => {
+    const { service } = makeService({
+      orderStatus: Order_status.RECEIVED,
+      hasReceivedReturnBatch: false,
+      homeBranchId: '10',
+      holderType: OrderHolderType.BRANCH,
+      holderBranchId: '10',
+      returnRequested: false,
+    });
+
+    await expectRpc(
+      service.markReturnedToMarket({ id: '9', roles: ['manager'] }, '101'),
+      400,
+    );
   });
 });

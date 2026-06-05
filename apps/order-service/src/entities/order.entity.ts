@@ -98,6 +98,15 @@ export class Order extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   branch_id!: string | null;
 
+  /**
+   * The order's home (owning/creating) branch — the branch the market submitted
+   * it to. Set once at creation and never overwritten, unlike `branch_id` which
+   * tracks the current physical location. Drives the return-to-market rules
+   * (market may collect at HQ or at the home branch).
+   */
+  @Column({ type: 'bigint', nullable: true })
+  home_branch_id!: string | null;
+
   @ManyToOne(() => Branch, {
     nullable: true,
     createForeignKeyConstraints: false,

@@ -1761,6 +1761,34 @@ export class OrderServiceService implements OnModuleInit {
       this.badRequest('Order allaqachon RETURNED_TO_MARKET holatida');
     }
 
+    // A returned order may be handed to the market at HQ or at its home
+    // (owning) branch. Two physical paths reach a valid handover point:
+    //   1) cross-branch: the order was shipped back in a RECEIVED return batch
+    //      (its destination branch is now where custody sits), or
+    //   2) direct: the home branch's own courier returned it straight to the
+    //      home branch, so custody already sits with the home branch.
+    // Both converge on "custody is held by HQ or the home branch", which the
+    // holder model now tracks. We keep the explicit return-batch check too, for
+    // legacy orders whose holder fields predate custody tracking.
+    const hqBranchId = await this.getHqBranchId();
+    const homeBranchId = String(order.home_branch_id ?? '').trim();
+    const holderBranchId = String(order.holder_branch_id ?? '').trim();
+
+    const validHandoverBranches = new Set(
+      [hqBranchId, homeBranchId].filter(Boolean).map(String),
+    );
+    const heldByHqOrHome =
+      order.holder_type === OrderHolderType.BRANCH &&
+      validHandoverBranches.has(holderBranchId);
+
+    // Direct path: the home branch's OWN courier may return straight to the home
+    // branch, collapsing courier→branch→market into one handover — but only when
+    // the order is held by a courier of its home branch (per the product rule).
+    const heldByHomeBranchCourier =
+      order.holder_type === OrderHolderType.COURIER &&
+      homeBranchId.length > 0 &&
+      holderBranchId === homeBranchId;
+
     const receivedReturnBatchItem = await this.transferBatchItemRepo
       .createQueryBuilder('item')
       .innerJoin(
@@ -1782,9 +1810,16 @@ export class OrderServiceService implements OnModuleInit {
       .select(['item.id'])
       .getRawOne();
 
-    if (!receivedReturnBatchItem) {
+    // The direct path requires an explicit return intent (return_requested),
+    // so an order merely sitting at its branch awaiting delivery can't be
+    // wrongly marked as handed back to the market.
+    const directHandoverAllowed =
+      Boolean(order.return_requested) &&
+      (heldByHqOrHome || heldByHomeBranchCourier);
+
+    if (!receivedReturnBatchItem && !directHandoverAllowed) {
       this.badRequest(
-        "Order return paketda filialga qabul qilingan bo'lishi kerak",
+        "Order HQ yoki o'z filialiga qaytarib qabul qilingan bo'lishi kerak (return paket yoki to'g'ridan-to'g'ri topshirish orqali)",
       );
     }
 
@@ -1877,6 +1912,7 @@ export class OrderServiceService implements OnModuleInit {
       canceled_post_id?: string | null;
       sold_at?: string | null;
       branch_id?: string | null;
+      home_branch_id?: string | null;
       current_batch_id?: string | null;
       courier_id?: string | null;
       assigned_at?: string | Date | null;
@@ -1935,6 +1971,10 @@ export class OrderServiceService implements OnModuleInit {
         canceled_post_id: dto.canceled_post_id ?? null,
         sold_at: dto.sold_at ?? null,
         branch_id: resolvedBranchId,
+        // Home (owning) branch — set once, never overwritten. Defaults to the
+        // creating branch when not explicitly provided (e.g. partly-sell child
+        // orders pass the parent's home branch).
+        home_branch_id: dto.home_branch_id ?? resolvedBranchId,
         current_batch_id: dto.current_batch_id ?? null,
         courier_id: dto.courier_id ?? null,
         assigned_at: this.normalizeDateTimeInput(dto.assigned_at),
@@ -3905,6 +3945,7 @@ export class OrderServiceService implements OnModuleInit {
           operator: order.operator ?? null,
           post_id: order.post_id ?? null,
           canceled_post_id: order.canceled_post_id ?? null,
+          home_branch_id: order.home_branch_id ?? order.branch_id ?? null,
           district_id: order.district_id ?? null,
           region_id: order.region_id ?? null,
           address: order.address ?? null,
@@ -5669,7 +5710,14 @@ export class OrderServiceService implements OnModuleInit {
         current_batch_id: IsNull(),
         isDeleted: false,
       },
-      select: ['id', 'branch_id', 'region_id', 'market_id', 'total_price'],
+      select: [
+        'id',
+        'branch_id',
+        'home_branch_id',
+        'region_id',
+        'market_id',
+        'total_price',
+      ],
     });
 
     if (orders.length !== orderIds.length) {
@@ -5678,20 +5726,30 @@ export class OrderServiceService implements OnModuleInit {
       );
     }
 
+    // A return ships goods from where they currently are (source) back to the
+    // order's HOME (owning) branch. If an order's home IS the source branch it
+    // is already home — it must be handed to the market directly, not via a
+    // cross-branch return batch (which can't target its own source).
+    const resolveReturnDestination = (order: {
+      home_branch_id?: string | null;
+      branch_id?: string | null;
+    }): string =>
+      String(order.home_branch_id ?? order.branch_id ?? '').trim();
+
     const invalidSourceOrder = orders.find(
-      (order) => String(order.branch_id ?? '').trim() === sourceBranchId,
+      (order) => resolveReturnDestination(order) === sourceBranchId,
     );
     if (invalidSourceOrder) {
       this.badRequest(
-        'Return batch target branch must be different from source branch',
+        "Bu order allaqachon o'z (home) filialida — uni return paket bilan emas, to'g'ridan-to'g'ri market egasiga topshiring",
       );
     }
 
     const groupedByDestinationBranch = new Map<string, Order[]>();
     for (const order of orders) {
-      const destinationBranchId = String(order.branch_id ?? '').trim();
+      const destinationBranchId = resolveReturnDestination(order);
       if (!destinationBranchId) {
-        this.badRequest(`Order ${String(order.id)} has no original branch_id`);
+        this.badRequest(`Order ${String(order.id)} has no home branch_id`);
       }
       const list = groupedByDestinationBranch.get(destinationBranchId) ?? [];
       list.push(order);
