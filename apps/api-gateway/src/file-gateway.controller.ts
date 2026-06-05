@@ -10,6 +10,7 @@ import {
   Post,
   Query,
   Req,
+  Res,
   UploadedFile,
   UseGuards,
   UseInterceptors,
@@ -29,11 +30,11 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { GeneratePdfRequestDto, GenerateQrRequestDto } from './dto/file.swagger.dto';
+import type { Response } from 'express';
 
 @ApiTags('File')
 @ApiBearerAuth()
 @Controller()
-@UseGuards(JwtAuthGuard)
 export class FileGatewayController {
   private readonly allowedMime = new Set<string>([
     'image/png',
@@ -46,6 +47,7 @@ export class FileGatewayController {
   constructor(@Inject('FILE') private readonly fileClient: ClientProxy) {}
 
   @Post('files/upload')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Upload file to MinIO (multipart/form-data)' })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
@@ -94,6 +96,7 @@ export class FileGatewayController {
   }
 
   @Get('files/:key')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get signed URL for file key' })
   @ApiParam({ name: 'key', description: 'Object key in MinIO' })
   @ApiQuery({ name: 'expires_in', required: false, type: Number, example: 3600 })
@@ -104,7 +107,31 @@ export class FileGatewayController {
     return this.fileClient.send({ cmd: 'file.get_url' }, { key, expires_in });
   }
 
+  @Get('files/view/:key')
+  @ApiOperation({ summary: 'Public redirect to file URL for image/file viewing' })
+  @ApiParam({ name: 'key', description: 'Object key in MinIO' })
+  async viewFile(
+    @Param('key') key: string,
+    @Res() res: Response,
+    @Query('expires_in', new ParseIntPipe({ optional: true })) expires_in?: number,
+  ) {
+    const response = await firstValueFrom(
+      this.fileClient.send<{ data?: { url?: string } }>(
+        { cmd: 'file.get_url' },
+        { key, expires_in },
+      ),
+    );
+
+    const url = response?.data?.url;
+    if (!url) {
+      throw new BadRequestException('File URL generation failed');
+    }
+
+    return res.redirect(url);
+  }
+
   @Delete('files/:key')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Delete file by key' })
   @ApiParam({ name: 'key', description: 'Object key in MinIO' })
   deleteFile(@Param('key') key: string) {
@@ -112,6 +139,7 @@ export class FileGatewayController {
   }
 
   @Post('files/qr')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Generate QR and upload to MinIO' })
   @ApiBody({ type: GenerateQrRequestDto })
   generateQr(@Body() dto: GenerateQrRequestDto) {
@@ -119,6 +147,7 @@ export class FileGatewayController {
   }
 
   @Post('files/pdf')
+  @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Generate PDF and upload to MinIO' })
   @ApiBody({ type: GeneratePdfRequestDto })
   generatePdf(@Body() dto: GeneratePdfRequestDto) {
