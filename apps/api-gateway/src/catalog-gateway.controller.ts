@@ -268,6 +268,7 @@ export class CatalogGatewayController {
       buffer: Buffer;
     } | undefined,
     @Body() dto: UpdateProductRequestDto,
+    @Req() req: { user: JwtUser },
   ) {
     let imageUrl = dto.image_url;
     if (file) {
