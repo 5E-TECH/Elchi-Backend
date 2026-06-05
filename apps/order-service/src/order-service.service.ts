@@ -906,6 +906,40 @@ export class OrderServiceService implements OnModuleInit {
     return response?.data;
   }
 
+  /**
+   * Resolve the non-HQ branch a sale should settle through, or null for HQ /
+   * unknown. Branches are separate cash owners: COD collected by a branch's
+   * courier rolls courier → branch → HQ. The branch a sale belongs to is where
+   * custody currently sits (holder branch, falling back to the order branch).
+   */
+  private async resolveSettlementBranchId(order: {
+    holder_branch_id?: string | null;
+    branch_id?: string | null;
+  }): Promise<string | null> {
+    const branchId = String(
+      order.holder_branch_id ?? order.branch_id ?? '',
+    ).trim();
+    if (!branchId) {
+      return null;
+    }
+    const hqId = String((await this.getHqBranchId()) ?? '').trim();
+    return branchId === hqId ? null : branchId;
+  }
+
+  /**
+   * Ensure a branch's BRANCH-type cashbox exists before we post to it (the
+   * finance balance update throws if the cashbox is missing). Idempotent — a
+   * pre-existing cashbox returns an "already exists" error we deliberately
+   * swallow.
+   */
+  private async ensureBranchCashbox(branchId: string): Promise<void> {
+    await rmqSend(
+      this.financeClient,
+      { cmd: 'finance.cashbox.create' },
+      { user_id: String(branchId), cashbox_type: Cashbox_type.BRANCH },
+    ).catch(() => undefined);
+  }
+
   private async updateCashboxBalance(
     data: {
       user_id: string;
@@ -2942,6 +2976,21 @@ export class OrderServiceService implements OnModuleInit {
       this.notFound('Courier cashbox not found');
     }
 
+    // Branch settlement: a non-HQ branch is a separate cash owner. Mirror the
+    // courier-side COD entry onto the branch's cashbox (courier → branch → HQ)
+    // so HQ can see what the branch owes and settle it later
+    // (paymentFromBranchToMain). Ensure the cashbox exists before posting.
+    const settlementBranchId = await this.resolveSettlementBranchId(order);
+    if (settlementBranchId) {
+      await this.ensureBranchCashbox(settlementBranchId);
+    }
+    const branchCashbox = settlementBranchId
+      ? await this.getCashboxByUser(
+          settlementBranchId,
+          Cashbox_type.BRANCH,
+        ).catch(() => null)
+      : null;
+
     const marketBalanceBefore = Number(marketCashbox.balance ?? 0);
 
     const marketTariff =
@@ -3030,6 +3079,40 @@ export class OrderServiceService implements OnModuleInit {
       ): Promise<void> =>
         this.updateCashboxBalance({ ...data, dedup_epoch: saleEpoch }, tx);
 
+      // Post the courier-side COD entry and mirror it onto the branch cashbox
+      // (courier → branch → HQ). Same amount/direction; the branch leg only
+      // fires for a non-HQ branch sale where the cashbox was ensured above.
+      const payCourierAndBranch = async (
+        amount: number,
+        operation_type: Operation_type,
+        comment: string,
+      ): Promise<void> => {
+        if (courierCashbox) {
+          await pay({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount,
+            operation_type,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment,
+          });
+        }
+        if (branchCashbox && settlementBranchId) {
+          await pay({
+            user_id: settlementBranchId,
+            cashbox_type: Cashbox_type.BRANCH,
+            amount,
+            operation_type,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment,
+          });
+        }
+      };
+
       if (totalPrice === 0) {
         await pay({
           user_id: String(order.market_id),
@@ -3041,18 +3124,11 @@ export class OrderServiceService implements OnModuleInit {
           created_by: String(requester.id),
           comment: "0 so'mlik mahsulot sotuvi",
         });
-        if (courierCashbox) {
-          await pay({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: courierTariff,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: "0 so'mlik mahsulot sotuvi",
-          });
-        }
+        await payCourierAndBranch(
+          courierTariff,
+          Operation_type.EXPENSE,
+          "0 so'mlik mahsulot sotuvi",
+        );
       } else if (totalPrice < courierTariff) {
         await pay({
           user_id: String(order.market_id),
@@ -3064,18 +3140,11 @@ export class OrderServiceService implements OnModuleInit {
           created_by: String(requester.id),
           comment: `${totalPrice} so'mlik mahsulot sotuvi`,
         });
-        if (courierCashbox) {
-          await pay({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: Math.max(courierTariff - totalPrice, 0),
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: `${totalPrice} so'mlik mahsulot sotuvi`,
-          });
-        }
+        await payCourierAndBranch(
+          Math.max(courierTariff - totalPrice, 0),
+          Operation_type.EXPENSE,
+          `${totalPrice} so'mlik mahsulot sotuvi`,
+        );
       } else if (totalPrice < marketTariff) {
         await pay({
           user_id: String(order.market_id),
@@ -3087,18 +3156,11 @@ export class OrderServiceService implements OnModuleInit {
           created_by: String(requester.id),
           comment: `${totalPrice} so'mlik mahsulot sotuvi`,
         });
-        if (courierCashbox) {
-          await pay({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: Math.max(courierToBePaid, 0),
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: `${totalPrice} so'mlik mahsulot sotuvi`,
-          });
-        }
+        await payCourierAndBranch(
+          Math.max(courierToBePaid, 0),
+          Operation_type.INCOME,
+          `${totalPrice} so'mlik mahsulot sotuvi`,
+        );
       } else {
         await pay({
           user_id: String(order.market_id),
@@ -3110,18 +3172,11 @@ export class OrderServiceService implements OnModuleInit {
           created_by: String(requester.id),
           comment: finalComment,
         });
-        if (courierCashbox) {
-          await pay({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: Math.max(courierToBePaid, 0),
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: finalComment,
-          });
-        }
+        await payCourierAndBranch(
+          Math.max(courierToBePaid, 0),
+          Operation_type.INCOME,
+          finalComment,
+        );
       }
 
       if (extraCost > 0) {
@@ -3587,6 +3642,18 @@ export class OrderServiceService implements OnModuleInit {
       this.notFound('Courier cashbox not found');
     }
 
+    // Branch settlement mirror (courier → branch → HQ) for non-HQ branch sales.
+    const settlementBranchId = await this.resolveSettlementBranchId(order);
+    if (settlementBranchId) {
+      await this.ensureBranchCashbox(settlementBranchId);
+    }
+    const branchCashbox = settlementBranchId
+      ? await this.getCashboxByUser(
+          settlementBranchId,
+          Cashbox_type.BRANCH,
+        ).catch(() => null)
+      : null;
+
     const marketBalanceBefore = Number(marketCashbox.balance ?? 0);
     const marketTariff =
       order.market_tariff != null
@@ -3735,6 +3802,39 @@ export class OrderServiceService implements OnModuleInit {
       ): Promise<void> =>
         this.updateCashboxBalance({ ...data, dedup_epoch: saleEpoch }, tx);
 
+      // Courier-side COD entry mirrored onto the branch cashbox
+      // (courier → branch → HQ) for non-HQ branch sales.
+      const payCourierAndBranch = async (
+        amount: number,
+        operation_type: Operation_type,
+        comment: string,
+      ): Promise<void> => {
+        if (courierCashbox) {
+          await pay({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount,
+            operation_type,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment,
+          });
+        }
+        if (branchCashbox && settlementBranchId) {
+          await pay({
+            user_id: settlementBranchId,
+            cashbox_type: Cashbox_type.BRANCH,
+            amount,
+            operation_type,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment,
+          });
+        }
+      };
+
       // Persist the reduced quantities for partially-returned line items.
       for (const existingItem of existingItems) {
         const dtoItem = dto.order_item_info.find(
@@ -3760,18 +3860,11 @@ export class OrderServiceService implements OnModuleInit {
           created_by: String(requester.id),
           comment: "0 so'mlik mahsulot qisman sotuvi",
         });
-        if (courierCashbox) {
-          await pay({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: courierTariff,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: "0 so'mlik mahsulot qisman sotuvi",
-          });
-        }
+        await payCourierAndBranch(
+          courierTariff,
+          Operation_type.EXPENSE,
+          "0 so'mlik mahsulot qisman sotuvi",
+        );
       } else if (price < courierTariff) {
         await pay({
           user_id: String(order.market_id),
@@ -3783,18 +3876,11 @@ export class OrderServiceService implements OnModuleInit {
           created_by: String(requester.id),
           comment: `${price} so'mlik mahsulot qisman sotuvi`,
         });
-        if (courierCashbox) {
-          await pay({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: Math.max(courierTariff - price, 0),
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: `${price} so'mlik mahsulot qisman sotuvi`,
-          });
-        }
+        await payCourierAndBranch(
+          Math.max(courierTariff - price, 0),
+          Operation_type.EXPENSE,
+          `${price} so'mlik mahsulot qisman sotuvi`,
+        );
       } else if (price < marketTariff) {
         await pay({
           user_id: String(order.market_id),
@@ -3806,18 +3892,11 @@ export class OrderServiceService implements OnModuleInit {
           created_by: String(requester.id),
           comment: `${price} so'mlik mahsulot qisman sotuvi`,
         });
-        if (courierCashbox) {
-          await pay({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: Math.max(courierToBePaid, 0),
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: `${price} so'mlik mahsulot qisman sotuvi`,
-          });
-        }
+        await payCourierAndBranch(
+          Math.max(courierToBePaid, 0),
+          Operation_type.INCOME,
+          `${price} so'mlik mahsulot qisman sotuvi`,
+        );
       } else {
         await pay({
           user_id: String(order.market_id),
@@ -3829,18 +3908,11 @@ export class OrderServiceService implements OnModuleInit {
           created_by: String(requester.id),
           comment: finalComment,
         });
-        if (courierCashbox) {
-          await pay({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: Math.max(courierToBePaid, 0),
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: finalComment,
-          });
-        }
+        await payCourierAndBranch(
+          Math.max(courierToBePaid, 0),
+          Operation_type.INCOME,
+          finalComment,
+        );
       }
 
       if (extraCost > 0) {
