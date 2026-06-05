@@ -113,21 +113,24 @@ export class FileGatewayController {
   async viewFile(
     @Param('key') key: string,
     @Res() res: Response,
-    @Query('expires_in', new ParseIntPipe({ optional: true })) expires_in?: number,
   ) {
     const response = await firstValueFrom(
-      this.fileClient.send<{ data?: { url?: string } }>(
-        { cmd: 'file.get_url' },
-        { key, expires_in },
+      this.fileClient.send<{ data?: { body_base64?: string; mime_type?: string } }>(
+        { cmd: 'file.read' },
+        { key },
       ),
     );
 
-    const url = response?.data?.url;
-    if (!url) {
-      throw new BadRequestException('File URL generation failed');
+    const bodyBase64 = response?.data?.body_base64;
+    const mimeType = response?.data?.mime_type ?? 'application/octet-stream';
+    if (!bodyBase64 || typeof bodyBase64 !== 'string') {
+      throw new BadRequestException('File read failed');
     }
 
-    return res.redirect(url);
+    const buffer = Buffer.from(bodyBase64, 'base64');
+    res.setHeader('Content-Type', mimeType);
+    res.setHeader('Cache-Control', 'public, max-age=3600');
+    return res.send(buffer);
   }
 
   @Delete('files/:key')
