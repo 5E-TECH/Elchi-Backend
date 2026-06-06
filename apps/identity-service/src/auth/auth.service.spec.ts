@@ -21,6 +21,13 @@ jest.mock('@app/common', () => ({
     INVESTOR: 'investor',
   },
   Where_deliver: { CENTER: 'center', HOME: 'home' },
+  CourierCompensationMode: {
+    SALARY_ONLY: 'salary_only',
+    PER_ORDER: 'per_order',
+    SALARY_PLUS_PER_ORDER: 'salary_plus_per_order',
+  },
+  Commission_type: { PERCENT: 'percent', FIXED: 'fixed' },
+  numericTransformer: { to: (v: unknown) => v, from: (v: unknown) => v },
   rmqSend: jest.fn(),
   BaseEntity: class BaseEntity {},
 }));
