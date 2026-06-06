@@ -21,10 +21,12 @@ import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.e
 import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
 import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.entity';
 import {
+  BranchOwnership,
   BranchTransferBatchAction,
   BranchTransferBatchStatus,
   BranchTransferDirection,
   Cashbox_type,
+  CourierCompensationMode,
   ExpenseProofCondition,
   Operation_type,
   Order_status,
@@ -32,6 +34,7 @@ import {
   PaymentMethod,
   Post_status,
   Roles,
+  SettlementStatus,
   Source_type,
   Where_deliver,
   rmqSend,
@@ -856,6 +859,7 @@ export class OrderServiceService implements OnModuleInit {
         name?: string;
         tariff_home?: number;
         tariff_center?: number;
+        compensation_mode?: string | null;
       }>;
     }>(
       this.identityClient,
@@ -938,6 +942,48 @@ export class OrderServiceService implements OnModuleInit {
       { cmd: 'finance.cashbox.create' },
       { user_id: String(branchId), cashbox_type: Cashbox_type.BRANCH },
     ).catch(() => undefined);
+  }
+
+  /**
+   * The per-order amount a branch KEEPS for a sold order: its configured
+   * per_order_share when the branch is PARTNER-owned, otherwise 0 (OWNED
+   * branches remit everything to HQ). Returns 0 for HQ / unknown branch.
+   */
+  private async resolveBranchShare(
+    branchId: string | null,
+  ): Promise<number> {
+    if (!branchId) {
+      return 0;
+    }
+    const res = await rmqSend<{
+      data?: { ownership?: string; per_order_share?: number | string };
+    }>(
+      this.branchClient,
+      { cmd: 'branch.find_by_id' },
+      { id: String(branchId) },
+    ).catch(() => ({ data: undefined }));
+    const branch = res?.data;
+    if (!branch || branch.ownership !== BranchOwnership.PARTNER) {
+      return 0;
+    }
+    const share = Number(branch.per_order_share ?? 0);
+    return Number.isFinite(share) && share > 0 ? share : 0;
+  }
+
+  /**
+   * The per-order amount a courier KEEPS, per their compensation mode:
+   * SALARY_ONLY keeps nothing (0); PER_ORDER / SALARY_PLUS_PER_ORDER keep the
+   * configured tariff. Defaults to keeping the tariff when the mode is unknown
+   * (back-compatible with couriers created before the mode existed).
+   */
+  private resolveCourierShare(
+    courier: { compensation_mode?: string | null } | null | undefined,
+    courierTariff: number,
+  ): number {
+    if (courier?.compensation_mode === CourierCompensationMode.SALARY_ONLY) {
+      return 0;
+    }
+    return courierTariff;
   }
 
   private async updateCashboxBalance(
@@ -1119,10 +1165,15 @@ export class OrderServiceService implements OnModuleInit {
         );
       }
 
-      // Company profit on this order = what the market paid us minus what we
-      // pay the courier. Tariffs are snapshotted on the order at sale time.
+      // Company (HQ) profit on this order = market tariff minus what the courier
+      // keeps minus what a PARTNER branch keeps. Shares are snapshotted at sale;
+      // fall back to the tariff for the courier when no share was recorded.
+      const courierShareSnap = Number(
+        order.courier_share ?? order.courier_tariff ?? 0,
+      );
+      const branchShareSnap = Number(order.branch_share ?? 0);
       const sellProfit =
-        Number(order.market_tariff ?? 0) - Number(order.courier_tariff ?? 0);
+        Number(order.market_tariff ?? 0) - courierShareSnap - branchShareSnap;
       if (sellProfit !== 0) {
         await this.outbox.enqueue(
           'FINANCE',
@@ -2990,6 +3041,10 @@ export class OrderServiceService implements OnModuleInit {
           Cashbox_type.BRANCH,
         ).catch(() => null)
       : null;
+    // branchShare = what a PARTNER branch keeps per order (0 for OWNED / HQ).
+    const branchShare = settlementBranchId
+      ? await this.resolveBranchShare(settlementBranchId)
+      : 0;
 
     const marketBalanceBefore = Number(marketCashbox.balance ?? 0);
 
@@ -3001,6 +3056,8 @@ export class OrderServiceService implements OnModuleInit {
       order.where_deliver === Where_deliver.CENTER
         ? Number(courier?.tariff_center ?? 0)
         : Number(courier?.tariff_home ?? 0);
+    // courierShare = what the courier keeps (0 for salary-only couriers).
+    const courierShare = this.resolveCourierShare(courier, courierTariff);
 
     const totalPrice = Number(order.total_price ?? 0);
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
@@ -3019,22 +3076,23 @@ export class OrderServiceService implements OnModuleInit {
       extraCost,
     );
 
-    let toBePaid = 0;
-    let courierToBePaid = 0;
+    // Decoupled COD legs — each independent of the others' thresholds:
+    //   market : HQ owes market (total − marketTariff); reversed if total < marketTariff
+    //   courier: courier owes branch (total − courierShare); HQ tops up if total < courierShare
+    //   branch : branch owes HQ (total − courierShare − branchShare); PARTNER keeps branchShare
+    const marketIncome = Math.max(totalPrice - marketTariff, 0);
+    const marketExpense = Math.max(marketTariff - totalPrice, 0);
+    const courierIncome = Math.max(totalPrice - courierShare, 0);
+    const courierExpense = Math.max(courierShare - totalPrice, 0);
+    const branchNet = totalPrice - courierShare - branchShare;
+    const saleComment =
+      totalPrice === 0
+        ? "0 so'mlik mahsulot sotuvi"
+        : totalPrice < marketTariff
+          ? `${totalPrice} so'mlik mahsulot sotuvi`
+          : finalComment;
 
-    // Compute payment state up front so we can derive nextStatus before opening
-    // the transaction. Pure math, no IO.
-    if (totalPrice === 0) {
-      // no toBePaid / courierToBePaid changes; both expenses applied below
-    } else if (totalPrice < courierTariff) {
-      // both expenses
-    } else if (totalPrice < marketTariff) {
-      courierToBePaid = totalPrice - courierTariff;
-    } else {
-      toBePaid = totalPrice - marketTariff;
-      courierToBePaid = totalPrice - courierTariff;
-    }
-
+    const toBePaid = marketIncome;
     const netToBePaid = Math.max(Number(toBePaid) || 0, 0);
     const requestedPaidAmount = Number(
       dto?.paidAmount ?? order.paid_amount ?? 0,
@@ -3079,104 +3137,83 @@ export class OrderServiceService implements OnModuleInit {
       ): Promise<void> =>
         this.updateCashboxBalance({ ...data, dedup_epoch: saleEpoch }, tx);
 
-      // Post the courier-side COD entry and mirror it onto the branch cashbox
-      // (courier → branch → HQ). Same amount/direction; the branch leg only
-      // fires for a non-HQ branch sale where the cashbox was ensured above.
-      const payCourierAndBranch = async (
-        amount: number,
-        operation_type: Operation_type,
-        comment: string,
-      ): Promise<void> => {
-        if (courierCashbox) {
-          await pay({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount,
-            operation_type,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment,
-          });
-        }
-        if (branchCashbox && settlementBranchId) {
-          await pay({
-            user_id: settlementBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount,
-            operation_type,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment,
-          });
-        }
-      };
-
-      if (totalPrice === 0) {
+      // ---- Market leg (HQ ↔ market) ----
+      if (marketIncome > 0) {
         await pay({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: marketTariff,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: "0 so'mlik mahsulot sotuvi",
-        });
-        await payCourierAndBranch(
-          courierTariff,
-          Operation_type.EXPENSE,
-          "0 so'mlik mahsulot sotuvi",
-        );
-      } else if (totalPrice < courierTariff) {
-        await pay({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Math.max(marketTariff - totalPrice, 0),
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: `${totalPrice} so'mlik mahsulot sotuvi`,
-        });
-        await payCourierAndBranch(
-          Math.max(courierTariff - totalPrice, 0),
-          Operation_type.EXPENSE,
-          `${totalPrice} so'mlik mahsulot sotuvi`,
-        );
-      } else if (totalPrice < marketTariff) {
-        await pay({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Math.max(marketTariff - totalPrice, 0),
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: `${totalPrice} so'mlik mahsulot sotuvi`,
-        });
-        await payCourierAndBranch(
-          Math.max(courierToBePaid, 0),
-          Operation_type.INCOME,
-          `${totalPrice} so'mlik mahsulot sotuvi`,
-        );
-      } else {
-        await pay({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Math.max(toBePaid, 0),
+          amount: marketIncome,
           operation_type: Operation_type.INCOME,
           source_type: Source_type.SELL,
           source_id: String(order.id),
           created_by: String(requester.id),
-          comment: finalComment,
+          comment: saleComment,
         });
-        await payCourierAndBranch(
-          Math.max(courierToBePaid, 0),
-          Operation_type.INCOME,
-          finalComment,
-        );
+      } else if (marketExpense > 0) {
+        await pay({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: marketExpense,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: saleComment,
+        });
+      }
+
+      // ---- Courier leg (courier ↔ branch) ----
+      if (courierCashbox) {
+        if (courierIncome > 0) {
+          await pay({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: courierIncome,
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: saleComment,
+          });
+        } else if (courierExpense > 0) {
+          await pay({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: courierExpense,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: saleComment,
+          });
+        }
+      }
+
+      // ---- Branch leg (branch ↔ HQ) — only for non-HQ branch sales ----
+      if (branchCashbox && settlementBranchId) {
+        if (branchNet > 0) {
+          await pay({
+            user_id: settlementBranchId,
+            cashbox_type: Cashbox_type.BRANCH,
+            amount: branchNet,
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: saleComment,
+          });
+        } else if (branchNet < 0) {
+          await pay({
+            user_id: settlementBranchId,
+            cashbox_type: Cashbox_type.BRANCH,
+            amount: -branchNet,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: saleComment,
+          });
+        }
       }
 
       if (extraCost > 0) {
@@ -3213,12 +3250,12 @@ export class OrderServiceService implements OnModuleInit {
           to_be_paid: netToBePaid,
           paid_amount: paidAfter,
           sold_at: saleEpoch,
-          // Snapshot the tariffs onto the order so the SELL_PROFIT ledger entry
-          // (market_tariff - courier_tariff) in enqueueFinanceOnStatusChange is
-          // non-zero. Without this the company margin was never recorded for the
-          // normal sale path.
+          // Snapshot tariffs + the actually-kept shares so SELL_PROFIT
+          // (marketTariff − courierShare − branchShare) and rollback are exact.
           market_tariff: order.market_tariff ?? marketTariff,
           courier_tariff: order.courier_tariff ?? courierTariff,
+          courier_share: courierShare,
+          branch_share: branchShare,
           comment: finalComment || null,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
         },
@@ -3653,6 +3690,9 @@ export class OrderServiceService implements OnModuleInit {
           Cashbox_type.BRANCH,
         ).catch(() => null)
       : null;
+    const branchShare = settlementBranchId
+      ? await this.resolveBranchShare(settlementBranchId)
+      : 0;
 
     const marketBalanceBefore = Number(marketCashbox.balance ?? 0);
     const marketTariff =
@@ -3667,6 +3707,7 @@ export class OrderServiceService implements OnModuleInit {
         : order.where_deliver === Where_deliver.CENTER
           ? Number(courier?.tariff_center ?? 0)
           : Number(courier?.tariff_home ?? 0);
+    const courierShare = this.resolveCourierShare(courier, courierTariff);
 
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
     // Partly-sell is a sell variant → evaluated against SELL_* conditions, with
@@ -3748,21 +3789,21 @@ export class OrderServiceService implements OnModuleInit {
           item !== null,
       );
 
-    // Compute the payment math up front (pure, no IO) so we can derive the next
-    // status before opening the transaction.
-    let toBePaid = 0;
-    let courierToBePaid = 0;
-    if (price === 0) {
-      // no toBePaid / courierToBePaid (both expenses applied below)
-    } else if (price < courierTariff) {
-      // both expenses
-    } else if (price < marketTariff) {
-      courierToBePaid = price - courierTariff;
-    } else {
-      toBePaid = price - marketTariff;
-      courierToBePaid = price - courierTariff;
-    }
+    // Decoupled COD legs (partial price as the operation total). See sellOrder
+    // for the model: market / courier / branch each settle independently.
+    const marketIncome = Math.max(price - marketTariff, 0);
+    const marketExpense = Math.max(marketTariff - price, 0);
+    const courierIncome = Math.max(price - courierShare, 0);
+    const courierExpense = Math.max(courierShare - price, 0);
+    const branchNet = price - courierShare - branchShare;
+    const saleComment =
+      price === 0
+        ? "0 so'mlik mahsulot qisman sotuvi"
+        : price < marketTariff
+          ? `${price} so'mlik mahsulot qisman sotuvi`
+          : finalComment;
 
+    const toBePaid = marketIncome;
     const netToBePaid = Math.max(Number(toBePaid) || 0, 0);
     const currentPaid = Math.min(
       Math.max(Number(order.paid_amount ?? 0), 0),
@@ -3802,39 +3843,6 @@ export class OrderServiceService implements OnModuleInit {
       ): Promise<void> =>
         this.updateCashboxBalance({ ...data, dedup_epoch: saleEpoch }, tx);
 
-      // Courier-side COD entry mirrored onto the branch cashbox
-      // (courier → branch → HQ) for non-HQ branch sales.
-      const payCourierAndBranch = async (
-        amount: number,
-        operation_type: Operation_type,
-        comment: string,
-      ): Promise<void> => {
-        if (courierCashbox) {
-          await pay({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount,
-            operation_type,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment,
-          });
-        }
-        if (branchCashbox && settlementBranchId) {
-          await pay({
-            user_id: settlementBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount,
-            operation_type,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment,
-          });
-        }
-      };
-
       // Persist the reduced quantities for partially-returned line items.
       for (const existingItem of existingItems) {
         const dtoItem = dto.order_item_info.find(
@@ -3849,70 +3857,83 @@ export class OrderServiceService implements OnModuleInit {
         }
       }
 
-      if (price === 0) {
+      // ---- Market leg ----
+      if (marketIncome > 0) {
         await pay({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: marketTariff,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: "0 so'mlik mahsulot qisman sotuvi",
-        });
-        await payCourierAndBranch(
-          courierTariff,
-          Operation_type.EXPENSE,
-          "0 so'mlik mahsulot qisman sotuvi",
-        );
-      } else if (price < courierTariff) {
-        await pay({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Math.max(marketTariff - price, 0),
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: `${price} so'mlik mahsulot qisman sotuvi`,
-        });
-        await payCourierAndBranch(
-          Math.max(courierTariff - price, 0),
-          Operation_type.EXPENSE,
-          `${price} so'mlik mahsulot qisman sotuvi`,
-        );
-      } else if (price < marketTariff) {
-        await pay({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Math.max(marketTariff - price, 0),
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.SELL,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: `${price} so'mlik mahsulot qisman sotuvi`,
-        });
-        await payCourierAndBranch(
-          Math.max(courierToBePaid, 0),
-          Operation_type.INCOME,
-          `${price} so'mlik mahsulot qisman sotuvi`,
-        );
-      } else {
-        await pay({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Math.max(toBePaid, 0),
+          amount: marketIncome,
           operation_type: Operation_type.INCOME,
           source_type: Source_type.SELL,
           source_id: String(order.id),
           created_by: String(requester.id),
-          comment: finalComment,
+          comment: saleComment,
         });
-        await payCourierAndBranch(
-          Math.max(courierToBePaid, 0),
-          Operation_type.INCOME,
-          finalComment,
-        );
+      } else if (marketExpense > 0) {
+        await pay({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: marketExpense,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: saleComment,
+        });
+      }
+
+      // ---- Courier leg ----
+      if (courierCashbox) {
+        if (courierIncome > 0) {
+          await pay({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: courierIncome,
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: saleComment,
+          });
+        } else if (courierExpense > 0) {
+          await pay({
+            user_id: actorCourierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: courierExpense,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: saleComment,
+          });
+        }
+      }
+
+      // ---- Branch leg (non-HQ branch only) ----
+      if (branchCashbox && settlementBranchId) {
+        if (branchNet > 0) {
+          await pay({
+            user_id: settlementBranchId,
+            cashbox_type: Cashbox_type.BRANCH,
+            amount: branchNet,
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: saleComment,
+          });
+        } else if (branchNet < 0) {
+          await pay({
+            user_id: settlementBranchId,
+            cashbox_type: Cashbox_type.BRANCH,
+            amount: -branchNet,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.SELL,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: saleComment,
+          });
+        }
       }
 
       if (extraCost > 0) {
@@ -3952,6 +3973,8 @@ export class OrderServiceService implements OnModuleInit {
           total_price: price,
           market_tariff: order.market_tariff ?? marketTariff,
           courier_tariff: order.courier_tariff ?? courierTariff,
+          courier_share: courierShare,
+          branch_share: branchShare,
           return_requested: false,
           comment: finalComment || null,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
@@ -4191,6 +4214,8 @@ export class OrderServiceService implements OnModuleInit {
       total_price?: number;
       market_tariff?: number | null;
       courier_tariff?: number | null;
+      courier_share?: number | null;
+      branch_share?: number | null;
       to_be_paid?: number;
       paid_amount?: number;
       status?: Order_status;
@@ -4227,6 +4252,8 @@ export class OrderServiceService implements OnModuleInit {
       total_price?: number;
       market_tariff?: number | null;
       courier_tariff?: number | null;
+      courier_share?: number | null;
+      branch_share?: number | null;
       to_be_paid?: number;
       paid_amount?: number;
       status?: Order_status;
@@ -4272,6 +4299,14 @@ export class OrderServiceService implements OnModuleInit {
         typeof dto.courier_tariff !== 'undefined'
           ? dto.courier_tariff
           : order.courier_tariff,
+      courier_share:
+        typeof dto.courier_share !== 'undefined'
+          ? dto.courier_share
+          : order.courier_share,
+      branch_share:
+        typeof dto.branch_share !== 'undefined'
+          ? dto.branch_share
+          : order.branch_share,
       to_be_paid: dto.to_be_paid ?? order.to_be_paid,
       paid_amount: dto.paid_amount ?? order.paid_amount,
       status: dto.status ?? order.status,
