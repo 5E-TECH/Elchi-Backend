@@ -44,6 +44,12 @@ interface JwtUser {
   roles?: string[];
 }
 
+interface HttpRequestLike {
+  protocol?: string;
+  get?(name: string): string | undefined;
+  headers?: Record<string, string | string[] | undefined>;
+}
+
 @ApiTags('Products')
 @Controller('product')
 export class CatalogGatewayController {
@@ -60,11 +66,22 @@ export class CatalogGatewayController {
     @Inject('FILE') private readonly fileClient: ClientProxy,
   ) {}
 
+  private buildPublicFileUrl(req: HttpRequestLike, key: string): string {
+    const forwardedProto = req?.headers?.['x-forwarded-proto'];
+    const protoHeader = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
+    const protocol = String(protoHeader || req?.protocol || 'https').trim() || 'https';
+    const host = req?.get?.('host') || String(req?.headers?.host || '').trim();
+    if (!host) {
+      throw new BadRequestException('Unable to resolve public host for uploaded file');
+    }
+    return `${protocol}://${host}/files/view/${encodeURIComponent(key)}`;
+  }
+
   private async uploadImageAndResolveUrl(file: {
     originalname: string;
     mimetype: string;
     buffer: Buffer;
-  }): Promise<string> {
+  }, req: HttpRequestLike): Promise<string> {
     if (!this.allowedMime.has(file.mimetype)) {
       throw new BadRequestException('Unsupported file type');
     }
@@ -84,12 +101,12 @@ export class CatalogGatewayController {
     );
 
     const payload = uploadResponse?.data ?? uploadResponse;
-    const resolvedUrl = payload?.url;
-    if (!resolvedUrl || typeof resolvedUrl !== 'string') {
+    const key = payload?.key;
+    if (!key || typeof key !== 'string') {
       throw new BadRequestException('Image upload failed');
     }
 
-    return resolvedUrl;
+    return this.buildPublicFileUrl(req, key);
   }
 
   @Get('health')
@@ -140,7 +157,7 @@ export class CatalogGatewayController {
 
     let imageUrl = dto.image_url;
     if (file) {
-      imageUrl = await this.uploadImageAndResolveUrl(file);
+      imageUrl = await this.uploadImageAndResolveUrl(file, req as unknown as HttpRequestLike);
     }
 
     return firstValueFrom(
@@ -251,10 +268,11 @@ export class CatalogGatewayController {
       buffer: Buffer;
     } | undefined,
     @Body() dto: UpdateProductRequestDto,
+    @Req() req: { user: JwtUser },
   ) {
     let imageUrl = dto.image_url;
     if (file) {
-      imageUrl = await this.uploadImageAndResolveUrl(file);
+      imageUrl = await this.uploadImageAndResolveUrl(file, req as unknown as HttpRequestLike);
     }
     const { image: _ignoredImage, ...safeDto } = dto;
 
@@ -303,7 +321,7 @@ export class CatalogGatewayController {
   ) {
     let imageUrl = dto.image_url;
     if (file) {
-      imageUrl = await this.uploadImageAndResolveUrl(file);
+      imageUrl = await this.uploadImageAndResolveUrl(file, req as unknown as HttpRequestLike);
     }
     const { image: _ignoredImage, ...safeDto } = dto;
 

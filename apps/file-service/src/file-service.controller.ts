@@ -7,6 +7,7 @@ import { GetFileUrlDto } from './dto/get-file-url.dto';
 import { DeleteFileDto } from './dto/delete-file.dto';
 import { GenerateQrDto } from './dto/generate-qr.dto';
 import { GeneratePdfDto } from './dto/generate-pdf.dto';
+import { ReadFileDto } from './dto/read-file.dto';
 
 @Controller()
 export class FileServiceController {
@@ -44,6 +45,11 @@ export class FileServiceController {
   @MessagePattern({ cmd: 'file.exists' })
   exists(@Payload() data: { key?: string }, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.fileService.exists(data));
+  }
+
+  @MessagePattern({ cmd: 'file.read' })
+  read(@Payload() data: ReadFileDto, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.fileService.read(data));
   }
 
   @MessagePattern({ cmd: 'file.delete' })

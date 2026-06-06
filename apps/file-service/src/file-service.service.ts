@@ -370,6 +370,35 @@ export class FileServiceService implements OnModuleInit {
     }
   }
 
+  async read(data: { key: string }) {
+    try {
+      const key = String(data?.key ?? '').trim();
+      if (!key) throw new BadRequestException('key is required');
+
+      const response = await this.s3.send(
+        new GetObjectCommand({ Bucket: this.bucket, Key: key }),
+      );
+      const body = response.Body;
+      if (!body || typeof body.transformToByteArray !== 'function') {
+        throw new NotFoundException('File not found');
+      }
+
+      const bytes = await body.transformToByteArray();
+      return this.successRes(
+        {
+          key,
+          bucket: this.bucket,
+          mime_type: String(response.ContentType ?? 'application/octet-stream'),
+          body_base64: Buffer.from(bytes).toString('base64'),
+        },
+        200,
+        'File read',
+      );
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
   async remove(data: DeleteFileDto) {
     try {
       const key = String(data?.key ?? '').trim();
