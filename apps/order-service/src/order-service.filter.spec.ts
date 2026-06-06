@@ -23,6 +23,7 @@ describe('OrderServiceService filters', () => {
       {} as any, // orderItemRepo
       {} as any, // orderTrackingRepo
       {} as any, // orderCustodyEventRepo
+      {} as any, // orderSettlementRepo
       {} as any, // transferBatchRepo
       {} as any, // transferBatchItemRepo
       {} as any, // transferBatchHistoryRepo

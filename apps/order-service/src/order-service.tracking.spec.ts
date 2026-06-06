@@ -53,6 +53,7 @@ function createService() {
     orderItemRepo as any, // orderItemRepo
     trackingRepo as any, // orderTrackingRepo
     {} as any, // orderCustodyEventRepo
+    {} as any, // orderSettlementRepo
     {} as any, // transferBatchRepo
     {} as any, // transferBatchItemRepo
     {} as any, // transferBatchHistoryRepo

@@ -16,6 +16,7 @@ import { OrderItem } from './entities/order-item.entity';
 import { OrderHolderType, Order_source } from './entities/order.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
 import { OrderCustodyEvent } from './entities/order-custody-event.entity';
+import { OrderSettlement } from './entities/order-settlement.entity';
 import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.entity';
 import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
@@ -57,6 +58,8 @@ export class OrderServiceService implements OnModuleInit {
     private readonly orderTrackingRepo: Repository<OrderTracking>,
     @InjectRepository(OrderCustodyEvent)
     private readonly orderCustodyEventRepo: Repository<OrderCustodyEvent>,
+    @InjectRepository(OrderSettlement)
+    private readonly orderSettlementRepo: Repository<OrderSettlement>,
     @InjectRepository(BranchTransferBatch)
     private readonly transferBatchRepo: Repository<BranchTransferBatch>,
     @InjectRepository(BranchTransferBatchItem)
@@ -986,6 +989,112 @@ export class OrderServiceService implements OnModuleInit {
     return courierTariff;
   }
 
+  /**
+   * Create/refresh the per-order settlement row at sale time (inside the sale
+   * transaction). Status starts at PENDING, but legs with no participant are
+   * auto-advanced: a branch-direct sale (no courier) starts COURIER_SETTLED
+   * (cash already at the branch); an HQ-direct sale (no courier, no branch)
+   * starts BRANCH_SETTLED (cash already at HQ). BRANCH_SETTLED uniformly means
+   * "money has reached HQ" — the point past which rollback is forbidden.
+   */
+  private async recordSaleSettlement(
+    manager: EntityManager,
+    data: {
+      order_id: string;
+      courier_id: string | null;
+      branch_id: string | null;
+      market_id: string | null;
+      courier_amount: number;
+      branch_amount: number;
+      market_amount: number;
+      hasCourier: boolean;
+    },
+  ): Promise<void> {
+    const repo = manager.getRepository(OrderSettlement);
+    const isBranchSale = Boolean(data.branch_id);
+    const now = new Date();
+
+    let status = SettlementStatus.PENDING;
+    let courier_to_branch_at: Date | null = null;
+    let branch_to_hq_at: Date | null = null;
+    if (!data.hasCourier) {
+      courier_to_branch_at = now;
+      if (isBranchSale) {
+        status = SettlementStatus.COURIER_SETTLED;
+      } else {
+        status = SettlementStatus.BRANCH_SETTLED;
+        branch_to_hq_at = now;
+      }
+    }
+
+    const fields = {
+      order_id: String(data.order_id),
+      courier_id: data.courier_id ? String(data.courier_id) : null,
+      branch_id: data.branch_id ? String(data.branch_id) : null,
+      market_id: data.market_id ? String(data.market_id) : null,
+      courier_amount: Math.max(data.courier_amount, 0),
+      branch_amount: Math.max(data.branch_amount, 0),
+      market_amount: Math.max(data.market_amount, 0),
+      status,
+      courier_to_branch_at,
+      courier_to_branch_by: null,
+      branch_to_hq_at,
+      branch_to_hq_by: null,
+      hq_to_market_at: null,
+      hq_to_market_by: null,
+      isDeleted: false,
+    };
+
+    const existing = await repo.findOne({
+      where: { order_id: String(data.order_id) },
+    });
+    if (existing) {
+      await repo.update({ id: existing.id }, fields);
+    } else {
+      await repo.save(repo.create(fields));
+    }
+  }
+
+  /**
+   * Whether an order's COD has reached HQ (the point past which a rollback is
+   * forbidden). True once the row is BRANCH_SETTLED or MARKET_SETTLED.
+   */
+  private isSettledToHq(status?: SettlementStatus | null): boolean {
+    return (
+      status === SettlementStatus.BRANCH_SETTLED ||
+      status === SettlementStatus.MARKET_SETTLED
+    );
+  }
+
+  /**
+   * Reset an order's settlement row on rollback (it returns to an unsold state).
+   * Only callable while the order has NOT reached HQ (guarded by the caller).
+   */
+  private async resetSettlementOnRollback(
+    manager: EntityManager,
+    orderId: string,
+  ): Promise<void> {
+    const repo = manager.getRepository(OrderSettlement);
+    await repo
+      .createQueryBuilder()
+      .update(OrderSettlement)
+      .set({
+        status: SettlementStatus.PENDING,
+        courier_to_branch_at: null,
+        courier_to_branch_by: null,
+        branch_to_hq_at: null,
+        branch_to_hq_by: null,
+        hq_to_market_at: null,
+        hq_to_market_by: null,
+        courier_amount: 0,
+        branch_amount: 0,
+        market_amount: 0,
+        isDeleted: true,
+      })
+      .where('order_id = :orderId', { orderId: String(orderId) })
+      .execute();
+  }
+
   private async updateCashboxBalance(
     data: {
       user_id: string;
@@ -1397,6 +1506,18 @@ export class OrderServiceService implements OnModuleInit {
       }
     }
 
+    // Settlement-aware guard: a branch/courier may roll back only while the
+    // order's COD has NOT yet reached HQ. Once branch→HQ is settled the money
+    // has moved up the chain and the order must not be reverted here.
+    const existingSettlement = await this.orderSettlementRepo.findOne({
+      where: { order_id: String(id), isDeleted: false },
+    });
+    if (existingSettlement && this.isSettledToHq(existingSettlement.status)) {
+      this.badRequest(
+        "Bu buyurtma summasi bosh ofisga to'langan — rollback mumkin emas",
+      );
+    }
+
     const courierId = this.resolveActorCourierId(requester, order, post);
     if (!courierId) {
       this.notFound('Courier not found');
@@ -1539,135 +1660,122 @@ export class OrderServiceService implements OnModuleInit {
       }
     }
 
-    if ([Order_status.SOLD, Order_status.PAID].includes(order.status)) {
-      if (totalPrice === 0) {
+    // Reverse the sale's cashbox legs EXACTLY (decoupled, snapshot-based) — the
+    // mirror image of the 3-leg sale model:
+    //   market : reverse (total − marketTariff)
+    //   courier: reverse (total − courierShare)
+    //   branch : reverse (total − courierShare − branchShare) for a non-HQ branch
+    // Applies to SOLD/PAID always, and PARTLY_PAID for superadmin.
+    const doSaleReversal =
+      [Order_status.SOLD, Order_status.PAID].includes(originalStatus) ||
+      (originalStatus === Order_status.PARTLY_PAID && isSuperAdmin);
+    if (doSaleReversal) {
+      const courierShareRb =
+        order.courier_share != null
+          ? Number(order.courier_share)
+          : courierTariff;
+      const branchShareRb =
+        order.branch_share != null ? Number(order.branch_share) : 0;
+
+      const saleMarketIncome = Math.max(totalPrice - marketTariff, 0);
+      const saleMarketExpense = Math.max(marketTariff - totalPrice, 0);
+      const saleCourierIncome = Math.max(totalPrice - courierShareRb, 0);
+      const saleCourierExpense = Math.max(courierShareRb - totalPrice, 0);
+      const saleBranchNet = totalPrice - courierShareRb - branchShareRb;
+
+      const rbBranchId = await this.resolveSettlementBranchId(order);
+      if (rbBranchId) {
+        await this.ensureBranchCashbox(rbBranchId);
+      }
+      const rbBranchCashbox = rbBranchId
+        ? await this.getCashboxByUser(rbBranchId, Cashbox_type.BRANCH).catch(
+            () => null,
+          )
+        : null;
+
+      // market leg (reverse)
+      if (saleMarketIncome > 0) {
         await pay({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: marketTariff,
-          operation_type: Operation_type.INCOME,
-          source_type: Source_type.CORRECTION,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: rollbackComment,
-        });
-        if (courierCashbox) {
-          await pay({
-            user_id: courierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: courierTariff,
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.CORRECTION,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: rollbackComment,
-          });
-        }
-      } else if (totalPrice < courierTariff) {
-        await pay({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Math.max(marketTariff - totalPrice, 0),
-          operation_type: Operation_type.INCOME,
-          source_type: Source_type.CORRECTION,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: rollbackComment,
-        });
-        if (courierCashbox) {
-          await pay({
-            user_id: courierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: Math.max(courierTariff - totalPrice, 0),
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.CORRECTION,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: rollbackComment,
-          });
-        }
-      } else if (totalPrice < marketTariff) {
-        const courierToBePaid = totalPrice - courierTariff;
-        await pay({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Math.max(marketTariff - totalPrice, 0),
-          operation_type: Operation_type.INCOME,
-          source_type: Source_type.CORRECTION,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: rollbackComment,
-        });
-        if (courierCashbox) {
-          await pay({
-            user_id: courierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: Math.max(courierToBePaid, 0),
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.CORRECTION,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: rollbackComment,
-          });
-        }
-      } else {
-        const toBePaid =
-          originalStatus === Order_status.PAID
-            ? Number(order.paid_amount ?? 0)
-            : totalPrice - marketTariff;
-        const courierToBePaid = totalPrice - courierTariff;
-        await pay({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Math.max(toBePaid, 0),
+          amount: saleMarketIncome,
           operation_type: Operation_type.EXPENSE,
           source_type: Source_type.CORRECTION,
           source_id: String(order.id),
           created_by: String(requester.id),
           comment: rollbackComment,
         });
-        if (courierCashbox) {
-          await pay({
-            user_id: courierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: Math.max(courierToBePaid, 0),
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.CORRECTION,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: rollbackComment,
-          });
-        }
+      } else if (saleMarketExpense > 0) {
+        await pay({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: saleMarketExpense,
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.CORRECTION,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: rollbackComment,
+        });
       }
-    }
 
-    if (order.status === Order_status.PARTLY_PAID && isSuperAdmin) {
-      const marketDiff = Number(order.paid_amount ?? 0);
-      const courierDiff = Math.max(totalPrice - courierTariff, 0);
-
-      await pay({
-        user_id: String(order.market_id),
-        cashbox_type: Cashbox_type.FOR_MARKET,
-        amount: marketDiff,
-        operation_type: Operation_type.EXPENSE,
-        source_type: Source_type.CORRECTION,
-        source_id: String(order.id),
-        created_by: String(requester.id),
-        comment: rollbackComment,
-      });
+      // courier leg (reverse)
       if (courierCashbox) {
-        await pay({
-          user_id: courierId,
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          amount: courierDiff,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.CORRECTION,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: rollbackComment,
-        });
+        if (saleCourierIncome > 0) {
+          await pay({
+            user_id: courierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: saleCourierIncome,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: rollbackComment,
+          });
+        } else if (saleCourierExpense > 0) {
+          await pay({
+            user_id: courierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount: saleCourierExpense,
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: rollbackComment,
+          });
+        }
+      }
+
+      // branch leg (reverse) — non-HQ branch only
+      if (rbBranchCashbox && rbBranchId) {
+        if (saleBranchNet > 0) {
+          await pay({
+            user_id: rbBranchId,
+            cashbox_type: Cashbox_type.BRANCH,
+            amount: saleBranchNet,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: rollbackComment,
+          });
+        } else if (saleBranchNet < 0) {
+          await pay({
+            user_id: rbBranchId,
+            cashbox_type: Cashbox_type.BRANCH,
+            amount: -saleBranchNet,
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: rollbackComment,
+          });
+        }
       }
     }
+
+    // The order is being reverted out of its sold state — clear its settlement
+    // row (guaranteed not yet settled-to-HQ by the guard above).
+    await this.resetSettlementOnRollback(this.orderSettlementRepo.manager, id);
 
     if (
       shouldRollbackMarketExtraCost &&
@@ -3263,6 +3371,18 @@ export class OrderServiceService implements OnModuleInit {
         tx,
       );
 
+      // Open the per-order settlement row (PENDING) inside the same tx.
+      await this.recordSaleSettlement(tx, {
+        order_id: String(order.id),
+        courier_id: courierCashbox ? actorCourierId : null,
+        branch_id: settlementBranchId,
+        market_id: order.market_id ? String(order.market_id) : null,
+        courier_amount: courierIncome,
+        branch_amount: Math.max(branchNet, 0),
+        market_amount: marketIncome,
+        hasCourier: Boolean(courierCashbox),
+      });
+
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -3988,6 +4108,18 @@ export class OrderServiceService implements OnModuleInit {
       await tx
         .getRepository(Order)
         .update({ id: String(order.id) }, { product_quantity: newQty });
+
+      // Open the per-order settlement row (PENDING) inside the same tx.
+      await this.recordSaleSettlement(tx, {
+        order_id: String(order.id),
+        courier_id: courierCashbox ? actorCourierId : null,
+        branch_id: settlementBranchId,
+        market_id: order.market_id ? String(order.market_id) : null,
+        courier_amount: courierIncome,
+        branch_amount: Math.max(branchNet, 0),
+        market_amount: marketIncome,
+        hasCourier: Boolean(courierCashbox),
+      });
 
       await queryRunner.commitTransaction();
     } catch (error) {

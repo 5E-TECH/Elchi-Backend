@@ -75,6 +75,7 @@ describe('OrderServiceService return flow', () => {
       {} as any, // orderItemRepo
       trackingRepo as any, // orderTrackingRepo
       {} as any, // orderCustodyEventRepo
+      {} as any, // orderSettlementRepo
       {} as any, // transferBatchRepo
       transferBatchItemRepo as any, // transferBatchItemRepo
       {} as any, // transferBatchHistoryRepo
