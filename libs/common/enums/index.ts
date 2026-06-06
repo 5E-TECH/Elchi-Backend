@@ -24,6 +24,43 @@ export enum BranchType {
   HYBRID = 'HYBRID',
 }
 
+/**
+ * Ownership of a branch — determines how COD settles up to HQ.
+ *   OWNED   → HQ's own branch: it remits the full collected amount to HQ and HQ
+ *             pays the branch's staff salaries. branchShare = 0.
+ *   PARTNER → partner-run branch: it keeps its per-order share (Branch.per_order_share)
+ *             and pays its own staff; only HQ's portion is remitted upward.
+ */
+export enum BranchOwnership {
+  OWNED = 'owned',
+  PARTNER = 'partner',
+}
+
+/**
+ * How a courier is compensated per order. Drives courierShare — the amount the
+ * courier keeps from the COD they collect (the rest is owed up the chain).
+ *   SALARY_ONLY          → keeps nothing per order (courierShare = 0); paid only
+ *                          a monthly salary. Owes the full `total` upward.
+ *   PER_ORDER            → keeps the per-order tariff (tariff_home/center); no salary.
+ *   SALARY_PLUS_PER_ORDER→ keeps the tariff AND draws a monthly salary.
+ */
+export enum CourierCompensationMode {
+  SALARY_ONLY = 'salary_only',
+  PER_ORDER = 'per_order',
+  SALARY_PLUS_PER_ORDER = 'salary_plus_per_order',
+}
+
+/**
+ * Per-order settlement progress along the COD chain courier → branch → HQ →
+ * market. Each leg is advanced (FIFO) as lump-sum payments are recorded.
+ */
+export enum SettlementStatus {
+  PENDING = 'pending',
+  COURIER_SETTLED = 'courier_settled',
+  BRANCH_SETTLED = 'branch_settled',
+  MARKET_SETTLED = 'market_settled',
+}
+
 export enum PaymentMethod {
   CASH = 'cash',
   CLICK = 'click',
@@ -67,6 +104,25 @@ export enum FinancialSource_type {
   SALARY = 'salary', // Salary paid out
   CORRECTION = 'correction', // Adjustment / rollback
   BILLS = 'bills', // Invoices / utility bills
+}
+
+/**
+ * Situations in which a market may require a courier to attach file proof
+ * (image/video) for an order operation. A market stores a SET of enabled
+ * conditions (admins.expense_proof_conditions). When a sell/cancel operation
+ * matches ANY enabled condition, proof becomes mandatory — otherwise the whole
+ * operation is rejected. Empty/none = proof never required for that market.
+ *
+ * The catalog is intentionally extensible: add a new condition here and teach
+ * the order-service evaluator (matchExpenseProofConditions) when it applies.
+ */
+export enum ExpenseProofCondition {
+  SELL_ANY = 'sell_any', // har qanday sotuvda
+  SELL_EXTRA_COST = 'sell_extra_cost', // sotishda qo'shimcha xarajat yozilganda
+  SELL_ZERO_TOTAL = 'sell_zero_total', // 0 summali buyurtma sotilganda
+  CANCEL_ANY = 'cancel_any', // har qanday bekor qilishda
+  CANCEL_EXTRA_COST = 'cancel_extra_cost', // bekor qilishda qo'shimcha xarajat yozilganda
+  CANCEL_ZERO_TOTAL = 'cancel_zero_total', // 0 summali buyurtma bekor qilinganda
 }
 
 export enum Order_status {

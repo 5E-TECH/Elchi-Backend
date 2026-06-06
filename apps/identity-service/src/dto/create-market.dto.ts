@@ -1,4 +1,5 @@
 import {
+  IsArray,
   IsBoolean,
   IsEnum,
   IsNotEmpty,
@@ -10,7 +11,10 @@ import {
   MinLength,
 } from 'class-validator';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Where_deliver } from '../../../../libs/common/enums';
+import {
+  ExpenseProofCondition,
+  Where_deliver,
+} from '../../../../libs/common/enums';
 
 export class CreateMarketDto {
   @ApiProperty({ example: 'Market 1' })
@@ -61,6 +65,21 @@ export class CreateMarketDto {
   @IsOptional()
   @IsBoolean()
   add_order?: boolean;
+
+  @ApiPropertyOptional({
+    isArray: true,
+    enum: ExpenseProofCondition,
+    description:
+      'Isbot (rasm/video) majburiy bo‘ladigan vaziyatlar to‘plami. Bo‘sh = isbot talab qilinmaydi.',
+    example: [
+      ExpenseProofCondition.CANCEL_EXTRA_COST,
+      ExpenseProofCondition.CANCEL_ZERO_TOTAL,
+    ],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsEnum(ExpenseProofCondition, { each: true })
+  expense_proof_conditions?: ExpenseProofCondition[];
 
   @ApiProperty({ example: 'secret123' })
   @IsNotEmpty()

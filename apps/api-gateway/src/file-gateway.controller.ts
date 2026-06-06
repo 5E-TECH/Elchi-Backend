@@ -42,6 +42,9 @@ export class FileGatewayController {
     'image/jpg',
     'application/pdf',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'video/mp4',
+    'video/quicktime',
+    'video/webm',
   ]);
 
   constructor(@Inject('FILE') private readonly fileClient: ClientProxy) {}
@@ -61,9 +64,11 @@ export class FileGatewayController {
     },
   })
   @UseInterceptors(
+    // 50MB ceiling to allow video expense-proof uploads. file-service still
+    // enforces the real per-type limit (10MB image/doc, 50MB video).
     FileInterceptor('file', {
       storage: memoryStorage(),
-      limits: { fileSize: 10 * 1024 * 1024 },
+      limits: { fileSize: 50 * 1024 * 1024 },
     }),
   )
   async uploadFile(

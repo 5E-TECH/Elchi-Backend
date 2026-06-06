@@ -17,6 +17,7 @@ describe('OrderServiceService transfer batch scan', () => {
       {} as any, // orderItemRepo
       {} as any, // orderTrackingRepo
       {} as any, // orderCustodyEventRepo
+      {} as any, // orderSettlementRepo
       transferBatchRepo as any, // transferBatchRepo
       transferBatchItemRepo as any, // transferBatchItemRepo
       {} as any, // transferBatchHistoryRepo
@@ -27,6 +28,7 @@ describe('OrderServiceService transfer batch scan', () => {
       {} as any, // financeClient
       {} as any, // integrationClient
       {} as any, // branchClient
+      {} as any, // fileClient
       {} as any, // outbox
     );
 

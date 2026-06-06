@@ -42,6 +42,11 @@ export class FileServiceController {
     return this.executeAndAck(context, () => this.fileService.getUrl(data));
   }
 
+  @MessagePattern({ cmd: 'file.exists' })
+  exists(@Payload() data: { key?: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.fileService.exists(data));
+  }
+
   @MessagePattern({ cmd: 'file.read' })
   read(@Payload() data: ReadFileDto, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.fileService.read(data));

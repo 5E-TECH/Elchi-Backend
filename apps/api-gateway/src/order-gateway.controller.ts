@@ -1113,6 +1113,137 @@ export class OrderGatewayController {
     });
   }
 
+  @Post('settlement/courier-to-branch')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Settle a courier lump-sum payment to the branch (FIFO per order)',
+  })
+  settlementCourierToBranch(
+    @Body() dto: { courier_id: string; amount: number },
+    @Req() req: { user: JwtUser },
+  ) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.settlement.courier_to_branch' },
+          {
+            dto,
+            requester: {
+              id: req.user.sub,
+              roles: this.normalizeRoles(req.user.roles),
+              branch_id: req.user.branch_id ?? null,
+            },
+            request_id: randomUUID(),
+          },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  @Post('settlement/branch-to-hq')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.MANAGER, RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Settle a branch lump-sum remittance to HQ (FIFO per order)',
+  })
+  settlementBranchToHq(
+    @Body() dto: { branch_id: string; amount: number },
+    @Req() req: { user: JwtUser },
+  ) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.settlement.branch_to_hq' },
+          {
+            dto,
+            requester: {
+              id: req.user.sub,
+              roles: this.normalizeRoles(req.user.roles),
+              branch_id: req.user.branch_id ?? null,
+            },
+            request_id: randomUUID(),
+          },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  @Post('settlement/hq-to-market')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Settle an HQ lump-sum payment to a market (FIFO per order)',
+  })
+  settlementHqToMarket(
+    @Body() dto: { market_id: string; amount: number },
+    @Req() req: { user: JwtUser },
+  ) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.settlement.hq_to_market' },
+          {
+            dto,
+            requester: {
+              id: req.user.sub,
+              roles: this.normalizeRoles(req.user.roles),
+              branch_id: req.user.branch_id ?? null,
+            },
+            request_id: randomUUID(),
+          },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  @Get(':id/settlement')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get the per-order settlement state' })
+  @ApiParam({ name: 'id', description: 'Order ID (id)' })
+  getOrderSettlement(@Param('id') id: string) {
+    return firstValueFrom(
+      this.orderClient
+        .send({ cmd: 'order.settlement.find_by_order' }, { id })
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
   @Post(':id/could-not-deliver')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER, RoleEnum.MANAGER)

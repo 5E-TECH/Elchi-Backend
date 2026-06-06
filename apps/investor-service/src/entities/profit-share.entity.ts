@@ -1,5 +1,5 @@
 import { Column, Entity, Index, ManyToOne, JoinColumn } from 'typeorm';
-import { BaseEntity } from '@app/common';
+import { BaseEntity, numericTransformer } from '@app/common';
 import { Investor } from './investor.entity';
 
 @Entity({ name: 'profit_shares' })
@@ -9,10 +9,22 @@ export class ProfitShare extends BaseEntity {
   @Column({ type: 'bigint' })
   investor_id!: string;
 
-  @Column({ type: 'float' })
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    transformer: numericTransformer,
+  })
   amount!: number;
 
-  @Column({ type: 'float', default: 0 })
+  // A pure percentage (0–100ish) → numeric(5,2) is plenty (max 999.99).
+  @Column({
+    type: 'numeric',
+    precision: 5,
+    scale: 2,
+    default: 0,
+    transformer: numericTransformer,
+  })
   percentage!: number;
 
   @Column({ type: 'timestamptz' })

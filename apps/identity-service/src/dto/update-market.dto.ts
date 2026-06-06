@@ -1,4 +1,5 @@
 import {
+  IsArray,
   IsBoolean,
   IsEnum,
   IsNumber,
@@ -7,7 +8,7 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
-import { Status, Where_deliver } from '@app/common';
+import { ExpenseProofCondition, Status, Where_deliver } from '@app/common';
 
 export class UpdateMarketDto {
   @IsOptional()
@@ -48,4 +49,9 @@ export class UpdateMarketDto {
   @IsOptional()
   @IsBoolean()
   add_order?: boolean;
+
+  @IsOptional()
+  @IsArray()
+  @IsEnum(ExpenseProofCondition, { each: true })
+  expense_proof_conditions?: ExpenseProofCondition[];
 }

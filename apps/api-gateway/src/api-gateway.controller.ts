@@ -39,6 +39,7 @@ import {
   CreateRegistratorRequestDto,
   UpdateAdminRequestDto,
   UpdateMarketAddOrderRequestDto,
+  UpdateMarketExpenseProofRequestDto,
   UpdateUserStatusRequestDto,
 } from './dto/identity.swagger.dto';
 
@@ -857,6 +858,7 @@ export class ApiGatewayController {
           tariff_center: dto.tariff_center,
           default_tariff: dto.default_tariff,
           add_order: dto.add_order,
+          expense_proof_conditions: dto.expense_proof_conditions,
         },
       },
     );
@@ -933,6 +935,33 @@ export class ApiGatewayController {
         id,
         dto: {
           add_order: dto.add_order,
+        },
+      },
+    );
+  }
+
+  @Patch('markets/:id/expense-proof')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Set the situations in which this market requires file proof for sell/cancel',
+  })
+  @ApiParam({ name: 'id', description: 'Market user ID' })
+  @ApiBody({ type: UpdateMarketExpenseProofRequestDto })
+  @ApiOkResponse({ description: 'Market expense-proof policy updated' })
+  @ApiNotFoundResponse({ description: 'Market not found' })
+  updateMarketExpenseProof(
+    @Param('id') id: string,
+    @Body() dto: UpdateMarketExpenseProofRequestDto,
+  ) {
+    return this.identityClient.send(
+      { cmd: 'identity.market.update' },
+      {
+        id,
+        dto: {
+          expense_proof_conditions: dto.expense_proof_conditions,
         },
       },
     );

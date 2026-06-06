@@ -645,6 +645,10 @@ export class FinanceServiceService implements OnModuleInit {
                 source_type: dto.source_type,
                 source_id: String(dto.source_id),
                 operation_type: dto.operation_type,
+                // Must mirror the IDX_CASHBOX_HISTORY_IDEMPOTENT key exactly,
+                // else a fresh attempt (new epoch) would match a prior row and
+                // be wrongly skipped.
+                dedup_epoch: String(dto.dedup_epoch ?? ''),
               },
             },
           );
@@ -672,6 +676,7 @@ export class FinanceServiceService implements OnModuleInit {
           cashbox_id: savedCashbox.id,
           source_type: dto.source_type,
           source_id: dto.source_id ?? null,
+          dedup_epoch: String(dto.dedup_epoch ?? ''),
           source_user_id: dto.source_user_id ?? null,
           amount: Number(dto.amount),
           balance_after: savedCashbox.balance,
@@ -680,6 +685,10 @@ export class FinanceServiceService implements OnModuleInit {
           payment_method: paymentMethod,
           comment: dto.comment ?? null,
           created_by: dto.created_by ?? null,
+          proof_files:
+            Array.isArray(dto.proof_files) && dto.proof_files.length
+              ? dto.proof_files
+              : null,
           payment_date:
             dto.payment_date != null
               ? (this.parseDate(String(dto.payment_date)) ?? null)
