@@ -52,6 +52,22 @@ export class Order extends BaseEntity {
   @Column({ type: 'float', nullable: true })
   courier_tariff!: number | null;
 
+  /**
+   * Amount the courier KEEPS for this order, snapshotted at sale time per the
+   * courier's compensation mode (= tariff for per-order modes, 0 for
+   * salary-only). Distinct from courier_tariff (the configured tariff value).
+   * Used for exact settlement and rollback math.
+   */
+  @Column({ type: 'float', nullable: true })
+  courier_share!: number | null;
+
+  /**
+   * Amount the (PARTNER) branch KEEPS for this order, snapshotted at sale time
+   * (= Branch.per_order_share for PARTNER branches, 0 for OWNED / HQ).
+   */
+  @Column({ type: 'float', nullable: true })
+  branch_share!: number | null;
+
   @Column({ type: 'int', default: 0 })
   to_be_paid!: number;
 

@@ -2,6 +2,7 @@ import { Entity, Column } from 'typeorm';
 import {
   BaseEntity,
   Commission_type,
+  CourierCompensationMode,
   ExpenseProofCondition,
   numericTransformer,
   Roles,
@@ -76,6 +77,19 @@ export class User extends BaseEntity {
 
   @Column({ type: 'int', nullable: true })
   tariff_center: number | null;
+
+  /**
+   * How this courier is compensated per order (see CourierCompensationMode).
+   * Drives courierShare at sale time: SALARY_ONLY keeps nothing per order,
+   * PER_ORDER / SALARY_PLUS_PER_ORDER keep the tariff_home/center amount.
+   * Defaults to PER_ORDER to preserve existing behaviour for current couriers.
+   */
+  @Column({
+    type: 'enum',
+    enum: CourierCompensationMode,
+    default: CourierCompensationMode.PER_ORDER,
+  })
+  compensation_mode: CourierCompensationMode;
 
   @Column({ type: 'boolean', default: false })
   add_order: boolean;
