@@ -1423,6 +1423,284 @@ export class OrderServiceService implements OnModuleInit {
     return Math.abs(leftTime - rightTime) <= maxDiffMs;
   }
 
+  /** Return the per-order settlement row (status + leg stamps) for one order. */
+  async getSettlementByOrderId(orderId: string) {
+    const id = String(orderId ?? '').trim();
+    if (!id) {
+      this.badRequest('order id is required');
+    }
+    const settlement = await this.orderSettlementRepo.findOne({
+      where: { order_id: id },
+    });
+    return successRes(settlement ?? null, 200, 'Order settlement');
+  }
+
+  private static readonly MAIN_CASHBOX_USER_ID = '0';
+
+  /** Ensure the singleton MAIN (HQ) cashbox exists before posting to it. */
+  private async ensureMainCashbox(): Promise<void> {
+    await rmqSend(
+      this.financeClient,
+      { cmd: 'finance.cashbox.create' },
+      {
+        user_id: OrderServiceService.MAIN_CASHBOX_USER_ID,
+        cashbox_type: Cashbox_type.MAIN,
+      },
+    ).catch(() => undefined);
+  }
+
+  /**
+   * FIFO-allocate a lump-sum settlement payment to the oldest unsettled orders
+   * for one participant, advancing each fully-covered order to the next leg and
+   * posting its cashbox movements (atomic with the status update via outbox).
+   * Whole-order allocation: an order is only settled when the remaining lump-sum
+   * covers its full leg amount; the unallocated remainder is reported back.
+   */
+  private async runFifoSettlement(params: {
+    matchColumn: 'courier_id' | 'branch_id' | 'market_id';
+    matchValue: string;
+    fromStatus: SettlementStatus;
+    toStatus: SettlementStatus;
+    amountField: 'courier_amount' | 'branch_amount' | 'market_amount';
+    lumpSum: number;
+    requesterId: string;
+    postLeg: (
+      manager: EntityManager,
+      settlement: OrderSettlement,
+      amount: number,
+    ) => Promise<void>;
+    stamp: (now: Date) => Partial<OrderSettlement>;
+  }): Promise<{ settled_order_ids: string[]; allocated: number; leftover: number }> {
+    const lumpSum = Math.max(Number(params.lumpSum) || 0, 0);
+    if (!params.matchValue || lumpSum <= 0) {
+      return { settled_order_ids: [], allocated: 0, leftover: lumpSum };
+    }
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    const settledOrderIds: string[] = [];
+    let allocated = 0;
+    try {
+      const tx = queryRunner.manager;
+      const repo = tx.getRepository(OrderSettlement);
+      const candidates = await repo.find({
+        where: {
+          [params.matchColumn]: params.matchValue,
+          status: params.fromStatus,
+          isDeleted: false,
+        } as Record<string, unknown>,
+        order: { createdAt: 'ASC' },
+      });
+
+      let remaining = lumpSum;
+      const now = new Date();
+      for (const settlement of candidates) {
+        const legAmount = Math.max(
+          Number(settlement[params.amountField] ?? 0),
+          0,
+        );
+        // Zero-amount legs (nothing owed at this hop) still advance status.
+        if (legAmount > remaining && legAmount > 0) {
+          continue;
+        }
+        await repo.update(
+          { id: settlement.id },
+          { status: params.toStatus, ...params.stamp(now) },
+        );
+        if (legAmount > 0) {
+          await params.postLeg(tx, settlement, legAmount);
+          remaining -= legAmount;
+          allocated += legAmount;
+        }
+        settledOrderIds.push(String(settlement.order_id));
+      }
+
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.handleDbError(error);
+      throw new RpcException({
+        statusCode: 500,
+        message:
+          error instanceof Error ? error.message : 'Internal server error',
+      });
+    } finally {
+      await queryRunner.release();
+    }
+
+    return {
+      settled_order_ids: settledOrderIds,
+      allocated,
+      leftover: Math.max(lumpSum - allocated, 0),
+    };
+  }
+
+  /**
+   * Courier hands a lump sum to the branch — FIFO-settles the courier's oldest
+   * PENDING orders (courier → branch). Only reduces the courier's owed balance;
+   * the branch was already credited at sale time.
+   */
+  async settleCourierToBranch(
+    requester: { id: string; roles?: string[] },
+    dto: { courier_id: string; amount: number },
+  ) {
+    const courierId = String(dto?.courier_id ?? '').trim();
+    if (!courierId) {
+      this.badRequest('courier_id is required');
+    }
+    const requesterId = String(requester?.id ?? 'system');
+    const result = await this.runFifoSettlement({
+      matchColumn: 'courier_id',
+      matchValue: courierId,
+      fromStatus: SettlementStatus.PENDING,
+      toStatus: SettlementStatus.COURIER_SETTLED,
+      amountField: 'courier_amount',
+      lumpSum: Number(dto?.amount ?? 0),
+      requesterId,
+      stamp: (now) => ({
+        courier_to_branch_at: now,
+        courier_to_branch_by: requesterId,
+      }),
+      postLeg: async (manager, settlement, amount) => {
+        await this.updateCashboxBalance(
+          {
+            user_id: courierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+            amount,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.COURIER_PAYMENT,
+            source_id: String(settlement.order_id),
+            created_by: requesterId,
+            comment: 'Kuryer filialga topshirdi',
+          },
+          manager,
+        );
+      },
+    });
+    return successRes(result, 200, 'Courier→branch settlement applied');
+  }
+
+  /**
+   * Branch remits a lump sum to HQ — FIFO-settles the branch's oldest
+   * COURIER_SETTLED orders (branch → HQ): branch owed-balance down, MAIN up.
+   */
+  async settleBranchToHq(
+    requester: { id: string; roles?: string[] },
+    dto: { branch_id: string; amount: number },
+  ) {
+    const branchId = String(dto?.branch_id ?? '').trim();
+    if (!branchId) {
+      this.badRequest('branch_id is required');
+    }
+    const requesterId = String(requester?.id ?? 'system');
+    await this.ensureBranchCashbox(branchId);
+    await this.ensureMainCashbox();
+    const result = await this.runFifoSettlement({
+      matchColumn: 'branch_id',
+      matchValue: branchId,
+      fromStatus: SettlementStatus.COURIER_SETTLED,
+      toStatus: SettlementStatus.BRANCH_SETTLED,
+      amountField: 'branch_amount',
+      lumpSum: Number(dto?.amount ?? 0),
+      requesterId,
+      stamp: (now) => ({
+        branch_to_hq_at: now,
+        branch_to_hq_by: requesterId,
+      }),
+      postLeg: async (manager, settlement, amount) => {
+        await this.updateCashboxBalance(
+          {
+            user_id: branchId,
+            cashbox_type: Cashbox_type.BRANCH,
+            amount,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.BRANCH_TO_MAIN,
+            source_id: String(settlement.order_id),
+            created_by: requesterId,
+            comment: 'Filial bosh ofisga topshirdi',
+          },
+          manager,
+        );
+        await this.updateCashboxBalance(
+          {
+            user_id: OrderServiceService.MAIN_CASHBOX_USER_ID,
+            cashbox_type: Cashbox_type.MAIN,
+            amount,
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.BRANCH_TO_MAIN,
+            source_id: String(settlement.order_id),
+            created_by: requesterId,
+            comment: 'Filialdan qabul qilindi',
+          },
+          manager,
+        );
+      },
+    });
+    return successRes(result, 200, 'Branch→HQ settlement applied');
+  }
+
+  /**
+   * HQ pays a market a lump sum — FIFO-settles the market's oldest
+   * BRANCH_SETTLED orders (HQ → market): MAIN down, market owed-balance down.
+   */
+  async settleHqToMarket(
+    requester: { id: string; roles?: string[] },
+    dto: { market_id: string; amount: number },
+  ) {
+    const marketId = String(dto?.market_id ?? '').trim();
+    if (!marketId) {
+      this.badRequest('market_id is required');
+    }
+    const requesterId = String(requester?.id ?? 'system');
+    await this.ensureMainCashbox();
+    const result = await this.runFifoSettlement({
+      matchColumn: 'market_id',
+      matchValue: marketId,
+      fromStatus: SettlementStatus.BRANCH_SETTLED,
+      toStatus: SettlementStatus.MARKET_SETTLED,
+      amountField: 'market_amount',
+      lumpSum: Number(dto?.amount ?? 0),
+      requesterId,
+      stamp: (now) => ({
+        hq_to_market_at: now,
+        hq_to_market_by: requesterId,
+      }),
+      postLeg: async (manager, settlement, amount) => {
+        await this.updateCashboxBalance(
+          {
+            user_id: OrderServiceService.MAIN_CASHBOX_USER_ID,
+            cashbox_type: Cashbox_type.MAIN,
+            amount,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.MARKET_PAYMENT,
+            source_id: String(settlement.order_id),
+            created_by: requesterId,
+            comment: 'Marketga toʼlandi',
+          },
+          manager,
+        );
+        await this.updateCashboxBalance(
+          {
+            user_id: marketId,
+            cashbox_type: Cashbox_type.FOR_MARKET,
+            amount,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.MARKET_PAYMENT,
+            source_id: String(settlement.order_id),
+            created_by: requesterId,
+            comment: 'Marketga toʼlandi',
+          },
+          manager,
+        );
+      },
+    });
+    return successRes(result, 200, 'HQ→market settlement applied');
+  }
+
   async rollbackOrderToWaiting(
     requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,
