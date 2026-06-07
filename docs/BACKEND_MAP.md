@@ -10,7 +10,8 @@
 > flow (order lifecycle, settlement/money model, cashbox invariant, branch
 > transfer), **update this file in the same change**. The code is the detail;
 > this map is the index. Companion docs:
-> [`docs/frontend/`](./frontend/) (API contract + frontend coverage audit).
+> [`docs/frontend/`](./frontend/) (API contract + frontend coverage audit),
+> [`AI_INTEGRATION_ROADMAP.md`](./AI_INTEGRATION_ROADMAP.md) (future AI/`ai-service` plan — not yet started).
 
 Last structural sync: **2026-06-06**.
 
@@ -88,7 +89,9 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   and indexes to search.
 
 ### order-service (`order_schema`) — the core
-- **Entities:** `order` (key cols incl. `status` (`Order_status`), `total_price`),
+- **Entities:** `order` (key cols incl. `status` (`Order_status`), `total_price`;
+  money cols `total_price`/`market_tariff`/`courier_tariff`/`courier_share`/`branch_share`
+  are `numeric(14,2)` — audit 2026-06-07, was float),
   `order_item`, `order_tracking` (history timeline), `order_settlement` (per-order
   FIFO chain state, `SettlementStatus`), `order_custody_event`, a local `branch`
   mirror, `branch_transfer_batch` + `_item` + `_history`, `order_batch_inbox_message`.
@@ -210,7 +213,10 @@ Imported as `@app/common`. Top level: `enums/`, `helpers/`, `src/`.
 - **`src/activity-log`** — pluggable audit-log entity+service; every row stores
   `serviceName` + acting user (denormalized) for a centralized audit dashboard.
 - **`src/idempotency`** — `idempotent-execute.helper.ts`: dedupe repeated
-  operations (e.g. order money ops) by idempotency key.
+  operations (e.g. order money ops) by idempotency key. `in_progress` reservations
+  carry a **lease** (`DEFAULT_IDEMPOTENCY_LEASE_MS`=30s): a key abandoned by a
+  crashed worker is atomically reclaimed by the next caller so a `request_id` is
+  never permanently stuck. (Audit 2026-06-06.)
 - **`src/outbox`** — transactional outbox pattern support (reliable RMQ emit).
 - **`src/soft-delete`** — soft-delete base (deleted rows kept for audit).
 - **`src/security`** — SSRF guard for outbound URLs from operator-supplied

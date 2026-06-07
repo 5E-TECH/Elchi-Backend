@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { RpcException } from '@nestjs/microservices';
 import {
@@ -56,22 +62,34 @@ export class FileServiceService implements OnModuleInit {
   private readonly s3: S3Client;
 
   constructor(private readonly configService: ConfigService) {
-    const endpointHost = this.configService.getOrThrow<string>('MINIO_ENDPOINT');
+    const endpointHost =
+      this.configService.getOrThrow<string>('MINIO_ENDPOINT');
     const port = Number(this.configService.get<string>('MINIO_PORT') ?? 9000);
-    const useSsl = String(this.configService.get<string>('MINIO_USE_SSL') ?? 'false') === 'true';
-    const accessKeyId = this.configService.getOrThrow<string>('MINIO_ACCESS_KEY');
-    const secretAccessKey = this.configService.getOrThrow<string>('MINIO_SECRET_KEY');
-    this.bucket = this.configService.get<string>('MINIO_BUCKET') ?? 'elchi-files';
-    const maxMb = Number(this.configService.get<string>('FILE_MAX_SIZE_MB') ?? 10);
+    const useSsl =
+      String(this.configService.get<string>('MINIO_USE_SSL') ?? 'false') ===
+      'true';
+    const accessKeyId =
+      this.configService.getOrThrow<string>('MINIO_ACCESS_KEY');
+    const secretAccessKey =
+      this.configService.getOrThrow<string>('MINIO_SECRET_KEY');
+    this.bucket =
+      this.configService.get<string>('MINIO_BUCKET') ?? 'elchi-files';
+    const maxMb = Number(
+      this.configService.get<string>('FILE_MAX_SIZE_MB') ?? 10,
+    );
     this.maxSizeBytes = Math.max(1, maxMb) * 1024 * 1024;
     const maxVideoMb = Number(
       this.configService.get<string>('FILE_MAX_VIDEO_SIZE_MB') ?? 50,
     );
     this.maxVideoSizeBytes = Math.max(1, maxVideoMb) * 1024 * 1024;
-    this.defaultExpiresIn = Number(this.configService.get<string>('FILE_SIGNED_URL_EXPIRES') ?? 3600);
+    this.defaultExpiresIn = Number(
+      this.configService.get<string>('FILE_SIGNED_URL_EXPIRES') ?? 3600,
+    );
     this.maxExpiresIn = Math.max(
       this.defaultExpiresIn,
-      Number(this.configService.get<string>('FILE_SIGNED_URL_MAX_EXPIRES') ?? 86_400),
+      Number(
+        this.configService.get<string>('FILE_SIGNED_URL_MAX_EXPIRES') ?? 86_400,
+      ),
     );
 
     const endpoint = `${useSsl ? 'https' : 'http'}://${endpointHost}:${port}`;
@@ -87,7 +105,10 @@ export class FileServiceService implements OnModuleInit {
     try {
       await this.ensureBucketExists();
     } catch (error) {
-      this.logger.error('MinIO bucket init failed', error instanceof Error ? error.stack : undefined);
+      this.logger.error(
+        'MinIO bucket init failed',
+        error instanceof Error ? error.stack : undefined,
+      );
       throw error;
     }
   }
@@ -129,14 +150,14 @@ export class FileServiceService implements OnModuleInit {
   private normalizeFolder(folder?: string): string {
     const fallback = 'uploads';
     if (!folder) return fallback;
-    const cleaned = folder
-      .trim()
-      .replace(/[^a-zA-Z0-9_-]/g, '');
+    const cleaned = folder.trim().replace(/[^a-zA-Z0-9_-]/g, '');
     return cleaned || fallback;
   }
 
   private decodeBase64(value: string): Buffer {
-    const cleaned = value.includes(',') ? value.split(',').pop() ?? '' : value;
+    const cleaned = value.includes(',')
+      ? (value.split(',').pop() ?? '')
+      : value;
     if (!cleaned) {
       throw new BadRequestException('file_base64 is required');
     }
@@ -226,7 +247,8 @@ export class FileServiceService implements OnModuleInit {
       );
     }
 
-    const normalizedClaimed = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+    const normalizedClaimed =
+      mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
     if (!detected.accepts.includes(normalizedClaimed)) {
       this.logger.warn(
         `MIME mismatch: client claimed "${mimeType}", buffer signature is "${detected.token}" — rejecting`,
@@ -239,7 +261,9 @@ export class FileServiceService implements OnModuleInit {
 
   private async ensureBucketExists() {
     const buckets = await this.s3.send(new ListBucketsCommand({}));
-    const exists = (buckets.Buckets ?? []).some((bucket) => bucket.Name === this.bucket);
+    const exists = (buckets.Buckets ?? []).some(
+      (bucket) => bucket.Name === this.bucket,
+    );
     if (!exists) {
       await this.s3.send(new CreateBucketCommand({ Bucket: this.bucket }));
       this.logger.log(`Created bucket: ${this.bucket}`);
@@ -248,7 +272,9 @@ export class FileServiceService implements OnModuleInit {
 
   private async ensureObjectExists(key: string) {
     try {
-      await this.s3.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+      await this.s3.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+      );
     } catch {
       throw new NotFoundException('File not found');
     }
@@ -293,7 +319,9 @@ export class FileServiceService implements OnModuleInit {
   async upload(data: UploadFileDto) {
     try {
       const fileName = String(data?.file_name ?? '').trim();
-      const mimeType = String(data?.mime_type ?? '').trim().toLowerCase();
+      const mimeType = String(data?.mime_type ?? '')
+        .trim()
+        .toLowerCase();
       if (!fileName) throw new BadRequestException('file_name is required');
       if (!mimeType) throw new BadRequestException('mime_type is required');
 
@@ -323,7 +351,9 @@ export class FileServiceService implements OnModuleInit {
 
       const expiresIn = Number(data?.expires_in ?? this.defaultExpiresIn);
       const bounded =
-        Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : this.defaultExpiresIn;
+        Number.isFinite(expiresIn) && expiresIn > 0
+          ? expiresIn
+          : this.defaultExpiresIn;
       // Cap at maxExpiresIn so a client cannot request a multi-year link.
       const safeExpires = Math.min(bounded, this.maxExpiresIn);
       const url = await getSignedUrl(
@@ -381,6 +411,16 @@ export class FileServiceService implements OnModuleInit {
       const body = response.Body;
       if (!body || typeof body.transformToByteArray !== 'function') {
         throw new NotFoundException('File not found');
+      }
+
+      // Guard against OOM: read() buffers the whole object AND base64-encodes it
+      // (~2× size) in memory. Reject anything larger than the max legitimate
+      // upload before materialising it. (Audit 2026-06-07.)
+      const size = Number(response.ContentLength ?? 0);
+      if (size > this.maxVideoSizeBytes) {
+        throw new BadRequestException(
+          `File too large to read into memory: ${size} bytes (limit ${this.maxVideoSizeBytes})`,
+        );
       }
 
       const bytes = await body.transformToByteArray();
@@ -452,7 +492,9 @@ export class FileServiceService implements OnModuleInit {
       const buffer = await new Promise<Buffer>((resolve, reject) => {
         const doc = new PDFDocument({ size: 'A4', margin: 50 });
         const chunks: Buffer[] = [];
-        doc.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        doc.on('data', (chunk) =>
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)),
+        );
         doc.on('error', reject);
         doc.on('end', () => resolve(Buffer.concat(chunks)));
 

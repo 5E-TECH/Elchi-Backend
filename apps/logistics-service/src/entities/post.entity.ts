@@ -1,5 +1,5 @@
 import { Column, Entity, Index, JoinColumn, ManyToOne } from 'typeorm';
-import { BaseEntity } from '@app/common';
+import { BaseEntity, numericTransformer } from '@app/common';
 import { Post_status } from '@app/common';
 import { Region } from './region.entity';
 
@@ -12,7 +12,15 @@ export class Post extends BaseEntity {
   @Column({ type: 'bigint' })
   courier_id!: string;
 
-  @Column({ type: 'float', default: 0 })
+  // numeric(14,2) — matches order.total_price (which feeds this aggregate) so
+  // the batch total stays exact. numericTransformer keeps the JS field a number.
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    default: 0,
+    transformer: numericTransformer,
+  })
   post_total_price!: number;
 
   @Column({ type: 'int', default: 0 })

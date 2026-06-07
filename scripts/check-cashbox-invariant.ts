@@ -22,9 +22,11 @@
  *   npm run migration:run
  *   npm run db:check-cashbox -- --compare=/tmp/cb-pre.json    # after migration
  *
- * Tolerance: amounts are stored as `float` in Elchi (legacy decision). Pure
- * equality would false-positive on accumulated rounding. EPSILON=0.01 catches
- * any real money drift while ignoring binary-float noise.
+ * Tolerance: money is now stored as `numeric(14,2)` (audit 2026-06-07; previously
+ * `float`). Live values no longer accumulate binary-float drift. EPSILON=0.01 is
+ * kept to absorb one-time ≤1-tiyin rounding applied to historical rows during the
+ * float→numeric cast; it can be tightened toward 0 once post-migration audits on
+ * real data confirm no residual mismatch.
  */
 import 'reflect-metadata';
 import * as fs from 'node:fs';

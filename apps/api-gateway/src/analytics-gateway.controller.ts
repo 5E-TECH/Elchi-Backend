@@ -1,5 +1,6 @@
 import { Controller, Get, Inject, Query, Req, UseGuards } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
+import { Roles as RoleEnum } from '@app/common';
 import {
   ApiBearerAuth,
   ApiOperation,
@@ -7,6 +8,8 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { Roles } from './auth/roles.decorator';
+import { RolesGuard } from './auth/roles.guard';
 import { firstValueFrom, timeout } from 'rxjs';
 
 interface JwtUser {
@@ -18,7 +21,9 @@ interface JwtUser {
 @ApiTags('Analytics')
 @Controller('analytics')
 export class AnalyticsGatewayController {
-  constructor(@Inject('ANALYTICS') private readonly analyticsClient: ClientProxy) {}
+  constructor(
+    @Inject('ANALYTICS') private readonly analyticsClient: ClientProxy,
+  ) {}
 
   private toRequester(req: { user: JwtUser }) {
     return {
@@ -51,13 +56,20 @@ export class AnalyticsGatewayController {
     );
   }
 
+  // Company-wide financial reports — SUPERADMIN/ADMIN only (audit 2026-06-07:
+  // these were JwtAuthGuard-only, leaking full financials to every role).
   @Get('revenue')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Revenue stats by period' })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
-  @ApiQuery({ name: 'period', required: false, enum: ['daily', 'weekly', 'monthly', 'yearly'] })
+  @ApiQuery({
+    name: 'period',
+    required: false,
+    enum: ['daily', 'weekly', 'monthly', 'yearly'],
+  })
   getRevenue(
     @Req() req: { user: JwtUser },
     @Query('startDate') startDate?: string,
@@ -78,7 +90,8 @@ export class AnalyticsGatewayController {
   }
 
   @Get('kpi')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'KPI stats report' })
   @ApiQuery({ name: 'startDate', required: false, type: String })
@@ -102,7 +115,8 @@ export class AnalyticsGatewayController {
   }
 
   @Get('reports/orders')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Order report' })
   @ApiQuery({ name: 'fromDate', required: false, type: String })
@@ -126,7 +140,8 @@ export class AnalyticsGatewayController {
   }
 
   @Get('reports/finance')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Finance report' })
   @ApiQuery({ name: 'fromDate', required: false, type: String })
