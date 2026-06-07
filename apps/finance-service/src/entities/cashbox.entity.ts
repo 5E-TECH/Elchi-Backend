@@ -3,7 +3,7 @@ import { BaseEntity, numericTransformer } from '@app/common';
 import { Cashbox_type } from '@app/common';
 import { CashboxHistory } from './cashbox-history.entity';
 
-// Money is stored as numeric(14,2) (exact fixed-point) so repeated balance
+// Money is stored as numeric(20,2) (exact fixed-point) so repeated balance
 // accumulation and the cashbox invariant stay drift-free. numericTransformer
 // keeps the JS field a `number`, so the API contract is unchanged.
 @Entity({ name: 'cashboxes' })
@@ -13,7 +13,7 @@ import { CashboxHistory } from './cashbox-history.entity';
 export class Cashbox extends BaseEntity {
   @Column({
     type: 'numeric',
-    precision: 14,
+    precision: 20,
     scale: 2,
     default: 0,
     transformer: numericTransformer,
@@ -22,7 +22,7 @@ export class Cashbox extends BaseEntity {
 
   @Column({
     type: 'numeric',
-    precision: 14,
+    precision: 20,
     scale: 2,
     default: 0,
     transformer: numericTransformer,
@@ -31,7 +31,7 @@ export class Cashbox extends BaseEntity {
 
   @Column({
     type: 'numeric',
-    precision: 14,
+    precision: 20,
     scale: 2,
     default: 0,
     transformer: numericTransformer,
