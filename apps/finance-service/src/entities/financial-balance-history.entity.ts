@@ -23,12 +23,12 @@ import {
 @Index('IDX_FBH_SOURCE_TYPE', ['source_type'])
 @Index('IDX_FBH_ORDER', ['order_id'])
 export class FinancialBalanceHistory extends BaseEntity {
-  // numeric(14,2) — exact fixed-point so the running P&L ledger
+  // numeric(20,2) — exact fixed-point so the running P&L ledger
   // (balance_after = balance_before + amount) never drifts. API stays `number`.
   /** Signed impact on the financial balance (+income, -expense). */
   @Column({
     type: 'numeric',
-    precision: 14,
+    precision: 20,
     scale: 2,
     transformer: numericTransformer,
   })
@@ -37,7 +37,7 @@ export class FinancialBalanceHistory extends BaseEntity {
   /** Running balance immediately before this entry. */
   @Column({
     type: 'numeric',
-    precision: 14,
+    precision: 20,
     scale: 2,
     transformer: numericTransformer,
   })
@@ -46,7 +46,7 @@ export class FinancialBalanceHistory extends BaseEntity {
   /** Running balance immediately after this entry (= balance_before + amount). */
   @Column({
     type: 'numeric',
-    precision: 14,
+    precision: 20,
     scale: 2,
     transformer: numericTransformer,
   })

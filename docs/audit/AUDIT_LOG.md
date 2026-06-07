@@ -381,3 +381,10 @@ o'zgarmadi. FRONTEND_CHANGELOG'ga info yozildi.
 **Yakun:** 🟠P1 ✅ tuzatildi (4 entity + migratsiya + invariant izoh, finance 19 test yashil,
 to'liq suite regresssiz). ⚠️ Deploy'da `npm run migration:run` kerak. Migratsiyadan keyin
 `npm run db:check-cashbox` bilan invariant tekshirilsin.
+
+> **PRECISION TUZATISH (2026-06-07, deploy fail'dan keyin):** finance pul ustunlari dastlab
+> `numeric(14,2)` (max ~1e12) edi — bu **kümülatif** qiymatlar (cashbox balanslar, P&L ledger
+> running total) UZS'da 1 trillion'dan oshib `ALTER ... USING ::numeric(14,2)` **overflow**
+> berib, migratsiya (va deploy) fail bo'lishiga sabab bo'ldi. **Yechim:** finance ustunlari
+> `numeric(20,2)` (max ~1e18) ga oshirildi (migratsiya 005 + 4 entity). Per-order ustunlar
+> (order 004, logistics 006) `numeric(14,2)` da qoldi — ular bitta order/post, overflow yo'q.

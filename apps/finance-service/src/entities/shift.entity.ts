@@ -1,10 +1,10 @@
 import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity, numericTransformer } from '@app/common';
 
-// Reusable numeric(14,2) money column config (exact fixed-point; API stays number).
+// Reusable numeric(20,2) money column config (exact fixed-point; API stays number).
 const moneyColumn = {
   type: 'numeric' as const,
-  precision: 14,
+  precision: 20,
   scale: 2,
   default: 0,
   transformer: numericTransformer,

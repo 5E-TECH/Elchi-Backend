@@ -41,10 +41,10 @@ export class CashboxHistory extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   source_user_id!: string | null;
 
-  // numeric(14,2) — exact fixed-point money (see Cashbox entity note).
+  // numeric(20,2) — exact fixed-point money (see Cashbox entity note).
   @Column({
     type: 'numeric',
-    precision: 14,
+    precision: 20,
     scale: 2,
     transformer: numericTransformer,
   })
@@ -52,7 +52,7 @@ export class CashboxHistory extends BaseEntity {
 
   @Column({
     type: 'numeric',
-    precision: 14,
+    precision: 20,
     scale: 2,
     transformer: numericTransformer,
   })
@@ -64,7 +64,7 @@ export class CashboxHistory extends BaseEntity {
   // rather than claiming a false 0/0 breakdown.
   @Column({
     type: 'numeric',
-    precision: 14,
+    precision: 20,
     scale: 2,
     nullable: true,
     transformer: numericTransformer,
@@ -73,7 +73,7 @@ export class CashboxHistory extends BaseEntity {
 
   @Column({
     type: 'numeric',
-    precision: 14,
+    precision: 20,
     scale: 2,
     nullable: true,
     transformer: numericTransformer,
