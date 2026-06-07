@@ -1,5 +1,10 @@
 import { Controller } from '@nestjs/common';
-import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
+import {
+  Ctx,
+  MessagePattern,
+  Payload,
+  RmqContext,
+} from '@nestjs/microservices';
 import { RmqService, executeAndAck } from '@app/common';
 import { UserServiceService } from './user-service.service';
 import { AuthService } from './auth/auth.service';
@@ -71,72 +76,96 @@ export class IdentityController {
   }
 
   @MessagePattern({ cmd: 'identity.logout' })
-  logout(
-    @Payload() data: { userId: string },
-    @Ctx() context: RmqContext,
-  ) {
-    return this.executeAndAck(context, () => this.authService.logout(data.userId));
+  logout(@Payload() data: { userId: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.authService.logout(data.userId),
+    );
   }
 
   @MessagePattern({ cmd: 'identity.validate' })
-  validate(
-    @Payload() data: { userId: string },
-    @Ctx() context: RmqContext,
-  ) {
-    return this.executeAndAck(context, () => this.authService.validateUser(data.userId));
+  validate(@Payload() data: { userId: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.authService.validateUser(data.userId),
+    );
   }
 
   // ==================== User CRUD ====================
 
   @MessagePattern({ cmd: 'identity.user.create' })
-  createAdmin(@Payload() payload: CreateUserPayload, @Ctx() context: RmqContext) {
+  createAdmin(
+    @Payload() payload: CreateUserPayload,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.userService.createAdmin(payload.dto, payload.requester),
     );
   }
 
   @MessagePattern({ cmd: 'identity.registrator.create' })
-  createRegistrator(@Payload() payload: CreateUserPayload, @Ctx() context: RmqContext) {
+  createRegistrator(
+    @Payload() payload: CreateUserPayload,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.userService.createRegistrator(payload.dto, payload.requester),
     );
   }
 
   @MessagePattern({ cmd: 'identity.courier.create' })
-  createCourier(@Payload() payload: CreateCourierPayload, @Ctx() context: RmqContext) {
+  createCourier(
+    @Payload() payload: CreateCourierPayload,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.userService.createCourier(payload.dto, payload.requester),
     );
   }
 
   @MessagePattern({ cmd: 'identity.manager.create' })
-  createManager(@Payload() payload: CreateManagerPayload, @Ctx() context: RmqContext) {
+  createManager(
+    @Payload() payload: CreateManagerPayload,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.userService.createManager(payload.dto, payload.requester),
     );
   }
 
   @MessagePattern({ cmd: 'identity.courier.find_all' })
-  getCouriers(@Payload() payload: FindAllUsersPayload, @Ctx() context: RmqContext) {
+  getCouriers(
+    @Payload() payload: FindAllUsersPayload,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.userService.findAllCouriers(payload?.query),
     );
   }
 
   @MessagePattern({ cmd: 'identity.customer.create' })
-  createCustomer(@Payload() payload: CreateCustomerPayload, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.userService.createCustomer(payload.dto));
+  createCustomer(
+    @Payload() payload: CreateCustomerPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.createCustomer(payload.dto),
+    );
   }
 
   @MessagePattern({ cmd: 'identity.user.update' })
-  updateAdmin(@Payload() payload: UpdateUserPayload, @Ctx() context: RmqContext) {
+  updateAdmin(
+    @Payload() payload: UpdateUserPayload,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.userService.updateUser(payload.id, payload.dto, payload.requester),
     );
   }
 
   @MessagePattern({ cmd: 'identity.user.delete' })
-  deleteAdmin(@Payload() payload: DeleteUserPayload, @Ctx() context: RmqContext) {
+  deleteAdmin(
+    @Payload() payload: DeleteUserPayload,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.userService.deleteUser(payload.id, payload.requester),
     );
@@ -147,7 +176,9 @@ export class IdentityController {
     @Payload() payload: FindUserByIdPayload,
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.userService.findUserById(payload.id));
+    return this.executeAndAck(context, () =>
+      this.userService.findUserById(payload.id),
+    );
   }
 
   @MessagePattern({ cmd: 'identity.user.profile' })
@@ -155,7 +186,9 @@ export class IdentityController {
     @Payload() payload: FindUserByIdPayload,
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.userService.findOwnProfile(payload.id));
+    return this.executeAndAck(context, () =>
+      this.userService.findOwnProfile(payload.id),
+    );
   }
 
   @MessagePattern({ cmd: 'identity.customer.find_by_id' })
@@ -169,8 +202,13 @@ export class IdentityController {
   }
 
   @MessagePattern({ cmd: 'identity.user.find_all' })
-  getAdmins(@Payload() payload: FindAllUsersPayload, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.userService.findAllAdmins(payload?.query));
+  getAdmins(
+    @Payload() payload: FindAllUsersPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.findAllAdmins(payload?.query),
+    );
   }
 
   @MessagePattern({ cmd: 'identity.user.status' })
@@ -190,20 +228,33 @@ export class IdentityController {
   // ==================== Market CRUD ====================
 
   @MessagePattern({ cmd: 'identity.market.create' })
-  createMarket(@Payload() payload: CreateMarketPayload, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.userService.createMarket(payload.dto));
+  createMarket(
+    @Payload() payload: CreateMarketPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.createMarket(payload.dto, payload.requester),
+    );
   }
 
   @MessagePattern({ cmd: 'identity.market.update' })
-  updateMarket(@Payload() payload: UpdateMarketPayload, @Ctx() context: RmqContext) {
+  updateMarket(
+    @Payload() payload: UpdateMarketPayload,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.userService.updateMarket(payload.id, payload.dto),
     );
   }
 
   @MessagePattern({ cmd: 'identity.market.delete' })
-  deleteMarket(@Payload() payload: DeleteMarketPayload, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.userService.deleteMarket(payload.id));
+  deleteMarket(
+    @Payload() payload: DeleteMarketPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.deleteMarket(payload.id),
+    );
   }
 
   @MessagePattern({ cmd: 'identity.market.find_by_id' })
@@ -211,7 +262,9 @@ export class IdentityController {
     @Payload() payload: FindMarketByIdPayload,
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.userService.findMarketById(payload.id));
+    return this.executeAndAck(context, () =>
+      this.userService.findMarketById(payload.id),
+    );
   }
 
   @MessagePattern({ cmd: 'identity.market.find_by_ids' })
@@ -219,12 +272,19 @@ export class IdentityController {
     @Payload() payload: FindMarketsByIdsPayload,
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.userService.findMarketsByIds(payload.ids));
+    return this.executeAndAck(context, () =>
+      this.userService.findMarketsByIds(payload.ids),
+    );
   }
 
   @MessagePattern({ cmd: 'identity.market.find_all' })
-  getMarkets(@Payload() payload: FindAllMarketsPayload, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.userService.findAllMarkets(payload?.query));
+  getMarkets(
+    @Payload() payload: FindAllMarketsPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.findAllMarkets(payload?.query),
+    );
   }
 
   @MessagePattern({ cmd: 'identity.market.find_by_tg_token' })

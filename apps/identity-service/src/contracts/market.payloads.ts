@@ -1,9 +1,10 @@
 import { CreateMarketDto } from '../dto/create-market.dto';
 import { UpdateMarketDto } from '../dto/update-market.dto';
-import { UserFilterQuery } from './user.payloads';
+import { RequesterContext, UserFilterQuery } from './user.payloads';
 
 export interface CreateMarketPayload {
   dto: CreateMarketDto;
+  requester?: RequesterContext;
 }
 
 export interface UpdateMarketPayload {

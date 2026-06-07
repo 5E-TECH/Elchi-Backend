@@ -29,6 +29,7 @@ describe('BranchServiceService', () => {
   let logisticsClient: any;
   let orderClient: any;
   let fileClient: any;
+  let financeClient: any;
 
   beforeEach(() => {
     // Chainable QueryBuilder mock — ensureBranchNameUnique uses
@@ -82,6 +83,7 @@ describe('BranchServiceService', () => {
     logisticsClient = { send: jest.fn().mockReturnValue(of({ data: [] })) };
     orderClient = { send: jest.fn().mockReturnValue(of({ data: [] })) };
     fileClient = { send: jest.fn().mockReturnValue(of({ data: { key: 'k1', url: 'u1' } })) };
+    financeClient = { send: jest.fn().mockReturnValue(of({ data: {} })) };
 
     const configService: any = {
       get: jest.fn((key: string, fallback?: string) => fallback),
@@ -95,6 +97,7 @@ describe('BranchServiceService', () => {
       logisticsClient,
       orderClient,
       fileClient,
+      financeClient,
       configService,
     );
   });

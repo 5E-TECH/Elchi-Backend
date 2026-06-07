@@ -7,7 +7,7 @@ import {
   ManyToOne,
   OneToMany,
 } from 'typeorm';
-import { BaseEntity } from '@app/common';
+import { BaseEntity, numericTransformer } from '@app/common';
 import { Order_status, Where_deliver } from '@app/common';
 import { OrderItem } from './order-item.entity';
 import { OrderTracking } from './order-tracking.entity';
@@ -43,13 +43,35 @@ export class Order extends BaseEntity {
   @Column({ type: 'enum', enum: Where_deliver, default: Where_deliver.CENTER })
   where_deliver!: Where_deliver;
 
-  @Column({ type: 'float', default: 0 })
+  // Money is stored as numeric(14,2) (exact fixed-point) to match
+  // order_settlement and keep SUM()/financial aggregations drift-free. The
+  // numericTransformer keeps the JS field a `number`, so existing arithmetic
+  // and the API contract (still a number) are unchanged.
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    default: 0,
+    transformer: numericTransformer,
+  })
   total_price!: number;
 
-  @Column({ type: 'float', nullable: true })
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   market_tariff!: number | null;
 
-  @Column({ type: 'float', nullable: true })
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   courier_tariff!: number | null;
 
   /**
@@ -58,14 +80,26 @@ export class Order extends BaseEntity {
    * salary-only). Distinct from courier_tariff (the configured tariff value).
    * Used for exact settlement and rollback math.
    */
-  @Column({ type: 'float', nullable: true })
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   courier_share!: number | null;
 
   /**
    * Amount the (PARTNER) branch KEEPS for this order, snapshotted at sale time
    * (= Branch.per_order_share for PARTNER branches, 0 for OWNED / HQ).
    */
-  @Column({ type: 'float', nullable: true })
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   branch_share!: number | null;
 
   @Column({ type: 'int', default: 0 })

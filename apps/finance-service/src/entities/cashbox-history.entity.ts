@@ -1,5 +1,5 @@
 import { Column, Entity, Index, ManyToOne, JoinColumn } from 'typeorm';
-import { BaseEntity } from '@app/common';
+import { BaseEntity, numericTransformer } from '@app/common';
 import { Operation_type, Source_type, PaymentMethod } from '@app/common';
 import { Cashbox } from './cashbox.entity';
 
@@ -41,20 +41,43 @@ export class CashboxHistory extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   source_user_id!: string | null;
 
-  @Column({ type: 'float' })
+  // numeric(14,2) — exact fixed-point money (see Cashbox entity note).
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    transformer: numericTransformer,
+  })
   amount!: number;
 
-  @Column({ type: 'float' })
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    transformer: numericTransformer,
+  })
   balance_after!: number;
 
   // Cash / card split of the balance immediately after this operation.
   // balance_cash_after + balance_card_after == balance_after. Nullable so
   // rows written before this column existed (no reliable split) stay NULL
   // rather than claiming a false 0/0 breakdown.
-  @Column({ type: 'float', nullable: true })
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   balance_cash_after!: number | null;
 
-  @Column({ type: 'float', nullable: true })
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   balance_card_after!: number | null;
 
   @Column({ type: 'enum', enum: PaymentMethod, default: PaymentMethod.CASH })

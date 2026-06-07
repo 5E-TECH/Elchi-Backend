@@ -15,6 +15,8 @@ jest.mock('@app/common', () => ({
     CLOSED: 'closed',
   },
   Roles: {
+    SUPERADMIN: 'superadmin',
+    ADMIN: 'admin',
     COURIER: 'courier',
     MARKET: 'market',
     MARKET_OPERATOR: 'market_operator',
@@ -88,7 +90,10 @@ describe('AnalyticsServiceService', () => {
       return Promise.resolve({ data: { balance: 1 } });
     });
 
-    const res = await service.getRevenueStats(undefined, { period: 'bad' } as any);
+    const res = await service.getRevenueStats(
+      { id: 'a', roles: ['admin'] },
+      { period: 'bad' } as any,
+    );
 
     expect(res.statusCode).toBe(200);
     expect(res.data.chart.labels).toEqual(['D1']);
@@ -99,7 +104,10 @@ describe('AnalyticsServiceService', () => {
       .mockResolvedValueOnce({ data: { data: [] } })
       .mockResolvedValueOnce({ data: { any: 1 } });
 
-    const res = await service.getRevenueStats(undefined, {} as any);
+    const res = await service.getRevenueStats(
+      { id: 'a', roles: ['admin'] },
+      {} as any,
+    );
 
     expect(res.statusCode).toBe(200);
     expect(res.data.chart.labels).toEqual([]);
@@ -126,7 +134,10 @@ describe('AnalyticsServiceService', () => {
       return Promise.resolve({ data: {} });
     });
 
-    const res = await service.getKpiStats(undefined, {} as any);
+    const res = await service.getKpiStats(
+      { id: 'a', roles: ['admin'] },
+      {} as any,
+    );
 
     expect(res.statusCode).toBe(200);
     expect(res.data.averageOrderValue).toBe(200);
@@ -142,7 +153,10 @@ describe('AnalyticsServiceService', () => {
       return Promise.resolve({ data: {} });
     });
 
-    const res = await service.getOrderReport(undefined, {} as any);
+    const res = await service.getOrderReport(
+      { id: 'a', roles: ['admin'] },
+      {} as any,
+    );
 
     expect(res.statusCode).toBe(200);
     expect(res.data.statusDistribution).toHaveProperty('new');
@@ -167,12 +181,43 @@ describe('AnalyticsServiceService', () => {
       return Promise.resolve({ data: {} });
     });
 
-    const res = await service.getFinanceReport(undefined, {} as any);
+    const res = await service.getFinanceReport(
+      { id: 'a', roles: ['admin'] },
+      {} as any,
+    );
 
     expect(res.statusCode).toBe(200);
     expect(res.data.totalIncome).toBe(300);
     expect(res.data.totalOutcome).toBe(100);
     expect(res.data.net).toBe(200);
+  });
+
+  // Audit 2026-06-07: financial reports must reject non-admin roles (P0 leak fix).
+  it.each([
+    ['getFinanceReport'],
+    ['getRevenueStats'],
+    ['getKpiStats'],
+    ['getOrderReport'],
+  ])('%s forbids a non-admin requester (403)', async (method) => {
+    const courier = { id: 'c1', roles: ['courier'] };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await (service as any)[method](courier, {})
+      .then(() => {
+        throw new Error('expected 403');
+      })
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      .catch((e: any) => {
+        expect(e?.getError?.()?.statusCode).toBe(403);
+      });
+    expect(rmqSendMock).not.toHaveBeenCalled();
+  });
+
+  it('financial reports allow an admin requester (no 403)', async () => {
+    rmqSendMock.mockResolvedValue({ data: {} });
+    const admin = { id: 'a', roles: ['admin'] };
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const res = await service.getFinanceReport(admin as any, {} as any);
+    expect(res.statusCode).toBe(200);
   });
 
   it('getCourierReport filters only requester courier data', async () => {

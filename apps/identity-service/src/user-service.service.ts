@@ -182,6 +182,59 @@ export class UserServiceService implements OnModuleInit {
     this.forbidden('Bu amal uchun ruxsat yoq');
   }
 
+  /**
+   * Service-level RBAC for the role-create flows, mirroring the gateway
+   * `@Roles(...)` on each route. Defense-in-depth: an absent `requester`
+   * (trusted internal call) is allowed; an authenticated caller is checked.
+   * Courier/Market: SUPERADMIN | ADMIN | MANAGER. Manager: SUPERADMIN | ADMIN.
+   */
+  private assertRequesterCanCreateCourier(requester?: RequesterContext) {
+    if (!requester) {
+      return;
+    }
+
+    if (
+      this.hasRole(requester, Roles.SUPERADMIN) ||
+      this.hasRole(requester, Roles.ADMIN) ||
+      this.hasRole(requester, Roles.MANAGER)
+    ) {
+      return;
+    }
+
+    this.forbidden('Bu amal uchun ruxsat yoq');
+  }
+
+  private assertRequesterCanCreateManager(requester?: RequesterContext) {
+    if (!requester) {
+      return;
+    }
+
+    if (
+      this.hasRole(requester, Roles.SUPERADMIN) ||
+      this.hasRole(requester, Roles.ADMIN)
+    ) {
+      return;
+    }
+
+    this.forbidden('Bu amal uchun ruxsat yoq');
+  }
+
+  private assertRequesterCanCreateMarket(requester?: RequesterContext) {
+    if (!requester) {
+      return;
+    }
+
+    if (
+      this.hasRole(requester, Roles.SUPERADMIN) ||
+      this.hasRole(requester, Roles.ADMIN) ||
+      this.hasRole(requester, Roles.MANAGER)
+    ) {
+      return;
+    }
+
+    this.forbidden('Bu amal uchun ruxsat yoq');
+  }
+
   private assertRequesterCanMutateUser(
     requester: RequesterContext | undefined,
     targetUserId: string,
@@ -379,7 +432,10 @@ export class UserServiceService implements OnModuleInit {
     if (role === Roles.MARKET) {
       return Cashbox_type.FOR_MARKET;
     }
-    if (role === Roles.COURIER) {
+    // Managers operate like couriers (deliver / collect cash), so they share the
+    // FOR_COURIER cashbox type — there is no dedicated manager cashbox type.
+    // Keep this in sync with createManager(), which provisions FOR_COURIER.
+    if (role === Roles.COURIER || role === Roles.MANAGER) {
       return Cashbox_type.FOR_COURIER;
     }
     return null;
@@ -915,7 +971,9 @@ export class UserServiceService implements OnModuleInit {
     });
   }
 
-  async createMarket(dto: CreateMarketDto) {
+  async createMarket(dto: CreateMarketDto, requester?: RequesterContext) {
+    this.assertRequesterCanCreateMarket(requester);
+
     await this.ensurePhoneUnique(dto.phone_number);
     await this.ensureUsernameUnique(dto.username);
 
@@ -950,6 +1008,8 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async createCourier(dto: CreateCourierDto, requester?: RequesterContext) {
+    this.assertRequesterCanCreateCourier(requester);
+
     await this.validateRegionExists(dto.region_id);
     await this.ensurePhoneUnique(dto.phone_number);
 
@@ -989,6 +1049,8 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async createManager(dto: CreateManagerDto, requester?: RequesterContext) {
+    this.assertRequesterCanCreateManager(requester);
+
     await this.ensurePhoneUnique(dto.phone_number);
 
     const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
@@ -1043,7 +1105,9 @@ export class UserServiceService implements OnModuleInit {
       );
     }
 
-    const generatedPassword = `cust_${Math.random().toString(36).slice(2, 12)}`;
+    // Crypto-strong throwaway password. Customers authenticate by phone/OTP, not
+    // this value, but it must not be guessable if a password path is ever enabled.
+    const generatedPassword = `cust_${randomBytes(12).toString('hex')}`;
     const customer = this.users.create({
       name: dto.name,
       phone_number: dto.phone_number,
