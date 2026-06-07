@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
-import { ClientProxy } from '@nestjs/microservices';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { Order_status, Roles, rmqSend } from '@app/common';
-import { successRes } from '../../../libs/common/helpers/response';
+import { errorRes, successRes } from '../../../libs/common/helpers/response';
 
 interface RequesterContext {
   id: string;
@@ -43,12 +43,25 @@ export class AnalyticsServiceService {
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
   ) {}
 
+  /**
+   * Defense-in-depth for company-wide financial reports. The gateway already
+   * restricts these routes to SUPERADMIN/ADMIN; this guards the RMQ entrypoint
+   * too, so another internal caller (or a misconfigured route) can't leak
+   * full financials to a lower-privileged role. (Audit 2026-06-07.)
+   */
+  private assertFinancialAccess(requester: RequesterContext | undefined): void {
+    const roles = (requester?.roles ?? []).map((r) => String(r).toLowerCase());
+    const allowed =
+      roles.includes(Roles.SUPERADMIN) || roles.includes(Roles.ADMIN);
+    if (!allowed) {
+      throw new RpcException(
+        errorRes('Bu hisobotni faqat admin koʻra oladi', 403),
+      );
+    }
+  }
+
   private unwrap<T>(response: T | { data?: T }) {
-    if (
-      response &&
-      typeof response === 'object' &&
-      'data' in response
-    ) {
+    if (response && typeof response === 'object' && 'data' in response) {
       return (response as { data?: T }).data ?? response;
     }
     return response;
@@ -73,9 +86,7 @@ export class AnalyticsServiceService {
     const start = startOnly
       ? this.startOfTashkentDay(startOnly)
       : new Date(startDate);
-    const end = endOnly
-      ? this.endOfTashkentDay(endOnly)
-      : new Date(endDate);
+    const end = endOnly ? this.endOfTashkentDay(endOnly) : new Date(endDate);
 
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
       const now = new Date();
@@ -99,7 +110,11 @@ export class AnalyticsServiceService {
     const year = Number(match[1]);
     const month = Number(match[2]);
     const day = Number(match[3]);
-    if (!Number.isFinite(year) || !Number.isFinite(month) || !Number.isFinite(day)) {
+    if (
+      !Number.isFinite(year) ||
+      !Number.isFinite(month) ||
+      !Number.isFinite(day)
+    ) {
       return null;
     }
 
@@ -115,22 +130,24 @@ export class AnalyticsServiceService {
   }
 
   private tashkentBoundaryToUtc(date: Date, isEnd: boolean): Date {
-    const offsetMs = AnalyticsServiceService.TASHKENT_OFFSET_MINUTES * 60 * 1000;
+    const offsetMs =
+      AnalyticsServiceService.TASHKENT_OFFSET_MINUTES * 60 * 1000;
     const shifted = new Date(date.getTime() + offsetMs);
 
     const y = shifted.getUTCFullYear();
     const m = shifted.getUTCMonth();
     const d = shifted.getUTCDate();
 
-    const utcMs = Date.UTC(
-      y,
-      m,
-      d,
-      isEnd ? 23 : 0,
-      isEnd ? 59 : 0,
-      isEnd ? 59 : 0,
-      isEnd ? 999 : 0,
-    ) - offsetMs;
+    const utcMs =
+      Date.UTC(
+        y,
+        m,
+        d,
+        isEnd ? 23 : 0,
+        isEnd ? 59 : 0,
+        isEnd ? 59 : 0,
+        isEnd ? 999 : 0,
+      ) - offsetMs;
 
     return new Date(utcMs);
   }
@@ -152,12 +169,19 @@ export class AnalyticsServiceService {
   }
 
   private roleSet(requester?: RequesterContext) {
-    return new Set((requester?.roles ?? []).map((role) => String(role).toLowerCase()));
+    return new Set(
+      (requester?.roles ?? []).map((role) => String(role).toLowerCase()),
+    );
   }
 
   private normalizeRevenuePeriod(period?: string): RevenuePeriod {
     const normalized = String(period ?? 'daily').toLowerCase();
-    if (normalized === 'daily' || normalized === 'weekly' || normalized === 'monthly' || normalized === 'yearly') {
+    if (
+      normalized === 'daily' ||
+      normalized === 'weekly' ||
+      normalized === 'monthly' ||
+      normalized === 'yearly'
+    ) {
       return normalized;
     }
     return 'daily';
@@ -175,8 +199,16 @@ export class AnalyticsServiceService {
   }
 
   private async requestOrderPage(query: Record<string, any>) {
-    const response = await rmqSend<any>(this.orderClient, { cmd: 'order.find_all' }, { query });
-    if (response && typeof response === 'object' && Array.isArray(response.data)) {
+    const response = await rmqSend<any>(
+      this.orderClient,
+      { cmd: 'order.find_all' },
+      { query },
+    );
+    if (
+      response &&
+      typeof response === 'object' &&
+      Array.isArray(response.data)
+    ) {
       return {
         data: response.data as any[],
         total: this.parseNumber(response.total, 0),
@@ -185,7 +217,7 @@ export class AnalyticsServiceService {
       };
     }
 
-    const wrapped = this.unwrap<any>(response as any) as any;
+    const wrapped = this.unwrap<any>(response);
     if (wrapped && typeof wrapped === 'object' && Array.isArray(wrapped.data)) {
       return {
         data: wrapped.data as any[],
@@ -235,17 +267,29 @@ export class AnalyticsServiceService {
     return response.total;
   }
 
-  private normalizePagedResponse(response: any): { items: any[]; total: number; totalPages: number } {
-    const direct = this.unwrap<any>(response as any) as any;
+  private normalizePagedResponse(response: any): {
+    items: any[];
+    total: number;
+    totalPages: number;
+  } {
+    const direct = this.unwrap<any>(response);
     const root = direct && typeof direct === 'object' ? direct : {};
     const items = Array.isArray(root.items)
       ? root.items
       : Array.isArray(root.data?.items)
         ? root.data.items
         : [];
-    const meta = root.meta ?? root.pagination ?? root.data?.meta ?? root.data?.pagination ?? {};
+    const meta =
+      root.meta ??
+      root.pagination ??
+      root.data?.meta ??
+      root.data?.pagination ??
+      {};
     const total = this.parseNumber(meta.total, items.length);
-    const totalPages = this.parseNumber(meta.totalPages, Math.max(1, Math.ceil(total / Math.max(1, items.length || 1))));
+    const totalPages = this.parseNumber(
+      meta.totalPages,
+      Math.max(1, Math.ceil(total / Math.max(1, items.length || 1))),
+    );
     return { items, total, totalPages };
   }
 
@@ -262,7 +306,7 @@ export class AnalyticsServiceService {
       { cmd: 'identity.user.find_by_id' },
       { id: requester.id },
     ).catch(() => null);
-    const operatorData = this.unwrap<any>(operatorRes as any) as any;
+    const operatorData = this.unwrap<any>(operatorRes);
     const marketId = operatorData?.market_id;
 
     if (!marketId) {
@@ -275,7 +319,9 @@ export class AnalyticsServiceService {
     };
   }
 
-  private async resolveRequesterBranchDashboard(requester: RequesterContext | undefined) {
+  private async resolveRequesterBranchDashboard(
+    requester: RequesterContext | undefined,
+  ) {
     if (!requester?.id) {
       return null;
     }
@@ -286,8 +332,10 @@ export class AnalyticsServiceService {
       { user_id: requester.id, requester },
     ).catch(() => null);
 
-    const assignmentData = this.unwrap<any>(assignmentRes as any) as any;
-    const branchId = assignmentData?.branch_id ? String(assignmentData.branch_id) : null;
+    const assignmentData = this.unwrap<any>(assignmentRes);
+    const branchId = assignmentData?.branch_id
+      ? String(assignmentData.branch_id)
+      : null;
     if (!branchId) {
       return null;
     }
@@ -298,7 +346,7 @@ export class AnalyticsServiceService {
       { id: branchId, requester },
     ).catch(() => null);
 
-    return this.unwrap<any>(dashboardRes as any) ?? null;
+    return this.unwrap<any>(dashboardRes) ?? null;
   }
 
   async getDashboard(
@@ -318,17 +366,17 @@ export class AnalyticsServiceService {
           this.orderClient,
           { cmd: 'order.analytics.courier_stat' },
           { requester, ...normalized },
-        ),
+        ).catch(() => null),
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.courier_stats' },
           normalized,
-        ),
+        ).catch(() => null),
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.top_couriers' },
           {},
-        ),
+        ).catch(() => null),
       ]);
 
       return successRes(
@@ -343,23 +391,26 @@ export class AnalyticsServiceService {
     }
 
     if (roles.has(Roles.MARKET) || roles.has(Roles.MARKET_OPERATOR)) {
-      const marketRequester = await this.resolveRequesterForMarket(requester, roles);
+      const marketRequester = await this.resolveRequesterForMarket(
+        requester,
+        roles,
+      );
       const [myStat, markets, topMarkets, topOperators] = await Promise.all([
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.market_stat' },
           { requester: marketRequester, ...normalized },
-        ),
+        ).catch(() => null),
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.market_stats' },
           normalized,
-        ),
+        ).catch(() => null),
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.top_markets' },
           {},
-        ),
+        ).catch(() => null),
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.top_operators_by_market' },
@@ -379,25 +430,47 @@ export class AnalyticsServiceService {
       );
     }
 
-    const [orders, markets, couriers, topMarkets, topCouriers] = await Promise.all([
-      rmqSend(this.orderClient, { cmd: 'order.analytics.overview' }, normalized),
-      rmqSend(this.orderClient, { cmd: 'order.analytics.market_stats' }, normalized),
-      rmqSend(this.orderClient, { cmd: 'order.analytics.courier_stats' }, normalized),
-      rmqSend(this.orderClient, { cmd: 'order.analytics.top_markets' }, {}),
-      rmqSend(this.orderClient, { cmd: 'order.analytics.top_couriers' }, {}),
-    ]);
+    const [orders, markets, couriers, topMarkets, topCouriers] =
+      await Promise.all([
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.overview' },
+          normalized,
+        ).catch(() => null),
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.market_stats' },
+          normalized,
+        ).catch(() => null),
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.courier_stats' },
+          normalized,
+        ).catch(() => null),
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.top_markets' },
+          {},
+        ).catch(() => null),
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.top_couriers' },
+          {},
+        ).catch(() => null),
+      ]);
     const branchDashboard = isBranchRole
       ? await this.resolveRequesterBranchDashboard(requester)
       : null;
 
-    const ordersOverview = this.unwrap<any>(orders as any) as any;
+    const ordersOverview = this.unwrap<any>(orders as any);
     const isRegistrator = roles.has(Roles.REGISTRATOR);
-    const safeOrdersOverview = isRegistrator && ordersOverview && typeof ordersOverview === 'object'
-      ? (() => {
-          const { profit: _profit, ...rest } = ordersOverview;
-          return rest;
-        })()
-      : ordersOverview;
+    const safeOrdersOverview =
+      isRegistrator && ordersOverview && typeof ordersOverview === 'object'
+        ? (() => {
+            const { profit: _profit, ...rest } = ordersOverview;
+            return rest;
+          })()
+        : ordersOverview;
 
     return successRes(
       {
@@ -414,24 +487,35 @@ export class AnalyticsServiceService {
   }
 
   async getRevenueStats(
-    _requester: RequesterContext | undefined,
+    requester: RequesterContext | undefined,
     filter: RevenueFilter,
   ) {
+    this.assertFinancialAccess(requester);
     const normalized = this.normalizeDateRangeAny(filter);
     const period = this.normalizeRevenuePeriod(filter.period);
 
+    // Resilient fan-out: a failed/timed-out downstream degrades that leg to null
+    // (handled by unwrap/?. below) instead of crashing the whole report.
     const [revenue, financialBalance] = await Promise.all([
       rmqSend(
         this.orderClient,
         { cmd: 'order.analytics.revenue' },
         { ...normalized, period },
-      ),
-      rmqSend(this.financeClient, { cmd: 'finance.cashbox.financial_balance' }, {}).catch(() => null),
+      ).catch(() => null),
+      rmqSend(
+        this.financeClient,
+        { cmd: 'finance.cashbox.financial_balance' },
+        {},
+      ).catch(() => null),
     ]);
 
-    const revenueData = this.unwrap<any>(revenue as any) as any;
-    const labels = Array.isArray(revenueData?.data) ? revenueData.data.map((row: any) => row.label ?? row.period) : [];
-    const values = Array.isArray(revenueData?.data) ? revenueData.data.map((row: any) => this.parseNumber(row.revenue)) : [];
+    const revenueData = this.unwrap<any>(revenue as any);
+    const labels = Array.isArray(revenueData?.data)
+      ? revenueData.data.map((row: any) => row.label ?? row.period)
+      : [];
+    const values = Array.isArray(revenueData?.data)
+      ? revenueData.data.map((row: any) => this.parseNumber(row.revenue))
+      : [];
 
     return successRes(
       {
@@ -445,23 +529,32 @@ export class AnalyticsServiceService {
   }
 
   async getKpiStats(
-    _requester: RequesterContext | undefined,
+    requester: RequesterContext | undefined,
     filter: RevenueFilter,
   ) {
+    this.assertFinancialAccess(requester);
     const normalized = this.normalizeDateRangeAny(filter);
     const [overview, revenue, courierStats, topMarkets] = await Promise.all([
       rmqSend(
         this.orderClient,
         { cmd: 'order.analytics.overview' },
         normalized,
-      ),
+      ).catch(() => null),
       rmqSend(
         this.orderClient,
         { cmd: 'order.analytics.revenue' },
         { ...normalized, period: 'daily' },
-      ),
-      rmqSend(this.orderClient, { cmd: 'order.analytics.courier_stats' }, normalized),
-      rmqSend(this.orderClient, { cmd: 'order.analytics.top_markets' }, { limit: 10 }),
+      ).catch(() => null),
+      rmqSend(
+        this.orderClient,
+        { cmd: 'order.analytics.courier_stats' },
+        normalized,
+      ).catch(() => null),
+      rmqSend(
+        this.orderClient,
+        { cmd: 'order.analytics.top_markets' },
+        { limit: 10 },
+      ).catch(() => null),
     ]);
 
     const soldStatuses = [
@@ -495,9 +588,11 @@ export class AnalyticsServiceService {
       }
     }
 
-    const overviewData = this.unwrap<any>(overview as any) as any;
-    const revenueData = this.unwrap<any>(revenue as any) as any;
-    const courierStatsData = Array.isArray(this.unwrap<any>(courierStats as any))
+    const overviewData = this.unwrap<any>(overview as any);
+    const revenueData = this.unwrap<any>(revenue as any);
+    const courierStatsData = Array.isArray(
+      this.unwrap<any>(courierStats as any),
+    )
       ? (this.unwrap<any>(courierStats as any) as any[])
       : [];
     const topMarketsData = Array.isArray(this.unwrap<any>(topMarkets as any))
@@ -508,12 +603,29 @@ export class AnalyticsServiceService {
     const soldAndPaid = this.parseNumber(overviewData?.soldAndPaid);
     const cancelled = this.parseNumber(overviewData?.cancelled);
     const totalRevenue = this.parseNumber(revenueData?.summary?.totalRevenue);
-    const avgOrderValue = soldAndPaid > 0 ? Number((totalRevenue / soldAndPaid).toFixed(2)) : 0;
-    const fulfillmentHours = deliveryCount > 0 ? Number(((deliveryMsTotal / deliveryCount) / (1000 * 60 * 60)).toFixed(2)) : 0;
-    const cancellationRate = totalOrders > 0 ? Number(((cancelled * 100) / totalOrders).toFixed(2)) : 0;
-    const courierEfficiency = courierStatsData.length > 0
-      ? Number((courierStatsData.reduce((sum, row) => sum + this.parseNumber(row.totalOrders), 0) / courierStatsData.length).toFixed(2))
-      : 0;
+    const avgOrderValue =
+      soldAndPaid > 0 ? Number((totalRevenue / soldAndPaid).toFixed(2)) : 0;
+    const fulfillmentHours =
+      deliveryCount > 0
+        ? Number(
+            (deliveryMsTotal / deliveryCount / (1000 * 60 * 60)).toFixed(2),
+          )
+        : 0;
+    const cancellationRate =
+      totalOrders > 0
+        ? Number(((cancelled * 100) / totalOrders).toFixed(2))
+        : 0;
+    const courierEfficiency =
+      courierStatsData.length > 0
+        ? Number(
+            (
+              courierStatsData.reduce(
+                (sum, row) => sum + this.parseNumber(row.totalOrders),
+                0,
+              ) / courierStatsData.length
+            ).toFixed(2),
+          )
+        : 0;
 
     return successRes(
       {
@@ -529,13 +641,22 @@ export class AnalyticsServiceService {
   }
 
   async getOrderReport(
-    _requester: RequesterContext | undefined,
+    requester: RequesterContext | undefined,
     filter: RevenueFilter,
   ) {
+    this.assertFinancialAccess(requester);
     const normalized = this.normalizeDateRangeAny(filter);
     const [overview, topMarkets] = await Promise.all([
-      rmqSend(this.orderClient, { cmd: 'order.analytics.overview' }, normalized),
-      rmqSend(this.orderClient, { cmd: 'order.analytics.top_markets' }, { limit: 10 }),
+      rmqSend(
+        this.orderClient,
+        { cmd: 'order.analytics.overview' },
+        normalized,
+      ).catch(() => null),
+      rmqSend(
+        this.orderClient,
+        { cmd: 'order.analytics.top_markets' },
+        { limit: 10 },
+      ).catch(() => null),
     ]);
 
     const statuses: Order_status[] = [
@@ -553,10 +674,13 @@ export class AnalyticsServiceService {
     const counts = await Promise.all(
       statuses.map((status) => this.countOrdersByStatus(status, normalized)),
     );
-    const statusDistribution = statuses.reduce<Record<string, number>>((acc, status, index) => {
-      acc[status] = counts[index];
-      return acc;
-    }, {});
+    const statusDistribution = statuses.reduce<Record<string, number>>(
+      (acc, status, index) => {
+        acc[status] = counts[index];
+        return acc;
+      },
+      {},
+    );
 
     const allOrders = await this.collectOrders({
       start_day: normalized.startDate,
@@ -564,7 +688,10 @@ export class AnalyticsServiceService {
     });
 
     const regionMap = new Map<string, number>();
-    const productMap = new Map<string, { product_id: string; total_quantity: number }>();
+    const productMap = new Map<
+      string,
+      { product_id: string; total_quantity: number }
+    >();
     for (const order of allOrders.items) {
       const regionId = String(order?.region_id ?? 'unknown');
       regionMap.set(regionId, (regionMap.get(regionId) ?? 0) + 1);
@@ -573,7 +700,10 @@ export class AnalyticsServiceService {
       for (const item of items) {
         const productId = String(item?.product_id ?? 'unknown');
         const quantity = this.parseNumber(item?.quantity, 1);
-        const current = productMap.get(productId) ?? { product_id: productId, total_quantity: 0 };
+        const current = productMap.get(productId) ?? {
+          product_id: productId,
+          total_quantity: 0,
+        };
         current.total_quantity += quantity;
         productMap.set(productId, current);
       }
@@ -601,24 +731,35 @@ export class AnalyticsServiceService {
   }
 
   async getFinanceReport(
-    _requester: RequesterContext | undefined,
+    requester: RequesterContext | undefined,
     filter: RevenueFilter,
   ) {
+    this.assertFinancialAccess(requester);
     const normalized = this.normalizeDateRangeAny(filter);
     const pagination = this.normalizePagination(filter);
     const [allInfo, balance] = await Promise.all([
-      rmqSend(this.financeClient, { cmd: 'finance.cashbox.all_info' }, {
-        fromDate: normalized.startDate,
-        toDate: normalized.endDate,
-        page: pagination.page,
-        limit: pagination.limit,
-      }).catch(() => null),
-      rmqSend(this.financeClient, { cmd: 'finance.cashbox.financial_balance' }, {}).catch(() => null),
+      rmqSend(
+        this.financeClient,
+        { cmd: 'finance.cashbox.all_info' },
+        {
+          fromDate: normalized.startDate,
+          toDate: normalized.endDate,
+          page: pagination.page,
+          limit: pagination.limit,
+        },
+      ).catch(() => null),
+      rmqSend(
+        this.financeClient,
+        { cmd: 'finance.cashbox.financial_balance' },
+        {},
+      ).catch(() => null),
     ]);
 
-    const allInfoData = this.unwrap<any>(allInfo as any) as any;
-    const balanceData = this.unwrap<any>(balance as any) as any;
-    const histories = Array.isArray(allInfoData?.allCashboxHistories) ? allInfoData.allCashboxHistories : [];
+    const allInfoData = this.unwrap<any>(allInfo as any);
+    const balanceData = this.unwrap<any>(balance as any);
+    const histories = Array.isArray(allInfoData?.allCashboxHistories)
+      ? allInfoData.allCashboxHistories
+      : [];
 
     const totalIncome = histories
       .filter((h: any) => h?.operation_type === 'income')
@@ -632,9 +773,10 @@ export class AnalyticsServiceService {
       const createdAt = this.parseDateValue(row?.createdAt);
       if (!createdAt) continue;
       const key = `${createdAt.getUTCFullYear()}-${String(createdAt.getUTCMonth() + 1).padStart(2, '0')}`;
-      const delta = row?.operation_type === 'income'
-        ? this.parseNumber(row?.amount)
-        : -this.parseNumber(row?.amount);
+      const delta =
+        row?.operation_type === 'income'
+          ? this.parseNumber(row?.amount)
+          : -this.parseNumber(row?.amount);
       monthlyMap.set(key, (monthlyMap.get(key) ?? 0) + delta);
     }
 
@@ -653,7 +795,9 @@ export class AnalyticsServiceService {
         monthlyDynamics,
         payables: {
           markets: this.parseNumber(balanceData?.markets?.marketsTotalBalans),
-          couriers: this.parseNumber(balanceData?.couriers?.couriersTotalBalanse),
+          couriers: this.parseNumber(
+            balanceData?.couriers?.couriersTotalBalanse,
+          ),
         },
       },
       200,
@@ -681,11 +825,21 @@ export class AnalyticsServiceService {
       topCouriersData = cached.data.ranking;
     } else {
       const [courierStats, topCouriers] = await Promise.all([
-        rmqSend(this.orderClient, { cmd: 'order.analytics.courier_stats' }, normalized),
-        rmqSend(this.orderClient, { cmd: 'order.analytics.top_couriers' }, { limit: 20 }),
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.courier_stats' },
+          normalized,
+        ),
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.top_couriers' },
+          { limit: 20 },
+        ),
       ]);
 
-      const courierStatsData = Array.isArray(this.unwrap<any>(courierStats as any))
+      const courierStatsData = Array.isArray(
+        this.unwrap<any>(courierStats as any),
+      )
         ? (this.unwrap<any>(courierStats as any) as any[])
         : [];
       topCouriersData = Array.isArray(this.unwrap<any>(topCouriers as any))
@@ -704,13 +858,17 @@ export class AnalyticsServiceService {
             ).catch(() => null);
           }
 
-          const detailData = this.unwrap<any>(detail as any) as any;
+          const detailData = this.unwrap<any>(detail);
           return {
             courier: row?.courier ?? null,
             deliveredOrders: this.parseNumber(row?.soldOrders),
             cancelledOrders: this.parseNumber(
               detailData?.canceledOrders,
-              Math.max(0, this.parseNumber(row?.totalOrders) - this.parseNumber(row?.soldOrders)),
+              Math.max(
+                0,
+                this.parseNumber(row?.totalOrders) -
+                  this.parseNumber(row?.soldOrders),
+              ),
             ),
             averageDeliveryHours: null,
             totalAmount: this.parseNumber(detailData?.profit),
@@ -738,7 +896,9 @@ export class AnalyticsServiceService {
       return successRes(
         {
           range: normalized,
-          items: items.filter((row) => String(row?.courier?.id ?? '') === requesterId),
+          items: items.filter(
+            (row) => String(row?.courier?.id ?? '') === requesterId,
+          ),
           ranking: topCouriersData,
         },
         200,

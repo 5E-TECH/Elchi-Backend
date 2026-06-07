@@ -1,5 +1,14 @@
 import { Column, Entity, Index } from 'typeorm';
-import { BaseEntity } from '@app/common';
+import { BaseEntity, numericTransformer } from '@app/common';
+
+// Reusable numeric(20,2) money column config (exact fixed-point; API stays number).
+const moneyColumn = {
+  type: 'numeric' as const,
+  precision: 20,
+  scale: 2,
+  default: 0,
+  transformer: numericTransformer,
+};
 
 export enum ShiftStatus {
   OPEN = 'open',
@@ -33,28 +42,28 @@ export class Shift extends BaseEntity {
   @Column({ type: 'enum', enum: ShiftStatus, default: ShiftStatus.OPEN })
   status!: ShiftStatus;
 
-  @Column({ type: 'float', default: 0 })
+  @Column(moneyColumn)
   opening_balance_cash!: number;
 
-  @Column({ type: 'float', default: 0 })
+  @Column(moneyColumn)
   opening_balance_card!: number;
 
-  @Column({ type: 'float', default: 0 })
+  @Column(moneyColumn)
   closing_balance_cash!: number;
 
-  @Column({ type: 'float', default: 0 })
+  @Column(moneyColumn)
   closing_balance_card!: number;
 
-  @Column({ type: 'float', default: 0 })
+  @Column(moneyColumn)
   total_income_cash!: number;
 
-  @Column({ type: 'float', default: 0 })
+  @Column(moneyColumn)
   total_income_card!: number;
 
-  @Column({ type: 'float', default: 0 })
+  @Column(moneyColumn)
   total_expense_cash!: number;
 
-  @Column({ type: 'float', default: 0 })
+  @Column(moneyColumn)
   total_expense_card!: number;
 
   @Column({ type: 'text', nullable: true })

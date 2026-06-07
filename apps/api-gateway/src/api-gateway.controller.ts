@@ -39,6 +39,7 @@ import {
   CreateRegistratorRequestDto,
   UpdateAdminRequestDto,
   UpdateMarketAddOrderRequestDto,
+  UpdateMarketExpenseProofRequestDto,
   UpdateUserStatusRequestDto,
 } from './dto/identity.swagger.dto';
 
@@ -74,7 +75,9 @@ export class ApiGatewayController {
     };
   }
 
-  private async resolveBranchAssignment(reqUser: JwtUser): Promise<BranchAssignment | null> {
+  private async resolveBranchAssignment(
+    reqUser: JwtUser,
+  ): Promise<BranchAssignment | null> {
     const response = await firstValueFrom(
       this.branchClient.send(
         { cmd: 'branch.user.find_by_user' },
@@ -98,7 +101,11 @@ export class ApiGatewayController {
       );
 
       if (Array.isArray(response?.data)) {
-        return response.data.find((cashbox: any) => cashbox?.cashbox_type === cashboxType) ?? null;
+        return (
+          response.data.find(
+            (cashbox: any) => cashbox?.cashbox_type === cashboxType,
+          ) ?? null
+        );
       }
 
       return response?.data ?? null;
@@ -121,7 +128,10 @@ export class ApiGatewayController {
   @ApiBody({ type: CreateAdminRequestDto })
   @ApiCreatedResponse({ description: 'Admin created' })
   @ApiConflictResponse({ description: 'Conflict' })
-  createAdmin(@Body() dto: CreateAdminRequestDto, @Req() req: { user: JwtUser }) {
+  createAdmin(
+    @Body() dto: CreateAdminRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
     return this.identityClient.send(
       { cmd: 'identity.user.create' },
       { dto, requester: this.toRequester(req) },
@@ -141,7 +151,9 @@ export class ApiGatewayController {
     @Req() req: { user: JwtUser },
   ) {
     const requesterRoles = (req?.user?.roles ?? []).map((role) =>
-      String(role ?? '').trim().toLowerCase(),
+      String(role ?? '')
+        .trim()
+        .toLowerCase(),
     );
     const isManager = requesterRoles.includes(RoleEnum.MANAGER);
 
@@ -152,13 +164,19 @@ export class ApiGatewayController {
     if (isManager) {
       const assignment = await this.resolveBranchAssignment(req.user);
       const branchId = String(assignment?.branch_id ?? '').trim();
-      const branchType = String(assignment?.branch?.type ?? '').trim().toUpperCase();
+      const branchType = String(assignment?.branch?.type ?? '')
+        .trim()
+        .toUpperCase();
 
       if (!branchId) {
-        throw new ForbiddenException('Manager hech qaysi branchga biriktirilmagan');
+        throw new ForbiddenException(
+          'Manager hech qaysi branchga biriktirilmagan',
+        );
       }
       if (branchType !== 'HYBRID') {
-        throw new ForbiddenException("Faqat HYBRID branch manager'i registrator yarata oladi");
+        throw new ForbiddenException(
+          "Faqat HYBRID branch manager'i registrator yarata oladi",
+        );
       }
       resolvedBranchId = branchId;
     }
@@ -186,7 +204,12 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List registrators with filtering and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    type: String,
+    example: 'active',
+  })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({ description: 'Registrator list' })
@@ -216,7 +239,12 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List admins with filtering and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    type: String,
+    example: 'active',
+  })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({ description: 'Admin list' })
@@ -248,12 +276,18 @@ export class ApiGatewayController {
   @ApiBody({ type: CreateCourierRequestDto })
   @ApiCreatedResponse({ description: 'Courier created' })
   @ApiConflictResponse({ description: 'Conflict' })
-  async createCourier(@Body() dto: CreateCourierRequestDto, @Req() req: { user: JwtUser }) {
+  async createCourier(
+    @Body() dto: CreateCourierRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
     const requesterRoles = (req?.user?.roles ?? []).map((role) =>
-      String(role ?? '').trim().toLowerCase(),
+      String(role ?? '')
+        .trim()
+        .toLowerCase(),
     );
     const isSystemPrivileged =
-      requesterRoles.includes(RoleEnum.SUPERADMIN) || requesterRoles.includes(RoleEnum.ADMIN);
+      requesterRoles.includes(RoleEnum.SUPERADMIN) ||
+      requesterRoles.includes(RoleEnum.ADMIN);
 
     // Branch selection: SUPERADMIN/ADMIN — HQ filial, qolganlar — o'z BranchUser
     // assignment'idan. region_id ham branch'dan keladi. (Hozircha gateway'da —
@@ -271,7 +305,9 @@ export class ApiGatewayController {
       const assignment = await this.resolveBranchAssignment(req.user);
       branchId = String(assignment?.branch_id ?? '').trim();
       if (!branchId) {
-        throw new ForbiddenException('Foydalanuvchi hech qaysi branchga biriktirilmagan');
+        throw new ForbiddenException(
+          'Foydalanuvchi hech qaysi branchga biriktirilmagan',
+        );
       }
     }
 
@@ -281,9 +317,13 @@ export class ApiGatewayController {
         { id: branchId, requester: this.toRequester(req) },
       ),
     );
-    const branchType = String(branchResponse?.data?.type ?? '').trim().toUpperCase();
+    const branchType = String(branchResponse?.data?.type ?? '')
+      .trim()
+      .toUpperCase();
     if (isSystemPrivileged && branchType !== 'HQ') {
-      throw new BadRequestException("Admin/Superadmin uchun courier faqat HQ branch'da yaratiladi");
+      throw new BadRequestException(
+        "Admin/Superadmin uchun courier faqat HQ branch'da yaratiladi",
+      );
     }
 
     const branchRegionId = String(branchResponse?.data?.region_id ?? '').trim();
@@ -322,7 +362,10 @@ export class ApiGatewayController {
   @ApiBody({ type: CreateManagerRequestDto })
   @ApiCreatedResponse({ description: 'Manager created' })
   @ApiConflictResponse({ description: 'Conflict' })
-  async createManager(@Body() dto: CreateManagerRequestDto, @Req() req: { user: JwtUser }) {
+  async createManager(
+    @Body() dto: CreateManagerRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
     // identity-service'ning createManager o'zi user.save + branch.user.assign
     // saga'sini bajaradi (branch_id DTO'da majburiy).
     return firstValueFrom(
@@ -345,9 +388,19 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List couriers with filtering and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    type: String,
+    example: 'active',
+  })
   @ApiQuery({ name: 'region_id', required: false, type: String })
-  @ApiQuery({ name: 'regionId', required: false, type: String, description: 'Alias for region_id' })
+  @ApiQuery({
+    name: 'regionId',
+    required: false,
+    type: String,
+    description: 'Alias for region_id',
+  })
   @ApiQuery({ name: 'branch_id', required: false, type: String })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
@@ -363,8 +416,11 @@ export class ApiGatewayController {
     @Req() req?: { user: JwtUser },
   ) {
     const resolvedRegionId = region_id ?? regionId;
-    const roles = (req?.user?.roles ?? []).map((role) => String(role).toLowerCase());
-    const isSystemPrivileged = roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
+    const roles = (req?.user?.roles ?? []).map((role) =>
+      String(role).toLowerCase(),
+    );
+    const isSystemPrivileged =
+      roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
 
     let resolvedBranchId = String(branch_id ?? '').trim() || undefined;
     if (!isSystemPrivileged && req?.user?.sub) {
@@ -403,14 +459,20 @@ export class ApiGatewayController {
         ),
       );
 
-      const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
+      const branchUsers = Array.isArray(branchUsersResponse?.data)
+        ? branchUsersResponse.data
+        : [];
       const courierIdsInBranch = new Set(
         branchUsers
-          .filter((row: any) => String(row?.role ?? '').toUpperCase() === 'COURIER')
+          .filter(
+            (row: any) => String(row?.role ?? '').toUpperCase() === 'COURIER',
+          )
           .map((row: any) => String(row?.user_id ?? '').trim())
           .filter(Boolean),
       );
-      items = items.filter((courier: any) => courierIdsInBranch.has(String(courier?.id ?? '').trim()));
+      items = items.filter((courier: any) =>
+        courierIdsInBranch.has(String(courier?.id ?? '').trim()),
+      );
     }
 
     if (!items.length) {
@@ -425,7 +487,10 @@ export class ApiGatewayController {
     response.data.items = await Promise.all(
       items.map(async (courier: any) => ({
         ...courier,
-        cashbox: await this.findUserCashbox(String(courier?.id ?? ''), Cashbox_type.FOR_COURIER),
+        cashbox: await this.findUserCashbox(
+          String(courier?.id ?? ''),
+          Cashbox_type.FOR_COURIER,
+        ),
       })),
     );
 
@@ -438,7 +503,12 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List managers with filtering and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    type: String,
+    example: 'active',
+  })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({ description: 'Manager list' })
@@ -487,9 +557,19 @@ export class ApiGatewayController {
   @ApiOperation({ summary: 'List all users with filtering and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiQuery({ name: 'role', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    type: String,
+    example: 'active',
+  })
   @ApiQuery({ name: 'region_id', required: false, type: String })
-  @ApiQuery({ name: 'regionId', required: false, type: String, description: 'Alias for region_id' })
+  @ApiQuery({
+    name: 'regionId',
+    required: false,
+    type: String,
+    description: 'Alias for region_id',
+  })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({ description: 'User list' })
@@ -504,19 +584,30 @@ export class ApiGatewayController {
     @Req() req?: { user: JwtUser },
   ) {
     const resolvedRegionId = region_id ?? regionId;
-    const normalizedRole = String(role ?? '').trim().toLowerCase();
-    const requesterRoles = (req?.user?.roles ?? []).map((item) => String(item ?? '').toLowerCase());
+    const normalizedRole = String(role ?? '')
+      .trim()
+      .toLowerCase();
+    const requesterRoles = (req?.user?.roles ?? []).map((item) =>
+      String(item ?? '').toLowerCase(),
+    );
     const isSystemPrivileged =
-      requesterRoles.includes(RoleEnum.SUPERADMIN) || requesterRoles.includes(RoleEnum.ADMIN);
+      requesterRoles.includes(RoleEnum.SUPERADMIN) ||
+      requesterRoles.includes(RoleEnum.ADMIN);
 
     let scopedUserIds: string[] | undefined;
     let managerBranchUserIds: string[] | undefined;
-    if (!isSystemPrivileged && requesterRoles.includes(RoleEnum.MANAGER) && req?.user?.sub) {
+    if (
+      !isSystemPrivileged &&
+      requesterRoles.includes(RoleEnum.MANAGER) &&
+      req?.user?.sub
+    ) {
       const assignment = await this.resolveBranchAssignment(req.user);
       const branchId = String(assignment?.branch_id ?? '').trim();
 
       if (!branchId) {
-        throw new ForbiddenException('Manager hech qaysi branchga biriktirilmagan');
+        throw new ForbiddenException(
+          'Manager hech qaysi branchga biriktirilmagan',
+        );
       }
 
       const branchUsersResponse = await firstValueFrom(
@@ -525,7 +616,9 @@ export class ApiGatewayController {
           { branch_id: branchId, requester: this.toRequester(req) },
         ),
       );
-      const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
+      const branchUsers = Array.isArray(branchUsersResponse?.data)
+        ? branchUsersResponse.data
+        : [];
       managerBranchUserIds = Array.from(
         new Set(
           branchUsers
@@ -555,7 +648,9 @@ export class ApiGatewayController {
       }
 
       if (!branchId) {
-        throw new ForbiddenException("Foydalanuvchi courier ko'rish uchun branchga biriktirilmagan");
+        throw new ForbiddenException(
+          "Foydalanuvchi courier ko'rish uchun branchga biriktirilmagan",
+        );
       }
 
       const branchUsersResponse = await firstValueFrom(
@@ -564,7 +659,9 @@ export class ApiGatewayController {
           { branch_id: branchId, requester: this.toRequester(req) },
         ),
       );
-      const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
+      const branchUsers = Array.isArray(branchUsersResponse?.data)
+        ? branchUsersResponse.data
+        : [];
       branchBoundUserIds = Array.from(
         new Set(
           branchUsers
@@ -575,14 +672,22 @@ export class ApiGatewayController {
       branchCourierIds = Array.from(
         new Set(
           branchUsers
-            .filter((row: any) => String(row?.role ?? '').trim().toUpperCase() === 'COURIER')
+            .filter(
+              (row: any) =>
+                String(row?.role ?? '')
+                  .trim()
+                  .toUpperCase() === 'COURIER',
+            )
             .map((row: any) => String(row?.user_id ?? '').trim())
             .filter(Boolean),
         ),
       );
     }
 
-    if (normalizedRole === RoleEnum.COURIER && Array.isArray(branchCourierIds)) {
+    if (
+      normalizedRole === RoleEnum.COURIER &&
+      Array.isArray(branchCourierIds)
+    ) {
       if (Array.isArray(scopedUserIds)) {
         const branchCourierSet = new Set(branchCourierIds);
         scopedUserIds = scopedUserIds.filter((id) => branchCourierSet.has(id));
@@ -608,11 +713,15 @@ export class ApiGatewayController {
       ),
     );
 
-    const items = Array.isArray(response?.data?.items) ? response.data.items : [];
+    const items = Array.isArray(response?.data?.items)
+      ? response.data.items
+      : [];
     if (!normalizedRole && Array.isArray(branchBoundUserIds)) {
       const allowedBranchBoundIds = new Set(branchBoundUserIds);
       const filteredItems = items.filter((row: any) => {
-        const rowRole = String(row?.role ?? '').trim().toLowerCase();
+        const rowRole = String(row?.role ?? '')
+          .trim()
+          .toLowerCase();
         const shouldScopeByBranch =
           rowRole === RoleEnum.COURIER ||
           rowRole === RoleEnum.BRANCH ||
@@ -631,15 +740,25 @@ export class ApiGatewayController {
           response.data.meta.totalUsers = filteredItems.length;
           const limitValue = Number(response.data.meta.limit ?? limit ?? 10);
           response.data.meta.totalPages =
-            limitValue > 0 ? Math.max(1, Math.ceil(filteredItems.length / limitValue)) : 1;
+            limitValue > 0
+              ? Math.max(1, Math.ceil(filteredItems.length / limitValue))
+              : 1;
         }
       }
     }
 
-    if (requesterRoles.includes(RoleEnum.MANAGER) && req?.user?.sub && response?.data) {
-      const allowed = new Set((managerBranchUserIds ?? []).map((id) => String(id)));
+    if (
+      requesterRoles.includes(RoleEnum.MANAGER) &&
+      req?.user?.sub &&
+      response?.data
+    ) {
+      const allowed = new Set(
+        (managerBranchUserIds ?? []).map((id) => String(id)),
+      );
       const requesterId = String(req.user.sub);
-      const branchScoped = (Array.isArray(response.data.items) ? response.data.items : []).filter((row: any) => {
+      const branchScoped = (
+        Array.isArray(response.data.items) ? response.data.items : []
+      ).filter((row: any) => {
         const userId = String(row?.id ?? '').trim();
         if (!allowed.has(userId)) {
           return false;
@@ -653,7 +772,9 @@ export class ApiGatewayController {
         response.data.meta.totalUsers = branchScoped.length;
         const limitValue = Number(response.data.meta.limit ?? limit ?? 10);
         response.data.meta.totalPages =
-          limitValue > 0 ? Math.max(1, Math.ceil(branchScoped.length / limitValue)) : 1;
+          limitValue > 0
+            ? Math.max(1, Math.ceil(branchScoped.length / limitValue))
+            : 1;
       }
     }
 
@@ -668,38 +789,53 @@ export class ApiGatewayController {
   @ApiParam({ name: 'id', description: 'User ID' })
   @ApiOkResponse({ description: 'User by id' })
   @ApiNotFoundResponse({ description: 'Not found' })
-  async getUserById(
-    @Param('id') id: string,
-    @Req() req?: { user?: JwtUser },
-  ) {
-    const requesterRoles = (req?.user?.roles ?? []).map((r) => String(r).toLowerCase());
+  async getUserById(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
+    const requesterRoles = (req?.user?.roles ?? []).map((r) =>
+      String(r).toLowerCase(),
+    );
     const requesterIsPrivileged =
-      requesterRoles.includes(RoleEnum.SUPERADMIN) || requesterRoles.includes(RoleEnum.ADMIN);
+      requesterRoles.includes(RoleEnum.SUPERADMIN) ||
+      requesterRoles.includes(RoleEnum.ADMIN);
     const requesterIsMarket = requesterRoles.includes(RoleEnum.MARKET);
 
     if (requesterIsMarket && !requesterIsPrivileged && req?.user?.sub !== id) {
       throw new ForbiddenException('Market faqat o‘z profilini ko‘ra oladi');
     }
 
-    if (!requesterIsPrivileged && requesterRoles.includes(RoleEnum.MANAGER) && req?.user?.sub) {
+    if (
+      !requesterIsPrivileged &&
+      requesterRoles.includes(RoleEnum.MANAGER) &&
+      req?.user?.sub
+    ) {
       const assignment = await this.resolveBranchAssignment(req.user);
       const branchId = String(assignment?.branch_id ?? '').trim();
-      const branchType = String(assignment?.branch?.type ?? '').trim().toUpperCase();
+      const branchType = String(assignment?.branch?.type ?? '')
+        .trim()
+        .toUpperCase();
 
       if (!branchId) {
-        throw new ForbiddenException('Manager hech qaysi branchga biriktirilmagan');
+        throw new ForbiddenException(
+          'Manager hech qaysi branchga biriktirilmagan',
+        );
       }
       if (branchType !== 'REGIONAL' && branchType !== 'HYBRID') {
-        throw new ForbiddenException('Bu branch type uchun userlarni ko‘rish ruxsati yo‘q');
+        throw new ForbiddenException(
+          'Bu branch type uchun userlarni ko‘rish ruxsati yo‘q',
+        );
       }
 
       const branchUsersResponse = await firstValueFrom(
         this.branchClient.send(
           { cmd: 'branch.user.find_by_branch' },
-          { branch_id: branchId, requester: this.toRequester(req as { user: JwtUser }) },
+          {
+            branch_id: branchId,
+            requester: this.toRequester(req as { user: JwtUser }),
+          },
         ),
       );
-      const branchUsers = Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [];
+      const branchUsers = Array.isArray(branchUsersResponse?.data)
+        ? branchUsersResponse.data
+        : [];
       const branchUserIds = new Set(
         branchUsers
           .map((row: any) => String(row?.user_id ?? '').trim())
@@ -733,40 +869,63 @@ export class ApiGatewayController {
   ) {
     let allowedUserIds: string[] | undefined;
     const requesterRoles = (req?.user?.roles ?? [])
-      .map((role) => String(role ?? '').trim().toLowerCase())
+      .map((role) =>
+        String(role ?? '')
+          .trim()
+          .toLowerCase(),
+      )
       .filter(Boolean);
     const requesterIsPrivileged =
-      requesterRoles.includes(RoleEnum.SUPERADMIN) || requesterRoles.includes(RoleEnum.ADMIN);
+      requesterRoles.includes(RoleEnum.SUPERADMIN) ||
+      requesterRoles.includes(RoleEnum.ADMIN);
 
-    if (!requesterIsPrivileged && requesterRoles.includes(RoleEnum.MANAGER) && req?.user?.sub) {
+    if (
+      !requesterIsPrivileged &&
+      requesterRoles.includes(RoleEnum.MANAGER) &&
+      req?.user?.sub
+    ) {
       const assignment = await this.resolveBranchAssignment(req.user);
       const branchId = String(assignment?.branch_id ?? '').trim();
-      const branchType = String(assignment?.branch?.type ?? '').trim().toUpperCase();
+      const branchType = String(assignment?.branch?.type ?? '')
+        .trim()
+        .toUpperCase();
 
       if (!branchId) {
-        throw new ForbiddenException('Manager hech qaysi branchga biriktirilmagan');
+        throw new ForbiddenException(
+          'Manager hech qaysi branchga biriktirilmagan',
+        );
       }
       if (branchType !== 'REGIONAL' && branchType !== 'HYBRID') {
-        throw new ForbiddenException("Faqat REGIONAL/HYBRID manager user yangilay oladi");
+        throw new ForbiddenException(
+          'Faqat REGIONAL/HYBRID manager user yangilay oladi',
+        );
       }
 
       const branchUsersResponse = await firstValueFrom(
         this.branchClient.send(
           { cmd: 'branch.user.find_by_branch' },
-          { branch_id: branchId, requester: this.toRequester(req as { user: JwtUser }) },
+          {
+            branch_id: branchId,
+            requester: this.toRequester(req as { user: JwtUser }),
+          },
         ),
       );
 
       allowedUserIds = Array.from(
         new Set(
-          (Array.isArray(branchUsersResponse?.data) ? branchUsersResponse.data : [])
+          (Array.isArray(branchUsersResponse?.data)
+            ? branchUsersResponse.data
+            : []
+          )
             .map((row: any) => String(row?.user_id ?? '').trim())
             .filter(Boolean),
         ),
       );
 
       if (!allowedUserIds.includes(String(id).trim())) {
-        throw new ForbiddenException("Manager faqat o'zi boshqaradigan userlarni yangilay oladi");
+        throw new ForbiddenException(
+          "Manager faqat o'zi boshqaradigan userlarni yangilay oladi",
+        );
       }
     }
 
@@ -826,22 +985,33 @@ export class ApiGatewayController {
   @ApiBody({ type: CreateMarketRequestDto })
   @ApiCreatedResponse({ description: 'Market created' })
   @ApiConflictResponse({ description: 'Conflict' })
-  async createMarket(@Body() dto: CreateMarketRequestDto, @Req() req: { user: JwtUser }) {
+  async createMarket(
+    @Body() dto: CreateMarketRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
     const requesterRoles = (req?.user?.roles ?? []).map((role) =>
-      String(role ?? '').trim().toLowerCase(),
+      String(role ?? '')
+        .trim()
+        .toLowerCase(),
     );
     const isManager = requesterRoles.includes(RoleEnum.MANAGER);
 
     if (isManager) {
       const assignment = await this.resolveBranchAssignment(req.user);
       const branchId = String(assignment?.branch_id ?? '').trim();
-      const branchType = String(assignment?.branch?.type ?? '').trim().toUpperCase();
+      const branchType = String(assignment?.branch?.type ?? '')
+        .trim()
+        .toUpperCase();
 
       if (!branchId) {
-        throw new ForbiddenException('Manager hech qaysi branchga biriktirilmagan');
+        throw new ForbiddenException(
+          'Manager hech qaysi branchga biriktirilmagan',
+        );
       }
       if (branchType !== 'HYBRID') {
-        throw new ForbiddenException("Faqat HYBRID branch manager'i market yarata oladi");
+        throw new ForbiddenException(
+          "Faqat HYBRID branch manager'i market yarata oladi",
+        );
       }
     }
 
@@ -857,7 +1027,9 @@ export class ApiGatewayController {
           tariff_center: dto.tariff_center,
           default_tariff: dto.default_tariff,
           add_order: dto.add_order,
+          expense_proof_conditions: dto.expense_proof_conditions,
         },
+        requester: this.toRequester(req),
       },
     );
   }
@@ -875,7 +1047,12 @@ export class ApiGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List markets with filtering and pagination' })
   @ApiQuery({ name: 'search', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, type: String, example: 'active' })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    type: String,
+    example: 'active',
+  })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({ description: 'Market list' })
@@ -899,7 +1076,9 @@ export class ApiGatewayController {
       ),
     );
 
-    const items = Array.isArray(response?.data?.items) ? response.data.items : [];
+    const items = Array.isArray(response?.data?.items)
+      ? response.data.items
+      : [];
     if (!items.length) {
       return response;
     }
@@ -907,7 +1086,10 @@ export class ApiGatewayController {
     response.data.items = await Promise.all(
       items.map(async (market: any) => ({
         ...market,
-        cashbox: await this.findUserCashbox(String(market?.id ?? ''), Cashbox_type.FOR_MARKET),
+        cashbox: await this.findUserCashbox(
+          String(market?.id ?? ''),
+          Cashbox_type.FOR_MARKET,
+        ),
       })),
     );
 
@@ -933,6 +1115,33 @@ export class ApiGatewayController {
         id,
         dto: {
           add_order: dto.add_order,
+        },
+      },
+    );
+  }
+
+  @Patch('markets/:id/expense-proof')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Set the situations in which this market requires file proof for sell/cancel',
+  })
+  @ApiParam({ name: 'id', description: 'Market user ID' })
+  @ApiBody({ type: UpdateMarketExpenseProofRequestDto })
+  @ApiOkResponse({ description: 'Market expense-proof policy updated' })
+  @ApiNotFoundResponse({ description: 'Market not found' })
+  updateMarketExpenseProof(
+    @Param('id') id: string,
+    @Body() dto: UpdateMarketExpenseProofRequestDto,
+  ) {
+    return this.identityClient.send(
+      { cmd: 'identity.market.update' },
+      {
+        id,
+        dto: {
+          expense_proof_conditions: dto.expense_proof_conditions,
         },
       },
     );

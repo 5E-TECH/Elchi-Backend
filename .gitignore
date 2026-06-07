@@ -59,5 +59,7 @@ report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 # local reports
 docs/*.md
 docs/*.pdf
+# ...but BACKEND_MAP.md is intentional, versioned project documentation
+!docs/BACKEND_MAP.md
 .env.production
 .env.production

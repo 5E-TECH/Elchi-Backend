@@ -16,6 +16,8 @@ import {
   HmacAlgorithm,
   Order_status,
   verifyHmacSignature,
+  assertPublicUrl,
+  SsrfBlockedError,
 } from '@app/common';
 import { ExternalIntegration } from './entities/external-integration.entity';
 import { SyncQueue } from './entities/sync-queue.entity';
@@ -155,6 +157,93 @@ export class IntegrationServiceService {
     throw new RpcException(errorRes(message, 404));
   }
 
+  // Dev/testing escape hatch for talking to local providers. Off by default so
+  // production blocks private/loopback/metadata targets.
+  private readonly allowPrivateHosts =
+    String(process.env.INTEGRATION_ALLOW_PRIVATE_HOSTS ?? '').toLowerCase() ===
+    'true';
+
+  // When true, reject signature-valid webhooks that carry no delivery id (for
+  // providers that declared a webhook_id_header) — forces replay protection on.
+  private readonly requireDeliveryId =
+    String(process.env.INTEGRATION_REQUIRE_DELIVERY_ID ?? '').toLowerCase() ===
+    'true';
+
+  // Bounds for operator-supplied JSON config blobs (mapping/dispatch/sync).
+  private static readonly MAX_CONFIG_BYTES = 64 * 1024; // 64 KB serialized
+  private static readonly MAX_CONFIG_DEPTH = 16;
+
+  private jsonDepth(value: unknown, depth = 0): number {
+    if (depth > IntegrationServiceService.MAX_CONFIG_DEPTH) return depth;
+    if (value === null || typeof value !== 'object') return depth;
+    let max = depth;
+    for (const v of Object.values(value as Record<string, unknown>)) {
+      const d = this.jsonDepth(v, depth + 1);
+      if (d > max) max = d;
+    }
+    return max;
+  }
+
+  /**
+   * Reject oversized or pathologically nested JSON config (DoS / malformed). The
+   * config columns are free-form JSONB, so this is the guard that keeps an
+   * operator (or a compromised admin token) from storing a huge/recursive blob.
+   */
+  private assertSafeJsonConfig(value: unknown, field: string): void {
+    if (value === null || typeof value === 'undefined') return;
+    let serialized: string;
+    try {
+      serialized = JSON.stringify(value);
+    } catch {
+      this.badRequest(`${field} is not serializable JSON`);
+    }
+    if (serialized.length > IntegrationServiceService.MAX_CONFIG_BYTES) {
+      this.badRequest(
+        `${field} is too large (max ${IntegrationServiceService.MAX_CONFIG_BYTES} bytes)`,
+      );
+    }
+    if (this.jsonDepth(value) > IntegrationServiceService.MAX_CONFIG_DEPTH) {
+      this.badRequest(
+        `${field} is nested too deeply (max ${IntegrationServiceService.MAX_CONFIG_DEPTH})`,
+      );
+    }
+  }
+
+  /** Validate every known JSON config field present on a create/update dto. */
+  private assertSafeConfigFields(dto: Record<string, unknown>): void {
+    const fields = [
+      'credentials',
+      'field_mapping',
+      'status_mapping',
+      'status_sync_config',
+      'dispatch_config',
+      'inbound_status_mapping',
+      'webhook_payload_paths',
+    ];
+    for (const f of fields) {
+      if (typeof dto[f] !== 'undefined') {
+        this.assertSafeJsonConfig(dto[f], f);
+      }
+    }
+  }
+
+  /**
+   * SSRF guard for every outbound request to an operator-configured URL. Rejects
+   * non-http(s) schemes and hosts that resolve to non-public addresses
+   * (loopback, private ranges, link-local, cloud metadata). Used both at
+   * config time (create/update) and right before each fetch.
+   */
+  private async assertOutboundUrlSafe(url: string): Promise<void> {
+    try {
+      await assertPublicUrl(url, { allowPrivate: this.allowPrivateHosts });
+    } catch (error) {
+      if (error instanceof SsrfBlockedError) {
+        this.badRequest(`Blocked outbound URL: ${error.message}`);
+      }
+      throw error;
+    }
+  }
+
   private extractPath(source: unknown, path?: string): unknown {
     if (!path || !path.trim()) {
       return source;
@@ -250,6 +339,7 @@ export class IntegrationServiceService {
         ? this.interpolate(authConfig.login_payload_template, context)
         : { username: integration.username, password: decryptedPassword };
 
+    await this.assertOutboundUrlSafe(integration.auth_url);
     try {
       const response = await fetch(integration.auth_url, {
         method,
@@ -687,6 +777,7 @@ export class IntegrationServiceService {
             ).toString()}`
           : '';
       const finalUrl = `${url}${query}`;
+      await this.assertOutboundUrlSafe(finalUrl);
 
       const response = await fetch(finalUrl, {
         method,
@@ -793,6 +884,14 @@ export class IntegrationServiceService {
       ...(authUrl ? { auth_url: authUrl } : {}),
       auth_type: authType,
     };
+
+    // Defense-in-depth: reject private/loopback/metadata targets at config time,
+    // not only at request time, and bound the free-form JSON config blobs.
+    await this.assertOutboundUrlSafe(baseUrl);
+    if (authUrl) {
+      await this.assertOutboundUrlSafe(authUrl);
+    }
+    this.assertSafeConfigFields(dto as Record<string, unknown>);
 
     const entity = this.integrationRepo.create({
       name: name || slug,
@@ -989,6 +1088,15 @@ export class IntegrationServiceService {
     if (typeof dto.auth_type !== 'undefined') {
       row.auth_type = dto.auth_type === 'login' ? 'login' : 'api_key';
     }
+    // Re-validate the effective outbound URLs after the merge (config-time SSRF)
+    // and bound any JSON config supplied in the update.
+    if (row.api_url) {
+      await this.assertOutboundUrlSafe(row.api_url);
+    }
+    if (row.auth_url) {
+      await this.assertOutboundUrlSafe(row.auth_url);
+    }
+    this.assertSafeConfigFields(dto as Record<string, unknown>);
     const saved = await this.integrationRepo.save(row);
     const [enriched] = await this.attachMarkets([saved as any]);
     return successRes(this.sanitizeIntegrationRow(enriched), 200, 'integration updated');
@@ -1051,6 +1159,7 @@ export class IntegrationServiceService {
     }
 
     const startedAt = Date.now();
+    await this.assertOutboundUrlSafe(url);
     try {
       const response = await fetch(url, {
         method,
@@ -1757,6 +1866,30 @@ export class IntegrationServiceService {
         `webhook signature rejected for ${integration.slug}: ${verification.reason}`,
       );
       return { ok: false, code: 401, reason: 'invalid_signature' };
+    }
+
+    // Replay protection depends on a per-delivery id. Surface (and optionally
+    // enforce) its absence so a provider silently shipping no delivery id can't
+    // leave replay protection quietly disabled.
+    if (!deliveryId) {
+      if (this.requireDeliveryId && integration.webhook_id_header) {
+        await this.saveWebhookLog({
+          integration_id: String(integration.id),
+          provider_slug: integration.slug,
+          delivery_id: null,
+          event_type: eventType,
+          signature_valid: true,
+          status: 'rejected',
+          raw_body: this.truncateBody(rawBody.toString('utf8')),
+          parsed_payload: parsed,
+          error: `missing delivery id header '${integration.webhook_id_header}'`,
+          trace_id: input.trace_id ?? null,
+        });
+        return { ok: false, code: 400, reason: 'missing_delivery_id' };
+      }
+      this.logger.warn(
+        `webhook for ${integration.slug} has no delivery id — replay protection inactive for this event`,
+      );
     }
 
     // Replay protection: if this provider sends a delivery id and we've

@@ -1,6 +1,6 @@
 import { Column, Entity, Index } from 'typeorm';
-import { BaseEntity } from '@app/common';
-import { BranchType, Status } from '@app/common';
+import { BaseEntity, numericTransformer } from '@app/common';
+import { BranchOwnership, BranchType, Status } from '@app/common';
 
 @Entity({ name: 'branches' })
 @Index('IDX_BRANCH_STATUS', ['status'])
@@ -39,4 +39,29 @@ export class Branch extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   manager_id!: string | null;
+
+  /**
+   * Ownership model (see BranchOwnership). OWNED branches remit the full
+   * collected amount to HQ (branchShare = 0); PARTNER branches keep
+   * `per_order_share` per order and remit only HQ's portion. Defaults to OWNED.
+   */
+  @Column({
+    type: 'enum',
+    enum: BranchOwnership,
+    default: BranchOwnership.OWNED,
+  })
+  ownership!: BranchOwnership;
+
+  /**
+   * Fixed per-order amount a PARTNER branch keeps from each sold order. Ignored
+   * (treated as 0) for OWNED branches.
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    default: 0,
+    transformer: numericTransformer,
+  })
+  per_order_share!: number;
 }

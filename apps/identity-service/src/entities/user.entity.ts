@@ -2,6 +2,9 @@ import { Entity, Column } from 'typeorm';
 import {
   BaseEntity,
   Commission_type,
+  CourierCompensationMode,
+  ExpenseProofCondition,
+  numericTransformer,
   Roles,
   Status,
   Where_deliver,
@@ -75,8 +78,28 @@ export class User extends BaseEntity {
   @Column({ type: 'int', nullable: true })
   tariff_center: number | null;
 
+  /**
+   * How this courier is compensated per order (see CourierCompensationMode).
+   * Drives courierShare at sale time: SALARY_ONLY keeps nothing per order,
+   * PER_ORDER / SALARY_PLUS_PER_ORDER keep the tariff_home/center amount.
+   * Defaults to PER_ORDER to preserve existing behaviour for current couriers.
+   */
+  @Column({
+    type: 'enum',
+    enum: CourierCompensationMode,
+    default: CourierCompensationMode.PER_ORDER,
+  })
+  compensation_mode: CourierCompensationMode;
+
   @Column({ type: 'boolean', default: false })
   add_order: boolean;
+
+  // Per-market proof policy: the SET of situations in which a courier MUST
+  // attach file proof (image/video) for a sell/cancel operation of this
+  // market's orders. NULL / empty = proof never required. See
+  // ExpenseProofCondition for the catalog of supported conditions.
+  @Column({ type: 'jsonb', nullable: true })
+  expense_proof_conditions: ExpenseProofCondition[] | null;
 
   @Column({
     type: 'enum',
@@ -96,6 +119,14 @@ export class User extends BaseEntity {
   @Column({ type: 'enum', enum: Commission_type, nullable: true })
   commission_type: Commission_type | null;
 
-  @Column({ type: 'float', nullable: true })
+  // Dual-purpose: a percentage when commission_type=PERCENT, a flat money
+  // amount when FIXED — so it must hold money-sized values, hence numeric(14,2).
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   commission_value: number | null;
 }

@@ -1,4 +1,10 @@
-import { BadRequestException, Injectable, Logger, NotFoundException, OnModuleInit } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  OnModuleInit,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { RpcException } from '@nestjs/microservices';
 import {
@@ -34,6 +40,7 @@ export class FileServiceService implements OnModuleInit {
   private readonly logger = new Logger(FileServiceService.name);
   private readonly bucket: string;
   private readonly maxSizeBytes: number;
+  private readonly maxVideoSizeBytes: number;
   private readonly defaultExpiresIn: number;
   private readonly maxExpiresIn: number;
   private readonly allowedMime = new Set<string>([
@@ -42,22 +49,47 @@ export class FileServiceService implements OnModuleInit {
     'image/jpg',
     'application/pdf',
     'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    // Video proof (expense proof on order sell/cancel)
+    'video/mp4',
+    'video/quicktime',
+    'video/webm',
+  ]);
+  private readonly videoMime = new Set<string>([
+    'video/mp4',
+    'video/quicktime',
+    'video/webm',
   ]);
   private readonly s3: S3Client;
 
   constructor(private readonly configService: ConfigService) {
-    const endpointHost = this.configService.getOrThrow<string>('MINIO_ENDPOINT');
+    const endpointHost =
+      this.configService.getOrThrow<string>('MINIO_ENDPOINT');
     const port = Number(this.configService.get<string>('MINIO_PORT') ?? 9000);
-    const useSsl = String(this.configService.get<string>('MINIO_USE_SSL') ?? 'false') === 'true';
-    const accessKeyId = this.configService.getOrThrow<string>('MINIO_ACCESS_KEY');
-    const secretAccessKey = this.configService.getOrThrow<string>('MINIO_SECRET_KEY');
-    this.bucket = this.configService.get<string>('MINIO_BUCKET') ?? 'elchi-files';
-    const maxMb = Number(this.configService.get<string>('FILE_MAX_SIZE_MB') ?? 10);
+    const useSsl =
+      String(this.configService.get<string>('MINIO_USE_SSL') ?? 'false') ===
+      'true';
+    const accessKeyId =
+      this.configService.getOrThrow<string>('MINIO_ACCESS_KEY');
+    const secretAccessKey =
+      this.configService.getOrThrow<string>('MINIO_SECRET_KEY');
+    this.bucket =
+      this.configService.get<string>('MINIO_BUCKET') ?? 'elchi-files';
+    const maxMb = Number(
+      this.configService.get<string>('FILE_MAX_SIZE_MB') ?? 10,
+    );
     this.maxSizeBytes = Math.max(1, maxMb) * 1024 * 1024;
-    this.defaultExpiresIn = Number(this.configService.get<string>('FILE_SIGNED_URL_EXPIRES') ?? 3600);
+    const maxVideoMb = Number(
+      this.configService.get<string>('FILE_MAX_VIDEO_SIZE_MB') ?? 50,
+    );
+    this.maxVideoSizeBytes = Math.max(1, maxVideoMb) * 1024 * 1024;
+    this.defaultExpiresIn = Number(
+      this.configService.get<string>('FILE_SIGNED_URL_EXPIRES') ?? 3600,
+    );
     this.maxExpiresIn = Math.max(
       this.defaultExpiresIn,
-      Number(this.configService.get<string>('FILE_SIGNED_URL_MAX_EXPIRES') ?? 86_400),
+      Number(
+        this.configService.get<string>('FILE_SIGNED_URL_MAX_EXPIRES') ?? 86_400,
+      ),
     );
 
     const endpoint = `${useSsl ? 'https' : 'http'}://${endpointHost}:${port}`;
@@ -73,7 +105,10 @@ export class FileServiceService implements OnModuleInit {
     try {
       await this.ensureBucketExists();
     } catch (error) {
-      this.logger.error('MinIO bucket init failed', error instanceof Error ? error.stack : undefined);
+      this.logger.error(
+        'MinIO bucket init failed',
+        error instanceof Error ? error.stack : undefined,
+      );
       throw error;
     }
   }
@@ -115,14 +150,14 @@ export class FileServiceService implements OnModuleInit {
   private normalizeFolder(folder?: string): string {
     const fallback = 'uploads';
     if (!folder) return fallback;
-    const cleaned = folder
-      .trim()
-      .replace(/[^a-zA-Z0-9_-]/g, '');
+    const cleaned = folder.trim().replace(/[^a-zA-Z0-9_-]/g, '');
     return cleaned || fallback;
   }
 
   private decodeBase64(value: string): Buffer {
-    const cleaned = value.includes(',') ? value.split(',').pop() ?? '' : value;
+    const cleaned = value.includes(',')
+      ? (value.split(',').pop() ?? '')
+      : value;
     if (!cleaned) {
       throw new BadRequestException('file_base64 is required');
     }
@@ -136,12 +171,18 @@ export class FileServiceService implements OnModuleInit {
   private validateFile(mimeType: string, size: number) {
     if (!this.allowedMime.has(mimeType)) {
       throw new BadRequestException(
-        'Unsupported mime type. Allowed: image/png, image/jpeg, image/jpg, application/pdf, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+        'Unsupported mime type. Allowed: image/png, image/jpeg, image/jpg, application/pdf, application/vnd.openxmlformats-officedocument.spreadsheetml.sheet, video/mp4, video/quicktime, video/webm',
       );
     }
 
-    if (size > this.maxSizeBytes) {
-      throw new BadRequestException(`File size exceeds ${Math.round(this.maxSizeBytes / 1024 / 1024)}MB`);
+    // Video proof files are allowed a larger ceiling than images/documents.
+    const limit = this.videoMime.has(mimeType)
+      ? this.maxVideoSizeBytes
+      : this.maxSizeBytes;
+    if (size > limit) {
+      throw new BadRequestException(
+        `File size exceeds ${Math.round(limit / 1024 / 1024)}MB`,
+      );
     }
   }
 
@@ -160,17 +201,43 @@ export class FileServiceService implements OnModuleInit {
     const startsWith = (prefix: number[]): boolean =>
       prefix.every((byte, idx) => buffer[idx] === byte);
 
-    const detected = ((): string | null => {
+    // ISO Base Media (mp4/quicktime): bytes 4..7 spell "ftyp".
+    const hasFtypBox =
+      buffer.length >= 8 &&
+      buffer[4] === 0x66 &&
+      buffer[5] === 0x74 &&
+      buffer[6] === 0x79 &&
+      buffer[7] === 0x70;
+
+    // detected → the set of mime types that signature legitimately covers.
+    const detected = ((): { token: string; accepts: string[] } | null => {
       // PNG: 89 50 4E 47 0D 0A 1A 0A
-      if (startsWith([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) return 'image/png';
+      if (startsWith([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))
+        return { token: 'image/png', accepts: ['image/png'] };
       // JPEG: FF D8 FF
-      if (startsWith([0xff, 0xd8, 0xff])) return 'image/jpeg';
+      if (startsWith([0xff, 0xd8, 0xff]))
+        return { token: 'image/jpeg', accepts: ['image/jpeg'] };
       // PDF: %PDF-
-      if (startsWith([0x25, 0x50, 0x44, 0x46, 0x2d])) return 'application/pdf';
+      if (startsWith([0x25, 0x50, 0x44, 0x46, 0x2d]))
+        return { token: 'application/pdf', accepts: ['application/pdf'] };
       // ZIP (XLSX/DOCX/PPTX containers): PK\x03\x04
       if (startsWith([0x50, 0x4b, 0x03, 0x04])) {
-        return 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+        return {
+          token: 'application/zip',
+          accepts: [
+            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          ],
+        };
       }
+      // EBML (WebM / Matroska): 1A 45 DF A3
+      if (startsWith([0x1a, 0x45, 0xdf, 0xa3]))
+        return { token: 'video/webm', accepts: ['video/webm'] };
+      // ISO BMFF "ftyp" box → mp4 / quicktime share the same container.
+      if (hasFtypBox)
+        return {
+          token: 'video/mp4',
+          accepts: ['video/mp4', 'video/quicktime'],
+        };
       return null;
     })();
 
@@ -180,20 +247,23 @@ export class FileServiceService implements OnModuleInit {
       );
     }
 
-    const normalizedClaimed = mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
-    if (detected !== normalizedClaimed) {
+    const normalizedClaimed =
+      mimeType === 'image/jpg' ? 'image/jpeg' : mimeType;
+    if (!detected.accepts.includes(normalizedClaimed)) {
       this.logger.warn(
-        `MIME mismatch: client claimed "${mimeType}", buffer signature is "${detected}" — rejecting`,
+        `MIME mismatch: client claimed "${mimeType}", buffer signature is "${detected.token}" — rejecting`,
       );
       throw new BadRequestException(
-        `File content (${detected}) does not match declared mime_type (${mimeType})`,
+        `File content (${detected.token}) does not match declared mime_type (${mimeType})`,
       );
     }
   }
 
   private async ensureBucketExists() {
     const buckets = await this.s3.send(new ListBucketsCommand({}));
-    const exists = (buckets.Buckets ?? []).some((bucket) => bucket.Name === this.bucket);
+    const exists = (buckets.Buckets ?? []).some(
+      (bucket) => bucket.Name === this.bucket,
+    );
     if (!exists) {
       await this.s3.send(new CreateBucketCommand({ Bucket: this.bucket }));
       this.logger.log(`Created bucket: ${this.bucket}`);
@@ -202,7 +272,9 @@ export class FileServiceService implements OnModuleInit {
 
   private async ensureObjectExists(key: string) {
     try {
-      await this.s3.send(new HeadObjectCommand({ Bucket: this.bucket, Key: key }));
+      await this.s3.send(
+        new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+      );
     } catch {
       throw new NotFoundException('File not found');
     }
@@ -247,7 +319,9 @@ export class FileServiceService implements OnModuleInit {
   async upload(data: UploadFileDto) {
     try {
       const fileName = String(data?.file_name ?? '').trim();
-      const mimeType = String(data?.mime_type ?? '').trim().toLowerCase();
+      const mimeType = String(data?.mime_type ?? '')
+        .trim()
+        .toLowerCase();
       if (!fileName) throw new BadRequestException('file_name is required');
       if (!mimeType) throw new BadRequestException('mime_type is required');
 
@@ -277,7 +351,9 @@ export class FileServiceService implements OnModuleInit {
 
       const expiresIn = Number(data?.expires_in ?? this.defaultExpiresIn);
       const bounded =
-        Number.isFinite(expiresIn) && expiresIn > 0 ? expiresIn : this.defaultExpiresIn;
+        Number.isFinite(expiresIn) && expiresIn > 0
+          ? expiresIn
+          : this.defaultExpiresIn;
       // Cap at maxExpiresIn so a client cannot request a multi-year link.
       const safeExpires = Math.min(bounded, this.maxExpiresIn);
       const url = await getSignedUrl(
@@ -301,6 +377,29 @@ export class FileServiceService implements OnModuleInit {
     }
   }
 
+  /**
+   * Lightweight existence check (HEAD) — used by order-service to verify that
+   * proof file keys submitted with an expense actually point to uploaded
+   * objects, so a courier cannot satisfy the proof requirement with a made-up
+   * key. Returns { exists: boolean } instead of throwing on a missing object.
+   */
+  async exists(data: { key?: string }) {
+    try {
+      const key = String(data?.key ?? '').trim();
+      if (!key) throw new BadRequestException('key is required');
+      try {
+        await this.s3.send(
+          new HeadObjectCommand({ Bucket: this.bucket, Key: key }),
+        );
+        return this.successRes({ key, exists: true }, 200, 'File exists');
+      } catch {
+        return this.successRes({ key, exists: false }, 200, 'File not found');
+      }
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
   async read(data: { key: string }) {
     try {
       const key = String(data?.key ?? '').trim();
@@ -312,6 +411,16 @@ export class FileServiceService implements OnModuleInit {
       const body = response.Body;
       if (!body || typeof body.transformToByteArray !== 'function') {
         throw new NotFoundException('File not found');
+      }
+
+      // Guard against OOM: read() buffers the whole object AND base64-encodes it
+      // (~2× size) in memory. Reject anything larger than the max legitimate
+      // upload before materialising it. (Audit 2026-06-07.)
+      const size = Number(response.ContentLength ?? 0);
+      if (size > this.maxVideoSizeBytes) {
+        throw new BadRequestException(
+          `File too large to read into memory: ${size} bytes (limit ${this.maxVideoSizeBytes})`,
+        );
       }
 
       const bytes = await body.transformToByteArray();
@@ -383,7 +492,9 @@ export class FileServiceService implements OnModuleInit {
       const buffer = await new Promise<Buffer>((resolve, reject) => {
         const doc = new PDFDocument({ size: 'A4', margin: 50 });
         const chunks: Buffer[] = [];
-        doc.on('data', (chunk) => chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)));
+        doc.on('data', (chunk) =>
+          chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)),
+        );
         doc.on('error', reject);
         doc.on('end', () => resolve(Buffer.concat(chunks)));
 

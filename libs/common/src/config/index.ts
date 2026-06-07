@@ -1,5 +1,24 @@
 import * as Joi from 'joi';
 
+/**
+ * Reject obviously low-entropy / placeholder secrets at boot. A 32+ char random
+ * hex/base64 secret easily passes; the doc-placeholder values and repeated
+ * characters do not. Fail-fast beats a weak AES key silently shipping.
+ */
+const rejectWeakSecret: Joi.CustomValidator<string> = (value, helpers) => {
+  const v = String(value);
+  if (/replace|changeme|example|your[_-]?secret|^secret$|^password$/i.test(v)) {
+    return helpers.error('any.invalid');
+  }
+  if (/^(.)\1+$/.test(v)) {
+    return helpers.error('any.invalid'); // all the same character
+  }
+  if (new Set(v).size < 10) {
+    return helpers.error('any.invalid'); // too few distinct characters
+  }
+  return value;
+};
+
 export const gatewayValidationSchema = Joi.object({
   PORT: Joi.number().default(2004),
   ACCESS_TOKEN_KEY: Joi.string().required(),
@@ -60,6 +79,7 @@ export const orderValidationSchema = Joi.object({
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
   RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
   RABBITMQ_CATALOG_QUEUE: Joi.string().required(),
+  RABBITMQ_FILE_QUEUE: Joi.string().required(),
 });
 
 export const catalogValidationSchema = Joi.object({
@@ -109,15 +129,39 @@ export const integrationValidationSchema = Joi.object({
   RABBITMQ_INTEGRATION_QUEUE: Joi.string().required(),
   INTEGRATION_CREDENTIAL_SECRET: Joi.string()
     .min(32)
+    .custom(rejectWeakSecret, 'weak-secret check')
     .required()
     .description(
-      'Primary secret used to AES-encrypt external integration credentials in DB. Must be >=32 chars of random entropy.',
-    ),
+      'Primary secret used to AES-encrypt external integration credentials in DB. Must be >=32 chars of random entropy (openssl rand -hex 32), not a passphrase/placeholder.',
+    )
+    .messages({
+      'any.invalid':
+        'INTEGRATION_CREDENTIAL_SECRET looks weak/placeholder. Use: openssl rand -hex 32',
+    }),
   INTEGRATION_CREDENTIAL_SECRET_PREVIOUS: Joi.string()
     .min(32)
+    .custom(rejectWeakSecret, 'weak-secret check')
     .optional()
     .description(
       'Optional previous secret. During rotation: set both vars, then trigger a re-encrypt pass; rows decrypted with the previous key are re-encrypted with the primary on next save. Remove this var once all rows are migrated.',
+    ),
+  // SSRF guard escape hatch. When true, outbound integration requests may target
+  // private/loopback/metadata hosts (dev/testing only). Default false.
+  INTEGRATION_ALLOW_PRIVATE_HOSTS: Joi.boolean()
+    .truthy('true', '1', 'yes')
+    .falsy('false', '0', 'no')
+    .default(false)
+    .description(
+      'Dev/testing only. Set true to allow integrations to call private/loopback hosts. Keep false in production.',
+    ),
+  // When true, reject signature-valid webhooks lacking a delivery id (for
+  // providers that declared a webhook_id_header) so replay protection is always on.
+  INTEGRATION_REQUIRE_DELIVERY_ID: Joi.boolean()
+    .truthy('true', '1', 'yes')
+    .falsy('false', '0', 'no')
+    .default(false)
+    .description(
+      'Enforce that webhook deliveries carry the configured id header (replay protection). Default false (warn only).',
     ),
   // Sync queue scheduler. The processor itself is HA-safe (pg_try_advisory_lock
   // inside processPendingSyncQueue), so multiple replicas can run the cron

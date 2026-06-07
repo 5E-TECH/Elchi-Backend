@@ -23,6 +23,7 @@ describe('OrderServiceService filters', () => {
       {} as any, // orderItemRepo
       {} as any, // orderTrackingRepo
       {} as any, // orderCustodyEventRepo
+      {} as any, // orderSettlementRepo
       {} as any, // transferBatchRepo
       {} as any, // transferBatchItemRepo
       {} as any, // transferBatchHistoryRepo
@@ -33,6 +34,7 @@ describe('OrderServiceService filters', () => {
       {} as any, // financeClient
       {} as any, // integrationClient
       {} as any, // branchClient
+      {} as any, // fileClient
       {} as any, // outbox
     );
 

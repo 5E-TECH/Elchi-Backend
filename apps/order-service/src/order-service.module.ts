@@ -16,6 +16,7 @@ import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
 import { OrderCustodyEvent } from './entities/order-custody-event.entity';
+import { OrderSettlement } from './entities/order-settlement.entity';
 import { Branch } from './entities/branch.entity';
 import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.entity';
@@ -38,6 +39,7 @@ import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.ent
     RmqModule.register({ name: 'FINANCE' }),
     RmqModule.register({ name: 'INTEGRATION' }),
     RmqModule.register({ name: 'BRANCH' }),
+    RmqModule.register({ name: 'FILE' }),
     DatabaseModule,
     IdempotencyModule.forService(),
     OutboxModule.forService({
@@ -57,6 +59,7 @@ import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.ent
       OrderItem,
       OrderTracking,
       OrderCustodyEvent,
+      OrderSettlement,
       Branch,
       BranchTransferBatch,
       BranchTransferBatchItem,

@@ -1,5 +1,5 @@
 import { Column, Entity, Index } from 'typeorm';
-import { BaseEntity } from '@app/common';
+import { BaseEntity, numericTransformer } from '@app/common';
 
 /**
  * A payout to an operator against their accrued earnings. An operator's
@@ -22,7 +22,13 @@ export class OperatorPayment extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   paid_by_id!: string | null;
 
-  @Column({ type: 'float', default: 0 })
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    default: 0,
+    transformer: numericTransformer,
+  })
   amount!: number;
 
   @Column({ type: 'text', nullable: true })

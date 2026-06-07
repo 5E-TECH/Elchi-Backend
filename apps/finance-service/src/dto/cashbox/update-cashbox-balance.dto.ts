@@ -1,5 +1,13 @@
 import { Cashbox_type, Operation_type, PaymentMethod, Source_type } from '@app/common';
-import { IsEnum, IsNumber, IsOptional, IsString, Matches, Min } from 'class-validator';
+import {
+  IsArray,
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Matches,
+  Min,
+} from 'class-validator';
 
 export class UpdateCashboxBalanceDto {
   @IsOptional()
@@ -44,6 +52,12 @@ export class UpdateCashboxBalanceDto {
   @Matches(/^\d+$/)
   source_id?: string | null;
 
+  // Per-attempt idempotency discriminator (see CashboxHistory.dedup_epoch).
+  // Free-form token (a timestamp); omitted/'' for non-sell-flow callers.
+  @IsOptional()
+  @IsString()
+  dedup_epoch?: string;
+
   @IsOptional()
   @IsString()
   @Matches(/^\d+$/)
@@ -51,4 +65,11 @@ export class UpdateCashboxBalanceDto {
 
   @IsOptional()
   payment_date?: string | Date | null;
+
+  // MinIO object keys of expense-proof files (image/video). Set by
+  // order-service for EXTRA_COST events when the market requires proof.
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  proof_files?: string[];
 }

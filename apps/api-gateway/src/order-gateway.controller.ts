@@ -74,7 +74,9 @@ export class OrderGatewayController {
   private normalizeRoles(roles?: string[]) {
     const normalized = new Set<string>();
     for (const rawRole of roles ?? []) {
-      const role = String(rawRole ?? '').trim().toLowerCase();
+      const role = String(rawRole ?? '')
+        .trim()
+        .toLowerCase();
       if (!role) {
         continue;
       }
@@ -97,25 +99,30 @@ export class OrderGatewayController {
 
     if (value && typeof value === 'object') {
       return Object.fromEntries(
-        Object.entries(value as Record<string, unknown>).map(([key, nestedValue]) => [
-          this.toSnakeCaseKey(key),
-          this.toLegacyShape(nestedValue),
-        ]),
+        Object.entries(value as Record<string, unknown>).map(
+          ([key, nestedValue]) => [
+            this.toSnakeCaseKey(key),
+            this.toLegacyShape(nestedValue),
+          ],
+        ),
       ) as T;
     }
 
     return value;
   }
 
-  private async sendOrderWithTimeout(pattern: { cmd: string }, payload: object) {
-    return firstValueFrom(this.orderClient.send(pattern, payload).pipe(timeout(8000))).catch(
-      (error: unknown) => {
-        if (error instanceof TimeoutError) {
-          throw new GatewayTimeoutException('Order service response timeout');
-        }
-        throw error;
-      },
-    );
+  private async sendOrderWithTimeout(
+    pattern: { cmd: string },
+    payload: object,
+  ) {
+    return firstValueFrom(
+      this.orderClient.send(pattern, payload).pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
   }
 
   private async sendOrderWithFallback(
@@ -133,45 +140,58 @@ export class OrderGatewayController {
     }
   }
 
-  private async sendIdentityWithTimeout(pattern: { cmd: string }, payload: object) {
-    return firstValueFrom(this.identityClient.send(pattern, payload).pipe(timeout(8000))).catch(
-      (error: unknown) => {
-        if (error instanceof TimeoutError) {
-          throw new GatewayTimeoutException('Identity service response timeout');
-        }
-        throw error;
-      },
-    );
+  private async sendIdentityWithTimeout(
+    pattern: { cmd: string },
+    payload: object,
+  ) {
+    return firstValueFrom(
+      this.identityClient.send(pattern, payload).pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Identity service response timeout');
+      }
+      throw error;
+    });
   }
 
-  private async sendLogisticsWithTimeout(pattern: { cmd: string }, payload: object) {
-    return firstValueFrom(this.logisticsClient.send(pattern, payload).pipe(timeout(8000))).catch(
-      (error: unknown) => {
-        if (error instanceof TimeoutError) {
-          throw new GatewayTimeoutException('Logistics service response timeout');
-        }
-        throw error;
-      },
-    );
+  private async sendLogisticsWithTimeout(
+    pattern: { cmd: string },
+    payload: object,
+  ) {
+    return firstValueFrom(
+      this.logisticsClient.send(pattern, payload).pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Logistics service response timeout');
+      }
+      throw error;
+    });
   }
 
-  private async sendBranchWithTimeout(pattern: { cmd: string }, payload: object) {
-    return firstValueFrom(this.branchClient.send(pattern, payload).pipe(timeout(8000))).catch(
-      (error: unknown) => {
-        if (error instanceof TimeoutError) {
-          throw new GatewayTimeoutException('Branch service response timeout');
-        }
-        throw error;
-      },
-    );
+  private async sendBranchWithTimeout(
+    pattern: { cmd: string },
+    payload: object,
+  ) {
+    return firstValueFrom(
+      this.branchClient.send(pattern, payload).pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Branch service response timeout');
+      }
+      throw error;
+    });
   }
 
-  private isBranchStaffAssignment(assignment?: BranchAssignment | null): boolean {
+  private isBranchStaffAssignment(
+    assignment?: BranchAssignment | null,
+  ): boolean {
     const role = String(assignment?.role ?? '').toUpperCase();
     return role === 'MANAGER' || role === 'REGISTRATOR' || role === 'BRANCH';
   }
 
-  private async resolveBranchAssignment(reqUser: JwtUser): Promise<BranchAssignment | null> {
+  private async resolveBranchAssignment(
+    reqUser: JwtUser,
+  ): Promise<BranchAssignment | null> {
     const normalizedRoles = this.normalizeRoles(reqUser.roles);
     const jwtBranchId = String(reqUser?.branch_id ?? '').trim();
     const canUseJwtBranch =
@@ -182,7 +202,9 @@ export class OrderGatewayController {
     if (canUseJwtBranch && jwtBranchId) {
       const inferredRole =
         normalizedRoles.find((role) =>
-          [RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR].includes(role as RoleEnum),
+          [RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR].includes(
+            role as RoleEnum,
+          ),
         ) ?? RoleEnum.BRANCH;
       return {
         branch_id: jwtBranchId,
@@ -227,12 +249,16 @@ export class OrderGatewayController {
     const allowedLimits = [10, 25, 50, 100];
     const parsedLimit = Number(limit ?? 10);
     if (!Number.isFinite(parsedLimit) || !allowedLimits.includes(parsedLimit)) {
-      throw new BadRequestException(`limit faqat ${allowedLimits.join(', ')} bo'lishi mumkin`);
+      throw new BadRequestException(
+        `limit faqat ${allowedLimits.join(', ')} bo'lishi mumkin`,
+      );
     }
 
     const parsedPage = Number(page ?? 1);
     const normalizedPage =
-      Number.isFinite(parsedPage) && parsedPage >= 1 ? Math.floor(parsedPage) : 1;
+      Number.isFinite(parsedPage) && parsedPage >= 1
+        ? Math.floor(parsedPage)
+        : 1;
 
     return { page: normalizedPage, limit: parsedLimit };
   }
@@ -253,7 +279,9 @@ export class OrderGatewayController {
     }
 
     const allowedStatuses = new Set(Object.values(Order_status));
-    const invalidValues = flattened.filter((value) => !allowedStatuses.has(value as Order_status));
+    const invalidValues = flattened.filter(
+      (value) => !allowedStatuses.has(value as Order_status),
+    );
     if (invalidValues.length) {
       throw new BadRequestException(
         `Noto'g'ri status qiymati: ${invalidValues.join(', ')}`,
@@ -263,7 +291,10 @@ export class OrderGatewayController {
     return Array.from(new Set(flattened)) as Order_status[];
   }
 
-  private withPaginationMeta(payload: unknown, fallback: { page: number; limit: number }) {
+  private withPaginationMeta(
+    payload: unknown,
+    fallback: { page: number; limit: number },
+  ) {
     if (!payload || typeof payload !== 'object') {
       return payload;
     }
@@ -322,7 +353,10 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create order' })
   @ApiBody({ type: CreateOrderRequestDto })
-  async create(@Body() dto: CreateOrderRequestDto, @Req() req: { user: JwtUser }) {
+  async create(
+    @Body() dto: CreateOrderRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
     const { customer, ...orderDto } = dto;
     let customerId = dto.customer_id;
     const roles = this.normalizeRoles(req.user.roles);
@@ -339,11 +373,19 @@ export class OrderGatewayController {
       : null;
 
     if (isBranchStaff && !assignedBranchId) {
-      throw new BadRequestException('Filial xodimi hech qaysi filialga biriktirilmagan');
+      throw new BadRequestException(
+        'Filial xodimi hech qaysi filialga biriktirilmagan',
+      );
     }
 
-    if (isBranchStaff && orderDto.branch_id && String(orderDto.branch_id) !== assignedBranchId) {
-      throw new BadRequestException("Filial xodimi boshqa filial uchun order yarata olmaydi");
+    if (
+      isBranchStaff &&
+      orderDto.branch_id &&
+      String(orderDto.branch_id) !== assignedBranchId
+    ) {
+      throw new BadRequestException(
+        'Filial xodimi boshqa filial uchun order yarata olmaydi',
+      );
     }
 
     if (
@@ -351,7 +393,9 @@ export class OrderGatewayController {
       typeof orderDto.source !== 'undefined' &&
       String(orderDto.source).toLowerCase() !== 'branch'
     ) {
-      throw new BadRequestException("Filial xodimi uchun source faqat 'branch' bo'lishi mumkin");
+      throw new BadRequestException(
+        "Filial xodimi uchun source faqat 'branch' bo'lishi mumkin",
+      );
     }
 
     let resolvedMarketId = orderDto.market_id;
@@ -368,7 +412,9 @@ export class OrderGatewayController {
 
     if (!customerId) {
       if (!customer) {
-        throw new BadRequestException('customer_id yoki customer obyekt yuborilishi shart');
+        throw new BadRequestException(
+          'customer_id yoki customer obyekt yuborilishi shart',
+        );
       }
 
       const customerResponse = await firstValueFrom(
@@ -377,7 +423,9 @@ export class OrderGatewayController {
           .pipe(timeout(8000)),
       ).catch((error: unknown) => {
         if (error instanceof TimeoutError) {
-          throw new GatewayTimeoutException('Identity service response timeout');
+          throw new GatewayTimeoutException(
+            'Identity service response timeout',
+          );
         }
         throw error;
       });
@@ -404,7 +452,9 @@ export class OrderGatewayController {
                 roles.includes(RoleEnum.MARKET_OPERATOR)
                   ? req.user.sub
                   : null,
-              branch_id: isBranchStaff ? assignedBranchId : (orderDto.branch_id ?? null),
+              branch_id: isBranchStaff
+                ? assignedBranchId
+                : (orderDto.branch_id ?? null),
               source: isBranchStaff ? 'branch' : orderDto.source,
             },
             requester: { id: req.user.sub, roles },
@@ -455,7 +505,10 @@ export class OrderGatewayController {
   @ApiOperation({ summary: 'Receive new orders' })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiBody({ type: OrdersArrayDto })
-  receiveNewOrders(@Body() dto: OrdersArrayDto, @Query('search') search?: string) {
+  receiveNewOrders(
+    @Body() dto: OrdersArrayDto,
+    @Query('search') search?: string,
+  ) {
     return firstValueFrom(
       this.orderClient
         .send(
@@ -495,16 +548,42 @@ export class OrderGatewayController {
 
   @Get('external')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR, RoleEnum.MARKET)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MARKET,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List external orders with filters' })
   @ApiQuery({ name: 'market_id', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, enum: Order_status, isArray: true })
-  @ApiQuery({ name: 'date', required: false, type: String, description: 'Single day filter (YYYY-MM-DD)' })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: Order_status,
+    isArray: true,
+  })
+  @ApiQuery({
+    name: 'date',
+    required: false,
+    type: String,
+    description: 'Single day filter (YYYY-MM-DD)',
+  })
   @ApiQuery({ name: 'start_day', required: false, type: String })
   @ApiQuery({ name: 'end_day', required: false, type: String })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1, schema: { default: 1, minimum: 1 } as any })
-  @ApiQuery({ name: 'limit', required: false, enum: [10, 25, 50, 100], schema: { default: 10 } as any })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    example: 1,
+    schema: { default: 1, minimum: 1 } as any,
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    enum: [10, 25, 50, 100],
+    schema: { default: 10 } as any,
+  })
   findAllExternal(
     @Query('market_id') market_id?: string,
     @Query('status') status?: string | string[],
@@ -519,7 +598,12 @@ export class OrderGatewayController {
     const isMarket = roles.includes(RoleEnum.MARKET);
     const requesterId = req?.user?.sub;
 
-    if (isMarket && market_id && requesterId && String(market_id) !== String(requesterId)) {
+    if (
+      isMarket &&
+      market_id &&
+      requesterId &&
+      String(market_id) !== String(requesterId)
+    ) {
       throw new BadRequestException('market role cannot query other market_id');
     }
 
@@ -547,21 +631,31 @@ export class OrderGatewayController {
           },
         )
         .pipe(timeout(8000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
-      }
-      throw error;
-    }).then((response) => this.withPaginationMeta(response, pagination));
+    )
+      .catch((error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Order service response timeout');
+        }
+        throw error;
+      })
+      .then((response) => this.withPaginationMeta(response, pagination));
   }
 
   @Post('external')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN, RoleEnum.REGISTRATOR, RoleEnum.MARKET)
+  @Roles(
+    RoleEnum.ADMIN,
+    RoleEnum.SUPERADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MARKET,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create external order' })
   @ApiBody({ type: CreateExternalOrderRequestDto })
-  async createExternal(@Body() dto: CreateExternalOrderRequestDto, @Req() req: { user: JwtUser }) {
+  async createExternal(
+    @Body() dto: CreateExternalOrderRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
     const { customer, external_id, ...orderDto } = dto;
     let customerId = dto.customer_id;
     const roles = this.normalizeRoles(req.user.roles);
@@ -580,7 +674,9 @@ export class OrderGatewayController {
 
     if (!customerId) {
       if (!customer) {
-        throw new BadRequestException('customer_id yoki customer obyekt yuborilishi shart');
+        throw new BadRequestException(
+          'customer_id yoki customer obyekt yuborilishi shart',
+        );
       }
 
       const customerPayload = {
@@ -594,7 +690,9 @@ export class OrderGatewayController {
           .pipe(timeout(8000)),
       ).catch((error: unknown) => {
         if (error instanceof TimeoutError) {
-          throw new GatewayTimeoutException('Identity service response timeout');
+          throw new GatewayTimeoutException(
+            'Identity service response timeout',
+          );
         }
         throw error;
       });
@@ -634,17 +732,57 @@ export class OrderGatewayController {
   @ApiOperation({ summary: 'List orders with filters' })
   @ApiQuery({ name: 'market_id', required: false, type: String })
   @ApiQuery({ name: 'customer_id', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, enum: Order_status, isArray: true })
-  @ApiQuery({ name: 'search', required: false, type: String, description: 'Customer name/family/phone search' })
-  @ApiQuery({ name: 'start_day', required: false, type: String, description: 'Start date (YYYY-MM-DD or ISO)' })
-  @ApiQuery({ name: 'end_day', required: false, type: String, description: 'End date (YYYY-MM-DD or ISO)' })
-  @ApiQuery({ name: 'courier', required: false, type: String, description: 'Courier (operator text or post_id)' })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: Order_status,
+    isArray: true,
+  })
+  @ApiQuery({
+    name: 'search',
+    required: false,
+    type: String,
+    description: 'Customer name/family/phone search',
+  })
+  @ApiQuery({
+    name: 'start_day',
+    required: false,
+    type: String,
+    description: 'Start date (YYYY-MM-DD or ISO)',
+  })
+  @ApiQuery({
+    name: 'end_day',
+    required: false,
+    type: String,
+    description: 'End date (YYYY-MM-DD or ISO)',
+  })
+  @ApiQuery({
+    name: 'courier',
+    required: false,
+    type: String,
+    description: 'Courier (operator text or post_id)',
+  })
   @ApiQuery({ name: 'region_id', required: false, type: String })
   @ApiQuery({ name: 'district_id', required: false, type: String })
   @ApiQuery({ name: 'branch_id', required: false, type: String })
-  @ApiQuery({ name: 'source', required: false, enum: ['internal', 'external', 'branch'] })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1, schema: { default: 1, minimum: 1 } as any })
-  @ApiQuery({ name: 'limit', required: false, enum: [10, 25, 50, 100], schema: { default: 10 } as any })
+  @ApiQuery({
+    name: 'source',
+    required: false,
+    enum: ['internal', 'external', 'branch'],
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    example: 1,
+    schema: { default: 1, minimum: 1 } as any,
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    enum: [10, 25, 50, 100],
+    schema: { default: 10 } as any,
+  })
   async findAll(
     @Query('market_id') market_id?: string,
     @Query('customer_id') customer_id?: string,
@@ -670,7 +808,12 @@ export class OrderGatewayController {
       normalizedRoles.includes(RoleEnum.REGISTRATOR);
     const requesterId = req?.user?.sub;
 
-    if (isMarket && market_id && requesterId && String(market_id) !== String(requesterId)) {
+    if (
+      isMarket &&
+      market_id &&
+      requesterId &&
+      String(market_id) !== String(requesterId)
+    ) {
       throw new BadRequestException('market role cannot query other market_id');
     }
 
@@ -683,7 +826,6 @@ export class OrderGatewayController {
         throw new BadRequestException('Branch user branchga biriktirilmagan');
       }
       resolvedBranchId = String(assignment.branch_id);
-
     }
 
     const pagination = this.parsePaginationQuery(page, limit);
@@ -721,9 +863,24 @@ export class OrderGatewayController {
   @ApiOperation({ summary: 'List orders by market ID with pagination' })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
   @ApiQuery({ name: 'branch_id', required: false, type: String })
-  @ApiQuery({ name: 'source', required: false, enum: ['internal', 'external', 'branch'] })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1, schema: { default: 1, minimum: 1 } as any })
-  @ApiQuery({ name: 'limit', required: false, enum: [10, 25, 50, 100], schema: { default: 10 } as any })
+  @ApiQuery({
+    name: 'source',
+    required: false,
+    enum: ['internal', 'external', 'branch'],
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    example: 1,
+    schema: { default: 1, minimum: 1 } as any,
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    enum: [10, 25, 50, 100],
+    schema: { default: 10 } as any,
+  })
   findAllByMarket(
     @Param('marketId') marketId: string,
     @Query('branch_id') branch_id?: string,
@@ -753,12 +910,38 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Legacy courier orders list endpoint' })
-  @ApiQuery({ name: 'status', required: false, enum: Order_status, isArray: true })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: Order_status,
+    isArray: true,
+  })
   @ApiQuery({ name: 'search', required: false, type: String })
-  @ApiQuery({ name: 'startDate', required: false, type: String, description: 'Legacy start date (YYYY-MM-DD or ISO)' })
-  @ApiQuery({ name: 'endDate', required: false, type: String, description: 'Legacy end date (YYYY-MM-DD or ISO)' })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1, schema: { default: 1, minimum: 1 } as any })
-  @ApiQuery({ name: 'limit', required: false, enum: [10, 25, 50, 100], schema: { default: 10 } as any })
+  @ApiQuery({
+    name: 'startDate',
+    required: false,
+    type: String,
+    description: 'Legacy start date (YYYY-MM-DD or ISO)',
+  })
+  @ApiQuery({
+    name: 'endDate',
+    required: false,
+    type: String,
+    description: 'Legacy end date (YYYY-MM-DD or ISO)',
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    example: 1,
+    schema: { default: 1, minimum: 1 } as any,
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    enum: [10, 25, 50, 100],
+    schema: { default: 10 } as any,
+  })
   async findCourierOrdersLegacy(
     @Query('status') status?: string | string[],
     @Query('search') search?: string,
@@ -779,9 +962,13 @@ export class OrderGatewayController {
       },
     );
 
-    const courierPosts = this.extractRows(courierPostsResponse?.data ?? courierPostsResponse);
+    const courierPosts = this.extractRows(
+      courierPostsResponse?.data ?? courierPostsResponse,
+    );
     const courierPostIds = Array.from(
-      new Set(courierPosts.map((post) => String(post?.id ?? '')).filter(Boolean)),
+      new Set(
+        courierPosts.map((post) => String(post?.id ?? '')).filter(Boolean),
+      ),
     );
 
     if (!courierPostIds.length) {
@@ -831,8 +1018,9 @@ export class OrderGatewayController {
     const filteredRows = resultRows.filter((row) =>
       courierPostIds.includes(String(row?.post_id ?? row?.postId ?? '')),
     );
-    const legacyData = (this.toLegacyShape(filteredRows) as Array<Record<string, unknown>>)
-      .map((row) => this.normalizeLegacyOrderRow(row));
+    const legacyData = this.toLegacyShape(filteredRows).map((row) =>
+      this.normalizeLegacyOrderRow(row),
+    );
     const total = Number(result?.total ?? legacyData.length);
     const currentPage = Number(result?.page ?? pagination.page);
     const currentLimit = Number(result?.limit ?? pagination.limit);
@@ -856,9 +1044,7 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Markets with NEW orders' })
-  async findNewMarkets(
-    @Req() req?: { user: JwtUser },
-  ) {
+  async findNewMarkets(@Req() req?: { user: JwtUser }) {
     const roles = req?.user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
     const isBranchScopedRequester =
@@ -900,8 +1086,19 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'NEW orders by market id' })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
-  @ApiQuery({ name: 'page', required: false, type: Number, example: 1, schema: { default: 1, minimum: 1 } as any })
-  @ApiQuery({ name: 'limit', required: false, enum: [10, 25, 50, 100], schema: { default: 10 } as any })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    example: 1,
+    schema: { default: 1, minimum: 1 } as any,
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    enum: [10, 25, 50, 100],
+    schema: { default: 10 } as any,
+  })
   async findNewOrdersByMarket(
     @Param('marketId') marketId: string,
     @Query('page') page?: string,
@@ -983,7 +1180,7 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: "Scan QR and assign order to current courier" })
+  @ApiOperation({ summary: 'Scan QR and assign order to current courier' })
   @ApiBody({ type: ScanAssignOrderRequestDto })
   scanAssignOrder(
     @Body() dto: ScanAssignOrderRequestDto,
@@ -1113,6 +1310,137 @@ export class OrderGatewayController {
     });
   }
 
+  @Post('settlement/courier-to-branch')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Settle a courier lump-sum payment to the branch (FIFO per order)',
+  })
+  settlementCourierToBranch(
+    @Body() dto: { courier_id: string; amount: number },
+    @Req() req: { user: JwtUser },
+  ) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.settlement.courier_to_branch' },
+          {
+            dto,
+            requester: {
+              id: req.user.sub,
+              roles: this.normalizeRoles(req.user.roles),
+              branch_id: req.user.branch_id ?? null,
+            },
+            request_id: randomUUID(),
+          },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  @Post('settlement/branch-to-hq')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.MANAGER, RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Settle a branch lump-sum remittance to HQ (FIFO per order)',
+  })
+  settlementBranchToHq(
+    @Body() dto: { branch_id: string; amount: number },
+    @Req() req: { user: JwtUser },
+  ) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.settlement.branch_to_hq' },
+          {
+            dto,
+            requester: {
+              id: req.user.sub,
+              roles: this.normalizeRoles(req.user.roles),
+              branch_id: req.user.branch_id ?? null,
+            },
+            request_id: randomUUID(),
+          },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  @Post('settlement/hq-to-market')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Settle an HQ lump-sum payment to a market (FIFO per order)',
+  })
+  settlementHqToMarket(
+    @Body() dto: { market_id: string; amount: number },
+    @Req() req: { user: JwtUser },
+  ) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.settlement.hq_to_market' },
+          {
+            dto,
+            requester: {
+              id: req.user.sub,
+              roles: this.normalizeRoles(req.user.roles),
+              branch_id: req.user.branch_id ?? null,
+            },
+            request_id: randomUUID(),
+          },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  @Get(':id/settlement')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get the per-order settlement state' })
+  @ApiParam({ name: 'id', description: 'Order ID (id)' })
+  getOrderSettlement(@Param('id') id: string) {
+    return firstValueFrom(
+      this.orderClient
+        .send({ cmd: 'order.settlement.find_by_order' }, { id })
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
   @Post(':id/could-not-deliver')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER, RoleEnum.MANAGER)
@@ -1189,7 +1517,10 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.COURIER, RoleEnum.MANAGER, RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Rollback sold/cancelled order to waiting/cancelled/cancelled_sent' })
+  @ApiOperation({
+    summary:
+      'Rollback sold/cancelled order to waiting/cancelled/cancelled_sent',
+  })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
   @ApiBody({ type: RollbackOrderRequestDto, required: false })
   rollbackOrder(
@@ -1237,7 +1568,14 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.initiate_return' },
-          { id, dto, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
+          {
+            id,
+            dto,
+            requester: {
+              id: req.user.sub,
+              roles: this.normalizeRoles(req.user.roles),
+            },
+          },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -1254,15 +1592,18 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Mark order as returned to market (branch)' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
-  markReturnedToMarket(
-    @Param('id') id: string,
-    @Req() req: { user: JwtUser },
-  ) {
+  markReturnedToMarket(@Param('id') id: string, @Req() req: { user: JwtUser }) {
     return firstValueFrom(
       this.orderClient
         .send(
           { cmd: 'order.mark_returned_to_market' },
-          { id, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
+          {
+            id,
+            requester: {
+              id: req.user.sub,
+              roles: this.normalizeRoles(req.user.roles),
+            },
+          },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -1273,8 +1614,11 @@ export class OrderGatewayController {
     });
   }
 
+  // Full order edit (money/status fields) — SUPERADMIN/ADMIN/REGISTRATOR only
+  // (audit 2026-06-07: was JwtAuthGuard-only, letting any role rewrite any order).
   @Patch(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update order (full fields, including items)' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
@@ -1288,7 +1632,14 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.update_normalized' },
-          { id, dto, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
+          {
+            id,
+            dto,
+            requester: {
+              id: req.user.sub,
+              roles: this.normalizeRoles(req.user.roles),
+            },
+          },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -1300,7 +1651,8 @@ export class OrderGatewayController {
   }
 
   @Patch(':id/full')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update order by id (full fields)' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
@@ -1314,7 +1666,14 @@ export class OrderGatewayController {
       this.orderClient
         .send(
           { cmd: 'order.update_normalized' },
-          { id, dto, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
+          {
+            id,
+            dto,
+            requester: {
+              id: req.user.sub,
+              roles: this.normalizeRoles(req.user.roles),
+            },
+          },
         )
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
@@ -1339,7 +1698,13 @@ export class OrderGatewayController {
   remove(@Param('id') id: string, @Req() req: { user: JwtUser }) {
     return this.orderClient.send(
       { cmd: 'order.delete' },
-      { id, requester: { id: req.user.sub, roles: this.normalizeRoles(req.user.roles) } },
+      {
+        id,
+        requester: {
+          id: req.user.sub,
+          roles: this.normalizeRoles(req.user.roles),
+        },
+      },
     );
   }
 }

@@ -7,7 +7,7 @@ import {
   ManyToOne,
   OneToMany,
 } from 'typeorm';
-import { BaseEntity } from '@app/common';
+import { BaseEntity, numericTransformer } from '@app/common';
 import { Order_status, Where_deliver } from '@app/common';
 import { OrderItem } from './order-item.entity';
 import { OrderTracking } from './order-tracking.entity';
@@ -43,14 +43,64 @@ export class Order extends BaseEntity {
   @Column({ type: 'enum', enum: Where_deliver, default: Where_deliver.CENTER })
   where_deliver!: Where_deliver;
 
-  @Column({ type: 'float', default: 0 })
+  // Money is stored as numeric(14,2) (exact fixed-point) to match
+  // order_settlement and keep SUM()/financial aggregations drift-free. The
+  // numericTransformer keeps the JS field a `number`, so existing arithmetic
+  // and the API contract (still a number) are unchanged.
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    default: 0,
+    transformer: numericTransformer,
+  })
   total_price!: number;
 
-  @Column({ type: 'float', nullable: true })
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   market_tariff!: number | null;
 
-  @Column({ type: 'float', nullable: true })
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
   courier_tariff!: number | null;
+
+  /**
+   * Amount the courier KEEPS for this order, snapshotted at sale time per the
+   * courier's compensation mode (= tariff for per-order modes, 0 for
+   * salary-only). Distinct from courier_tariff (the configured tariff value).
+   * Used for exact settlement and rollback math.
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  courier_share!: number | null;
+
+  /**
+   * Amount the (PARTNER) branch KEEPS for this order, snapshotted at sale time
+   * (= Branch.per_order_share for PARTNER branches, 0 for OWNED / HQ).
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  branch_share!: number | null;
 
   @Column({ type: 'int', default: 0 })
   to_be_paid!: number;
@@ -79,6 +129,13 @@ export class Order extends BaseEntity {
   @Column({ type: 'boolean', default: false })
   return_requested!: boolean;
 
+  // MinIO object keys of proof files (image/video) attached to the most recent
+  // proof-required sell/cancel operation on this order. Covers proof conditions
+  // that produce no expense (e.g. cancelling a zero-total order). Expense-bearing
+  // proofs are additionally stored on the matching cashbox_history row.
+  @Column({ type: 'jsonb', nullable: true })
+  proof_files!: string[] | null;
+
   @Column({ type: 'bigint', nullable: true })
   sold_at!: string | null;
 
@@ -90,6 +147,15 @@ export class Order extends BaseEntity {
 
   @Column({ type: 'bigint', nullable: true })
   branch_id!: string | null;
+
+  /**
+   * The order's home (owning/creating) branch — the branch the market submitted
+   * it to. Set once at creation and never overwritten, unlike `branch_id` which
+   * tracks the current physical location. Drives the return-to-market rules
+   * (market may collect at HQ or at the home branch).
+   */
+  @Column({ type: 'bigint', nullable: true })
+  home_branch_id!: string | null;
 
   @ManyToOne(() => Branch, {
     nullable: true,

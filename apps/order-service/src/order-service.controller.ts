@@ -233,7 +233,12 @@ export class OrderServiceController {
     @Payload()
     data: {
       id: string;
-      dto: { comment?: string; extraCost?: number; paidAmount?: number };
+      dto: {
+        comment?: string;
+        extraCost?: number;
+        paidAmount?: number;
+        proofFileKeys?: string[];
+      };
       requester: { id: string; roles?: string[] };
       request_id?: string;
     },
@@ -249,7 +254,7 @@ export class OrderServiceController {
     @Payload()
     data: {
       id: string;
-      dto: { comment?: string; extraCost?: number };
+      dto: { comment?: string; extraCost?: number; proofFileKeys?: string[] };
       requester: { id: string; roles?: string[] };
       request_id?: string;
     },
@@ -294,6 +299,7 @@ export class OrderServiceController {
         totalPrice: number;
         extraCost?: number;
         comment?: string;
+        proofFileKeys?: string[];
       };
       requester: { id: string; roles?: string[] };
       request_id?: string;
@@ -325,6 +331,70 @@ export class OrderServiceController {
       'order.rollback_waiting',
       data.request_id,
       () => this.orderService.rollbackOrderToWaiting(data.requester, data.id, data.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.settlement.courier_to_branch' })
+  settlementCourierToBranch(
+    @Payload()
+    data: {
+      dto: { courier_id: string; amount: number };
+      requester: { id: string; roles?: string[] };
+      request_id?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.runIdempotent(
+      context,
+      'order.settlement.courier_to_branch',
+      data.request_id,
+      () => this.orderService.settleCourierToBranch(data.requester, data.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.settlement.branch_to_hq' })
+  settlementBranchToHq(
+    @Payload()
+    data: {
+      dto: { branch_id: string; amount: number };
+      requester: { id: string; roles?: string[] };
+      request_id?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.runIdempotent(
+      context,
+      'order.settlement.branch_to_hq',
+      data.request_id,
+      () => this.orderService.settleBranchToHq(data.requester, data.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.settlement.hq_to_market' })
+  settlementHqToMarket(
+    @Payload()
+    data: {
+      dto: { market_id: string; amount: number };
+      requester: { id: string; roles?: string[] };
+      request_id?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.runIdempotent(
+      context,
+      'order.settlement.hq_to_market',
+      data.request_id,
+      () => this.orderService.settleHqToMarket(data.requester, data.dto),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.settlement.find_by_order' })
+  settlementFindByOrder(
+    @Payload() data: { id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getSettlementByOrderId(data.id),
     );
   }
 

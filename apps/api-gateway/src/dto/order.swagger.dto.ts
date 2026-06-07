@@ -375,6 +375,17 @@ export class SellOrderRequestDto {
   @IsOptional()
   @IsNumber()
   paidAmount?: number;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      "Xarajat isboti uchun yuklangan fayl kalitlari (rasm/video). Market isbot talab qilsa va extraCost > 0 bo'lsa majburiy.",
+    example: ['proof-1700000000000-uuid-video.mp4'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  proofFileKeys?: string[];
 }
 
 export class CouldNotDeliverOrderRequestDto {
@@ -421,6 +432,17 @@ export class PartlySellOrderRequestDto {
   @IsOptional()
   @IsString()
   comment?: string;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      "Xarajat isboti uchun yuklangan fayl kalitlari (rasm/video). Market sotishda isbot talab qilsa va extraCost > 0 bo'lsa majburiy.",
+    example: ['proof-1700000000000-uuid-photo.jpg'],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  proofFileKeys?: string[];
 }
 
 export class CreateExternalOrderRequestDto extends CreateOrderRequestDto {

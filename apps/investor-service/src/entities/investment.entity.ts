@@ -1,5 +1,5 @@
 import { Column, Entity, Index, ManyToOne, JoinColumn } from 'typeorm';
-import { BaseEntity } from '@app/common';
+import { BaseEntity, numericTransformer } from '@app/common';
 import { Investor } from './investor.entity';
 
 @Entity({ name: 'investments' })
@@ -12,7 +12,12 @@ export class Investment extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   branch_id!: string | null;
 
-  @Column({ type: 'float' })
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    transformer: numericTransformer,
+  })
   amount!: number;
 
   @Column({ type: 'timestamptz' })

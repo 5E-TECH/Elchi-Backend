@@ -33,6 +33,17 @@ jest.mock('./entities/provider-webhook-log.entity', () => ({
 jest.mock('./entities/provider-shipment.entity', () => ({
   ProviderShipment: class ProviderShipment {},
 }));
+jest.mock('./entities/provider-receivable.entity', () => ({
+  ProviderReceivable: class ProviderReceivable {},
+  ReceivableStatus: {
+    PENDING: 'pending',
+    SETTLED: 'settled',
+    CANCELLED: 'cancelled',
+  },
+}));
+jest.mock('./entities/provider-remittance.entity', () => ({
+  ProviderRemittance: class ProviderRemittance {},
+}));
 
 const SECRET = 'provider-shared-secret';
 const BODY = JSON.stringify({ event: 'package.delivered', order_id: '1001' });
@@ -55,6 +66,16 @@ function makeService(integration: Record<string, unknown> | null) {
     create: jest.fn((dto: any) => ({ ...dto })),
     save: jest.fn(async (e: any) => ({ id: 'shp1', ...e })),
   };
+  const receivableRepo: any = {
+    findOne: jest.fn().mockResolvedValue(null),
+    create: jest.fn((dto: any) => ({ ...dto })),
+    save: jest.fn(async (e: any) => ({ id: 'rcv1', ...e })),
+  };
+  const remittanceRepo: any = {
+    findOne: jest.fn().mockResolvedValue(null),
+    create: jest.fn((dto: any) => ({ ...dto })),
+    save: jest.fn(async (e: any) => ({ id: 'rem1', ...e })),
+  };
   const activityLog: any = { log: jest.fn().mockResolvedValue(undefined) };
   const noClient: any = {};
 
@@ -64,6 +85,8 @@ function makeService(integration: Record<string, unknown> | null) {
     syncHistoryRepo,
     webhookLogRepo,
     shipmentRepo,
+    receivableRepo,
+    remittanceRepo,
     activityLog,
     noClient,
     noClient,
