@@ -4,7 +4,16 @@ import { RpcException } from '@nestjs/microservices';
 import { ClientProxy } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
-import { BranchTransferDirection, BranchType, BranchUserRole, Cashbox_type, Order_status, Post_status, Status } from '@app/common';
+import {
+  BranchTransferDirection,
+  BranchType,
+  BranchUserRole,
+  Cashbox_type,
+  Order_status,
+  Post_status,
+  Status,
+  Where_deliver,
+} from '@app/common';
 import { Branch } from './entities/branch.entity';
 import { BranchUser } from './entities/branch-user.entity';
 import { BranchConfig } from './entities/branch-config.entity';
@@ -1975,17 +1984,12 @@ export class BranchServiceService implements OnModuleInit {
           select: ['branch_id', 'user_id'],
         })
       : [];
-    const hqBranchIds = items
-      .filter((item) => item.type === BranchType.HQ)
-      .map((item) => String(item.id))
-      .filter(Boolean);
-
-    const courierAssignments = hqBranchIds.length
+    const courierAssignments = branchIds.length
       ? await this.branchUserRepo.find({
           where: {
             isDeleted: false,
             role: BranchUserRole.COURIER,
-            branch_id: In(hqBranchIds),
+            branch_id: In(branchIds),
           },
           select: ['branch_id', 'user_id'],
         })
@@ -2016,7 +2020,6 @@ export class BranchServiceService implements OnModuleInit {
     const managerIds = Array.from(new Set(Array.from(managerByBranchId.values())));
     const managerUsersMap = await this.getUsersByIds(managerIds);
     const paymentByManagerId = new Map<string, unknown>();
-    const managerCashboxBalanceByManagerId = new Map<string, number>();
     const courierBalanceByUserId = new Map<string, number>();
 
     await Promise.all(
@@ -2054,24 +2057,6 @@ export class BranchServiceService implements OnModuleInit {
       }),
     );
 
-    await Promise.all(
-      managerIds.map(async (managerId) => {
-        try {
-          const cashboxRes = await this.sendFinanceCommand<{ data?: { balance?: number | string } }>(
-            'finance.cashbox.find_by_user',
-            { user_id: managerId, cashbox_type: Cashbox_type.FOR_COURIER },
-          );
-          const rawBalance = Number(cashboxRes?.data?.balance ?? 0);
-          managerCashboxBalanceByManagerId.set(
-            managerId,
-            Number.isFinite(rawBalance) ? rawBalance : 0,
-          );
-        } catch {
-          managerCashboxBalanceByManagerId.set(managerId, 0);
-        }
-      }),
-    );
-
     const allCourierIds = Array.from(
       new Set(
         Array.from(courierIdsByBranchId.values()).flat().map((id) => String(id)).filter(Boolean),
@@ -2093,6 +2078,131 @@ export class BranchServiceService implements OnModuleInit {
       }),
     );
 
+    const payableToHqByBranchId = new Map<string, number>();
+    await Promise.all(
+      items.map(async (item) => {
+        const branchId = String(item.id ?? '').trim();
+        const managerId = managerByBranchId.get(branchId);
+        if (!branchId || !managerId || item.type === BranchType.HQ) {
+          payableToHqByBranchId.set(branchId, 0);
+          return;
+        }
+
+        const manager = managerUsersMap.get(managerId) as Record<string, unknown> | null;
+        const managerTariffHome = Math.max(Number(manager?.tariff_home ?? 0), 0);
+        const managerTariffCenter = Math.max(Number(manager?.tariff_center ?? 0), 0);
+        const courierIds = courierIdsByBranchId.get(branchId) ?? [];
+        const courierUsersMap = await this.getUsersByIds(courierIds);
+        const courierTariffMap = new Map(
+          courierIds.map((courierId) => {
+            const courier = courierUsersMap.get(courierId) as Record<string, unknown> | null;
+            return [
+              courierId,
+              {
+                home: Math.max(Number(courier?.tariff_home ?? 0), 0),
+                center: Math.max(Number(courier?.tariff_center ?? 0), 0),
+              },
+            ] as const;
+          }),
+        );
+
+        let response: any = null;
+        try {
+          response = await this.sendOrderCommand<any>('order.find_all', {
+            query: {
+              branch_id: branchId,
+              status: [
+                Order_status.SOLD,
+                Order_status.PAID,
+                Order_status.PARTLY_PAID,
+              ],
+              fetch_all: true,
+              page: 1,
+              limit: 5000,
+            },
+          });
+        } catch {
+          payableToHqByBranchId.set(branchId, 0);
+          return;
+        }
+
+        const candidates = [
+          response?.data?.data,
+          response?.data?.items,
+          response?.data,
+          response,
+        ];
+        const orders = candidates.find((candidate) => Array.isArray(candidate)) ?? [];
+        const courierOrders = new Map<string, any[]>();
+        let payableToHq = 0;
+
+        const calculateAmounts = (order: any) => {
+          const totalPrice = Math.max(Number(order?.total_price ?? 0), 0);
+          const isCenter =
+            String(order?.where_deliver ?? '').toLowerCase() ===
+            String(Where_deliver.CENTER).toLowerCase();
+          const managerTariff = isCenter ? managerTariffCenter : managerTariffHome;
+          const courierId = String(order?.courier_id ?? '').trim();
+          const courierTariffs = courierTariffMap.get(courierId);
+          const savedCourierTariff = Number(order?.courier_tariff ?? NaN);
+          const courierTariff = Number.isFinite(savedCourierTariff)
+            ? Math.max(savedCourierTariff, 0)
+            : isCenter
+              ? Number(courierTariffs?.center ?? 0)
+              : Number(courierTariffs?.home ?? 0);
+
+          return {
+            courierId,
+            courierReceivable: Math.max(totalPrice - courierTariff, 0),
+            hqPayable: Math.max(totalPrice - managerTariff, 0),
+          };
+        };
+
+        for (const order of orders) {
+          const amounts = calculateAmounts(order);
+          if (!amounts.courierId || !courierTariffMap.has(amounts.courierId)) {
+            payableToHq += amounts.hqPayable;
+            continue;
+          }
+          const rows = courierOrders.get(amounts.courierId) ?? [];
+          rows.push(order);
+          courierOrders.set(amounts.courierId, rows);
+        }
+
+        for (const [courierId, rows] of courierOrders) {
+          const sortedOrders = [...rows].sort(
+            (left, right) =>
+              new Date(left?.createdAt ?? 0).getTime() -
+              new Date(right?.createdAt ?? 0).getTime(),
+          );
+          const totalCourierReceivable = sortedOrders.reduce(
+            (sum, order) => sum + calculateAmounts(order).courierReceivable,
+            0,
+          );
+          let acceptedAmount = Math.max(
+            totalCourierReceivable -
+              Math.max(Number(courierBalanceByUserId.get(courierId) ?? 0), 0),
+            0,
+          );
+
+          for (const order of sortedOrders) {
+            if (acceptedAmount <= 0) break;
+            const amounts = calculateAmounts(order);
+            if (amounts.courierReceivable <= 0) {
+              payableToHq += amounts.hqPayable;
+              continue;
+            }
+            const allocated = Math.min(acceptedAmount, amounts.courierReceivable);
+            payableToHq +=
+              amounts.hqPayable * (allocated / amounts.courierReceivable);
+            acceptedAmount -= allocated;
+          }
+        }
+
+        payableToHqByBranchId.set(branchId, Math.max(Math.round(payableToHq), 0));
+      }),
+    );
+
     const enrichedItems = items.map((item) => ({
       ...item,
       region: item.region_id ? (regionMap.get(item.region_id) ?? null) : null,
@@ -2106,10 +2216,7 @@ export class BranchServiceService implements OnModuleInit {
             return balance > 0 ? sum + balance : sum;
           }, 0);
         }
-        const managerId = managerByBranchId.get(String(item.id));
-        if (!managerId) return 0;
-        const managerBalance = Number(managerCashboxBalanceByManagerId.get(managerId) ?? 0);
-        return managerBalance > 0 ? managerBalance : 0;
+        return Number(payableToHqByBranchId.get(String(item.id)) ?? 0);
       })(),
       payment: (() => {
         const managerId = managerByBranchId.get(String(item.id));

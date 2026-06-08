@@ -29,6 +29,7 @@ import {
   Cashbox_type,
   Order_status,
   Roles as RoleEnum,
+  Source_type,
   Where_deliver,
 } from '@app/common';
 import {
@@ -660,9 +661,27 @@ export class FinanceGatewayController {
         );
       }
     }
+    let isPrivilegedBranchView = false;
+    let requestQuery: FindCashboxByUserQueryDto = query;
+    if (this.isPrivileged(req?.user) && !query.cashbox_type) {
+      try {
+        await this.sendBranch(
+          { cmd: 'branch.find_by_id' },
+          { id: user_id, requester: this.toRequester(req.user) },
+        );
+        isPrivilegedBranchView = true;
+        requestQuery = {
+          ...query,
+          cashbox_type: Cashbox_type.BRANCH,
+        };
+      } catch {
+        isPrivilegedBranchView = false;
+      }
+    }
+
     const response = await this.send(
       { cmd: 'finance.cashbox.find_by_user' },
-      { user_id, ...query },
+      { user_id, ...requestQuery },
     );
 
     const withHistory = query.with_history ?? true;
@@ -712,6 +731,18 @@ export class FinanceGatewayController {
     }
 
     if (response?.data?.cashbox && Array.isArray(response?.data?.history)) {
+      if (isPrivilegedBranchView) {
+        response.data.history = response.data.history.filter(
+          (item: any) =>
+            String(item?.source_type ?? '') ===
+            String(Source_type.BRANCH_TO_MAIN),
+        );
+        response.data.pagination = {
+          ...(response.data.pagination ?? {}),
+          total: response.data.history.length,
+          totalPages: response.data.history.length ? 1 : 0,
+        };
+      }
       response.data.cashboxHistory = await this.attachCreatedByUsers(
         response.data.history,
       );
