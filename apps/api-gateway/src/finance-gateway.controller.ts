@@ -662,6 +662,9 @@ export class FinanceGatewayController {
       }
     }
     let isPrivilegedBranchView = false;
+    let privilegedBranchSettlement: Awaited<
+      ReturnType<FinanceGatewayController['buildManagerSettlement']>
+    > | null = null;
     let requestQuery: FindCashboxByUserQueryDto = query;
     if (this.isPrivileged(req?.user) && !query.cashbox_type) {
       try {
@@ -674,8 +677,33 @@ export class FinanceGatewayController {
           ...query,
           cashbox_type: Cashbox_type.BRANCH,
         };
+
+        const branchUsersResponse = await this.sendBranch<{ data?: any[] }>(
+          { cmd: 'branch.user.find_by_branch' },
+          {
+            branch_id: user_id,
+            requester: this.toRequester(req.user),
+          },
+        );
+        const managerAssignment = (
+          Array.isArray(branchUsersResponse?.data)
+            ? branchUsersResponse.data
+            : []
+        ).find(
+          (item: any) =>
+            String(item?.role ?? '').toUpperCase() === 'MANAGER' &&
+            item?.user_id,
+        );
+        if (managerAssignment?.user_id) {
+          privilegedBranchSettlement = await this.buildManagerSettlement({
+            sub: String(managerAssignment.user_id),
+            roles: [RoleEnum.MANAGER],
+            branch_id: user_id,
+          });
+        }
       } catch {
         isPrivilegedBranchView = false;
+        privilegedBranchSettlement = null;
       }
     }
 
@@ -686,6 +714,19 @@ export class FinanceGatewayController {
 
     const withHistory = query.with_history ?? true;
     if (!withHistory) {
+      if (isPrivilegedBranchView && response?.data) {
+        response.data = {
+          cashbox: response.data,
+          kassadagi_summa: Number(response.data?.balance ?? 0),
+          berilishi_kerak: Number(
+            privilegedBranchSettlement?.berilishi_kerak ?? 0,
+          ),
+          olinishi_kerak: Number(
+            privilegedBranchSettlement?.berilishi_kerak ?? 0,
+          ),
+          counterparty: 'HQ',
+        };
+      }
       return response;
     }
 
@@ -742,6 +783,16 @@ export class FinanceGatewayController {
           total: response.data.history.length,
           totalPages: response.data.history.length ? 1 : 0,
         };
+        response.data.kassadagi_summa = Number(
+          response.data.cashbox?.balance ?? 0,
+        );
+        response.data.berilishi_kerak = Number(
+          privilegedBranchSettlement?.berilishi_kerak ?? 0,
+        );
+        response.data.olinishi_kerak = Number(
+          privilegedBranchSettlement?.berilishi_kerak ?? 0,
+        );
+        response.data.counterparty = 'HQ';
       }
       response.data.cashboxHistory = await this.attachCreatedByUsers(
         response.data.history,
@@ -1045,7 +1096,44 @@ export class FinanceGatewayController {
         },
       };
     }
-    return this.send({ cmd: 'finance.cashbox.all_info' }, query);
+
+    const [financeResponse, branchesResponse] = await Promise.all([
+      this.send({ cmd: 'finance.cashbox.all_info' }, query),
+      this.sendBranch<{
+        data?: {
+          items?: Array<{
+            type?: string;
+            olinishi_kerak?: number | string;
+          }>;
+        };
+      }>(
+        { cmd: 'branch.find_all' },
+        {
+          requester: this.toRequester(req.user),
+          query: {
+            status: 'active',
+            page: 1,
+            limit: 1000,
+          },
+        },
+      ).catch(() => null),
+    ]);
+
+    const branches = branchesResponse?.data?.items ?? [];
+    const branchManagersReceivable = branches.reduce((sum, branch) => {
+      if (String(branch?.type ?? '').toUpperCase() === 'HQ') {
+        return sum;
+      }
+      const amount = Number(branch?.olinishi_kerak ?? 0);
+      return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
+    }, 0);
+
+    if (financeResponse?.data) {
+      financeResponse.data.olinishi_kerak = branchManagersReceivable;
+      financeResponse.data.courierCashboxTotal = branchManagersReceivable;
+    }
+
+    return financeResponse;
   }
 
   @Get('cashbox/manager/settlement')
