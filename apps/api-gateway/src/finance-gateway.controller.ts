@@ -463,7 +463,9 @@ export class FinanceGatewayController {
       { cmd: 'order.find_all' },
       {
         query: {
-          courier_ids: courierIds.length ? courierIds : undefined,
+          branch_id: managerBranchId || undefined,
+          courier_ids:
+            !managerBranchId && courierIds.length ? courierIds : undefined,
           status: [
             Order_status.SOLD,
             Order_status.PAID,
