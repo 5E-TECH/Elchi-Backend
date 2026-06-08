@@ -191,6 +191,17 @@ export class IdentityController {
     );
   }
 
+  @MessagePattern({ cmd: 'identity.me.update_settings' })
+  updateOwnSettings(
+    @Payload()
+    payload: { id: string; settings: Record<string, unknown> | null },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.updateOwnSettings(payload.id, payload.settings),
+    );
+  }
+
   @MessagePattern({ cmd: 'identity.customer.find_by_id' })
   getCustomerById(
     @Payload() payload: FindUserByIdPayload,
