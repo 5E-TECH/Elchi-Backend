@@ -438,86 +438,168 @@ export class FinanceGatewayController {
 
     const courierCashboxes = await Promise.all(
       couriers.map(async (courier) => {
+        const courierId = String(courier?.id ?? '').trim();
         const cashboxRes = await this.send(
           { cmd: 'finance.cashbox.find_by_user' },
           {
-            user_id: String(courier.id),
+            user_id: courierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             with_history: false,
           },
         ).catch(() => null);
         const cashbox = cashboxRes?.data?.cashbox ?? cashboxRes?.data ?? null;
-        return Number(cashbox?.balance ?? 0);
+        return {
+          courierId,
+          balance: Number(cashbox?.balance ?? 0),
+        };
       }),
     );
     const olinishiKerak = courierCashboxes.reduce(
-      (sum, value) => sum + Math.max(Number(value ?? 0), 0),
+      (sum, item) => sum + Math.max(Number(item.balance ?? 0), 0),
       0,
+    );
+    const courierBalanceMap = new Map(
+      courierCashboxes.map((item) => [item.courierId, item.balance]),
     );
 
     const courierIds = couriers
       .map((courier) => String(courier?.id ?? '').trim())
       .filter(Boolean);
 
-    const soldOrdersResponse = await this.sendOrder(
-      { cmd: 'order.find_all' },
-      {
-        query: {
-          branch_id: managerBranchId || undefined,
-          courier_ids:
-            !managerBranchId && courierIds.length ? courierIds : undefined,
-          status: [
-            Order_status.SOLD,
-            Order_status.PAID,
-            Order_status.PARTLY_PAID,
-          ],
-          page: 1,
-          limit: 5000,
-          start_day: query?.fromDate,
-          end_day: query?.toDate,
-        },
-      },
-    ).catch(() => null);
+    const soldOrderQuery = {
+      status: [
+        Order_status.SOLD,
+        Order_status.PAID,
+        Order_status.PARTLY_PAID,
+      ],
+      page: 1,
+      limit: 5000,
+      start_day: query?.fromDate,
+      end_day: query?.toDate,
+    };
+    const [branchSoldOrdersResponse, courierSoldOrdersResponse] =
+      await Promise.all([
+        managerBranchId
+          ? this.sendOrder(
+              { cmd: 'order.find_all' },
+              {
+                query: {
+                  ...soldOrderQuery,
+                  branch_id: managerBranchId,
+                },
+              },
+            ).catch(() => null)
+          : Promise.resolve(null),
+        courierIds.length
+          ? this.sendOrder(
+              { cmd: 'order.find_all' },
+              {
+                query: {
+                  ...soldOrderQuery,
+                  courier_ids: courierIds,
+                },
+              },
+            ).catch(() => null)
+          : Promise.resolve(null),
+      ]);
 
-    const soldOrders =
-      soldOrdersResponse?.data?.data ??
-      soldOrdersResponse?.data?.items ??
-      soldOrdersResponse?.data ??
-      [];
-
-    const berilishiKerak = (Array.isArray(soldOrders) ? soldOrders : []).reduce(
-      (sum: number, order: any) => {
-        const totalPrice = Number(order?.total_price ?? 0);
-        const whereDeliver = String(order?.where_deliver ?? '').toLowerCase();
-        const managerTariff =
-          whereDeliver === String(Where_deliver.CENTER).toLowerCase()
-            ? managerTariffCenter
-            : managerTariffHome;
-
-        const courierTariffFromOrder = Number(order?.courier_tariff ?? NaN);
-        const courierId = String(order?.courier_id ?? '').trim();
-        const courierTariffByUser =
-          courierId && courierTariffMap.has(courierId)
-            ? whereDeliver === String(Where_deliver.CENTER).toLowerCase()
-              ? Number(courierTariffMap.get(courierId)?.center ?? 0)
-              : Number(courierTariffMap.get(courierId)?.home ?? 0)
-            : 0;
-        const courierTariff = Number.isFinite(courierTariffFromOrder)
-          ? courierTariffFromOrder
-          : courierTariffByUser;
-        const courierShare = Math.max(courierTariff, 0);
-        const managerShare = Math.max(managerTariff - courierShare, 0);
-        const hqPayable = totalPrice - courierShare - managerShare;
-
-        return sum + Math.max(hqPayable, 0);
-      },
-      0,
+    const extractOrders = (response: any): any[] => {
+      const rows =
+        response?.data?.data ??
+        response?.data?.items ??
+        response?.data ??
+        [];
+      return Array.isArray(rows) ? rows : [];
+    };
+    const soldOrders = Array.from(
+      new Map(
+        [
+          ...extractOrders(branchSoldOrdersResponse),
+          ...extractOrders(courierSoldOrdersResponse),
+        ].map((order: any) => [String(order?.id ?? ''), order]),
+      ).values(),
     );
+
+    const calculateOrderAmounts = (order: any) => {
+      const totalPrice = Math.max(Number(order?.total_price ?? 0), 0);
+      const whereDeliver = String(order?.where_deliver ?? '').toLowerCase();
+      const managerTariff =
+        whereDeliver === String(Where_deliver.CENTER).toLowerCase()
+          ? managerTariffCenter
+          : managerTariffHome;
+      const courierId = String(order?.courier_id ?? '').trim();
+      const courierTariffFromOrder = Number(order?.courier_tariff ?? NaN);
+      const courierTariffByUser =
+        courierId && courierTariffMap.has(courierId)
+          ? whereDeliver === String(Where_deliver.CENTER).toLowerCase()
+            ? Number(courierTariffMap.get(courierId)?.center ?? 0)
+            : Number(courierTariffMap.get(courierId)?.home ?? 0)
+          : 0;
+      const courierShare = Math.max(
+        Number.isFinite(courierTariffFromOrder)
+          ? courierTariffFromOrder
+          : courierTariffByUser,
+        0,
+      );
+
+      return {
+        courierId,
+        courierReceivable: Math.max(totalPrice - courierShare, 0),
+        hqPayable: Math.max(totalPrice - managerTariff, 0),
+      };
+    };
+
+    let berilishiKerak = 0;
+    const courierOrders = new Map<string, any[]>();
+
+    for (const order of soldOrders) {
+      const amounts = calculateOrderAmounts(order);
+      if (!amounts.courierId || !courierTariffMap.has(amounts.courierId)) {
+        berilishiKerak += amounts.hqPayable;
+        continue;
+      }
+      const rows = courierOrders.get(amounts.courierId) ?? [];
+      rows.push(order);
+      courierOrders.set(amounts.courierId, rows);
+    }
+
+    for (const [courierId, orders] of courierOrders) {
+      const sortedOrders = [...orders].sort(
+        (left, right) =>
+          new Date(left?.createdAt ?? 0).getTime() -
+          new Date(right?.createdAt ?? 0).getTime(),
+      );
+      const totalCourierReceivable = sortedOrders.reduce(
+        (sum, order) => sum + calculateOrderAmounts(order).courierReceivable,
+        0,
+      );
+      let acceptedAmount = Math.max(
+        totalCourierReceivable -
+          Math.max(Number(courierBalanceMap.get(courierId) ?? 0), 0),
+        0,
+      );
+
+      for (const order of sortedOrders) {
+        if (acceptedAmount <= 0) break;
+        const amounts = calculateOrderAmounts(order);
+        if (amounts.courierReceivable <= 0) {
+          berilishiKerak += amounts.hqPayable;
+          continue;
+        }
+        const allocated = Math.min(
+          acceptedAmount,
+          amounts.courierReceivable,
+        );
+        berilishiKerak +=
+          amounts.hqPayable * (allocated / amounts.courierReceivable);
+        acceptedAmount -= allocated;
+      }
+    }
 
     return {
       kassa,
       olinishi_kerak: Math.max(olinishiKerak, 0),
-      berilishi_kerak: Math.max(berilishiKerak, 0),
+      berilishi_kerak: Math.max(Math.round(berilishiKerak), 0),
       counterparty: 'HQ',
       cashbox: ownCashbox,
       couriers,
