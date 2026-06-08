@@ -577,6 +577,8 @@ export class AnalyticsServiceService {
 
     let deliveryMsTotal = 0;
     let deliveryCount = 0;
+    let onTimeCount = 0; // 24 soat ichida yetkazilganlar (SLA)
+    const SLA_MS = 24 * 60 * 60 * 1000;
     for (const order of soldOrders) {
       const createdAt = this.parseDateValue(order?.createdAt);
       const soldAt = order?.sold_at ? new Date(Number(order.sold_at)) : null;
@@ -585,6 +587,7 @@ export class AnalyticsServiceService {
       if (diff > 0) {
         deliveryMsTotal += diff;
         deliveryCount += 1;
+        if (diff <= SLA_MS) onTimeCount += 1;
       }
     }
 
@@ -611,6 +614,10 @@ export class AnalyticsServiceService {
             (deliveryMsTotal / deliveryCount / (1000 * 60 * 60)).toFixed(2),
           )
         : 0;
+    const onTimeRate =
+      deliveryCount > 0
+        ? Number(((onTimeCount * 100) / deliveryCount).toFixed(2))
+        : 0;
     const cancellationRate =
       totalOrders > 0
         ? Number(((cancelled * 100) / totalOrders).toFixed(2))
@@ -631,6 +638,7 @@ export class AnalyticsServiceService {
       {
         averageOrderValue: avgOrderValue,
         averageFulfillmentHours: fulfillmentHours,
+        onTimeRate,
         cancellationRate,
         courierEfficiency,
         marketRating: topMarketsData,

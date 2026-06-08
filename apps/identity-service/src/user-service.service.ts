@@ -816,6 +816,27 @@ export class UserServiceService implements OnModuleInit {
     });
   }
 
+  /**
+   * Update the requester's OWN UI preferences (theme, language, dashboard
+   * widget visibility, ...). Stored opaquely; the frontend owns the shape and
+   * sends the full settings object on each save.
+   */
+  async updateOwnSettings(
+    id: string,
+    settings: Record<string, unknown> | null,
+  ) {
+    const user = await this.users.findOne({
+      where: { id, isDeleted: false },
+    });
+    if (!user) {
+      this.notFound('User topilmadi');
+    }
+    user.settings =
+      settings && typeof settings === 'object' ? settings : null;
+    await this.users.save(user);
+    return successRes({ settings: user.settings }, 200, 'Settings updated');
+  }
+
   async findCustomerById(id: string) {
     const user = await this.users.findOne({
       where: { id, role: Roles.CUSTOMER, isDeleted: false },

@@ -257,4 +257,20 @@ export class AuthGatewayController {
       { id: req.user.sub, dto, requester: this.toRequester(req) },
     );
   }
+
+  @Patch('my-settings')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Update current user UI settings/preferences' })
+  @ApiOkResponse({ description: 'Settings updated' })
+  @ApiUnauthorizedResponse({ description: 'Unauthorized' })
+  updateMySettings(
+    @Req() req: { user: JwtUser },
+    @Body() body: { settings: Record<string, unknown> | null },
+  ) {
+    return this.identityClient.send(
+      { cmd: 'identity.me.update_settings' },
+      { id: req.user.sub, settings: body?.settings ?? null },
+    );
+  }
 }

@@ -129,4 +129,10 @@ export class User extends BaseEntity {
     transformer: numericTransformer,
   })
   commission_value: number | null;
+
+  // Per-user UI/dashboard preferences (theme, language, sidebar, dashboard
+  // widget visibility, ...). Shape is owned by the frontend; backend stores it
+  // opaquely. NULL = user has never customized (frontend applies defaults).
+  @Column({ type: 'jsonb', nullable: true })
+  settings: Record<string, unknown> | null;
 }
