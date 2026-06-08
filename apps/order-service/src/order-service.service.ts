@@ -379,6 +379,106 @@ export class OrderServiceService implements OnModuleInit {
     return transitions[fromStatus]?.includes(toStatus) ?? false;
   }
 
+  private haveOrderItemsChanged(
+    existingItems: Array<{ product_id: string; quantity?: number }>,
+    requestedItems: Array<{ product_id: string; quantity?: number }>,
+  ): boolean {
+    const aggregate = (
+      items: Array<{ product_id: string; quantity?: number }>,
+    ): Map<string, number> => {
+      const result = new Map<string, number>();
+      for (const item of items) {
+        const productId = String(item.product_id);
+        const quantity = Number(item.quantity ?? 1);
+        result.set(productId, (result.get(productId) ?? 0) + quantity);
+      }
+      return result;
+    };
+
+    const existing = aggregate(existingItems);
+    const requested = aggregate(requestedItems);
+    if (existing.size !== requested.size) return true;
+
+    for (const [productId, quantity] of existing) {
+      if (requested.get(productId) !== quantity) return true;
+    }
+
+    return false;
+  }
+
+  private assertCommercialFieldsEditable(
+    order: Order,
+    dto: {
+      total_price?: number;
+      items?: Array<{ product_id: string; quantity?: number }>;
+    },
+  ): void {
+    if ([Order_status.CREATED, Order_status.NEW].includes(order.status)) {
+      return;
+    }
+
+    const totalPriceChanged =
+      typeof dto.total_price !== 'undefined' &&
+      Number(dto.total_price) !== Number(order.total_price);
+    const itemsChanged =
+      typeof dto.items !== 'undefined' &&
+      this.haveOrderItemsChanged(order.items ?? [], dto.items);
+
+    if (totalPriceChanged || itemsChanged) {
+      this.badRequest(
+        "HQ qabul qilgan buyurtmaning summasi va mahsulot sonini o'zgartirib bo'lmaydi",
+      );
+    }
+  }
+
+  private async wasSentFromHqToBranch(orderId: string): Promise<boolean> {
+    const hqBranchId = await this.getHqBranchId();
+    if (!hqBranchId) return false;
+
+    const batchItems = await this.transferBatchItemRepo.find({
+      where: { order_id: String(orderId), isDeleted: false },
+      relations: { batch: true },
+    });
+
+    return batchItems.some(
+      (item) =>
+        Boolean(item.sent_at) &&
+        !item.batch?.isDeleted &&
+        item.batch?.direction === BranchTransferDirection.FORWARD &&
+        String(item.batch?.source_branch_id ?? '') === hqBranchId &&
+        String(item.batch?.destination_branch_id ?? '') !== hqBranchId,
+    );
+  }
+
+  private async assertDeliveryDetailsEditable(
+    order: Order,
+    dto: {
+      customer_id?: string;
+      where_deliver?: Where_deliver;
+      district_id?: string | null;
+      region_id?: string | null;
+      address?: string | null;
+    },
+  ): Promise<void> {
+    const changed =
+      (typeof dto.customer_id !== 'undefined' &&
+        String(dto.customer_id) !== String(order.customer_id)) ||
+      (typeof dto.where_deliver !== 'undefined' &&
+        dto.where_deliver !== order.where_deliver) ||
+      (typeof dto.district_id !== 'undefined' &&
+        String(dto.district_id ?? '') !== String(order.district_id ?? '')) ||
+      (typeof dto.region_id !== 'undefined' &&
+        String(dto.region_id ?? '') !== String(order.region_id ?? '')) ||
+      (typeof dto.address !== 'undefined' &&
+        String(dto.address ?? '') !== String(order.address ?? ''));
+
+    if (changed && (await this.wasSentFromHqToBranch(order.id))) {
+      this.badRequest(
+        "Branchga jo'natilgan buyurtmaning manzili va mijozini o'zgartirib bo'lmaydi",
+      );
+    }
+  }
+
   private async createTrackingEvent(
     data: {
       order_id: string;
@@ -4691,6 +4791,10 @@ export class OrderServiceService implements OnModuleInit {
     externalManager?: EntityManager,
   ) {
     const order = await this.findById(id);
+    if (!externalManager) {
+      this.assertCommercialFieldsEditable(order, dto);
+      await this.assertDeliveryDetailsEditable(order, dto);
+    }
     const oldStatus = order.status;
     const previousHolderType = order.holder_type;
     const previousHolderBranchId = order.holder_branch_id;
