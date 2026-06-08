@@ -2106,33 +2106,50 @@ export class BranchServiceService implements OnModuleInit {
           }),
         );
 
-        let response: any = null;
-        try {
-          response = await this.sendOrderCommand<any>('order.find_all', {
+        const soldOrderQuery = {
+          status: [
+            Order_status.SOLD,
+            Order_status.PAID,
+            Order_status.PARTLY_PAID,
+          ],
+          fetch_all: true,
+          page: 1,
+          limit: 5000,
+        };
+        const [branchOrdersResponse, courierOrdersResponse] = await Promise.all([
+          this.sendOrderCommand<any>('order.find_all', {
             query: {
+              ...soldOrderQuery,
               branch_id: branchId,
-              status: [
-                Order_status.SOLD,
-                Order_status.PAID,
-                Order_status.PARTLY_PAID,
-              ],
-              fetch_all: true,
-              page: 1,
-              limit: 5000,
             },
-          });
-        } catch {
-          payableToHqByBranchId.set(branchId, 0);
-          return;
-        }
+          }).catch(() => null),
+          courierIds.length
+            ? this.sendOrderCommand<any>('order.find_all', {
+                query: {
+                  ...soldOrderQuery,
+                  courier_ids: courierIds,
+                },
+              }).catch(() => null)
+            : Promise.resolve(null),
+        ]);
 
-        const candidates = [
-          response?.data?.data,
-          response?.data?.items,
-          response?.data,
-          response,
-        ];
-        const orders = candidates.find((candidate) => Array.isArray(candidate)) ?? [];
+        const extractOrders = (response: any): any[] => {
+          const candidates = [
+            response?.data?.data,
+            response?.data?.items,
+            response?.data,
+            response,
+          ];
+          return candidates.find((candidate) => Array.isArray(candidate)) ?? [];
+        };
+        const orders = Array.from(
+          new Map(
+            [
+              ...extractOrders(branchOrdersResponse),
+              ...extractOrders(courierOrdersResponse),
+            ].map((order: any) => [String(order?.id ?? ''), order]),
+          ).values(),
+        );
         const courierOrders = new Map<string, any[]>();
         let payableToHq = 0;
 
