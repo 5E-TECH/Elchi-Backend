@@ -12,6 +12,9 @@ function createService() {
     createQueryBuilder: jest.fn(),
     delete: jest.fn(),
   };
+  const transferBatchItemRepo = {
+    find: jest.fn().mockResolvedValue([]),
+  };
   const trackingRepo = {
     create: jest.fn((payload) => payload),
     save: jest.fn(),
@@ -55,7 +58,7 @@ function createService() {
     {} as any, // orderCustodyEventRepo
     {} as any, // orderSettlementRepo
     {} as any, // transferBatchRepo
-    {} as any, // transferBatchItemRepo
+    transferBatchItemRepo as any, // transferBatchItemRepo
     {} as any, // transferBatchHistoryRepo
     nullClient as any, // searchClient
     nullClient as any, // identityClient
@@ -70,7 +73,13 @@ function createService() {
 
   jest.spyOn<any, any>(service as any, 'syncOrderToSearch').mockResolvedValue(undefined);
 
-  return { service, orderRepo, trackingRepo, queryRunner };
+  return {
+    service,
+    orderRepo,
+    trackingRepo,
+    transferBatchItemRepo,
+    queryRunner,
+  };
 }
 
 describe('Order tracking lifecycle', () => {
@@ -155,6 +164,106 @@ describe('Order tracking lifecycle', () => {
         changed_by: '55',
         changed_by_role: 'courier',
       }),
+    );
+  });
+
+  it('received order total_price cannot be edited', async () => {
+    const { service } = createService();
+    jest.spyOn(service, 'findById').mockResolvedValue({
+      id: 'received-price',
+      status: Order_status.RECEIVED,
+      total_price: 1_000_000,
+      items: [{ product_id: '1', quantity: 1 }],
+    } as any);
+
+    await expect(
+      service.updateFull('received-price', { total_price: 1_100_000 }),
+    ).rejects.toThrow(
+      "HQ qabul qilgan buyurtmaning summasi va mahsulot sonini o'zgartirib bo'lmaydi",
+    );
+  });
+
+  it('received order item quantity cannot be edited', async () => {
+    const { service } = createService();
+    jest.spyOn(service, 'findById').mockResolvedValue({
+      id: 'received-items',
+      status: Order_status.RECEIVED,
+      total_price: 1_000_000,
+      items: [{ product_id: '1', quantity: 1 }],
+    } as any);
+
+    await expect(
+      service.updateFull('received-items', {
+        items: [{ product_id: '1', quantity: 2 }],
+      }),
+    ).rejects.toThrow(
+      "HQ qabul qilgan buyurtmaning summasi va mahsulot sonini o'zgartirib bo'lmaydi",
+    );
+  });
+
+  it('order sent from HQ to branch cannot change address', async () => {
+    const { service, transferBatchItemRepo } = createService();
+    jest.spyOn(service as any, 'getHqBranchId').mockResolvedValue('1');
+    transferBatchItemRepo.find.mockResolvedValue([
+      {
+        sent_at: new Date(),
+        batch: {
+          isDeleted: false,
+          direction: 'FORWARD',
+          source_branch_id: '1',
+          destination_branch_id: '13',
+        },
+      },
+    ]);
+    jest.spyOn(service, 'findById').mockResolvedValue({
+      id: 'sent-address',
+      status: Order_status.RECEIVED,
+      customer_id: '44',
+      where_deliver: 'center',
+      district_id: '29',
+      region_id: '3',
+      address: 'Old address',
+      total_price: 1_000_000,
+      items: [{ product_id: '1', quantity: 1 }],
+    } as any);
+
+    await expect(
+      service.updateFull('sent-address', { address: 'New address' }),
+    ).rejects.toThrow(
+      "Branchga jo'natilgan buyurtmaning manzili va mijozini o'zgartirib bo'lmaydi",
+    );
+  });
+
+  it('order sent from HQ to branch cannot change customer', async () => {
+    const { service, transferBatchItemRepo } = createService();
+    jest.spyOn(service as any, 'getHqBranchId').mockResolvedValue('1');
+    transferBatchItemRepo.find.mockResolvedValue([
+      {
+        sent_at: new Date(),
+        batch: {
+          isDeleted: false,
+          direction: 'FORWARD',
+          source_branch_id: '1',
+          destination_branch_id: '13',
+        },
+      },
+    ]);
+    jest.spyOn(service, 'findById').mockResolvedValue({
+      id: 'sent-customer',
+      status: Order_status.RECEIVED,
+      customer_id: '44',
+      where_deliver: 'center',
+      district_id: '29',
+      region_id: '3',
+      address: 'Old address',
+      total_price: 1_000_000,
+      items: [{ product_id: '1', quantity: 1 }],
+    } as any);
+
+    await expect(
+      service.updateFull('sent-customer', { customer_id: '45' }),
+    ).rejects.toThrow(
+      "Branchga jo'natilgan buyurtmaning manzili va mijozini o'zgartirib bo'lmaydi",
     );
   });
 
