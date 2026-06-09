@@ -1420,7 +1420,20 @@ export class FinanceGatewayController {
         { ...query, user_id: req.user.sub },
       );
     }
-    return this.send({ cmd: 'finance.history.find_all' }, query);
+
+    const hasCashboxSelector = Boolean(
+      query.cashbox_id ||
+      query.user_id ||
+      query.cashbox_type ||
+      query.cashboxType,
+    );
+
+    return this.send(
+      { cmd: 'finance.history.find_all' },
+      hasCashboxSelector
+        ? query
+        : { ...query, cashbox_type: Cashbox_type.MAIN },
+    );
   }
 
   @Get('history/:id')
