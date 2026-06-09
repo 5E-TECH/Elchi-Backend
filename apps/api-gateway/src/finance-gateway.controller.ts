@@ -27,6 +27,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import {
   Cashbox_type,
+  Operation_type,
   Order_status,
   Roles as RoleEnum,
   Source_type,
@@ -597,10 +598,43 @@ export class FinanceGatewayController {
       }
     }
 
+    const branchToMainHistoryResponse = ownCashbox?.id
+      ? await this.send<{
+          data?: {
+            items?: Array<{
+              amount?: number | string;
+            }>;
+          };
+        }>(
+          { cmd: 'finance.history.find_all' },
+          {
+            cashbox_id: String(ownCashbox.id),
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.BRANCH_TO_MAIN,
+            from_date: query?.fromDate,
+            to_date: query?.toDate,
+            page: 0,
+            limit: 0,
+          },
+        ).catch(() => null)
+      : null;
+    const paidToHq = (branchToMainHistoryResponse?.data?.items ?? []).reduce(
+      (sum, history) => {
+        const amount = Number(history?.amount ?? 0);
+        return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
+      },
+      0,
+    );
+    const remainingPayableToHq = Math.max(
+      Math.round(berilishiKerak) - paidToHq,
+      0,
+    );
+
     return {
       kassa,
       olinishi_kerak: Math.max(olinishiKerak, 0),
-      berilishi_kerak: Math.max(Math.round(berilishiKerak), 0),
+      berilishi_kerak: remainingPayableToHq,
+      hq_ga_tollangan: paidToHq,
       counterparty: 'HQ',
       cashbox: ownCashbox,
       couriers,
