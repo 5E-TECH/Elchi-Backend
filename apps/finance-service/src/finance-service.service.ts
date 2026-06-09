@@ -76,8 +76,10 @@ export class FinanceServiceService implements OnModuleInit {
 
   async onModuleInit() {
     const main = await this.cashboxRepo.findOne({
-      where: { cashbox_type: Cashbox_type.MAIN },
-      order: { createdAt: 'ASC' },
+      where: {
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        cashbox_type: Cashbox_type.MAIN,
+      },
     });
 
     if (!main) {
@@ -153,8 +155,10 @@ export class FinanceServiceService implements OnModuleInit {
 
   private async ensureMainCashbox() {
     const main = await this.cashboxRepo.findOne({
-      where: { cashbox_type: Cashbox_type.MAIN },
-      order: { createdAt: 'ASC' },
+      where: {
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        cashbox_type: Cashbox_type.MAIN,
+      },
     });
     if (!main) {
       const created = this.cashboxRepo.create({
@@ -1738,7 +1742,10 @@ export class FinanceServiceService implements OnModuleInit {
       // Lock order: main → market (same order as paymentsFromCourier to avoid
       // cross-method deadlocks).
       const mainCashbox = await queryRunner.manager.findOne(Cashbox, {
-        where: { cashbox_type: Cashbox_type.MAIN },
+        where: {
+          user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+          cashbox_type: Cashbox_type.MAIN,
+        },
         lock: { mode: 'pessimistic_write' },
       });
       if (!mainCashbox) throw new NotFoundException('Main cashbox not found');

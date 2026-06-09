@@ -1163,6 +1163,12 @@ export class FinanceGatewayController {
     }, 0);
 
     if (financeResponse?.data) {
+      financeResponse.data.kassadagi_summa = Number(
+        financeResponse.data.mainCashboxTotal ?? 0,
+      );
+      financeResponse.data.berilishi_kerak = Number(
+        financeResponse.data.marketCashboxTotal ?? 0,
+      );
       financeResponse.data.olinishi_kerak = branchManagersReceivable;
       financeResponse.data.courierCashboxTotal = branchManagersReceivable;
     }
