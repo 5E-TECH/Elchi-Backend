@@ -9,6 +9,7 @@ jest.mock('@app/common', () => ({
     MAIN: 'main',
     FOR_COURIER: 'for_courier',
     FOR_MARKET: 'for_market',
+    BRANCH: 'branch',
   },
   Operation_type: { INCOME: 'income', EXPENSE: 'expense' },
   Source_type: {
@@ -16,6 +17,8 @@ jest.mock('@app/common', () => ({
     COURIER_PAYMENT: 'courier_payment',
     MARKET_PAYMENT: 'market_payment',
     EXTRA_COST: 'extra_cost',
+    MANUAL_INCOME: 'manual_income',
+    MANUAL_EXPENSE: 'manual_expense',
   },
   PaymentMethod: {
     CASH: 'cash',
@@ -100,7 +103,10 @@ function makeService(manager: MockManager) {
   };
 
   const cashboxRepo: any = { findOne: jest.fn(), save: jest.fn() };
-  const historyRepo: any = {};
+  const historyRepo: any = {
+    findAndCount: jest.fn(),
+    createQueryBuilder: jest.fn(),
+  };
   const shiftRepo: any = { findOne: jest.fn(), save: jest.fn() };
   const salaryRepo: any = {};
   const earningRepo: any = {
@@ -147,12 +153,56 @@ function makeService(manager: MockManager) {
     queryRunner,
     dataSource,
     cashboxRepo,
+    historyRepo,
     earningRepo,
     paymentRepo,
     financialHistoryRepo,
     activityLog,
   };
 }
+
+describe('FinanceServiceService.findCashboxByUser', () => {
+  it('filters typed cashbox history by the requested source type', async () => {
+    const manager = makeManager();
+    const { service, cashboxRepo, historyRepo } = makeService(manager);
+    const cashbox = {
+      id: '16',
+      user_id: '24',
+      cashbox_type: 'markets',
+      balance: 30290000,
+    };
+    const marketPayment = {
+      id: '50',
+      cashbox_id: '16',
+      source_type: 'market_payment',
+      amount: 1000000,
+    };
+
+    cashboxRepo.findOne.mockResolvedValue(cashbox);
+    historyRepo.findAndCount.mockResolvedValue([[marketPayment], 1]);
+
+    const response = await service.findCashboxByUser({
+      user_id: '24',
+      cashbox_type: 'markets' as any,
+      history_source_type: 'market_payment' as any,
+      with_history: true,
+      page: 1,
+      limit: 20,
+    });
+
+    expect(historyRepo.findAndCount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          cashbox_id: '16',
+          isDeleted: false,
+          source_type: 'market_payment',
+        },
+      }),
+    );
+    expect(response.data.history).toEqual([marketPayment]);
+    expect(response.data.pagination.total).toBe(1);
+  });
+});
 
 describe('FinanceServiceService.updateBalance', () => {
   beforeEach(() => {
@@ -546,6 +596,60 @@ describe('FinanceServiceService operator earnings & payments', () => {
   });
 });
 
+describe('FinanceServiceService manual branch cashbox operations', () => {
+  it('records manager manual income in the branch cashbox with manager as creator', async () => {
+    const manager = makeManager();
+    const { service } = makeService(manager);
+    const updateBalance = jest
+      .spyOn(service, 'updateBalance')
+      .mockResolvedValue({ data: { id: 'history-1' } } as any);
+
+    await service.fillTheCashbox({
+      user_id: '13',
+      created_by: '54',
+      amount: 150000,
+      cashbox_type: 'branch' as any,
+    });
+
+    expect(updateBalance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user_id: '13',
+        created_by: '54',
+        amount: 150000,
+        cashbox_type: 'branch',
+        source_type: 'manual_income',
+        operation_type: 'income',
+      }),
+    );
+  });
+
+  it('records manager manual expense in the branch cashbox with manager as creator', async () => {
+    const manager = makeManager();
+    const { service } = makeService(manager);
+    const updateBalance = jest
+      .spyOn(service, 'updateBalance')
+      .mockResolvedValue({ data: { id: 'history-2' } } as any);
+
+    await service.spendMoney({
+      user_id: '13',
+      created_by: '54',
+      amount: 50000,
+      cashbox_type: 'branch' as any,
+    });
+
+    expect(updateBalance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        user_id: '13',
+        created_by: '54',
+        amount: 50000,
+        cashbox_type: 'branch',
+        source_type: 'manual_expense',
+        operation_type: 'expense',
+      }),
+    );
+  });
+});
+
 describe('FinanceServiceService financial balance ledger', () => {
   beforeEach(() => {
     captureExceptionMock.mockReset();
@@ -653,7 +757,10 @@ describe('FinanceServiceService financial balance ledger', () => {
     const { service, financialHistoryRepo } = makeService(manager);
 
     financialHistoryRepo.findAndCount.mockResolvedValue([
-      [{ id: '2', amount: 25000 }, { id: '1', amount: 100000 }],
+      [
+        { id: '2', amount: 25000 },
+        { id: '1', amount: 100000 },
+      ],
       2,
     ]);
     financialHistoryRepo.findOne.mockResolvedValue({ balance_after: 125000 });

@@ -469,11 +469,7 @@ export class FinanceGatewayController {
       .filter(Boolean);
 
     const soldOrderQuery = {
-      status: [
-        Order_status.SOLD,
-        Order_status.PAID,
-        Order_status.PARTLY_PAID,
-      ],
+      status: [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID],
       page: 1,
       limit: 5000,
       start_day: query?.fromDate,
@@ -507,10 +503,7 @@ export class FinanceGatewayController {
 
     const extractOrders = (response: any): any[] => {
       const rows =
-        response?.data?.data ??
-        response?.data?.items ??
-        response?.data ??
-        [];
+        response?.data?.data ?? response?.data?.items ?? response?.data ?? [];
       return Array.isArray(rows) ? rows : [];
     };
     const soldOrders = Array.from(
@@ -588,10 +581,7 @@ export class FinanceGatewayController {
           berilishiKerak += amounts.hqPayable;
           continue;
         }
-        const allocated = Math.min(
-          acceptedAmount,
-          amounts.courierReceivable,
-        );
+        const allocated = Math.min(acceptedAmount, amounts.courierReceivable);
         berilishiKerak +=
           amounts.hqPayable * (allocated / amounts.courierReceivable);
         acceptedAmount -= allocated;
@@ -699,7 +689,32 @@ export class FinanceGatewayController {
     let privilegedBranchSettlement: Awaited<
       ReturnType<FinanceGatewayController['buildManagerSettlement']>
     > | null = null;
-    let requestQuery: FindCashboxByUserQueryDto = query;
+    let isPrivilegedMarketView = false;
+    let requestQuery: FindCashboxByUserQueryDto & {
+      history_source_type?: Source_type;
+    } = query;
+    let requestUserId = user_id;
+    if (this.isManager(req?.user) && !this.isPrivileged(req?.user)) {
+      const isOwnCashbox = String(user_id) === String(req?.user?.sub ?? '');
+      if (isOwnCashbox) {
+        const branchId =
+          this.extractBranchId(req.user) ||
+          (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
+        if (!branchId) {
+          throw new ForbiddenException("Managerning branch'i topilmadi");
+        }
+        requestUserId = branchId;
+        requestQuery = {
+          ...query,
+          cashbox_type: Cashbox_type.BRANCH,
+        };
+      } else if (!query.cashbox_type) {
+        requestQuery = {
+          ...query,
+          cashbox_type: Cashbox_type.FOR_COURIER,
+        };
+      }
+    }
     if (this.isPrivileged(req?.user) && !query.cashbox_type) {
       try {
         await this.sendBranch(
@@ -738,12 +753,35 @@ export class FinanceGatewayController {
       } catch {
         isPrivilegedBranchView = false;
         privilegedBranchSettlement = null;
+        try {
+          const userResponse = await this.sendIdentity<{
+            data?: Record<string, any>;
+          }>({ cmd: 'identity.user.find_by_id' }, { id: user_id });
+          const targetRoles = Array.isArray(userResponse?.data?.roles)
+            ? userResponse.data.roles
+            : userResponse?.data?.role
+              ? [userResponse.data.role]
+              : [];
+          isPrivilegedMarketView = targetRoles.some(
+            (role: unknown) =>
+              String(role ?? '').toLowerCase() === RoleEnum.MARKET,
+          );
+          if (isPrivilegedMarketView) {
+            requestQuery = {
+              ...query,
+              cashbox_type: Cashbox_type.FOR_MARKET,
+              history_source_type: Source_type.MARKET_PAYMENT,
+            };
+          }
+        } catch {
+          isPrivilegedMarketView = false;
+        }
       }
     }
 
     const response = await this.send(
       { cmd: 'finance.cashbox.find_by_user' },
-      { user_id, ...requestQuery },
+      { user_id: requestUserId, ...requestQuery },
     );
 
     const withHistory = query.with_history ?? true;
@@ -828,6 +866,13 @@ export class FinanceGatewayController {
         );
         response.data.counterparty = 'HQ';
       }
+      if (isPrivilegedMarketView) {
+        response.data.history = response.data.history.filter(
+          (item: any) =>
+            String(item?.source_type ?? '') ===
+            String(Source_type.MARKET_PAYMENT),
+        );
+      }
       response.data.cashboxHistory = await this.attachCreatedByUsers(
         response.data.history,
       );
@@ -910,9 +955,15 @@ export class FinanceGatewayController {
     @Req() req: { user: JwtUser },
   ) {
     if (this.isManager(req?.user)) {
+      const branchId =
+        this.extractBranchId(req.user) ||
+        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
+      if (!branchId) {
+        throw new ForbiddenException("Managerning branch'i topilmadi");
+      }
       return this.send(
         { cmd: 'finance.cashbox.user_by_id' },
-        { id: req.user.sub, cashbox_type: Cashbox_type.FOR_COURIER, ...query },
+        { id: branchId, cashbox_type: Cashbox_type.BRANCH, ...query },
       );
     }
 
@@ -987,6 +1038,25 @@ export class FinanceGatewayController {
         );
       }
     }
+    if (this.isManager(req?.user) && !this.isPrivileged(req?.user)) {
+      const isOwnCashbox = String(id) === String(req?.user?.sub ?? '');
+      if (isOwnCashbox) {
+        const branchId =
+          this.extractBranchId(req.user) ||
+          (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
+        if (!branchId) {
+          throw new ForbiddenException("Managerning branch'i topilmadi");
+        }
+        return this.send(
+          { cmd: 'finance.cashbox.user_by_id' },
+          { id: branchId, cashbox_type: Cashbox_type.BRANCH, ...query },
+        );
+      }
+      return this.send(
+        { cmd: 'finance.cashbox.user_by_id' },
+        { id, cashbox_type: Cashbox_type.FOR_COURIER, ...query },
+      );
+    }
     return this.send({ cmd: 'finance.cashbox.user_by_id' }, { id, ...query });
   }
 
@@ -1000,11 +1070,17 @@ export class FinanceGatewayController {
     @Query() query: MainCashboxFilterQueryDto,
   ) {
     const branchId = this.isManager(req?.user)
-      ? this.extractBranchId(req.user) || (await this.resolveBranchIdByUserId(String(req.user.sub), req.user))
+      ? this.extractBranchId(req.user) ||
+        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user))
       : null;
     const response = await this.send(
       { cmd: 'finance.cashbox.my' },
-      { user_id: req.user.sub, branch_id: branchId, roles: req.user.roles ?? [], ...query },
+      {
+        user_id: req.user.sub,
+        branch_id: branchId,
+        roles: req.user.roles ?? [],
+        ...query,
+      },
     );
 
     return this.attachCreatedByUsersToHistory(response);
@@ -1342,17 +1418,25 @@ export class FinanceGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Spend money from main cashbox' })
   @ApiBody({ type: MainCashboxManualRequestDto })
-  spendMoney(
+  async spendMoney(
     @Req() req: { user: JwtUser },
     @Body() dto: MainCashboxManualRequestDto,
   ) {
     const isManager = this.isManager(req?.user);
+    const branchId = isManager
+      ? this.extractBranchId(req.user) ||
+        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user))
+      : '';
+    if (isManager && !branchId) {
+      throw new ForbiddenException("Managerning branch'i topilmadi");
+    }
     return this.send(
       { cmd: 'finance.cashbox.spend' },
       {
         ...dto,
-        user_id: req.user.sub,
-        ...(isManager ? { cashbox_type: Cashbox_type.FOR_COURIER } : {}),
+        user_id: isManager ? branchId : req.user.sub,
+        created_by: req.user.sub,
+        ...(isManager ? { cashbox_type: Cashbox_type.BRANCH } : {}),
       },
     );
   }
@@ -1363,17 +1447,25 @@ export class FinanceGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Fill main cashbox' })
   @ApiBody({ type: MainCashboxManualRequestDto })
-  fillCashbox(
+  async fillCashbox(
     @Req() req: { user: JwtUser },
     @Body() dto: MainCashboxManualRequestDto,
   ) {
     const isManager = this.isManager(req?.user);
+    const branchId = isManager
+      ? this.extractBranchId(req.user) ||
+        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user))
+      : '';
+    if (isManager && !branchId) {
+      throw new ForbiddenException("Managerning branch'i topilmadi");
+    }
     return this.send(
       { cmd: 'finance.cashbox.fill' },
       {
         ...dto,
-        user_id: req.user.sub,
-        ...(isManager ? { cashbox_type: Cashbox_type.FOR_COURIER } : {}),
+        user_id: isManager ? branchId : req.user.sub,
+        created_by: req.user.sub,
+        ...(isManager ? { cashbox_type: Cashbox_type.BRANCH } : {}),
       },
     );
   }
@@ -1393,12 +1485,12 @@ export class FinanceGatewayController {
   @ApiQuery({
     name: 'cashbox_type',
     required: false,
-    enum: ['main', 'for_courier', 'for_market'],
+    enum: Cashbox_type,
   })
   @ApiQuery({
     name: 'cashboxType',
     required: false,
-    enum: ['main', 'for_courier', 'for_market'],
+    enum: Cashbox_type,
   })
   @ApiQuery({ name: 'operation_type', required: false })
   @ApiQuery({ name: 'source_type', required: false })
@@ -1407,7 +1499,7 @@ export class FinanceGatewayController {
   @ApiQuery({ name: 'to_date', required: false })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  findHistory(
+  async findHistory(
     @Query() query: FindHistoryQueryDto,
     @Req() req: { user: JwtUser },
   ) {
@@ -1415,9 +1507,19 @@ export class FinanceGatewayController {
       this.hasRole(req?.user, RoleEnum.MANAGER) &&
       !this.isPrivileged(req?.user)
     ) {
+      const branchId =
+        this.extractBranchId(req.user) ||
+        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
+      if (!branchId) {
+        throw new ForbiddenException("Managerning branch'i topilmadi");
+      }
       return this.send(
         { cmd: 'finance.history.find_all' },
-        { ...query, user_id: req.user.sub },
+        {
+          ...query,
+          user_id: branchId,
+          cashbox_type: Cashbox_type.BRANCH,
+        },
       );
     }
 

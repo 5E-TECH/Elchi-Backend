@@ -972,6 +972,24 @@ export class OrderServiceService implements OnModuleInit {
     return response?.data ?? [];
   }
 
+  private async getUserById(id: string) {
+    const response = await rmqSend<{
+      data?: {
+        id: string;
+        name?: string;
+        tariff_home?: number;
+        tariff_center?: number;
+        compensation_mode?: string | null;
+      };
+    }>(
+      this.identityClient,
+      { cmd: 'identity.user.find_by_id' },
+      { id: String(id) },
+    ).catch(() => ({ data: undefined }));
+
+    return response?.data;
+  }
+
   private async getAllOperatorUsers() {
     const limit = 200;
     let page = 1;
@@ -1052,9 +1070,7 @@ export class OrderServiceService implements OnModuleInit {
    * per_order_share when the branch is PARTNER-owned, otherwise 0 (OWNED
    * branches remit everything to HQ). Returns 0 for HQ / unknown branch.
    */
-  private async resolveBranchShare(
-    branchId: string | null,
-  ): Promise<number> {
+  private async resolveBranchShare(branchId: string | null): Promise<number> {
     if (!branchId) {
       return 0;
     }
@@ -1302,7 +1318,7 @@ export class OrderServiceService implements OnModuleInit {
 
     if (keys.length === 0) {
       this.badRequest(
-        "Bu amal uchun rasm yoki video isbot majburiy. Iltimos, isbot fayl(lar)ini biriktiring.",
+        'Bu amal uchun rasm yoki video isbot majburiy. Iltimos, isbot fayl(lar)ini biriktiring.',
       );
     }
 
@@ -1320,7 +1336,7 @@ export class OrderServiceService implements OnModuleInit {
     );
     if (checks.some((ok) => !ok)) {
       this.badRequest(
-        "Isbot fayl topilmadi yoki yuklanmagan. Iltimos, isbotni qaytadan yuklang.",
+        'Isbot fayl topilmadi yoki yuklanmagan. Iltimos, isbotni qaytadan yuklang.',
       );
     }
 
@@ -1442,7 +1458,8 @@ export class OrderServiceService implements OnModuleInit {
     const postCourierId = this.normalizeCourierId(post?.courier_id);
     const holderCourierId = this.normalizeCourierId(order?.holder_courier_id);
     const orderCourierId = this.normalizeCourierId(order?.courier_id);
-    const resolvedCourierId = postCourierId || holderCourierId || orderCourierId;
+    const resolvedCourierId =
+      postCourierId || holderCourierId || orderCourierId;
 
     if (isCourier) {
       const requesterId = String(requester.id ?? '').trim();
@@ -1570,7 +1587,11 @@ export class OrderServiceService implements OnModuleInit {
       amount: number,
     ) => Promise<void>;
     stamp: (now: Date) => Partial<OrderSettlement>;
-  }): Promise<{ settled_order_ids: string[]; allocated: number; leftover: number }> {
+  }): Promise<{
+    settled_order_ids: string[];
+    allocated: number;
+    leftover: number;
+  }> {
     const lumpSum = Math.max(Number(params.lumpSum) || 0, 0);
     if (!params.matchValue || lumpSum <= 0) {
       return { settled_order_ids: [], allocated: 0, leftover: lumpSum };
@@ -1806,12 +1827,13 @@ export class OrderServiceService implements OnModuleInit {
     id: string,
     dto?: { target_status?: 'waiting' | 'cancelled' | 'cancelled_sent' },
   ) {
-    const rollbackTarget = String(dto?.target_status ?? 'waiting').trim().toLowerCase() as
-      | 'waiting'
-      | 'cancelled'
-      | 'cancelled_sent';
+    const rollbackTarget = String(dto?.target_status ?? 'waiting')
+      .trim()
+      .toLowerCase() as 'waiting' | 'cancelled' | 'cancelled_sent';
     if (!['waiting', 'cancelled', 'cancelled_sent'].includes(rollbackTarget)) {
-      this.badRequest(`Invalid rollback target: ${String(dto?.target_status ?? '')}`);
+      this.badRequest(
+        `Invalid rollback target: ${String(dto?.target_status ?? '')}`,
+      );
     }
 
     const isManagerRequester =
@@ -1824,7 +1846,9 @@ export class OrderServiceService implements OnModuleInit {
     const isManager = this.hasRole(requester, Roles.MANAGER);
 
     if (rollbackTarget === 'cancelled_sent' && !isCourier) {
-      this.badRequest("cancelled_sent rollback faqat courier uchun ruxsat etilgan");
+      this.badRequest(
+        'cancelled_sent rollback faqat courier uchun ruxsat etilgan',
+      );
     }
 
     if (
@@ -1901,20 +1925,28 @@ export class OrderServiceService implements OnModuleInit {
       this.notFound('Courier not found');
     }
 
-    const [market, courier] = await Promise.all([
+    const [market, financialActor] = await Promise.all([
       this.getMarketsByIds([String(order.market_id)]).then((rows) => rows[0]),
-      this.getCouriersByIds([courierId]).then((rows) => rows[0]),
+      isManagerRequester
+        ? this.getUserById(String(requester.id))
+        : this.getCouriersByIds([courierId]).then((rows) => rows[0]),
     ]);
     if (!market) {
       this.notFound('Market not found');
     }
-    if (!courier && !isManagerRequester) {
-      this.notFound('Courier not found');
+    if (!financialActor) {
+      this.notFound(
+        isManagerRequester ? 'Manager not found' : 'Courier not found',
+      );
     }
 
     const [marketCashbox, courierCashbox] = await Promise.all([
       this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
-      this.getCashboxByUser(courierId, Cashbox_type.FOR_COURIER).catch(() => null),
+      isManagerRequester
+        ? Promise.resolve(null)
+        : this.getCashboxByUser(courierId, Cashbox_type.FOR_COURIER).catch(
+            () => null,
+          ),
     ]);
     if (!marketCashbox) {
       this.notFound('Market cashbox not found');
@@ -1937,10 +1969,28 @@ export class OrderServiceService implements OnModuleInit {
       order.courier_tariff != null
         ? Number(order.courier_tariff)
         : order.where_deliver === Where_deliver.CENTER
-          ? Number(courier?.tariff_center ?? 0)
-          : Number(courier?.tariff_home ?? 0);
+          ? Number(financialActor?.tariff_center ?? 0)
+          : Number(financialActor?.tariff_home ?? 0);
     const rollbackComment = `[ROLLBACK] ${order.comment || ''}`.trim();
     const totalPrice = Number(order.total_price ?? 0);
+    const actorExpenseUserId = isManagerRequester
+      ? String(requester.branch_id ?? '')
+      : courierId;
+    const actorExpenseCashboxType = isManagerRequester
+      ? Cashbox_type.BRANCH
+      : Cashbox_type.FOR_COURIER;
+    if (isManagerRequester && !actorExpenseUserId) {
+      this.badRequest('Manager branch not found');
+    }
+    if (isManagerRequester) {
+      await this.ensureBranchCashbox(actorExpenseUserId);
+    }
+    const actorExpenseCashbox = isManagerRequester
+      ? await this.getCashboxByUser(
+          actorExpenseUserId,
+          Cashbox_type.BRANCH,
+        ).catch(() => null)
+      : courierCashbox;
     const [marketExtraCost, courierExtraCost] = await Promise.all([
       this.findLatestHistoryBySource({
         user_id: String(order.market_id),
@@ -1948,7 +1998,7 @@ export class OrderServiceService implements OnModuleInit {
         source_id: String(order.id),
       }),
       this.findLatestHistoryBySource({
-        user_id: courierId,
+        user_id: actorExpenseUserId,
         source_type: Source_type.EXTRA_COST,
         source_id: String(order.id),
       }),
@@ -2024,10 +2074,10 @@ export class OrderServiceService implements OnModuleInit {
         });
       }
 
-      if (shouldRollbackCourierExtraCost && courierCashbox) {
+      if (shouldRollbackCourierExtraCost && actorExpenseCashbox) {
         await pay({
-          user_id: courierId,
-          cashbox_type: Cashbox_type.FOR_COURIER,
+          user_id: actorExpenseUserId,
+          cashbox_type: actorExpenseCashboxType,
           amount: Number(courierExtraCost?.amount ?? 0),
           operation_type: Operation_type.INCOME,
           source_type: Source_type.CORRECTION,
@@ -2177,12 +2227,12 @@ export class OrderServiceService implements OnModuleInit {
 
     if (
       shouldRollbackCourierExtraCost &&
-      courierCashbox &&
+      actorExpenseCashbox &&
       [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
     ) {
       await pay({
-        user_id: courierId,
-        cashbox_type: Cashbox_type.FOR_COURIER,
+        user_id: actorExpenseUserId,
+        cashbox_type: actorExpenseCashboxType,
         amount: Number(courierExtraCost.amount),
         operation_type: Operation_type.INCOME,
         source_type: Source_type.CORRECTION,
@@ -2230,23 +2280,39 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     if (rollbackTarget === 'cancelled') {
-      await this.updateFull(id, {
-        status: Order_status.CANCELLED,
-        canceled_post_id: null,
-        return_requested: false,
-        sold_at: null,
-      }, { id: requester.id, roles: requester.roles, note: 'Rollback to cancelled' });
+      await this.updateFull(
+        id,
+        {
+          status: Order_status.CANCELLED,
+          canceled_post_id: null,
+          return_requested: false,
+          sold_at: null,
+        },
+        {
+          id: requester.id,
+          roles: requester.roles,
+          note: 'Rollback to cancelled',
+        },
+      );
 
       return successRes({}, 200, 'Order CANCELLED holatiga qaytarildi');
     }
 
     if (rollbackTarget === 'cancelled_sent') {
-      await this.updateFull(id, {
-        status: Order_status.CANCELLED,
-        canceled_post_id: null,
-        return_requested: false,
-        sold_at: null,
-      }, { id: requester.id, roles: requester.roles, note: 'Rollback to cancelled_sent' });
+      await this.updateFull(
+        id,
+        {
+          status: Order_status.CANCELLED,
+          canceled_post_id: null,
+          return_requested: false,
+          sold_at: null,
+        },
+        {
+          id: requester.id,
+          roles: requester.roles,
+          note: 'Rollback to cancelled_sent',
+        },
+      );
 
       await rmqSend(
         this.logisticsClient,
@@ -3489,22 +3555,28 @@ export class OrderServiceService implements OnModuleInit {
       this.hasRole(requester, Roles.MANAGER) &&
       !this.hasRole(requester, Roles.COURIER);
 
-    const [market, courier] = await Promise.all([
+    const [market, financialActor] = await Promise.all([
       this.getMarketsByIds([String(order.market_id)]).then((rows) => rows[0]),
-      this.getCouriersByIds([actorCourierId]).then((rows) => rows[0]),
+      isManagerRequester
+        ? this.getUserById(String(requester.id))
+        : this.getCouriersByIds([actorCourierId]).then((rows) => rows[0]),
     ]);
     if (!market) {
       this.notFound('Market not found');
     }
-    if (!courier && !isManagerRequester) {
-      this.notFound('Courier not found');
+    if (!financialActor) {
+      this.notFound(
+        isManagerRequester ? 'Manager not found' : 'Courier not found',
+      );
     }
 
     const [marketCashbox, courierCashbox] = await Promise.all([
       this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
-      this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER).catch(
-        () => null,
-      ),
+      isManagerRequester
+        ? Promise.resolve(null)
+        : this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER).catch(
+            () => null,
+          ),
     ]);
     if (!marketCashbox) {
       this.notFound('Market cashbox not found');
@@ -3540,10 +3612,22 @@ export class OrderServiceService implements OnModuleInit {
         : Number(market.tariff_home ?? 0);
     const courierTariff =
       order.where_deliver === Where_deliver.CENTER
-        ? Number(courier?.tariff_center ?? 0)
-        : Number(courier?.tariff_home ?? 0);
+        ? Number(financialActor?.tariff_center ?? 0)
+        : Number(financialActor?.tariff_home ?? 0);
     // courierShare = what the courier keeps (0 for salary-only couriers).
-    const courierShare = this.resolveCourierShare(courier, courierTariff);
+    const courierShare = this.resolveCourierShare(
+      financialActor,
+      courierTariff,
+    );
+    const actorExpenseUserId = isManagerRequester
+      ? String(requester.branch_id ?? '')
+      : actorCourierId;
+    const actorExpenseCashboxType = isManagerRequester
+      ? Cashbox_type.BRANCH
+      : Cashbox_type.FOR_COURIER;
+    const actorExpenseCashbox = isManagerRequester
+      ? branchCashbox
+      : courierCashbox;
 
     const totalPrice = Number(order.total_price ?? 0);
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
@@ -3714,10 +3798,10 @@ export class OrderServiceService implements OnModuleInit {
           comment: finalComment,
           proof_files: proofFiles.length ? proofFiles : undefined,
         });
-        if (courierCashbox) {
+        if (actorExpenseCashbox) {
           await pay({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
+            user_id: actorExpenseUserId,
+            cashbox_type: actorExpenseCashboxType,
             amount: extraCost,
             operation_type: Operation_type.EXPENSE,
             source_type: Source_type.EXTRA_COST,
@@ -3833,9 +3917,9 @@ export class OrderServiceService implements OnModuleInit {
 
     // The market is needed for the proof policy regardless of extra cost, since
     // some conditions (e.g. cancelling a zero-total order) apply with no expense.
-    const market = await this.getMarketsByIds([
-      String(order.market_id),
-    ]).then((rows) => rows[0]);
+    const market = await this.getMarketsByIds([String(order.market_id)]).then(
+      (rows) => rows[0],
+    );
 
     // Reject the cancel up front if this market's proof policy is triggered and
     // the courier didn't attach valid file proof.
@@ -3848,19 +3932,41 @@ export class OrderServiceService implements OnModuleInit {
     });
 
     // Look up cashboxes (remote reads) before opening the transaction.
-    let courierCashbox: { id: string; balance?: number } | null | undefined;
+    let actorExpenseCashbox:
+      | { id: string; balance?: number }
+      | null
+      | undefined;
+    const actorExpenseUserId = isManagerRequester
+      ? String(requester.branch_id ?? '')
+      : actorCourierId;
+    const actorExpenseCashboxType = isManagerRequester
+      ? Cashbox_type.BRANCH
+      : Cashbox_type.FOR_COURIER;
+    if (isManagerRequester && !actorExpenseUserId) {
+      this.badRequest('Manager branch not found');
+    }
     if (extraCost > 0) {
-      const [marketCashbox, fetchedCourierCashbox] = await Promise.all([
+      if (isManagerRequester) {
+        await this.ensureBranchCashbox(actorExpenseUserId);
+      }
+      const [marketCashbox, fetchedActorExpenseCashbox] = await Promise.all([
         this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
-        this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER),
+        this.getCashboxByUser(
+          actorExpenseUserId,
+          actorExpenseCashboxType,
+        ).catch(() => null),
       ]);
       if (!marketCashbox) {
         this.notFound('Market cashbox not found');
       }
-      if (!fetchedCourierCashbox && !isManagerRequester) {
-        this.notFound('Courier cashbox not found');
+      if (!fetchedActorExpenseCashbox) {
+        this.notFound(
+          isManagerRequester
+            ? 'Branch cashbox not found'
+            : 'Courier cashbox not found',
+        );
       }
-      courierCashbox = fetchedCourierCashbox;
+      actorExpenseCashbox = fetchedActorExpenseCashbox;
     }
 
     // Atomic block: the extra-cost cashbox movements (outbox enqueues) and the
@@ -3892,10 +3998,10 @@ export class OrderServiceService implements OnModuleInit {
           comment: finalComment,
           proof_files: proofFiles.length ? proofFiles : undefined,
         });
-        if (courierCashbox) {
+        if (actorExpenseCashbox) {
           await pay({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
+            user_id: actorExpenseUserId,
+            cashbox_type: actorExpenseCashboxType,
             amount: extraCost,
             operation_type: Operation_type.EXPENSE,
             source_type: Source_type.EXTRA_COST,
@@ -4153,22 +4259,28 @@ export class OrderServiceService implements OnModuleInit {
       this.badRequest('totalPrice must be a non-negative number');
     }
 
-    const [market, courier] = await Promise.all([
+    const [market, financialActor] = await Promise.all([
       this.getMarketsByIds([String(order.market_id)]).then((rows) => rows[0]),
-      this.getCouriersByIds([actorCourierId]).then((rows) => rows[0]),
+      isManagerRequester
+        ? this.getUserById(String(requester.id))
+        : this.getCouriersByIds([actorCourierId]).then((rows) => rows[0]),
     ]);
     if (!market) {
       this.notFound('Market not found');
     }
-    if (!courier && !isManagerRequester) {
-      this.notFound('Courier not found');
+    if (!financialActor) {
+      this.notFound(
+        isManagerRequester ? 'Manager not found' : 'Courier not found',
+      );
     }
 
     const [marketCashbox, courierCashbox] = await Promise.all([
       this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
-      this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER).catch(
-        () => null,
-      ),
+      isManagerRequester
+        ? Promise.resolve(null)
+        : this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER).catch(
+            () => null,
+          ),
     ]);
     if (!marketCashbox) {
       this.notFound('Market cashbox not found');
@@ -4203,9 +4315,21 @@ export class OrderServiceService implements OnModuleInit {
       order.courier_tariff != null
         ? Number(order.courier_tariff)
         : order.where_deliver === Where_deliver.CENTER
-          ? Number(courier?.tariff_center ?? 0)
-          : Number(courier?.tariff_home ?? 0);
-    const courierShare = this.resolveCourierShare(courier, courierTariff);
+          ? Number(financialActor?.tariff_center ?? 0)
+          : Number(financialActor?.tariff_home ?? 0);
+    const courierShare = this.resolveCourierShare(
+      financialActor,
+      courierTariff,
+    );
+    const actorExpenseUserId = isManagerRequester
+      ? String(requester.branch_id ?? '')
+      : actorCourierId;
+    const actorExpenseCashboxType = isManagerRequester
+      ? Cashbox_type.BRANCH
+      : Cashbox_type.FOR_COURIER;
+    const actorExpenseCashbox = isManagerRequester
+      ? branchCashbox
+      : courierCashbox;
 
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
     // Partly-sell is a sell variant → evaluated against SELL_* conditions, with
@@ -4446,10 +4570,10 @@ export class OrderServiceService implements OnModuleInit {
           comment: finalComment,
           proof_files: proofFiles.length ? proofFiles : undefined,
         });
-        if (courierCashbox) {
+        if (actorExpenseCashbox) {
           await pay({
-            user_id: actorCourierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
+            user_id: actorExpenseUserId,
+            cashbox_type: actorExpenseCashboxType,
             amount: extraCost,
             operation_type: Operation_type.EXPENSE,
             source_type: Source_type.EXTRA_COST,
@@ -6354,8 +6478,7 @@ export class OrderServiceService implements OnModuleInit {
     const resolveReturnDestination = (order: {
       home_branch_id?: string | null;
       branch_id?: string | null;
-    }): string =>
-      String(order.home_branch_id ?? order.branch_id ?? '').trim();
+    }): string => String(order.home_branch_id ?? order.branch_id ?? '').trim();
 
     const invalidSourceOrder = orders.find(
       (order) => resolveReturnDestination(order) === sourceBranchId,
@@ -7555,8 +7678,7 @@ export class OrderServiceService implements OnModuleInit {
       );
       const orderRepo = queryRunner.manager.getRepository(Order);
       const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
-      const custodyRepo =
-        queryRunner.manager.getRepository(OrderCustodyEvent);
+      const custodyRepo = queryRunner.manager.getRepository(OrderCustodyEvent);
       const historyRepo = queryRunner.manager.getRepository(
         BranchTransferBatchHistory,
       );
@@ -7721,7 +7843,10 @@ export class OrderServiceService implements OnModuleInit {
         // assignable pool. RETURN: returning orders must NOT be reset to NEW
         // (that would drop them into the new-orders flow and reverse their
         // direction) — only detach them from the batch and keep their status.
-        const remainingUpdate: { current_batch_id: null; status?: Order_status } =
+        const remainingUpdate: {
+          current_batch_id: null;
+          status?: Order_status;
+        } =
           batch.direction === BranchTransferDirection.RETURN
             ? { current_batch_id: null }
             : { current_batch_id: null, status: Order_status.NEW };
