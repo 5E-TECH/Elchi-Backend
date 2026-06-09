@@ -905,7 +905,7 @@ export class FinanceGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get main cashbox summary' })
-  getMainCashbox(
+  async getMainCashbox(
     @Query() query: MainCashboxFilterQueryDto,
     @Req() req: { user: JwtUser },
   ) {
@@ -915,7 +915,51 @@ export class FinanceGatewayController {
         { id: req.user.sub, cashbox_type: Cashbox_type.FOR_COURIER, ...query },
       );
     }
-    return this.send({ cmd: 'finance.cashbox.main' }, query);
+
+    const response = await this.send({ cmd: 'finance.cashbox.main' }, query);
+    const histories = await this.attachCreatedByUsers(
+      response?.data?.cashboxHistory ?? [],
+    );
+    const visibleHistories = histories.filter((history: any) => {
+      if (
+        String(history?.source_type ?? '') !==
+        String(Source_type.COURIER_PAYMENT)
+      ) {
+        return true;
+      }
+
+      const creatorRoles = Array.isArray(history?.createdByUser?.roles)
+        ? history.createdByUser.roles
+        : history?.createdByUser?.role
+          ? [history.createdByUser.role]
+          : [];
+      return !creatorRoles.some(
+        (role: unknown) =>
+          String(role ?? '').toLowerCase() === RoleEnum.MANAGER,
+      );
+    });
+
+    if (response?.data) {
+      response.data.cashboxHistory = visibleHistories;
+      response.data.income = visibleHistories.reduce(
+        (sum: number, history: any) =>
+          String(history?.operation_type ?? '') ===
+          String(Operation_type.INCOME)
+            ? sum + Number(history?.amount ?? 0)
+            : sum,
+        0,
+      );
+      response.data.outcome = visibleHistories.reduce(
+        (sum: number, history: any) =>
+          String(history?.operation_type ?? '') ===
+          String(Operation_type.EXPENSE)
+            ? sum + Number(history?.amount ?? 0)
+            : sum,
+        0,
+      );
+    }
+
+    return response;
   }
 
   @Get('cashbox/user/:id/main')
