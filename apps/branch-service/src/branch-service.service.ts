@@ -57,8 +57,10 @@ export class BranchServiceService implements OnModuleInit {
 
   constructor(
     @InjectRepository(Branch) private readonly branchRepo: Repository<Branch>,
-    @InjectRepository(BranchUser) private readonly branchUserRepo: Repository<BranchUser>,
-    @InjectRepository(BranchConfig) private readonly branchConfigRepo: Repository<BranchConfig>,
+    @InjectRepository(BranchUser)
+    private readonly branchUserRepo: Repository<BranchUser>,
+    @InjectRepository(BranchConfig)
+    private readonly branchConfigRepo: Repository<BranchConfig>,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
@@ -93,7 +95,9 @@ export class BranchServiceService implements OnModuleInit {
   }
 
   private normalizeBranchUserRole(role?: string | null): BranchUserRole {
-    const normalized = String(role ?? BranchUserRole.REGISTRATOR).trim().toUpperCase();
+    const normalized = String(role ?? BranchUserRole.REGISTRATOR)
+      .trim()
+      .toUpperCase();
     if (normalized === BranchUserRole.MANAGER) {
       return BranchUserRole.MANAGER;
     }
@@ -107,13 +111,19 @@ export class BranchServiceService implements OnModuleInit {
   }
 
   private isSystemPrivileged(requester?: RequesterContext): boolean {
-    const roles = (requester?.roles ?? []).map((role) => String(role).toLowerCase());
+    const roles = (requester?.roles ?? []).map((role) =>
+      String(role).toLowerCase(),
+    );
     return roles.includes('superadmin') || roles.includes('admin');
   }
 
-  private async collectDescendantBranchIds(rootBranchIds: string[]): Promise<Set<string>> {
+  private async collectDescendantBranchIds(
+    rootBranchIds: string[],
+  ): Promise<Set<string>> {
     const roots = Array.from(
-      new Set(rootBranchIds.map((id) => String(id ?? '').trim()).filter(Boolean)),
+      new Set(
+        rootBranchIds.map((id) => String(id ?? '').trim()).filter(Boolean),
+      ),
     );
     if (roots.length === 0) {
       return new Set<string>();
@@ -145,7 +155,9 @@ export class BranchServiceService implements OnModuleInit {
     return new Set<string>(rows.map((row) => String(row.id)));
   }
 
-  private async resolveAccessScope(requester?: RequesterContext): Promise<BranchAccessScope> {
+  private async resolveAccessScope(
+    requester?: RequesterContext,
+  ): Promise<BranchAccessScope> {
     if (this.isSystemPrivileged(requester)) {
       return {
         readableBranchIds: new Set<string>(),
@@ -174,7 +186,10 @@ export class BranchServiceService implements OnModuleInit {
     );
 
     const managerRoots = assignments
-      .filter((item) => this.normalizeBranchUserRole(item.role) === BranchUserRole.MANAGER)
+      .filter(
+        (item) =>
+          this.normalizeBranchUserRole(item.role) === BranchUserRole.MANAGER,
+      )
       .map((item) => String(item.branch_id));
 
     const readableBranchIds = new Set<string>(ownBranchIds);
@@ -188,7 +203,10 @@ export class BranchServiceService implements OnModuleInit {
     };
   }
 
-  private async assertCanReadBranch(branchId: string, requester?: RequesterContext): Promise<void> {
+  private async assertCanReadBranch(
+    branchId: string,
+    requester?: RequesterContext,
+  ): Promise<void> {
     if (this.isSystemPrivileged(requester)) {
       return;
     }
@@ -198,7 +216,10 @@ export class BranchServiceService implements OnModuleInit {
     }
   }
 
-  private async assertCanWriteBranch(branchId: string, requester?: RequesterContext): Promise<void> {
+  private async assertCanWriteBranch(
+    branchId: string,
+    requester?: RequesterContext,
+  ): Promise<void> {
     if (this.isSystemPrivileged(requester)) {
       return;
     }
@@ -238,15 +259,24 @@ export class BranchServiceService implements OnModuleInit {
   }
 
   private parseBranchType(type?: string): BranchType {
-    const normalized = String(type ?? '').trim().toUpperCase();
-    if (!normalized || !Object.values(BranchType).includes(normalized as BranchType)) {
-      this.badRequest(`type must be one of: ${Object.values(BranchType).join(', ')}`);
+    const normalized = String(type ?? '')
+      .trim()
+      .toUpperCase();
+    if (
+      !normalized ||
+      !Object.values(BranchType).includes(normalized as BranchType)
+    ) {
+      this.badRequest(
+        `type must be one of: ${Object.values(BranchType).join(', ')}`,
+      );
     }
     return normalized as BranchType;
   }
 
   private normalizeBranchCode(code?: string | null): string {
-    const normalized = String(code ?? '').trim().toUpperCase();
+    const normalized = String(code ?? '')
+      .trim()
+      .toUpperCase();
     if (!normalized) {
       this.badRequest('code is required');
     }
@@ -256,7 +286,10 @@ export class BranchServiceService implements OnModuleInit {
     return normalized;
   }
 
-  private async ensureBranchNameUnique(name: string, exceptId?: string): Promise<void> {
+  private async ensureBranchNameUnique(
+    name: string,
+    exceptId?: string,
+  ): Promise<void> {
     const normalized = name.trim();
     if (!normalized) return;
     const found = await this.branchRepo
@@ -269,7 +302,10 @@ export class BranchServiceService implements OnModuleInit {
     }
   }
 
-  private async ensureBranchCodeUnique(code: string, exceptId?: string): Promise<void> {
+  private async ensureBranchCodeUnique(
+    code: string,
+    exceptId?: string,
+  ): Promise<void> {
     const exists = await this.branchRepo.findOne({
       where: { code, isDeleted: false },
     });
@@ -282,7 +318,10 @@ export class BranchServiceService implements OnModuleInit {
     return this.getBranchOrThrow(parentId);
   }
 
-  private async ensureNotCyclicParent(branchId: string, parentId: string): Promise<void> {
+  private async ensureNotCyclicParent(
+    branchId: string,
+    parentId: string,
+  ): Promise<void> {
     if (branchId === parentId) {
       this.badRequest('Branch cannot be parent of itself');
     }
@@ -315,8 +354,13 @@ export class BranchServiceService implements OnModuleInit {
     return childrenCount > 0;
   }
 
-  private async rebalanceDescendantLevels(rootBranchId: string, rootLevel: number): Promise<void> {
-    const queue: Array<{ branchId: string; level: number }> = [{ branchId: rootBranchId, level: rootLevel }];
+  private async rebalanceDescendantLevels(
+    rootBranchId: string,
+    rootLevel: number,
+  ): Promise<void> {
+    const queue: Array<{ branchId: string; level: number }> = [
+      { branchId: rootBranchId, level: rootLevel },
+    ];
     while (queue.length > 0) {
       const current = queue.shift()!;
       const children = await this.branchRepo.find({
@@ -350,7 +394,11 @@ export class BranchServiceService implements OnModuleInit {
       where: { code: this.hqCode, isDeleted: false },
     });
     if (hqByCode) {
-      if (hqByCode.type !== BranchType.HQ || hqByCode.level !== 0 || hqByCode.parent_id !== null) {
+      if (
+        hqByCode.type !== BranchType.HQ ||
+        hqByCode.level !== 0 ||
+        hqByCode.parent_id !== null
+      ) {
         hqByCode.type = BranchType.HQ;
         hqByCode.level = 0;
         hqByCode.parent_id = null;
@@ -403,11 +451,15 @@ export class BranchServiceService implements OnModuleInit {
     return branch;
   }
 
-  private async ensureUserExists(userId: string): Promise<{ id: string; role?: string | null }> {
+  private async ensureUserExists(
+    userId: string,
+  ): Promise<{ id: string; role?: string | null }> {
     try {
       const res = await lastValueFrom(
         this.identityClient
-          .send<{ data?: { id?: string; role?: string | null } }>({ cmd: 'identity.user.find_by_id' }, { id: userId })
+          .send<{
+            data?: { id?: string; role?: string | null };
+          }>({ cmd: 'identity.user.find_by_id' }, { id: userId })
           .pipe(timeout(5000)),
       );
       if (!res?.data?.id) {
@@ -423,9 +475,7 @@ export class BranchServiceService implements OnModuleInit {
               message?: string;
             };
         const statusCode =
-          typeof err === 'object' && err
-            ? Number(err.statusCode ?? 500)
-            : 500;
+          typeof err === 'object' && err ? Number(err.statusCode ?? 500) : 500;
         if (statusCode === 404) {
           this.notFound('User not found');
         }
@@ -443,8 +493,12 @@ export class BranchServiceService implements OnModuleInit {
     }
   }
 
-  private resolveBranchRoleFromUserRole(userRole?: string | null): BranchUserRole {
-    const normalized = String(userRole ?? '').trim().toLowerCase();
+  private resolveBranchRoleFromUserRole(
+    userRole?: string | null,
+  ): BranchUserRole {
+    const normalized = String(userRole ?? '')
+      .trim()
+      .toLowerCase();
     if (normalized === 'manager') {
       return BranchUserRole.MANAGER;
     }
@@ -454,10 +508,14 @@ export class BranchServiceService implements OnModuleInit {
     if (normalized === 'courier') {
       return BranchUserRole.COURIER;
     }
-    this.badRequest("User roli branchga biriktirish uchun mos emas (faqat manager/registrator/courier)");
+    this.badRequest(
+      'User roli branchga biriktirish uchun mos emas (faqat manager/registrator/courier)',
+    );
   }
 
-  private async getRegionsByIds(regionIds: string[]): Promise<Map<string, unknown>> {
+  private async getRegionsByIds(
+    regionIds: string[],
+  ): Promise<Map<string, unknown>> {
     if (!regionIds.length) {
       return new Map();
     }
@@ -465,10 +523,9 @@ export class BranchServiceService implements OnModuleInit {
     try {
       const res = await lastValueFrom(
         this.logisticsClient
-          .send<{ data?: Array<Record<string, unknown>> }>(
-            { cmd: 'logistics.region.find_by_ids' },
-            { ids: regionIds },
-          )
+          .send<{
+            data?: Array<Record<string, unknown>>;
+          }>({ cmd: 'logistics.region.find_by_ids' }, { ids: regionIds })
           .pipe(timeout(5000)),
       );
 
@@ -489,7 +546,9 @@ export class BranchServiceService implements OnModuleInit {
     }
   }
 
-  private async getDistrictsByIds(districtIds: string[]): Promise<Map<string, unknown>> {
+  private async getDistrictsByIds(
+    districtIds: string[],
+  ): Promise<Map<string, unknown>> {
     if (!districtIds.length) {
       return new Map();
     }
@@ -497,10 +556,9 @@ export class BranchServiceService implements OnModuleInit {
     try {
       const res = await lastValueFrom(
         this.logisticsClient
-          .send<{ data?: Array<Record<string, unknown>> }>(
-            { cmd: 'logistics.district.find_by_ids' },
-            { ids: districtIds },
-          )
+          .send<{
+            data?: Array<Record<string, unknown>>;
+          }>({ cmd: 'logistics.district.find_by_ids' }, { ids: districtIds })
           .pipe(timeout(5000)),
       );
 
@@ -521,7 +579,9 @@ export class BranchServiceService implements OnModuleInit {
     }
   }
 
-  private async getUsersByIds(userIds: string[]): Promise<Map<string, unknown>> {
+  private async getUsersByIds(
+    userIds: string[],
+  ): Promise<Map<string, unknown>> {
     if (!userIds.length) {
       return new Map();
     }
@@ -531,10 +591,9 @@ export class BranchServiceService implements OnModuleInit {
         try {
           const res = await lastValueFrom(
             this.identityClient
-              .send<{ data?: Record<string, unknown> }>(
-                { cmd: 'identity.user.find_by_id' },
-                { id },
-              )
+              .send<{
+                data?: Record<string, unknown>;
+              }>({ cmd: 'identity.user.find_by_id' }, { id })
               .pipe(timeout(5000)),
           );
           return [id, res?.data ?? null] as const;
@@ -567,11 +626,7 @@ export class BranchServiceService implements OnModuleInit {
 
   private extractOrderRows(payload: unknown): OrderAnalyticsRow[] {
     const source = payload as any;
-    const candidates = [
-      source?.data?.data,
-      source?.data,
-      source,
-    ];
+    const candidates = [source?.data?.data, source?.data, source];
 
     for (const candidate of candidates) {
       if (!Array.isArray(candidate)) {
@@ -586,9 +641,12 @@ export class BranchServiceService implements OnModuleInit {
           market_id: row?.market_id ? String(row.market_id) : null,
           status: row?.status ? String(row.status) : null,
           total_price: Number(row?.total_price ?? 0) || 0,
-          current_batch_id: row?.current_batch_id ? String(row.current_batch_id) : null,
+          current_batch_id: row?.current_batch_id
+            ? String(row.current_batch_id)
+            : null,
           courier_id: row?.courier_id ? String(row.courier_id) : null,
-          createdAt: createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : null,
+          createdAt:
+            createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : null,
         };
       });
     }
@@ -596,7 +654,9 @@ export class BranchServiceService implements OnModuleInit {
     return [];
   }
 
-  private async getOrdersByBranchIds(branchIds: string[]): Promise<OrderAnalyticsRow[]> {
+  private async getOrdersByBranchIds(
+    branchIds: string[],
+  ): Promise<OrderAnalyticsRow[]> {
     const rows = await Promise.all(
       branchIds.map(async (branchId) => {
         try {
@@ -644,9 +704,16 @@ export class BranchServiceService implements OnModuleInit {
   }
 
   private normalizeTransferDirection(value?: string): BranchTransferDirection {
-    const normalized = String(value ?? '').trim().toUpperCase();
-    if (normalized !== BranchTransferDirection.FORWARD && normalized !== BranchTransferDirection.RETURN) {
-      this.badRequest(`direction must be one of: ${BranchTransferDirection.FORWARD}, ${BranchTransferDirection.RETURN}`);
+    const normalized = String(value ?? '')
+      .trim()
+      .toUpperCase();
+    if (
+      normalized !== BranchTransferDirection.FORWARD &&
+      normalized !== BranchTransferDirection.RETURN
+    ) {
+      this.badRequest(
+        `direction must be one of: ${BranchTransferDirection.FORWARD}, ${BranchTransferDirection.RETURN}`,
+      );
     }
     return normalized as BranchTransferDirection;
   }
@@ -662,7 +729,10 @@ export class BranchServiceService implements OnModuleInit {
     return normalized;
   }
 
-  private async assertCanCreateTransferBatch(branchId: string, requester?: RequesterContext) {
+  private async assertCanCreateTransferBatch(
+    branchId: string,
+    requester?: RequesterContext,
+  ) {
     if (this.isSystemPrivileged(requester)) {
       return;
     }
@@ -680,7 +750,8 @@ export class BranchServiceService implements OnModuleInit {
     const ownAssignment = assignments.find(
       (item) =>
         String(item.branch_id) === String(branchId) &&
-        (this.normalizeBranchUserRole(item.role) === BranchUserRole.REGISTRATOR ||
+        (this.normalizeBranchUserRole(item.role) ===
+          BranchUserRole.REGISTRATOR ||
           this.normalizeBranchUserRole(item.role) === BranchUserRole.MANAGER),
     );
     if (ownAssignment) {
@@ -688,7 +759,10 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const managerRoots = assignments
-      .filter((item) => this.normalizeBranchUserRole(item.role) === BranchUserRole.MANAGER)
+      .filter(
+        (item) =>
+          this.normalizeBranchUserRole(item.role) === BranchUserRole.MANAGER,
+      )
       .map((item) => String(item.branch_id));
 
     if (!managerRoots.length) {
@@ -701,7 +775,10 @@ export class BranchServiceService implements OnModuleInit {
     }
   }
 
-  private assertBranchCanCreateBatches(branch: Branch, operation: 'transfer' | 'return') {
+  private assertBranchCanCreateBatches(
+    branch: Branch,
+    operation: 'transfer' | 'return',
+  ) {
     if (branch.type === BranchType.REGIONAL) {
       this.forbidden(
         operation === 'return'
@@ -713,14 +790,21 @@ export class BranchServiceService implements OnModuleInit {
 
   private assertBranchCanReceiveBatches(branch: Branch) {
     if (branch.type === BranchType.PICKUP) {
-      this.forbidden("PICKUP filial boshqa filialdan kelgan batchni qabul qila olmaydi");
+      this.forbidden(
+        'PICKUP filial boshqa filialdan kelgan batchni qabul qila olmaydi',
+      );
     }
   }
 
-  private extractRpcError(error: unknown): { statusCode: number; message: string } | null {
+  private extractRpcError(
+    error: unknown,
+  ): { statusCode: number; message: string } | null {
     const fallback = { statusCode: 500, message: 'Internal service error' };
     const source = error as
-      | { message?: string; error?: { statusCode?: number; message?: string | string[] } }
+      | {
+          message?: string;
+          error?: { statusCode?: number; message?: string | string[] };
+        }
       | undefined;
 
     const nested = source?.error;
@@ -741,12 +825,13 @@ export class BranchServiceService implements OnModuleInit {
     return null;
   }
 
-  private async sendOrderCommand<T>(cmd: string, payload: Record<string, unknown>): Promise<T> {
+  private async sendOrderCommand<T>(
+    cmd: string,
+    payload: Record<string, unknown>,
+  ): Promise<T> {
     try {
       return await lastValueFrom(
-        this.orderClient
-          .send<T>({ cmd }, payload)
-          .pipe(timeout(15000)),
+        this.orderClient.send<T>({ cmd }, payload).pipe(timeout(15000)),
       );
     } catch (error) {
       const parsed = this.extractRpcError(error);
@@ -757,12 +842,13 @@ export class BranchServiceService implements OnModuleInit {
     }
   }
 
-  private async sendLogisticsCommand<T>(cmd: string, payload: Record<string, unknown>): Promise<T> {
+  private async sendLogisticsCommand<T>(
+    cmd: string,
+    payload: Record<string, unknown>,
+  ): Promise<T> {
     try {
       return await lastValueFrom(
-        this.logisticsClient
-          .send<T>({ cmd }, payload)
-          .pipe(timeout(15000)),
+        this.logisticsClient.send<T>({ cmd }, payload).pipe(timeout(15000)),
       );
     } catch (error) {
       const parsed = this.extractRpcError(error);
@@ -773,24 +859,26 @@ export class BranchServiceService implements OnModuleInit {
     }
   }
 
-  private async sendFileCommand<T>(cmd: string, payload: Record<string, unknown>): Promise<T> {
+  private async sendFileCommand<T>(
+    cmd: string,
+    payload: Record<string, unknown>,
+  ): Promise<T> {
     try {
       return await lastValueFrom(
-        this.fileClient
-          .send<T>({ cmd }, payload)
-          .pipe(timeout(15000)),
+        this.fileClient.send<T>({ cmd }, payload).pipe(timeout(15000)),
       );
     } catch {
       throw new RpcException(errorRes('File service unavailable', 502));
     }
   }
 
-  private async sendFinanceCommand<T>(cmd: string, payload: Record<string, unknown>): Promise<T> {
+  private async sendFinanceCommand<T>(
+    cmd: string,
+    payload: Record<string, unknown>,
+  ): Promise<T> {
     try {
       return await lastValueFrom(
-        this.financeClient
-          .send<T>({ cmd }, payload)
-          .pipe(timeout(15000)),
+        this.financeClient.send<T>({ cmd }, payload).pipe(timeout(15000)),
       );
     } catch (error) {
       const parsed = this.extractRpcError(error);
@@ -798,6 +886,21 @@ export class BranchServiceService implements OnModuleInit {
         throw new RpcException(errorRes(parsed.message, parsed.statusCode));
       }
       throw new RpcException(errorRes('Finance service unavailable', 502));
+    }
+  }
+
+  private async ensureBranchCashbox(branchId: string): Promise<void> {
+    try {
+      await this.sendFinanceCommand('finance.cashbox.create', {
+        user_id: branchId,
+        cashbox_type: Cashbox_type.BRANCH,
+      });
+    } catch (error) {
+      const parsed = this.extractRpcError(error);
+      if (parsed?.message?.includes('Cashbox already exists')) {
+        return;
+      }
+      throw error;
     }
   }
 
@@ -811,7 +914,8 @@ export class BranchServiceService implements OnModuleInit {
   ) {
     let sourceBranchId = String(branchId ?? '').trim();
     if (!sourceBranchId) {
-      sourceBranchId = await this.resolveRequesterBranchIdForTransfer(requester);
+      sourceBranchId =
+        await this.resolveRequesterBranchIdForTransfer(requester);
     }
 
     const sourceBranch = await this.getBranchOrThrow(sourceBranchId);
@@ -825,7 +929,11 @@ export class BranchServiceService implements OnModuleInit {
     await this.assertCanCreateTransferBatch(sourceBranchId, requester);
 
     const orderIds = Array.from(
-      new Set((dto?.orderIds ?? dto?.order_ids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean)),
+      new Set(
+        (dto?.orderIds ?? dto?.order_ids ?? [])
+          .map((id) => String(id ?? '').trim())
+          .filter(Boolean),
+      ),
     );
     if (!orderIds.length) {
       this.badRequest('order_ids is required');
@@ -847,7 +955,9 @@ export class BranchServiceService implements OnModuleInit {
       order_ids: orderIds,
     });
 
-    const createdBatches = Array.isArray(createRes?.data?.batches) ? createRes.data.batches : [];
+    const createdBatches = Array.isArray(createRes?.data?.batches)
+      ? createRes.data.batches
+      : [];
     const batchIds = createdBatches.map((batch) => String(batch.id));
 
     if (createRes?.data?.idempotent) {
@@ -866,7 +976,9 @@ export class BranchServiceService implements OnModuleInit {
       for (const batch of createdBatches) {
         const token = String(batch?.qr_code_token ?? '').trim();
         if (!token) {
-          throw new RpcException(errorRes('QR token missing for created batch', 500));
+          throw new RpcException(
+            errorRes('QR token missing for created batch', 500),
+          );
         }
         const qrResponse = await this.sendFileCommand<{
           data?: { key?: string; url?: string };
@@ -930,7 +1042,9 @@ export class BranchServiceService implements OnModuleInit {
     );
   }
 
-  private async resolveRequesterBranchIdForTransfer(requester?: RequesterContext): Promise<string> {
+  private async resolveRequesterBranchIdForTransfer(
+    requester?: RequesterContext,
+  ): Promise<string> {
     if (this.isSystemPrivileged(requester)) {
       this.badRequest('source branch id is required');
     }
@@ -950,7 +1064,10 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const role = this.normalizeBranchUserRole(assignment.role);
-    if (role !== BranchUserRole.MANAGER && role !== BranchUserRole.REGISTRATOR) {
+    if (
+      role !== BranchUserRole.MANAGER &&
+      role !== BranchUserRole.REGISTRATOR
+    ) {
       this.forbidden('Transfer batch yaratishga ruxsat yo‘q');
     }
 
@@ -976,7 +1093,11 @@ export class BranchServiceService implements OnModuleInit {
     await this.assertCanCreateTransferBatch(sourceBranchId, requester);
 
     const orderIds = Array.from(
-      new Set((dto?.order_ids ?? []).map((id) => String(id ?? '').trim()).filter(Boolean)),
+      new Set(
+        (dto?.order_ids ?? [])
+          .map((id) => String(id ?? '').trim())
+          .filter(Boolean),
+      ),
     );
     if (!orderIds.length) {
       this.badRequest('order_ids is required');
@@ -995,7 +1116,9 @@ export class BranchServiceService implements OnModuleInit {
       notes: dto?.notes ?? null,
     });
 
-    const createdBatches = Array.isArray(createRes?.data?.batches) ? createRes.data.batches : [];
+    const createdBatches = Array.isArray(createRes?.data?.batches)
+      ? createRes.data.batches
+      : [];
     const batchIds = createdBatches.map((batch) => String(batch.id));
 
     if (createRes?.data?.idempotent) {
@@ -1014,7 +1137,9 @@ export class BranchServiceService implements OnModuleInit {
       for (const batch of createdBatches) {
         const token = String(batch?.qr_code_token ?? '').trim();
         if (!token) {
-          throw new RpcException(errorRes('QR token missing for created batch', 500));
+          throw new RpcException(
+            errorRes('QR token missing for created batch', 500),
+          );
         }
         const qrResponse = await this.sendFileCommand<{
           data?: { key?: string; url?: string };
@@ -1095,7 +1220,11 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const orderIds = Array.from(
-      new Set((dto?.orderIds ?? dto?.order_ids ?? []).map((value) => String(value ?? '').trim()).filter(Boolean)),
+      new Set(
+        (dto?.orderIds ?? dto?.order_ids ?? [])
+          .map((value) => String(value ?? '').trim())
+          .filter(Boolean),
+      ),
     );
     if (!orderIds.length) {
       this.badRequest('orderIds is required');
@@ -1103,12 +1232,15 @@ export class BranchServiceService implements OnModuleInit {
 
     const vehiclePlate = String(dto?.vehicle_plate ?? 'N/A').trim() || 'N/A';
     const driverName = String(dto?.driver_name ?? 'N/A').trim() || 'N/A';
-    const driverPhone = String(dto?.driver_phone ?? '+998000000000').trim() || '+998000000000';
+    const driverPhone =
+      String(dto?.driver_phone ?? '+998000000000').trim() || '+998000000000';
 
     const batchRes = await this.sendOrderCommand<{
       data?: { source_branch_id?: string };
     }>('order.transfer_batch.find_by_id', { id });
-    const sourceBranchId = String(batchRes?.data?.source_branch_id ?? '').trim();
+    const sourceBranchId = String(
+      batchRes?.data?.source_branch_id ?? '',
+    ).trim();
     if (!sourceBranchId) {
       this.notFound('Transfer batch not found');
     }
@@ -1127,7 +1259,10 @@ export class BranchServiceService implements OnModuleInit {
     });
   }
 
-  async findRemainingTransferBatchById(id: string, requester?: RequesterContext) {
+  async findRemainingTransferBatchById(
+    id: string,
+    requester?: RequesterContext,
+  ) {
     const batchId = String(id ?? '').trim();
     if (!batchId) {
       this.badRequest('batch id is required');
@@ -1137,8 +1272,12 @@ export class BranchServiceService implements OnModuleInit {
       data?: { source_branch_id?: string; destination_branch_id?: string };
     }>('order.transfer_batch.find_by_id', { id: batchId });
 
-    const sourceBranchId = String(response?.data?.source_branch_id ?? '').trim();
-    const destinationBranchId = String(response?.data?.destination_branch_id ?? '').trim();
+    const sourceBranchId = String(
+      response?.data?.source_branch_id ?? '',
+    ).trim();
+    const destinationBranchId = String(
+      response?.data?.destination_branch_id ?? '',
+    ).trim();
 
     if (sourceBranchId && destinationBranchId) {
       try {
@@ -1156,7 +1295,8 @@ export class BranchServiceService implements OnModuleInit {
       data?: Record<string, unknown>;
     }>('order.transfer_batch.find_remaining', { id: batchId });
 
-    const batchData = (remainingResponse as { data?: Record<string, unknown> })?.data;
+    const batchData = (remainingResponse as { data?: Record<string, unknown> })
+      ?.data;
     if (!batchData || typeof batchData !== 'object') {
       return remainingResponse;
     }
@@ -1164,7 +1304,9 @@ export class BranchServiceService implements OnModuleInit {
     const batchRecord = batchData as Record<string, unknown>;
     const regionId = String(batchRecord?.target_region_id ?? '').trim();
     const regionMap = await this.getRegionsByIds(regionId ? [regionId] : []);
-    const rawItems = Array.isArray(batchRecord?.items) ? (batchRecord.items as Array<Record<string, unknown>>) : [];
+    const rawItems = Array.isArray(batchRecord?.items)
+      ? (batchRecord.items as Array<Record<string, unknown>>)
+      : [];
 
     const enrichedItems = await Promise.all(
       rawItems.map(async (item) => {
@@ -1174,13 +1316,15 @@ export class BranchServiceService implements OnModuleInit {
         }
 
         try {
-          const orderRes = await this.sendOrderCommand<{ data?: Record<string, unknown> }>(
-            'order.find_by_id_enriched',
-            { id: orderId },
-          );
+          const orderRes = await this.sendOrderCommand<{
+            data?: Record<string, unknown>;
+          }>('order.find_by_id_enriched', { id: orderId });
           return {
             ...item,
-            order: (orderRes as { data?: Record<string, unknown> })?.data ?? orderRes ?? null,
+            order:
+              (orderRes as { data?: Record<string, unknown> })?.data ??
+              orderRes ??
+              null,
           };
         } catch {
           return {
@@ -1212,7 +1356,9 @@ export class BranchServiceService implements OnModuleInit {
     requester?: RequesterContext,
   ) {
     const sourceBranchId = String(query?.source_branch_id ?? '').trim();
-    const destinationBranchId = String(query?.destination_branch_id ?? '').trim();
+    const destinationBranchId = String(
+      query?.destination_branch_id ?? '',
+    ).trim();
 
     if (sourceBranchId) {
       await this.assertCanReadBranch(sourceBranchId, requester);
@@ -1221,7 +1367,11 @@ export class BranchServiceService implements OnModuleInit {
       await this.assertCanReadBranch(destinationBranchId, requester);
     }
 
-    if (!this.isSystemPrivileged(requester) && !sourceBranchId && !destinationBranchId) {
+    if (
+      !this.isSystemPrivileged(requester) &&
+      !sourceBranchId &&
+      !destinationBranchId
+    ) {
       const requesterId = String(requester?.id ?? '').trim();
       if (!requesterId) {
         this.forbidden('Requester aniqlanmadi');
@@ -1236,36 +1386,48 @@ export class BranchServiceService implements OnModuleInit {
         this.forbidden('Filial biriktirilmagan foydalanuvchi');
       }
 
-      const direction = String(query?.direction ?? '').trim().toUpperCase();
+      const direction = String(query?.direction ?? '')
+        .trim()
+        .toUpperCase();
       const assignmentBranchId = String(assignment.branch_id);
       const scopedSourceBranchId =
-        direction === BranchTransferDirection.RETURN ? undefined : assignmentBranchId;
+        direction === BranchTransferDirection.RETURN
+          ? undefined
+          : assignmentBranchId;
       const scopedDestinationBranchId =
-        direction === BranchTransferDirection.RETURN ? assignmentBranchId : undefined;
+        direction === BranchTransferDirection.RETURN
+          ? assignmentBranchId
+          : undefined;
 
-      const response = await this.sendOrderCommand('order.transfer_batch.find_all', {
-        source_branch_id: scopedSourceBranchId,
-        destination_branch_id: scopedDestinationBranchId,
+      const response = await this.sendOrderCommand(
+        'order.transfer_batch.find_all',
+        {
+          source_branch_id: scopedSourceBranchId,
+          destination_branch_id: scopedDestinationBranchId,
+          status: query?.status,
+          direction: query?.direction,
+          period: query?.period,
+          date: query?.date,
+          page: query?.page,
+          limit: query?.limit,
+        },
+      );
+      return this.attachRegionsToTransferBatches(response);
+    }
+
+    const response = await this.sendOrderCommand(
+      'order.transfer_batch.find_all',
+      {
+        source_branch_id: sourceBranchId || undefined,
+        destination_branch_id: destinationBranchId || undefined,
         status: query?.status,
         direction: query?.direction,
         period: query?.period,
         date: query?.date,
         page: query?.page,
         limit: query?.limit,
-      });
-      return this.attachRegionsToTransferBatches(response);
-    }
-
-    const response = await this.sendOrderCommand('order.transfer_batch.find_all', {
-      source_branch_id: sourceBranchId || undefined,
-      destination_branch_id: destinationBranchId || undefined,
-      status: query?.status,
-      direction: query?.direction,
-      period: query?.period,
-      date: query?.date,
-      page: query?.page,
-      limit: query?.limit,
-    });
+      },
+    );
     return this.attachRegionsToTransferBatches(response);
   }
 
@@ -1292,7 +1454,8 @@ export class BranchServiceService implements OnModuleInit {
     });
 
     const sideRaw = String(response?.data?.side ?? 'source').toLowerCase();
-    const side: 'source' | 'destination' = sideRaw === 'destination' ? 'destination' : 'source';
+    const side: 'source' | 'destination' =
+      sideRaw === 'destination' ? 'destination' : 'source';
     const aggregates = (response?.data?.items ?? [])
       .map((row) => ({
         branch_id: String(row?.branch_id ?? '').trim(),
@@ -1300,7 +1463,9 @@ export class BranchServiceService implements OnModuleInit {
         sent_total_price: Number(row?.sent_total_price ?? 0),
       }))
       .filter((row) => Boolean(row.branch_id));
-    const branchIds = Array.from(new Set(aggregates.map((row) => row.branch_id)));
+    const branchIds = Array.from(
+      new Set(aggregates.map((row) => row.branch_id)),
+    );
 
     if (!branchIds.length) {
       return successRes(
@@ -1314,7 +1479,9 @@ export class BranchServiceService implements OnModuleInit {
       where: { id: In(branchIds), isDeleted: false },
       order: { name: 'ASC' },
     });
-    const aggregateByBranchId = new Map(aggregates.map((row) => [row.branch_id, row]));
+    const aggregateByBranchId = new Map(
+      aggregates.map((row) => [row.branch_id, row]),
+    );
 
     const canRead = async (branchId: string) => {
       try {
@@ -1357,7 +1524,9 @@ export class BranchServiceService implements OnModuleInit {
   }
 
   private async attachRegionsToTransferBatches(response: any) {
-    const items = Array.isArray(response?.data?.items) ? response.data.items : [];
+    const items = Array.isArray(response?.data?.items)
+      ? response.data.items
+      : [];
     if (!items.length) {
       return response;
     }
@@ -1365,7 +1534,9 @@ export class BranchServiceService implements OnModuleInit {
     const regionIds: string[] = Array.from(
       new Set(
         items
-          .map((batch: Record<string, unknown>) => String(batch?.target_region_id ?? '').trim())
+          .map((batch: Record<string, unknown>) =>
+            String(batch?.target_region_id ?? '').trim(),
+          )
           .filter(Boolean),
       ),
     );
@@ -1398,8 +1569,12 @@ export class BranchServiceService implements OnModuleInit {
       data?: { source_branch_id?: string; destination_branch_id?: string };
     }>('order.transfer_batch.find_by_id', { id: batchId });
 
-    const sourceBranchId = String(response?.data?.source_branch_id ?? '').trim();
-    const destinationBranchId = String(response?.data?.destination_branch_id ?? '').trim();
+    const sourceBranchId = String(
+      response?.data?.source_branch_id ?? '',
+    ).trim();
+    const destinationBranchId = String(
+      response?.data?.destination_branch_id ?? '',
+    ).trim();
 
     if (sourceBranchId) {
       await this.assertCanReadBranch(sourceBranchId, requester);
@@ -1415,7 +1590,9 @@ export class BranchServiceService implements OnModuleInit {
     const batchRecord = batchData as Record<string, unknown>;
     const regionId = String(batchRecord?.target_region_id ?? '').trim();
     const regionMap = await this.getRegionsByIds(regionId ? [regionId] : []);
-    const rawItems = Array.isArray(batchRecord?.items) ? (batchRecord.items as Array<Record<string, unknown>>) : [];
+    const rawItems = Array.isArray(batchRecord?.items)
+      ? (batchRecord.items as Array<Record<string, unknown>>)
+      : [];
 
     const enrichedItems = await Promise.all(
       rawItems.map(async (item) => {
@@ -1425,13 +1602,15 @@ export class BranchServiceService implements OnModuleInit {
         }
 
         try {
-          const orderRes = await this.sendOrderCommand<{ data?: Record<string, unknown> }>(
-            'order.find_by_id_enriched',
-            { id: orderId },
-          );
+          const orderRes = await this.sendOrderCommand<{
+            data?: Record<string, unknown>;
+          }>('order.find_by_id_enriched', { id: orderId });
           return {
             ...item,
-            order: (orderRes as { data?: Record<string, unknown> })?.data ?? orderRes ?? null,
+            order:
+              (orderRes as { data?: Record<string, unknown> })?.data ??
+              orderRes ??
+              null,
           };
         } catch {
           return {
@@ -1449,7 +1628,10 @@ export class BranchServiceService implements OnModuleInit {
     };
   }
 
-  private async assertRequesterWorksInBranch(branchId: string, requester?: RequesterContext) {
+  private async assertRequesterWorksInBranch(
+    branchId: string,
+    requester?: RequesterContext,
+  ) {
     if (this.isSystemPrivileged(requester)) {
       return;
     }
@@ -1468,14 +1650,11 @@ export class BranchServiceService implements OnModuleInit {
       select: ['id'],
     });
     if (!assignment) {
-      this.forbidden("Qabul qiluvchi xodim manzil filialga biriktirilmagan");
+      this.forbidden('Qabul qiluvchi xodim manzil filialga biriktirilmagan');
     }
   }
 
-  async receiveTransferBatch(
-    batchId: string,
-    requester?: RequesterContext,
-  ) {
+  async receiveTransferBatch(batchId: string, requester?: RequesterContext) {
     const id = String(batchId ?? '').trim();
     if (!id) {
       this.badRequest('batch id is required');
@@ -1484,7 +1663,9 @@ export class BranchServiceService implements OnModuleInit {
     const batchRes = await this.sendOrderCommand<{
       data?: { destination_branch_id?: string };
     }>('order.transfer_batch.find_by_id', { id });
-    const destinationBranchId = String(batchRes?.data?.destination_branch_id ?? '').trim();
+    const destinationBranchId = String(
+      batchRes?.data?.destination_branch_id ?? '',
+    ).trim();
     if (!destinationBranchId) {
       this.notFound('Transfer batch not found');
     }
@@ -1523,7 +1704,9 @@ export class BranchServiceService implements OnModuleInit {
     const batchRes = await this.sendOrderCommand<{
       data?: { destination_branch_id?: string };
     }>('order.transfer_batch.find_by_id', { id });
-    const destinationBranchId = String(batchRes?.data?.destination_branch_id ?? '').trim();
+    const destinationBranchId = String(
+      batchRes?.data?.destination_branch_id ?? '',
+    ).trim();
     if (!destinationBranchId) {
       this.notFound('Transfer batch not found');
     }
@@ -1555,13 +1738,17 @@ export class BranchServiceService implements OnModuleInit {
 
     const reason = String(dto?.reason ?? '').trim();
     if (!reason || reason.length < 10) {
-      this.badRequest("Bekor qilish sababi kamida 10 ta belgidan iborat bo'lishi kerak");
+      this.badRequest(
+        "Bekor qilish sababi kamida 10 ta belgidan iborat bo'lishi kerak",
+      );
     }
 
     const batchRes = await this.sendOrderCommand<{
       data?: { source_branch_id?: string };
     }>('order.transfer_batch.find_by_id', { id });
-    const sourceBranchId = String(batchRes?.data?.source_branch_id ?? '').trim();
+    const sourceBranchId = String(
+      batchRes?.data?.source_branch_id ?? '',
+    ).trim();
     if (!sourceBranchId) {
       this.notFound('Transfer batch not found');
     }
@@ -1571,12 +1758,15 @@ export class BranchServiceService implements OnModuleInit {
     const requesterId = String(requester?.id ?? '').trim() || '0';
     const requesterName = requesterId;
 
-    const cancelResult = await this.sendOrderCommand('order.transfer_batch.cancel', {
-      batch_id: id,
-      reason,
-      requester_id: requesterId,
-      requester_name: requesterName,
-    });
+    const cancelResult = await this.sendOrderCommand(
+      'order.transfer_batch.cancel',
+      {
+        batch_id: id,
+        reason,
+        requester_id: requesterId,
+        requester_name: requesterName,
+      },
+    );
 
     // Keep compatibility with T13 flow: send explicit unassign command as well.
     // This is safe and idempotent even if orders were already unassigned in cancel command.
@@ -1604,7 +1794,9 @@ export class BranchServiceService implements OnModuleInit {
     const postId = String(postIdInput ?? '').trim();
 
     if (!sourceBranchId || !destinationBranchId || !postId) {
-      this.badRequest('source_branch_id, destination_branch_id va post_id majburiy');
+      this.badRequest(
+        'source_branch_id, destination_branch_id va post_id majburiy',
+      );
     }
 
     const sourceBranch = await this.getBranchOrThrow(sourceBranchId);
@@ -1658,11 +1850,13 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const selectedSet = new Set(selectedOrderIds);
-    const candidateOrders = orders.filter((order) => selectedSet.has(String(order?.id ?? '').trim()));
+    const candidateOrders = orders.filter((order) =>
+      selectedSet.has(String(order?.id ?? '').trim()),
+    );
 
     if (!candidateOrders.length) {
       throw new RpcException(
-        errorRes("Tanlangan order_ids post ichida topilmadi", 400, {
+        errorRes('Tanlangan order_ids post ichida topilmadi', 400, {
           post_id: postId,
           source_branch_id: sourceBranchId,
           destination_branch_id: destinationBranchId,
@@ -1671,7 +1865,9 @@ export class BranchServiceService implements OnModuleInit {
       );
     }
 
-    const orderIds = candidateOrders.map((order) => String(order?.id ?? '')).filter(Boolean);
+    const orderIds = candidateOrders
+      .map((order) => String(order?.id ?? ''))
+      .filter(Boolean);
     const mismatchedOrders = candidateOrders.filter(
       (order) => String(order?.branch_id ?? '') !== sourceBranchId,
     );
@@ -1679,8 +1875,12 @@ export class BranchServiceService implements OnModuleInit {
       Boolean(order?.isDeleted ?? order?.is_deleted),
     );
     const blockedStatusOrders = candidateOrders.filter((order) => {
-      const status = String(order?.status ?? '').trim().toLowerCase();
-      return status === Order_status.CANCELLED || status === Order_status.CLOSED;
+      const status = String(order?.status ?? '')
+        .trim()
+        .toLowerCase();
+      return (
+        status === Order_status.CANCELLED || status === Order_status.CLOSED
+      );
     });
 
     const ineligibleOrderIds = new Set(
@@ -1689,7 +1889,9 @@ export class BranchServiceService implements OnModuleInit {
         .filter(Boolean),
     );
 
-    const eligibleOrderIds = orderIds.filter((id) => !ineligibleOrderIds.has(id));
+    const eligibleOrderIds = orderIds.filter(
+      (id) => !ineligibleOrderIds.has(id),
+    );
 
     if (!eligibleOrderIds.length) {
       throw new RpcException(
@@ -1753,7 +1955,10 @@ export class BranchServiceService implements OnModuleInit {
 
     const assignmentMap = new Map<string, string>(
       (destinationPostAssignmentsRes?.data ?? [])
-        .map((row) => [String(row?.order_id ?? ''), String(row?.post_id ?? '')] as const)
+        .map(
+          (row) =>
+            [String(row?.order_id ?? ''), String(row?.post_id ?? '')] as const,
+        )
         .filter(([orderId, postId]) => Boolean(orderId) && Boolean(postId)),
     );
 
@@ -1822,12 +2027,15 @@ export class BranchServiceService implements OnModuleInit {
       throw error;
     }
 
-    const payload = (response?.data ?? null) as
-      | { source_branch_id?: string; destination_branch_id?: string }
-      | null;
+    const payload = (response?.data ?? null) as {
+      source_branch_id?: string;
+      destination_branch_id?: string;
+    } | null;
 
     const sourceBranchId = String(payload?.source_branch_id ?? '').trim();
-    const destinationBranchId = String(payload?.destination_branch_id ?? '').trim();
+    const destinationBranchId = String(
+      payload?.destination_branch_id ?? '',
+    ).trim();
 
     if (sourceBranchId) {
       await this.assertCanReadBranch(sourceBranchId, requester);
@@ -1901,13 +2109,19 @@ export class BranchServiceService implements OnModuleInit {
     return successRes(saved, 201, 'Branch created');
   }
 
-  async findAllBranches(query?: {
-    search?: string;
-    status?: string;
-    page?: number;
-    limit?: number;
-  }, requester?: RequesterContext) {
-    const { page, limit, skip } = this.normalizePagination(query?.page, query?.limit);
+  async findAllBranches(
+    query?: {
+      search?: string;
+      status?: string;
+      page?: number;
+      limit?: number;
+    },
+    requester?: RequesterContext,
+  ) {
+    const { page, limit, skip } = this.normalizePagination(
+      query?.page,
+      query?.limit,
+    );
     const status = this.parseStatus(query?.status);
     const search = String(query?.search ?? '').trim();
 
@@ -2019,7 +2233,9 @@ export class BranchServiceService implements OnModuleInit {
       }
     }
 
-    const managerIds = Array.from(new Set(Array.from(managerByBranchId.values())));
+    const managerIds = Array.from(
+      new Set(Array.from(managerByBranchId.values())),
+    );
     const managerUsersMap = await this.getUsersByIds(managerIds);
     const paymentByManagerId = new Map<string, unknown>();
     const courierBalanceByUserId = new Map<string, number>();
@@ -2033,21 +2249,27 @@ export class BranchServiceService implements OnModuleInit {
           );
           paymentByManagerId.set(managerId, salaryRes?.data ?? null);
         } catch {
-          const managerUser = managerUsersMap.get(managerId) as Record<string, unknown> | null;
+          const managerUser = managerUsersMap.get(managerId) as Record<
+            string,
+            unknown
+          > | null;
           if (managerUser) {
             paymentByManagerId.set(managerId, {
               user_id: managerId,
               salary_amount: Number(managerUser.salary ?? 0),
               payment_day:
-                managerUser.payment_day !== undefined && managerUser.payment_day !== null
+                managerUser.payment_day !== undefined &&
+                managerUser.payment_day !== null
                   ? Number(managerUser.payment_day)
                   : null,
               tariff_home:
-                managerUser.tariff_home !== undefined && managerUser.tariff_home !== null
+                managerUser.tariff_home !== undefined &&
+                managerUser.tariff_home !== null
                   ? Number(managerUser.tariff_home)
                   : null,
               tariff_center:
-                managerUser.tariff_center !== undefined && managerUser.tariff_center !== null
+                managerUser.tariff_center !== undefined &&
+                managerUser.tariff_center !== null
                   ? Number(managerUser.tariff_center)
                   : null,
               source: 'identity_fallback',
@@ -2061,19 +2283,27 @@ export class BranchServiceService implements OnModuleInit {
 
     const allCourierIds = Array.from(
       new Set(
-        Array.from(courierIdsByBranchId.values()).flat().map((id) => String(id)).filter(Boolean),
+        Array.from(courierIdsByBranchId.values())
+          .flat()
+          .map((id) => String(id))
+          .filter(Boolean),
       ),
     );
 
     await Promise.all(
       allCourierIds.map(async (courierId) => {
         try {
-          const cashboxRes = await this.sendFinanceCommand<{ data?: { balance?: number | string } }>(
-            'finance.cashbox.find_by_user',
-            { user_id: courierId, cashbox_type: Cashbox_type.FOR_COURIER },
-          );
+          const cashboxRes = await this.sendFinanceCommand<{
+            data?: { balance?: number | string };
+          }>('finance.cashbox.find_by_user', {
+            user_id: courierId,
+            cashbox_type: Cashbox_type.FOR_COURIER,
+          });
           const rawBalance = Number(cashboxRes?.data?.balance ?? 0);
-          courierBalanceByUserId.set(courierId, Number.isFinite(rawBalance) ? rawBalance : 0);
+          courierBalanceByUserId.set(
+            courierId,
+            Number.isFinite(rawBalance) ? rawBalance : 0,
+          );
         } catch {
           courierBalanceByUserId.set(courierId, 0);
         }
@@ -2090,14 +2320,26 @@ export class BranchServiceService implements OnModuleInit {
           return;
         }
 
-        const manager = managerUsersMap.get(managerId) as Record<string, unknown> | null;
-        const managerTariffHome = Math.max(Number(manager?.tariff_home ?? 0), 0);
-        const managerTariffCenter = Math.max(Number(manager?.tariff_center ?? 0), 0);
+        const manager = managerUsersMap.get(managerId) as Record<
+          string,
+          unknown
+        > | null;
+        const managerTariffHome = Math.max(
+          Number(manager?.tariff_home ?? 0),
+          0,
+        );
+        const managerTariffCenter = Math.max(
+          Number(manager?.tariff_center ?? 0),
+          0,
+        );
         const courierIds = courierIdsByBranchId.get(branchId) ?? [];
         const courierUsersMap = await this.getUsersByIds(courierIds);
         const courierTariffMap = new Map(
           courierIds.map((courierId) => {
-            const courier = courierUsersMap.get(courierId) as Record<string, unknown> | null;
+            const courier = courierUsersMap.get(courierId) as Record<
+              string,
+              unknown
+            > | null;
             return [
               courierId,
               {
@@ -2118,22 +2360,24 @@ export class BranchServiceService implements OnModuleInit {
           page: 1,
           limit: 5000,
         };
-        const [branchOrdersResponse, courierOrdersResponse] = await Promise.all([
-          this.sendOrderCommand<any>('order.find_all', {
-            query: {
-              ...soldOrderQuery,
-              branch_id: branchId,
-            },
-          }).catch(() => null),
-          courierIds.length
-            ? this.sendOrderCommand<any>('order.find_all', {
-                query: {
-                  ...soldOrderQuery,
-                  courier_ids: courierIds,
-                },
-              }).catch(() => null)
-            : Promise.resolve(null),
-        ]);
+        const [branchOrdersResponse, courierOrdersResponse] = await Promise.all(
+          [
+            this.sendOrderCommand<any>('order.find_all', {
+              query: {
+                ...soldOrderQuery,
+                branch_id: branchId,
+              },
+            }).catch(() => null),
+            courierIds.length
+              ? this.sendOrderCommand<any>('order.find_all', {
+                  query: {
+                    ...soldOrderQuery,
+                    courier_ids: courierIds,
+                  },
+                }).catch(() => null)
+              : Promise.resolve(null),
+          ],
+        );
 
         const extractOrders = (response: any): any[] => {
           const candidates = [
@@ -2160,7 +2404,9 @@ export class BranchServiceService implements OnModuleInit {
           const isCenter =
             String(order?.where_deliver ?? '').toLowerCase() ===
             String(Where_deliver.CENTER).toLowerCase();
-          const managerTariff = isCenter ? managerTariffCenter : managerTariffHome;
+          const managerTariff = isCenter
+            ? managerTariffCenter
+            : managerTariffHome;
           const courierId = String(order?.courier_id ?? '').trim();
           const courierTariffs = courierTariffMap.get(courierId);
           const savedCourierTariff = Number(order?.courier_tariff ?? NaN);
@@ -2211,7 +2457,10 @@ export class BranchServiceService implements OnModuleInit {
               payableToHq += amounts.hqPayable;
               continue;
             }
-            const allocated = Math.min(acceptedAmount, amounts.courierReceivable);
+            const allocated = Math.min(
+              acceptedAmount,
+              amounts.courierReceivable,
+            );
             payableToHq +=
               amounts.hqPayable * (allocated / amounts.courierReceivable);
             acceptedAmount -= allocated;
@@ -2271,7 +2520,9 @@ export class BranchServiceService implements OnModuleInit {
     const enrichedItems = items.map((item) => ({
       ...item,
       region: item.region_id ? (regionMap.get(item.region_id) ?? null) : null,
-      district: item.district_id ? (districtMap.get(item.district_id) ?? null) : null,
+      district: item.district_id
+        ? (districtMap.get(item.district_id) ?? null)
+        : null,
       parent: item.parent_id ? (parentMap.get(item.parent_id) ?? null) : null,
       olinishi_kerak: (() => {
         if (item.type === BranchType.HQ) {
@@ -2306,7 +2557,9 @@ export class BranchServiceService implements OnModuleInit {
   }
 
   async findBranchByCode(code: string) {
-    const normalized = String(code ?? '').trim().toUpperCase();
+    const normalized = String(code ?? '')
+      .trim()
+      .toUpperCase();
     if (!normalized) {
       this.badRequest('code is required');
     }
@@ -2351,9 +2604,15 @@ export class BranchServiceService implements OnModuleInit {
     return successRes(
       {
         ...branch,
-        region: branch.region_id ? (regionMap.get(branch.region_id) ?? null) : null,
-        district: branch.district_id ? (districtMap.get(branch.district_id) ?? null) : null,
-        parent: branch.parent_id ? (parentMap.get(branch.parent_id) ?? null) : null,
+        region: branch.region_id
+          ? (regionMap.get(branch.region_id) ?? null)
+          : null,
+        district: branch.district_id
+          ? (districtMap.get(branch.district_id) ?? null)
+          : null,
+        parent: branch.parent_id
+          ? (parentMap.get(branch.parent_id) ?? null)
+          : null,
       },
       200,
       'Branch found',
@@ -2487,13 +2746,12 @@ export class BranchServiceService implements OnModuleInit {
       Order_status.CLOSED,
     ]);
 
-    const returnedStatuses = new Set<string>([
-      Order_status.RETURNED_TO_MARKET,
-    ]);
+    const returnedStatuses = new Set<string>([Order_status.RETURNED_TO_MARKET]);
 
     const ordersCard = {
       total: todayOrders.length,
-      new: todayOrders.filter((order) => order.status === Order_status.NEW).length,
+      new: todayOrders.filter((order) => order.status === Order_status.NEW)
+        .length,
       on_the_road: todayOrders.filter(
         (order) => order.status === Order_status.ON_THE_ROAD,
       ).length,
@@ -2530,8 +2788,7 @@ export class BranchServiceService implements OnModuleInit {
       orders
         .filter(
           (order) =>
-            order.current_batch_id &&
-            order.status === Order_status.ON_THE_ROAD,
+            order.current_batch_id && order.status === Order_status.ON_THE_ROAD,
         )
         .map((order) => String(order.current_batch_id)),
     ).size;
@@ -2540,8 +2797,7 @@ export class BranchServiceService implements OnModuleInit {
       orders
         .filter(
           (order) =>
-            order.current_batch_id &&
-            order.status === Order_status.RECEIVED,
+            order.current_batch_id && order.status === Order_status.RECEIVED,
         )
         .map((order) => String(order.current_batch_id)),
     ).size;
@@ -2563,7 +2819,8 @@ export class BranchServiceService implements OnModuleInit {
     };
 
     const canSeeAll =
-      requesterBranchRole === 'SUPER' || requesterBranchRole === BranchUserRole.MANAGER;
+      requesterBranchRole === 'SUPER' ||
+      requesterBranchRole === BranchUserRole.MANAGER;
     const canSeeMarkets = canSeeAll;
 
     return successRes(
@@ -2606,7 +2863,12 @@ export class BranchServiceService implements OnModuleInit {
 
     const marketMap = new Map<
       string,
-      { market_id: string; orders_count: number; delivered_count: number; total_price: number }
+      {
+        market_id: string;
+        orders_count: number;
+        delivered_count: number;
+        total_price: number;
+      }
     >();
 
     for (const order of orders) {
@@ -2778,8 +3040,12 @@ export class BranchServiceService implements OnModuleInit {
       branch.name = nextName;
     }
 
-    if (typeof dto?.address !== 'undefined' || typeof dto?.location !== 'undefined') {
-      branch.address = String(dto?.address ?? dto?.location ?? '').trim() || null;
+    if (
+      typeof dto?.address !== 'undefined' ||
+      typeof dto?.location !== 'undefined'
+    ) {
+      branch.address =
+        String(dto?.address ?? dto?.location ?? '').trim() || null;
     }
 
     if (typeof dto?.phone_number !== 'undefined') {
@@ -2794,7 +3060,10 @@ export class BranchServiceService implements OnModuleInit {
       branch.district_id = this.normalizeNullableBigint(dto.district_id);
     }
 
-    const nextType = typeof dto?.type !== 'undefined' ? this.parseBranchType(dto.type) : branch.type;
+    const nextType =
+      typeof dto?.type !== 'undefined'
+        ? this.parseBranchType(dto.type)
+        : branch.type;
     const nextParentId =
       typeof dto?.parent_id !== 'undefined'
         ? this.normalizeNullableBigint(dto.parent_id)
@@ -2871,10 +3140,9 @@ export class BranchServiceService implements OnModuleInit {
     try {
       const response = await lastValueFrom(
         this.orderClient
-          .send<{ data?: CanDeleteShape }>(
-            { cmd: 'order.branch_can_delete' },
-            { branch_id: branch.id },
-          )
+          .send<{
+            data?: CanDeleteShape;
+          }>({ cmd: 'order.branch_can_delete' }, { branch_id: branch.id })
           .pipe(timeout(5000)),
       );
       canDelete = response?.data ?? null;
@@ -2923,15 +3191,21 @@ export class BranchServiceService implements OnModuleInit {
       ? this.normalizeBranchUserRole(data?.role)
       : null;
     if (requestedRole && requestedRole !== derivedRole) {
-      this.badRequest(`Berilgan role user roli bilan mos emas. User roli: ${derivedRole}`);
+      this.badRequest(
+        `Berilgan role user roli bilan mos emas. User roli: ${derivedRole}`,
+      );
     }
     const role = derivedRole;
 
     if (role === BranchUserRole.COURIER) {
       const requesterRoles = (requester?.roles ?? []).map((item) =>
-        String(item ?? '').trim().toLowerCase(),
+        String(item ?? '')
+          .trim()
+          .toLowerCase(),
       );
-      const isSystemPrivileged = requesterRoles.includes('superadmin') || requesterRoles.includes('admin');
+      const isSystemPrivileged =
+        requesterRoles.includes('superadmin') ||
+        requesterRoles.includes('admin');
 
       const branch = await this.getBranchOrThrow(branchId);
       if (
@@ -2939,7 +3213,9 @@ export class BranchServiceService implements OnModuleInit {
         branch.type !== BranchType.REGIONAL &&
         branch.type !== BranchType.HYBRID
       ) {
-        this.forbidden('Courier faqat HQ, REGIONAL yoki HYBRID branchga biriktirilishi mumkin');
+        this.forbidden(
+          'Courier faqat HQ, REGIONAL yoki HYBRID branchga biriktirilishi mumkin',
+        );
       }
 
       if (!isSystemPrivileged) {
@@ -2952,8 +3228,14 @@ export class BranchServiceService implements OnModuleInit {
           select: ['id', 'role'],
         });
 
-        if (!managerAssignment || this.normalizeBranchUserRole(managerAssignment.role) !== BranchUserRole.MANAGER) {
-          this.forbidden('Courier biriktirish uchun ushbu branchda MANAGER bo‘lish kerak');
+        if (
+          !managerAssignment ||
+          this.normalizeBranchUserRole(managerAssignment.role) !==
+            BranchUserRole.MANAGER
+        ) {
+          this.forbidden(
+            'Courier biriktirish uchun ushbu branchda MANAGER bo‘lish kerak',
+          );
         }
       }
     }
@@ -2980,6 +3262,9 @@ export class BranchServiceService implements OnModuleInit {
       existing.isDeleted = false;
       existing.role = role;
       const revived = await this.branchUserRepo.save(existing);
+      if (role === BranchUserRole.MANAGER) {
+        await this.ensureBranchCashbox(branchId);
+      }
       return successRes(revived, 200, 'Branch user assigned');
     }
 
@@ -2990,6 +3275,10 @@ export class BranchServiceService implements OnModuleInit {
         role,
       }),
     );
+
+    if (role === BranchUserRole.MANAGER) {
+      await this.ensureBranchCashbox(branchId);
+    }
 
     return successRes(saved, 201, 'Branch user assigned');
   }
@@ -3020,7 +3309,11 @@ export class BranchServiceService implements OnModuleInit {
     row.isDeleted = true;
     await this.branchUserRepo.save(row);
 
-    return successRes({ branch_id: branchId, user_id: userId }, 200, 'Branch user removed');
+    return successRes(
+      { branch_id: branchId, user_id: userId },
+      200,
+      'Branch user removed',
+    );
   }
 
   async findUsersByBranch(branch_id: string, requester?: RequesterContext) {
@@ -3071,7 +3364,9 @@ export class BranchServiceService implements OnModuleInit {
         this.forbidden('Requester aniqlanmadi');
       }
       if (requesterId !== userId) {
-        this.forbidden('Boshqa foydalanuvchining filialini ko‘rishga ruxsat yo‘q');
+        this.forbidden(
+          'Boshqa foydalanuvchining filialini ko‘rishga ruxsat yo‘q',
+        );
       }
     }
 
@@ -3100,11 +3395,14 @@ export class BranchServiceService implements OnModuleInit {
     );
   }
 
-  async setBranchConfig(data: {
-    branch_id?: string;
-    config_key?: string;
-    config_value?: Record<string, unknown> | null;
-  }, requester?: RequesterContext) {
+  async setBranchConfig(
+    data: {
+      branch_id?: string;
+      config_key?: string;
+      config_value?: Record<string, unknown> | null;
+    },
+    requester?: RequesterContext,
+  ) {
     const branchId = String(data?.branch_id ?? '').trim();
     const configKey = String(data?.config_key ?? '').trim();
 
@@ -3124,7 +3422,9 @@ export class BranchServiceService implements OnModuleInit {
     });
 
     const configValue =
-      typeof data?.config_value === 'undefined' ? null : (data.config_value ?? null);
+      typeof data?.config_value === 'undefined'
+        ? null
+        : (data.config_value ?? null);
 
     if (existing) {
       existing.isDeleted = false;
@@ -3191,11 +3491,14 @@ export class BranchServiceService implements OnModuleInit {
     return successRes(item, 200, 'Branch config found');
   }
 
-  async updateBranchConfig(data: {
-    branch_id?: string;
-    config_key?: string;
-    config_value?: Record<string, unknown> | null;
-  }, requester?: RequesterContext) {
+  async updateBranchConfig(
+    data: {
+      branch_id?: string;
+      config_key?: string;
+      config_value?: Record<string, unknown> | null;
+    },
+    requester?: RequesterContext,
+  ) {
     const branchId = String(data?.branch_id ?? '').trim();
     const configKey = String(data?.config_key ?? '').trim();
 
@@ -3217,7 +3520,10 @@ export class BranchServiceService implements OnModuleInit {
       this.notFound('Branch config not found');
     }
 
-    item.config_value = typeof data?.config_value === 'undefined' ? null : (data.config_value ?? null);
+    item.config_value =
+      typeof data?.config_value === 'undefined'
+        ? null
+        : (data.config_value ?? null);
     const saved = await this.branchConfigRepo.save(item);
 
     return successRes(saved, 200, 'Branch config updated');
@@ -3251,6 +3557,10 @@ export class BranchServiceService implements OnModuleInit {
     item.isDeleted = true;
     await this.branchConfigRepo.save(item);
 
-    return successRes({ branch_id: branchId, config_key: configKey }, 200, 'Branch config deleted');
+    return successRes(
+      { branch_id: branchId, config_key: configKey },
+      200,
+      'Branch config deleted',
+    );
   }
 }
