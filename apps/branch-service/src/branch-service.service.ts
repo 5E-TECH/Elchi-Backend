@@ -9,8 +9,10 @@ import {
   BranchType,
   BranchUserRole,
   Cashbox_type,
+  Operation_type,
   Order_status,
   Post_status,
+  Source_type,
   Status,
   Where_deliver,
 } from '@app/common';
@@ -2216,7 +2218,53 @@ export class BranchServiceService implements OnModuleInit {
           }
         }
 
-        payableToHqByBranchId.set(branchId, Math.max(Math.round(payableToHq), 0));
+        let paidToHq = 0;
+        try {
+          const cashboxResponse = await this.sendFinanceCommand<{
+            data?: {
+              id?: string;
+              cashbox?: { id?: string };
+            };
+          }>('finance.cashbox.find_by_user', {
+            user_id: branchId,
+            cashbox_type: Cashbox_type.BRANCH,
+          });
+          const cashboxId = String(
+            cashboxResponse?.data?.cashbox?.id ??
+              cashboxResponse?.data?.id ??
+              '',
+          ).trim();
+
+          if (cashboxId) {
+            const historyResponse = await this.sendFinanceCommand<{
+              data?: {
+                items?: Array<{ amount?: number | string }>;
+              };
+            }>('finance.history.find_all', {
+              cashbox_id: cashboxId,
+              operation_type: Operation_type.EXPENSE,
+              source_type: Source_type.BRANCH_TO_MAIN,
+              page: 0,
+              limit: 0,
+            });
+            paidToHq = (historyResponse?.data?.items ?? []).reduce(
+              (sum, history) => {
+                const amount = Number(history?.amount ?? 0);
+                return (
+                  sum + (Number.isFinite(amount) && amount > 0 ? amount : 0)
+                );
+              },
+              0,
+            );
+          }
+        } catch {
+          paidToHq = 0;
+        }
+
+        payableToHqByBranchId.set(
+          branchId,
+          Math.max(Math.round(payableToHq) - paidToHq, 0),
+        );
       }),
     );
 
