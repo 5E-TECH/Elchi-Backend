@@ -1176,7 +1176,13 @@ export class FinanceGatewayController {
     }
 
     const [financeResponse, branchesResponse] = await Promise.all([
-      this.send({ cmd: 'finance.cashbox.all_info' }, query),
+      this.send(
+        { cmd: 'finance.cashbox.all_info' },
+        {
+          ...query,
+          cashboxType: Cashbox_type.MAIN,
+        },
+      ),
       this.sendBranch<{
         data?: {
           items?: Array<{
