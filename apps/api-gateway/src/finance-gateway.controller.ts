@@ -263,14 +263,6 @@ export class FinanceGatewayController {
     }
 
     try {
-      const userResponse = await this.sendIdentity<{
-        data?: Record<string, any>;
-      }>({ cmd: 'identity.user.find_by_id' }, { id: userId });
-      const targetUser = userResponse?.data;
-      if (!targetUser) {
-        return false;
-      }
-
       let managerBranchId = this.extractBranchId(manager);
       if (!managerBranchId) {
         managerBranchId = await this.resolveBranchIdByUserId(
@@ -287,6 +279,17 @@ export class FinanceGatewayController {
         } catch {
           managerBranchId = '';
         }
+      }
+      if (managerBranchId && String(userId) === String(managerBranchId)) {
+        return true;
+      }
+
+      const userResponse = await this.sendIdentity<{
+        data?: Record<string, any>;
+      }>({ cmd: 'identity.user.find_by_id' }, { id: userId });
+      const targetUser = userResponse?.data;
+      if (!targetUser) {
+        return false;
       }
 
       let targetBranchId = this.extractBranchId(targetUser);
@@ -695,11 +698,12 @@ export class FinanceGatewayController {
     } = query;
     let requestUserId = user_id;
     if (this.isManager(req?.user) && !this.isPrivileged(req?.user)) {
+      const branchId =
+        this.extractBranchId(req.user) ||
+        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
       const isOwnCashbox = String(user_id) === String(req?.user?.sub ?? '');
-      if (isOwnCashbox) {
-        const branchId =
-          this.extractBranchId(req.user) ||
-          (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
+      const isOwnBranch = branchId && String(user_id) === String(branchId);
+      if (isOwnCashbox || isOwnBranch) {
         if (!branchId) {
           throw new ForbiddenException("Managerning branch'i topilmadi");
         }
@@ -1039,11 +1043,12 @@ export class FinanceGatewayController {
       }
     }
     if (this.isManager(req?.user) && !this.isPrivileged(req?.user)) {
+      const branchId =
+        this.extractBranchId(req.user) ||
+        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
       const isOwnCashbox = String(id) === String(req?.user?.sub ?? '');
-      if (isOwnCashbox) {
-        const branchId =
-          this.extractBranchId(req.user) ||
-          (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
+      const isOwnBranch = branchId && String(id) === String(branchId);
+      if (isOwnCashbox || isOwnBranch) {
         if (!branchId) {
           throw new ForbiddenException("Managerning branch'i topilmadi");
         }
