@@ -3395,6 +3395,74 @@ export class BranchServiceService implements OnModuleInit {
     );
   }
 
+  async resolveCashboxBranchForManager(
+    requested_id: string,
+    requester?: RequesterContext,
+  ) {
+    const requesterId = String(requester?.id ?? '').trim();
+    const requestedId = String(requested_id ?? '').trim();
+    if (!requesterId || !requestedId) {
+      this.badRequest('requester_id and requested_id are required');
+    }
+
+    const managerAssignment = await this.branchUserRepo.findOne({
+      where: {
+        user_id: requesterId,
+        role: BranchUserRole.MANAGER,
+        isDeleted: false,
+      },
+      order: { createdAt: 'DESC' },
+    });
+    if (!managerAssignment) {
+      this.forbidden('Requester branch manager emas');
+    }
+
+    const managerBranch = await this.getBranchOrThrow(
+      String(managerAssignment.branch_id),
+    );
+    if (
+      requestedId === requesterId ||
+      requestedId === String(managerBranch.id)
+    ) {
+      return successRes(
+        { branch_id: String(managerBranch.id) },
+        200,
+        'Manager cashbox branch resolved',
+      );
+    }
+
+    const parentBranchId = String(managerBranch.parent_id ?? '');
+    if (!parentBranchId) {
+      return successRes(null, 200, 'Manager cashbox branch not resolved');
+    }
+
+    if (requestedId === parentBranchId) {
+      return successRes(
+        { branch_id: parentBranchId },
+        200,
+        'Manager parent cashbox branch resolved',
+      );
+    }
+
+    const parentManagerAssignment = await this.branchUserRepo.findOne({
+      where: {
+        branch_id: parentBranchId,
+        user_id: requestedId,
+        role: BranchUserRole.MANAGER,
+        isDeleted: false,
+      },
+    });
+    if (parentManagerAssignment) {
+      return successRes(
+        { branch_id: parentBranchId },
+        200,
+        'Manager parent cashbox branch resolved',
+      );
+    }
+
+    return successRes(null, 200, 'Manager cashbox branch not resolved');
+  }
+
   async setBranchConfig(
     data: {
       branch_id?: string;

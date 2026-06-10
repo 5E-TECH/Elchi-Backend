@@ -260,6 +260,19 @@ export class BranchServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'branch.cashbox.resolve_for_manager' })
+  resolveCashboxBranchForManager(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.branchService.resolveCashboxBranchForManager(
+        data?.requested_id,
+        this.getRequester(data),
+      ),
+    );
+  }
+
   // --- BranchConfig ---
   @MessagePattern({ cmd: 'branch.config.set' })
   setConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
