@@ -12,8 +12,8 @@ import type { RequesterContext } from './contracts/user.payloads';
 function makeService() {
   const repo = {
     findOne: jest.fn(),
-    create: jest.fn(),
-    save: jest.fn(),
+    create: jest.fn((value) => ({ id: 'created-user', ...value })),
+    save: jest.fn(async (value) => ({ id: 'created-user', ...value })),
   };
   const noopClient = { send: jest.fn(), emit: jest.fn() };
   const bcrypt = { encrypt: jest.fn(), compare: jest.fn() };
@@ -124,11 +124,11 @@ describe('UserServiceService — role-create RBAC guards', () => {
 });
 
 describe('UserServiceService — roleToCashboxType', () => {
-  it('maps MANAGER and COURIER to FOR_COURIER, MARKET to FOR_MARKET, others null', () => {
+  it('maps only COURIER and MARKET to user cashboxes', () => {
     const { service } = makeService();
 
     const map = (role: Roles) => (service as any).roleToCashboxType(role);
-    expect(map(Roles.MANAGER)).toBe(Cashbox_type.FOR_COURIER);
+    expect(map(Roles.MANAGER)).toBeNull();
     expect(map(Roles.COURIER)).toBe(Cashbox_type.FOR_COURIER);
     expect(map(Roles.MARKET)).toBe(Cashbox_type.FOR_MARKET);
     expect(map(Roles.ADMIN)).toBeNull();

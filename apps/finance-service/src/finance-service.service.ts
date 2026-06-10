@@ -77,8 +77,11 @@ export class FinanceServiceService implements OnModuleInit {
 
   async onModuleInit() {
     const main = await this.cashboxRepo.findOne({
-      where: { cashbox_type: Cashbox_type.MAIN },
-      order: { createdAt: 'ASC' },
+      where: {
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        cashbox_type: Cashbox_type.MAIN,
+        isDeleted: false,
+      },
     });
 
     if (!main) {
@@ -172,8 +175,11 @@ export class FinanceServiceService implements OnModuleInit {
 
   private async ensureMainCashbox() {
     const main = await this.cashboxRepo.findOne({
-      where: { cashbox_type: Cashbox_type.MAIN },
-      order: { createdAt: 'ASC' },
+      where: {
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        cashbox_type: Cashbox_type.MAIN,
+        isDeleted: false,
+      },
     });
     if (!main) {
       const created = this.cashboxRepo.create({
@@ -402,7 +408,7 @@ export class FinanceServiceService implements OnModuleInit {
     if (selector.cashbox_id) {
       this.assertBigIntId(selector.cashbox_id, 'cashbox_id');
       const byId = await this.cashboxRepo.findOne({
-        where: { id: selector.cashbox_id },
+        where: { id: selector.cashbox_id, isDeleted: false },
       });
       if (!byId) {
         throw new NotFoundException('Cashbox not found');
@@ -421,6 +427,7 @@ export class FinanceServiceService implements OnModuleInit {
       where: {
         user_id: selector.user_id,
         cashbox_type: selector.cashbox_type,
+        isDeleted: false,
       },
     });
 
@@ -450,7 +457,7 @@ export class FinanceServiceService implements OnModuleInit {
     if (selector.cashbox_id) {
       this.assertBigIntId(selector.cashbox_id, 'cashbox_id');
       const byId = await manager.findOne(Cashbox, {
-        where: { id: selector.cashbox_id },
+        where: { id: selector.cashbox_id, isDeleted: false },
         lock,
       });
       if (!byId) {
@@ -470,6 +477,7 @@ export class FinanceServiceService implements OnModuleInit {
       where: {
         user_id: selector.user_id,
         cashbox_type: selector.cashbox_type,
+        isDeleted: false,
       },
       lock,
     });
@@ -517,6 +525,7 @@ export class FinanceServiceService implements OnModuleInit {
         where: {
           user_id: dto.user_id,
           cashbox_type: dto.cashbox_type,
+          isDeleted: false,
         },
       });
 
@@ -571,6 +580,7 @@ export class FinanceServiceService implements OnModuleInit {
           where: {
             user_id: dto.user_id,
             cashbox_type: dto.cashbox_type,
+            isDeleted: false,
           },
         });
 
@@ -582,8 +592,16 @@ export class FinanceServiceService implements OnModuleInit {
           return this.successRes(cashbox, 200, 'Cashbox found');
         }
 
+        const historyWhere: FindOptionsWhere<CashboxHistory> = {
+          cashbox_id: cashbox.id,
+          isDeleted: false,
+        };
+        if (dto.history_source_type) {
+          historyWhere.source_type = dto.history_source_type;
+        }
+
         const [history, total] = await this.historyRepo.findAndCount({
-          where: { cashbox_id: cashbox.id },
+          where: historyWhere,
           order: { createdAt: 'DESC' },
           skip: (page - 1) * limit,
           take: limit,
@@ -606,7 +624,7 @@ export class FinanceServiceService implements OnModuleInit {
       }
 
       const all = await this.cashboxRepo.find({
-        where: { user_id: dto.user_id },
+        where: { user_id: dto.user_id, isDeleted: false },
         order: { createdAt: 'DESC' },
       });
 
@@ -614,14 +632,27 @@ export class FinanceServiceService implements OnModuleInit {
         return this.successRes(all, 200, 'Cashboxes found');
       }
 
-      const [history, total] = await this.historyRepo
+      const historyQuery = this.historyRepo
         .createQueryBuilder('history')
         .innerJoinAndSelect('history.cashbox', 'cashbox')
         .where('cashbox.user_id = :userId', { userId: dto.user_id })
+        .andWhere('cashbox.isDeleted = :cashboxActive', {
+          cashboxActive: false,
+        })
+        .andWhere('history.isDeleted = :historyActive', {
+          historyActive: false,
+        })
         .orderBy('history.createdAt', 'DESC')
         .skip((page - 1) * limit)
-        .take(limit)
-        .getManyAndCount();
+        .take(limit);
+
+      if (dto.history_source_type) {
+        historyQuery.andWhere('history.source_type = :historySourceType', {
+          historySourceType: dto.history_source_type,
+        });
+      }
+
+      const [history, total] = await historyQuery.getManyAndCount();
 
       return this.successRes(
         {
@@ -786,7 +817,7 @@ export class FinanceServiceService implements OnModuleInit {
           : 20;
       const historyCashboxType = dto.cashbox_type ?? dto.cashboxType;
 
-      const where: FindOptionsWhere<CashboxHistory> = {};
+      const where: FindOptionsWhere<CashboxHistory> = { isDeleted: false };
 
       if (dto.cashbox_id) {
         this.assertBigIntId(dto.cashbox_id, 'cashbox_id');
@@ -808,7 +839,10 @@ export class FinanceServiceService implements OnModuleInit {
       }
       if (historyCashboxType) {
         const cashboxesByType = await this.cashboxRepo.find({
-          where: { cashbox_type: historyCashboxType },
+          where: {
+            cashbox_type: historyCashboxType,
+            isDeleted: false,
+          },
           select: ['id'],
         });
         if (!cashboxesByType.length) {
@@ -864,6 +898,7 @@ export class FinanceServiceService implements OnModuleInit {
         const userCashboxes = await this.cashboxRepo.find({
           where: {
             user_id: dto.user_id,
+            isDeleted: false,
             ...(historyCashboxType ? { cashbox_type: historyCashboxType } : {}),
           },
           select: ['id'],
@@ -947,7 +982,7 @@ export class FinanceServiceService implements OnModuleInit {
       this.assertBigIntId(id, 'id');
 
       const history = await this.historyRepo.findOne({
-        where: { id },
+        where: { id, isDeleted: false },
         relations: ['cashbox'],
       });
 
@@ -1345,6 +1380,7 @@ export class FinanceServiceService implements OnModuleInit {
       );
       const where: FindOptionsWhere<CashboxHistory> = {
         cashbox_id: mainCashbox.id,
+        isDeleted: false,
       };
       if (start && end) where.createdAt = Between(start, end);
       else if (start) where.createdAt = MoreThanOrEqual(start);
@@ -1373,7 +1409,10 @@ export class FinanceServiceService implements OnModuleInit {
   }) {
     try {
       this.assertBigIntId(data.id, 'id');
-      const where: FindOptionsWhere<Cashbox> = { user_id: data.id };
+      const where: FindOptionsWhere<Cashbox> = {
+        user_id: data.id,
+        isDeleted: false,
+      };
       if (data.cashbox_type) where.cashbox_type = data.cashbox_type;
 
       const cashbox = await this.cashboxRepo.findOne({
@@ -1385,6 +1424,7 @@ export class FinanceServiceService implements OnModuleInit {
       const { start, end } = this.parseDateRange(data.fromDate, data.toDate);
       const historyWhere: FindOptionsWhere<CashboxHistory> = {
         cashbox_id: cashbox.id,
+        isDeleted: false,
       };
       if (start && end) historyWhere.createdAt = Between(start, end);
       else if (start) historyWhere.createdAt = MoreThanOrEqual(start);
@@ -1416,19 +1456,28 @@ export class FinanceServiceService implements OnModuleInit {
     try {
       this.assertBigIntId(data.user_id, 'user_id');
       const roles = (data.roles ?? []).map((r) => r.toLowerCase());
-      const isManager = roles.includes('manager') && !roles.includes('superadmin') && !roles.includes('admin');
+      const isManager =
+        roles.includes('manager') &&
+        !roles.includes('superadmin') &&
+        !roles.includes('admin');
       const cashboxType = roles.includes('market')
         ? Cashbox_type.FOR_MARKET
         : isManager
           ? Cashbox_type.BRANCH
           : Cashbox_type.FOR_COURIER;
       const targetUserId =
-        cashboxType === Cashbox_type.BRANCH ? String(data.branch_id ?? '').trim() : data.user_id;
+        cashboxType === Cashbox_type.BRANCH
+          ? String(data.branch_id ?? '').trim()
+          : data.user_id;
       if (cashboxType === Cashbox_type.BRANCH && !targetUserId) {
         throw new BadRequestException('Manager uchun branch_id majburiy');
       }
       let cashbox = await this.cashboxRepo.findOne({
-        where: { user_id: targetUserId, cashbox_type: cashboxType },
+        where: {
+          user_id: targetUserId,
+          cashbox_type: cashboxType,
+          isDeleted: false,
+        },
         order: { createdAt: 'DESC' },
       });
 
@@ -1460,6 +1509,7 @@ export class FinanceServiceService implements OnModuleInit {
     type?: PaymentMethod;
     comment?: string;
     cashbox_type?: Cashbox_type;
+    created_by?: string;
   }) {
     try {
       const targetCashboxType = data.cashbox_type ?? Cashbox_type.MAIN;
@@ -1474,7 +1524,7 @@ export class FinanceServiceService implements OnModuleInit {
         source_type: Source_type.MANUAL_EXPENSE,
         payment_method: data.type ?? PaymentMethod.CASH,
         comment: data.comment,
-        created_by: data.user_id,
+        created_by: data.created_by ?? data.user_id,
         cashbox_type: targetCashboxType,
       });
       await this.activityLog.log({
@@ -1501,6 +1551,7 @@ export class FinanceServiceService implements OnModuleInit {
     type?: PaymentMethod;
     comment?: string;
     cashbox_type?: Cashbox_type;
+    created_by?: string;
   }) {
     try {
       const targetCashboxType = data.cashbox_type ?? Cashbox_type.MAIN;
@@ -1515,7 +1566,7 @@ export class FinanceServiceService implements OnModuleInit {
         source_type: Source_type.MANUAL_INCOME,
         payment_method: data.type ?? PaymentMethod.CASH,
         comment: data.comment,
-        created_by: data.user_id,
+        created_by: data.created_by ?? data.user_id,
         cashbox_type: targetCashboxType,
       });
       await this.activityLog.log({
@@ -1571,6 +1622,7 @@ export class FinanceServiceService implements OnModuleInit {
         where: {
           user_id: data.courier_id,
           cashbox_type: Cashbox_type.FOR_COURIER,
+          isDeleted: false,
         },
         lock: { mode: 'pessimistic_write' },
       });
@@ -1584,7 +1636,11 @@ export class FinanceServiceService implements OnModuleInit {
         data.receiver_cashbox_type ?? Cashbox_type.MAIN;
 
       let receiverCashbox = await queryRunner.manager.findOne(Cashbox, {
-        where: { user_id: receiverUserId, cashbox_type: receiverCashboxType },
+        where: {
+          user_id: receiverUserId,
+          cashbox_type: receiverCashboxType,
+          isDeleted: false,
+        },
         lock: { mode: 'pessimistic_write' },
       });
       if (!receiverCashbox) {
@@ -1932,7 +1988,10 @@ export class FinanceServiceService implements OnModuleInit {
       // Lock order: main → market (same order as paymentsFromCourier to avoid
       // cross-method deadlocks).
       const mainCashbox = await queryRunner.manager.findOne(Cashbox, {
-        where: { cashbox_type: Cashbox_type.MAIN },
+        where: {
+          user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+          cashbox_type: Cashbox_type.MAIN,
+        },
         lock: { mode: 'pessimistic_write' },
       });
       if (!mainCashbox) throw new NotFoundException('Main cashbox not found');
@@ -2038,10 +2097,16 @@ export class FinanceServiceService implements OnModuleInit {
     try {
       const mainCashbox = await this.ensureMainCashbox();
       const courierCashboxes = await this.cashboxRepo.find({
-        where: { cashbox_type: Cashbox_type.FOR_COURIER },
+        where: {
+          cashbox_type: Cashbox_type.FOR_COURIER,
+          isDeleted: false,
+        },
       });
       const marketCashboxes = await this.cashboxRepo.find({
-        where: { cashbox_type: Cashbox_type.FOR_MARKET },
+        where: {
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          isDeleted: false,
+        },
       });
 
       const noPagination = filters?.page === 0 || filters?.limit === 0;
@@ -2058,6 +2123,10 @@ export class FinanceServiceService implements OnModuleInit {
       const qb = this.historyRepo
         .createQueryBuilder('h')
         .leftJoinAndSelect('h.cashbox', 'cashbox')
+        .where('h.isDeleted = :historyActive', { historyActive: false })
+        .andWhere('cashbox.isDeleted = :cashboxActive', {
+          cashboxActive: false,
+        })
         .orderBy('h.createdAt', 'DESC');
 
       if (!noPagination) {
@@ -2128,10 +2197,16 @@ export class FinanceServiceService implements OnModuleInit {
     try {
       const mainCashbox = await this.ensureMainCashbox();
       const allCourierCashboxes = await this.cashboxRepo.find({
-        where: { cashbox_type: Cashbox_type.FOR_COURIER },
+        where: {
+          cashbox_type: Cashbox_type.FOR_COURIER,
+          isDeleted: false,
+        },
       });
       const allMarketCashboxes = await this.cashboxRepo.find({
-        where: { cashbox_type: Cashbox_type.FOR_MARKET },
+        where: {
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          isDeleted: false,
+        },
       });
 
       const couriersTotalBalanse = allCourierCashboxes.reduce(

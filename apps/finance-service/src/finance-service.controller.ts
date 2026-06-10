@@ -229,6 +229,7 @@ export class FinanceServiceController {
       type?: any;
       comment?: string;
       cashbox_type?: Cashbox_type;
+      created_by?: string;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -246,6 +247,7 @@ export class FinanceServiceController {
       type?: any;
       comment?: string;
       cashbox_type?: Cashbox_type;
+      created_by?: string;
     },
     @Ctx() context: RmqContext,
   ) {

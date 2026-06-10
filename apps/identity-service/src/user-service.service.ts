@@ -454,10 +454,7 @@ export class UserServiceService implements OnModuleInit {
     if (role === Roles.MARKET) {
       return Cashbox_type.FOR_MARKET;
     }
-    // Managers operate like couriers (deliver / collect cash), so they share the
-    // FOR_COURIER cashbox type — there is no dedicated manager cashbox type.
-    // Keep this in sync with createManager(), which provisions FOR_COURIER.
-    if (role === Roles.COURIER || role === Roles.MANAGER) {
+    if (role === Roles.COURIER) {
       return Cashbox_type.FOR_COURIER;
     }
     return null;
@@ -913,8 +910,7 @@ export class UserServiceService implements OnModuleInit {
     if (!user) {
       this.notFound('User topilmadi');
     }
-    user.settings =
-      settings && typeof settings === 'object' ? settings : null;
+    user.settings = settings && typeof settings === 'object' ? settings : null;
     await this.users.save(user);
     await this.activityLog.log({
       entity_type: 'User',
@@ -1212,9 +1208,8 @@ export class UserServiceService implements OnModuleInit {
         'MANAGER',
         requester,
       );
+      await this.ensureUserCashbox(dto.branch_id, Cashbox_type.BRANCH);
     }
-
-    await this.ensureUserCashbox(saved.id, Cashbox_type.FOR_COURIER);
 
     void this.syncUserToSearch(saved);
     await this.activityLog.log({

@@ -102,6 +102,20 @@ export class Order extends BaseEntity {
   })
   branch_share!: number | null;
 
+  /**
+   * Amount actually credited to the branch cashbox at sale time. Manager-direct
+   * sales credit the full collected amount, while courier sales keep their
+   * existing settlement-based amount. Used to reverse the exact credit.
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  branch_cashbox_amount!: number | null;
+
   @Column({ type: 'int', default: 0 })
   to_be_paid!: number;
 

@@ -203,8 +203,6 @@ export class OrderServiceController {
       market_id: string;
       branch_id?: string;
       exclude_branch_source?: boolean;
-      page?: number;
-      limit?: number;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -213,8 +211,6 @@ export class OrderServiceController {
         data.market_id,
         data.branch_id,
         Boolean(data?.exclude_branch_source),
-        data.page,
-        data.limit,
       ),
     );
   }
@@ -331,7 +327,12 @@ export class OrderServiceController {
       context,
       'order.rollback_waiting',
       data.request_id,
-      () => this.orderService.rollbackOrderToWaiting(data.requester, data.id, data.dto),
+      () =>
+        this.orderService.rollbackOrderToWaiting(
+          data.requester,
+          data.id,
+          data.dto,
+        ),
     );
   }
 
@@ -623,8 +624,6 @@ export class OrderServiceController {
       market_id: string;
       branch_id?: string;
       exclude_branch_source?: boolean;
-      page?: number;
-      limit?: number;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -633,8 +632,6 @@ export class OrderServiceController {
         data.market_id,
         data.branch_id,
         Boolean(data?.exclude_branch_source),
-        data.page,
-        data.limit,
       ),
     );
   }

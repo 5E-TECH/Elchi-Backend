@@ -27,8 +27,10 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import {
   Cashbox_type,
+  Operation_type,
   Order_status,
   Roles as RoleEnum,
+  Source_type,
   Where_deliver,
 } from '@app/common';
 import {
@@ -225,6 +227,67 @@ export class FinanceGatewayController {
     }
   }
 
+  private async resolveManagerBranchCashboxId(
+    manager: JwtUser | undefined,
+    requestedId: string,
+  ): Promise<string> {
+    if (!manager?.sub) {
+      return '';
+    }
+
+    const response = await this.sendBranch<{
+      data?: { branch_id?: string } | null;
+    }>(
+      { cmd: 'branch.cashbox.resolve_for_manager' },
+      {
+        requested_id: requestedId,
+        requester: this.toRequester(manager),
+      },
+    );
+    const resolvedBranchId = String(response?.data?.branch_id ?? '');
+    if (resolvedBranchId) {
+      return resolvedBranchId;
+    }
+
+    const managerBranchId =
+      this.extractBranchId(manager) ||
+      (await this.resolveBranchIdByUserId(String(manager.sub), manager));
+    if (!managerBranchId) {
+      return '';
+    }
+
+    if (
+      String(requestedId) === String(manager.sub) ||
+      String(requestedId) === String(managerBranchId)
+    ) {
+      return managerBranchId;
+    }
+
+    try {
+      const branchResponse = await this.sendBranch<{
+        data?: Record<string, any>;
+      }>(
+        { cmd: 'branch.find_by_id' },
+        { id: managerBranchId, requester: this.toRequester(manager) },
+      );
+      const branch = branchResponse?.data;
+      const parentBranchId = String(branch?.parent_id ?? '');
+      const parentManagerId = String(branch?.parent?.manager_id ?? '');
+
+      if (
+        parentBranchId &&
+        (String(requestedId) === parentBranchId ||
+          (parentManagerId && String(requestedId) === parentManagerId))
+      ) {
+        return parentBranchId;
+      }
+    } catch {
+      return '';
+    }
+
+    return '';
+  }
+
   private async isUserAssignedToBranch(
     branchId: string,
     userId: string,
@@ -260,15 +323,15 @@ export class FinanceGatewayController {
       return true;
     }
 
-    try {
-      const userResponse = await this.sendIdentity<{
-        data?: Record<string, any>;
-      }>({ cmd: 'identity.user.find_by_id' }, { id: userId });
-      const targetUser = userResponse?.data;
-      if (!targetUser) {
-        return false;
-      }
+    const accessibleBranchId = await this.resolveManagerBranchCashboxId(
+      manager,
+      userId,
+    );
+    if (accessibleBranchId) {
+      return true;
+    }
 
+    try {
       let managerBranchId = this.extractBranchId(manager);
       if (!managerBranchId) {
         managerBranchId = await this.resolveBranchIdByUserId(
@@ -285,6 +348,17 @@ export class FinanceGatewayController {
         } catch {
           managerBranchId = '';
         }
+      }
+      if (managerBranchId && String(userId) === String(managerBranchId)) {
+        return true;
+      }
+
+      const userResponse = await this.sendIdentity<{
+        data?: Record<string, any>;
+      }>({ cmd: 'identity.user.find_by_id' }, { id: userId });
+      const targetUser = userResponse?.data;
+      if (!targetUser) {
+        return false;
       }
 
       let targetBranchId = this.extractBranchId(targetUser);
@@ -438,84 +512,191 @@ export class FinanceGatewayController {
 
     const courierCashboxes = await Promise.all(
       couriers.map(async (courier) => {
+        const courierId = String(courier?.id ?? '').trim();
         const cashboxRes = await this.send(
           { cmd: 'finance.cashbox.find_by_user' },
           {
-            user_id: String(courier.id),
+            user_id: courierId,
             cashbox_type: Cashbox_type.FOR_COURIER,
             with_history: false,
           },
         ).catch(() => null);
         const cashbox = cashboxRes?.data?.cashbox ?? cashboxRes?.data ?? null;
-        return Number(cashbox?.balance ?? 0);
+        return {
+          courierId,
+          balance: Number(cashbox?.balance ?? 0),
+        };
       }),
     );
     const olinishiKerak = courierCashboxes.reduce(
-      (sum, value) => sum + Math.max(Number(value ?? 0), 0),
+      (sum, item) => sum + Math.max(Number(item.balance ?? 0), 0),
       0,
+    );
+    const courierBalanceMap = new Map(
+      courierCashboxes.map((item) => [item.courierId, item.balance]),
     );
 
     const courierIds = couriers
       .map((courier) => String(courier?.id ?? '').trim())
       .filter(Boolean);
 
-    const soldOrdersResponse = await this.sendOrder(
-      { cmd: 'order.find_all' },
-      {
-        query: {
-          courier_ids: courierIds.length ? courierIds : undefined,
-          status: [
-            Order_status.SOLD,
-            Order_status.PAID,
-            Order_status.PARTLY_PAID,
-          ],
-          page: 1,
-          limit: 5000,
-          start_day: query?.fromDate,
-          end_day: query?.toDate,
-        },
-      },
-    ).catch(() => null);
+    const soldOrderQuery = {
+      status: [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID],
+      page: 1,
+      limit: 5000,
+      start_day: query?.fromDate,
+      end_day: query?.toDate,
+    };
+    const [branchSoldOrdersResponse, courierSoldOrdersResponse] =
+      await Promise.all([
+        managerBranchId
+          ? this.sendOrder(
+              { cmd: 'order.find_all' },
+              {
+                query: {
+                  ...soldOrderQuery,
+                  branch_id: managerBranchId,
+                },
+              },
+            ).catch(() => null)
+          : Promise.resolve(null),
+        courierIds.length
+          ? this.sendOrder(
+              { cmd: 'order.find_all' },
+              {
+                query: {
+                  ...soldOrderQuery,
+                  courier_ids: courierIds,
+                },
+              },
+            ).catch(() => null)
+          : Promise.resolve(null),
+      ]);
 
-    const soldOrders =
-      soldOrdersResponse?.data?.data ??
-      soldOrdersResponse?.data?.items ??
-      soldOrdersResponse?.data ??
-      [];
+    const extractOrders = (response: any): any[] => {
+      const rows =
+        response?.data?.data ?? response?.data?.items ?? response?.data ?? [];
+      return Array.isArray(rows) ? rows : [];
+    };
+    const soldOrders = Array.from(
+      new Map(
+        [
+          ...extractOrders(branchSoldOrdersResponse),
+          ...extractOrders(courierSoldOrdersResponse),
+        ].map((order: any) => [String(order?.id ?? ''), order]),
+      ).values(),
+    );
 
-    const berilishiKerak = (Array.isArray(soldOrders) ? soldOrders : []).reduce(
-      (sum: number, order: any) => {
-        const totalPrice = Number(order?.total_price ?? 0);
-        const whereDeliver = String(order?.where_deliver ?? '').toLowerCase();
-        const managerTariff =
-          whereDeliver === String(Where_deliver.CENTER).toLowerCase()
-            ? managerTariffCenter
-            : managerTariffHome;
-
-        const courierTariffFromOrder = Number(order?.courier_tariff ?? NaN);
-        const courierId = String(order?.courier_id ?? '').trim();
-        const courierTariffByUser =
-          courierId && courierTariffMap.has(courierId)
-            ? whereDeliver === String(Where_deliver.CENTER).toLowerCase()
-              ? Number(courierTariffMap.get(courierId)?.center ?? 0)
-              : Number(courierTariffMap.get(courierId)?.home ?? 0)
-            : 0;
-        const courierTariff = Number.isFinite(courierTariffFromOrder)
+    const calculateOrderAmounts = (order: any) => {
+      const totalPrice = Math.max(Number(order?.total_price ?? 0), 0);
+      const whereDeliver = String(order?.where_deliver ?? '').toLowerCase();
+      const managerTariff =
+        whereDeliver === String(Where_deliver.CENTER).toLowerCase()
+          ? managerTariffCenter
+          : managerTariffHome;
+      const courierId = String(order?.courier_id ?? '').trim();
+      const courierTariffFromOrder = Number(order?.courier_tariff ?? NaN);
+      const courierTariffByUser =
+        courierId && courierTariffMap.has(courierId)
+          ? whereDeliver === String(Where_deliver.CENTER).toLowerCase()
+            ? Number(courierTariffMap.get(courierId)?.center ?? 0)
+            : Number(courierTariffMap.get(courierId)?.home ?? 0)
+          : 0;
+      const courierShare = Math.max(
+        Number.isFinite(courierTariffFromOrder)
           ? courierTariffFromOrder
-          : courierTariffByUser;
-        const courierShare = Math.max(courierTariff, 0);
-        const managerShare = Math.max(managerTariff - courierShare, 0);
-        const hqPayable = totalPrice - courierShare - managerShare;
+          : courierTariffByUser,
+        0,
+      );
 
-        return sum + Math.max(hqPayable, 0);
+      return {
+        courierId,
+        courierReceivable: Math.max(totalPrice - courierShare, 0),
+        hqPayable: Math.max(totalPrice - managerTariff, 0),
+      };
+    };
+
+    let berilishiKerak = 0;
+    const courierOrders = new Map<string, any[]>();
+
+    for (const order of soldOrders) {
+      const amounts = calculateOrderAmounts(order);
+      if (!amounts.courierId || !courierTariffMap.has(amounts.courierId)) {
+        berilishiKerak += amounts.hqPayable;
+        continue;
+      }
+      const rows = courierOrders.get(amounts.courierId) ?? [];
+      rows.push(order);
+      courierOrders.set(amounts.courierId, rows);
+    }
+
+    for (const [courierId, orders] of courierOrders) {
+      const sortedOrders = [...orders].sort(
+        (left, right) =>
+          new Date(left?.createdAt ?? 0).getTime() -
+          new Date(right?.createdAt ?? 0).getTime(),
+      );
+      const totalCourierReceivable = sortedOrders.reduce(
+        (sum, order) => sum + calculateOrderAmounts(order).courierReceivable,
+        0,
+      );
+      let acceptedAmount = Math.max(
+        totalCourierReceivable -
+          Math.max(Number(courierBalanceMap.get(courierId) ?? 0), 0),
+        0,
+      );
+
+      for (const order of sortedOrders) {
+        if (acceptedAmount <= 0) break;
+        const amounts = calculateOrderAmounts(order);
+        if (amounts.courierReceivable <= 0) {
+          berilishiKerak += amounts.hqPayable;
+          continue;
+        }
+        const allocated = Math.min(acceptedAmount, amounts.courierReceivable);
+        berilishiKerak +=
+          amounts.hqPayable * (allocated / amounts.courierReceivable);
+        acceptedAmount -= allocated;
+      }
+    }
+
+    const branchToMainHistoryResponse = ownCashbox?.id
+      ? await this.send<{
+          data?: {
+            items?: Array<{
+              amount?: number | string;
+            }>;
+          };
+        }>(
+          { cmd: 'finance.history.find_all' },
+          {
+            cashbox_id: String(ownCashbox.id),
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.BRANCH_TO_MAIN,
+            from_date: query?.fromDate,
+            to_date: query?.toDate,
+            page: 0,
+            limit: 0,
+          },
+        ).catch(() => null)
+      : null;
+    const paidToHq = (branchToMainHistoryResponse?.data?.items ?? []).reduce(
+      (sum, history) => {
+        const amount = Number(history?.amount ?? 0);
+        return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
       },
+      0,
+    );
+    const remainingPayableToHq = Math.max(
+      Math.round(berilishiKerak) - paidToHq,
       0,
     );
 
     return {
       kassa,
       olinishi_kerak: Math.max(olinishiKerak, 0),
-      berilishi_kerak: Math.max(berilishiKerak, 0),
+      berilishi_kerak: remainingPayableToHq,
+      hq_ga_tollangan: paidToHq,
       counterparty: 'HQ',
       cashbox: ownCashbox,
       couriers,
@@ -559,12 +740,16 @@ export class FinanceGatewayController {
     @Query() query: FindCashboxByUserQueryDto,
     @Req() req: { user: JwtUser },
   ) {
+    const managerBranchCashboxId =
+      this.isManager(req?.user) && !this.isPrivileged(req?.user)
+        ? await this.resolveManagerBranchCashboxId(req.user, user_id)
+        : '';
+
     if (!this.isPrivileged(req?.user)) {
       if (this.isManager(req?.user)) {
-        const managerCanAccess = await this.canManagerAccessUser(
-          req?.user,
-          user_id,
-        );
+        const managerCanAccess =
+          Boolean(managerBranchCashboxId) ||
+          (await this.canManagerAccessUser(req?.user, user_id));
         if (!managerCanAccess) {
           throw new ForbiddenException(
             "Siz bu foydalanuvchi kassasini ko'ra olmaysiz",
@@ -576,13 +761,114 @@ export class FinanceGatewayController {
         );
       }
     }
+    let isPrivilegedBranchView = false;
+    let privilegedBranchSettlement: Awaited<
+      ReturnType<FinanceGatewayController['buildManagerSettlement']>
+    > | null = null;
+    let isPrivilegedMarketView = false;
+    let requestQuery: FindCashboxByUserQueryDto & {
+      history_source_type?: Source_type;
+    } = query;
+    let requestUserId = user_id;
+    if (this.isManager(req?.user) && !this.isPrivileged(req?.user)) {
+      if (managerBranchCashboxId) {
+        requestUserId = managerBranchCashboxId;
+        requestQuery = {
+          ...query,
+          cashbox_type: Cashbox_type.BRANCH,
+          history_source_type: Source_type.BRANCH_TO_MAIN,
+        };
+      } else if (!query.cashbox_type) {
+        requestQuery = {
+          ...query,
+          cashbox_type: Cashbox_type.FOR_COURIER,
+        };
+      }
+    }
+    if (this.isPrivileged(req?.user) && !query.cashbox_type) {
+      try {
+        await this.sendBranch(
+          { cmd: 'branch.find_by_id' },
+          { id: user_id, requester: this.toRequester(req.user) },
+        );
+        isPrivilegedBranchView = true;
+        requestQuery = {
+          ...query,
+          cashbox_type: Cashbox_type.BRANCH,
+        };
+
+        const branchUsersResponse = await this.sendBranch<{ data?: any[] }>(
+          { cmd: 'branch.user.find_by_branch' },
+          {
+            branch_id: user_id,
+            requester: this.toRequester(req.user),
+          },
+        );
+        const managerAssignment = (
+          Array.isArray(branchUsersResponse?.data)
+            ? branchUsersResponse.data
+            : []
+        ).find(
+          (item: any) =>
+            String(item?.role ?? '').toUpperCase() === 'MANAGER' &&
+            item?.user_id,
+        );
+        if (managerAssignment?.user_id) {
+          privilegedBranchSettlement = await this.buildManagerSettlement({
+            sub: String(managerAssignment.user_id),
+            roles: [RoleEnum.MANAGER],
+            branch_id: user_id,
+          });
+        }
+      } catch {
+        isPrivilegedBranchView = false;
+        privilegedBranchSettlement = null;
+        try {
+          const userResponse = await this.sendIdentity<{
+            data?: Record<string, any>;
+          }>({ cmd: 'identity.user.find_by_id' }, { id: user_id });
+          const targetRoles = Array.isArray(userResponse?.data?.roles)
+            ? userResponse.data.roles
+            : userResponse?.data?.role
+              ? [userResponse.data.role]
+              : [];
+          isPrivilegedMarketView = targetRoles.some(
+            (role: unknown) =>
+              String(role ?? '').toLowerCase() === RoleEnum.MARKET,
+          );
+          if (isPrivilegedMarketView) {
+            requestQuery = {
+              ...query,
+              cashbox_type: Cashbox_type.FOR_MARKET,
+              history_source_type: Source_type.MARKET_PAYMENT,
+            };
+          }
+        } catch {
+          isPrivilegedMarketView = false;
+        }
+      }
+    }
+
     const response = await this.send(
       { cmd: 'finance.cashbox.find_by_user' },
-      { user_id, ...query },
+      { user_id: requestUserId, ...requestQuery },
     );
 
     const withHistory = query.with_history ?? true;
     if (!withHistory) {
+      if (isPrivilegedBranchView && response?.data) {
+        response.data = {
+          cashbox: response.data,
+          kassadagi_summa: Number(response.data?.balance ?? 0),
+          berilishi_kerak: Number(
+            privilegedBranchSettlement?.berilishi_kerak ?? 0,
+          ),
+          olinishi_kerak: Number(
+            privilegedBranchSettlement?.berilishi_kerak ?? 0,
+          ),
+          counterparty: 'HQ',
+        };
+      }
       return response;
     }
 
@@ -628,6 +914,35 @@ export class FinanceGatewayController {
     }
 
     if (response?.data?.cashbox && Array.isArray(response?.data?.history)) {
+      if (isPrivilegedBranchView) {
+        response.data.history = response.data.history.filter(
+          (item: any) =>
+            String(item?.source_type ?? '') ===
+            String(Source_type.BRANCH_TO_MAIN),
+        );
+        response.data.pagination = {
+          ...(response.data.pagination ?? {}),
+          total: response.data.history.length,
+          totalPages: response.data.history.length ? 1 : 0,
+        };
+        response.data.kassadagi_summa = Number(
+          response.data.cashbox?.balance ?? 0,
+        );
+        response.data.berilishi_kerak = Number(
+          privilegedBranchSettlement?.berilishi_kerak ?? 0,
+        );
+        response.data.olinishi_kerak = Number(
+          privilegedBranchSettlement?.berilishi_kerak ?? 0,
+        );
+        response.data.counterparty = 'HQ';
+      }
+      if (isPrivilegedMarketView) {
+        response.data.history = response.data.history.filter(
+          (item: any) =>
+            String(item?.source_type ?? '') ===
+            String(Source_type.MARKET_PAYMENT),
+        );
+      }
       response.data.cashboxHistory = await this.attachCreatedByUsers(
         response.data.history,
       );
@@ -705,17 +1020,67 @@ export class FinanceGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get main cashbox summary' })
-  getMainCashbox(
+  async getMainCashbox(
     @Query() query: MainCashboxFilterQueryDto,
     @Req() req: { user: JwtUser },
   ) {
     if (this.isManager(req?.user)) {
+      const branchId =
+        this.extractBranchId(req.user) ||
+        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
+      if (!branchId) {
+        throw new ForbiddenException("Managerning branch'i topilmadi");
+      }
       return this.send(
         { cmd: 'finance.cashbox.user_by_id' },
-        { id: req.user.sub, cashbox_type: Cashbox_type.FOR_COURIER, ...query },
+        { id: branchId, cashbox_type: Cashbox_type.BRANCH, ...query },
       );
     }
-    return this.send({ cmd: 'finance.cashbox.main' }, query);
+
+    const response = await this.send({ cmd: 'finance.cashbox.main' }, query);
+    const histories = await this.attachCreatedByUsers(
+      response?.data?.cashboxHistory ?? [],
+    );
+    const visibleHistories = histories.filter((history: any) => {
+      if (
+        String(history?.source_type ?? '') !==
+        String(Source_type.COURIER_PAYMENT)
+      ) {
+        return true;
+      }
+
+      const creatorRoles = Array.isArray(history?.createdByUser?.roles)
+        ? history.createdByUser.roles
+        : history?.createdByUser?.role
+          ? [history.createdByUser.role]
+          : [];
+      return !creatorRoles.some(
+        (role: unknown) =>
+          String(role ?? '').toLowerCase() === RoleEnum.MANAGER,
+      );
+    });
+
+    if (response?.data) {
+      response.data.cashboxHistory = visibleHistories;
+      response.data.income = visibleHistories.reduce(
+        (sum: number, history: any) =>
+          String(history?.operation_type ?? '') ===
+          String(Operation_type.INCOME)
+            ? sum + Number(history?.amount ?? 0)
+            : sum,
+        0,
+      );
+      response.data.outcome = visibleHistories.reduce(
+        (sum: number, history: any) =>
+          String(history?.operation_type ?? '') ===
+          String(Operation_type.EXPENSE)
+            ? sum + Number(history?.amount ?? 0)
+            : sum,
+        0,
+      );
+    }
+
+    return response;
   }
 
   @Get('cashbox/user/:id/main')
@@ -729,9 +1094,16 @@ export class FinanceGatewayController {
     @Query() query: MainCashboxFilterQueryDto,
     @Req() req: { user: JwtUser },
   ) {
+    const managerBranchCashboxId =
+      this.isManager(req?.user) && !this.isPrivileged(req?.user)
+        ? await this.resolveManagerBranchCashboxId(req.user, id)
+        : '';
+
     if (!this.isPrivileged(req?.user)) {
       if (this.isManager(req?.user)) {
-        const managerCanAccess = await this.canManagerAccessUser(req?.user, id);
+        const managerCanAccess =
+          Boolean(managerBranchCashboxId) ||
+          (await this.canManagerAccessUser(req?.user, id));
         if (!managerCanAccess) {
           throw new ForbiddenException(
             "Siz bu foydalanuvchi kassasini ko'ra olmaysiz",
@@ -742,6 +1114,22 @@ export class FinanceGatewayController {
           "Siz faqat o'zingizning kassangizni ko'ra olasiz",
         );
       }
+    }
+    if (this.isManager(req?.user) && !this.isPrivileged(req?.user)) {
+      if (managerBranchCashboxId) {
+        return this.send(
+          { cmd: 'finance.cashbox.user_by_id' },
+          {
+            id: managerBranchCashboxId,
+            cashbox_type: Cashbox_type.BRANCH,
+            ...query,
+          },
+        );
+      }
+      return this.send(
+        { cmd: 'finance.cashbox.user_by_id' },
+        { id, cashbox_type: Cashbox_type.FOR_COURIER, ...query },
+      );
     }
     return this.send({ cmd: 'finance.cashbox.user_by_id' }, { id, ...query });
   }
@@ -756,11 +1144,17 @@ export class FinanceGatewayController {
     @Query() query: MainCashboxFilterQueryDto,
   ) {
     const branchId = this.isManager(req?.user)
-      ? this.extractBranchId(req.user) || (await this.resolveBranchIdByUserId(String(req.user.sub), req.user))
+      ? this.extractBranchId(req.user) ||
+        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user))
       : null;
     const response = await this.send(
       { cmd: 'finance.cashbox.my' },
-      { user_id: req.user.sub, branch_id: branchId, roles: req.user.roles ?? [], ...query },
+      {
+        user_id: req.user.sub,
+        branch_id: branchId,
+        roles: req.user.roles ?? [],
+        ...query,
+      },
     );
 
     return this.attachCreatedByUsersToHistory(response);
@@ -903,6 +1297,8 @@ export class FinanceGatewayController {
           ...query,
           user_id: settlement.cashbox?.user_id ?? '',
           cashbox_type: Cashbox_type.BRANCH,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.BRANCH_TO_MAIN,
         },
       );
       const page = Number(query?.page ?? 1);
@@ -930,7 +1326,56 @@ export class FinanceGatewayController {
         },
       };
     }
-    return this.send({ cmd: 'finance.cashbox.all_info' }, query);
+
+    const [financeResponse, branchesResponse] = await Promise.all([
+      this.send(
+        { cmd: 'finance.cashbox.all_info' },
+        {
+          ...query,
+          cashboxType: Cashbox_type.MAIN,
+        },
+      ),
+      this.sendBranch<{
+        data?: {
+          items?: Array<{
+            type?: string;
+            olinishi_kerak?: number | string;
+          }>;
+        };
+      }>(
+        { cmd: 'branch.find_all' },
+        {
+          requester: this.toRequester(req.user),
+          query: {
+            status: 'active',
+            page: 1,
+            limit: 1000,
+          },
+        },
+      ).catch(() => null),
+    ]);
+
+    const branches = branchesResponse?.data?.items ?? [];
+    const branchManagersReceivable = branches.reduce((sum, branch) => {
+      if (String(branch?.type ?? '').toUpperCase() === 'HQ') {
+        return sum;
+      }
+      const amount = Number(branch?.olinishi_kerak ?? 0);
+      return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
+    }, 0);
+
+    if (financeResponse?.data) {
+      financeResponse.data.kassadagi_summa = Number(
+        financeResponse.data.mainCashboxTotal ?? 0,
+      );
+      financeResponse.data.berilishi_kerak = Number(
+        financeResponse.data.marketCashboxTotal ?? 0,
+      );
+      financeResponse.data.olinishi_kerak = branchManagersReceivable;
+      financeResponse.data.courierCashboxTotal = branchManagersReceivable;
+    }
+
+    return financeResponse;
   }
 
   @Get('cashbox/manager/settlement')
@@ -1049,17 +1494,25 @@ export class FinanceGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Spend money from main cashbox' })
   @ApiBody({ type: MainCashboxManualRequestDto })
-  spendMoney(
+  async spendMoney(
     @Req() req: { user: JwtUser },
     @Body() dto: MainCashboxManualRequestDto,
   ) {
     const isManager = this.isManager(req?.user);
+    const branchId = isManager
+      ? this.extractBranchId(req.user) ||
+        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user))
+      : '';
+    if (isManager && !branchId) {
+      throw new ForbiddenException("Managerning branch'i topilmadi");
+    }
     return this.send(
       { cmd: 'finance.cashbox.spend' },
       {
         ...dto,
-        user_id: req.user.sub,
-        ...(isManager ? { cashbox_type: Cashbox_type.FOR_COURIER } : {}),
+        user_id: isManager ? branchId : req.user.sub,
+        created_by: req.user.sub,
+        ...(isManager ? { cashbox_type: Cashbox_type.BRANCH } : {}),
       },
     );
   }
@@ -1070,17 +1523,25 @@ export class FinanceGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Fill main cashbox' })
   @ApiBody({ type: MainCashboxManualRequestDto })
-  fillCashbox(
+  async fillCashbox(
     @Req() req: { user: JwtUser },
     @Body() dto: MainCashboxManualRequestDto,
   ) {
     const isManager = this.isManager(req?.user);
+    const branchId = isManager
+      ? this.extractBranchId(req.user) ||
+        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user))
+      : '';
+    if (isManager && !branchId) {
+      throw new ForbiddenException("Managerning branch'i topilmadi");
+    }
     return this.send(
       { cmd: 'finance.cashbox.fill' },
       {
         ...dto,
-        user_id: req.user.sub,
-        ...(isManager ? { cashbox_type: Cashbox_type.FOR_COURIER } : {}),
+        user_id: isManager ? branchId : req.user.sub,
+        created_by: req.user.sub,
+        ...(isManager ? { cashbox_type: Cashbox_type.BRANCH } : {}),
       },
     );
   }
@@ -1100,12 +1561,12 @@ export class FinanceGatewayController {
   @ApiQuery({
     name: 'cashbox_type',
     required: false,
-    enum: ['main', 'for_courier', 'for_market'],
+    enum: Cashbox_type,
   })
   @ApiQuery({
     name: 'cashboxType',
     required: false,
-    enum: ['main', 'for_courier', 'for_market'],
+    enum: Cashbox_type,
   })
   @ApiQuery({ name: 'operation_type', required: false })
   @ApiQuery({ name: 'source_type', required: false })
@@ -1114,7 +1575,7 @@ export class FinanceGatewayController {
   @ApiQuery({ name: 'to_date', required: false })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  findHistory(
+  async findHistory(
     @Query() query: FindHistoryQueryDto,
     @Req() req: { user: JwtUser },
   ) {
@@ -1122,12 +1583,37 @@ export class FinanceGatewayController {
       this.hasRole(req?.user, RoleEnum.MANAGER) &&
       !this.isPrivileged(req?.user)
     ) {
+      const branchId =
+        this.extractBranchId(req.user) ||
+        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
+      if (!branchId) {
+        throw new ForbiddenException("Managerning branch'i topilmadi");
+      }
       return this.send(
         { cmd: 'finance.history.find_all' },
-        { ...query, user_id: req.user.sub },
+        {
+          ...query,
+          user_id: branchId,
+          cashbox_type: Cashbox_type.BRANCH,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.BRANCH_TO_MAIN,
+        },
       );
     }
-    return this.send({ cmd: 'finance.history.find_all' }, query);
+
+    const hasCashboxSelector = Boolean(
+      query.cashbox_id ||
+      query.user_id ||
+      query.cashbox_type ||
+      query.cashboxType,
+    );
+
+    return this.send(
+      { cmd: 'finance.history.find_all' },
+      hasCashboxSelector
+        ? query
+        : { ...query, cashbox_type: Cashbox_type.MAIN },
+    );
   }
 
   @Get('history/:id')
