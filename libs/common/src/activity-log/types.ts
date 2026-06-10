@@ -48,3 +48,26 @@ export interface ActivityChangeInput extends Omit<
   new_value: Record<string, unknown> | null | undefined;
   ignore_fields?: string[];
 }
+
+/** Filters for the paginated audit-log read API ({service}.activity_log.find_all). */
+export interface ActivityLogQuery {
+  entity_type?: string;
+  entity_id?: string | number;
+  action?: string;
+  /** Actor filter — matches the user_id column. */
+  user_id?: string;
+  user_role?: string;
+  trace_id?: string;
+  /** ISO date / parseable timestamp lower & upper bounds on created_at. */
+  from?: string | Date;
+  to?: string | Date;
+  /** Free-text ILIKE across entity_type / entity_id / action / user_name. */
+  search?: string;
+  page?: number;
+  limit?: number;
+}
+
+export interface ActivityLogPage<T = unknown> {
+  items: T[];
+  meta: { page: number; limit: number; total: number; totalPages: number };
+}

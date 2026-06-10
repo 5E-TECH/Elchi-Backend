@@ -9,6 +9,8 @@ import {
   ActivityAction,
   ActivityChangeInput,
   ActivityLogInput,
+  ActivityLogPage,
+  ActivityLogQuery,
 } from './types';
 
 function normaliseJsonb(value: unknown): Record<string, unknown> | null {
@@ -111,6 +113,65 @@ export class ActivityLogService {
       order: { created_at: 'DESC' },
       take: Math.min(Math.max(limit, 1), 500),
     });
+  }
+
+  /**
+   * Filterable, paginated read over this service's own activity_logs table.
+   * Backs the `{service}.activity_log.find_all` message pattern; the gateway
+   * fans this out across services, merges by created_at DESC, and enriches ids.
+   * Rows are ordered newest-first with id as a stable tiebreak.
+   */
+  async query(q: ActivityLogQuery = {}): Promise<ActivityLogPage<ActivityLog>> {
+    const page = Number(q.page) > 0 ? Math.floor(Number(q.page)) : 1;
+    const rawLimit = Number(q.limit) > 0 ? Math.floor(Number(q.limit)) : 50;
+    const limit = Math.min(rawLimit, 500);
+
+    const qb = this.repo.createQueryBuilder('a');
+
+    if (q.entity_type) qb.andWhere('a.entity_type = :et', { et: q.entity_type });
+    if (q.entity_id !== undefined && q.entity_id !== null && `${q.entity_id}` !== '') {
+      qb.andWhere('a.entity_id = :eid', { eid: String(q.entity_id) });
+    }
+    if (q.action) qb.andWhere('a.action = :act', { act: q.action });
+    if (q.user_id) qb.andWhere('a.user_id = :uid', { uid: String(q.user_id) });
+    if (q.user_role) qb.andWhere('a.user_role ILIKE :urole', { urole: `%${q.user_role}%` });
+    if (q.trace_id) qb.andWhere('a.trace_id = :tid', { tid: q.trace_id });
+    // Parse date bounds defensively — an invalid value must be IGNORED, never
+    // forwarded to the driver (which would throw and silently empty the feed).
+    const parseDate = (v: string | Date): Date | null => {
+      const d = v instanceof Date ? v : new Date(v);
+      return Number.isNaN(d.getTime()) ? null : d;
+    };
+    const isDateOnly = (v: string | Date): boolean =>
+      typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v.trim());
+    if (q.from) {
+      const from = parseDate(q.from);
+      if (from) qb.andWhere('a.created_at >= :from', { from });
+    }
+    if (q.to) {
+      let to = parseDate(q.to);
+      // A date-only upper bound should be inclusive of that whole day.
+      if (to && isDateOnly(q.to)) to = new Date(to.getTime() + 86_400_000 - 1);
+      if (to) qb.andWhere('a.created_at <= :to', { to });
+    }
+    if (q.search && q.search.trim()) {
+      const term = `%${q.search.trim()}%`;
+      qb.andWhere(
+        '(a.entity_type ILIKE :s OR a.entity_id ILIKE :s OR a.action ILIKE :s OR a.user_name ILIKE :s)',
+        { s: term },
+      );
+    }
+
+    qb.orderBy('a.created_at', 'DESC')
+      .addOrderBy('a.id', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    const [items, total] = await qb.getManyAndCount();
+    return {
+      items,
+      meta: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
+    };
   }
 
   /** Best-effort retention: delete rows older than `olderThanMs`. */

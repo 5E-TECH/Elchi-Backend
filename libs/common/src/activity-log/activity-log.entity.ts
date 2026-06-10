@@ -22,7 +22,7 @@ export class ActivityLog {
   @Column({ type: 'varchar', length: 100 })
   entity_id!: string;
 
-  @Column({ type: 'varchar', length: 32 })
+  @Column({ type: 'varchar', length: 64 })
   action!: string;
 
   @Column({ type: 'jsonb', nullable: true })
