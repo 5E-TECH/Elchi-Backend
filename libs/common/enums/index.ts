@@ -195,3 +195,45 @@ export enum BranchTransferBatchAction {
   RECEIVED = 'RECEIVED',
   CANCELLED = 'CANCELLED',
 }
+
+/**
+ * Delivery channels a notification can fan out to. A single dispatch may request
+ * several. `IN_APP` is the persisted inbox row; the others are side-effects.
+ */
+export enum NotificationChannel {
+  IN_APP = 'in_app',
+  REALTIME = 'realtime',
+  TELEGRAM = 'telegram',
+  EMAIL = 'email',
+  SMS = 'sms',
+}
+
+/** Severity / surfacing hint for the frontend (badge colour, sound, etc). */
+export enum NotificationPriority {
+  LOW = 'low',
+  NORMAL = 'normal',
+  HIGH = 'high',
+  CRITICAL = 'critical',
+}
+
+/**
+ * Stable, coarse grouping for inbox filtering/tabs. The fine-grained event is
+ * carried by the free-form `type` string (e.g. `order.sold`, `finance.paid`).
+ */
+export enum NotificationCategory {
+  ORDER = 'order',
+  FINANCE = 'finance',
+  BRANCH = 'branch',
+  LOGISTICS = 'logistics',
+  ACCOUNT = 'account',
+  SYSTEM = 'system',
+  MARKETING = 'marketing',
+}
+
+/** Per-channel delivery outcome recorded on the notification row. */
+export enum NotificationDeliveryStatus {
+  PENDING = 'pending',
+  SENT = 'sent',
+  FAILED = 'failed',
+  SKIPPED = 'skipped',
+}
