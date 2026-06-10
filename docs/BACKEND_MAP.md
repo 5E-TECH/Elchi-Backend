@@ -231,6 +231,15 @@ Imported as `@app/common`. Top level: `enums/`, `helpers/`, `src/`.
 - **`src/sentry`** — `initSentry`/`flushSentry` (no-op without `SENTRY_DSN`).
 - **`src/activity-log`** — pluggable audit-log entity+service; every row stores
   `serviceName` + acting user (denormalized) for a centralized audit dashboard.
+  `ActivityLogService.log/logChange` (fail-safe writes), `query(filters,page)`,
+  `findByEntity`, `prune`. **Wired into 9 services** (identity/order/finance/
+  branch/logistics/catalog/integration/investor/notification — ~96 state-changing
+  ops; tables in those schemas, action VARCHAR(64), migration 1716000000009).
+  Each exposes `{svc}.activity_log.find_all` + `.find_by_entity`. Read via gateway
+  **`GET /activity-logs`** (+ `/entity/:type/:id`, `/user/:id`, `/actions`),
+  `@Roles(SUPERADMIN, ADMIN)`: fans in across per-schema tables, merges
+  newest-first, and `AuditEnrichmentService` resolves raw ids (actor/entity/
+  `*_id` refs) into full objects via batch find_by_ids (best-effort).
 - **`src/idempotency`** — `idempotent-execute.helper.ts`: dedupe repeated
   operations (e.g. order money ops) by idempotency key. `in_progress` reservations
   carry a **lease** (`DEFAULT_IDEMPOTENCY_LEASE_MS`=30s): a key abandoned by a
