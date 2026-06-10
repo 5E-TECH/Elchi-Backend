@@ -1086,23 +1086,8 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'NEW orders by market id' })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
-  @ApiQuery({
-    name: 'page',
-    required: false,
-    type: Number,
-    example: 1,
-    schema: { default: 1, minimum: 1 } as any,
-  })
-  @ApiQuery({
-    name: 'limit',
-    required: false,
-    enum: [10, 25, 50, 100],
-    schema: { default: 10 } as any,
-  })
   async findNewOrdersByMarket(
     @Param('marketId') marketId: string,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
     @Req() req?: { user: JwtUser },
   ) {
     const roles = req?.user?.roles ?? [];
@@ -1112,7 +1097,6 @@ export class OrderGatewayController {
       normalizedRoles.includes(RoleEnum.MANAGER) ||
       normalizedRoles.includes(RoleEnum.REGISTRATOR);
 
-    const pagination = this.parsePaginationQuery(page, limit);
     let resolvedBranchId: string | undefined;
     let excludeBranchSource = false;
 
@@ -1130,15 +1114,13 @@ export class OrderGatewayController {
       market_id: marketId,
       branch_id: resolvedBranchId,
       exclude_branch_source: excludeBranchSource,
-      page: pagination.page,
-      limit: pagination.limit,
     };
 
     return this.sendOrderWithFallback(
       { cmd: 'order.find_new_by_market_enriched' },
       { cmd: 'order.find_new_by_market' },
       payload,
-    ).then((response) => this.withPaginationMeta(response, pagination));
+    );
   }
 
   @Get(':id')
