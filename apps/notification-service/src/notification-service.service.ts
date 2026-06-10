@@ -9,7 +9,13 @@ import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, Repository } from 'typeorm';
 import { ConfigService } from '@nestjs/config';
-import { Group_type, rmqSend } from '@app/common';
+import {
+  ActivityAction,
+  ActivityLogQuery,
+  ActivityLogService,
+  Group_type,
+  rmqSend,
+} from '@app/common';
 import { TelegramMarket } from './entities/telegram-market.entity';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { UpdateNotificationDto } from './dto/update-notification.dto';
@@ -24,7 +30,35 @@ export class NotificationServiceService {
     private readonly tgMarketRepo: Repository<TelegramMarket>,
     private readonly configService: ConfigService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    private readonly activityLog: ActivityLogService,
   ) {}
+
+  /**
+   * Normalise the RMQ `requester` payload into the actor fields the
+   * activity-log expects. `user_name` is not carried in `requester`, so it is
+   * left null; the user_id + role pair is enough to attribute every action.
+   */
+  private auditActor(
+    requester?: { id?: string; roles?: string[] } | null,
+  ): { user_id: string | null; user_role: string | null } {
+    const roles = requester?.roles ?? [];
+    return {
+      user_id: requester?.id ? String(requester.id) : null,
+      user_role: roles.length ? roles.join(',') : null,
+    };
+  }
+
+  async auditLogQuery(q: ActivityLogQuery) {
+    return this.activityLog.query(q ?? {});
+  }
+
+  async auditLogByEntity(
+    entity_type: string,
+    entity_id: string,
+    limit?: number,
+  ) {
+    return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
+  }
 
   private successRes(data: unknown, code = 200, message = 'success') {
     return {
@@ -218,6 +252,15 @@ export class NotificationServiceService {
         existsByMarketType.is_active = true;
         const updated = await this.tgMarketRepo.save(existsByMarketType);
         await this.rotateMarketTokenAfterConnect(parsed.market_id);
+
+        // Audit: group connection (token text itself is never logged).
+        await this.activityLog.log({
+          entity_type: 'TelegramMarket',
+          entity_id: updated.id,
+          action: 'notification.tg_group_connected',
+          metadata: { group_id: groupId, market_id: parsed.market_id },
+        });
+
         return this.successRes(updated, 200, `${market.name ?? 'Market'} uchun telegram group yangilandi`);
       }
 
@@ -231,6 +274,15 @@ export class NotificationServiceService {
 
       const saved = await this.tgMarketRepo.save(created);
       await this.rotateMarketTokenAfterConnect(parsed.market_id);
+
+      // Audit: group connection (token text itself is never logged).
+      await this.activityLog.log({
+        entity_type: 'TelegramMarket',
+        entity_id: saved.id,
+        action: 'notification.tg_group_connected',
+        metadata: { group_id: groupId, market_id: parsed.market_id },
+      });
+
       return this.successRes(saved, 201, `${market.name ?? 'Market'} uchun telegram group ulandi`);
     } catch (error) {
       const message =
@@ -265,6 +317,19 @@ export class NotificationServiceService {
       });
 
       const saved = await this.tgMarketRepo.save(entity);
+
+      // Audit: config change. NEVER log the bot token value.
+      await this.activityLog.log({
+        entity_type: 'TelegramMarket',
+        entity_id: saved.id,
+        action: ActivityAction.CREATED,
+        ...this.auditActor((dto as { requester?: { id?: string; roles?: string[] } }).requester),
+        metadata: {
+          market_id: saved.market_id,
+          group_type: saved.group_type,
+        },
+      });
+
       return this.successRes(saved, 201, 'Telegram market created');
     } catch (error) {
       this.toRpcError(error);
@@ -348,6 +413,14 @@ export class NotificationServiceService {
         group_type: dto.group_type,
       });
 
+      // Snapshot BEFORE mutating — token is excluded from the diff (secret).
+      const beforeSnapshot = {
+        market_id: target.market_id,
+        group_id: target.group_id,
+        group_type: target.group_type,
+        is_active: target.is_active,
+      };
+
       if (dto.market_id !== undefined) {
         this.assertBigIntId(dto.market_id, 'market_id');
         target.market_id = dto.market_id;
@@ -382,6 +455,27 @@ export class NotificationServiceService {
       }
 
       const saved = await this.tgMarketRepo.save(target);
+
+      // Audit: only changed fields are persisted. token is never snapshotted;
+      // we only note whether it was rotated as part of this update.
+      await this.activityLog.logChange({
+        entity_type: 'TelegramMarket',
+        entity_id: saved.id,
+        action: ActivityAction.UPDATED,
+        old_value: beforeSnapshot,
+        new_value: {
+          market_id: saved.market_id,
+          group_id: saved.group_id,
+          group_type: saved.group_type,
+          is_active: saved.is_active,
+        },
+        ...this.auditActor((dto as { requester?: { id?: string; roles?: string[] } }).requester),
+        metadata: {
+          market_id: saved.market_id,
+          token_changed: dto.token !== undefined,
+        },
+      });
+
       return this.successRes(saved, 200, 'Telegram market updated');
     } catch (error) {
       this.toRpcError(error);
@@ -395,8 +489,19 @@ export class NotificationServiceService {
   }) {
     try {
       const target = await this.resolveTelegramMarketTarget(data);
+      const marketId = target.market_id;
       target.isDeleted = true;
       await this.tgMarketRepo.save(target);
+
+      // Audit: config removal.
+      await this.activityLog.log({
+        entity_type: 'TelegramMarket',
+        entity_id: target.id,
+        action: ActivityAction.DELETED,
+        ...this.auditActor((data as { requester?: { id?: string; roles?: string[] } }).requester),
+        metadata: { market_id: marketId },
+      });
+
       return this.successRes({ id: target.id }, 200, 'Telegram market deleted');
     } catch (error) {
       this.toRpcError(error);

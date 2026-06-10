@@ -58,7 +58,7 @@ export class IntegrationServiceController {
   @MessagePattern({ cmd: 'integration.delete' })
   remove(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.integrationService.deleteIntegration(String(data?.id)),
+      this.integrationService.deleteIntegration(String(data?.id), data?.requester),
     );
   }
 
@@ -266,6 +266,25 @@ export class IntegrationServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.integrationService.createRemittance(data),
+    );
+  }
+
+  // --- Activity log (audit) read fan-in ---
+  @MessagePattern({ cmd: 'integration.activity_log.find_all' })
+  activityLogFindAll(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.auditLogQuery(data?.query ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.activity_log.find_by_entity' })
+  activityLogFindByEntity(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.auditLogByEntity(
+        data.entity_type,
+        data.entity_id,
+        data.limit,
+      ),
     );
   }
 }

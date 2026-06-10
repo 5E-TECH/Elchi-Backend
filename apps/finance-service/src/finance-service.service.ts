@@ -28,6 +28,7 @@ import { OperatorPayment } from './entities/operator-payment.entity';
 import { FinancialBalanceHistory } from './entities/financial-balance-history.entity';
 import {
   ActivityAction,
+  ActivityLogQuery,
   ActivityLogService,
   Cashbox_type,
   Commission_type,
@@ -98,6 +99,24 @@ export class FinanceServiceService implements OnModuleInit {
       message,
       data,
     };
+  }
+
+  private auditActor(
+    requester?: { id?: string; roles?: string[] } | null,
+  ): { user_id: string | null; user_role: string | null } {
+    const roles = requester?.roles ?? [];
+    return {
+      user_id: requester?.id ? String(requester.id) : null,
+      user_role: roles.length ? roles.join(',') : null,
+    };
+  }
+
+  async auditLogQuery(q: ActivityLogQuery) {
+    return this.activityLog.query(q ?? {});
+  }
+
+  async auditLogByEntity(entity_type: string, entity_id: string, limit?: number) {
+    return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
   }
 
   private toRpcError(error: unknown): never {
@@ -523,6 +542,17 @@ export class FinanceServiceService implements OnModuleInit {
       });
 
       const saved = await this.cashboxRepo.save(entity);
+      await this.activityLog.log({
+        entity_type: 'Cashbox',
+        entity_id: saved.id,
+        action: ActivityAction.CREATED,
+        new_value: {
+          cashbox_type: saved.cashbox_type,
+          balance: saved.balance,
+        },
+        user_id: dto.user_id ? String(dto.user_id) : null,
+        metadata: { user_id: dto.user_id, cashbox_type: saved.cashbox_type },
+      });
       return this.successRes(saved, 201, 'Cashbox created');
     } catch (error) {
       this.toRpcError(error);
@@ -613,6 +643,11 @@ export class FinanceServiceService implements OnModuleInit {
   }
 
   async updateBalance(dto: UpdateCashboxBalanceDto) {
+    // Captured after a successful (non-idempotent) commit so we can write the
+    // audit row only once the transaction is durable and the runner released.
+    // Declared at method scope so the outer `finally` (a sibling of the inner
+    // try) can read it.
+    let auditedCashbox: Cashbox | null = null;
     try {
       this.assertPositiveAmount(Number(dto.amount));
       const paymentMethod = dto.payment_method ?? PaymentMethod.CASH;
@@ -697,6 +732,7 @@ export class FinanceServiceService implements OnModuleInit {
 
         const savedHistory = await queryRunner.manager.save(history);
         await queryRunner.commitTransaction();
+        auditedCashbox = savedCashbox;
 
         return this.successRes(
           {
@@ -714,6 +750,28 @@ export class FinanceServiceService implements OnModuleInit {
       }
     } catch (error) {
       this.toRpcError(error);
+    } finally {
+      if (auditedCashbox) {
+        await this.activityLog.log({
+          entity_type: 'Cashbox',
+          entity_id: auditedCashbox.id,
+          action: 'finance.balance_update',
+          new_value: {
+            balance: auditedCashbox.balance,
+            operation_type: dto.operation_type,
+            amount: Number(dto.amount),
+          },
+          user_id: dto.created_by ? String(dto.created_by) : null,
+          metadata: {
+            user_id: dto.user_id ?? null,
+            source_id: dto.source_id ?? null,
+            source_user_id: dto.source_user_id ?? null,
+            amount: Number(dto.amount),
+            created_by: dto.created_by ?? null,
+            direction: dto.operation_type,
+          },
+        });
+      }
     }
   }
 
@@ -959,6 +1017,17 @@ export class FinanceServiceService implements OnModuleInit {
 
       try {
         const saved = await this.shiftRepo.save(shift);
+        await this.activityLog.log({
+          entity_type: 'Shift',
+          entity_id: saved.id,
+          action: ActivityAction.CREATED,
+          new_value: {
+            opened_by: saved.opened_by,
+            opened_at: saved.opened_at,
+          },
+          user_id: dto.opened_by ? String(dto.opened_by) : null,
+          metadata: { opened_by: dto.opened_by },
+        });
         return this.successRes(saved, 201, 'Shift opened');
       } catch (insertError) {
         if (
@@ -1007,6 +1076,10 @@ export class FinanceServiceService implements OnModuleInit {
       const queryRunner = this.dataSource.createQueryRunner();
       await queryRunner.connect();
       await queryRunner.startTransaction();
+
+      // Captured after a durable commit so the audit row is written once the
+      // transaction is committed and the runner released (never inside the tx).
+      let auditedShift: Shift | null = null;
 
       try {
         const shift = await queryRunner.manager.findOne(Shift, {
@@ -1063,12 +1136,29 @@ export class FinanceServiceService implements OnModuleInit {
 
         const saved = await queryRunner.manager.save(shift);
         await queryRunner.commitTransaction();
+        auditedShift = saved;
         return this.successRes(saved, 200, 'Shift closed');
       } catch (error) {
         await queryRunner.rollbackTransaction();
         throw error;
       } finally {
         await queryRunner.release();
+        if (auditedShift) {
+          await this.activityLog.log({
+            entity_type: 'Shift',
+            entity_id: auditedShift.id,
+            action: ActivityAction.STATUS_CHANGE,
+            new_value: {
+              status: auditedShift.status,
+              closed_at: auditedShift.closed_at,
+            },
+            user_id: dto.closed_by ? String(dto.closed_by) : null,
+            metadata: {
+              closed_by: dto.closed_by,
+              opened_by: auditedShift.opened_by,
+            },
+          });
+        }
       }
     } catch (error) {
       this.toRpcError(error);
@@ -1155,6 +1245,17 @@ export class FinanceServiceService implements OnModuleInit {
       });
 
       const saved = await this.salaryRepo.save(salary);
+      await this.activityLog.log({
+        entity_type: 'UserSalary',
+        entity_id: saved.id,
+        action: ActivityAction.CREATED,
+        new_value: {
+          salary_amount: saved.salary_amount,
+          payment_day: saved.payment_day,
+        },
+        user_id: dto.user_id ? String(dto.user_id) : null,
+        metadata: { user_id: dto.user_id },
+      });
       return this.successRes(saved, 201, 'Salary created');
     } catch (error) {
       this.toRpcError(error);
@@ -1171,6 +1272,13 @@ export class FinanceServiceService implements OnModuleInit {
       if (!salary) {
         throw new NotFoundException('Salary not found for this user');
       }
+
+      // Snapshot BEFORE mutating so logChange can diff only the changed fields.
+      const before = {
+        salary_amount: Number(salary.salary_amount),
+        have_to_pay: Number(salary.have_to_pay),
+        payment_day: Number(salary.payment_day),
+      };
 
       if (dto.salary_amount !== undefined) {
         this.assertPositiveAmount(Number(dto.salary_amount), 'salary_amount');
@@ -1191,6 +1299,19 @@ export class FinanceServiceService implements OnModuleInit {
       }
 
       const saved = await this.salaryRepo.save(salary);
+      await this.activityLog.logChange({
+        entity_type: 'UserSalary',
+        entity_id: saved.id,
+        old_value: before,
+        new_value: {
+          salary_amount: Number(saved.salary_amount),
+          have_to_pay: Number(saved.have_to_pay),
+          payment_day: Number(saved.payment_day),
+        },
+        action: ActivityAction.UPDATED,
+        user_id: dto.user_id ? String(dto.user_id) : null,
+        metadata: { user_id: dto.user_id },
+      });
       return this.successRes(saved, 200, 'Salary updated');
     } catch (error) {
       this.toRpcError(error);
@@ -1356,6 +1477,18 @@ export class FinanceServiceService implements OnModuleInit {
         created_by: data.user_id,
         cashbox_type: targetCashboxType,
       });
+      await this.activityLog.log({
+        entity_type: 'Cashbox',
+        entity_id: String(update?.data?.cashbox?.id ?? targetUserId),
+        action: 'finance.manual_expense',
+        new_value: { amount: Number(data.amount), payment_method: data.type },
+        user_id: data.user_id ? String(data.user_id) : null,
+        metadata: {
+          user_id: data.user_id,
+          amount: Number(data.amount),
+          cashbox_type: targetCashboxType,
+        },
+      });
       return this.successRes(update?.data ?? {}, 200, 'Manual expense created');
     } catch (error) {
       this.toRpcError(error);
@@ -1385,6 +1518,18 @@ export class FinanceServiceService implements OnModuleInit {
         created_by: data.user_id,
         cashbox_type: targetCashboxType,
       });
+      await this.activityLog.log({
+        entity_type: 'Cashbox',
+        entity_id: String(update?.data?.cashbox?.id ?? targetUserId),
+        action: 'finance.manual_income',
+        new_value: { amount: Number(data.amount), payment_method: data.type },
+        user_id: data.user_id ? String(data.user_id) : null,
+        metadata: {
+          user_id: data.user_id,
+          amount: Number(data.amount),
+          cashbox_type: targetCashboxType,
+        },
+      });
       return this.successRes(update?.data ?? {}, 200, 'Cashbox filled');
     } catch (error) {
       this.toRpcError(error);
@@ -1405,6 +1550,9 @@ export class FinanceServiceService implements OnModuleInit {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
+    // Captured after a durable commit so the audit row is written once the
+    // transaction is committed and the runner released (never inside the tx).
+    let auditedCourierCashboxId: string | null = null;
     try {
       this.assertBigIntId(data.courier_id, 'courier_id');
       this.assertPositiveAmount(Number(data.amount));
@@ -1563,6 +1711,7 @@ export class FinanceServiceService implements OnModuleInit {
       }
 
       await queryRunner.commitTransaction();
+      auditedCourierCashboxId = String(courierCashbox.id);
 
       if (
         data.payment_method === PaymentMethod.CLICK_TO_MARKET &&
@@ -1611,6 +1760,27 @@ export class FinanceServiceService implements OnModuleInit {
       this.toRpcError(error);
     } finally {
       await queryRunner.release();
+      if (auditedCourierCashboxId) {
+        await this.activityLog.log({
+          entity_type: 'Cashbox',
+          entity_id: auditedCourierCashboxId,
+          action: ActivityAction.PAYMENT,
+          new_value: {
+            amount: Number(data.amount),
+            payment_method: data.payment_method,
+          },
+          user_id: data.created_by ? String(data.created_by) : null,
+          metadata: {
+            courier_id: data.courier_id,
+            market_id: data.market_id ?? null,
+            amount: Number(data.amount),
+            created_by: data.created_by ?? null,
+            receiver_user_id:
+              data.receiver_user_id ??
+              FinanceServiceService.MAIN_CASHBOX_USER_ID,
+          },
+        });
+      }
     }
   }
 
@@ -1625,6 +1795,9 @@ export class FinanceServiceService implements OnModuleInit {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
+    // Captured after a durable commit so the audit row is written once the
+    // transaction is committed and the runner released (never inside the tx).
+    let auditedBranchCashboxId: string | null = null;
     try {
       this.assertBigIntId(data.branch_id, 'branch_id');
       this.assertPositiveAmount(Number(data.amount));
@@ -1704,6 +1877,7 @@ export class FinanceServiceService implements OnModuleInit {
       await queryRunner.manager.save(mainHistory);
 
       await queryRunner.commitTransaction();
+      auditedBranchCashboxId = String(branchCashbox.id);
       return this.successRes(
         {
           branch_cashbox: branchCashbox,
@@ -1717,6 +1891,23 @@ export class FinanceServiceService implements OnModuleInit {
       this.toRpcError(error);
     } finally {
       await queryRunner.release();
+      if (auditedBranchCashboxId) {
+        await this.activityLog.log({
+          entity_type: 'Cashbox',
+          entity_id: auditedBranchCashboxId,
+          action: ActivityAction.PAYMENT,
+          new_value: {
+            amount: Number(data.amount),
+            payment_method: data.payment_method,
+          },
+          user_id: data.created_by ? String(data.created_by) : null,
+          metadata: {
+            branch_id: data.branch_id,
+            amount: Number(data.amount),
+            created_by: data.created_by ?? null,
+          },
+        });
+      }
     }
   }
 
@@ -1731,6 +1922,9 @@ export class FinanceServiceService implements OnModuleInit {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
+    // Captured after a durable commit so the audit row is written once the
+    // transaction is committed and the runner released (never inside the tx).
+    let auditedMarketCashboxId: string | null = null;
     try {
       this.assertBigIntId(data.market_id, 'market_id');
       this.assertPositiveAmount(Number(data.amount));
@@ -1802,6 +1996,7 @@ export class FinanceServiceService implements OnModuleInit {
       );
 
       await queryRunner.commitTransaction();
+      auditedMarketCashboxId = String(marketCashbox.id);
       await this.syncMarketPaymentsSafely(data.market_id, Number(data.amount));
 
       return this.successRes({}, 200, `Marketga ${data.amount} so'm to'landi`);
@@ -1810,6 +2005,23 @@ export class FinanceServiceService implements OnModuleInit {
       this.toRpcError(error);
     } finally {
       await queryRunner.release();
+      if (auditedMarketCashboxId) {
+        await this.activityLog.log({
+          entity_type: 'Cashbox',
+          entity_id: auditedMarketCashboxId,
+          action: ActivityAction.PAYMENT,
+          new_value: {
+            amount: Number(data.amount),
+            payment_method: data.payment_method,
+          },
+          user_id: data.created_by ? String(data.created_by) : null,
+          metadata: {
+            market_id: data.market_id,
+            amount: Number(data.amount),
+            created_by: data.created_by ?? null,
+          },
+        });
+      }
     }
   }
 

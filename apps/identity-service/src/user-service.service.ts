@@ -23,6 +23,7 @@ import {
   Status,
   rmqSend,
 } from '@app/common';
+import type { ActivityLogQuery } from '@app/common';
 import {
   catchError,
   errorRes,
@@ -915,6 +916,20 @@ export class UserServiceService implements OnModuleInit {
     user.settings =
       settings && typeof settings === 'object' ? settings : null;
     await this.users.save(user);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: id,
+      action: ActivityAction.UPDATED,
+      user_id: id,
+      // Never log the settings values themselves (UI prefs may carry tokens
+      // in future); only which keys changed.
+      metadata: {
+        changed_keys:
+          user.settings && typeof user.settings === 'object'
+            ? Object.keys(user.settings)
+            : [],
+      },
+    });
     return successRes({ settings: user.settings }, 200, 'Settings updated');
   }
 
@@ -1453,6 +1468,14 @@ export class UserServiceService implements OnModuleInit {
     market.market_tg_token = this.generateGroupToken();
     const saved = await this.users.save(market);
 
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.UPDATED,
+      // Credential rotation: record only that it happened, NEVER the token value.
+      metadata: { rotated: true, market_id: saved.id },
+    });
+
     return successRes(
       {
         id: saved.id,
@@ -1662,5 +1685,21 @@ export class UserServiceService implements OnModuleInit {
     const saved = await this.users.save(user);
     void this.syncUserToSearch(saved);
     return saved;
+  }
+
+  // ==================== Activity log (read) ====================
+
+  /** Paginated activity-log query (gateway fan-in). */
+  async auditLogQuery(q: ActivityLogQuery) {
+    return this.activityLog.query(q ?? {});
+  }
+
+  /** Activity-log rows for a single entity (gateway fan-in). */
+  async auditLogByEntity(
+    entity_type: string,
+    entity_id: string,
+    limit?: number,
+  ) {
+    return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
   }
 }

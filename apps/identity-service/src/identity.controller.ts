@@ -6,6 +6,7 @@ import {
   RmqContext,
 } from '@nestjs/microservices';
 import { RmqService, executeAndAck } from '@app/common';
+import type { ActivityLogQuery } from '@app/common';
 import { UserServiceService } from './user-service.service';
 import { AuthService } from './auth/auth.service';
 import type {
@@ -347,6 +348,33 @@ export class IdentityController {
   ) {
     return this.executeAndAck(context, () =>
       this.userService.searchCustomers(payload.search, payload.limit),
+    );
+  }
+
+  // ==================== Activity log (read) ====================
+
+  @MessagePattern({ cmd: 'identity.activity_log.find_all' })
+  activityLogFindAll(
+    @Payload() data: { query?: ActivityLogQuery },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.auditLogQuery(data?.query ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'identity.activity_log.find_by_entity' })
+  activityLogFindByEntity(
+    @Payload()
+    data: { entity_type: string; entity_id: string; limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.auditLogByEntity(
+        data.entity_type,
+        data.entity_id,
+        data.limit,
+      ),
     );
   }
 }

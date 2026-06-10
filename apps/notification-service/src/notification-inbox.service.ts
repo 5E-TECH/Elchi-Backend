@@ -10,6 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, Repository } from 'typeorm';
 import { lastValueFrom } from 'rxjs';
 import {
+  ActivityLogService,
   NotificationCategory,
   NotificationChannel,
   NotificationDeliveryStatus,
@@ -43,6 +44,7 @@ export class NotificationInboxService {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('GATEWAY') private readonly gatewayClient: ClientProxy,
     private readonly telegramService: NotificationServiceService,
+    private readonly activityLog: ActivityLogService,
   ) {}
 
   private toRpcError(error: unknown): never {
@@ -103,6 +105,23 @@ export class NotificationInboxService {
           );
         }
       }
+
+      // Audit: ONE row per dispatch operation (never one per recipient).
+      const actor = (dto as { requester?: { id?: string; roles?: string[] } })
+        .requester;
+      await this.activityLog.log({
+        entity_type: 'Notification',
+        entity_id: 'dispatch',
+        action: 'notification.dispatched',
+        user_id: actor?.id ? String(actor.id) : null,
+        user_role: actor?.roles?.length ? actor.roles.join(',') : null,
+        metadata: {
+          type: dto.type.trim(),
+          category: dto.category ?? NotificationCategory.SYSTEM,
+          dispatched_count: rows.length,
+          channels,
+        },
+      });
 
       return successRes(
         {

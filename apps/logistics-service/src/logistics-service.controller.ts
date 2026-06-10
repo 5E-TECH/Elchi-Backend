@@ -14,6 +14,7 @@ import { SendPostDto } from './dto/send-post.dto';
 import { ReceivePostDto } from './dto/receive-post.dto';
 import { PostIdDto } from './dto/post-id.dto';
 import { Post_status } from '@app/common';
+import type { ActivityLogQuery } from '@app/common';
 
 @Controller()
 export class LogisticsServiceController {
@@ -523,6 +524,27 @@ export class LogisticsServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.logisticsService.findRegionsByIds(payload.ids ?? []),
+    );
+  }
+
+  // --- Activity log (read) ---
+  @MessagePattern({ cmd: 'logistics.activity_log.find_all' })
+  activityLogFindAll(
+    @Payload() data: { query?: ActivityLogQuery },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.auditLogQuery(data?.query ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.activity_log.find_by_entity' })
+  activityLogFindByEntity(
+    @Payload() data: { entity_type: string; entity_id: string; limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.auditLogByEntity(data.entity_type, data.entity_id, data.limit),
     );
   }
 }

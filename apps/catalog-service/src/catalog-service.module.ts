@@ -3,7 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { CatalogServiceController } from './catalog-service.controller';
 import { CatalogServiceService } from './catalog-service.service';
-import { AppLoggerModule, RmqModule, DatabaseModule, catalogValidationSchema } from '@app/common';
+import { AppLoggerModule, RmqModule, DatabaseModule, catalogValidationSchema, ActivityLogModule } from '@app/common';
 import { Product } from './entities/product.entity';
 
 @Module({
@@ -19,6 +19,7 @@ import { Product } from './entities/product.entity';
     RmqModule.register({ name: 'IDENTITY' }),
     DatabaseModule,
     TypeOrmModule.forFeature([Product]),
+    ActivityLogModule.forService('catalog-service'),
   ],
   controllers: [CatalogServiceController],
   providers: [CatalogServiceService],

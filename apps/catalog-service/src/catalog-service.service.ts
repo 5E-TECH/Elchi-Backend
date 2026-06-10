@@ -5,6 +5,11 @@ import { lastValueFrom, timeout } from 'rxjs';
 import { In, QueryFailedError, Repository } from 'typeorm';
 import { Product } from './entities/product.entity';
 import { successRes } from '../../../libs/common/helpers/response';
+import {
+  ActivityAction,
+  ActivityLogService,
+  ActivityLogQuery,
+} from '@app/common';
 
 interface MarketInfo {
   id: string;
@@ -20,7 +25,18 @@ export class CatalogServiceService {
     private readonly productRepo: Repository<Product>,
     @Inject('SEARCH') private readonly searchClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    private readonly activityLog: ActivityLogService,
   ) {}
+
+  private auditActor(
+    requester?: { id?: string; roles?: string[] } | null,
+  ): { user_id: string | null; user_role: string | null } {
+    const roles = requester?.roles ?? [];
+    return {
+      user_id: requester?.id ? String(requester.id) : null,
+      user_role: roles.length ? roles.join(',') : null,
+    };
+  }
 
   private notFound(message: string): never {
     throw new RpcException({ statusCode: 404, message });
@@ -186,6 +202,15 @@ export class CatalogServiceService {
     }
 
     void this.syncProductToSearch(saved);
+
+    void this.activityLog.log({
+      entity_type: 'Product',
+      entity_id: saved.id,
+      action: ActivityAction.CREATED,
+      new_value: { name: saved.name, image_url: saved.image_url },
+      metadata: { user_id: saved.user_id },
+    });
+
     return this.findById(saved.id);
   }
 
@@ -234,6 +259,7 @@ export class CatalogServiceService {
     dto: { name?: string; image_url?: string },
   ) {
     const product = await this.findByIdEntity(id);
+    const before = { name: product.name, image_url: product.image_url };
     Object.assign(product, dto);
     let saved: Product;
     try {
@@ -243,6 +269,16 @@ export class CatalogServiceService {
     }
 
     void this.syncProductToSearch(saved);
+
+    void this.activityLog.logChange({
+      entity_type: 'Product',
+      entity_id: saved.id,
+      old_value: before,
+      new_value: { name: saved.name, image_url: saved.image_url },
+      action: ActivityAction.UPDATED,
+      metadata: { user_id: saved.user_id },
+    });
+
     return this.findById(saved.id);
   }
 
@@ -256,6 +292,7 @@ export class CatalogServiceService {
       this.forbidden('You can update only your own product');
     }
 
+    const before = { name: product.name, image_url: product.image_url };
     Object.assign(product, dto);
     let saved: Product;
     try {
@@ -265,6 +302,19 @@ export class CatalogServiceService {
     }
 
     void this.syncProductToSearch(saved);
+
+    void this.activityLog.logChange({
+      entity_type: 'Product',
+      entity_id: saved.id,
+      old_value: before,
+      new_value: { name: saved.name, image_url: saved.image_url },
+      action: ActivityAction.UPDATED,
+      // The market updating its OWN product IS the actor.
+      user_id: String(userId),
+      user_role: 'market',
+      metadata: { user_id: saved.user_id },
+    });
+
     return this.findById(saved.id);
   }
 
@@ -278,6 +328,16 @@ export class CatalogServiceService {
     product.isDeleted = true;
     await this.productRepo.save(product);
     void this.removeProductFromSearch(id);
+
+    void this.activityLog.log({
+      entity_type: 'Product',
+      entity_id: product.id,
+      action: ActivityAction.DELETED,
+      old_value: { name: product.name },
+      metadata: { user_id: product.user_id },
+      ...this.auditActor(requester),
+    });
+
     return successRes({}, 200, `Product #${id} o'chirildi`);
   }
 
@@ -324,6 +384,29 @@ export class CatalogServiceService {
       void this.removeProductFromSearch(id);
     }
 
+    void this.activityLog.log({
+      entity_type: 'Product',
+      entity_id: 'by_market',
+      action: ActivityAction.DELETED,
+      metadata: {
+        user_id: userId,
+        deleted_count: ids.length,
+        order_ids: ids.slice(0, 10),
+      },
+    });
+
     return successRes({ count: ids.length }, 200, 'Products deleted');
+  }
+
+  async auditLogQuery(q: ActivityLogQuery) {
+    return this.activityLog.query(q ?? {});
+  }
+
+  async auditLogByEntity(
+    entity_type: string,
+    entity_id: string,
+    limit?: number,
+  ) {
+    return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
   }
 }

@@ -67,6 +67,14 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       })),
     };
 
+    const activityLog = {
+      log: jest.fn().mockResolvedValue(undefined),
+      logChange: jest.fn().mockResolvedValue(undefined),
+      query: jest.fn().mockResolvedValue({ items: [], meta: { page: 1, limit: 50, total: 0, totalPages: 1 } }),
+      findByEntity: jest.fn().mockResolvedValue([]),
+      findByUser: jest.fn().mockResolvedValue([]),
+    };
+
     const service = new LogisticsServiceService(
       postRepo as any,
       {} as any,
@@ -75,9 +83,10 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       branchClient as any,
       { send: jest.fn(() => of({})) } as any,
       { send: jest.fn(() => of({})) } as any,
+      activityLog as any,
     );
 
-    return { service, orderClient, branchClient, postRepo, postUpdateQb };
+    return { service, orderClient, branchClient, postRepo, postUpdateQb, activityLog };
   }
 
   async function expectRpcStatus(

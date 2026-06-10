@@ -19,7 +19,15 @@ import { SendPostDto } from './dto/send-post.dto';
 import { PostIdDto } from './dto/post-id.dto';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 import { matchDistricts } from './utils/sato-matcher';
-import { Order_status, Post_status, Roles, Where_deliver } from '@app/common';
+import {
+  ActivityAction,
+  ActivityLogService,
+  ActivityLogQuery,
+  Order_status,
+  Post_status,
+  Roles,
+  Where_deliver,
+} from '@app/common';
 
 interface RequesterContext {
   id: string;
@@ -68,7 +76,31 @@ export class LogisticsServiceService implements OnModuleInit {
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('SEARCH') private readonly searchClient: ClientProxy,
+    private readonly activityLog: ActivityLogService,
   ) {}
+
+  /**
+   * Normalise the RMQ `requester` payload into the actor fields the
+   * activity-log expects. user_id + role pair is enough to attribute every
+   * action; user_name is resolved by the gateway during enrichment.
+   */
+  private auditActor(
+    requester?: { id?: string; roles?: string[] } | null,
+  ): { user_id: string | null; user_role: string | null } {
+    const roles = requester?.roles ?? [];
+    return {
+      user_id: requester?.id ? String(requester.id) : null,
+      user_role: roles.length ? roles.join(',') : null,
+    };
+  }
+
+  async auditLogQuery(q: ActivityLogQuery) {
+    return this.activityLog.query(q ?? {});
+  }
+
+  async auditLogByEntity(entity_type: string, entity_id: string, limit?: number) {
+    return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
+  }
 
   private notFound(message: string): never {
     throw new RpcException(errorRes(message, 404));
@@ -638,6 +670,19 @@ export class LogisticsServiceService implements OnModuleInit {
       });
     }
 
+    await this.activityLog.log({
+      entity_type: 'Post',
+      entity_id: String(savedPost.id),
+      action: ActivityAction.CREATED,
+      metadata: {
+        courier_id: dto.courier_id,
+        order_count: uniqueOrderIds.length,
+        order_ids: uniqueOrderIds.slice(0, 10),
+        branch_id: branchId,
+        region_id: regionId,
+      },
+    });
+
     return successRes(savedPost, 201, 'Post created');
   }
 
@@ -714,6 +759,10 @@ export class LogisticsServiceService implements OnModuleInit {
       byBranchRegion.set(key, current);
     }
 
+    const touchedBranchIds = new Set<string>();
+    const touchedRegionIds = new Set<string>();
+    let assignedOrderCount = 0;
+
     for (const payload of byBranchRegion.values()) {
       let post = await this.postRepo.findOne({
         where: {
@@ -759,6 +808,24 @@ export class LogisticsServiceService implements OnModuleInit {
       if (refreshedPost) {
         void this.syncPostToSearch(refreshedPost);
       }
+      touchedBranchIds.add(payload.branchId);
+      touchedRegionIds.add(payload.regionId);
+      assignedOrderCount += payload.ids.length;
+    }
+
+    if (byBranchRegion.size > 0) {
+      await this.activityLog.log({
+        entity_type: 'Post',
+        entity_id: 'auto_batch',
+        action: 'logistics.post_auto_batch',
+        ...this.auditActor(requester),
+        metadata: {
+          branch_id: Array.from(touchedBranchIds).slice(0, 10),
+          region_id: Array.from(touchedRegionIds).slice(0, 10),
+          post_count: byBranchRegion.size,
+          order_count: assignedOrderCount,
+        },
+      });
     }
 
     const allPosts = await this.postRepo.find({
@@ -945,8 +1012,28 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Post not found');
     }
 
+    const deletedSnapshot = {
+      courier_id: post.courier_id,
+      status: post.status,
+      branch_id: post.branch_id,
+      region_id: post.region_id,
+      order_quantity: post.order_quantity,
+    };
+
     await this.postRepo.remove(post);
     void this.removePostFromSearch(post);
+
+    await this.activityLog.log({
+      entity_type: 'Post',
+      entity_id: String(id),
+      action: ActivityAction.DELETED,
+      old_value: deletedSnapshot,
+      metadata: {
+        courier_id: deletedSnapshot.courier_id,
+        branch_id: deletedSnapshot.branch_id,
+      },
+    });
+
     return successRes({ id }, 200, 'Post deleted');
   }
 
@@ -1215,6 +1302,21 @@ export class LogisticsServiceService implements OnModuleInit {
 
       void this.syncPostToSearch(sourcePost);
       void this.syncPostToSearch(sentPost);
+
+      await this.activityLog.log({
+        entity_type: 'Post',
+        entity_id: String(sentPost.id),
+        action: ActivityAction.STATUS_CHANGE,
+        new_value: { status: Post_status.SENT },
+        ...this.auditActor(requester),
+        metadata: {
+          courier_id: dto.courierId,
+          order_count: selectedIds.length,
+          order_ids: selectedIds.slice(0, 10),
+          source_post_id: String(sourcePost.id),
+        },
+      });
+
       return successRes(
         {
           updatedPost: sentPost,
@@ -1247,6 +1349,20 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const updatedPost = await this.postRepo.save(post);
     void this.syncPostToSearch(updatedPost);
+
+    await this.activityLog.log({
+      entity_type: 'Post',
+      entity_id: String(updatedPost.id),
+      action: ActivityAction.STATUS_CHANGE,
+      new_value: { status: Post_status.SENT },
+      ...this.auditActor(requester),
+      metadata: {
+        courier_id: dto.courierId,
+        order_count: selectedIds.length,
+        order_ids: selectedIds.slice(0, 10),
+      },
+    });
+
     return successRes(
       {
         updatedPost,
@@ -1368,6 +1484,19 @@ export class LogisticsServiceService implements OnModuleInit {
     const savedPost = await this.postRepo.save(post);
     void this.syncPostToSearch(savedPost);
 
+    await this.activityLog.log({
+      entity_type: 'Post',
+      entity_id: String(savedPost.id),
+      action: ActivityAction.STATUS_CHANGE,
+      new_value: { status: Post_status.RECEIVED },
+      ...this.auditActor(requester),
+      metadata: {
+        order_count: allOrders.length,
+        branch_id: targetBranchId ?? null,
+        courier_id: savedPost.courier_id,
+      },
+    });
+
     const waitingOrders = waitingOrderIds.length
       ? await Promise.all(waitingOrderIds.map((orderId) => this.findOrderById(orderId)))
       : [];
@@ -1396,6 +1525,18 @@ export class LogisticsServiceService implements OnModuleInit {
     post.courier_id = courierId;
     const updatedPost = await this.postRepo.save(post);
     void this.syncPostToSearch(updatedPost);
+
+    await this.activityLog.log({
+      entity_type: 'Post',
+      entity_id: String(updatedPost.id),
+      action: ActivityAction.ASSIGN,
+      old_value: { courier_id: oldCourierId },
+      new_value: { courier_id: courierId },
+      metadata: {
+        courier_id: courierId,
+        old_courier_id: oldCourierId,
+      },
+    });
 
     return successRes(
       {
@@ -1501,6 +1642,8 @@ export class LogisticsServiceService implements OnModuleInit {
       ordersByRegion.set(regionId, bucket);
     }
 
+    const targetPostIds: string[] = [];
+
     for (const [regionId, regionOrders] of ordersByRegion.entries()) {
       let newPost = await this.postRepo.findOne({
         where: { region_id: regionId, status: Post_status.NEW },
@@ -1548,7 +1691,22 @@ export class LogisticsServiceService implements OnModuleInit {
       if (savedNewPost) {
         void this.syncPostToSearch(savedNewPost);
       }
+      targetPostIds.push(String(newPost.id));
     }
+
+    await this.activityLog.log({
+      // Subject is the returned Order(s); entity_id must be an Order id (mirrors
+      // rejectReturnRequests). The created post(s) are carried in metadata.
+      entity_type: 'Order',
+      entity_id: String(eligibleOrders[0]?.id ?? 'bulk'),
+      action: 'logistics.return_approve',
+      ...this.auditActor(requester),
+      metadata: {
+        order_count: eligibleOrders.length,
+        order_ids: eligibleOrders.slice(0, 10).map((order) => String(order.id)),
+        post_ids: targetPostIds.slice(0, 10),
+      },
+    });
 
     return successRes(
       { approved: eligibleOrders.length },
@@ -1564,6 +1722,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     let rejected = 0;
+    const rejectedOrderIds: string[] = [];
     for (const orderId of orderIds) {
       const order = await this.findOrderById(orderId);
       if (
@@ -1580,12 +1739,24 @@ export class LogisticsServiceService implements OnModuleInit {
           },
         );
         rejected += 1;
+        rejectedOrderIds.push(String(order.id));
       }
     }
 
     if (!rejected) {
       this.notFound('No return-requested orders found');
     }
+
+    await this.activityLog.log({
+      entity_type: 'Order',
+      entity_id: String(rejectedOrderIds[0] ?? 'bulk'),
+      action: 'logistics.return_reject',
+      ...this.auditActor(requester),
+      metadata: {
+        order_count: rejected,
+        order_ids: rejectedOrderIds.slice(0, 10),
+      },
+    });
 
     return successRes(
       { rejected },
@@ -1622,6 +1793,18 @@ export class LogisticsServiceService implements OnModuleInit {
     const savedPost = await this.postRepo.save(post);
     void this.syncPostToSearch(savedPost);
 
+    await this.activityLog.log({
+      entity_type: 'Post',
+      entity_id: String(savedPost.id),
+      action: ActivityAction.STATUS_CHANGE,
+      new_value: { status: Post_status.RECEIVED },
+      ...this.auditActor(requester),
+      metadata: {
+        courier_id: savedPost.courier_id,
+        order_count: orders.length,
+      },
+    });
+
     return successRes({}, 200, 'Post received successfully');
   }
 
@@ -1645,11 +1828,26 @@ export class LogisticsServiceService implements OnModuleInit {
       limit: 1,
     });
 
+    let postReceived = false;
     if (!remaining.length) {
       post.status = Post_status.RECEIVED;
       const savedPost = await this.postRepo.save(post);
       void this.syncPostToSearch(savedPost);
+      postReceived = true;
     }
+
+    await this.activityLog.log({
+      entity_type: 'Order',
+      entity_id: String(order.id),
+      action: ActivityAction.STATUS_CHANGE,
+      new_value: { status: Order_status.WAITING },
+      ...this.auditActor(requester),
+      metadata: {
+        courier_id: post.courier_id,
+        post_id: String(post.id),
+        post_received: postReceived,
+      },
+    });
 
     return successRes({}, 200, 'Order received');
   }
@@ -1793,6 +1991,20 @@ export class LogisticsServiceService implements OnModuleInit {
         );
       }
     }
+
+    await this.activityLog.log({
+      entity_type: 'Order',
+      entity_id: String(order.id),
+      action: ActivityAction.ASSIGN,
+      new_value: { courier_id: requesterId, post_id: String(targetPost.id) },
+      ...this.auditActor(requester),
+      metadata: {
+        courier_id: requesterId,
+        post_id: String(targetPost.id),
+        branch_id: orderBranchId,
+        post_created: createdNewPost,
+      },
+    });
 
     return successRes(
       {
@@ -2008,6 +2220,23 @@ export class LogisticsServiceService implements OnModuleInit {
       throw error;
     }
 
+    await this.activityLog.log({
+      // The post is the single mutated aggregate here; the assigned orders live
+      // in metadata. entity_id is a Post id, so entity_type must be 'Post'.
+      entity_type: 'Post',
+      entity_id: String(targetPost.id),
+      action: ActivityAction.ASSIGN,
+      ...this.auditActor(requester),
+      metadata: {
+        courier_id: courierId,
+        order_count: orderIds.length,
+        order_ids: orderIds.slice(0, 10),
+        branch_id: requesterBranchId,
+        post_id: String(targetPost.id),
+        post_created: createdNewPost,
+      },
+    });
+
     return successRes(
       {
         order_ids: orderIds,
@@ -2068,6 +2297,19 @@ export class LogisticsServiceService implements OnModuleInit {
     const savedCanceledPost = await this.postRepo.save(canceledPost);
     void this.syncPostToSearch(savedCanceledPost);
 
+    await this.activityLog.log({
+      entity_type: 'Post',
+      entity_id: String(savedCanceledPost.id),
+      action: ActivityAction.CREATED,
+      ...this.auditActor(requester),
+      metadata: {
+        courier_id: requester?.id ?? null,
+        order_count: orders.length,
+        order_ids: orderIds.slice(0, 10),
+        canceled: true,
+      },
+    });
+
     return successRes(
       { post_id: canceledPost.id, order_ids: orderIds },
       200,
@@ -2115,6 +2357,17 @@ export class LogisticsServiceService implements OnModuleInit {
     const savedPost = await this.postRepo.save(post);
     void this.syncPostToSearch(savedPost);
 
+    await this.activityLog.log({
+      entity_type: 'Post',
+      entity_id: String(savedPost.id),
+      action: ActivityAction.STATUS_CHANGE,
+      new_value: { status: Post_status.CANCELED_RECEIVED },
+      metadata: {
+        order_count: canceledOrderIds.length,
+        courier_id: savedPost.courier_id,
+      },
+    });
+
     return successRes({}, 200, 'Post received successfully');
   }
 
@@ -2151,6 +2404,15 @@ export class LogisticsServiceService implements OnModuleInit {
     });
     const saved = await this.districtRepo.save(district);
     void this.syncDistrictToSearch(saved);
+
+    await this.activityLog.log({
+      entity_type: 'District',
+      entity_id: String(saved.id),
+      action: ActivityAction.CREATED,
+      new_value: { name: saved.name, sato_code: saved.sato_code, region_id: saved.region_id },
+      metadata: { region_id: dto.region_id },
+    });
+
     return successRes(saved, 201, 'New district added');
   }
 
@@ -2190,6 +2452,8 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('District not found');
     }
 
+    const before = { assigned_region: district.assigned_region };
+
     if (district.assigned_region === dto.assigned_region) {
       this.badRequest('The district already assigned to this region');
     }
@@ -2206,6 +2470,15 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const saved = await this.districtRepo.save(district);
     void this.syncDistrictToSearch(saved);
+
+    await this.activityLog.logChange({
+      entity_type: 'District',
+      entity_id: String(saved.id),
+      action: ActivityAction.UPDATED,
+      old_value: before,
+      new_value: { assigned_region: saved.assigned_region },
+    });
+
     return successRes(saved, 200, 'District assigned to new region');
   }
 
@@ -2214,6 +2487,8 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!district) {
       this.notFound('District not found');
     }
+
+    const before = { name: district.name };
 
     const trimmedName = dto.name.trim();
     if (!trimmedName) {
@@ -2230,6 +2505,15 @@ export class LogisticsServiceService implements OnModuleInit {
     district.name = trimmedName;
     const savedDistrict = await this.districtRepo.save(district);
     void this.syncDistrictToSearch(savedDistrict);
+
+    await this.activityLog.logChange({
+      entity_type: 'District',
+      entity_id: String(savedDistrict.id),
+      action: ActivityAction.UPDATED,
+      old_value: before,
+      new_value: { name: savedDistrict.name },
+    });
+
     return successRes({}, 200, 'District name updated');
   }
 
@@ -2238,6 +2522,8 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!district) {
       this.notFound('District not found');
     }
+
+    const before = { sato_code: district.sato_code };
 
     const satoCode = dto.sato_code.trim();
     if (!satoCode) {
@@ -2254,6 +2540,15 @@ export class LogisticsServiceService implements OnModuleInit {
     district.sato_code = satoCode;
     const savedDistrict = await this.districtRepo.save(district);
     void this.syncDistrictToSearch(savedDistrict);
+
+    await this.activityLog.logChange({
+      entity_type: 'District',
+      entity_id: String(savedDistrict.id),
+      action: ActivityAction.UPDATED,
+      old_value: before,
+      new_value: { sato_code: savedDistrict.sato_code },
+    });
+
     return successRes(savedDistrict, 200, 'District sato_code updated');
   }
 
@@ -2309,6 +2604,18 @@ export class LogisticsServiceService implements OnModuleInit {
       });
     }
 
+    if (appliedCount > 0) {
+      await this.activityLog.log({
+        entity_type: 'District',
+        entity_id: 'bulk',
+        action: 'logistics.sato_bulk_apply',
+        metadata: {
+          applied_count: appliedCount,
+          district_ids: updatedIds.slice(0, 10),
+        },
+      });
+    }
+
     return successRes(
       {
         applied,
@@ -2328,8 +2635,23 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('District not found');
     }
 
+    const deletedSnapshot = {
+      name: district.name,
+      sato_code: district.sato_code,
+      region_id: district.region_id,
+    };
+
     await this.districtRepo.remove(district);
     void this.removeDistrictFromSearch(district);
+
+    await this.activityLog.log({
+      entity_type: 'District',
+      entity_id: String(id),
+      action: ActivityAction.DELETED,
+      old_value: deletedSnapshot,
+      metadata: { region_id: deletedSnapshot.region_id },
+    });
+
     return successRes({ id }, 200, 'District deleted');
   }
 
@@ -2356,6 +2678,14 @@ export class LogisticsServiceService implements OnModuleInit {
     const region = this.regionRepo.create({ name, sato_code: satoCode });
     const saved = await this.regionRepo.save(region);
     void this.syncRegionToSearch(saved);
+
+    await this.activityLog.log({
+      entity_type: 'Region',
+      entity_id: String(saved.id),
+      action: ActivityAction.CREATED,
+      new_value: { name: saved.name, sato_code: saved.sato_code },
+    });
+
     return successRes(saved, 201, 'Region created');
   }
 
@@ -2692,6 +3022,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     const assignments: Array<{ order_id: string; post_id: string }> = [];
+    const touchedPostIds: string[] = [];
 
     for (const regionOrders of byBranchRegion.values()) {
       const first = regionOrders[0];
@@ -2730,7 +3061,20 @@ export class LogisticsServiceService implements OnModuleInit {
       post.post_total_price = Number(post.post_total_price ?? 0) + addedTotal;
       const saved = await this.postRepo.save(post);
       void this.syncPostToSearch(saved);
+      touchedPostIds.push(String(saved.id));
     }
+
+    await this.activityLog.log({
+      entity_type: 'Post',
+      entity_id: String(touchedPostIds[0] ?? 'bulk'),
+      action: 'logistics.post_assign_orders',
+      metadata: {
+        order_count: assignments.length,
+        order_ids: assignments.slice(0, 10).map((a) => a.order_id),
+        post_ids: touchedPostIds.slice(0, 10),
+        post_count: touchedPostIds.length,
+      },
+    });
 
     return successRes(assignments, 200, 'Posts assigned');
   }
@@ -2750,6 +3094,8 @@ export class LogisticsServiceService implements OnModuleInit {
     if (!region) {
       this.notFound('Region not found');
     }
+
+    const before = { name: region.name, sato_code: region.sato_code };
 
     if (typeof dto.name !== 'undefined') {
       const nextName = dto.name.trim();
@@ -2779,6 +3125,15 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const saved = await this.regionRepo.save(region);
     void this.syncRegionToSearch(saved);
+
+    await this.activityLog.logChange({
+      entity_type: 'Region',
+      entity_id: String(saved.id),
+      action: ActivityAction.UPDATED,
+      old_value: before,
+      new_value: { name: saved.name, sato_code: saved.sato_code },
+    });
+
     return successRes(saved, 200, 'Region updated');
   }
 
@@ -2788,8 +3143,18 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Region not found');
     }
 
+    const deletedSnapshot = { name: region.name, sato_code: region.sato_code };
+
     await this.regionRepo.remove(region);
     void this.removeRegionFromSearch(region);
+
+    await this.activityLog.log({
+      entity_type: 'Region',
+      entity_id: String(id),
+      action: ActivityAction.DELETED,
+      old_value: deletedSnapshot,
+    });
+
     return successRes({ id }, 200, 'Region deleted');
   }
 }

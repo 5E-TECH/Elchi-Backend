@@ -24,6 +24,7 @@ import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.ent
 import {
   ActivityAction,
   ActivityLogService,
+  ActivityLogQuery,
   BranchOwnership,
   BranchTransferBatchAction,
   BranchTransferBatchStatus,
@@ -96,6 +97,18 @@ export class OrderServiceService implements OnModuleInit {
       user_id: requester?.id ? String(requester.id) : null,
       user_role: roles.length ? roles.join(',') : null,
     };
+  }
+
+  async auditLogQuery(q: ActivityLogQuery) {
+    return this.activityLog.query(q ?? {});
+  }
+
+  async auditLogByEntity(
+    entity_type: string,
+    entity_id: string,
+    limit?: number,
+  ) {
+    return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
   }
 
   async onModuleInit(): Promise<void> {
@@ -1700,6 +1713,18 @@ export class OrderServiceService implements OnModuleInit {
         );
       },
     });
+    await this.activityLog.log({
+      entity_type: 'OrderSettlement',
+      entity_id: courierId,
+      action: ActivityAction.PAYMENT,
+      ...this.auditActor(requester),
+      metadata: {
+        courier_id: courierId,
+        order_count: result.settled_order_ids.length,
+        order_ids: result.settled_order_ids.slice(0, 20),
+        total: result.allocated,
+      },
+    });
     return successRes(result, 200, 'Courier→branch settlement applied');
   }
 
@@ -1759,6 +1784,18 @@ export class OrderServiceService implements OnModuleInit {
         );
       },
     });
+    await this.activityLog.log({
+      entity_type: 'OrderSettlement',
+      entity_id: branchId,
+      action: ActivityAction.PAYMENT,
+      ...this.auditActor(requester),
+      metadata: {
+        branch_id: branchId,
+        order_count: result.settled_order_ids.length,
+        order_ids: result.settled_order_ids.slice(0, 20),
+        total: result.allocated,
+      },
+    });
     return successRes(result, 200, 'Branch→HQ settlement applied');
   }
 
@@ -1815,6 +1852,18 @@ export class OrderServiceService implements OnModuleInit {
           },
           manager,
         );
+      },
+    });
+    await this.activityLog.log({
+      entity_type: 'OrderSettlement',
+      entity_id: marketId,
+      action: ActivityAction.PAYMENT,
+      ...this.auditActor(requester),
+      metadata: {
+        market_id: marketId,
+        order_count: result.settled_order_ids.length,
+        order_ids: result.settled_order_ids.slice(0, 20),
+        total: result.allocated,
       },
     });
     return successRes(result, 200, 'HQ→market settlement applied');
@@ -4221,6 +4270,18 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     const updated = await this.findById(order.id);
+    await this.activityLog.log({
+      entity_type: 'Order',
+      entity_id: String(updated.id),
+      action: ActivityAction.WEBHOOK_RECEIVED,
+      old_value: { status: oldStatus },
+      new_value: { status: updated.status },
+      metadata: {
+        provider_slug: input.provider_slug ?? null,
+        external_ref: input.external_ref ?? null,
+        provider_action: input.action,
+      },
+    });
     return successRes(
       {
         id: updated.id,
@@ -6429,9 +6490,23 @@ export class OrderServiceService implements OnModuleInit {
       await batchHistoryRepo.save(historyEntities);
       await queryRunner.commitTransaction();
 
-      const batches = await this.listBatchesWithItems(
-        Array.from(touchedBatchIds),
-      );
+      const touchedBatchIdList = Array.from(touchedBatchIds);
+      await this.activityLog.log({
+        entity_type: 'BranchTransferBatch',
+        entity_id: touchedBatchIdList[0] ?? sourceBranchId,
+        action: ActivityAction.CREATED,
+        ...this.auditActor({ id: requesterId }),
+        metadata: {
+          source_branch_id: sourceBranchId,
+          destination_branch_id: destinationBranchId,
+          direction,
+          batch_ids: touchedBatchIdList,
+          order_count: candidateOrders.length,
+          order_ids: candidateOrders.slice(0, 20).map((o) => String(o.id)),
+        },
+      });
+
+      const batches = await this.listBatchesWithItems(touchedBatchIdList);
       return successRes(
         {
           idempotent: false,
@@ -6711,6 +6786,19 @@ export class OrderServiceService implements OnModuleInit {
           ),
         ),
       ];
+      await this.activityLog.log({
+        entity_type: 'BranchTransferBatch',
+        entity_id: affectedBatchIds[0] ?? sourceBranchId,
+        action: ActivityAction.CREATED,
+        ...this.auditActor({ id: requesterId }),
+        metadata: {
+          source_branch_id: sourceBranchId,
+          direction,
+          batch_ids: affectedBatchIds,
+          order_count: orders.length,
+          order_ids: orders.slice(0, 20).map((o) => String(o.id)),
+        },
+      });
       const batches = await this.listBatchesWithItems(affectedBatchIds);
       return successRes(
         {
@@ -6766,14 +6854,16 @@ export class OrderServiceService implements OnModuleInit {
         .andWhere('"is_deleted" = false')
         .execute();
 
+      let unboundOrderCount = 0;
       if (input?.remove_order_bindings) {
-        await orderRepo
+        const unbindResult = await orderRepo
           .createQueryBuilder()
           .update(Order)
           .set({ current_batch_id: null })
           .where('"current_batch_id" IN (:...batchIds)', { batchIds })
           .andWhere('"is_deleted" = false')
           .execute();
+        unboundOrderCount = Number(unbindResult.affected ?? 0);
       }
 
       const histories = batchIds.map((batchId) =>
@@ -6787,6 +6877,18 @@ export class OrderServiceService implements OnModuleInit {
       await batchHistoryRepo.save(histories);
 
       await queryRunner.commitTransaction();
+      await this.activityLog.log({
+        entity_type: 'BranchTransferBatch',
+        entity_id: batchIds[0],
+        action: ActivityAction.STATUS_CHANGE,
+        new_value: { status: BranchTransferBatchStatus.CANCELLED },
+        ...this.auditActor({ id: requesterId }),
+        metadata: {
+          batch_ids: batchIds,
+          order_count: unboundOrderCount,
+          remove_order_bindings: Boolean(input?.remove_order_bindings),
+        },
+      });
       return successRes(
         { batch_ids: batchIds },
         200,
@@ -6874,6 +6976,17 @@ export class OrderServiceService implements OnModuleInit {
       }
 
       await queryRunner.commitTransaction();
+      await this.activityLog.log({
+        entity_type: 'Order',
+        entity_id: batchId,
+        action: ActivityAction.ASSIGN,
+        metadata: {
+          batch_id: batchId,
+          message_id: messageId,
+          order_count: orderIds.length,
+          order_ids: orderIds.slice(0, 20),
+        },
+      });
       return successRes(
         {
           idempotent: false,
@@ -6941,6 +7054,16 @@ export class OrderServiceService implements OnModuleInit {
         .execute();
 
       await queryRunner.commitTransaction();
+      await this.activityLog.log({
+        entity_type: 'Order',
+        entity_id: batchId,
+        action: ActivityAction.UNASSIGN,
+        metadata: {
+          batch_id: batchId,
+          message_id: messageId,
+          order_count: Number(result.affected ?? 0),
+        },
+      });
       return successRes(
         {
           idempotent: false,
@@ -6998,6 +7121,13 @@ export class OrderServiceService implements OnModuleInit {
       notes: input?.notes?.trim() || null,
     });
     await this.transferBatchHistoryRepo.save(entity);
+    await this.activityLog.log({
+      entity_type: 'BranchTransferBatchHistory',
+      entity_id: batchId,
+      action: ActivityAction.CREATED,
+      ...this.auditActor({ id: userId }),
+      metadata: { batch_id: batchId, action_in_history: actionRaw },
+    });
     return successRes(entity, 201, 'Transfer batch history added');
   }
 
@@ -7540,6 +7670,19 @@ export class OrderServiceService implements OnModuleInit {
       }),
     );
 
+    await this.activityLog.log({
+      entity_type: 'BranchTransferBatch',
+      entity_id: batchId,
+      action: ActivityAction.STATUS_CHANGE,
+      new_value: { status: saved.status },
+      ...this.auditActor({ id: String(input?.requester_id ?? '').trim() }),
+      metadata: {
+        batch_id: batchId,
+        order_count: toMark.length,
+        order_ids: orderIds.slice(0, 20),
+      },
+    });
+
     return successRes(saved, 200, 'Transfer batch sent');
   }
 
@@ -7687,6 +7830,18 @@ export class OrderServiceService implements OnModuleInit {
       );
 
       await queryRunner.commitTransaction();
+      await this.activityLog.log({
+        entity_type: 'BranchTransferBatch',
+        entity_id: batchId,
+        action: ActivityAction.STATUS_CHANGE,
+        new_value: { status: BranchTransferBatchStatus.RECEIVED },
+        ...this.auditActor({ id: requesterId }),
+        metadata: {
+          batch_id: batchId,
+          order_count: orderIds.length,
+          order_ids: orderIds.slice(0, 20),
+        },
+      });
       return successRes(savedBatch, 200, 'Transfer batch received');
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -7972,6 +8127,20 @@ export class OrderServiceService implements OnModuleInit {
         }
       }
 
+      await this.activityLog.log({
+        entity_type: 'BranchTransferBatch',
+        entity_id: batchId,
+        action: ActivityAction.STATUS_CHANGE,
+        new_value: { status: BranchTransferBatchStatus.RECEIVED },
+        ...this.auditActor({ id: requesterId }),
+        metadata: {
+          batch_id: batchId,
+          order_count: selectedOrderIds.length,
+          order_ids: selectedOrderIds.slice(0, 20),
+          requeued_count: remainingOrderIdsForRequeue.length,
+        },
+      });
+
       return successRes(
         savedBatch,
         200,
@@ -8061,6 +8230,14 @@ export class OrderServiceService implements OnModuleInit {
       );
 
       await queryRunner.commitTransaction();
+      await this.activityLog.log({
+        entity_type: 'BranchTransferBatch',
+        entity_id: batchId,
+        action: ActivityAction.STATUS_CHANGE,
+        new_value: { status: BranchTransferBatchStatus.CANCELLED },
+        ...this.auditActor({ id: requesterId }),
+        metadata: { batch_id: batchId, reason },
+      });
       return successRes(savedBatch, 200, 'Transfer batch cancelled');
     } catch (error) {
       await queryRunner.rollbackTransaction();

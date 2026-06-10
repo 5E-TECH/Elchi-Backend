@@ -12,6 +12,13 @@ jest.mock('@app/common', () => {
       CREATE: 'create',
       CANCEL: 'cancel',
     },
+    ActivityAction: {
+      ...(actual.ActivityAction ?? {}),
+      CREATED: 'created',
+      UPDATED: 'updated',
+      DELETED: 'deleted',
+    },
+    ActivityLogService: class {},
     rmqSend: (...args: any[]) => rmqSendMock(...args),
   };
 });
@@ -20,6 +27,7 @@ describe('NotificationServiceService', () => {
   let service: NotificationServiceService;
   let repo: any;
   let config: any;
+  let activityLog: any;
 
   beforeEach(() => {
     rmqSendMock.mockReset();
@@ -31,7 +39,17 @@ describe('NotificationServiceService', () => {
       create: jest.fn((v) => v),
     };
     config = { get: jest.fn((k: string) => (k === 'TELEGRAM_BOT_TOKEN' ? 'ENV_TOKEN' : undefined)) };
-    service = new NotificationServiceService(repo, config, {} as any);
+    activityLog = {
+      log: jest.fn().mockResolvedValue(undefined),
+      logChange: jest.fn().mockResolvedValue(undefined),
+      query: jest.fn().mockResolvedValue({
+        items: [],
+        meta: { page: 1, limit: 50, total: 0, totalPages: 1 },
+      }),
+      findByEntity: jest.fn().mockResolvedValue([]),
+      findByUser: jest.fn().mockResolvedValue([]),
+    };
+    service = new NotificationServiceService(repo, config, {} as any, activityLog);
     (global as any).fetch = jest.fn();
   });
 

@@ -30,10 +30,21 @@ function makeService(opts: {
       return saved;
     }),
   };
+  const activityLog: any = {
+    log: jest.fn().mockResolvedValue(undefined),
+    logChange: jest.fn().mockResolvedValue(undefined),
+    query: jest.fn().mockResolvedValue({
+      items: [],
+      meta: { page: 1, limit: 50, total: 0, totalPages: 1 },
+    }),
+    findByEntity: jest.fn().mockResolvedValue([]),
+    findByUser: jest.fn().mockResolvedValue([]),
+  };
   const service = new InvestorServiceService(
     investorRepo,
     investmentRepo,
     profitShareRepo,
+    activityLog,
   );
   return { service, profitShareRepo, savedRows };
 }

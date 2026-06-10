@@ -1,6 +1,11 @@
 import { Controller } from '@nestjs/common';
 import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
-import { RmqService, Group_type, executeAndAck } from '@app/common';
+import {
+  RmqService,
+  Group_type,
+  executeAndAck,
+  ActivityLogQuery,
+} from '@app/common';
 import { NotificationServiceService } from './notification-service.service';
 import { NotificationInboxService } from './notification-inbox.service';
 import { CreateNotificationDto } from './dto/create-notification.dto';
@@ -196,6 +201,33 @@ export class NotificationServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.inboxService.remove(data.recipient_id, data.id),
+    );
+  }
+
+  // ==================== Audit-log reads (gateway fan-in) ====================
+
+  @MessagePattern({ cmd: 'notification.activity_log.find_all' })
+  activityLogFindAll(
+    @Payload() data: { query?: ActivityLogQuery },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.notificationService.auditLogQuery(data?.query ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'notification.activity_log.find_by_entity' })
+  activityLogFindByEntity(
+    @Payload()
+    data: { entity_type: string; entity_id: string; limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.notificationService.auditLogByEntity(
+        data.entity_type,
+        data.entity_id,
+        data.limit,
+      ),
     );
   }
 }

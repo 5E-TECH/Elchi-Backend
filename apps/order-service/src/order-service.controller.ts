@@ -10,6 +10,7 @@ import {
   executeAndAck,
   IdempotencyService,
   executeIdempotent,
+  ActivityLogQuery,
 } from '@app/common';
 import { Order_status, Where_deliver } from '@app/common';
 import { OrderServiceService } from './order-service.service';
@@ -1022,6 +1023,31 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.findOrdersForPrint(data?.order_ids ?? []),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.activity_log.find_all' })
+  activityLogFindAll(
+    @Payload() data: { query?: ActivityLogQuery },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.auditLogQuery(data?.query ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.activity_log.find_by_entity' })
+  activityLogFindByEntity(
+    @Payload()
+    data: { entity_type: string; entity_id: string; limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.auditLogByEntity(
+        data.entity_type,
+        data.entity_id,
+        data.limit,
+      ),
     );
   }
 }

@@ -8,6 +8,7 @@ import {
   RmqModule,
   DatabaseModule,
   notificationValidationSchema,
+  ActivityLogModule,
 } from '@app/common';
 import { TelegramMarket } from './entities/telegram-market.entity';
 import { Notification } from './entities/notification.entity';
@@ -30,6 +31,7 @@ import { OrderBotUpdateService } from './order-bot.update';
     // connected socket.io clients receive new notifications live.
     RmqModule.register({ name: 'GATEWAY' }),
     DatabaseModule,
+    ActivityLogModule.forService('notification-service'),
     TypeOrmModule.forFeature([TelegramMarket, Notification]),
   ],
   controllers: [NotificationServiceController],

@@ -18,6 +18,7 @@ describe('NotificationInboxService', () => {
   let identityClient: any;
   let gatewayClient: any;
   let telegramService: any;
+  let activityLog: any;
 
   beforeEach(() => {
     rmqSendMock.mockReset();
@@ -32,11 +33,22 @@ describe('NotificationInboxService', () => {
     identityClient = { send: jest.fn() };
     gatewayClient = { emit: jest.fn(() => of(null)) };
     telegramService = { sendNotification: jest.fn() };
+    activityLog = {
+      log: jest.fn().mockResolvedValue(undefined),
+      logChange: jest.fn().mockResolvedValue(undefined),
+      query: jest.fn().mockResolvedValue({
+        items: [],
+        meta: { page: 1, limit: 50, total: 0, totalPages: 1 },
+      }),
+      findByEntity: jest.fn().mockResolvedValue([]),
+      findByUser: jest.fn().mockResolvedValue([]),
+    };
     service = new NotificationInboxService(
       repo,
       identityClient,
       gatewayClient,
       telegramService,
+      activityLog,
     );
   });
 

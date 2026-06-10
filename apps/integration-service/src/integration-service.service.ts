@@ -13,6 +13,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypt
 import {
   ActivityAction,
   ActivityLogService,
+  ActivityLogQuery,
   HmacAlgorithm,
   Order_status,
   verifyHmacSignature,
@@ -155,6 +156,29 @@ export class IntegrationServiceService {
 
   private notFound(message: string): never {
     throw new RpcException(errorRes(message, 404));
+  }
+
+  private auditActor(
+    requester?: { id?: string; roles?: string[] } | null,
+  ): { user_id: string | null; user_role: string | null } {
+    const roles = requester?.roles ?? [];
+    return {
+      user_id: requester?.id ? String(requester.id) : null,
+      user_role: roles.length ? roles.join(',') : null,
+    };
+  }
+
+  // --- Audit-log read fan-in (consumed by the gateway) ---
+  async auditLogQuery(q: ActivityLogQuery) {
+    return this.activityLog.query(q ?? {});
+  }
+
+  async auditLogByEntity(
+    entity_type: string,
+    entity_id: string,
+    limit?: number,
+  ) {
+    return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
   }
 
   // Dev/testing escape hatch for talking to local providers. Off by default so
@@ -918,6 +942,23 @@ export class IntegrationServiceService {
 
     const saved = await this.integrationRepo.save(entity);
     const [enriched] = await this.attachMarkets([saved as any]);
+
+    // Never log credentials/api keys — only non-secret identity of the row.
+    await this.activityLog.log({
+      entity_type: 'ExternalIntegration',
+      entity_id: String(saved.id),
+      action: ActivityAction.CREATED,
+      new_value: {
+        name: saved.name,
+        slug: saved.slug,
+        type: saved.type,
+        status: saved.status,
+        is_active: saved.is_active,
+      },
+      metadata: { market_id: saved.market_id ?? null, provider: saved.slug },
+      ...this.auditActor((dto as any)?.requester),
+    });
+
     return successRes(this.sanitizeIntegrationRow(enriched), 201, 'integration created');
   }
 
@@ -1026,6 +1067,23 @@ export class IntegrationServiceService {
       }
     }
 
+    // Snapshot only non-secret fields BEFORE mutating — credentials/api keys
+    // must never reach the audit log.
+    const auditSnapshot = (
+      r: ExternalIntegration,
+    ): Record<string, unknown> => ({
+      name: r.name,
+      slug: r.slug,
+      type: r.type,
+      base_url: r.base_url,
+      api_url: r.api_url,
+      status: r.status,
+      is_active: r.is_active,
+      auth_type: r.auth_type,
+      market_id: r.market_id ?? null,
+    });
+    const before = auditSnapshot(row);
+
     Object.assign(row, dto);
     if (typeof (dto as any).type !== 'undefined') {
       row.type = this.normalizeType((dto as any).type);
@@ -1099,10 +1157,24 @@ export class IntegrationServiceService {
     this.assertSafeConfigFields(dto as Record<string, unknown>);
     const saved = await this.integrationRepo.save(row);
     const [enriched] = await this.attachMarkets([saved as any]);
+
+    await this.activityLog.logChange({
+      entity_type: 'ExternalIntegration',
+      entity_id: String(saved.id),
+      action: ActivityAction.UPDATED,
+      old_value: before,
+      new_value: auditSnapshot(saved),
+      metadata: { market_id: saved.market_id ?? null, provider: saved.slug },
+      ...this.auditActor((dto as any)?.requester),
+    });
+
     return successRes(this.sanitizeIntegrationRow(enriched), 200, 'integration updated');
   }
 
-  async deleteIntegration(id: string) {
+  async deleteIntegration(
+    id: string,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
     const row = await this.integrationRepo.findOne({ where: { id, isDeleted: false } });
     if (!row) {
       this.notFound('integration not found');
@@ -1117,6 +1189,16 @@ export class IntegrationServiceService {
     row.status = 'inactive';
     const saved = await this.integrationRepo.save(row);
     this.clearTokenCache(saved.id);
+
+    await this.activityLog.log({
+      entity_type: 'ExternalIntegration',
+      entity_id: String(saved.id),
+      action: ActivityAction.DELETED,
+      old_value: { name: saved.name, slug: saved.slug, type: saved.type },
+      ...this.auditActor(requester),
+      metadata: { market_id: saved.market_id ?? null, provider: saved.slug },
+    });
+
     return successRes({ id: saved.id }, 200, 'integration deleted');
   }
 
@@ -1461,6 +1543,18 @@ export class IntegrationServiceService {
     });
     const savedQueue = await this.syncQueueRepo.save(queue);
 
+    await this.activityLog.log({
+      entity_type: 'SyncQueue',
+      entity_id: String(savedQueue.id),
+      action: ActivityAction.EXTERNAL_SYNC,
+      new_value: { action: savedQueue.action, status: savedQueue.status },
+      metadata: {
+        order_id: savedQueue.order_id ?? null,
+        integration_id: String(integration.id),
+        external_order_id: savedQueue.external_order_id ?? null,
+      },
+    });
+
     await this.processPendingSyncQueue(1);
     const updated = await this.syncQueueRepo.findOne({ where: { id: savedQueue.id } });
     return successRes(updated ?? savedQueue, 201, 'sync enqueued');
@@ -1638,6 +1732,8 @@ export class IntegrationServiceService {
     await queryRunner.connect();
 
     let acquired = false;
+    let auditSummary: { processed: number; completed: number; failed: number } | null =
+      null;
     try {
       const lockRows = await queryRunner.query(
         'SELECT pg_try_advisory_lock($1::bigint) AS acquired',
@@ -1682,6 +1778,7 @@ export class IntegrationServiceService {
         }
       }
 
+      auditSummary = { processed, completed, failed };
       return successRes(
         { processed, completed, failed },
         200,
@@ -1702,6 +1799,23 @@ export class IntegrationServiceService {
         }
       }
       await queryRunner.release();
+      // Audit AFTER the advisory lock is released — one batch row per run that
+      // actually processed work; log() is fail-safe so it never breaks the run.
+      if (auditSummary && auditSummary.processed > 0) {
+        await this.activityLog.log({
+          entity_type: 'SyncQueue',
+          entity_id: 'batch',
+          action: ActivityAction.EXTERNAL_SYNC,
+          new_value: {
+            completed: auditSummary.completed,
+            failed: auditSummary.failed,
+          },
+          metadata: {
+            integration_id: integration_id ?? null,
+            processed_count: auditSummary.processed,
+          },
+        });
+      }
     }
   }
 
@@ -1725,6 +1839,17 @@ export class IntegrationServiceService {
       row.retry_count = 0;
       row.next_retry_at = null;
       await this.syncQueueRepo.save(row);
+
+      await this.activityLog.log({
+        entity_type: 'SyncQueue',
+        entity_id: String(row.id),
+        action: ActivityAction.EXTERNAL_SYNC,
+        new_value: { status: 'pending', retried: true },
+        metadata: {
+          integration_id: integration_id ?? row.integration_id ?? null,
+        },
+      });
+
       return this.processPendingSyncQueue(1, integration_id);
     }
 
@@ -1747,6 +1872,20 @@ export class IntegrationServiceService {
       row.retry_count = 0;
       row.next_retry_at = null;
       await this.syncQueueRepo.save(row);
+    }
+
+    if (rows.length) {
+      await this.activityLog.log({
+        entity_type: 'SyncQueue',
+        entity_id: 'batch',
+        action: ActivityAction.EXTERNAL_SYNC,
+        new_value: { status: 'pending', retried: true },
+        metadata: {
+          integration_id: integration_id ?? null,
+          order_count: rows.length,
+          order_ids: rows.slice(0, 10).map((r) => String(r.id)),
+        },
+      });
     }
 
     return this.processPendingSyncQueue(Math.max(1, rows.length), integration_id);
@@ -2258,6 +2397,23 @@ export class IntegrationServiceService {
     }
 
     const saved = await this.shipmentRepo.save(shipment);
+
+    await this.activityLog.log({
+      entity_type: 'ProviderShipment',
+      entity_id: String(saved.id),
+      action: ActivityAction.EXTERNAL_SYNC,
+      new_value: {
+        provider_status: saved.provider_status ?? null,
+        internal_status: saved.internal_status ?? null,
+        external_ref: saved.external_ref ?? null,
+        tracking_number: saved.tracking_number ?? null,
+      },
+      metadata: {
+        order_id: orderId,
+        integration_id: String(input.integration_id),
+      },
+    });
+
     return successRes(saved, 200, 'shipment upserted');
   }
 
@@ -2500,6 +2656,7 @@ export class IntegrationServiceService {
       },
     });
 
+    let saved: ProviderReceivable;
     if (existing) {
       // Already settled → leave it. Pending → keep amount in sync. Cancelled →
       // the delivery happened again, revive it.
@@ -2512,18 +2669,32 @@ export class IntegrationServiceService {
       existing.external_ref = input.external_ref ?? existing.external_ref;
       existing.remittance_id = null;
       existing.settled_at = null;
-      return this.receivableRepo.save(existing);
+      saved = await this.receivableRepo.save(existing);
+    } else {
+      const created = this.receivableRepo.create({
+        integration_id: String(input.integration_id),
+        order_id: String(input.order_id),
+        provider_slug: input.provider_slug ?? null,
+        external_ref: input.external_ref ?? null,
+        amount: amount.toFixed(2),
+        status: ReceivableStatus.PENDING,
+      });
+      saved = await this.receivableRepo.save(created);
     }
 
-    const created = this.receivableRepo.create({
-      integration_id: String(input.integration_id),
-      order_id: String(input.order_id),
-      provider_slug: input.provider_slug ?? null,
-      external_ref: input.external_ref ?? null,
-      amount: amount.toFixed(2),
-      status: ReceivableStatus.PENDING,
+    await this.activityLog.log({
+      entity_type: 'ProviderReceivable',
+      entity_id: String(saved.id ?? input.order_id),
+      action: ActivityAction.PAYMENT,
+      new_value: { amount: saved.amount, status: saved.status },
+      metadata: {
+        integration_id: String(input.integration_id),
+        order_id: String(input.order_id),
+        amount,
+      },
     });
-    return this.receivableRepo.save(created);
+
+    return saved;
   }
 
   /**
@@ -2545,7 +2716,19 @@ export class IntegrationServiceService {
     });
     if (row) {
       row.status = ReceivableStatus.CANCELLED;
-      await this.receivableRepo.save(row);
+      const saved = await this.receivableRepo.save(row);
+
+      await this.activityLog.log({
+        entity_type: 'ProviderReceivable',
+        entity_id: String(saved.id ?? order_id),
+        action: ActivityAction.STATUS_CHANGE,
+        old_value: { status: ReceivableStatus.PENDING },
+        new_value: { status: ReceivableStatus.CANCELLED },
+        metadata: {
+          integration_id: String(integration_id),
+          order_id: String(order_id),
+        },
+      });
     }
   }
 
@@ -2642,7 +2825,8 @@ export class IntegrationServiceService {
       this.notFound('Integration not found');
     }
 
-    return this.receivableRepo.manager.transaction(async (manager) => {
+    const settledOrderIds: string[] = [];
+    const result = await this.receivableRepo.manager.transaction(async (manager) => {
       const receivableRepo = manager.getRepository(ProviderReceivable);
       const remittanceRepo = manager.getRepository(ProviderRemittance);
 
@@ -2691,6 +2875,7 @@ export class IntegrationServiceService {
         row.remittance_id = remittance.id;
         row.settled_at = now;
         await receivableRepo.save(row);
+        settledOrderIds.push(String(row.order_id));
         remaining -= rowAmount;
         settledAmount += rowAmount;
         settledCount += 1;
@@ -2699,18 +2884,45 @@ export class IntegrationServiceService {
       remittance.settled_count = settledCount;
       await remittanceRepo.save(remittance);
 
-      return successRes(
-        {
-          remittance_id: remittance.id,
-          integration_id: integrationId,
-          remitted_amount: amount,
-          settled_amount: settledAmount,
-          settled_count: settledCount,
-          unapplied_amount: Number((amount - settledAmount).toFixed(2)),
-        },
-        201,
-        'Remittance recorded',
-      );
+      return {
+        response: successRes(
+          {
+            remittance_id: remittance.id,
+            integration_id: integrationId,
+            remitted_amount: amount,
+            settled_amount: settledAmount,
+            settled_count: settledCount,
+            unapplied_amount: Number((amount - settledAmount).toFixed(2)),
+          },
+          201,
+          'Remittance recorded',
+        ),
+        remittance_id: remittance.id,
+        settled_count: settledCount,
+        settled_amount: settledAmount,
+      };
     });
+
+    // Audit AFTER the transaction commits — one row per remittance (batch over
+    // many receivables), collection summarised in metadata.
+    await this.activityLog.log({
+      entity_type: 'ProviderRemittance',
+      entity_id: String(result.remittance_id),
+      action: ActivityAction.PAYMENT,
+      new_value: {
+        amount,
+        settled_amount: result.settled_amount,
+        settled_count: result.settled_count,
+      },
+      metadata: {
+        integration_id: integrationId,
+        order_count: result.settled_count,
+        order_ids: settledOrderIds.slice(0, 10),
+        created_by: input.created_by ?? null,
+        amount,
+      },
+    });
+
+    return result.response;
   }
 }
