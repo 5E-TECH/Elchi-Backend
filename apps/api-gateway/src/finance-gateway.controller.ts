@@ -776,6 +776,7 @@ export class FinanceGatewayController {
         requestQuery = {
           ...query,
           cashbox_type: Cashbox_type.BRANCH,
+          history_source_type: Source_type.BRANCH_TO_MAIN,
         };
       } else if (!query.cashbox_type) {
         requestQuery = {
@@ -1296,6 +1297,8 @@ export class FinanceGatewayController {
           ...query,
           user_id: settlement.cashbox?.user_id ?? '',
           cashbox_type: Cashbox_type.BRANCH,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.BRANCH_TO_MAIN,
         },
       );
       const page = Number(query?.page ?? 1);
@@ -1592,6 +1595,8 @@ export class FinanceGatewayController {
           ...query,
           user_id: branchId,
           cashbox_type: Cashbox_type.BRANCH,
+          operation_type: Operation_type.EXPENSE,
+          source_type: Source_type.BRANCH_TO_MAIN,
         },
       );
     }

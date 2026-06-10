@@ -1105,6 +1105,24 @@ export class OrderServiceService implements OnModuleInit {
     return courierTariff;
   }
 
+  private resolveSaleActorShare(
+    isManagerSale: boolean,
+    financialActor: { compensation_mode?: string | null } | null | undefined,
+    tariff: number,
+  ): number {
+    return isManagerSale
+      ? tariff
+      : this.resolveCourierShare(financialActor, tariff);
+  }
+
+  private resolveBranchCashboxSaleAmount(
+    totalPrice: number,
+    branchPayable: number,
+    isManagerSale: boolean,
+  ): number {
+    return isManagerSale ? totalPrice : branchPayable;
+  }
+
   /**
    * Create/refresh the per-order settlement row at sale time (inside the sale
    * transaction). Status starts at PENDING, but legs with no participant are
@@ -2092,7 +2110,7 @@ export class OrderServiceService implements OnModuleInit {
     // mirror image of the 3-leg sale model:
     //   market : reverse (total − marketTariff)
     //   courier: reverse (total − courierShare)
-    //   branch : reverse (total − courierShare − branchShare) for a non-HQ branch
+    //   branch : reverse the exact amount credited to its cashbox at sale time
     // Applies to SOLD/PAID always, and PARTLY_PAID for superadmin.
     const doSaleReversal =
       [Order_status.SOLD, Order_status.PAID].includes(originalStatus) ||
@@ -2110,6 +2128,10 @@ export class OrderServiceService implements OnModuleInit {
       const saleCourierIncome = Math.max(totalPrice - courierShareRb, 0);
       const saleCourierExpense = Math.max(courierShareRb - totalPrice, 0);
       const saleBranchNet = totalPrice - courierShareRb - branchShareRb;
+      const saleBranchCashboxAmount =
+        order.branch_cashbox_amount != null
+          ? Number(order.branch_cashbox_amount)
+          : saleBranchNet;
 
       const rbBranchId = await this.resolveSettlementBranchId(order);
       if (rbBranchId) {
@@ -2175,22 +2197,22 @@ export class OrderServiceService implements OnModuleInit {
 
       // branch leg (reverse) — non-HQ branch only
       if (rbBranchCashbox && rbBranchId) {
-        if (saleBranchNet > 0) {
+        if (saleBranchCashboxAmount > 0) {
           await pay({
             user_id: rbBranchId,
             cashbox_type: Cashbox_type.BRANCH,
-            amount: saleBranchNet,
+            amount: saleBranchCashboxAmount,
             operation_type: Operation_type.EXPENSE,
             source_type: Source_type.CORRECTION,
             source_id: String(order.id),
             created_by: String(requester.id),
             comment: rollbackComment,
           });
-        } else if (saleBranchNet < 0) {
+        } else if (saleBranchCashboxAmount < 0) {
           await pay({
             user_id: rbBranchId,
             cashbox_type: Cashbox_type.BRANCH,
-            amount: -saleBranchNet,
+            amount: -saleBranchCashboxAmount,
             operation_type: Operation_type.INCOME,
             source_type: Source_type.CORRECTION,
             source_id: String(order.id),
@@ -2726,6 +2748,7 @@ export class OrderServiceService implements OnModuleInit {
     unbatched_only?: boolean;
     fetch_all?: boolean | string;
     fetchAll?: boolean | string;
+    disable_pagination?: boolean;
     page?: number;
     limit?: number;
   }) {
@@ -2752,6 +2775,7 @@ export class OrderServiceService implements OnModuleInit {
       unbatched_only,
       fetch_all,
       fetchAll,
+      disable_pagination,
       page,
       limit,
     } = query;
@@ -2898,9 +2922,10 @@ export class OrderServiceService implements OnModuleInit {
       qb.andWhere('order.createdAt <= :endDate', { endDate });
     }
 
-    qb.orderBy('order.createdAt', 'DESC')
-      .skip((pagination.page - 1) * pagination.limit)
-      .take(pagination.limit);
+    qb.orderBy('order.createdAt', 'DESC');
+    if (!disable_pagination) {
+      qb.skip((pagination.page - 1) * pagination.limit).take(pagination.limit);
+    }
 
     let data: Order[];
     let total: number;
@@ -2908,6 +2933,10 @@ export class OrderServiceService implements OnModuleInit {
       [data, total] = await qb.getManyAndCount();
     } catch (error) {
       this.handleDbError(error);
+    }
+
+    if (disable_pagination) {
+      return { data, total };
     }
 
     return {
@@ -2963,8 +2992,6 @@ export class OrderServiceService implements OnModuleInit {
     market_id: string,
     branch_id?: string,
     exclude_branch_source = false,
-    page = 1,
-    limit = 20,
   ) {
     return this.findAll({
       market_id,
@@ -2974,8 +3001,7 @@ export class OrderServiceService implements OnModuleInit {
       ...(exclude_branch_source
         ? { exclude_sources: [Order_source.BRANCH] }
         : {}),
-      page,
-      limit,
+      disable_pagination: true,
     });
   }
 
@@ -3615,7 +3641,8 @@ export class OrderServiceService implements OnModuleInit {
         ? Number(financialActor?.tariff_center ?? 0)
         : Number(financialActor?.tariff_home ?? 0);
     // courierShare = what the courier keeps (0 for salary-only couriers).
-    const courierShare = this.resolveCourierShare(
+    const courierShare = this.resolveSaleActorShare(
+      isManagerRequester,
       financialActor,
       courierTariff,
     );
@@ -3649,12 +3676,18 @@ export class OrderServiceService implements OnModuleInit {
     // Decoupled COD legs — each independent of the others' thresholds:
     //   market : HQ owes market (total − marketTariff); reversed if total < marketTariff
     //   courier: courier owes branch (total − courierShare); HQ tops up if total < courierShare
-    //   branch : branch owes HQ (total − courierShare − branchShare); PARTNER keeps branchShare
+    //   branch payable: branch owes HQ (total − courierShare − branchShare)
+    //   branch cashbox: manager-direct sales receive the full collected amount
     const marketIncome = Math.max(totalPrice - marketTariff, 0);
     const marketExpense = Math.max(marketTariff - totalPrice, 0);
     const courierIncome = Math.max(totalPrice - courierShare, 0);
     const courierExpense = Math.max(courierShare - totalPrice, 0);
     const branchNet = totalPrice - courierShare - branchShare;
+    const branchCashboxAmount = this.resolveBranchCashboxSaleAmount(
+      totalPrice,
+      branchNet,
+      isManagerRequester,
+    );
     const saleComment =
       totalPrice === 0
         ? "0 so'mlik mahsulot sotuvi"
@@ -3761,22 +3794,22 @@ export class OrderServiceService implements OnModuleInit {
 
       // ---- Branch leg (branch ↔ HQ) — only for non-HQ branch sales ----
       if (branchCashbox && settlementBranchId) {
-        if (branchNet > 0) {
+        if (branchCashboxAmount > 0) {
           await pay({
             user_id: settlementBranchId,
             cashbox_type: Cashbox_type.BRANCH,
-            amount: branchNet,
+            amount: branchCashboxAmount,
             operation_type: Operation_type.INCOME,
             source_type: Source_type.SELL,
             source_id: String(order.id),
             created_by: String(requester.id),
             comment: saleComment,
           });
-        } else if (branchNet < 0) {
+        } else if (branchCashboxAmount < 0) {
           await pay({
             user_id: settlementBranchId,
             cashbox_type: Cashbox_type.BRANCH,
-            amount: -branchNet,
+            amount: -branchCashboxAmount,
             operation_type: Operation_type.EXPENSE,
             source_type: Source_type.SELL,
             source_id: String(order.id),
@@ -3826,6 +3859,7 @@ export class OrderServiceService implements OnModuleInit {
           courier_tariff: order.courier_tariff ?? courierTariff,
           courier_share: courierShare,
           branch_share: branchShare,
+          branch_cashbox_amount: branchCashboxAmount,
           comment: finalComment || null,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
         },
@@ -4317,7 +4351,8 @@ export class OrderServiceService implements OnModuleInit {
         : order.where_deliver === Where_deliver.CENTER
           ? Number(financialActor?.tariff_center ?? 0)
           : Number(financialActor?.tariff_home ?? 0);
-    const courierShare = this.resolveCourierShare(
+    const courierShare = this.resolveSaleActorShare(
+      isManagerRequester,
       financialActor,
       courierTariff,
     );
@@ -4418,6 +4453,11 @@ export class OrderServiceService implements OnModuleInit {
     const courierIncome = Math.max(price - courierShare, 0);
     const courierExpense = Math.max(courierShare - price, 0);
     const branchNet = price - courierShare - branchShare;
+    const branchCashboxAmount = this.resolveBranchCashboxSaleAmount(
+      price,
+      branchNet,
+      isManagerRequester,
+    );
     const saleComment =
       price === 0
         ? "0 so'mlik mahsulot qisman sotuvi"
@@ -4533,22 +4573,22 @@ export class OrderServiceService implements OnModuleInit {
 
       // ---- Branch leg (non-HQ branch only) ----
       if (branchCashbox && settlementBranchId) {
-        if (branchNet > 0) {
+        if (branchCashboxAmount > 0) {
           await pay({
             user_id: settlementBranchId,
             cashbox_type: Cashbox_type.BRANCH,
-            amount: branchNet,
+            amount: branchCashboxAmount,
             operation_type: Operation_type.INCOME,
             source_type: Source_type.SELL,
             source_id: String(order.id),
             created_by: String(requester.id),
             comment: saleComment,
           });
-        } else if (branchNet < 0) {
+        } else if (branchCashboxAmount < 0) {
           await pay({
             user_id: settlementBranchId,
             cashbox_type: Cashbox_type.BRANCH,
-            amount: -branchNet,
+            amount: -branchCashboxAmount,
             operation_type: Operation_type.EXPENSE,
             source_type: Source_type.SELL,
             source_id: String(order.id),
@@ -4597,6 +4637,7 @@ export class OrderServiceService implements OnModuleInit {
           courier_tariff: order.courier_tariff ?? courierTariff,
           courier_share: courierShare,
           branch_share: branchShare,
+          branch_cashbox_amount: branchCashboxAmount,
           return_requested: false,
           comment: finalComment || null,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
@@ -4850,6 +4891,7 @@ export class OrderServiceService implements OnModuleInit {
       courier_tariff?: number | null;
       courier_share?: number | null;
       branch_share?: number | null;
+      branch_cashbox_amount?: number | null;
       to_be_paid?: number;
       paid_amount?: number;
       status?: Order_status;
@@ -4888,6 +4930,7 @@ export class OrderServiceService implements OnModuleInit {
       courier_tariff?: number | null;
       courier_share?: number | null;
       branch_share?: number | null;
+      branch_cashbox_amount?: number | null;
       to_be_paid?: number;
       paid_amount?: number;
       status?: Order_status;
@@ -4945,6 +4988,10 @@ export class OrderServiceService implements OnModuleInit {
         typeof dto.branch_share !== 'undefined'
           ? dto.branch_share
           : order.branch_share,
+      branch_cashbox_amount:
+        typeof dto.branch_cashbox_amount !== 'undefined'
+          ? dto.branch_cashbox_amount
+          : order.branch_cashbox_amount,
       to_be_paid: dto.to_be_paid ?? order.to_be_paid,
       paid_amount: dto.paid_amount ?? order.paid_amount,
       status: dto.status ?? order.status,
@@ -5387,24 +5434,16 @@ export class OrderServiceService implements OnModuleInit {
     market_id: string,
     branch_id?: string,
     exclude_branch_source = false,
-    page = 1,
-    limit = 10,
   ) {
     const result = await this.findNewOrdersByMarket(
       market_id,
       branch_id,
       exclude_branch_source,
-      page,
-      limit,
     );
     const enriched = await this.enrichOrders(result.data);
     return {
       data: enriched,
       total: result.total,
-      page: result.page,
-      limit: result.limit,
-      total_pages: result.total_pages ?? 0,
-      totalPages: result.totalPages ?? result.total_pages ?? 0,
     };
   }
 
