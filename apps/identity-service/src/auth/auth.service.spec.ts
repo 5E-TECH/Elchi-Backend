@@ -27,6 +27,16 @@ jest.mock('@app/common', () => ({
     SALARY_PLUS_PER_ORDER: 'salary_plus_per_order',
   },
   Commission_type: { PERCENT: 'percent', FIXED: 'fixed' },
+  ActivityAction: {
+    CREATED: 'created',
+    UPDATED: 'updated',
+    DELETED: 'deleted',
+    STATUS_CHANGE: 'status_change',
+    LOGIN: 'login',
+    LOGOUT: 'logout',
+    AUTH_FAILURE: 'auth_failure',
+  },
+  ActivityLogService: class ActivityLogService {},
   numericTransformer: { to: (v: unknown) => v, from: (v: unknown) => v },
   rmqSend: jest.fn(),
   BaseEntity: class BaseEntity {},
@@ -79,6 +89,10 @@ function buildService(user: MockUser | null) {
 
   const bcryptEncryption: any = { compare: jest.fn(), encrypt: jest.fn() };
   const branchClient: any = { send: jest.fn() };
+  const activityLog: any = {
+    log: jest.fn().mockResolvedValue(undefined),
+    logChange: jest.fn().mockResolvedValue(undefined),
+  };
 
   const service = new AuthService(
     usersRepo,
@@ -86,9 +100,10 @@ function buildService(user: MockUser | null) {
     configService,
     bcryptEncryption,
     branchClient,
+    activityLog,
   );
 
-  return { service, usersRepo, jwtService, configService };
+  return { service, usersRepo, jwtService, configService, activityLog };
 }
 
 describe('AuthService.refresh', () => {

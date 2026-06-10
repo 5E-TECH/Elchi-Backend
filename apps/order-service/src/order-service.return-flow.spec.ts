@@ -88,6 +88,10 @@ describe('OrderServiceService return flow', () => {
       {} as any, // branchClient
       {} as any, // fileClient
       outbox as any, // outbox
+      {
+        log: jest.fn().mockResolvedValue(undefined),
+        logChange: jest.fn().mockResolvedValue(undefined),
+      } as any, // activityLog
     );
 
     return { service, orderRepo, transferBatchItemQb, trackingRepo, queryRunner, outbox };
