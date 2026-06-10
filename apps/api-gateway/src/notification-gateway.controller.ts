@@ -69,6 +69,11 @@ export class NotificationGatewayController {
     return String(id);
   }
 
+  /** The authenticated user as an audit actor for write operations. */
+  private auditActor(req: AuthedRequest) {
+    return { id: req.user?.sub ?? null, roles: req.user?.roles ?? [] };
+  }
+
   @Get('health')
   @ApiOperation({ summary: 'Notification service health check' })
   health() {
@@ -158,8 +163,14 @@ export class NotificationGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Manually dispatch a notification (admin/testing)' })
   @ApiBody({ type: DispatchNotificationRequestDto })
-  dispatch(@Body() dto: DispatchNotificationRequestDto) {
-    return this.send({ cmd: 'notification.dispatch' }, dto);
+  dispatch(
+    @Body() dto: DispatchNotificationRequestDto,
+    @Req() req: AuthedRequest,
+  ) {
+    return this.send(
+      { cmd: 'notification.dispatch' },
+      { ...dto, requester: this.auditActor(req) },
+    );
   }
 
   @Get()
@@ -192,8 +203,14 @@ export class NotificationGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create notification config' })
   @ApiBody({ type: CreateTelegramMarketRequestDto })
-  createNotification(@Body() dto: CreateTelegramMarketRequestDto) {
-    return this.send({ cmd: 'notification.telegram.create' }, dto);
+  createNotification(
+    @Body() dto: CreateTelegramMarketRequestDto,
+    @Req() req: AuthedRequest,
+  ) {
+    return this.send(
+      { cmd: 'notification.telegram.create' },
+      { ...dto, requester: this.auditActor(req) },
+    );
   }
 
   @Patch(':id')
@@ -206,8 +223,12 @@ export class NotificationGatewayController {
   updateNotification(
     @Param('id') id: string,
     @Body() dto: UpdateTelegramMarketRequestDto,
+    @Req() req: AuthedRequest,
   ) {
-    return this.send({ cmd: 'notification.telegram.update' }, { ...dto, id });
+    return this.send(
+      { cmd: 'notification.telegram.update' },
+      { ...dto, id, requester: this.auditActor(req) },
+    );
   }
 
   @Delete(':id')
@@ -216,8 +237,11 @@ export class NotificationGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete notification config' })
   @ApiParam({ name: 'id', example: '10' })
-  deleteNotification(@Param('id') id: string) {
-    return this.send({ cmd: 'notification.telegram.delete' }, { id });
+  deleteNotification(@Param('id') id: string, @Req() req: AuthedRequest) {
+    return this.send(
+      { cmd: 'notification.telegram.delete' },
+      { id, requester: this.auditActor(req) },
+    );
   }
 
   @Post('connect-by-token')
