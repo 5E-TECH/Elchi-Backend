@@ -3405,21 +3405,30 @@ export class BranchServiceService implements OnModuleInit {
       this.badRequest('requester_id and requested_id are required');
     }
 
+    const requesterRoles = (requester?.roles ?? []).map((role) =>
+      String(role ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+    if (!requesterRoles.includes('manager')) {
+      this.forbidden('Requester branch manager emas');
+    }
+
     const managerAssignment = await this.branchUserRepo.findOne({
       where: {
         user_id: requesterId,
-        role: BranchUserRole.MANAGER,
         isDeleted: false,
       },
       order: { createdAt: 'DESC' },
     });
-    if (!managerAssignment) {
-      this.forbidden('Requester branch manager emas');
+    const managerBranchId = String(
+      requester?.branch_id ?? managerAssignment?.branch_id ?? '',
+    ).trim();
+    if (!managerBranchId) {
+      return successRes(null, 200, 'Manager branch assignment not found');
     }
 
-    const managerBranch = await this.getBranchOrThrow(
-      String(managerAssignment.branch_id),
-    );
+    const managerBranch = await this.getBranchOrThrow(managerBranchId);
     if (
       requestedId === requesterId ||
       requestedId === String(managerBranch.id)
@@ -3431,32 +3440,48 @@ export class BranchServiceService implements OnModuleInit {
       );
     }
 
-    const parentBranchId = String(managerBranch.parent_id ?? '');
-    if (!parentBranchId) {
-      return successRes(null, 200, 'Manager cashbox branch not resolved');
+    const accessibleBranches = new Map<string, Branch>([
+      [String(managerBranch.id), managerBranch],
+    ]);
+    const visitedBranchIds = new Set<string>([String(managerBranch.id)]);
+    let ancestorBranchId = String(managerBranch.parent_id ?? '').trim();
+
+    while (ancestorBranchId && !visitedBranchIds.has(ancestorBranchId)) {
+      visitedBranchIds.add(ancestorBranchId);
+      const ancestorBranch = await this.branchRepo.findOne({
+        where: { id: ancestorBranchId, isDeleted: false },
+      });
+      if (!ancestorBranch) {
+        break;
+      }
+
+      accessibleBranches.set(String(ancestorBranch.id), ancestorBranch);
+      ancestorBranchId = String(ancestorBranch.parent_id ?? '').trim();
     }
 
-    if (requestedId === parentBranchId) {
+    if (accessibleBranches.has(requestedId)) {
       return successRes(
-        { branch_id: parentBranchId },
+        { branch_id: requestedId },
         200,
-        'Manager parent cashbox branch resolved',
+        'Manager accessible cashbox branch resolved',
       );
     }
 
-    const parentManagerAssignment = await this.branchUserRepo.findOne({
+    const requestedUserAssignment = await this.branchUserRepo.findOne({
       where: {
-        branch_id: parentBranchId,
         user_id: requestedId,
-        role: BranchUserRole.MANAGER,
         isDeleted: false,
       },
+      order: { createdAt: 'DESC' },
     });
-    if (parentManagerAssignment) {
+    const requestedUserBranchId = String(
+      requestedUserAssignment?.branch_id ?? '',
+    );
+    if (accessibleBranches.has(requestedUserBranchId)) {
       return successRes(
-        { branch_id: parentBranchId },
+        { branch_id: requestedUserBranchId },
         200,
-        'Manager parent cashbox branch resolved',
+        'Manager accessible user cashbox branch resolved',
       );
     }
 
