@@ -2,7 +2,12 @@ import { Injectable } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, ILike, In, Repository } from 'typeorm';
-import { Status } from '@app/common';
+import {
+  ActivityAction,
+  ActivityLogQuery,
+  ActivityLogService,
+  Status,
+} from '@app/common';
 import { Investor } from './entities/investor.entity';
 import { Investment } from './entities/investment.entity';
 import { ProfitShare } from './entities/profit-share.entity';
@@ -42,7 +47,26 @@ export class InvestorServiceService {
     @InjectRepository(Investor) private readonly investorRepo: Repository<Investor>,
     @InjectRepository(Investment) private readonly investmentRepo: Repository<Investment>,
     @InjectRepository(ProfitShare) private readonly profitShareRepo: Repository<ProfitShare>,
+    private readonly activityLog: ActivityLogService,
   ) {}
+
+  private auditActor(
+    requester?: { id?: string; roles?: string[] } | null,
+  ): { user_id: string | null; user_role: string | null } {
+    const roles = requester?.roles ?? [];
+    return {
+      user_id: requester?.id ? String(requester.id) : null,
+      user_role: roles.length ? roles.join(',') : null,
+    };
+  }
+
+  async auditLogQuery(q: ActivityLogQuery) {
+    return this.activityLog.query(q ?? {});
+  }
+
+  async auditLogByEntity(entity_type: string, entity_id: string, limit?: number) {
+    return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
+  }
 
   private badRequest(message: string): never {
     throw new RpcException(errorRes(message, 400));
@@ -100,7 +124,10 @@ export class InvestorServiceService {
     return investment;
   }
 
-  async createInvestor(dto: CreateInvestorDto) {
+  async createInvestor(
+    dto: CreateInvestorDto,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
     const name = String(dto.name ?? '').trim();
     const phoneNumber = String(dto.phone_number ?? '').trim();
     if (!name) {
@@ -127,6 +154,16 @@ export class InvestorServiceService {
     });
 
     const saved = await this.investorRepo.save(investor);
+
+    await this.activityLog.log({
+      entity_type: 'Investor',
+      entity_id: String(saved.id),
+      action: ActivityAction.CREATED,
+      new_value: saved,
+      metadata: { user_id: saved.user_id },
+      ...this.auditActor(requester),
+    });
+
     return successRes(saved, 201, 'investor created');
   }
 
@@ -213,8 +250,13 @@ export class InvestorServiceService {
     });
   }
 
-  async updateInvestor(id: string, dto: UpdateInvestorDto) {
+  async updateInvestor(
+    id: string,
+    dto: UpdateInvestorDto,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
     const investor = await this.getInvestorOrThrow(id);
+    const before = { ...investor };
 
     if (dto.name !== undefined) {
       const name = String(dto.name).trim();
@@ -251,18 +293,42 @@ export class InvestorServiceService {
     }
 
     const saved = await this.investorRepo.save(investor);
+
+    await this.activityLog.logChange({
+      entity_type: 'Investor',
+      entity_id: String(saved.id),
+      old_value: before as unknown as Record<string, unknown>,
+      new_value: saved as unknown as Record<string, unknown>,
+      action: ActivityAction.UPDATED,
+      ...this.auditActor(requester),
+    });
+
     return successRes(saved, 200, 'investor updated');
   }
 
-  async deleteInvestor(id: string) {
+  async deleteInvestor(
+    id: string,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
     const investor = await this.getInvestorOrThrow(id);
     investor.isDeleted = true;
     investor.status = Status.INACTIVE;
     await this.investorRepo.save(investor);
+
+    await this.activityLog.log({
+      entity_type: 'Investor',
+      entity_id: String(investor.id),
+      action: ActivityAction.DELETED,
+      ...this.auditActor(requester),
+    });
+
     return successRes({ id }, 200, 'investor deleted');
   }
 
-  async createInvestment(dto: CreateInvestmentDto) {
+  async createInvestment(
+    dto: CreateInvestmentDto,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
     const investor_id = String(dto.investor_id ?? '').trim();
     if (!investor_id) {
       this.badRequest('investor_id is required');
@@ -291,6 +357,20 @@ export class InvestorServiceService {
     });
 
     const saved = await this.investmentRepo.save(investment);
+
+    await this.activityLog.log({
+      entity_type: 'Investment',
+      entity_id: String(saved.id),
+      action: ActivityAction.CREATED,
+      new_value: saved,
+      metadata: {
+        investor_id: saved.investor_id,
+        branch_id: saved.branch_id,
+        amount: saved.amount,
+      },
+      ...this.auditActor(requester),
+    });
+
     return successRes(saved, 201, 'investment created');
   }
 
@@ -359,8 +439,13 @@ export class InvestorServiceService {
     return successRes(investment);
   }
 
-  async updateInvestment(id: string, dto: UpdateInvestmentDto) {
+  async updateInvestment(
+    id: string,
+    dto: UpdateInvestmentDto,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
     const investment = await this.getInvestmentOrThrow(id);
+    const before = { ...investment };
 
     if (dto.investor_id !== undefined) {
       const investorId = String(dto.investor_id ?? '').trim();
@@ -399,17 +484,42 @@ export class InvestorServiceService {
     }
 
     const saved = await this.investmentRepo.save(investment);
+
+    await this.activityLog.logChange({
+      entity_type: 'Investment',
+      entity_id: String(saved.id),
+      old_value: before as unknown as Record<string, unknown>,
+      new_value: saved as unknown as Record<string, unknown>,
+      action: ActivityAction.UPDATED,
+      ...this.auditActor(requester),
+    });
+
     return successRes(saved, 200, 'investment updated');
   }
 
-  async deleteInvestment(id: string) {
+  async deleteInvestment(
+    id: string,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
     const investment = await this.getInvestmentOrThrow(id);
     investment.isDeleted = true;
     await this.investmentRepo.save(investment);
+
+    await this.activityLog.log({
+      entity_type: 'Investment',
+      entity_id: String(investment.id),
+      action: ActivityAction.DELETED,
+      metadata: { investor_id: investment.investor_id },
+      ...this.auditActor(requester),
+    });
+
     return successRes({ id: investment.id }, 200, 'investment deleted');
   }
 
-  async createProfitShare(dto: CreateProfitShareDto) {
+  async createProfitShare(
+    dto: CreateProfitShareDto,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
     const investor_id = String(dto.investor_id ?? '').trim();
     if (!investor_id) {
       this.badRequest('investor_id is required');
@@ -447,10 +557,23 @@ export class InvestorServiceService {
     });
 
     const saved = await this.profitShareRepo.save(row);
+
+    await this.activityLog.log({
+      entity_type: 'ProfitShare',
+      entity_id: String(saved.id),
+      action: ActivityAction.CREATED,
+      new_value: saved,
+      metadata: { investor_id: saved.investor_id },
+      ...this.auditActor(requester),
+    });
+
     return successRes(saved, 201, 'profit share created');
   }
 
-  async calculateProfit(input: CalculateProfitDto) {
+  async calculateProfit(
+    input: CalculateProfitDto,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
     const period_start = this.parseDate(input?.period_start, 'period_start');
     const period_end = this.parseDate(input?.period_end, 'period_end');
     if (!period_start || !period_end) {
@@ -506,7 +629,20 @@ export class InvestorServiceService {
         paid_at: null,
         description: input?.description ? String(input.description).trim() : null,
       });
-      result.push(await this.profitShareRepo.save(row));
+      const savedRow = await this.profitShareRepo.save(row);
+      result.push(savedRow);
+
+      await this.activityLog.log({
+        entity_type: 'ProfitShare',
+        entity_id: String(savedRow.id),
+        action: 'investor.profit_calculated',
+        new_value: savedRow,
+        metadata: {
+          investor_id: savedRow.investor_id,
+          amount: savedRow.amount,
+        },
+        ...this.auditActor(requester),
+      });
     }
 
     return successRes(
@@ -585,7 +721,10 @@ export class InvestorServiceService {
     });
   }
 
-  async markProfitPaid(id: string) {
+  async markProfitPaid(
+    id: string,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
     const row = await this.profitShareRepo.findOne({
       where: { id: String(id), isDeleted: false },
     });
@@ -596,6 +735,16 @@ export class InvestorServiceService {
     row.is_paid = true;
     row.paid_at = new Date();
     const saved = await this.profitShareRepo.save(row);
+
+    await this.activityLog.log({
+      entity_type: 'ProfitShare',
+      entity_id: String(saved.id),
+      action: ActivityAction.PAYMENT,
+      new_value: saved,
+      metadata: { amount: saved.amount, investor_id: saved.investor_id },
+      ...this.auditActor(requester),
+    });
+
     return successRes(saved, 200, 'profit marked as paid');
   }
 }

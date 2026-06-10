@@ -57,6 +57,20 @@ describe('OrderServiceService bulk batch handlers', () => {
       {} as any,
       {} as any,
       {} as any,
+      {} as any, // integrationClient
+      {} as any, // branchClient
+      {} as any, // fileClient
+      {} as any, // outbox
+      {
+        log: jest.fn().mockResolvedValue(undefined),
+        logChange: jest.fn().mockResolvedValue(undefined),
+        query: jest.fn().mockResolvedValue({
+          items: [],
+          meta: { page: 1, limit: 50, total: 0, totalPages: 1 },
+        }),
+        findByEntity: jest.fn().mockResolvedValue([]),
+        findByUser: jest.fn().mockResolvedValue([]),
+      } as any, // activityLog
     );
 
     return { service, queryRunner, orderRepo, inboxRepo, updateQb };

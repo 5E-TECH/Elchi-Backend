@@ -10,7 +10,7 @@ import { User } from '../entities/user.entity';
 import { BcryptEncryption } from '../../../../libs/common/helpers/bcrypt';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
-import { Status, rmqSend } from '@app/common';
+import { ActivityAction, ActivityLogService, Status, rmqSend } from '@app/common';
 import { errorRes, successRes } from '../../../../libs/common/helpers/response';
 
 @Injectable()
@@ -24,6 +24,7 @@ export class AuthService {
     private readonly configService: ConfigService,
     private readonly bcryptEncryption: BcryptEncryption,
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
+    private readonly activityLog: ActivityLogService,
   ) {}
 
   /**
@@ -53,24 +54,50 @@ export class AuthService {
     }
   }
 
+  /** Record a failed login attempt for the security audit trail. */
+  private async logAuthFailure(
+    phone: string,
+    reason: string,
+    userId?: string,
+  ): Promise<void> {
+    await this.activityLog.log({
+      entity_type: 'Auth',
+      entity_id: userId ?? phone,
+      action: ActivityAction.AUTH_FAILURE,
+      user_id: userId ?? null,
+      metadata: { phone_number: phone, reason },
+    });
+  }
+
   async login(dto: LoginDto) {
     const user = await this.users.findOne({
       where: { phone_number: dto.phone_number, isDeleted: false },
     });
     if (!user) {
+      await this.logAuthFailure(dto.phone_number, 'user_not_found');
       throw new RpcException(errorRes('Invalid credentials', 401));
     }
     if (user.status !== Status.ACTIVE) {
+      await this.logAuthFailure(dto.phone_number, 'inactive', user.id);
       throw new RpcException(errorRes('Invalid credentials', 401));
     }
 
     const isMatch = await this.bcryptEncryption.compare(dto.password, user.password);
     if (!isMatch) {
+      await this.logAuthFailure(dto.phone_number, 'bad_password', user.id);
       throw new RpcException(errorRes('Invalid credentials', 401));
     }
 
     const tokens = await this.issueTokens(user);
     await this.saveRefreshToken(user.id, tokens.refreshToken);
+    await this.activityLog.log({
+      entity_type: 'Auth',
+      entity_id: user.id,
+      action: ActivityAction.LOGIN,
+      user_id: user.id,
+      user_name: user.name,
+      user_role: user.role,
+    });
     return {
       statusCode: 200,
       message: 'success',
@@ -141,6 +168,15 @@ export class AuthService {
       );
       user.refresh_token = null;
       await this.users.save(user);
+      await this.activityLog.log({
+        entity_type: 'Auth',
+        entity_id: user.id,
+        action: ActivityAction.AUTH_FAILURE,
+        user_id: user.id,
+        user_name: user.name,
+        user_role: user.role,
+        metadata: { reason: 'refresh_token_reuse', session_invalidated: true },
+      });
       throw new RpcException(errorRes('Invalid refresh token', 401));
     }
 
@@ -168,6 +204,15 @@ export class AuthService {
 
     user.refresh_token = null;
     await this.users.save(user);
+
+    await this.activityLog.log({
+      entity_type: 'Auth',
+      entity_id: user.id,
+      action: ActivityAction.LOGOUT,
+      user_id: user.id,
+      user_name: user.name,
+      user_role: user.role,
+    });
 
     return successRes({}, 200, 'Logged out successfully');
   }

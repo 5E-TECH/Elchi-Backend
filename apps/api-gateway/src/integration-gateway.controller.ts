@@ -47,6 +47,11 @@ export class IntegrationGatewayController {
     @Inject('INTEGRATION') private readonly integrationClient: ClientProxy,
   ) {}
 
+  /** The authenticated user as an audit actor for write operations. */
+  private auditActor(req: { user?: { sub?: string; roles?: string[] } }) {
+    return { id: req.user?.sub ?? null, roles: req.user?.roles ?? [] };
+  }
+
   @Get()
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'List integrations' })
@@ -120,8 +125,14 @@ export class IntegrationGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Create integration' })
   @ApiBody({ type: CreateIntegrationRequestDto })
-  create(@Body() dto: CreateIntegrationRequestDto) {
-    return this.integrationClient.send({ cmd: 'integration.create' }, { dto });
+  create(
+    @Body() dto: CreateIntegrationRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.create' },
+      { dto: { ...dto, requester: this.auditActor(req) } },
+    );
   }
 
   @Get(':id')
@@ -138,18 +149,28 @@ export class IntegrationGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Update integration' })
   @ApiBody({ type: UpdateIntegrationRequestDto })
-  update(@Param('id') id: string, @Body() dto: UpdateIntegrationRequestDto) {
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateIntegrationRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
     return this.integrationClient.send(
       { cmd: 'integration.update' },
-      { id, dto },
+      { id, dto: { ...dto, requester: this.auditActor(req) } },
     );
   }
 
   @Delete(':id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Delete integration' })
-  remove(@Param('id') id: string) {
-    return this.integrationClient.send({ cmd: 'integration.delete' }, { id });
+  remove(
+    @Param('id') id: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.delete' },
+      { id, requester: this.auditActor(req) },
+    );
   }
 
   @Post(':id/healthcheck')

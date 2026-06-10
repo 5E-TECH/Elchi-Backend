@@ -9,6 +9,8 @@ import {
   Patch,
   Post,
   Query,
+  Req,
+  UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
@@ -28,10 +30,16 @@ import { Roles as RoleEnum } from '@app/common';
 import {
   ConnectTelegramByTokenRequestDto,
   CreateTelegramMarketRequestDto,
+  DispatchNotificationRequestDto,
   FindTelegramMarketsQueryDto,
+  InboxQueryDto,
   SendNotificationRequestDto,
   UpdateTelegramMarketRequestDto,
 } from './dto/notification.swagger.dto';
+
+interface AuthedRequest {
+  user?: { sub?: string; roles?: string[] };
+}
 
 @ApiTags('Notification')
 @Controller('notifications')
@@ -55,10 +63,114 @@ export class NotificationGatewayController {
     });
   }
 
+  private requireUserId(req: AuthedRequest): string {
+    const id = req.user?.sub;
+    if (!id) throw new UnauthorizedException('User not authenticated');
+    return String(id);
+  }
+
+  /** The authenticated user as an audit actor for write operations. */
+  private auditActor(req: AuthedRequest) {
+    return { id: req.user?.sub ?? null, roles: req.user?.roles ?? [] };
+  }
+
   @Get('health')
   @ApiOperation({ summary: 'Notification service health check' })
   health() {
     return this.send({ cmd: 'notification.health' }, {});
+  }
+
+  // ==================== In-app inbox (current user) ====================
+  // NOTE: these static-segment routes are declared BEFORE the telegram-config
+  // `:id` routes so `/notifications/inbox` is not captured by `GET :id`.
+
+  @Get('inbox')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Current user's notification inbox" })
+  listInbox(@Req() req: AuthedRequest, @Query() query: InboxQueryDto) {
+    return this.send(
+      { cmd: 'notification.inbox.list' },
+      { ...query, recipient_id: this.requireUserId(req) },
+    );
+  }
+
+  @Get('inbox/unread-count')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Current user unread notification count' })
+  unreadCount(@Req() req: AuthedRequest) {
+    return this.send(
+      { cmd: 'notification.inbox.unread_count' },
+      { recipient_id: this.requireUserId(req) },
+    );
+  }
+
+  @Get('inbox/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Get one of my notifications' })
+  @ApiParam({ name: 'id', example: '10' })
+  findOneInbox(@Req() req: AuthedRequest, @Param('id') id: string) {
+    return this.send(
+      { cmd: 'notification.inbox.find_one' },
+      { recipient_id: this.requireUserId(req), id },
+    );
+  }
+
+  @Patch('inbox/read-all')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Mark all my notifications read' })
+  markAllRead(@Req() req: AuthedRequest) {
+    return this.send(
+      { cmd: 'notification.inbox.mark_all_read' },
+      { recipient_id: this.requireUserId(req) },
+    );
+  }
+
+  @Patch('inbox/:id/read')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Mark one of my notifications read (or unread)' })
+  @ApiParam({ name: 'id', example: '10' })
+  markRead(
+    @Req() req: AuthedRequest,
+    @Param('id') id: string,
+    @Body() body: { read?: boolean },
+  ) {
+    return this.send(
+      { cmd: 'notification.inbox.mark_read' },
+      { recipient_id: this.requireUserId(req), id, read: body?.read ?? true },
+    );
+  }
+
+  @Delete('inbox/:id')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Delete one of my notifications' })
+  @ApiParam({ name: 'id', example: '10' })
+  deleteInbox(@Req() req: AuthedRequest, @Param('id') id: string) {
+    return this.send(
+      { cmd: 'notification.inbox.delete' },
+      { recipient_id: this.requireUserId(req), id },
+    );
+  }
+
+  @Post('dispatch')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Manually dispatch a notification (admin/testing)' })
+  @ApiBody({ type: DispatchNotificationRequestDto })
+  dispatch(
+    @Body() dto: DispatchNotificationRequestDto,
+    @Req() req: AuthedRequest,
+  ) {
+    return this.send(
+      { cmd: 'notification.dispatch' },
+      { ...dto, requester: this.auditActor(req) },
+    );
   }
 
   @Get()
@@ -91,8 +203,14 @@ export class NotificationGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create notification config' })
   @ApiBody({ type: CreateTelegramMarketRequestDto })
-  createNotification(@Body() dto: CreateTelegramMarketRequestDto) {
-    return this.send({ cmd: 'notification.telegram.create' }, dto);
+  createNotification(
+    @Body() dto: CreateTelegramMarketRequestDto,
+    @Req() req: AuthedRequest,
+  ) {
+    return this.send(
+      { cmd: 'notification.telegram.create' },
+      { ...dto, requester: this.auditActor(req) },
+    );
   }
 
   @Patch(':id')
@@ -105,8 +223,12 @@ export class NotificationGatewayController {
   updateNotification(
     @Param('id') id: string,
     @Body() dto: UpdateTelegramMarketRequestDto,
+    @Req() req: AuthedRequest,
   ) {
-    return this.send({ cmd: 'notification.telegram.update' }, { ...dto, id });
+    return this.send(
+      { cmd: 'notification.telegram.update' },
+      { ...dto, id, requester: this.auditActor(req) },
+    );
   }
 
   @Delete(':id')
@@ -115,8 +237,11 @@ export class NotificationGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete notification config' })
   @ApiParam({ name: 'id', example: '10' })
-  deleteNotification(@Param('id') id: string) {
-    return this.send({ cmd: 'notification.telegram.delete' }, { id });
+  deleteNotification(@Param('id') id: string, @Req() req: AuthedRequest) {
+    return this.send(
+      { cmd: 'notification.telegram.delete' },
+      { id, requester: this.auditActor(req) },
+    );
   }
 
   @Post('connect-by-token')

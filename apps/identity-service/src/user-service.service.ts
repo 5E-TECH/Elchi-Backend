@@ -15,7 +15,15 @@ import { CreateCourierDto } from './dto/create-courier.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { CreateManagerDto } from './dto/create-manager.dto';
 import { UserFilterQuery } from './contracts/user.payloads';
-import { Cashbox_type, Roles, Status, rmqSend } from '@app/common';
+import {
+  ActivityAction,
+  ActivityLogService,
+  Cashbox_type,
+  Roles,
+  Status,
+  rmqSend,
+} from '@app/common';
+import type { ActivityLogQuery } from '@app/common';
 import {
   catchError,
   errorRes,
@@ -38,11 +46,25 @@ export class UserServiceService implements OnModuleInit {
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
     private readonly bcryptEncryption: BcryptEncryption,
     private readonly configService: ConfigService,
+    private readonly activityLog: ActivityLogService,
   ) {}
 
   private sanitize(user: User) {
     const { password, refresh_token, ...safeUser } = user;
     return safeUser;
+  }
+
+  /** Normalise the RMQ requester into activity-log actor fields. */
+  private auditActor(requester?: RequesterContext): {
+    user_id: string | null;
+    user_role: string | null;
+  } {
+    const roles = (requester as { roles?: string[] } | undefined)?.roles ?? [];
+    const id = (requester as { id?: string } | undefined)?.id;
+    return {
+      user_id: id ? String(id) : null,
+      user_role: roles.length ? roles.join(',') : null,
+    };
   }
 
   /**
@@ -592,6 +614,13 @@ export class UserServiceService implements OnModuleInit {
 
     const saved = await this.users.save(admin);
     void this.syncUserToSearch(saved);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.CREATED,
+      new_value: { name: saved.name, phone_number: saved.phone_number, role: saved.role },
+      ...this.auditActor(requester),
+    });
     return successRes(this.sanitize(saved), 201, 'Admin yaratildi');
   }
 
@@ -626,6 +655,14 @@ export class UserServiceService implements OnModuleInit {
     }
 
     void this.syncUserToSearch(saved);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.CREATED,
+      new_value: { name: saved.name, phone_number: saved.phone_number, role: saved.role },
+      ...this.auditActor(requester),
+      metadata: dto.branch_id ? { branch_id: dto.branch_id } : null,
+    });
     return successRes(this.sanitize(saved), 201, "Ro'yxatchi yaratildi");
   }
 
@@ -646,6 +683,21 @@ export class UserServiceService implements OnModuleInit {
       this.notFound('User topilmadi');
     }
     this.assertRequesterCanMutateUser(requester, id, admin.role);
+
+    const auditBefore = {
+      name: admin.name,
+      phone_number: admin.phone_number,
+      status: admin.status,
+      salary: admin.salary,
+      payment_day: admin.payment_day,
+      tariff_home: admin.tariff_home,
+      tariff_center: admin.tariff_center,
+      default_tariff: admin.default_tariff,
+      commission_type: admin.commission_type,
+      commission_value: admin.commission_value,
+      add_order: admin.add_order,
+      password_changed: false,
+    };
 
     const requesterIsSelf = this.isSelfRequester(requester, id);
     const requesterIsPrivileged =
@@ -722,6 +774,28 @@ export class UserServiceService implements OnModuleInit {
 
     const saved = await this.users.save(admin);
     void this.syncUserToSearch(saved);
+    await this.activityLog.logChange({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.UPDATED,
+      old_value: auditBefore,
+      new_value: {
+        name: saved.name,
+        phone_number: saved.phone_number,
+        status: saved.status,
+        salary: saved.salary,
+        payment_day: saved.payment_day,
+        tariff_home: saved.tariff_home,
+        tariff_center: saved.tariff_center,
+        default_tariff: saved.default_tariff,
+        commission_type: saved.commission_type,
+        commission_value: saved.commission_value,
+        add_order: saved.add_order,
+        // Surface that the password was rotated without ever logging its value.
+        password_changed: Boolean(dto.password),
+      },
+      ...this.auditActor(requester),
+    });
     return successRes(this.sanitize(saved), 200, 'User yangilandi');
   }
 
@@ -772,6 +846,14 @@ export class UserServiceService implements OnModuleInit {
 
     const saved = await this.users.save(admin);
     void this.removeUserFromSearch(saved);
+
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: id,
+      action: ActivityAction.DELETED,
+      old_value: { name: admin.name, role: admin.role },
+      ...this.auditActor(requester),
+    });
 
     return successRes({ id }, 200, 'User o‘chirildi');
   }
@@ -830,6 +912,20 @@ export class UserServiceService implements OnModuleInit {
     }
     user.settings = settings && typeof settings === 'object' ? settings : null;
     await this.users.save(user);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: id,
+      action: ActivityAction.UPDATED,
+      user_id: id,
+      // Never log the settings values themselves (UI prefs may carry tokens
+      // in future); only which keys changed.
+      metadata: {
+        changed_keys:
+          user.settings && typeof user.settings === 'object'
+            ? Object.keys(user.settings)
+            : [],
+      },
+    });
     return successRes({ settings: user.settings }, 200, 'Settings updated');
   }
 
@@ -1021,6 +1117,13 @@ export class UserServiceService implements OnModuleInit {
     const saved = await this.users.save(market);
     await this.ensureUserCashbox(saved.id, Cashbox_type.FOR_MARKET);
     void this.syncUserToSearch(saved);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.CREATED,
+      new_value: { name: saved.name, username: saved.username, role: saved.role },
+      ...this.auditActor(requester),
+    });
     return successRes(this.sanitize(saved), 201, 'Market yaratildi');
   }
 
@@ -1062,6 +1165,14 @@ export class UserServiceService implements OnModuleInit {
 
     await this.ensureUserCashbox(saved.id, Cashbox_type.FOR_COURIER);
     void this.syncUserToSearch(saved);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.CREATED,
+      new_value: { name: saved.name, phone_number: saved.phone_number, role: saved.role },
+      ...this.auditActor(requester),
+      metadata: dto.branch_id ? { branch_id: dto.branch_id } : null,
+    });
     return successRes(this.sanitize(saved), 201, 'Courier yaratildi');
   }
 
@@ -1101,6 +1212,14 @@ export class UserServiceService implements OnModuleInit {
     }
 
     void this.syncUserToSearch(saved);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.CREATED,
+      new_value: { name: saved.name, phone_number: saved.phone_number, role: saved.role },
+      ...this.auditActor(requester),
+      metadata: dto.branch_id ? { branch_id: dto.branch_id } : null,
+    });
     return successRes(this.sanitize(saved), 201, 'Manager yaratildi');
   }
 
@@ -1145,6 +1264,12 @@ export class UserServiceService implements OnModuleInit {
 
     const saved = await this.users.save(customer);
     void this.syncUserToSearch(saved);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.CREATED,
+      new_value: { name: saved.name, phone_number: saved.phone_number, role: saved.role },
+    });
     return successRes(this.sanitize(saved), 201, 'Customer yaratildi');
   }
 
@@ -1156,6 +1281,19 @@ export class UserServiceService implements OnModuleInit {
     if (!market) {
       this.notFound('Market topilmadi');
     }
+
+    const auditBefore = {
+      name: market.name,
+      phone_number: market.phone_number,
+      address: market.address,
+      status: market.status,
+      tariff_home: market.tariff_home,
+      tariff_center: market.tariff_center,
+      default_tariff: market.default_tariff,
+      add_order: market.add_order,
+      expense_proof_conditions: market.expense_proof_conditions,
+      password_changed: false,
+    };
 
     if (dto.phone_number && dto.phone_number !== market.phone_number) {
       await this.ensurePhoneUnique(dto.phone_number, id);
@@ -1203,6 +1341,24 @@ export class UserServiceService implements OnModuleInit {
 
     const saved = await this.users.save(market);
     void this.syncUserToSearch(saved);
+    await this.activityLog.logChange({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.UPDATED,
+      old_value: auditBefore,
+      new_value: {
+        name: saved.name,
+        phone_number: saved.phone_number,
+        address: saved.address,
+        status: saved.status,
+        tariff_home: saved.tariff_home,
+        tariff_center: saved.tariff_center,
+        default_tariff: saved.default_tariff,
+        add_order: saved.add_order,
+        expense_proof_conditions: saved.expense_proof_conditions,
+        password_changed: Boolean(dto.password),
+      },
+    });
     return successRes(this.sanitize(saved), 200, 'Market yangilandi');
   }
 
@@ -1239,6 +1395,13 @@ export class UserServiceService implements OnModuleInit {
 
     const saved = await this.users.save(market);
     void this.removeUserFromSearch(saved);
+
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: id,
+      action: ActivityAction.DELETED,
+      old_value: { name: market.name, role: Roles.MARKET },
+    });
 
     return successRes({ id }, 200, 'Market o‘chirildi');
   }
@@ -1299,6 +1462,14 @@ export class UserServiceService implements OnModuleInit {
 
     market.market_tg_token = this.generateGroupToken();
     const saved = await this.users.save(market);
+
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.UPDATED,
+      // Credential rotation: record only that it happened, NEVER the token value.
+      metadata: { rotated: true, market_id: saved.id },
+    });
 
     return successRes(
       {
@@ -1387,9 +1558,19 @@ export class UserServiceService implements OnModuleInit {
     }
     this.assertRequesterCanMutateUser(requester, id, user.role);
 
+    const previousStatus = user.status;
     user.status = status;
     const saved = await this.users.save(user);
     void this.syncUserToSearch(saved);
+
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.STATUS_CHANGE,
+      old_value: { status: previousStatus },
+      new_value: { status: saved.status },
+      ...this.auditActor(requester),
+    });
 
     return successRes(this.sanitize(saved), 200, 'User status yangilandi');
   }
@@ -1499,5 +1680,21 @@ export class UserServiceService implements OnModuleInit {
     const saved = await this.users.save(user);
     void this.syncUserToSearch(saved);
     return saved;
+  }
+
+  // ==================== Activity log (read) ====================
+
+  /** Paginated activity-log query (gateway fan-in). */
+  async auditLogQuery(q: ActivityLogQuery) {
+    return this.activityLog.query(q ?? {});
+  }
+
+  /** Activity-log rows for a single entity (gateway fan-in). */
+  async auditLogByEntity(
+    entity_type: string,
+    entity_id: string,
+    limit?: number,
+  ) {
+    return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
   }
 }

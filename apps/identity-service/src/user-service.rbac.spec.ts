@@ -18,6 +18,16 @@ function makeService() {
   const noopClient = { send: jest.fn(), emit: jest.fn() };
   const bcrypt = { encrypt: jest.fn(), compare: jest.fn() };
   const config = { get: jest.fn() };
+  const activityLog = {
+    log: jest.fn().mockResolvedValue(undefined),
+    logChange: jest.fn().mockResolvedValue(undefined),
+    query: jest.fn().mockResolvedValue({
+      items: [],
+      meta: { page: 1, limit: 50, total: 0, totalPages: 1 },
+    }),
+    findByEntity: jest.fn().mockResolvedValue([]),
+    findByUser: jest.fn().mockResolvedValue([]),
+  };
 
   const service = new UserServiceService(
     repo as any,
@@ -37,6 +47,8 @@ function makeService() {
     bcrypt as any,
 
     config as any,
+
+    activityLog as any,
   );
   return { service, repo };
 }

@@ -115,6 +115,9 @@ export const notificationValidationSchema = Joi.object({
   RABBITMQ_NOTIFICATION_QUEUE: Joi.string().required(),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
   RABBITMQ_ORDER_QUEUE: Joi.string().required(),
+  // Optional: gateway queue for realtime socket.io push. When unset, in-app
+  // notifications are still persisted; only the live push is skipped.
+  RABBITMQ_GATEWAY_QUEUE: Joi.string().optional(),
   TELEGRAM_BOT_TOKEN: Joi.string().optional(),
   // Order-create bot (PCS order_create-bot parity). Both optional — the bot
   // stays disabled when ORDER_BOT_TOKEN is unset.

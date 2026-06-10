@@ -6,6 +6,7 @@ import {
   RmqContext,
 } from '@nestjs/microservices';
 import {
+  ActivityLogQuery,
   Cashbox_type,
   FinancialSource_type,
   RmqService,
@@ -394,6 +395,33 @@ export class FinanceServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.financeService.findFinancialBalanceHistory(data),
+    );
+  }
+
+  // --- Audit log (read-only fan-in for the gateway) ---
+
+  @MessagePattern({ cmd: 'finance.activity_log.find_all' })
+  findActivityLogs(
+    @Payload() data: { query?: ActivityLogQuery },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.auditLogQuery(data?.query ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'finance.activity_log.find_by_entity' })
+  findActivityLogsByEntity(
+    @Payload()
+    data: { entity_type: string; entity_id: string; limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.auditLogByEntity(
+        data.entity_type,
+        data.entity_id,
+        data.limit,
+      ),
     );
   }
 }

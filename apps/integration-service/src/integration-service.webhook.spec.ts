@@ -12,7 +12,15 @@ jest.mock('@app/common', () => {
   return {
     verifyHmacSignature: hmac.verifyHmacSignature,
     computeHmacSignature: hmac.computeHmacSignature,
-    ActivityAction: { WEBHOOK_RECEIVED: 'webhook_received' },
+    ActivityAction: {
+      CREATED: 'created',
+      UPDATED: 'updated',
+      DELETED: 'deleted',
+      STATUS_CHANGE: 'status_change',
+      PAYMENT: 'payment',
+      EXTERNAL_SYNC: 'external_sync',
+      WEBHOOK_RECEIVED: 'webhook_received',
+    },
     ActivityLogService: class {},
     Order_status: {},
   };
@@ -76,7 +84,16 @@ function makeService(integration: Record<string, unknown> | null) {
     create: jest.fn((dto: any) => ({ ...dto })),
     save: jest.fn(async (e: any) => ({ id: 'rem1', ...e })),
   };
-  const activityLog: any = { log: jest.fn().mockResolvedValue(undefined) };
+  const activityLog: any = {
+    log: jest.fn().mockResolvedValue(undefined),
+    logChange: jest.fn().mockResolvedValue(undefined),
+    query: jest.fn().mockResolvedValue({
+      items: [],
+      meta: { page: 1, limit: 50, total: 0, totalPages: 1 },
+    }),
+    findByEntity: jest.fn().mockResolvedValue([]),
+    findByUser: jest.fn().mockResolvedValue([]),
+  };
   const noClient: any = {};
 
   const service = new IntegrationServiceService(

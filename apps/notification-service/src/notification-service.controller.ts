@@ -1,16 +1,25 @@
 import { Controller } from '@nestjs/common';
 import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
-import { RmqService, Group_type, executeAndAck } from '@app/common';
+import {
+  RmqService,
+  Group_type,
+  executeAndAck,
+  ActivityLogQuery,
+} from '@app/common';
 import { NotificationServiceService } from './notification-service.service';
+import { NotificationInboxService } from './notification-inbox.service';
 import { CreateNotificationDto } from './dto/create-notification.dto';
 import { UpdateNotificationDto } from './dto/update-notification.dto';
 import { SendNotificationDto } from './dto/send-notification.dto';
+import { DispatchNotificationDto } from './dto/dispatch-notification.dto';
+import { ListNotificationsDto } from './dto/list-notifications.dto';
 
 @Controller()
 export class NotificationServiceController {
   constructor(
     private readonly rmqService: RmqService,
     private readonly notificationService: NotificationServiceService,
+    private readonly inboxService: NotificationInboxService,
   ) {}
 
   private executeAndAck<T>(
@@ -121,6 +130,104 @@ export class NotificationServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.notificationService.sendNotification(data),
+    );
+  }
+
+  // ==================== In-app notification inbox ====================
+
+  /** Generic entry point any service calls to raise a notification. */
+  @MessagePattern({ cmd: 'notification.dispatch' })
+  dispatch(
+    @Payload() data: DispatchNotificationDto,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.inboxService.dispatch(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'notification.inbox.list' })
+  listInbox(
+    @Payload() data: ListNotificationsDto,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.inboxService.list(data));
+  }
+
+  @MessagePattern({ cmd: 'notification.inbox.find_one' })
+  findOneInbox(
+    @Payload() data: { recipient_id: string; id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.inboxService.findOne(data.recipient_id, data.id),
+    );
+  }
+
+  @MessagePattern({ cmd: 'notification.inbox.unread_count' })
+  unreadCount(
+    @Payload() data: { recipient_id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.inboxService.unreadCount(data.recipient_id),
+    );
+  }
+
+  @MessagePattern({ cmd: 'notification.inbox.mark_read' })
+  markRead(
+    @Payload() data: { recipient_id: string; id: string; read?: boolean },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.inboxService.markRead(data.recipient_id, data.id, data.read ?? true),
+    );
+  }
+
+  @MessagePattern({ cmd: 'notification.inbox.mark_all_read' })
+  markAllRead(
+    @Payload() data: { recipient_id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.inboxService.markAllRead(data.recipient_id),
+    );
+  }
+
+  @MessagePattern({ cmd: 'notification.inbox.delete' })
+  deleteInbox(
+    @Payload() data: { recipient_id: string; id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.inboxService.remove(data.recipient_id, data.id),
+    );
+  }
+
+  // ==================== Audit-log reads (gateway fan-in) ====================
+
+  @MessagePattern({ cmd: 'notification.activity_log.find_all' })
+  activityLogFindAll(
+    @Payload() data: { query?: ActivityLogQuery },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.notificationService.auditLogQuery(data?.query ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'notification.activity_log.find_by_entity' })
+  activityLogFindByEntity(
+    @Payload()
+    data: { entity_type: string; entity_id: string; limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.notificationService.auditLogByEntity(
+        data.entity_type,
+        data.entity_id,
+        data.limit,
+      ),
     );
   }
 }

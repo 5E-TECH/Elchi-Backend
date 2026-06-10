@@ -69,6 +69,10 @@ function createService() {
     nullClient as any, // branchClient
     nullClient as any, // fileClient
     outbox as any, // outbox
+    {
+      log: jest.fn().mockResolvedValue(undefined),
+      logChange: jest.fn().mockResolvedValue(undefined),
+    } as any, // activityLog
   );
 
   jest.spyOn<any, any>(service as any, 'syncOrderToSearch').mockResolvedValue(undefined);

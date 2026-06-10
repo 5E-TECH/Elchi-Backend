@@ -34,6 +34,8 @@ import { PrinterGatewayController } from './printer-gateway.controller';
 import { ExcelGatewayController } from './excel-gateway.controller';
 import { RealtimeGateway } from './realtime/realtime.gateway';
 import { RealtimeController } from './realtime/realtime.controller';
+import { AuditGatewayController } from './audit-gateway.controller';
+import { AuditEnrichmentService } from './audit/audit-enrichment.service';
 import type { StringValue } from 'ms';
 
 @Module({
@@ -106,6 +108,7 @@ import type { StringValue } from 'ms';
     PrinterGatewayController,
     ExcelGatewayController,
     RealtimeController,
+    AuditGatewayController,
     HealthController,
     // TODO: Qolgan gateway controllerlarni qo'shish
     // FinanceGatewayController,
@@ -124,6 +127,7 @@ import type { StringValue } from 'ms';
     RolesGuard,
     SelfGuard,
     RealtimeGateway,
+    AuditEnrichmentService,
     { provide: APP_GUARD, useClass: ThrottlerGuard },
   ],
 })

@@ -33,7 +33,9 @@ export class BranchServiceController {
   // --- Branch ---
   @MessagePattern({ cmd: 'branch.create' })
   create(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.branchService.createBranch(data?.dto ?? data));
+    return this.executeAndAck(context, () =>
+      this.branchService.createBranch(data?.dto ?? data, this.getRequester(data)),
+    );
   }
 
   @MessagePattern({ cmd: 'branch.find_all' })
@@ -343,6 +345,21 @@ export class BranchServiceController {
         branch_id: data?.branch_id ?? data?.id,
         config_key: data?.config_key ?? data?.key,
       }, this.getRequester(data)),
+    );
+  }
+
+  // --- Activity log (audit) ---
+  @MessagePattern({ cmd: 'branch.activity_log.find_all' })
+  activityLogFindAll(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.auditLogQuery(data?.query ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'branch.activity_log.find_by_entity' })
+  activityLogFindByEntity(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.auditLogByEntity(data?.entity_type, data?.entity_id, data?.limit),
     );
   }
 }

@@ -1,6 +1,6 @@
 import { Controller } from '@nestjs/common';
 import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
-import { RmqService, executeAndAck } from '@app/common';
+import { RmqService, executeAndAck, ActivityLogQuery } from '@app/common';
 import { CatalogServiceService } from './catalog-service.service';
 
 @Controller()
@@ -95,6 +95,30 @@ export class CatalogServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.catalogService.findByIds(data.ids ?? []),
+    );
+  }
+
+  @MessagePattern({ cmd: 'catalog.activity_log.find_all' })
+  auditLogFindAll(
+    @Payload() data: { query?: ActivityLogQuery },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.catalogService.auditLogQuery(data?.query ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'catalog.activity_log.find_by_entity' })
+  auditLogFindByEntity(
+    @Payload() data: { entity_type: string; entity_id: string; limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.catalogService.auditLogByEntity(
+        data.entity_type,
+        data.entity_id,
+        data.limit,
+      ),
     );
   }
 }

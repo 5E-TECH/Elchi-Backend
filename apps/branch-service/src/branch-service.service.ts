@@ -5,6 +5,9 @@ import { ClientProxy } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { In, Repository } from 'typeorm';
 import {
+  ActivityAction,
+  ActivityLogService,
+  ActivityLogQuery,
   BranchTransferDirection,
   BranchType,
   BranchUserRole,
@@ -67,6 +70,7 @@ export class BranchServiceService implements OnModuleInit {
     @Inject('FILE') private readonly fileClient: ClientProxy,
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
     config: ConfigService,
+    private readonly activityLog: ActivityLogService,
   ) {
     this.hqCode = config.get<string>('BRANCH_HQ_CODE', 'HQ-TSHKNT');
     this.hqName = config.get<string>('BRANCH_HQ_NAME', 'HQ Toshkent');
@@ -92,6 +96,24 @@ export class BranchServiceService implements OnModuleInit {
 
   private forbidden(message: string): never {
     throw new RpcException(errorRes(message, 403));
+  }
+
+  private auditActor(
+    requester?: { id?: string; roles?: string[] } | null,
+  ): { user_id: string | null; user_role: string | null } {
+    const roles = requester?.roles ?? [];
+    return {
+      user_id: requester?.id ? String(requester.id) : null,
+      user_role: roles.length ? roles.join(',') : null,
+    };
+  }
+
+  async auditLogQuery(q: ActivityLogQuery) {
+    return this.activityLog.query(q ?? {});
+  }
+
+  async auditLogByEntity(entity_type: string, entity_id: string, limit?: number) {
+    return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
   }
 
   private normalizeBranchUserRole(role?: string | null): BranchUserRole {
@@ -1032,6 +1054,20 @@ export class BranchServiceService implements OnModuleInit {
       qr_file: qrByBatchId.get(String(batch.id)) ?? null,
     }));
 
+    await this.activityLog.log({
+      entity_type: 'TransferBatch',
+      entity_id: String(batchIds[0] ?? sourceBranchId),
+      action: 'branch.transfer_batch_create',
+      metadata: {
+        source_branch_id: sourceBranchId,
+        destination_branch_id: destinationBranchId,
+        order_count: orderIds.length,
+        order_ids: orderIds.slice(0, 20),
+        batch_ids: batchIds,
+      },
+      ...this.auditActor(requester),
+    });
+
     return successRes(
       {
         idempotent: false,
@@ -1193,6 +1229,19 @@ export class BranchServiceService implements OnModuleInit {
       qr_file: qrByBatchId.get(String(batch.id)) ?? null,
     }));
 
+    await this.activityLog.log({
+      entity_type: 'TransferBatch',
+      entity_id: String(batchIds[0] ?? sourceBranchId),
+      action: 'branch.return_batch_create',
+      metadata: {
+        source_branch_id: sourceBranchId,
+        order_count: orderIds.length,
+        order_ids: orderIds.slice(0, 20),
+        batch_ids: batchIds,
+      },
+      ...this.auditActor(requester),
+    });
+
     return successRes(
       {
         idempotent: false,
@@ -1248,7 +1297,7 @@ export class BranchServiceService implements OnModuleInit {
     await this.assertCanCreateTransferBatch(sourceBranchId, requester);
 
     const requesterId = String(requester?.id ?? '').trim() || '0';
-    return this.sendOrderCommand('order.transfer_batch.send', {
+    const sendResult = await this.sendOrderCommand('order.transfer_batch.send', {
       batch_id: id,
       order_ids: orderIds,
       vehicle_plate: vehiclePlate,
@@ -1257,6 +1306,21 @@ export class BranchServiceService implements OnModuleInit {
       requester_id: requesterId,
       requester_name: requesterId,
     });
+
+    await this.activityLog.log({
+      entity_type: 'TransferBatch',
+      entity_id: String(id),
+      action: ActivityAction.STATUS_CHANGE,
+      metadata: {
+        status: 'SENT',
+        source_branch_id: sourceBranchId,
+        order_count: orderIds.length,
+        order_ids: orderIds.slice(0, 20),
+      },
+      ...this.auditActor(requester),
+    });
+
+    return sendResult;
   }
 
   async findRemainingTransferBatchById(
@@ -1675,11 +1739,24 @@ export class BranchServiceService implements OnModuleInit {
     await this.assertRequesterWorksInBranch(destinationBranchId, requester);
 
     const requesterId = String(requester?.id ?? '').trim() || '0';
-    return this.sendOrderCommand('order.transfer_batch.receive', {
+    const receiveResult = await this.sendOrderCommand('order.transfer_batch.receive', {
       batch_id: id,
       requester_id: requesterId,
       requester_name: requesterId,
     });
+
+    await this.activityLog.log({
+      entity_type: 'TransferBatch',
+      entity_id: String(id),
+      action: ActivityAction.STATUS_CHANGE,
+      metadata: {
+        status: 'RECEIVED',
+        destination_branch_id: destinationBranchId,
+      },
+      ...this.auditActor(requester),
+    });
+
+    return receiveResult;
   }
 
   async receiveTransferBatchOrders(
@@ -1716,12 +1793,27 @@ export class BranchServiceService implements OnModuleInit {
     await this.assertRequesterWorksInBranch(destinationBranchId, requester);
 
     const requesterId = String(requester?.id ?? '').trim() || '0';
-    return this.sendOrderCommand('order.transfer_batch.receive_orders', {
+    const receiveOrdersResult = await this.sendOrderCommand('order.transfer_batch.receive_orders', {
       batch_id: id,
       order_ids: uniqueOrderIds,
       requester_id: requesterId,
       requester_name: requesterId,
     });
+
+    await this.activityLog.log({
+      entity_type: 'TransferBatch',
+      entity_id: String(id),
+      action: ActivityAction.STATUS_CHANGE,
+      metadata: {
+        status: 'RECEIVED_ORDERS',
+        destination_branch_id: destinationBranchId,
+        order_count: uniqueOrderIds.length,
+        order_ids: uniqueOrderIds.slice(0, 20),
+      },
+      ...this.auditActor(requester),
+    });
+
+    return receiveOrdersResult;
   }
 
   async cancelTransferBatch(
@@ -1778,6 +1870,18 @@ export class BranchServiceService implements OnModuleInit {
     } catch {
       // Best-effort call; main cancel transaction has already handled unassignment.
     }
+
+    await this.activityLog.log({
+      entity_type: 'TransferBatch',
+      entity_id: String(id),
+      action: ActivityAction.STATUS_CHANGE,
+      metadata: {
+        status: 'CANCELLED',
+        source_branch_id: sourceBranchId,
+        reason,
+      },
+      ...this.auditActor(requester),
+    });
 
     return cancelResult;
   }
@@ -1985,6 +2089,20 @@ export class BranchServiceService implements OnModuleInit {
       await this.sendLogisticsCommand('logistics.post.delete', { id: postId });
     }
 
+    await this.activityLog.log({
+      entity_type: 'Post',
+      entity_id: String(postId),
+      action: 'branch.post_dispatch',
+      metadata: {
+        source_branch_id: sourceBranchId,
+        destination_branch_id: destinationBranchId,
+        order_count: eligibleOrderIds.length,
+        order_ids: eligibleOrderIds.slice(0, 20),
+        post_deleted: shouldDeletePost,
+      },
+      ...this.auditActor(requester),
+    });
+
     return successRes(
       {
         source_branch_id: sourceBranchId,
@@ -2057,7 +2175,7 @@ export class BranchServiceService implements OnModuleInit {
     type?: BranchType | string;
     code?: string;
     manager_id?: string | null;
-  }) {
+  }, requester?: RequesterContext) {
     const name = String(dto?.name ?? '').trim();
     if (!name) {
       this.badRequest('name is required');
@@ -2105,6 +2223,21 @@ export class BranchServiceService implements OnModuleInit {
         status: Status.ACTIVE,
       }),
     );
+
+    await this.activityLog.log({
+      entity_type: 'Branch',
+      entity_id: String(saved.id),
+      action: ActivityAction.CREATED,
+      new_value: saved,
+      metadata: {
+        parent_id: saved.parent_id ?? null,
+        region_id: saved.region_id ?? null,
+        district_id: saved.district_id ?? null,
+        manager_id: saved.manager_id ?? null,
+        type: saved.type,
+      },
+      ...this.auditActor(requester),
+    });
 
     return successRes(saved, 201, 'Branch created');
   }
@@ -3029,6 +3162,16 @@ export class BranchServiceService implements OnModuleInit {
     await this.assertCanWriteBranch(id, requester);
     const branch = await this.getBranchOrThrow(id);
 
+    const beforeSnapshot = {
+      name: branch.name,
+      parent_id: branch.parent_id,
+      region_id: branch.region_id,
+      district_id: branch.district_id,
+      manager_id: branch.manager_id,
+      status: branch.status,
+      type: branch.type,
+    };
+
     if (typeof dto?.name !== 'undefined') {
       const nextName = String(dto.name).trim();
       if (!nextName) {
@@ -3112,6 +3255,24 @@ export class BranchServiceService implements OnModuleInit {
 
     const saved = await this.branchRepo.save(branch);
     await this.rebalanceDescendantLevels(saved.id, saved.level);
+
+    await this.activityLog.logChange({
+      entity_type: 'Branch',
+      entity_id: String(saved.id),
+      action: ActivityAction.UPDATED,
+      old_value: beforeSnapshot,
+      new_value: {
+        name: saved.name,
+        parent_id: saved.parent_id,
+        region_id: saved.region_id,
+        district_id: saved.district_id,
+        manager_id: saved.manager_id,
+        status: saved.status,
+        type: saved.type,
+      },
+      ...this.auditActor(requester),
+    });
+
     return successRes(saved, 200, 'Branch updated');
   }
 
@@ -3162,9 +3323,21 @@ export class BranchServiceService implements OnModuleInit {
       }
     }
 
+    const deletedName = branch.name;
+    const deletedCode = branch.code;
+
     branch.isDeleted = true;
     branch.status = Status.INACTIVE;
     await this.branchRepo.save(branch);
+
+    await this.activityLog.log({
+      entity_type: 'Branch',
+      entity_id: String(branch.id),
+      action: ActivityAction.DELETED,
+      old_value: { name: deletedName, code: deletedCode },
+      ...this.auditActor(requester),
+    });
+
     return successRes({ id }, 200, 'Branch deleted');
   }
 
@@ -3265,6 +3438,13 @@ export class BranchServiceService implements OnModuleInit {
       if (role === BranchUserRole.MANAGER) {
         await this.ensureBranchCashbox(branchId);
       }
+      await this.activityLog.log({
+        entity_type: 'BranchUser',
+        entity_id: String(branchId),
+        action: ActivityAction.ASSIGN,
+        metadata: { user_id: userId, role },
+        ...this.auditActor(requester),
+      });
       return successRes(revived, 200, 'Branch user assigned');
     }
 
@@ -3279,6 +3459,13 @@ export class BranchServiceService implements OnModuleInit {
     if (role === BranchUserRole.MANAGER) {
       await this.ensureBranchCashbox(branchId);
     }
+    await this.activityLog.log({
+      entity_type: 'BranchUser',
+      entity_id: String(branchId),
+      action: ActivityAction.ASSIGN,
+      metadata: { user_id: userId, role },
+      ...this.auditActor(requester),
+    });
 
     return successRes(saved, 201, 'Branch user assigned');
   }
@@ -3308,6 +3495,14 @@ export class BranchServiceService implements OnModuleInit {
 
     row.isDeleted = true;
     await this.branchUserRepo.save(row);
+
+    await this.activityLog.log({
+      entity_type: 'BranchUser',
+      entity_id: String(branchId),
+      action: ActivityAction.UNASSIGN,
+      metadata: { user_id: userId },
+      ...this.auditActor(requester),
+    });
 
     return successRes(
       { branch_id: branchId, user_id: userId },
@@ -3523,6 +3718,14 @@ export class BranchServiceService implements OnModuleInit {
       existing.isDeleted = false;
       existing.config_value = configValue;
       const saved = await this.branchConfigRepo.save(existing);
+      await this.activityLog.log({
+        entity_type: 'BranchConfig',
+        entity_id: String(branchId),
+        action: 'branch.config_set',
+        new_value: saved,
+        metadata: { config_key: configKey },
+        ...this.auditActor(requester),
+      });
       return successRes(saved, 200, 'Branch config saved');
     }
 
@@ -3533,6 +3736,15 @@ export class BranchServiceService implements OnModuleInit {
         config_value: configValue,
       }),
     );
+
+    await this.activityLog.log({
+      entity_type: 'BranchConfig',
+      entity_id: String(branchId),
+      action: 'branch.config_set',
+      new_value: saved,
+      metadata: { config_key: configKey },
+      ...this.auditActor(requester),
+    });
 
     return successRes(saved, 201, 'Branch config saved');
   }
@@ -3613,11 +3825,23 @@ export class BranchServiceService implements OnModuleInit {
       this.notFound('Branch config not found');
     }
 
+    const beforeConfig = { config_value: item.config_value };
+
     item.config_value =
       typeof data?.config_value === 'undefined'
         ? null
         : (data.config_value ?? null);
     const saved = await this.branchConfigRepo.save(item);
+
+    await this.activityLog.logChange({
+      entity_type: 'BranchConfig',
+      entity_id: String(branchId),
+      action: ActivityAction.UPDATED,
+      old_value: beforeConfig,
+      new_value: { config_value: saved.config_value },
+      metadata: { config_key: configKey },
+      ...this.auditActor(requester),
+    });
 
     return successRes(saved, 200, 'Branch config updated');
   }
@@ -3649,6 +3873,15 @@ export class BranchServiceService implements OnModuleInit {
 
     item.isDeleted = true;
     await this.branchConfigRepo.save(item);
+
+    await this.activityLog.log({
+      entity_type: 'BranchConfig',
+      entity_id: String(branchId),
+      action: ActivityAction.DELETED,
+      old_value: { config_key: configKey, config_value: item.config_value },
+      metadata: { config_key: configKey },
+      ...this.auditActor(requester),
+    });
 
     return successRes(
       { branch_id: branchId, config_key: configKey },

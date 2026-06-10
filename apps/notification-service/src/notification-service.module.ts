@@ -8,8 +8,11 @@ import {
   RmqModule,
   DatabaseModule,
   notificationValidationSchema,
+  ActivityLogModule,
 } from '@app/common';
 import { TelegramMarket } from './entities/telegram-market.entity';
+import { Notification } from './entities/notification.entity';
+import { NotificationInboxService } from './notification-inbox.service';
 import { NotificationBotUpdateService } from './notification-bot.update';
 import { OrderBotUpdateService } from './order-bot.update';
 
@@ -24,12 +27,17 @@ import { OrderBotUpdateService } from './order-bot.update';
     RmqModule,
     RmqModule.register({ name: 'IDENTITY' }),
     RmqModule.register({ name: 'ORDER' }),
+    // Realtime push: emits `realtime.notify` to the gateway's RMQ queue so
+    // connected socket.io clients receive new notifications live.
+    RmqModule.register({ name: 'GATEWAY' }),
     DatabaseModule,
-    TypeOrmModule.forFeature([TelegramMarket]),
+    ActivityLogModule.forService('notification-service'),
+    TypeOrmModule.forFeature([TelegramMarket, Notification]),
   ],
   controllers: [NotificationServiceController],
   providers: [
     NotificationServiceService,
+    NotificationInboxService,
     NotificationBotUpdateService,
     OrderBotUpdateService,
   ],

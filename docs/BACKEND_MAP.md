@@ -61,7 +61,7 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
 | **branch-service** | `branch_schema` | `branch`, `branch_config`, `branch_user` | Branch tree (HQ→regional→pickup), per-branch config (ownership/compensation), branch staff, transfer-batch orchestration, branch analytics/dashboard |
 | **investor-service** | `investor_schema` | `investor`, `investment`, `profit_share` | Investor capital, investments, profit-share calculation/payout |
 | **integration-service** | `integration_schema` | `external_integration`, `provider_shipment`, `provider_receivable`, `provider_remittance`, `sync_queue`, `sync_history`, `provider_webhook_log` | External providers (cargo/marketplace): credentials (AES-encrypted), sync queue, dispatch shipments, COD receivables/remittances, inbound HMAC webhooks |
-| **notification-service** | `notification_schema` | `telegram_market` | Telegram notifications: configs, connect-by-token, send group alerts |
+| **notification-service** | `notification_schema` | `telegram_market`, `notification` | Per-user in-app notification inbox (dispatch/list/read/unread) + realtime socket.io push + Telegram group notifications (configs, connect-by-token, send) |
 | **analytics-service** | — (no DB; aggregator) | — | Dashboards, KPI, revenue, reports — **reads other services** (order/finance/branch/identity) via RMQ; stores nothing |
 | **file-service** | — (MinIO, no DB) | — | Upload/download (signed URLs), PDF & QR generation in MinIO |
 | **c2c-service** | `c2c_schema` | `listing`, `c2c_order`, `review`, `dispute` | Consumer-to-consumer marketplace (listings/orders/reviews/disputes). **Not yet exposed via gateway** — no c2c gateway controller |
@@ -158,10 +158,28 @@ Browser/Mobile ──HTTP──> API Gateway ──RMQ(cmd)──> [identity, or
   create/calculate/find/mark_paid. Read-only-ish portfolio domain.
 
 ### notification-service (`notification_schema`)
-- **Entity:** `telegram_market`.
-- **Patterns:** telegram config CRUD, `connect_by_token`, `send`. Also runs the
-  **order-create telegram bot** + group alert bot (tokens in env). Calls identity
-  for market lookup and order for order lookup.
+- **Entities:** `telegram_market`, `notification` (per-recipient inbox row —
+  one row per recipient so read-state is per-user; `recipient_id`, `type`
+  `{domain}.{event}`, `category`/`priority` enums, `title`/`body`/`data`/`link`,
+  `channels`/`delivery` jsonb, `group_key` for dedupe, `is_read`/`read_at`).
+- **Inbox engine (`NotificationInboxService`):** generic dispatch + inbox read API.
+  - `notification.dispatch` — resolve recipients (`recipient_id` / `recipient_ids` /
+    `roles[]` via `identity.user.find_all` paging / `broadcast`) → persist one row
+    each (dedupe by `group_key`) → realtime push → optional telegram relay →
+    email/sms stubbed. Returns `{dispatched, recipient_ids, channels, telegram}`.
+  - `notification.inbox.{list,find_one,unread_count,mark_read,mark_all_read,delete}`
+    — all scoped to the caller's `recipient_id` (set by the gateway from the JWT).
+  - **Realtime:** first emitter of `{cmd:'realtime.notify'}` to the `GATEWAY` queue
+    (socket.io `notification:new` to room `user:<sub>`); best-effort — when
+    `RABBITMQ_GATEWAY_QUEUE` is unset the row still persists, push is skipped.
+  - Default channels when omitted: `[in_app, realtime]`. The DB row is the system
+    of record regardless of channel outcome. `role`/`broadcast` targeting can't
+    reach superadmin/customer (excluded by `identity.user.find_all`) — use
+    explicit `recipient_id` for those.
+- **Telegram patterns (unchanged):** config CRUD, `connect_by_token`, `send`. Also
+  runs the **order-create telegram bot** + group alert bot (tokens in env).
+- **Gateway routes:** `GET/PATCH/DELETE /notifications/inbox*` (any authed user,
+  own inbox), `POST /notifications/dispatch` (`@Roles(superadmin, admin)`).
 
 ### catalog-service (`catalog_schema`)
 - **Entity:** `product`. CRUD + `update_own` (market), `delete_by_market`,
@@ -194,7 +212,8 @@ Imported as `@app/common`. Top level: `enums/`, `helpers/`, `src/`.
 - **`enums/index.ts`** — ALL domain enums (Roles, Order_status, SettlementStatus,
   BranchType/Ownership, CourierCompensationMode, PaymentMethod, Cashbox_type,
   Source_type, FinancialSource_type, ExpenseProofCondition, Post_status,
-  BranchTransfer*). Single source of truth for state machines.
+  BranchTransfer*, Notification{Channel,Priority,Category,DeliveryStatus}).
+  Single source of truth for state machines.
 - **`helpers/response`** — `successRes`/`errorRes`/`catchError` (the
   `{statusCode,message,data}` envelope). `helpers/bcrypt` — hashing.
 - **`src/config`** — all Joi validation schemas (`gatewayValidationSchema`,
@@ -212,6 +231,15 @@ Imported as `@app/common`. Top level: `enums/`, `helpers/`, `src/`.
 - **`src/sentry`** — `initSentry`/`flushSentry` (no-op without `SENTRY_DSN`).
 - **`src/activity-log`** — pluggable audit-log entity+service; every row stores
   `serviceName` + acting user (denormalized) for a centralized audit dashboard.
+  `ActivityLogService.log/logChange` (fail-safe writes), `query(filters,page)`,
+  `findByEntity`, `prune`. **Wired into 9 services** (identity/order/finance/
+  branch/logistics/catalog/integration/investor/notification — ~96 state-changing
+  ops; tables in those schemas, action VARCHAR(64), migration 1716000000009).
+  Each exposes `{svc}.activity_log.find_all` + `.find_by_entity`. Read via gateway
+  **`GET /activity-logs`** (+ `/entity/:type/:id`, `/user/:id`, `/actions`),
+  `@Roles(SUPERADMIN, ADMIN)`: fans in across per-schema tables, merges
+  newest-first, and `AuditEnrichmentService` resolves raw ids (actor/entity/
+  `*_id` refs) into full objects via batch find_by_ids (best-effort).
 - **`src/idempotency`** — `idempotent-execute.helper.ts`: dedupe repeated
   operations (e.g. order money ops) by idempotency key. `in_progress` reservations
   carry a **lease** (`DEFAULT_IDEMPOTENCY_LEASE_MS`=30s): a key abandoned by a
