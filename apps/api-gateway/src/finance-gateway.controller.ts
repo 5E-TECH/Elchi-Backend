@@ -227,6 +227,67 @@ export class FinanceGatewayController {
     }
   }
 
+  private async resolveManagerBranchCashboxId(
+    manager: JwtUser | undefined,
+    requestedId: string,
+  ): Promise<string> {
+    if (!manager?.sub) {
+      return '';
+    }
+
+    const response = await this.sendBranch<{
+      data?: { branch_id?: string } | null;
+    }>(
+      { cmd: 'branch.cashbox.resolve_for_manager' },
+      {
+        requested_id: requestedId,
+        requester: this.toRequester(manager),
+      },
+    );
+    const resolvedBranchId = String(response?.data?.branch_id ?? '');
+    if (resolvedBranchId) {
+      return resolvedBranchId;
+    }
+
+    const managerBranchId =
+      this.extractBranchId(manager) ||
+      (await this.resolveBranchIdByUserId(String(manager.sub), manager));
+    if (!managerBranchId) {
+      return '';
+    }
+
+    if (
+      String(requestedId) === String(manager.sub) ||
+      String(requestedId) === String(managerBranchId)
+    ) {
+      return managerBranchId;
+    }
+
+    try {
+      const branchResponse = await this.sendBranch<{
+        data?: Record<string, any>;
+      }>(
+        { cmd: 'branch.find_by_id' },
+        { id: managerBranchId, requester: this.toRequester(manager) },
+      );
+      const branch = branchResponse?.data;
+      const parentBranchId = String(branch?.parent_id ?? '');
+      const parentManagerId = String(branch?.parent?.manager_id ?? '');
+
+      if (
+        parentBranchId &&
+        (String(requestedId) === parentBranchId ||
+          (parentManagerId && String(requestedId) === parentManagerId))
+      ) {
+        return parentBranchId;
+      }
+    } catch {
+      return '';
+    }
+
+    return '';
+  }
+
   private async isUserAssignedToBranch(
     branchId: string,
     userId: string,
@@ -259,6 +320,14 @@ export class FinanceGatewayController {
       return false;
     }
     if (String(userId) === String(manager.sub)) {
+      return true;
+    }
+
+    const accessibleBranchId = await this.resolveManagerBranchCashboxId(
+      manager,
+      userId,
+    );
+    if (accessibleBranchId) {
       return true;
     }
 
@@ -671,12 +740,16 @@ export class FinanceGatewayController {
     @Query() query: FindCashboxByUserQueryDto,
     @Req() req: { user: JwtUser },
   ) {
+    const managerBranchCashboxId =
+      this.isManager(req?.user) && !this.isPrivileged(req?.user)
+        ? await this.resolveManagerBranchCashboxId(req.user, user_id)
+        : '';
+
     if (!this.isPrivileged(req?.user)) {
       if (this.isManager(req?.user)) {
-        const managerCanAccess = await this.canManagerAccessUser(
-          req?.user,
-          user_id,
-        );
+        const managerCanAccess =
+          Boolean(managerBranchCashboxId) ||
+          (await this.canManagerAccessUser(req?.user, user_id));
         if (!managerCanAccess) {
           throw new ForbiddenException(
             "Siz bu foydalanuvchi kassasini ko'ra olmaysiz",
@@ -698,16 +771,8 @@ export class FinanceGatewayController {
     } = query;
     let requestUserId = user_id;
     if (this.isManager(req?.user) && !this.isPrivileged(req?.user)) {
-      const branchId =
-        this.extractBranchId(req.user) ||
-        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
-      const isOwnCashbox = String(user_id) === String(req?.user?.sub ?? '');
-      const isOwnBranch = branchId && String(user_id) === String(branchId);
-      if (isOwnCashbox || isOwnBranch) {
-        if (!branchId) {
-          throw new ForbiddenException("Managerning branch'i topilmadi");
-        }
-        requestUserId = branchId;
+      if (managerBranchCashboxId) {
+        requestUserId = managerBranchCashboxId;
         requestQuery = {
           ...query,
           cashbox_type: Cashbox_type.BRANCH,
@@ -1028,9 +1093,16 @@ export class FinanceGatewayController {
     @Query() query: MainCashboxFilterQueryDto,
     @Req() req: { user: JwtUser },
   ) {
+    const managerBranchCashboxId =
+      this.isManager(req?.user) && !this.isPrivileged(req?.user)
+        ? await this.resolveManagerBranchCashboxId(req.user, id)
+        : '';
+
     if (!this.isPrivileged(req?.user)) {
       if (this.isManager(req?.user)) {
-        const managerCanAccess = await this.canManagerAccessUser(req?.user, id);
+        const managerCanAccess =
+          Boolean(managerBranchCashboxId) ||
+          (await this.canManagerAccessUser(req?.user, id));
         if (!managerCanAccess) {
           throw new ForbiddenException(
             "Siz bu foydalanuvchi kassasini ko'ra olmaysiz",
@@ -1043,18 +1115,14 @@ export class FinanceGatewayController {
       }
     }
     if (this.isManager(req?.user) && !this.isPrivileged(req?.user)) {
-      const branchId =
-        this.extractBranchId(req.user) ||
-        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
-      const isOwnCashbox = String(id) === String(req?.user?.sub ?? '');
-      const isOwnBranch = branchId && String(id) === String(branchId);
-      if (isOwnCashbox || isOwnBranch) {
-        if (!branchId) {
-          throw new ForbiddenException("Managerning branch'i topilmadi");
-        }
+      if (managerBranchCashboxId) {
         return this.send(
           { cmd: 'finance.cashbox.user_by_id' },
-          { id: branchId, cashbox_type: Cashbox_type.BRANCH, ...query },
+          {
+            id: managerBranchCashboxId,
+            cashbox_type: Cashbox_type.BRANCH,
+            ...query,
+          },
         );
       }
       return this.send(
