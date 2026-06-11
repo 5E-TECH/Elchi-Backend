@@ -766,9 +766,7 @@ export class FinanceGatewayController {
       ReturnType<FinanceGatewayController['buildManagerSettlement']>
     > | null = null;
     let isPrivilegedMarketView = false;
-    let requestQuery: FindCashboxByUserQueryDto & {
-      history_source_type?: Source_type;
-    } = query;
+    let requestQuery: FindCashboxByUserQueryDto = query;
     let requestUserId = user_id;
     if (this.isManager(req?.user) && !this.isPrivileged(req?.user)) {
       if (managerBranchCashboxId) {
@@ -776,7 +774,6 @@ export class FinanceGatewayController {
         requestQuery = {
           ...query,
           cashbox_type: Cashbox_type.BRANCH,
-          history_source_type: Source_type.BRANCH_TO_MAIN,
         };
       } else if (!query.cashbox_type) {
         requestQuery = {
@@ -840,7 +837,6 @@ export class FinanceGatewayController {
             requestQuery = {
               ...query,
               cashbox_type: Cashbox_type.FOR_MARKET,
-              history_source_type: Source_type.MARKET_PAYMENT,
             };
           }
         } catch {
@@ -915,16 +911,6 @@ export class FinanceGatewayController {
 
     if (response?.data?.cashbox && Array.isArray(response?.data?.history)) {
       if (isPrivilegedBranchView) {
-        response.data.history = response.data.history.filter(
-          (item: any) =>
-            String(item?.source_type ?? '') ===
-            String(Source_type.BRANCH_TO_MAIN),
-        );
-        response.data.pagination = {
-          ...(response.data.pagination ?? {}),
-          total: response.data.history.length,
-          totalPages: response.data.history.length ? 1 : 0,
-        };
         response.data.kassadagi_summa = Number(
           response.data.cashbox?.balance ?? 0,
         );
@@ -935,13 +921,6 @@ export class FinanceGatewayController {
           privilegedBranchSettlement?.berilishi_kerak ?? 0,
         );
         response.data.counterparty = 'HQ';
-      }
-      if (isPrivilegedMarketView) {
-        response.data.history = response.data.history.filter(
-          (item: any) =>
-            String(item?.source_type ?? '') ===
-            String(Source_type.MARKET_PAYMENT),
-        );
       }
       response.data.cashboxHistory = await this.attachCreatedByUsers(
         response.data.history,
@@ -1294,11 +1273,15 @@ export class FinanceGatewayController {
       const ownHistoryResponse = await this.send(
         { cmd: 'finance.history.find_all' },
         {
-          ...query,
           user_id: settlement.cashbox?.user_id ?? '',
           cashbox_type: Cashbox_type.BRANCH,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.BRANCH_TO_MAIN,
+          operation_type: query.operationType,
+          source_type: query.sourceType,
+          created_by: query.createdBy,
+          from_date: query.fromDate,
+          to_date: query.toDate,
+          page: query.page,
+          limit: query.limit,
         },
       );
       const page = Number(query?.page ?? 1);
@@ -1595,8 +1578,6 @@ export class FinanceGatewayController {
           ...query,
           user_id: branchId,
           cashbox_type: Cashbox_type.BRANCH,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.BRANCH_TO_MAIN,
         },
       );
     }
@@ -1624,12 +1605,50 @@ export class FinanceGatewayController {
     RoleEnum.REGISTRATOR,
     RoleEnum.COURIER,
     RoleEnum.MARKET,
+    RoleEnum.MANAGER,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Find cashbox history detail by id' })
   @ApiParam({ name: 'id', description: 'History id (bigint string)' })
-  findHistoryById(@Param('id') id: string) {
-    return this.send({ cmd: 'finance.history.find_by_id' }, { id });
+  async findHistoryById(
+    @Param('id') id: string,
+    @Req() req: { user: JwtUser },
+  ) {
+    const response = await this.send(
+      { cmd: 'finance.history.find_by_id' },
+      { id },
+    );
+
+    if (this.isPrivileged(req?.user)) {
+      return response;
+    }
+
+    const cashbox = response?.data?.cashbox;
+    if (this.isManager(req?.user)) {
+      const branchId =
+        this.extractBranchId(req.user) ||
+        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
+      if (
+        !branchId ||
+        String(cashbox?.user_id ?? '') !== String(branchId) ||
+        cashbox?.cashbox_type !== Cashbox_type.BRANCH
+      ) {
+        throw new ForbiddenException(
+          "Siz faqat o'z branch'ingiz tarixini ko'ra olasiz",
+        );
+      }
+    } else if (
+      this.hasRole(req?.user, RoleEnum.COURIER) ||
+      this.hasRole(req?.user, RoleEnum.MARKET)
+    ) {
+      if (String(cashbox?.user_id ?? '') !== String(req.user.sub)) {
+        throw new ForbiddenException(
+          "Siz faqat o'zingizning kassa tarixingizni ko'ra olasiz",
+        );
+      }
+    }
+
+    return response;
   }
 
   @Post('shift/open')

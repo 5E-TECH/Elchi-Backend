@@ -55,7 +55,7 @@ describe('FinanceGatewayController', () => {
     expect(roles).toEqual(['superadmin', 'admin']);
   });
 
-  it('shows manager only their branch-to-HQ transaction history', async () => {
+  it('shows all payment history from the manager branch cashbox', async () => {
     const { controller, financeClient } = setup();
     const req = {
       user: { sub: 'manager-1', roles: ['manager'], branch_id: '16' },
@@ -76,9 +76,11 @@ describe('FinanceGatewayController', () => {
       expect.objectContaining({
         user_id: '16',
         cashbox_type: 'branch',
-        operation_type: 'expense',
-        source_type: 'branch_to_main',
+        source_type: 'courier_payment',
       }),
+    );
+    expect(financeClient.send.mock.calls[0][1]).not.toHaveProperty(
+      'operation_type',
     );
   });
 
@@ -111,8 +113,41 @@ describe('FinanceGatewayController', () => {
         page: 1,
         limit: 100,
         cashbox_type: 'branch',
-        history_source_type: 'branch_to_main',
       },
+    );
+  });
+
+  it('allows a manager to open only their branch history detail', async () => {
+    const { controller, financeClient } = setup();
+    const req = {
+      user: { sub: '2', roles: ['manager'], branch_id: '16' },
+    } as any;
+    financeClient.send.mockReturnValue(
+      of({
+        data: {
+          id: 'history-1',
+          cashbox: { user_id: '16', cashbox_type: 'branch' },
+        },
+      }),
+    );
+
+    await expect(controller.findHistoryById('1', req)).resolves.toEqual(
+      expect.objectContaining({
+        data: expect.objectContaining({ id: 'history-1' }),
+      }),
+    );
+
+    financeClient.send.mockReturnValue(
+      of({
+        data: {
+          id: 'history-2',
+          cashbox: { user_id: '99', cashbox_type: 'branch' },
+        },
+      }),
+    );
+
+    await expect(controller.findHistoryById('2', req)).rejects.toThrow(
+      "Siz faqat o'z branch'ingiz tarixini ko'ra olasiz",
     );
   });
 });

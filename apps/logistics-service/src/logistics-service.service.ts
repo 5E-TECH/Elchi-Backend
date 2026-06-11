@@ -382,7 +382,16 @@ export class LogisticsServiceService implements OnModuleInit {
           .send({ cmd: 'order.update' }, { id, dto, requester })
           .pipe(timeout(5000)),
       );
-    } catch {
+    } catch (error) {
+      const downstreamError =
+        error instanceof RpcException ? error.getError() : error;
+      if (
+        downstreamError &&
+        typeof downstreamError === 'object' &&
+        Number((downstreamError as { statusCode?: number }).statusCode) >= 400
+      ) {
+        throw new RpcException(downstreamError);
+      }
       throw new RpcException(errorRes(`Order #${id} update failed`, 502));
     }
   }
@@ -2285,10 +2294,18 @@ export class LogisticsServiceService implements OnModuleInit {
 
     let addedTotal = 0;
     for (const order of orders) {
-      await this.updateOrder(order.id, {
-        canceled_post_id: canceledPost.id,
-        status: Order_status.CANCELLED_SENT,
-      });
+      await this.updateOrder(
+        order.id,
+        {
+          canceled_post_id: canceledPost.id,
+          status: Order_status.CANCELLED_SENT,
+        },
+        {
+          id: requester.id,
+          roles: requester.roles ?? [Roles.COURIER],
+          note: 'Canceled post created',
+        },
+      );
       addedTotal += Number(order.total_price ?? 0);
     }
 
