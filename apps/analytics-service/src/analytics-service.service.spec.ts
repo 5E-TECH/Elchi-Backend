@@ -130,8 +130,18 @@ describe('AnalyticsServiceService', () => {
   );
 
   it('uses requester branch_id for manager branch dashboard', async () => {
+    const scopedCommands = new Set([
+      'order.analytics.overview',
+      'order.analytics.market_stats',
+      'order.analytics.courier_stats',
+      'order.analytics.top_markets',
+      'order.analytics.top_couriers',
+    ]);
     rmqSendMock.mockImplementation(
       (_client: any, pattern: any, payload: any) => {
+        if (scopedCommands.has(pattern?.cmd)) {
+          expect(payload.branch_id).toBe('16');
+        }
         if (pattern?.cmd === 'branch.dashboard') {
           expect(payload.id).toBe('16');
           return Promise.resolve({ data: { branchId: '16' } });

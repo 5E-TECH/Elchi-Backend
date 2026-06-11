@@ -658,51 +658,66 @@ export class OrderServiceController {
 
   @MessagePattern({ cmd: 'order.analytics.overview' })
   analyticsOverview(
-    @Payload() data: { startDate?: string; endDate?: string },
+    @Payload()
+    data: { startDate?: string; endDate?: string; branch_id?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getOverviewStats(data.startDate, data.endDate),
+      this.orderService.getOverviewStats(
+        data.startDate,
+        data.endDate,
+        data.branch_id,
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'order.analytics.market_stats' })
   analyticsMarketStats(
-    @Payload() data: { startDate?: string; endDate?: string },
+    @Payload()
+    data: { startDate?: string; endDate?: string; branch_id?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getMarketStats(data.startDate, data.endDate),
+      this.orderService.getMarketStats(
+        data.startDate,
+        data.endDate,
+        data.branch_id,
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'order.analytics.courier_stats' })
   analyticsCourierStats(
-    @Payload() data: { startDate?: string; endDate?: string },
+    @Payload()
+    data: { startDate?: string; endDate?: string; branch_id?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getCourierStats(data.startDate, data.endDate),
+      this.orderService.getCourierStats(
+        data.startDate,
+        data.endDate,
+        data.branch_id,
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'order.analytics.top_markets' })
   analyticsTopMarkets(
-    @Payload() data: { limit?: number },
+    @Payload() data: { limit?: number; branch_id?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getTopMarkets(data.limit),
+      this.orderService.getTopMarkets(data.limit, data.branch_id),
     );
   }
 
   @MessagePattern({ cmd: 'order.analytics.top_couriers' })
   analyticsTopCouriers(
-    @Payload() data: { limit?: number },
+    @Payload() data: { limit?: number; branch_id?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getTopCouriers(data.limit),
+      this.orderService.getTopCouriers(data.limit, data.branch_id),
     );
   }
 

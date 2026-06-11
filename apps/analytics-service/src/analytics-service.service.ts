@@ -359,23 +359,7 @@ export class AnalyticsServiceService {
   private async resolveRequesterBranchDashboard(
     requester: RequesterContext | undefined,
   ) {
-    if (!requester?.id) {
-      return null;
-    }
-
-    let branchId = requester.branch_id ? String(requester.branch_id) : null;
-    if (!branchId) {
-      const assignmentRes = await rmqSend<any>(
-        this.branchClient,
-        { cmd: 'branch.user.find_by_user' },
-        { user_id: requester.id, requester },
-      ).catch(() => null);
-
-      const assignmentData = this.unwrap<any>(assignmentRes);
-      branchId = assignmentData?.branch_id
-        ? String(assignmentData.branch_id)
-        : null;
-    }
+    const branchId = await this.resolveRequesterBranchId(requester);
     if (!branchId) {
       return null;
     }
@@ -389,6 +373,25 @@ export class AnalyticsServiceService {
     return this.unwrap<any>(dashboardRes) ?? null;
   }
 
+  private async resolveRequesterBranchId(
+    requester: RequesterContext | undefined,
+  ): Promise<string | null> {
+    if (!requester?.id) {
+      return null;
+    }
+    if (requester.branch_id) {
+      return String(requester.branch_id);
+    }
+
+    const assignmentRes = await rmqSend<any>(
+      this.branchClient,
+      { cmd: 'branch.user.find_by_user' },
+      { user_id: requester.id, requester },
+    ).catch(() => null);
+    const assignmentData = this.unwrap<any>(assignmentRes);
+    return assignmentData?.branch_id ? String(assignmentData.branch_id) : null;
+  }
+
   async getDashboard(
     requester: RequesterContext | undefined,
     filter: { startDate?: string; endDate?: string; period?: string },
@@ -399,6 +402,12 @@ export class AnalyticsServiceService {
       roles.has(Roles.BRANCH) ||
       roles.has(Roles.MANAGER) ||
       roles.has(Roles.REGISTRATOR);
+    const branchId = isBranchRole
+      ? await this.resolveRequesterBranchId(requester)
+      : null;
+    const scopedRange = branchId
+      ? { ...normalized, branch_id: branchId }
+      : normalized;
 
     if (roles.has(Roles.COURIER)) {
       const [myStat, couriers, topCouriers] = await Promise.all([
@@ -475,27 +484,27 @@ export class AnalyticsServiceService {
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.overview' },
-          normalized,
+          scopedRange,
         ).catch(() => null),
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.market_stats' },
-          normalized,
+          scopedRange,
         ).catch(() => null),
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.courier_stats' },
-          normalized,
+          scopedRange,
         ).catch(() => null),
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.top_markets' },
-          {},
+          branchId ? { branch_id: branchId } : {},
         ).catch(() => null),
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.top_couriers' },
-          {},
+          branchId ? { branch_id: branchId } : {},
         ).catch(() => null),
       ]);
     const branchDashboard = isBranchRole
