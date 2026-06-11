@@ -33,7 +33,16 @@ describe('AnalyticsServiceService', () => {
 
   beforeEach(() => {
     rmqSendMock.mockReset();
-    service = new AnalyticsServiceService({} as any, {} as any, {} as any, {} as any);
+    service = new AnalyticsServiceService(
+      {} as any,
+      {} as any,
+      {} as any,
+      {} as any,
+    );
+  });
+
+  afterEach(() => {
+    jest.useRealTimers();
   });
 
   it('getDashboard returns courier-specific payload for courier role', async () => {
@@ -42,7 +51,10 @@ describe('AnalyticsServiceService', () => {
       .mockResolvedValueOnce({ data: [{ id: 'c1' }] })
       .mockResolvedValueOnce({ data: [{ id: 'top1' }] });
 
-    const res = await service.getDashboard({ id: 'u1', roles: ['courier'] }, {} as any);
+    const res = await service.getDashboard(
+      { id: 'u1', roles: ['courier'] },
+      {} as any,
+    );
 
     expect(res.statusCode).toBe(200);
     expect(res.data.myStat).toEqual({ sold: 1 });
@@ -55,7 +67,10 @@ describe('AnalyticsServiceService', () => {
       .mockResolvedValueOnce({ data: [{ id: 'tm1' }] })
       .mockResolvedValueOnce({ data: [{ id: 'op1' }] });
 
-    const res = await service.getDashboard({ id: 'm1', roles: ['market'] }, {} as any);
+    const res = await service.getDashboard(
+      { id: 'm1', roles: ['market'] },
+      {} as any,
+    );
 
     expect(res.statusCode).toBe(200);
     expect(res.data.myStat).toEqual({ sold: 2 });
@@ -65,15 +80,23 @@ describe('AnalyticsServiceService', () => {
   it('getDashboard general branch returns pcs-compatible payload', async () => {
     rmqSendMock.mockImplementation((_client: any, pattern: any) => {
       const cmd = pattern?.cmd;
-      if (cmd === 'order.analytics.overview') return Promise.resolve({ data: { acceptedCount: 1 } });
-      if (cmd === 'order.analytics.market_stats') return Promise.resolve({ data: [] });
-      if (cmd === 'order.analytics.courier_stats') return Promise.resolve({ data: [] });
-      if (cmd === 'order.analytics.top_markets') return Promise.resolve({ data: [] });
-      if (cmd === 'order.analytics.top_couriers') return Promise.resolve({ data: [] });
+      if (cmd === 'order.analytics.overview')
+        return Promise.resolve({ data: { acceptedCount: 1 } });
+      if (cmd === 'order.analytics.market_stats')
+        return Promise.resolve({ data: [] });
+      if (cmd === 'order.analytics.courier_stats')
+        return Promise.resolve({ data: [] });
+      if (cmd === 'order.analytics.top_markets')
+        return Promise.resolve({ data: [] });
+      if (cmd === 'order.analytics.top_couriers')
+        return Promise.resolve({ data: [] });
       return Promise.resolve({ data: {} });
     });
 
-    const res = await service.getDashboard({ id: 'admin', roles: ['superadmin'] }, {} as any);
+    const res = await service.getDashboard(
+      { id: 'admin', roles: ['superadmin'] },
+      {} as any,
+    );
 
     expect(res.statusCode).toBe(200);
     expect(res.data.orders).toEqual({ acceptedCount: 1 });
@@ -81,19 +104,72 @@ describe('AnalyticsServiceService', () => {
     expect(res.data).not.toHaveProperty('newUsersCount');
   });
 
-  it('getRevenueStats defaults invalid period to daily', async () => {
-    rmqSendMock.mockImplementation((_client: any, pattern: any, payload: any) => {
-      if (pattern.cmd === 'order.analytics.revenue') {
-        expect(payload.period).toBe('daily');
-        return Promise.resolve({ data: { data: [{ label: 'D1', revenue: 100 }], summary: { totalRevenue: 100 } } });
-      }
-      return Promise.resolve({ data: { balance: 1 } });
-    });
+  it.each([
+    ['today', '2026-06-10T19:00:00.000Z'],
+    ['week', '2026-06-07T19:00:00.000Z'],
+    ['month', '2026-05-31T19:00:00.000Z'],
+  ])(
+    'getDashboard resolves %s in Tashkent time',
+    async (period, expectedStart) => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-06-11T10:00:00.000Z'));
+      rmqSendMock.mockResolvedValue({ data: [] });
 
-    const res = await service.getRevenueStats(
-      { id: 'a', roles: ['admin'] },
-      { period: 'bad' } as any,
+      await service.getDashboard(
+        { id: 'admin', roles: ['superadmin'] },
+        { period },
+      );
+
+      const overviewCall = rmqSendMock.mock.calls.find(
+        ([, pattern]) => pattern?.cmd === 'order.analytics.overview',
+      );
+      expect(overviewCall?.[2]).toEqual({
+        startDate: expectedStart,
+        endDate: '2026-06-11T18:59:59.999Z',
+      });
+    },
+  );
+
+  it('uses requester branch_id for manager branch dashboard', async () => {
+    rmqSendMock.mockImplementation(
+      (_client: any, pattern: any, payload: any) => {
+        if (pattern?.cmd === 'branch.dashboard') {
+          expect(payload.id).toBe('16');
+          return Promise.resolve({ data: { branchId: '16' } });
+        }
+        if (pattern?.cmd === 'branch.user.find_by_user') {
+          throw new Error('branch assignment lookup should not be needed');
+        }
+        return Promise.resolve({ data: [] });
+      },
     );
+
+    const res = await service.getDashboard(
+      { id: '2', roles: ['manager'], branch_id: '16' },
+      { period: 'today' },
+    );
+
+    expect(res.data.branchDashboard).toEqual({ branchId: '16' });
+  });
+
+  it('getRevenueStats defaults invalid period to daily', async () => {
+    rmqSendMock.mockImplementation(
+      (_client: any, pattern: any, payload: any) => {
+        if (pattern.cmd === 'order.analytics.revenue') {
+          expect(payload.period).toBe('daily');
+          return Promise.resolve({
+            data: {
+              data: [{ label: 'D1', revenue: 100 }],
+              summary: { totalRevenue: 100 },
+            },
+          });
+        }
+        return Promise.resolve({ data: { balance: 1 } });
+      },
+    );
+
+    const res = await service.getRevenueStats({ id: 'a', roles: ['admin'] }, {
+      period: 'bad',
+    } as any);
 
     expect(res.statusCode).toBe(200);
     expect(res.data.chart.labels).toEqual(['D1']);
@@ -117,13 +193,19 @@ describe('AnalyticsServiceService', () => {
   it('getKpiStats calculates KPI metrics', async () => {
     rmqSendMock.mockImplementation((_client: any, pattern: any) => {
       if (pattern.cmd === 'order.analytics.overview') {
-        return Promise.resolve({ data: { acceptedCount: 10, soldAndPaid: 5, cancelled: 2 } });
+        return Promise.resolve({
+          data: { acceptedCount: 10, soldAndPaid: 5, cancelled: 2 },
+        });
       }
       if (pattern.cmd === 'order.analytics.revenue') {
-        return Promise.resolve({ data: { summary: { totalRevenue: 1000 }, data: [] } });
+        return Promise.resolve({
+          data: { summary: { totalRevenue: 1000 }, data: [] },
+        });
       }
       if (pattern.cmd === 'order.analytics.courier_stats') {
-        return Promise.resolve({ data: [{ totalOrders: 4 }, { totalOrders: 6 }] });
+        return Promise.resolve({
+          data: [{ totalOrders: 4 }, { totalOrders: 6 }],
+        });
       }
       if (pattern.cmd === 'order.analytics.top_markets') {
         return Promise.resolve({ data: [{ id: 'm1' }] });
@@ -147,9 +229,12 @@ describe('AnalyticsServiceService', () => {
 
   it('getOrderReport returns status distribution object', async () => {
     rmqSendMock.mockImplementation((_client: any, pattern: any) => {
-      if (pattern.cmd === 'order.analytics.overview') return Promise.resolve({ data: { acceptedCount: 1 } });
-      if (pattern.cmd === 'order.analytics.top_markets') return Promise.resolve({ data: [] });
-      if (pattern.cmd === 'order.find_all') return Promise.resolve({ data: [], total: 0, page: 1, limit: 200 });
+      if (pattern.cmd === 'order.analytics.overview')
+        return Promise.resolve({ data: { acceptedCount: 1 } });
+      if (pattern.cmd === 'order.analytics.top_markets')
+        return Promise.resolve({ data: [] });
+      if (pattern.cmd === 'order.find_all')
+        return Promise.resolve({ data: [], total: 0, page: 1, limit: 200 });
       return Promise.resolve({ data: {} });
     });
 
@@ -169,14 +254,27 @@ describe('AnalyticsServiceService', () => {
         return Promise.resolve({
           data: {
             allCashboxHistories: [
-              { operation_type: 'income', amount: 300, createdAt: new Date().toISOString() },
-              { operation_type: 'expense', amount: 100, createdAt: new Date().toISOString() },
+              {
+                operation_type: 'income',
+                amount: 300,
+                createdAt: new Date().toISOString(),
+              },
+              {
+                operation_type: 'expense',
+                amount: 100,
+                createdAt: new Date().toISOString(),
+              },
             ],
           },
         });
       }
       if (pattern.cmd === 'finance.cashbox.financial_balance') {
-        return Promise.resolve({ data: { markets: { marketsTotalBalans: 11 }, couriers: { couriersTotalBalanse: 7 } } });
+        return Promise.resolve({
+          data: {
+            markets: { marketsTotalBalans: 11 },
+            couriers: { couriersTotalBalanse: 7 },
+          },
+        });
       }
       return Promise.resolve({ data: {} });
     });
@@ -201,7 +299,8 @@ describe('AnalyticsServiceService', () => {
   ])('%s forbids a non-admin requester (403)', async (method) => {
     const courier = { id: 'c1', roles: ['courier'] };
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (service as any)[method](courier, {})
+    await (service as any)
+      [method](courier, {})
       .then(() => {
         throw new Error('expected 403');
       })
@@ -221,20 +320,34 @@ describe('AnalyticsServiceService', () => {
   });
 
   it('getCourierReport filters only requester courier data', async () => {
-    rmqSendMock.mockImplementation((_client: any, pattern: any, payload: any) => {
-      if (pattern.cmd === 'order.analytics.courier_stats') {
-        return Promise.resolve({ data: [{ courier: { id: 'c1' }, soldOrders: 2, totalOrders: 3, successRate: 66 }] });
-      }
-      if (pattern.cmd === 'order.analytics.top_couriers') {
-        return Promise.resolve({ data: [] });
-      }
-      if (pattern.cmd === 'order.analytics.courier_stat') {
-        return Promise.resolve({ data: { profit: 500, canceledOrders: 1 } });
-      }
-      return Promise.resolve({ data: {} });
-    });
+    rmqSendMock.mockImplementation(
+      (_client: any, pattern: any, payload: any) => {
+        if (pattern.cmd === 'order.analytics.courier_stats') {
+          return Promise.resolve({
+            data: [
+              {
+                courier: { id: 'c1' },
+                soldOrders: 2,
+                totalOrders: 3,
+                successRate: 66,
+              },
+            ],
+          });
+        }
+        if (pattern.cmd === 'order.analytics.top_couriers') {
+          return Promise.resolve({ data: [] });
+        }
+        if (pattern.cmd === 'order.analytics.courier_stat') {
+          return Promise.resolve({ data: { profit: 500, canceledOrders: 1 } });
+        }
+        return Promise.resolve({ data: {} });
+      },
+    );
 
-    const res = await service.getCourierReport({ id: 'c1', roles: ['courier'] }, {} as any);
+    const res = await service.getCourierReport(
+      { id: 'c1', roles: ['courier'] },
+      {} as any,
+    );
 
     expect(res.statusCode).toBe(200);
     expect(res.data.items).toHaveLength(1);
@@ -244,7 +357,16 @@ describe('AnalyticsServiceService', () => {
   it('getCourierReport returns all items for non-courier requester', async () => {
     rmqSendMock.mockImplementation((_client: any, pattern: any) => {
       if (pattern.cmd === 'order.analytics.courier_stats') {
-        return Promise.resolve({ data: [{ courier: { id: 'c1' }, soldOrders: 2, totalOrders: 3, successRate: 66 }] });
+        return Promise.resolve({
+          data: [
+            {
+              courier: { id: 'c1' },
+              soldOrders: 2,
+              totalOrders: 3,
+              successRate: 66,
+            },
+          ],
+        });
       }
       if (pattern.cmd === 'order.analytics.top_couriers') {
         return Promise.resolve({ data: [] });
@@ -255,7 +377,10 @@ describe('AnalyticsServiceService', () => {
       return Promise.resolve({ data: {} });
     });
 
-    const res = await service.getCourierReport({ id: 'admin', roles: ['superadmin'] }, {} as any);
+    const res = await service.getCourierReport(
+      { id: 'admin', roles: ['superadmin'] },
+      {} as any,
+    );
 
     expect(res.statusCode).toBe(200);
     expect(res.data.items.length).toBeGreaterThan(0);

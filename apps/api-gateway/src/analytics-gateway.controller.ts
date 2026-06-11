@@ -16,6 +16,7 @@ interface JwtUser {
   sub: string;
   username: string;
   roles?: string[];
+  branch_id?: string;
 }
 
 @ApiTags('Analytics')
@@ -29,6 +30,7 @@ export class AnalyticsGatewayController {
     return {
       id: req.user.sub,
       roles: req.user.roles ?? [],
+      branch_id: req.user.branch_id,
     };
   }
 
@@ -38,10 +40,16 @@ export class AnalyticsGatewayController {
   @ApiOperation({ summary: 'Dashboard statistics by requester role' })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
+  @ApiQuery({
+    name: 'period',
+    required: false,
+    enum: ['today', 'week', 'month'],
+  })
   getDashboard(
     @Req() req: { user: JwtUser },
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('period') period?: string,
   ) {
     return firstValueFrom(
       this.analyticsClient
@@ -49,7 +57,7 @@ export class AnalyticsGatewayController {
           { cmd: 'analytics.dashboard' },
           {
             requester: this.toRequester(req),
-            filter: { startDate, endDate },
+            filter: { startDate, endDate, period },
           },
         )
         .pipe(timeout(8000)),

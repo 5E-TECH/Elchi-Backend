@@ -6,6 +6,7 @@ import { errorRes, successRes } from '../../../libs/common/helpers/response';
 interface RequesterContext {
   id: string;
   roles?: string[];
+  branch_id?: string;
 }
 
 interface RevenueFilter {
@@ -94,6 +95,42 @@ export class AnalyticsServiceService {
         startDate: this.startOfTashkentDay(now).toISOString(),
         endDate: this.endOfTashkentDay(now).toISOString(),
       };
+    }
+
+    return {
+      startDate: start.toISOString(),
+      endDate: end.toISOString(),
+    };
+  }
+
+  private normalizeDashboardDateRange(filter: {
+    startDate?: string;
+    endDate?: string;
+    period?: string;
+  }) {
+    if (filter.startDate && filter.endDate) {
+      return this.normalizeDateRange(filter);
+    }
+
+    const period = String(filter.period ?? 'today').toLowerCase();
+    const now = new Date();
+    const end = this.endOfTashkentDay(now);
+    let start = this.startOfTashkentDay(now);
+
+    if (period === 'week') {
+      const offsetMs =
+        AnalyticsServiceService.TASHKENT_OFFSET_MINUTES * 60 * 1000;
+      const tashkentNow = new Date(now.getTime() + offsetMs);
+      const daysSinceMonday = (tashkentNow.getUTCDay() + 6) % 7;
+      start = new Date(start.getTime() - daysSinceMonday * 24 * 60 * 60 * 1000);
+    } else if (period === 'month') {
+      const offsetMs =
+        AnalyticsServiceService.TASHKENT_OFFSET_MINUTES * 60 * 1000;
+      const tashkentNow = new Date(now.getTime() + offsetMs);
+      const daysSinceMonthStart = tashkentNow.getUTCDate() - 1;
+      start = new Date(
+        start.getTime() - daysSinceMonthStart * 24 * 60 * 60 * 1000,
+      );
     }
 
     return {
@@ -326,16 +363,19 @@ export class AnalyticsServiceService {
       return null;
     }
 
-    const assignmentRes = await rmqSend<any>(
-      this.branchClient,
-      { cmd: 'branch.user.find_by_user' },
-      { user_id: requester.id, requester },
-    ).catch(() => null);
+    let branchId = requester.branch_id ? String(requester.branch_id) : null;
+    if (!branchId) {
+      const assignmentRes = await rmqSend<any>(
+        this.branchClient,
+        { cmd: 'branch.user.find_by_user' },
+        { user_id: requester.id, requester },
+      ).catch(() => null);
 
-    const assignmentData = this.unwrap<any>(assignmentRes);
-    const branchId = assignmentData?.branch_id
-      ? String(assignmentData.branch_id)
-      : null;
+      const assignmentData = this.unwrap<any>(assignmentRes);
+      branchId = assignmentData?.branch_id
+        ? String(assignmentData.branch_id)
+        : null;
+    }
     if (!branchId) {
       return null;
     }
@@ -351,9 +391,9 @@ export class AnalyticsServiceService {
 
   async getDashboard(
     requester: RequesterContext | undefined,
-    filter: { startDate?: string; endDate?: string },
+    filter: { startDate?: string; endDate?: string; period?: string },
   ) {
-    const normalized = this.normalizeDateRange(filter);
+    const normalized = this.normalizeDashboardDateRange(filter);
     const roles = this.roleSet(requester);
     const isBranchRole =
       roles.has(Roles.BRANCH) ||
