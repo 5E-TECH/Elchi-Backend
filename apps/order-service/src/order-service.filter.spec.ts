@@ -122,4 +122,16 @@ describe('OrderServiceService filters', () => {
 
     expect(managerShare).toBe(50_000);
   });
+
+  it('scopes analytics to branch and includes courier-held branch orders', () => {
+    const { service, qb } = setup();
+
+    const result = (service as any).applyAnalyticsBranchScope(qb, '16');
+
+    expect(result).toBe(qb);
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      '(o.branch_id = :analyticsBranchId OR o.holder_branch_id = :analyticsBranchId)',
+      { analyticsBranchId: '16' },
+    );
+  });
 });

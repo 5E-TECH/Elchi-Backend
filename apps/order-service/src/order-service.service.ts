@@ -2,7 +2,6 @@ import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import {
-  Between,
   Brackets,
   DataSource,
   In,
@@ -89,9 +88,10 @@ export class OrderServiceService implements OnModuleInit {
    * left null (the audit table denormalises it but tolerates absence); the
    * user_id + role pair is enough to attribute every action.
    */
-  private auditActor(
-    requester?: { id?: string; roles?: string[] } | null,
-  ): { user_id: string | null; user_role: string | null } {
+  private auditActor(requester?: { id?: string; roles?: string[] } | null): {
+    user_id: string | null;
+    user_role: string | null;
+  } {
     const roles = requester?.roles ?? [];
     return {
       user_id: requester?.id ? String(requester.id) : null,
@@ -788,6 +788,18 @@ export class OrderServiceService implements OnModuleInit {
 
   private soldStatuses() {
     return [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID];
+  }
+
+  private applyAnalyticsBranchScope<
+    T extends { andWhere: (...args: any[]) => T },
+  >(query: T, branchId?: string): T {
+    if (!branchId) {
+      return query;
+    }
+    return query.andWhere(
+      '(o.branch_id = :analyticsBranchId OR o.holder_branch_id = :analyticsBranchId)',
+      { analyticsBranchId: branchId },
+    );
   }
 
   private dateKey(date: Date) {
@@ -4300,7 +4312,12 @@ export class OrderServiceService implements OnModuleInit {
       {
         status: Order_status.WAITING_CUSTOMER,
       },
-      { id: requester.id, roles: requester.roles, note: trackingNote, audit: false },
+      {
+        id: requester.id,
+        roles: requester.roles,
+        note: trackingNote,
+        audit: false,
+      },
     );
 
     await this.activityLog.log({
@@ -5691,7 +5708,11 @@ export class OrderServiceService implements OnModuleInit {
     };
   }
 
-  async getOverviewStats(startDate?: string, endDate?: string) {
+  async getOverviewStats(
+    startDate?: string,
+    endDate?: string,
+    branchId?: string,
+  ) {
     const { start, end } = this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
     const startMs = String(start.getTime());
@@ -5699,30 +5720,43 @@ export class OrderServiceService implements OnModuleInit {
 
     const [acceptedCount, cancelled, soldAndPaid, soldOrders] =
       await Promise.all([
-        this.orderRepo.count({
-          where: {
-            isDeleted: false,
-            createdAt: Between(start, end),
-          },
-        }),
-        this.orderRepo
-          .createQueryBuilder('o')
-          .where('o.isDeleted = :isDeleted', { isDeleted: false })
-          .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-          .andWhere('o.status = :status', { status: Order_status.CANCELLED })
-          .getCount(),
-        this.orderRepo
-          .createQueryBuilder('o')
-          .where('o.isDeleted = :isDeleted', { isDeleted: false })
-          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-          .getCount(),
-        this.orderRepo
-          .createQueryBuilder('o')
-          .where('o.isDeleted = :isDeleted', { isDeleted: false })
-          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-          .getMany(),
+        this.applyAnalyticsBranchScope(
+          this.orderRepo
+            .createQueryBuilder('o')
+            .where('o.isDeleted = :isDeleted', { isDeleted: false })
+            .andWhere('o.createdAt BETWEEN :start AND :end', { start, end }),
+          branchId,
+        ).getCount(),
+        this.applyAnalyticsBranchScope(
+          this.orderRepo
+            .createQueryBuilder('o')
+            .where('o.isDeleted = :isDeleted', { isDeleted: false })
+            .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+            .andWhere('o.status = :status', { status: Order_status.CANCELLED }),
+          branchId,
+        ).getCount(),
+        this.applyAnalyticsBranchScope(
+          this.orderRepo
+            .createQueryBuilder('o')
+            .where('o.isDeleted = :isDeleted', { isDeleted: false })
+            .andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
+              startMs,
+              endMs,
+            })
+            .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses }),
+          branchId,
+        ).getCount(),
+        this.applyAnalyticsBranchScope(
+          this.orderRepo
+            .createQueryBuilder('o')
+            .where('o.isDeleted = :isDeleted', { isDeleted: false })
+            .andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
+              startMs,
+              endMs,
+            })
+            .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses }),
+          branchId,
+        ).getMany(),
       ]);
 
     const marketIds = [
@@ -5771,30 +5805,40 @@ export class OrderServiceService implements OnModuleInit {
     };
   }
 
-  async getMarketStats(startDate?: string, endDate?: string) {
+  async getMarketStats(
+    startDate?: string,
+    endDate?: string,
+    branchId?: string,
+  ) {
     const { start, end } = this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
     const startMs = String(start.getTime());
     const endMs = String(end.getTime());
 
-    const totalsRaw = await this.orderRepo
-      .createQueryBuilder('o')
-      .select('o.market_id', 'market_id')
-      .addSelect('COUNT(*)', 'total')
-      .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.createdAt BETWEEN :start AND :end', { start, end })
-      .andWhere('o.market_id IS NOT NULL')
+    const totalsRaw = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .select('o.market_id', 'market_id')
+        .addSelect('COUNT(*)', 'total')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.createdAt BETWEEN :start AND :end', { start, end })
+        .andWhere('o.market_id IS NOT NULL'),
+      branchId,
+    )
       .groupBy('o.market_id')
       .getRawMany<{ market_id: string; total: string }>();
 
-    const soldsRaw = await this.orderRepo
-      .createQueryBuilder('o')
-      .select('o.market_id', 'market_id')
-      .addSelect('COUNT(*)', 'sold')
-      .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-      .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-      .andWhere('o.market_id IS NOT NULL')
+    const soldsRaw = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .select('o.market_id', 'market_id')
+        .addSelect('COUNT(*)', 'sold')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
+        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+        .andWhere('o.market_id IS NOT NULL'),
+      branchId,
+    )
       .groupBy('o.market_id')
       .getRawMany<{ market_id: string; sold: string }>();
 
@@ -5823,17 +5867,24 @@ export class OrderServiceService implements OnModuleInit {
     return result;
   }
 
-  async getCourierStats(startDate?: string, endDate?: string) {
+  async getCourierStats(
+    startDate?: string,
+    endDate?: string,
+    branchId?: string,
+  ) {
     const { start, end } = this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
     const startMs = start.getTime();
     const endMs = end.getTime();
-    const postRows = await this.orderRepo
-      .createQueryBuilder('o')
-      .select('o.post_id', 'post_id')
-      .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-      .andWhere('o.post_id IS NOT NULL')
+    const postRows = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .select('o.post_id', 'post_id')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+        .andWhere('o.post_id IS NOT NULL'),
+      branchId,
+    )
       .groupBy('o.post_id')
       .getRawMany<{ post_id: string }>();
     const postIds = postRows.map((row) => String(row.post_id)).filter(Boolean);
@@ -5844,13 +5895,16 @@ export class OrderServiceService implements OnModuleInit {
 
     const posts = await this.getPostsByIds(postIds);
 
-    const orders = await this.orderRepo
-      .createQueryBuilder('o')
-      .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.post_id IN (:...postIds)', {
-        postIds,
-      })
-      .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+    const orders = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.post_id IN (:...postIds)', {
+          postIds,
+        })
+        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end }),
+      branchId,
+    )
       .select(['o.id', 'o.status', 'o.post_id', 'o.sold_at'])
       .getMany();
 
@@ -5908,21 +5962,24 @@ export class OrderServiceService implements OnModuleInit {
     return result;
   }
 
-  async getTopMarkets(limit = 10) {
+  async getTopMarkets(limit = 10, branchId?: string) {
     const soldStatuses = this.soldStatuses();
     const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-    const totalsRaw = await this.orderRepo
-      .createQueryBuilder('o')
-      .select('o.market_id', 'market_id')
-      .addSelect('COUNT(*)', 'total_orders')
-      .addSelect(
-        `SUM(CASE WHEN o.status IN (:...statuses) THEN 1 ELSE 0 END)`,
-        'successful_orders',
-      )
-      .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.createdAt >= :lastMonth', { lastMonth })
-      .andWhere('o.market_id IS NOT NULL')
+    const totalsRaw = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .select('o.market_id', 'market_id')
+        .addSelect('COUNT(*)', 'total_orders')
+        .addSelect(
+          `SUM(CASE WHEN o.status IN (:...statuses) THEN 1 ELSE 0 END)`,
+          'successful_orders',
+        )
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.createdAt >= :lastMonth', { lastMonth })
+        .andWhere('o.market_id IS NOT NULL'),
+      branchId,
+    )
       .setParameter('statuses', soldStatuses)
       .groupBy('o.market_id')
       .getRawMany<{
@@ -5960,15 +6017,18 @@ export class OrderServiceService implements OnModuleInit {
     return result;
   }
 
-  async getTopCouriers(limit = 10) {
+  async getTopCouriers(limit = 10, branchId?: string) {
     const soldStatuses = this.soldStatuses();
     const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-    const orders = await this.orderRepo
-      .createQueryBuilder('o')
-      .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.createdAt >= :lastMonth', { lastMonth })
-      .andWhere('o.post_id IS NOT NULL')
+    const orders = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.createdAt >= :lastMonth', { lastMonth })
+        .andWhere('o.post_id IS NOT NULL'),
+      branchId,
+    )
       .select(['o.post_id', 'o.status'])
       .getMany();
 
