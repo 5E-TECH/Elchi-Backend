@@ -399,7 +399,11 @@ export class OrderServiceService implements OnModuleInit {
         Order_status.CLOSED,
       ],
       [Order_status.PAID]: [Order_status.WAITING, Order_status.CLOSED],
-      [Order_status.CANCELLED]: [Order_status.WAITING, Order_status.CLOSED],
+      [Order_status.CANCELLED]: [
+        Order_status.WAITING,
+        Order_status.CANCELLED_SENT,
+        Order_status.CLOSED,
+      ],
       [Order_status.RETURNED_TO_MARKET]: [],
       [Order_status.CANCELLED_SENT]: [
         Order_status.CANCELLED,

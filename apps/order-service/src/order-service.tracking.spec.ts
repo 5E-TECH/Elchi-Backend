@@ -87,6 +87,17 @@ function createService() {
 }
 
 describe('Order tracking lifecycle', () => {
+  it('allows canceled orders to be sent in a canceled post', () => {
+    const { service } = createService();
+
+    expect(
+      (service as any).isValidStatusTransition(
+        Order_status.CANCELLED,
+        Order_status.CANCELLED_SENT,
+      ),
+    ).toBe(true);
+  });
+
   it('create -> tracking created event', async () => {
     const { service, orderRepo, trackingRepo, queryRunner } = createService();
 
