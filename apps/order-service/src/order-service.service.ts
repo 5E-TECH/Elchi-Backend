@@ -1618,6 +1618,63 @@ export class OrderServiceService implements OnModuleInit {
     return successRes(settlement ?? null, 200, 'Order settlement');
   }
 
+  async getFinancialBalanceSettlementSummary() {
+    const activeStatuses = [
+      SettlementStatus.PENDING,
+      SettlementStatus.COURIER_SETTLED,
+      SettlementStatus.BRANCH_SETTLED,
+    ];
+    const branchReceivableStatuses = [
+      SettlementStatus.PENDING,
+      SettlementStatus.COURIER_SETTLED,
+    ];
+
+    const [branchRows, marketRows] = await Promise.all([
+      this.orderSettlementRepo
+        .createQueryBuilder('settlement')
+        .select('settlement.branch_id', 'branch_id')
+        .addSelect('COALESCE(SUM(settlement.branch_amount), 0)', 'amount')
+        .where('settlement.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('settlement.branch_id IS NOT NULL')
+        .andWhere('settlement.status IN (:...statuses)', {
+          statuses: branchReceivableStatuses,
+        })
+        .groupBy('settlement.branch_id')
+        .getRawMany<{ branch_id: string; amount: string }>(),
+      this.orderSettlementRepo
+        .createQueryBuilder('settlement')
+        .select('settlement.market_id', 'market_id')
+        .addSelect('COALESCE(SUM(settlement.market_amount), 0)', 'amount')
+        .where('settlement.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('settlement.market_id IS NOT NULL')
+        .andWhere('settlement.status IN (:...statuses)', {
+          statuses: activeStatuses,
+        })
+        .groupBy('settlement.market_id')
+        .getRawMany<{ market_id: string; amount: string }>(),
+    ]);
+
+    const branches = branchRows.map((row) => ({
+      branch_id: String(row.branch_id),
+      amount: Math.max(Number(row.amount) || 0, 0),
+    }));
+    const markets = marketRows.map((row) => ({
+      market_id: String(row.market_id),
+      amount: Math.max(Number(row.amount) || 0, 0),
+    }));
+
+    return successRes(
+      {
+        branch_receivable: branches.reduce((sum, row) => sum + row.amount, 0),
+        market_payable: markets.reduce((sum, row) => sum + row.amount, 0),
+        branches,
+        markets,
+      },
+      200,
+      'Financial balance settlement summary',
+    );
+  }
+
   private static readonly MAIN_CASHBOX_USER_ID = '0';
 
   /** Ensure the singleton MAIN (HQ) cashbox exists before posting to it. */

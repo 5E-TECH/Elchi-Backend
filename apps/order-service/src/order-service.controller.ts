@@ -400,6 +400,13 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.settlement.financial_balance_summary' })
+  settlementFinancialBalanceSummary(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getFinancialBalanceSettlementSummary(),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.initiate_return' })
   initiateReturn(
     @Payload()

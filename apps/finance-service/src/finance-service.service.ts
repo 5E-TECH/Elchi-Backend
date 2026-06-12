@@ -104,9 +104,10 @@ export class FinanceServiceService implements OnModuleInit {
     };
   }
 
-  private auditActor(
-    requester?: { id?: string; roles?: string[] } | null,
-  ): { user_id: string | null; user_role: string | null } {
+  private auditActor(requester?: { id?: string; roles?: string[] } | null): {
+    user_id: string | null;
+    user_role: string | null;
+  } {
     const roles = requester?.roles ?? [];
     return {
       user_id: requester?.id ? String(requester.id) : null,
@@ -118,7 +119,11 @@ export class FinanceServiceService implements OnModuleInit {
     return this.activityLog.query(q ?? {});
   }
 
-  async auditLogByEntity(entity_type: string, entity_id: string, limit?: number) {
+  async auditLogByEntity(
+    entity_type: string,
+    entity_id: string,
+    limit?: number,
+  ) {
     return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
   }
 
@@ -2196,37 +2201,53 @@ export class FinanceServiceService implements OnModuleInit {
   async financialBalance() {
     try {
       const mainCashbox = await this.ensureMainCashbox();
-      const allCourierCashboxes = await this.cashboxRepo.find({
-        where: {
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          isDeleted: false,
-        },
-      });
       const allMarketCashboxes = await this.cashboxRepo.find({
         where: {
           cashbox_type: Cashbox_type.FOR_MARKET,
           isDeleted: false,
         },
       });
-
-      const couriersTotalBalanse = allCourierCashboxes.reduce(
-        (s, c) => s + Number(c.balance),
+      const settlementResponse = await rmqSend<{
+        data?: {
+          branch_receivable?: number;
+          market_payable?: number;
+          branches?: Array<{ branch_id: string; amount: number }>;
+          markets?: Array<{ market_id: string; amount: number }>;
+        };
+      }>(
+        this.orderClient,
+        { cmd: 'order.settlement.financial_balance_summary' },
+        {},
+      );
+      const settlement = settlementResponse?.data ?? {};
+      const branchReceivable = Math.max(
+        Number(settlement.branch_receivable ?? 0),
         0,
       );
-      const marketsTotalBalans = allMarketCashboxes.reduce(
-        (s, c) => s - Number(c.balance),
-        0,
-      );
-      const difference = couriersTotalBalanse + marketsTotalBalans;
+      const marketPayable = Math.max(Number(settlement.market_payable ?? 0), 0);
+      const difference = branchReceivable - marketPayable;
       const currentSituation = Number(mainCashbox.balance) + difference;
 
       return this.successRes(
         {
           currentSituation,
           main: mainCashbox,
-          markets: { allMarketCashboxes, marketsTotalBalans },
-          couriers: { allCourierCashboxes, couriersTotalBalanse },
+          branches: {
+            branchReceivable,
+            items: settlement.branches ?? [],
+          },
+          markets: {
+            allMarketCashboxes,
+            marketPayable,
+            marketsTotalBalans: -marketPayable,
+            items: settlement.markets ?? [],
+          },
+          couriers: {
+            allCourierCashboxes: [],
+            couriersTotalBalanse: 0,
+          },
           difference,
+          formula: 'main_cashbox + branch_receivable - market_payable',
         },
         200,
         'Financial balance infos',
