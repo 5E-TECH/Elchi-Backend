@@ -2930,6 +2930,8 @@ export class OrderServiceService implements OnModuleInit {
     post_ids?: string[];
     exclude_statuses?: Order_status[];
     canceled_post_id?: string;
+    canceled_post_unassigned?: boolean;
+    holder_type?: OrderHolderType;
     qr_code_token?: string;
     status?: Order_status | Order_status[] | string | string[];
     return_requested?: boolean;
@@ -2957,6 +2959,8 @@ export class OrderServiceService implements OnModuleInit {
       post_ids,
       exclude_statuses,
       canceled_post_id,
+      canceled_post_unassigned,
+      holder_type,
       qr_code_token,
       status,
       return_requested,
@@ -3014,6 +3018,11 @@ export class OrderServiceService implements OnModuleInit {
       qb.andWhere('order.canceled_post_id = :canceled_post_id', {
         canceled_post_id,
       });
+    } else if (canceled_post_unassigned) {
+      qb.andWhere('order.canceled_post_id IS NULL');
+    }
+    if (holder_type) {
+      qb.andWhere('order.holder_type = :holder_type', { holder_type });
     }
     if (qr_code_token) {
       qb.andWhere('order.qr_code_token = :qr_code_token', { qr_code_token });
@@ -5663,6 +5672,9 @@ export class OrderServiceService implements OnModuleInit {
     market_id?: string;
     customer_id?: string;
     post_ids?: string[];
+    branch_id?: string;
+    canceled_post_unassigned?: boolean;
+    holder_type?: OrderHolderType;
     exclude_statuses?: Order_status[];
     status?: Order_status | Order_status[] | string | string[];
     search?: string;

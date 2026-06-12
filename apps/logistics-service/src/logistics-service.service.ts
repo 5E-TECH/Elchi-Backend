@@ -796,9 +796,20 @@ export class LogisticsServiceService implements OnModuleInit {
         where.status = status;
       }
     }
+    if (status === Post_status.CANCELED && this.isSystemPrivileged(requester)) {
+      where.branch_id = await this.findHqBranchId();
+    }
+    let queryWhere: Record<string, unknown> | Record<string, unknown>[] = where;
+    if (!status && this.isSystemPrivileged(requester)) {
+      const hqBranchId = await this.findHqBranchId();
+      queryWhere = [
+        { status: Not(In([Post_status.NEW, Post_status.CANCELED])) },
+        { status: Post_status.CANCELED, branch_id: hqBranchId },
+      ];
+    }
 
     const [data, total] = await this.postRepo.findAndCount({
-      where,
+      where: queryWhere,
       relations: ['region'],
       order: { createdAt: 'DESC' },
       skip,
@@ -1002,6 +1013,8 @@ export class LogisticsServiceService implements OnModuleInit {
     const where: Record<string, unknown> = { status: Post_status.CANCELED };
     if (scopedBranchId) {
       where.branch_id = scopedBranchId;
+    } else if (this.isSystemPrivileged(requester)) {
+      where.branch_id = await this.findHqBranchId();
     }
 
     const allPosts = await this.postRepo.find({
