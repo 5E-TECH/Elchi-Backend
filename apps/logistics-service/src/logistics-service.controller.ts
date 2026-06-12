@@ -299,7 +299,11 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.cancel.create' })
   createCanceledPost(
-    @Payload() data: { dto: ReceivePostDto; requester: { id: string; roles?: string[] } },
+    @Payload()
+    data: {
+      dto: ReceivePostDto;
+      requester: { id: string; roles?: string[]; branch_id?: string | null };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -309,11 +313,20 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.cancel.receive' })
   receiveCanceledPost(
-    @Payload() data: { id: string; dto: ReceivePostDto },
+    @Payload()
+    data: {
+      id: string;
+      dto: ReceivePostDto;
+      requester: { id: string; roles?: string[]; branch_id?: string | null };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.logisticsService.receiveCanceledPost(data.id, data.dto),
+      this.logisticsService.receiveCanceledPost(
+        data.requester,
+        data.id,
+        data.dto,
+      ),
     );
   }
 
