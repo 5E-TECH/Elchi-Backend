@@ -316,6 +316,29 @@ export class OrderGatewayController {
     };
   }
 
+  private toManagerCancelledTabResponse(payload: unknown) {
+    if (!payload || typeof payload !== 'object') {
+      return payload;
+    }
+
+    const body = payload as Record<string, unknown>;
+    const rows = this.extractRows(body);
+    const data = rows.map((row) => {
+      const realStatus = String(row.status ?? '');
+      if (realStatus !== Order_status.CANCELLED_SENT) {
+        return row;
+      }
+
+      return {
+        ...row,
+        status: Order_status.CANCELLED,
+        transport_status: Order_status.CANCELLED_SENT,
+      };
+    });
+
+    return { ...body, data };
+  }
+
   private async enrichMarketRows(rows: Array<Record<string, any>>) {
     const marketIds = Array.from(
       new Set(rows.map((row) => String(row?.market_id ?? '')).filter(Boolean)),
@@ -831,12 +854,19 @@ export class OrderGatewayController {
     const pagination = this.parsePaginationQuery(page, limit);
 
     const statuses = this.parseStatusQuery(status);
+    const isBranchCancelledTab =
+      isBranchScopedRequester &&
+      statuses?.length === 1 &&
+      statuses[0] === Order_status.CANCELLED;
+    const resolvedStatuses = isBranchCancelledTab
+      ? [Order_status.CANCELLED, Order_status.CANCELLED_SENT]
+      : statuses;
 
     const payload = {
       query: {
         market_id: resolvedMarketId,
         customer_id,
-        status: statuses,
+        status: resolvedStatuses,
         search,
         start_day,
         end_day,
@@ -844,6 +874,8 @@ export class OrderGatewayController {
         region_id,
         district_id,
         branch_id: resolvedBranchId,
+        holder_type: isBranchCancelledTab ? 'BRANCH' : undefined,
+        canceled_post_unassigned: isBranchCancelledTab ? true : undefined,
         source,
         page: pagination.page,
         limit: pagination.limit,
@@ -854,7 +886,12 @@ export class OrderGatewayController {
       { cmd: 'order.find_all_enriched' },
       { cmd: 'order.find_all' },
       payload,
-    ).then((response) => this.withPaginationMeta(response, pagination));
+    ).then((response) => {
+      const paginated = this.withPaginationMeta(response, pagination);
+      return isBranchCancelledTab
+        ? this.toManagerCancelledTabResponse(paginated)
+        : paginated;
+    });
   }
 
   @Get('market/:marketId')
@@ -1079,6 +1116,79 @@ export class OrderGatewayController {
     }
 
     return this.enrichMarketRows(result);
+  }
+
+  @Get('branch/orders')
+  @Get('branch/cancelled')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Branch tomonidan qabul qilingan va hali HQga yuborilmagan canceled orderlar',
+  })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: [Order_status.CANCELLED],
+  })
+  @ApiQuery({
+    name: 'page',
+    required: false,
+    type: Number,
+    schema: { default: 1, minimum: 1 } as any,
+  })
+  @ApiQuery({
+    name: 'limit',
+    required: false,
+    enum: [10, 25, 50, 100],
+    schema: { default: 10 } as any,
+  })
+  async findBranchCancelledOrders(
+    @Query('status') status?: string | string[],
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+    @Req() req?: { user: JwtUser },
+  ) {
+    if (!req?.user) {
+      throw new BadRequestException('Foydalanuvchi aniqlanmadi');
+    }
+
+    const assignment = await this.resolveBranchAssignment(req.user);
+    if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
+      throw new BadRequestException('Branch user branchga biriktirilmagan');
+    }
+
+    const pagination = this.parsePaginationQuery(page, limit);
+    const statuses = this.parseStatusQuery(status);
+    if (
+      statuses?.length &&
+      !statuses.every((value) => value === Order_status.CANCELLED)
+    ) {
+      throw new BadRequestException(
+        'Branch canceled orders endpoint faqat cancelled status uchun',
+      );
+    }
+    const payload = {
+      query: {
+        branch_id: String(assignment.branch_id),
+        status: [Order_status.CANCELLED, Order_status.CANCELLED_SENT],
+        holder_type: 'BRANCH',
+        canceled_post_unassigned: true,
+        page: pagination.page,
+        limit: pagination.limit,
+      },
+    };
+
+    return this.sendOrderWithFallback(
+      { cmd: 'order.find_all_enriched' },
+      { cmd: 'order.find_all' },
+      payload,
+    ).then((response) =>
+      this.toManagerCancelledTabResponse(
+        this.withPaginationMeta(response, pagination),
+      ),
+    );
   }
 
   @Get('markets/:marketId/new')

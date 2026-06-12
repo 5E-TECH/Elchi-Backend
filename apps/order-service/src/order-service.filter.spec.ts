@@ -70,6 +70,30 @@ describe('OrderServiceService filters', () => {
     });
   });
 
+  it('filters manager canceled tab to branch-held unassigned orders', async () => {
+    const { service, qb } = setup();
+
+    await service.findAll({
+      branch_id: '10',
+      status: ['cancelled', 'cancelled (sent)'],
+      holder_type: 'BRANCH',
+      canceled_post_unassigned: true,
+      page: 1,
+      limit: 10,
+    } as any);
+
+    expect(qb.andWhere).toHaveBeenCalledWith('order.status IN (:...statuses)', {
+      statuses: ['cancelled', 'cancelled (sent)'],
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'order.holder_type = :holder_type',
+      {
+        holder_type: 'BRANCH',
+      },
+    );
+    expect(qb.andWhere).toHaveBeenCalledWith('order.canceled_post_id IS NULL');
+  });
+
   it('returns all NEW market orders without pagination', async () => {
     const { service, qb } = setup();
 

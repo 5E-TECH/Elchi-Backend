@@ -14,7 +14,7 @@ import {
 } from '@app/common';
 import { Order_status, Where_deliver } from '@app/common';
 import { OrderServiceService } from './order-service.service';
-import { Order_source } from './entities/order.entity';
+import { OrderHolderType, Order_source } from './entities/order.entity';
 
 @Controller()
 export class OrderServiceController {
@@ -110,6 +110,8 @@ export class OrderServiceController {
         post_ids?: string[];
         exclude_statuses?: Order_status[];
         canceled_post_id?: string;
+        canceled_post_unassigned?: boolean;
+        holder_type?: OrderHolderType;
         qr_code_token?: string;
         status?: Order_status | Order_status[] | string | string[];
         return_requested?: boolean;
