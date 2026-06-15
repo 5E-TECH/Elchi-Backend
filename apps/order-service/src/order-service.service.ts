@@ -4719,6 +4719,28 @@ export class OrderServiceService implements OnModuleInit {
           item !== null,
       );
 
+    if (!cancelledItems.length) {
+      this.badRequest(
+        'Qisman sotishda kamida bitta mahsulot soni kamaytirilishi kerak',
+      );
+    }
+    const cancelledTotalPrice = Math.max(oldTotalPrice - price, 0);
+    const cancelledBranchId = String(
+      order.holder_branch_id ??
+        order.branch_id ??
+        order.home_branch_id ??
+        requester.branch_id ??
+        '',
+    ).trim();
+    if (!cancelledBranchId) {
+      this.badRequest('Qisman bekor qilingan order uchun branch aniqlanmadi');
+    }
+    const cancelledCourierId = isManagerRequester ? null : actorCourierId;
+    const cancelledHolder = await this.resolveHolderFromState(
+      cancelledBranchId,
+      cancelledCourierId,
+    );
+
     // Decoupled COD legs (partial price as the operation total). See sellOrder
     // for the model: market / courier / branch each settle independently.
     const marketIncome = Math.max(price - marketTariff, 0);
@@ -4937,6 +4959,87 @@ export class OrderServiceService implements OnModuleInit {
         hasCourier: Boolean(courierCashbox),
       });
 
+      const cancelledOrderRepo = tx.getRepository(Order);
+      const cancelledOrderItemRepo = tx.getRepository(OrderItem);
+      const cancelledTrackingRepo = tx.getRepository(OrderTracking);
+      const cancelledCustodyRepo = tx.getRepository(OrderCustodyEvent);
+      const cancelledOrder = await cancelledOrderRepo.save(
+        cancelledOrderRepo.create({
+          market_id: String(order.market_id),
+          customer_id: String(order.customer_id),
+          where_deliver: order.where_deliver,
+          total_price: cancelledTotalPrice,
+          to_be_paid: 0,
+          paid_amount: 0,
+          status: Order_status.CANCELLED,
+          comment: 'Qisman bekor qilingan mahsulotlar',
+          operator: order.operator ?? null,
+          operator_id: order.operator_id ?? null,
+          post_id: order.post_id ?? null,
+          canceled_post_id: null,
+          branch_id: cancelledBranchId,
+          home_branch_id: order.home_branch_id ?? order.branch_id ?? null,
+          courier_id: cancelledCourierId,
+          assigned_at: cancelledCourierId
+            ? (order.assigned_at ?? new Date())
+            : null,
+          holder_type: cancelledHolder.holder_type,
+          holder_branch_id: cancelledHolder.holder_branch_id,
+          holder_courier_id: cancelledHolder.holder_courier_id,
+          last_handover_at: new Date(),
+          last_handover_by: String(requester.id),
+          district_id: order.district_id ?? null,
+          region_id: order.region_id ?? null,
+          address: order.address ?? null,
+          qr_code_token: `CANCEL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+          parent_order_id: String(order.id),
+          source: order.source,
+          product_quantity: cancelledItems.reduce(
+            (sum, item) => sum + item.quantity,
+            0,
+          ),
+          isDeleted: false,
+        }),
+      );
+      await cancelledOrderItemRepo
+        .createQueryBuilder()
+        .insert()
+        .values(
+          cancelledItems.map((item) => ({
+            order_id: cancelledOrder.id,
+            product_id: item.product_id,
+            quantity: item.quantity,
+          })),
+        )
+        .execute();
+      await this.createTrackingEvent(
+        {
+          order_id: cancelledOrder.id,
+          from_status: null,
+          to_status: Order_status.CANCELLED,
+          changed_by: String(requester.id),
+          changed_by_role: this.toTrackingRole(requester.roles),
+          note: 'Partly-sell unsold items canceled',
+        },
+        cancelledTrackingRepo,
+      );
+      await this.createCustodyEvent(
+        {
+          order_id: cancelledOrder.id,
+          from_holder_type: null,
+          to_holder_type: cancelledHolder.holder_type,
+          from_branch_id: null,
+          to_branch_id: cancelledHolder.holder_branch_id,
+          from_courier_id: null,
+          to_courier_id: cancelledHolder.holder_courier_id,
+          changed_by: String(requester.id),
+          changed_by_role: this.toTrackingRole(requester.roles),
+          note: 'Partly-sell canceled items custody assigned',
+        },
+        cancelledCustodyRepo,
+      );
+      await this.syncOrderToSearch(cancelledOrder, tx);
+
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -4968,41 +5071,6 @@ export class OrderServiceService implements OnModuleInit {
       }
     } catch {
       // External sync is best-effort.
-    }
-
-    // Spawn the CANCELLED child order capturing the returned line items. The
-    // main sale is already committed; if this fails the financial state stays
-    // correct, so we log and continue rather than fail the whole operation.
-    if (cancelledItems.length > 0) {
-      const cancelledTotalPrice = Math.max(oldTotalPrice - price, 0);
-      try {
-        await this.create({
-          market_id: String(order.market_id),
-          customer_id: String(order.customer_id),
-          where_deliver: order.where_deliver,
-          total_price: cancelledTotalPrice,
-          to_be_paid: 0,
-          paid_amount: 0,
-          status: Order_status.CANCELLED,
-          comment: 'Qisman bekor qilingan mahsulotlar',
-          operator: order.operator ?? null,
-          post_id: order.post_id ?? null,
-          canceled_post_id: order.canceled_post_id ?? null,
-          home_branch_id: order.home_branch_id ?? order.branch_id ?? null,
-          district_id: order.district_id ?? null,
-          region_id: order.region_id ?? null,
-          address: order.address ?? null,
-          qr_code_token: `CANCEL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
-          parent_order_id: String(order.id),
-          items: cancelledItems,
-        });
-      } catch (childError) {
-        this.logger.error(
-          `Partly-sell ${id}: failed to create cancelled child order: ${
-            (childError as Error)?.message ?? childError
-          }`,
-        );
-      }
     }
 
     await this.activityLog.log({
