@@ -1,28 +1,43 @@
 import {
+  Body,
   Controller,
   Get,
   GatewayTimeoutException,
+  HttpCode,
   Inject,
   Param,
+  Post,
   Req,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import {
   ApiBearerAuth,
+  ApiBody,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiTags,
 } from '@nestjs/swagger';
+import { IsNotEmpty, IsString } from 'class-validator';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 
-type ScanResponseType = 'order' | 'batch' | 'post';
+type ScanResponseType =
+  | 'order'
+  | 'batch'
+  | 'post'
+  | 'market_cancelled_handover';
 interface JwtUser {
   sub: string;
   roles?: string[];
+}
+
+class ScanMarketCancelledHandoverQrDto {
+  @IsNotEmpty()
+  @IsString()
+  qr_token!: string;
 }
 
 @ApiTags('Scan')
@@ -54,9 +69,13 @@ export class ScanGatewayController {
           ? this.branchClient
           : this.logisticsClient;
 
-    return firstValueFrom(client.send(pattern, payload).pipe(timeout(8000))).catch((error) => {
+    return firstValueFrom(
+      client.send(pattern, payload).pipe(timeout(8000)),
+    ).catch((error) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException(`${service} service response timeout`);
+        throw new GatewayTimeoutException(
+          `${service} service response timeout`,
+        );
       }
       throw error;
     });
@@ -73,7 +92,10 @@ export class ScanGatewayController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Resolve scanned QR token to order/batch/post' })
-  @ApiParam({ name: 'token', description: 'QR token (ORD-/BTB-/BTR-/PST- or legacy token)' })
+  @ApiParam({
+    name: 'token',
+    description: 'QR token (ORD-/BTB-/BTR-/PST- or legacy token)',
+  })
   @ApiOkResponse({
     description: 'Resolved scan result',
     schema: {
@@ -87,10 +109,7 @@ export class ScanGatewayController {
     },
   })
   @ApiNotFoundResponse({ description: 'Topilmadi' })
-  async scan(
-    @Param('token') token: string,
-    @Req() req: { user: JwtUser },
-  ) {
+  async scan(@Param('token') token: string, @Req() req: { user: JwtUser }) {
     const normalizedToken = this.normalizeToken(token);
     const prefix = this.extractPrefix(normalizedToken);
 
@@ -122,5 +141,31 @@ export class ScanGatewayController {
       { token: normalizedToken },
     );
     return this.shapeResponse('order', response);
+  }
+
+  @Post('market-cancelled')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Market canceled handover QRni scan qilib 5 daqiqalik ruxsat olish',
+  })
+  @ApiBody({ type: ScanMarketCancelledHandoverQrDto })
+  async scanMarketCancelledHandover(
+    @Body() dto: ScanMarketCancelledHandoverQrDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    const response = await this.sendWithTimeout(
+      'order',
+      { cmd: 'order.market_cancelled_handover.scan_qr' },
+      {
+        qr_token: this.normalizeToken(dto.qr_token),
+        requester: {
+          id: req.user.sub,
+          roles: req.user.roles ?? [],
+        },
+      },
+    );
+    return this.shapeResponse('market_cancelled_handover', response);
   }
 }

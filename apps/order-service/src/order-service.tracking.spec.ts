@@ -19,6 +19,7 @@ function createService() {
     create: jest.fn((payload) => payload),
     save: jest.fn(),
     find: jest.fn(),
+    findAndCount: jest.fn(),
   };
 
   const qb = {
@@ -75,7 +76,9 @@ function createService() {
     } as any, // activityLog
   );
 
-  jest.spyOn<any, any>(service as any, 'syncOrderToSearch').mockResolvedValue(undefined);
+  jest
+    .spyOn<any, any>(service as any, 'syncOrderToSearch')
+    .mockResolvedValue(undefined);
 
   return {
     service,
@@ -87,6 +90,52 @@ function createService() {
 }
 
 describe('Order tracking lifecycle', () => {
+  it('returns newest tracking events with pagination metadata', async () => {
+    const { service, trackingRepo } = createService();
+    jest.spyOn(service, 'findById').mockResolvedValue({
+      id: '100',
+      status: Order_status.SOLD,
+    } as any);
+    trackingRepo.findAndCount.mockResolvedValue([
+      [
+        {
+          id: 'event-2',
+          order_id: '100',
+          from_status: Order_status.WAITING,
+          to_status: Order_status.SOLD,
+          changed_by: '55',
+          changed_by_role: 'courier',
+          note: 'sold',
+          created_at: new Date('2026-06-15T08:00:00.000Z'),
+        },
+      ],
+      21,
+    ]);
+
+    const result = await service.getTrackingByOrderId('100', 2, 10);
+
+    expect(trackingRepo.findAndCount).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { order_id: '100' },
+        order: { created_at: 'DESC' },
+        skip: 10,
+        take: 10,
+      }),
+    );
+    expect(result).toMatchObject({
+      total: 21,
+      page: 2,
+      limit: 10,
+      data: [
+        {
+          id: 'event-2',
+          from_status: Order_status.WAITING,
+          to_status: Order_status.SOLD,
+        },
+      ],
+    });
+  });
+
   it('allows canceled orders to be sent in a canceled post', () => {
     const { service } = createService();
 
@@ -109,7 +158,9 @@ describe('Order tracking lifecycle', () => {
     orderRepo.create.mockReturnValue(savedOrder);
     orderRepo.save.mockResolvedValue(savedOrder);
     orderRepo.update.mockResolvedValue(undefined);
-    jest.spyOn(service, 'findById').mockResolvedValue({ ...savedOrder, items: [] } as any);
+    jest
+      .spyOn(service, 'findById')
+      .mockResolvedValue({ ...savedOrder, items: [] } as any);
 
     await service.create(
       {
@@ -161,7 +212,11 @@ describe('Order tracking lifecycle', () => {
     jest
       .spyOn(service, 'findById')
       .mockResolvedValueOnce({ ...baseOrder, items: [] } as any)
-      .mockResolvedValueOnce({ ...baseOrder, status: Order_status.SOLD, items: [] } as any);
+      .mockResolvedValueOnce({
+        ...baseOrder,
+        status: Order_status.SOLD,
+        items: [],
+      } as any);
 
     orderRepo.save.mockResolvedValue(undefined);
 
@@ -312,7 +367,11 @@ describe('Order tracking lifecycle', () => {
     jest
       .spyOn(service, 'findById')
       .mockResolvedValueOnce({ ...baseOrder, items: [] } as any)
-      .mockResolvedValueOnce({ ...baseOrder, status: Order_status.CLOSED, items: [] } as any);
+      .mockResolvedValueOnce({
+        ...baseOrder,
+        status: Order_status.CLOSED,
+        items: [],
+      } as any);
 
     orderRepo.save.mockResolvedValue(undefined);
 
@@ -335,9 +394,14 @@ describe('Order tracking lifecycle', () => {
     const { service, orderRepo } = createService();
 
     orderRepo.create.mockImplementation((payload: any) => payload);
-    orderRepo.save.mockImplementation(async (payload: any) => ({ ...payload, id: '404' }));
+    orderRepo.save.mockImplementation(async (payload: any) => ({
+      ...payload,
+      id: '404',
+    }));
     orderRepo.update.mockResolvedValue(undefined);
-    jest.spyOn(service, 'findById').mockResolvedValue({ id: '404', items: [] } as any);
+    jest
+      .spyOn(service, 'findById')
+      .mockResolvedValue({ id: '404', items: [] } as any);
 
     await service.create(
       {
@@ -411,14 +475,24 @@ describe('markByProvider (status-only provider transition)', () => {
 
   it('cancel → CANCELLED', async () => {
     const { service, orderRepo } = createService();
-    const order = { id: '501', status: Order_status.ON_THE_ROAD, sold_at: null };
+    const order = {
+      id: '501',
+      status: Order_status.ON_THE_ROAD,
+      sold_at: null,
+    };
     jest
       .spyOn(service, 'findById')
       .mockResolvedValueOnce(order as any)
-      .mockResolvedValueOnce({ ...order, status: Order_status.CANCELLED } as any);
+      .mockResolvedValueOnce({
+        ...order,
+        status: Order_status.CANCELLED,
+      } as any);
     orderRepo.save.mockResolvedValue(order);
 
-    const res = await service.markByProvider({ order_id: '501', action: 'cancel' });
+    const res = await service.markByProvider({
+      order_id: '501',
+      action: 'cancel',
+    });
     expect(orderRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({ status: Order_status.CANCELLED }),
     );
@@ -434,7 +508,10 @@ describe('markByProvider (status-only provider transition)', () => {
       .mockResolvedValueOnce({ ...order, status: Order_status.CLOSED } as any);
     orderRepo.save.mockResolvedValue(order);
 
-    const res = await service.markByProvider({ order_id: '502', action: 'return' });
+    const res = await service.markByProvider({
+      order_id: '502',
+      action: 'return',
+    });
     expect(orderRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({ status: Order_status.CLOSED }),
     );
@@ -446,9 +523,15 @@ describe('markByProvider (status-only provider transition)', () => {
     const order = { id: '503', status: Order_status.SOLD, sold_at: '123' };
     jest.spyOn(service, 'findById').mockResolvedValueOnce(order as any);
 
-    const res = await service.markByProvider({ order_id: '503', action: 'sell' });
+    const res = await service.markByProvider({
+      order_id: '503',
+      action: 'sell',
+    });
 
-    expect(res.data).toMatchObject({ skipped: true, status: Order_status.SOLD });
+    expect(res.data).toMatchObject({
+      skipped: true,
+      status: Order_status.SOLD,
+    });
     expect(orderRepo.save).not.toHaveBeenCalled();
     expect(queryRunner.startTransaction).not.toHaveBeenCalled();
   });

@@ -171,9 +171,12 @@ export class OrderServiceController {
   }
 
   @MessagePattern({ cmd: 'order.tracking' })
-  tracking(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
+  tracking(
+    @Payload() data: { id: string; page?: number; limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getTrackingByOrderId(data.id),
+      this.orderService.getTrackingByOrderId(data.id, data.page, data.limit),
     );
   }
 
@@ -706,6 +709,50 @@ export class OrderServiceController {
         holder_type: data.holder_type,
         exclude_branch_source: Boolean(data?.exclude_branch_source),
       }),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.market_cancelled_handover.create_qr' })
+  createMarketCancelledHandoverQr(
+    @Payload()
+    data: {
+      market_id: string;
+      requester: { id: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.createMarketCancelledHandoverQr(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.market_cancelled_handover.scan_qr' })
+  scanMarketCancelledHandoverQr(
+    @Payload()
+    data: {
+      qr_token: string;
+      requester: { id: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.scanMarketCancelledHandoverQr(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.market_cancelled_handover.complete' })
+  completeMarketCancelledHandover(
+    @Payload()
+    data: {
+      market_id: string;
+      order_ids: string[];
+      authorization_token: string;
+      requester: { id: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.completeMarketCancelledHandover(data),
     );
   }
 
