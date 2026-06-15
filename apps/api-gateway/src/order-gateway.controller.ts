@@ -825,6 +825,9 @@ export class OrderGatewayController {
     const roles = req?.user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
     const isMarket = normalizedRoles.includes(RoleEnum.MARKET);
+    const isSystemPrivilegedRequester =
+      normalizedRoles.includes(RoleEnum.ADMIN) ||
+      normalizedRoles.includes(RoleEnum.SUPERADMIN);
     const isBranchScopedRequester =
       normalizedRoles.includes(RoleEnum.BRANCH) ||
       normalizedRoles.includes(RoleEnum.MANAGER) ||
@@ -854,13 +857,19 @@ export class OrderGatewayController {
     const pagination = this.parsePaginationQuery(page, limit);
 
     const statuses = this.parseStatusQuery(status);
-    const isBranchCancelledTab =
-      isBranchScopedRequester &&
-      statuses?.length === 1 &&
-      statuses[0] === Order_status.CANCELLED;
-    const resolvedStatuses = isBranchCancelledTab
-      ? [Order_status.CANCELLED, Order_status.CANCELLED_SENT]
-      : statuses;
+    const isCancelledTab =
+      Boolean(statuses?.length) &&
+      statuses!.every(
+        (value) =>
+          value === Order_status.CANCELLED ||
+          value === Order_status.CANCELLED_SENT,
+      );
+    const isBranchCancelledTab = isBranchScopedRequester && isCancelledTab;
+    const isHqCancelledTab = isSystemPrivilegedRequester && isCancelledTab;
+    const resolvedStatuses =
+      isBranchCancelledTab || isHqCancelledTab
+        ? [Order_status.CANCELLED, Order_status.CANCELLED_SENT]
+        : statuses;
 
     const payload = {
       query: {
@@ -874,8 +883,13 @@ export class OrderGatewayController {
         region_id,
         district_id,
         branch_id: resolvedBranchId,
-        holder_type: isBranchCancelledTab ? 'BRANCH' : undefined,
-        canceled_post_unassigned: isBranchCancelledTab ? true : undefined,
+        holder_type: isBranchCancelledTab
+          ? 'BRANCH'
+          : isHqCancelledTab
+            ? 'HQ'
+            : undefined,
+        canceled_post_unassigned:
+          isBranchCancelledTab || isHqCancelledTab ? true : undefined,
         source,
         page: pagination.page,
         limit: pagination.limit,
