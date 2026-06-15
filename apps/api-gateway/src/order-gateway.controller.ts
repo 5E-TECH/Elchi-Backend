@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   GatewayTimeoutException,
   Get,
   Inject,
@@ -1132,6 +1133,60 @@ export class OrderGatewayController {
     return this.enrichMarketRows(result);
   }
 
+  @Get('markets/cancelled')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MARKET,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Markets with CANCELLED orders' })
+  async findCancelledMarkets(@Req() req?: { user: JwtUser }) {
+    const roles = req?.user?.roles ?? [];
+    const normalizedRoles = this.normalizeRoles(roles);
+    const isMarket = normalizedRoles.includes(RoleEnum.MARKET);
+    const isBranchScopedRequester =
+      normalizedRoles.includes(RoleEnum.BRANCH) ||
+      normalizedRoles.includes(RoleEnum.MANAGER) ||
+      normalizedRoles.includes(RoleEnum.REGISTRATOR);
+
+    let branchId: string | undefined;
+    let holderType: 'HQ' | 'BRANCH' | undefined = 'HQ';
+    let excludeBranchSource = true;
+    let marketId: string | undefined;
+
+    if (isMarket) {
+      if (!req?.user?.sub) {
+        throw new BadRequestException('Market aniqlanmadi');
+      }
+      marketId = String(req.user.sub);
+      holderType = undefined;
+      excludeBranchSource = false;
+    } else if (isBranchScopedRequester && req?.user) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
+        throw new BadRequestException('Branch user branchga biriktirilmagan');
+      }
+      branchId = String(assignment.branch_id);
+      holderType = 'BRANCH';
+      excludeBranchSource = false;
+    }
+
+    return this.sendOrderWithTimeout(
+      { cmd: 'order.find_cancelled_markets_enriched' },
+      {
+        market_id: marketId,
+        branch_id: branchId,
+        holder_type: holderType,
+        exclude_branch_source: excludeBranchSource,
+      },
+    );
+  }
+
   @Get('branch/orders')
   @Get('branch/cancelled')
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -1244,6 +1299,64 @@ export class OrderGatewayController {
       { cmd: 'order.find_new_by_market_enriched' },
       { cmd: 'order.find_new_by_market' },
       payload,
+    );
+  }
+
+  @Get('markets/:marketId/cancelled')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MARKET,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'CANCELLED orders by market id' })
+  @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
+  async findCancelledOrdersByMarket(
+    @Param('marketId') marketId: string,
+    @Req() req?: { user: JwtUser },
+  ) {
+    const roles = req?.user?.roles ?? [];
+    const normalizedRoles = this.normalizeRoles(roles);
+    const isMarket = normalizedRoles.includes(RoleEnum.MARKET);
+    const isBranchScopedRequester =
+      normalizedRoles.includes(RoleEnum.BRANCH) ||
+      normalizedRoles.includes(RoleEnum.MANAGER) ||
+      normalizedRoles.includes(RoleEnum.REGISTRATOR);
+
+    let branchId: string | undefined;
+    let holderType: 'HQ' | 'BRANCH' | undefined = 'HQ';
+    let excludeBranchSource = true;
+
+    if (isMarket) {
+      if (!req?.user?.sub || String(req.user.sub) !== String(marketId)) {
+        throw new ForbiddenException(
+          'Market faqat o‘zining canceled orderlarini ko‘ra oladi',
+        );
+      }
+      holderType = undefined;
+      excludeBranchSource = false;
+    } else if (isBranchScopedRequester && req?.user) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
+        throw new BadRequestException('Branch user branchga biriktirilmagan');
+      }
+      branchId = String(assignment.branch_id);
+      holderType = 'BRANCH';
+      excludeBranchSource = false;
+    }
+
+    return this.sendOrderWithTimeout(
+      { cmd: 'order.find_cancelled_by_market_enriched' },
+      {
+        market_id: marketId,
+        branch_id: branchId,
+        holder_type: holderType,
+        exclude_branch_source: excludeBranchSource,
+      },
     );
   }
 

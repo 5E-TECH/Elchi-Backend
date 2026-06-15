@@ -645,6 +645,47 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.find_cancelled_markets_enriched' })
+  findCancelledMarketsEnriched(
+    @Payload()
+    data: {
+      market_id?: string;
+      branch_id?: string;
+      holder_type?: OrderHolderType;
+      exclude_branch_source?: boolean;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findCancelledMarketsEnriched({
+        market_id: data?.market_id,
+        branch_id: data?.branch_id,
+        holder_type: data.holder_type,
+        exclude_branch_source: Boolean(data?.exclude_branch_source),
+      }),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.find_cancelled_by_market_enriched' })
+  findCancelledByMarketEnriched(
+    @Payload()
+    data: {
+      market_id: string;
+      branch_id?: string;
+      holder_type?: OrderHolderType;
+      exclude_branch_source?: boolean;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findCancelledByMarketEnriched(data.market_id, {
+        branch_id: data?.branch_id,
+        holder_type: data.holder_type,
+        exclude_branch_source: Boolean(data?.exclude_branch_source),
+      }),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.update_normalized' })
   updateNormalized(
     @Payload()
