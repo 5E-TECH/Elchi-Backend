@@ -78,13 +78,17 @@ export class CreateOrderCustomerDto {
 export class CreateOrderRequestDto {
   @ApiPropertyOptional({
     example: '1',
-    description: 'Market ID (admin/superadmin/reg uchun majburiy, market rolida token’dan olinadi)',
+    description:
+      'Market ID (admin/superadmin/reg uchun majburiy, market rolida token’dan olinadi)',
   })
   @IsOptional()
   @IsString()
   market_id?: string;
 
-  @ApiPropertyOptional({ example: '1', description: 'Customer ID (as string/bigint)' })
+  @ApiPropertyOptional({
+    example: '1',
+    description: 'Customer ID (as string/bigint)',
+  })
   @IsOptional()
   @IsString()
   customer_id?: string;
@@ -96,7 +100,9 @@ export class CreateOrderRequestDto {
   customer?: CreateOrderCustomerDto;
 
   @ApiPropertyOptional({ enum: Where_deliver, default: Where_deliver.CENTER })
-  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.toLowerCase() : value,
+  )
   @IsOptional()
   @IsEnum(Where_deliver)
   where_deliver?: Where_deliver;
@@ -107,7 +113,9 @@ export class CreateOrderRequestDto {
   total_price?: number;
 
   @ApiPropertyOptional({ enum: Order_status, default: Order_status.NEW })
-  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.toLowerCase() : value,
+  )
   @IsOptional()
   @IsEnum(Order_status)
   status?: Order_status;
@@ -137,17 +145,29 @@ export class CreateOrderRequestDto {
   @IsString()
   region_id?: string | null;
 
-  @ApiPropertyOptional({ type: String, example: '12', description: 'Branch ID (as string/bigint)' })
+  @ApiPropertyOptional({
+    type: String,
+    example: '12',
+    description: 'Branch ID (as string/bigint)',
+  })
   @IsOptional()
   @IsString()
   branch_id?: string | null;
 
-  @ApiPropertyOptional({ type: String, example: '1001', description: 'Current batch ID (as string/bigint)' })
+  @ApiPropertyOptional({
+    type: String,
+    example: '1001',
+    description: 'Current batch ID (as string/bigint)',
+  })
   @IsOptional()
   @IsString()
   current_batch_id?: string | null;
 
-  @ApiPropertyOptional({ type: String, example: '77', description: 'Courier ID (as string/bigint)' })
+  @ApiPropertyOptional({
+    type: String,
+    example: '77',
+    description: 'Courier ID (as string/bigint)',
+  })
   @IsOptional()
   @IsString()
   courier_id?: string | null;
@@ -167,8 +187,13 @@ export class CreateOrderRequestDto {
   @IsString()
   address?: string | null;
 
-  @ApiPropertyOptional({ enum: OrderSourceDto, default: OrderSourceDto.INTERNAL })
-  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
+  @ApiPropertyOptional({
+    enum: OrderSourceDto,
+    default: OrderSourceDto.INTERNAL,
+  })
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.toLowerCase() : value,
+  )
   @IsOptional()
   @IsEnum(OrderSourceDto)
   source?: OrderSourceDto;
@@ -183,7 +208,9 @@ export class CreateOrderRequestDto {
 
 export class UpdateOrderRequestDto {
   @ApiPropertyOptional({ enum: Where_deliver })
-  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.toLowerCase() : value,
+  )
   @IsOptional()
   @IsEnum(Where_deliver)
   where_deliver?: Where_deliver;
@@ -194,7 +221,9 @@ export class UpdateOrderRequestDto {
   total_price?: number;
 
   @ApiPropertyOptional({ enum: Order_status })
-  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.toLowerCase() : value,
+  )
   @IsOptional()
   @IsEnum(Order_status)
   status?: Order_status;
@@ -224,17 +253,29 @@ export class UpdateOrderRequestDto {
   @IsString()
   region_id?: string | null;
 
-  @ApiPropertyOptional({ type: String, example: '12', description: 'Branch ID (as string/bigint)' })
+  @ApiPropertyOptional({
+    type: String,
+    example: '12',
+    description: 'Branch ID (as string/bigint)',
+  })
   @IsOptional()
   @IsString()
   branch_id?: string | null;
 
-  @ApiPropertyOptional({ type: String, example: '1001', description: 'Current batch ID (as string/bigint)' })
+  @ApiPropertyOptional({
+    type: String,
+    example: '1001',
+    description: 'Current batch ID (as string/bigint)',
+  })
   @IsOptional()
   @IsString()
   current_batch_id?: string | null;
 
-  @ApiPropertyOptional({ type: String, example: '77', description: 'Courier ID (as string/bigint)' })
+  @ApiPropertyOptional({
+    type: String,
+    example: '77',
+    description: 'Courier ID (as string/bigint)',
+  })
   @IsOptional()
   @IsString()
   courier_id?: string | null;
@@ -264,7 +305,9 @@ export class UpdateOrderRequestDto {
 
 export class UpdateOrderByIdRequestDto {
   @ApiPropertyOptional({ enum: Where_deliver })
-  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.toLowerCase() : value,
+  )
   @IsOptional()
   @IsEnum(Where_deliver)
   where_deliver?: Where_deliver;
@@ -275,7 +318,9 @@ export class UpdateOrderByIdRequestDto {
   total_price?: number;
 
   @ApiPropertyOptional({ enum: Order_status })
-  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.toLowerCase() : value,
+  )
   @IsOptional()
   @IsEnum(Order_status)
   status?: Order_status;
@@ -317,12 +362,18 @@ export class UpdateOrderByIdRequestDto {
   @Type(() => OrderItemDto)
   items?: OrderItemDto[];
 
-  @ApiPropertyOptional({ example: '1', description: 'Market ID (as string/bigint)' })
+  @ApiPropertyOptional({
+    example: '1',
+    description: 'Market ID (as string/bigint)',
+  })
   @IsOptional()
   @IsString()
   market_id?: string;
 
-  @ApiPropertyOptional({ example: '1', description: 'Customer ID (as string/bigint)' })
+  @ApiPropertyOptional({
+    example: '1',
+    description: 'Customer ID (as string/bigint)',
+  })
   @IsOptional()
   @IsString()
   customer_id?: string;
@@ -342,8 +393,13 @@ export class UpdateOrderByIdRequestDto {
   @IsString()
   qr_code_token?: string | null;
 
-  @ApiPropertyOptional({ enum: OrderSourceDto, default: OrderSourceDto.INTERNAL })
-  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
+  @ApiPropertyOptional({
+    enum: OrderSourceDto,
+    default: OrderSourceDto.INTERNAL,
+  })
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.toLowerCase() : value,
+  )
   @IsOptional()
   @IsEnum(OrderSourceDto)
   source?: OrderSourceDto;
@@ -352,12 +408,25 @@ export class UpdateOrderByIdRequestDto {
 export class OrdersArrayDto {
   @ApiProperty({
     type: [String],
-    example: ['6b1f3f2a-8c1d-4e2b-9f4a-1234567890ab', '7c2e4d3b-9d2e-5f3c-0a5b-abcdefabcdef'],
+    example: [
+      '6b1f3f2a-8c1d-4e2b-9f4a-1234567890ab',
+      '7c2e4d3b-9d2e-5f3c-0a5b-abcdefabcdef',
+    ],
   })
   @IsArray()
   @ArrayNotEmpty()
   @IsString({ each: true })
   order_ids!: string[];
+}
+
+export class HandoverCancelledOrdersToMarketRequestDto extends OrdersArrayDto {
+  @ApiProperty({
+    example: 'MHA-secure-one-time-token',
+    description: 'QR scan orqali olingan 5 daqiqalik authorization token',
+  })
+  @IsNotEmpty()
+  @IsString()
+  authorization_token!: string;
 }
 
 export class SellOrderRequestDto {
@@ -391,7 +460,7 @@ export class SellOrderRequestDto {
 export class CouldNotDeliverOrderRequestDto {
   @ApiProperty({
     example: "Mijoz uyda yo'q edi, ertaga qayta urinish so'radi",
-    description: "Yetkazib berolmaslik sababi (kamida 10 ta belgi)",
+    description: 'Yetkazib berolmaslik sababi (kamida 10 ta belgi)',
   })
   @IsString()
   @MinLength(10)
@@ -477,7 +546,7 @@ export class AssignOrdersToCourierRequestDto {
 }
 
 export class InitiateOrderReturnRequestDto {
-  @ApiProperty({ example: "Mijoz qabul qilmayapti, qaytarish kerak" })
+  @ApiProperty({ example: 'Mijoz qabul qilmayapti, qaytarish kerak' })
   @IsNotEmpty()
   @IsString()
   reason!: string;
@@ -539,7 +608,9 @@ export class CreateOrderByTelegramBotRequestDto {
   total_price!: number;
 
   @ApiPropertyOptional({ enum: Where_deliver, default: Where_deliver.CENTER })
-  @Transform(({ value }) => (typeof value === 'string' ? value.toLowerCase() : value))
+  @Transform(({ value }) =>
+    typeof value === 'string' ? value.toLowerCase() : value,
+  )
   @IsOptional()
   @IsEnum(Where_deliver)
   where_deliver?: Where_deliver;

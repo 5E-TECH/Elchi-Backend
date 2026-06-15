@@ -6,6 +6,7 @@ import {
   ForbiddenException,
   GatewayTimeoutException,
   Get,
+  HttpCode,
   Inject,
   Param,
   Patch,
@@ -34,6 +35,7 @@ import {
   CreateExternalOrderRequestDto,
   InitiateOrderReturnRequestDto,
   CreateOrderRequestDto,
+  HandoverCancelledOrdersToMarketRequestDto,
   OrdersArrayDto,
   PartlySellOrderRequestDto,
   RollbackOrderRequestDto,
@@ -1440,7 +1442,6 @@ export class OrderGatewayController {
           'Market faqat o‘zining canceled orderlarini ko‘ra oladi',
         );
       }
-      holderType = undefined;
       excludeBranchSource = false;
     } else if (isBranchScopedRequester && req?.user) {
       const assignment = await this.resolveBranchAssignment(req.user);
@@ -1459,6 +1460,64 @@ export class OrderGatewayController {
         branch_id: branchId,
         holder_type: holderType,
         exclude_branch_source: excludeBranchSource,
+      },
+    );
+  }
+
+  @Post('markets/:marketId/cancelled/qr')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.MARKET)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Market canceled order handover uchun 2 daqiqalik QR olish',
+  })
+  @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
+  async createCancelledMarketHandoverQr(
+    @Param('marketId') marketId: string,
+    @Req() req: { user: JwtUser },
+  ) {
+    if (String(req.user.sub) !== String(marketId)) {
+      throw new ForbiddenException('Market faqat o‘zi uchun QR yarata oladi');
+    }
+
+    return this.sendOrderWithTimeout(
+      { cmd: 'order.market_cancelled_handover.create_qr' },
+      {
+        market_id: marketId,
+        requester: {
+          id: req.user.sub,
+          roles: this.normalizeRoles(req.user.roles),
+        },
+      },
+    );
+  }
+
+  @Post('markets/:marketId/cancelled/handover')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Selected CANCELLED orderlarni QR ruxsati bilan marketga topshirish',
+  })
+  @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
+  @ApiBody({ type: HandoverCancelledOrdersToMarketRequestDto })
+  handoverCancelledOrdersToMarket(
+    @Param('marketId') marketId: string,
+    @Body() dto: HandoverCancelledOrdersToMarketRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.sendOrderWithTimeout(
+      { cmd: 'order.market_cancelled_handover.complete' },
+      {
+        market_id: marketId,
+        order_ids: dto.order_ids,
+        authorization_token: dto.authorization_token,
+        requester: {
+          id: req.user.sub,
+          roles: this.normalizeRoles(req.user.roles),
+        },
       },
     );
   }
@@ -1549,17 +1608,27 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get order tracking history by ID' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
-  async getTracking(@Param('id') id: string, @Req() req?: { user: JwtUser }) {
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 20 })
+  async getTracking(
+    @Param('id') id: string,
+    @Query('page') pageRaw?: string,
+    @Query('limit') limitRaw?: string,
+    @Req() req?: { user: JwtUser },
+  ) {
+    const page = Math.max(1, Number(pageRaw) || 1);
+    const limit = Math.min(100, Math.max(1, Number(limitRaw) || 20));
+
     // Authorize against the order itself before exposing its movement history.
     const order = await this.sendOrderWithFallback(
       { cmd: 'order.find_by_id_enriched' },
       { cmd: 'order.find_by_id' },
       { id },
-    ).catch(() => null);
+    );
     await this.assertCanViewOrder(req?.user, (order as any)?.data);
     return firstValueFrom(
       this.orderClient
-        .send({ cmd: 'order.tracking' }, { id })
+        .send({ cmd: 'order.tracking' }, { id, page, limit })
         .pipe(timeout(8000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {

@@ -10,6 +10,7 @@ import {
   Repository,
 } from 'typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
+import { createHash, randomBytes } from 'node:crypto';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { OrderHolderType, Order_source } from './entities/order.entity';
@@ -20,11 +21,13 @@ import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.entity';
 import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
 import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.entity';
+import { MarketCancelledHandoverSession } from './entities/market-cancelled-handover-session.entity';
 import {
   ActivityAction,
   ActivityLogService,
   ActivityLogQuery,
   BranchOwnership,
+  BranchType,
   BranchTransferBatchAction,
   BranchTransferBatchStatus,
   BranchTransferDirection,
@@ -344,6 +347,59 @@ export class OrderServiceService implements OnModuleInit {
       return 'market';
     }
     return 'system';
+  }
+
+  private hashHandoverToken(token: string): string {
+    return createHash('sha256').update(token).digest('hex');
+  }
+
+  private generateHandoverToken(prefix: 'MCR' | 'MHA'): string {
+    return `${prefix}-${randomBytes(32).toString('base64url')}`;
+  }
+
+  private async assertMarketHandoverHqRequester(requester: {
+    id: string;
+    roles?: string[];
+  }): Promise<void> {
+    const roles = new Set(
+      (requester.roles ?? []).map((role) =>
+        String(role ?? '')
+          .trim()
+          .toLowerCase(),
+      ),
+    );
+
+    if (roles.has(Roles.SUPERADMIN) || roles.has(Roles.ADMIN)) {
+      return;
+    }
+
+    if (!roles.has(Roles.REGISTRATOR)) {
+      this.forbidden('QR scan va marketga topshirish faqat HQ xodimlari uchun');
+    }
+
+    const response = await rmqSend<{
+      data?: {
+        branch_id?: string | null;
+        branch?: { type?: string | null } | null;
+      } | null;
+    }>(
+      this.branchClient,
+      { cmd: 'branch.user.find_by_user' },
+      {
+        user_id: String(requester.id),
+        requester: {
+          id: String(requester.id),
+          roles: requester.roles ?? [],
+        },
+      },
+      { attachRequestId: false, retries: 1 },
+    );
+
+    if (
+      String(response?.data?.branch?.type ?? '').toUpperCase() !== BranchType.HQ
+    ) {
+      this.forbidden('Faqat HQga tegishli registrator QR scan qila oladi');
+    }
   }
 
   private mapInitialStatusForTracking(status: Order_status): Order_status {
@@ -2334,199 +2390,201 @@ export class OrderServiceService implements OnModuleInit {
           tx,
         );
 
-    if (
-      [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID].includes(
-        originalStatus,
-      )
-    ) {
-      if (shouldRollbackMarketExtraCost) {
+      if (
+        [
+          Order_status.SOLD,
+          Order_status.PAID,
+          Order_status.PARTLY_PAID,
+        ].includes(originalStatus)
+      ) {
+        if (shouldRollbackMarketExtraCost) {
+          await pay({
+            user_id: String(order.market_id),
+            cashbox_type: Cashbox_type.FOR_MARKET,
+            amount: Number(marketExtraCost?.amount ?? 0),
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: "Qo'shimcha xarajat orqaga qaytarildi",
+          });
+        }
+
+        if (shouldRollbackCourierExtraCost && actorExpenseCashbox) {
+          await pay({
+            user_id: actorExpenseUserId,
+            cashbox_type: actorExpenseCashboxType,
+            amount: Number(courierExtraCost?.amount ?? 0),
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: "Qo'shimcha xarajat orqaga qaytarildi",
+          });
+        }
+      }
+
+      // Reverse the sale's cashbox legs EXACTLY (decoupled, snapshot-based) — the
+      // mirror image of the 3-leg sale model:
+      //   market : reverse (total − marketTariff)
+      //   courier: reverse (total − courierShare)
+      //   branch : reverse the exact amount credited to its cashbox at sale time
+      // Applies to SOLD/PAID always, and PARTLY_PAID for superadmin.
+      const doSaleReversal =
+        [Order_status.SOLD, Order_status.PAID].includes(originalStatus) ||
+        (originalStatus === Order_status.PARTLY_PAID && isSuperAdmin);
+      if (doSaleReversal) {
+        const courierShareRb =
+          order.courier_share != null
+            ? Number(order.courier_share)
+            : courierTariff;
+        const branchShareRb =
+          order.branch_share != null ? Number(order.branch_share) : 0;
+
+        const saleMarketIncome = Math.max(totalPrice - marketTariff, 0);
+        const saleMarketExpense = Math.max(marketTariff - totalPrice, 0);
+        const saleCourierIncome = Math.max(totalPrice - courierShareRb, 0);
+        const saleCourierExpense = Math.max(courierShareRb - totalPrice, 0);
+        const saleBranchNet = totalPrice - courierShareRb - branchShareRb;
+        const saleBranchCashboxAmount =
+          order.branch_cashbox_amount != null
+            ? Number(order.branch_cashbox_amount)
+            : saleBranchNet;
+
+        const rbBranchId = await this.resolveSettlementBranchId(order);
+        if (rbBranchId) {
+          await this.ensureBranchCashbox(rbBranchId);
+        }
+        const rbBranchCashbox = rbBranchId
+          ? await this.getCashboxByUser(rbBranchId, Cashbox_type.BRANCH).catch(
+              () => null,
+            )
+          : null;
+
+        // market leg (reverse)
+        if (saleMarketIncome > 0) {
+          await pay({
+            user_id: String(order.market_id),
+            cashbox_type: Cashbox_type.FOR_MARKET,
+            amount: saleMarketIncome,
+            operation_type: Operation_type.EXPENSE,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: rollbackComment,
+          });
+        } else if (saleMarketExpense > 0) {
+          await pay({
+            user_id: String(order.market_id),
+            cashbox_type: Cashbox_type.FOR_MARKET,
+            amount: saleMarketExpense,
+            operation_type: Operation_type.INCOME,
+            source_type: Source_type.CORRECTION,
+            source_id: String(order.id),
+            created_by: String(requester.id),
+            comment: rollbackComment,
+          });
+        }
+
+        // courier leg (reverse)
+        if (courierCashbox) {
+          if (saleCourierIncome > 0) {
+            await pay({
+              user_id: courierId,
+              cashbox_type: Cashbox_type.FOR_COURIER,
+              amount: saleCourierIncome,
+              operation_type: Operation_type.EXPENSE,
+              source_type: Source_type.CORRECTION,
+              source_id: String(order.id),
+              created_by: String(requester.id),
+              comment: rollbackComment,
+            });
+          } else if (saleCourierExpense > 0) {
+            await pay({
+              user_id: courierId,
+              cashbox_type: Cashbox_type.FOR_COURIER,
+              amount: saleCourierExpense,
+              operation_type: Operation_type.INCOME,
+              source_type: Source_type.CORRECTION,
+              source_id: String(order.id),
+              created_by: String(requester.id),
+              comment: rollbackComment,
+            });
+          }
+        }
+
+        // branch leg (reverse) — non-HQ branch only
+        if (rbBranchCashbox && rbBranchId) {
+          if (saleBranchCashboxAmount > 0) {
+            await pay({
+              user_id: rbBranchId,
+              cashbox_type: Cashbox_type.BRANCH,
+              amount: saleBranchCashboxAmount,
+              operation_type: Operation_type.EXPENSE,
+              source_type: Source_type.CORRECTION,
+              source_id: String(order.id),
+              created_by: String(requester.id),
+              comment: rollbackComment,
+            });
+          } else if (saleBranchCashboxAmount < 0) {
+            await pay({
+              user_id: rbBranchId,
+              cashbox_type: Cashbox_type.BRANCH,
+              amount: -saleBranchCashboxAmount,
+              operation_type: Operation_type.INCOME,
+              source_type: Source_type.CORRECTION,
+              source_id: String(order.id),
+              created_by: String(requester.id),
+              comment: rollbackComment,
+            });
+          }
+        }
+      }
+
+      // The order is being reverted out of its sold state — clear its settlement
+      // row (guaranteed not yet settled-to-HQ by the guard above), in the same tx.
+      await this.resetSettlementOnRollback(tx, id);
+
+      if (
+        shouldRollbackMarketExtraCost &&
+        [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
+      ) {
         await pay({
           user_id: String(order.market_id),
           cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Number(marketExtraCost?.amount ?? 0),
+          amount: Number(marketExtraCost.amount),
           operation_type: Operation_type.INCOME,
           source_type: Source_type.CORRECTION,
           source_id: String(order.id),
           created_by: String(requester.id),
-          comment: "Qo'shimcha xarajat orqaga qaytarildi",
+          comment: [Order_status.CANCELLED, Order_status.CLOSED].includes(
+            originalStatus,
+          )
+            ? "Bekor qilingan buyurtmaga yozilgan qo'shimcha xarajat orqaga qaytarildi"
+            : "Qo'shimcha xarajat orqaga qaytarildi",
         });
       }
 
-      if (shouldRollbackCourierExtraCost && actorExpenseCashbox) {
+      if (
+        shouldRollbackCourierExtraCost &&
+        actorExpenseCashbox &&
+        [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
+      ) {
         await pay({
           user_id: actorExpenseUserId,
           cashbox_type: actorExpenseCashboxType,
-          amount: Number(courierExtraCost?.amount ?? 0),
+          amount: Number(courierExtraCost.amount),
           operation_type: Operation_type.INCOME,
           source_type: Source_type.CORRECTION,
           source_id: String(order.id),
           created_by: String(requester.id),
-          comment: "Qo'shimcha xarajat orqaga qaytarildi",
-        });
-      }
-    }
-
-    // Reverse the sale's cashbox legs EXACTLY (decoupled, snapshot-based) — the
-    // mirror image of the 3-leg sale model:
-    //   market : reverse (total − marketTariff)
-    //   courier: reverse (total − courierShare)
-    //   branch : reverse the exact amount credited to its cashbox at sale time
-    // Applies to SOLD/PAID always, and PARTLY_PAID for superadmin.
-    const doSaleReversal =
-      [Order_status.SOLD, Order_status.PAID].includes(originalStatus) ||
-      (originalStatus === Order_status.PARTLY_PAID && isSuperAdmin);
-    if (doSaleReversal) {
-      const courierShareRb =
-        order.courier_share != null
-          ? Number(order.courier_share)
-          : courierTariff;
-      const branchShareRb =
-        order.branch_share != null ? Number(order.branch_share) : 0;
-
-      const saleMarketIncome = Math.max(totalPrice - marketTariff, 0);
-      const saleMarketExpense = Math.max(marketTariff - totalPrice, 0);
-      const saleCourierIncome = Math.max(totalPrice - courierShareRb, 0);
-      const saleCourierExpense = Math.max(courierShareRb - totalPrice, 0);
-      const saleBranchNet = totalPrice - courierShareRb - branchShareRb;
-      const saleBranchCashboxAmount =
-        order.branch_cashbox_amount != null
-          ? Number(order.branch_cashbox_amount)
-          : saleBranchNet;
-
-      const rbBranchId = await this.resolveSettlementBranchId(order);
-      if (rbBranchId) {
-        await this.ensureBranchCashbox(rbBranchId);
-      }
-      const rbBranchCashbox = rbBranchId
-        ? await this.getCashboxByUser(rbBranchId, Cashbox_type.BRANCH).catch(
-            () => null,
+          comment: [Order_status.CANCELLED, Order_status.CLOSED].includes(
+            originalStatus,
           )
-        : null;
-
-      // market leg (reverse)
-      if (saleMarketIncome > 0) {
-        await pay({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: saleMarketIncome,
-          operation_type: Operation_type.EXPENSE,
-          source_type: Source_type.CORRECTION,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: rollbackComment,
-        });
-      } else if (saleMarketExpense > 0) {
-        await pay({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: saleMarketExpense,
-          operation_type: Operation_type.INCOME,
-          source_type: Source_type.CORRECTION,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: rollbackComment,
+            ? "Bekor qilingan buyurtmaga yozilgan qo'shimcha xarajat orqaga qaytarildi"
+            : "Qo'shimcha xarajat orqaga qaytarildi",
         });
       }
-
-      // courier leg (reverse)
-      if (courierCashbox) {
-        if (saleCourierIncome > 0) {
-          await pay({
-            user_id: courierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: saleCourierIncome,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.CORRECTION,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: rollbackComment,
-          });
-        } else if (saleCourierExpense > 0) {
-          await pay({
-            user_id: courierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount: saleCourierExpense,
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.CORRECTION,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: rollbackComment,
-          });
-        }
-      }
-
-      // branch leg (reverse) — non-HQ branch only
-      if (rbBranchCashbox && rbBranchId) {
-        if (saleBranchCashboxAmount > 0) {
-          await pay({
-            user_id: rbBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount: saleBranchCashboxAmount,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.CORRECTION,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: rollbackComment,
-          });
-        } else if (saleBranchCashboxAmount < 0) {
-          await pay({
-            user_id: rbBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount: -saleBranchCashboxAmount,
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.CORRECTION,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: rollbackComment,
-          });
-        }
-      }
-    }
-
-    // The order is being reverted out of its sold state — clear its settlement
-    // row (guaranteed not yet settled-to-HQ by the guard above), in the same tx.
-    await this.resetSettlementOnRollback(tx, id);
-
-    if (
-      shouldRollbackMarketExtraCost &&
-      [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
-    ) {
-      await pay({
-        user_id: String(order.market_id),
-        cashbox_type: Cashbox_type.FOR_MARKET,
-        amount: Number(marketExtraCost.amount),
-        operation_type: Operation_type.INCOME,
-        source_type: Source_type.CORRECTION,
-        source_id: String(order.id),
-        created_by: String(requester.id),
-        comment: [Order_status.CANCELLED, Order_status.CLOSED].includes(
-          originalStatus,
-        )
-          ? "Bekor qilingan buyurtmaga yozilgan qo'shimcha xarajat orqaga qaytarildi"
-          : "Qo'shimcha xarajat orqaga qaytarildi",
-      });
-    }
-
-    if (
-      shouldRollbackCourierExtraCost &&
-      actorExpenseCashbox &&
-      [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
-    ) {
-      await pay({
-        user_id: actorExpenseUserId,
-        cashbox_type: actorExpenseCashboxType,
-        amount: Number(courierExtraCost.amount),
-        operation_type: Operation_type.INCOME,
-        source_type: Source_type.CORRECTION,
-        source_id: String(order.id),
-        created_by: String(requester.id),
-        comment: [Order_status.CANCELLED, Order_status.CLOSED].includes(
-          originalStatus,
-        )
-          ? "Bekor qilingan buyurtmaga yozilgan qo'shimcha xarajat orqaga qaytarildi"
-          : "Qo'shimcha xarajat orqaga qaytarildi",
-      });
-    }
 
       // Single final status write inside the transaction, then commit.
       if (
@@ -2712,11 +2770,9 @@ export class OrderServiceService implements OnModuleInit {
     // to the market. Otherwise the collected cash would be left owed up the
     // chain while the parcel is marked returned. (Audit I11.)
     if (
-      [
-        Order_status.SOLD,
-        Order_status.PAID,
-        Order_status.PARTLY_PAID,
-      ].includes(order.status)
+      [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID].includes(
+        order.status,
+      )
     ) {
       this.badRequest(
         "Sotilgan/to'langan buyurtmani to'g'ridan-to'g'ri marketga qaytarib bo'lmaydi — avval rollback qiling (pul qaytariladi), keyin qaytaring",
@@ -2861,6 +2917,304 @@ export class OrderServiceService implements OnModuleInit {
 
     const updated = await this.findById(id);
     return successRes(updated, 200, 'Order marked as returned to market');
+  }
+
+  async createMarketCancelledHandoverQr(input: {
+    market_id: string;
+    requester: { id: string; roles?: string[] };
+  }) {
+    const marketId = String(input?.market_id ?? '').trim();
+    const requesterId = String(input?.requester?.id ?? '').trim();
+    const roles = new Set(
+      (input?.requester?.roles ?? []).map((role) =>
+        String(role ?? '')
+          .trim()
+          .toLowerCase(),
+      ),
+    );
+
+    if (!marketId || !requesterId) {
+      this.badRequest('market_id va requester majburiy');
+    }
+    if (!roles.has(Roles.MARKET) || requesterId !== marketId) {
+      this.forbidden('Market faqat o‘zi uchun QR yarata oladi');
+    }
+
+    const now = new Date();
+    const expiresAt = new Date(now.getTime() + 2 * 60 * 1000);
+    const qrToken = this.generateHandoverToken('MCR');
+    const sessionRepo = this.dataSource.getRepository(
+      MarketCancelledHandoverSession,
+    );
+
+    await sessionRepo
+      .createQueryBuilder()
+      .update(MarketCancelledHandoverSession)
+      .set({ isDeleted: true })
+      .where('market_id = :marketId', { marketId })
+      .andWhere('scanned_at IS NULL')
+      .andWhere('is_deleted = false')
+      .execute();
+
+    const session = sessionRepo.create({
+      market_id: marketId,
+      qr_token_hash: this.hashHandoverToken(qrToken),
+      qr_expires_at: expiresAt,
+      scanned_at: null,
+      scanned_by_user_id: null,
+      authorization_token_hash: null,
+      authorization_expires_at: null,
+      consumed_at: null,
+    });
+    await sessionRepo.save(session);
+
+    return successRes(
+      {
+        market_id: marketId,
+        qr_token: qrToken,
+        qr_expires_at: expiresAt.toISOString(),
+        qr_ttl_seconds: 120,
+      },
+      201,
+      'Market canceled handover QR yaratildi',
+    );
+  }
+
+  async scanMarketCancelledHandoverQr(input: {
+    qr_token: string;
+    requester: { id: string; roles?: string[] };
+  }) {
+    const qrToken = String(input?.qr_token ?? '').trim();
+    const requesterId = String(input?.requester?.id ?? '').trim();
+    if (!qrToken.startsWith('MCR-') || !requesterId) {
+      this.badRequest('QR token yoki requester noto‘g‘ri');
+    }
+
+    await this.assertMarketHandoverHqRequester(input.requester);
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      const sessionRepo = queryRunner.manager.getRepository(
+        MarketCancelledHandoverSession,
+      );
+      const session = await sessionRepo.findOne({
+        where: {
+          qr_token_hash: this.hashHandoverToken(qrToken),
+          isDeleted: false,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!session) {
+        this.badRequest('QR topilmadi yoki yangilangan');
+      }
+
+      const now = new Date();
+      if (session.qr_expires_at.getTime() <= now.getTime()) {
+        this.badRequest('QR muddati tugagan');
+      }
+      if (session.scanned_at || session.authorization_token_hash) {
+        this.badRequest('QR allaqachon ishlatilgan');
+      }
+
+      const authorizationToken = this.generateHandoverToken('MHA');
+      const authorizationExpiresAt = new Date(now.getTime() + 5 * 60 * 1000);
+
+      session.scanned_at = now;
+      session.scanned_by_user_id = requesterId;
+      session.authorization_token_hash =
+        this.hashHandoverToken(authorizationToken);
+      session.authorization_expires_at = authorizationExpiresAt;
+      await sessionRepo.save(session);
+      await queryRunner.commitTransaction();
+
+      return successRes(
+        {
+          market_id: String(session.market_id),
+          authorized: true,
+          authorization_token: authorizationToken,
+          authorized_at: now.toISOString(),
+          expires_at: authorizationExpiresAt.toISOString(),
+          remaining_seconds: 300,
+        },
+        200,
+        'Marketga topshirish uchun 5 daqiqalik ruxsat ochildi',
+      );
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.handleDbError(error);
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
+  async completeMarketCancelledHandover(input: {
+    market_id: string;
+    order_ids: string[];
+    authorization_token: string;
+    requester: { id: string; roles?: string[] };
+  }) {
+    const marketId = String(input?.market_id ?? '').trim();
+    const requesterId = String(input?.requester?.id ?? '').trim();
+    const authorizationToken = String(input?.authorization_token ?? '').trim();
+    const orderIds = Array.from(
+      new Set(
+        (input?.order_ids ?? []).map((id) => String(id).trim()).filter(Boolean),
+      ),
+    );
+
+    if (!marketId || !requesterId || !authorizationToken) {
+      this.badRequest('market_id, requester va authorization_token majburiy');
+    }
+    if (!authorizationToken.startsWith('MHA-')) {
+      this.badRequest('authorization_token noto‘g‘ri');
+    }
+    if (!orderIds.length) {
+      this.badRequest('order_ids is required');
+    }
+
+    await this.assertMarketHandoverHqRequester(input.requester);
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    let handedOverOrders: Order[] = [];
+    try {
+      const sessionRepo = queryRunner.manager.getRepository(
+        MarketCancelledHandoverSession,
+      );
+      const orderRepo = queryRunner.manager.getRepository(Order);
+      const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+      const custodyRepo = queryRunner.manager.getRepository(OrderCustodyEvent);
+
+      const session = await sessionRepo.findOne({
+        where: {
+          authorization_token_hash: this.hashHandoverToken(authorizationToken),
+          isDeleted: false,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (!session || !session.authorization_expires_at) {
+        this.forbidden('Topshirish ruxsati topilmadi');
+      }
+      if (String(session.market_id) !== marketId) {
+        this.forbidden('Ruxsat boshqa market uchun berilgan');
+      }
+      if (String(session.scanned_by_user_id ?? '') !== requesterId) {
+        this.forbidden('Ruxsat boshqa xodimga tegishli');
+      }
+      if (session.consumed_at) {
+        this.forbidden('Topshirish ruxsati allaqachon ishlatilgan');
+      }
+
+      const now = new Date();
+      if (session.authorization_expires_at.getTime() <= now.getTime()) {
+        this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
+      }
+
+      handedOverOrders = await orderRepo.find({
+        where: {
+          id: In(orderIds),
+          market_id: marketId,
+          status: Order_status.CANCELLED,
+          holder_type: OrderHolderType.HQ,
+          canceled_post_id: IsNull(),
+          isDeleted: false,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+
+      if (handedOverOrders.length !== orderIds.length) {
+        this.badRequest(
+          'Tanlangan orderlarning ayrimlari marketga tegishli emas, CANCELLED emas yoki HQda turmagan',
+        );
+      }
+
+      for (const order of handedOverOrders) {
+        const previousHolderType = order.holder_type ?? null;
+        const previousHolderBranchId = order.holder_branch_id ?? null;
+        const previousHolderCourierId = order.holder_courier_id ?? null;
+
+        order.status = Order_status.CLOSED;
+        order.holder_type = OrderHolderType.MARKET;
+        order.holder_branch_id = null;
+        order.holder_courier_id = null;
+        order.return_requested = false;
+        order.last_handover_at = now;
+        order.last_handover_by = requesterId;
+        await orderRepo.save(order);
+
+        await this.createTrackingEvent(
+          {
+            order_id: String(order.id),
+            from_status: Order_status.CANCELLED,
+            to_status: Order_status.CLOSED,
+            changed_by: requesterId,
+            changed_by_role: this.toTrackingRole(input.requester.roles),
+            note: `Bekor qilingan order market ${marketId}ga QR tasdiqi bilan topshirildi`,
+          },
+          trackingRepo,
+        );
+
+        await this.createCustodyEvent(
+          {
+            order_id: String(order.id),
+            from_holder_type: previousHolderType,
+            to_holder_type: OrderHolderType.MARKET,
+            from_branch_id: previousHolderBranchId,
+            to_branch_id: null,
+            from_courier_id: previousHolderCourierId,
+            to_courier_id: null,
+            changed_by: requesterId,
+            changed_by_role: this.toTrackingRole(input.requester.roles),
+            note: `Bekor qilingan order market ${marketId}ga topshirildi`,
+          },
+          custodyRepo,
+        );
+
+        await this.syncOrderToSearch(order, queryRunner.manager);
+      }
+
+      session.consumed_at = now;
+      await sessionRepo.save(session);
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.handleDbError(error);
+    } finally {
+      await queryRunner.release();
+    }
+
+    await this.activityLog.log({
+      entity_type: 'Market',
+      entity_id: marketId,
+      action: ActivityAction.STATUS_CHANGE,
+      old_value: { status: Order_status.CANCELLED },
+      new_value: { status: Order_status.CLOSED },
+      ...this.auditActor(input.requester),
+      metadata: {
+        handover_type: 'market_cancelled_qr',
+        order_count: handedOverOrders.length,
+        order_ids: handedOverOrders
+          .slice(0, 20)
+          .map((order) => String(order.id)),
+      },
+    });
+
+    return successRes(
+      {
+        market_id: marketId,
+        closed_count: handedOverOrders.length,
+        order_ids: handedOverOrders.map((order) => String(order.id)),
+      },
+      200,
+      'Bekor qilingan buyurtmalar marketga topshirildi va yopildi',
+    );
   }
 
   private async replaceOrderItems(
@@ -5431,29 +5785,40 @@ export class OrderServiceService implements OnModuleInit {
     return successRes(enriched[0] ?? order, 200, 'Order by QR code');
   }
 
-  async getTrackingByOrderId(id: string) {
+  async getTrackingByOrderId(id: string, pageRaw = 1, limitRaw = 20) {
     await this.findById(id);
 
-    let rows: OrderTracking[];
+    const page = Math.max(1, Number(pageRaw) || 1);
+    const limit = Math.min(100, Math.max(1, Number(limitRaw) || 20));
+
+    let rows: OrderTracking[] = [];
+    let total = 0;
     try {
-      rows = await this.orderTrackingRepo.find({
+      [rows, total] = await this.orderTrackingRepo.findAndCount({
         where: { order_id: id },
-        order: { created_at: 'ASC' },
+        order: { created_at: 'DESC' },
+        skip: (page - 1) * limit,
+        take: limit,
       });
     } catch (error) {
       this.handleDbError(error);
     }
 
-    return rows.map((row) => ({
-      id: row.id,
-      order_id: row.order_id,
-      from_status: row.from_status,
-      to_status: row.to_status,
-      changed_by: row.changed_by,
-      changed_by_role: row.changed_by_role,
-      note: row.note,
-      created_at: this.toUzIsoString(row.created_at),
-    }));
+    return {
+      data: rows.map((row) => ({
+        id: row.id,
+        order_id: row.order_id,
+        from_status: row.from_status,
+        to_status: row.to_status,
+        changed_by: row.changed_by,
+        changed_by_role: row.changed_by_role,
+        note: row.note,
+        created_at: this.toUzIsoString(row.created_at),
+      })),
+      total,
+      page,
+      limit,
+    };
   }
 
   async getCustodyHistoryByOrderId(id: string) {
@@ -8521,6 +8886,25 @@ export class OrderServiceService implements OnModuleInit {
           }
         }
 
+        for (const transitOrderId of transitOrderIds) {
+          const order = ordersById.get(String(transitOrderId));
+          const fromStatus = order?.status;
+          if (!fromStatus) continue;
+          if (fromStatus !== Order_status.NEW) {
+            await this.createTrackingEvent(
+              {
+                order_id: String(transitOrderId),
+                from_status: fromStatus,
+                to_status: Order_status.NEW,
+                changed_by: requesterId,
+                changed_by_role: 'system',
+                note: `Batch #${batchId} tranzit uchun qayta navbatga qo'yildi`,
+              },
+              trackingRepo,
+            );
+          }
+        }
+
         // Custody handover into the receiving branch for ALL received orders
         // (local + transit — transit orders are physically here until re-sent).
         for (const order of orders) {
@@ -8778,6 +9162,13 @@ export class OrderServiceService implements OnModuleInit {
         const remainingOrderIds = remainingItems.map((item) =>
           String(item.order_id),
         );
+        const remainingPriorOrders =
+          batch.direction === BranchTransferDirection.FORWARD
+            ? await orderRepo.find({
+                where: { id: In(remainingOrderIds), isDeleted: false },
+                select: ['id', 'status'],
+              })
+            : [];
 
         // FORWARD: un-received orders go back to NEW so they re-enter the
         // assignable pool. RETURN: returning orders must NOT be reset to NEW
@@ -8798,6 +9189,21 @@ export class OrderServiceService implements OnModuleInit {
           .where('id IN (:...orderIds)', { orderIds: remainingOrderIds })
           .andWhere('"is_deleted" = false')
           .execute();
+
+        for (const remainingOrder of remainingPriorOrders) {
+          if (remainingOrder.status === Order_status.NEW) continue;
+          await this.createTrackingEvent(
+            {
+              order_id: String(remainingOrder.id),
+              from_status: remainingOrder.status,
+              to_status: Order_status.NEW,
+              changed_by: requesterId,
+              changed_by_role: 'system',
+              note: `Batch #${batchId} qisman qabul qilindi, order qayta navbatga qo'yildi`,
+            },
+            trackingRepo,
+          );
+        }
 
         await batchItemRepo
           .createQueryBuilder()

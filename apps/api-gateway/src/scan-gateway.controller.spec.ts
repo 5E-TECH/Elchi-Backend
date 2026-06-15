@@ -33,7 +33,9 @@ describe('ScanGatewayController', () => {
 
   it('routes BTB/BTR tokens to branch-service and returns type=batch', async () => {
     const { controller, branchClient } = setup();
-    branchClient.send.mockReturnValue(of({ data: { id: '501', qr_code_token: 'BTB-x' } }));
+    branchClient.send.mockReturnValue(
+      of({ data: { id: '501', qr_code_token: 'BTB-x' } }),
+    );
 
     const res = await controller.scan('BTB-x', req);
 
@@ -46,7 +48,9 @@ describe('ScanGatewayController', () => {
 
   it('routes PST- token to logistics-service and returns type=post', async () => {
     const { controller, logisticsClient } = setup();
-    logisticsClient.send.mockReturnValue(of({ data: { id: '91', qr_code_token: 'PST-z' } }));
+    logisticsClient.send.mockReturnValue(
+      of({ data: { id: '91', qr_code_token: 'PST-z' } }),
+    );
 
     const res = await controller.scan('PST-z', req);
 
@@ -55,6 +59,33 @@ describe('ScanGatewayController', () => {
       { id: 'PST-z' },
     );
     expect(res.type).toBe('post');
+  });
+
+  it('routes market cancelled QR to its state-changing scan endpoint', async () => {
+    const { controller, orderClient } = setup();
+    orderClient.send.mockReturnValue(
+      of({
+        data: {
+          market_id: '16',
+          authorization_token: 'MHA-token',
+          remaining_seconds: 300,
+        },
+      }),
+    );
+
+    const res = await controller.scanMarketCancelledHandover(
+      { qr_token: 'MCR-token' },
+      req,
+    );
+
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.market_cancelled_handover.scan_qr' },
+      {
+        qr_token: 'MCR-token',
+        requester: { id: 'u1', roles: ['admin'] },
+      },
+    );
+    expect(res.type).toBe('market_cancelled_handover');
   });
 
   it('routes legacy prefixless token to order-service', async () => {
@@ -72,8 +103,12 @@ describe('ScanGatewayController', () => {
 
   it('propagates not found from downstream service', async () => {
     const { controller, orderClient } = setup();
-    orderClient.send.mockReturnValue(throwError(() => new NotFoundException('Topilmadi')));
+    orderClient.send.mockReturnValue(
+      throwError(() => new NotFoundException('Topilmadi')),
+    );
 
-    await expect(controller.scan('ORD-notfound', req)).rejects.toBeInstanceOf(NotFoundException);
+    await expect(controller.scan('ORD-notfound', req)).rejects.toBeInstanceOf(
+      NotFoundException,
+    );
   });
 });
