@@ -1265,6 +1265,25 @@ export class OrderServiceService implements OnModuleInit {
       .execute();
   }
 
+  /**
+   * Lock an order row FOR UPDATE inside a transaction and assert it is still in
+   * WAITING before any money is posted. Serializes concurrent sell/cancel/
+   * partly-sell on the same order and makes a redelivered RMQ message a no-op
+   * (the WAITING→terminal status flip is the idempotency key). (Audit P0-2.)
+   */
+  private async lockWaitingOrder(
+    tx: EntityManager,
+    orderId: string,
+  ): Promise<void> {
+    const locked = await tx.getRepository(Order).findOne({
+      where: { id: String(orderId) },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (!locked || locked.status !== Order_status.WAITING) {
+      this.badRequest('Order not found or not in waiting status');
+    }
+  }
+
   private async updateCashboxBalance(
     data: {
       user_id: string;
@@ -1715,6 +1734,87 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   /**
+   * Advance the per-order FIFO settlement ledger WITHOUT posting any cashbox leg.
+   * The production cash path (finance.cashbox.payment_courier/branch_to_main/
+   * market) already moves the cashbox balances; this keeps order_settlement in
+   * lock-step so that (a) the settlement-aware rollback guard (isSettledToHq)
+   * actually reflects real-world cash position in production, and (b) the legacy
+   * order.settlement.* cashbox path becomes a no-op for already-advanced rows
+   * (its candidates are filtered by fromStatus), so the two paths can never
+   * double-post the same handover. (Audit I1/I2.)
+   */
+  async advanceSettlement(data: {
+    level: 'courier_to_branch' | 'branch_to_hq' | 'hq_to_market';
+    match_value: string;
+    amount: number;
+    requester_id?: string;
+  }) {
+    const requesterId = String(data?.requester_id ?? 'system');
+    const matchValue = String(data?.match_value ?? '').trim();
+    const amount = Number(data?.amount ?? 0);
+    if (!matchValue || !(amount > 0)) {
+      return successRes(
+        { settled_order_ids: [], allocated: 0, leftover: amount },
+        200,
+        'No settlement to advance',
+      );
+    }
+
+    // State-only: the cashbox was already moved by the finance payment path.
+    const noPost = async (): Promise<void> => {};
+
+    const configs = {
+      courier_to_branch: {
+        matchColumn: 'courier_id' as const,
+        fromStatus: SettlementStatus.PENDING,
+        toStatus: SettlementStatus.COURIER_SETTLED,
+        amountField: 'courier_amount' as const,
+        stamp: (now: Date) => ({
+          courier_to_branch_at: now,
+          courier_to_branch_by: requesterId,
+        }),
+      },
+      branch_to_hq: {
+        matchColumn: 'branch_id' as const,
+        fromStatus: SettlementStatus.COURIER_SETTLED,
+        toStatus: SettlementStatus.BRANCH_SETTLED,
+        amountField: 'branch_amount' as const,
+        stamp: (now: Date) => ({
+          branch_to_hq_at: now,
+          branch_to_hq_by: requesterId,
+        }),
+      },
+      hq_to_market: {
+        matchColumn: 'market_id' as const,
+        fromStatus: SettlementStatus.BRANCH_SETTLED,
+        toStatus: SettlementStatus.MARKET_SETTLED,
+        amountField: 'market_amount' as const,
+        stamp: (now: Date) => ({
+          hq_to_market_at: now,
+          hq_to_market_by: requesterId,
+        }),
+      },
+    };
+    const cfg = configs[data.level];
+    if (!cfg) {
+      this.badRequest(`Invalid settlement level: ${String(data?.level)}`);
+    }
+
+    const result = await this.runFifoSettlement({
+      matchColumn: cfg.matchColumn,
+      matchValue,
+      fromStatus: cfg.fromStatus,
+      toStatus: cfg.toStatus,
+      amountField: cfg.amountField,
+      lumpSum: amount,
+      requesterId,
+      postLeg: noPost,
+      stamp: cfg.stamp,
+    });
+    return successRes(result, 200, 'Settlement advanced');
+  }
+
+  /**
    * Courier hands a lump sum to the branch — FIFO-settles the courier's oldest
    * PENDING orders (courier → branch). Only reduces the courier's owed balance;
    * the branch was already credited at sale time.
@@ -2125,26 +2225,45 @@ export class OrderServiceService implements OnModuleInit {
           ? this.isNearInTime(orderUpdatedAt, courierExtraCostCreatedAt)
           : false);
 
-    // Per-rollback idempotency epoch on every CORRECTION posting, so a second
-    // rollback of the same order (after a re-sell) is not deduped against the
-    // first rollback's reversal entries. The original SELL/CORRECTION rows are
-    // preserved — only the dedup discriminator differs per attempt.
-    //
-    // A per-posting sequence suffix is appended so that two postings of the same
-    // (cashbox, source_type, operation_type) within ONE rollback (e.g. an
-    // extra-cost reversal plus the main tariff reversal, both CORRECTION/INCOME
-    // on a zero-total order) don't collide on the idempotency index. The
-    // sequence is deterministic per handler run, so an outbox re-delivery still
-    // dedups correctly.
+    // Atomic rollback (Audit P0-1/P0-2). Previously the cashbox reversals,
+    // settlement reset, and status flip ran WITHOUT a transaction, so a
+    // mid-rollback crash could leave cashboxes reversed while the order stayed
+    // SOLD (split state), and a redelivered/concurrent call could double-reverse.
+    // Now everything commits together, under a row lock, with an in-transaction
+    // status re-check that makes the reversal idempotent.
     const rollbackEpoch = String(Date.now());
     let rollbackSeq = 0;
-    const pay = (
-      data: Parameters<typeof this.updateCashboxBalance>[0],
-    ): Promise<void> =>
-      this.updateCashboxBalance({
-        ...data,
-        dedup_epoch: `${rollbackEpoch}:${rollbackSeq++}`,
+    let finalStatus: Order_status = Order_status.WAITING;
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const tx = queryRunner.manager;
+
+      // Lock the order row and re-assert it is still in the state we validated
+      // against. A concurrent sell/cancel/rollback (or a redelivered RMQ
+      // message) blocks here, then fails this guard — so the reversal is applied
+      // at most once (the status transition is the idempotency key).
+      const locked = await tx.getRepository(Order).findOne({
+        where: { id: String(order.id) },
+        lock: { mode: 'pessimistic_write' },
       });
+      if (!locked || locked.status !== originalStatus) {
+        this.badRequest(
+          `Rollback holati o'zgargan (status: ${locked?.status ?? "yo'q"})`,
+        );
+      }
+
+      // Per-rollback idempotency epoch on every CORRECTION posting: a second
+      // rollback of the same order (after a re-sell) is not deduped against the
+      // first; a per-posting sequence suffix avoids in-run index collisions.
+      const pay = (
+        data: Parameters<typeof this.updateCashboxBalance>[0],
+      ): Promise<void> =>
+        this.updateCashboxBalance(
+          { ...data, dedup_epoch: `${rollbackEpoch}:${rollbackSeq++}` },
+          tx,
+        );
 
     if (
       [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID].includes(
@@ -2296,8 +2415,8 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     // The order is being reverted out of its sold state — clear its settlement
-    // row (guaranteed not yet settled-to-HQ by the guard above).
-    await this.resetSettlementOnRollback(this.orderSettlementRepo.manager, id);
+    // row (guaranteed not yet settled-to-HQ by the guard above), in the same tx.
+    await this.resetSettlementOnRollback(tx, id);
 
     if (
       shouldRollbackMarketExtraCost &&
@@ -2340,90 +2459,78 @@ export class OrderServiceService implements OnModuleInit {
       });
     }
 
-    if (
-      isSuperAdmin &&
-      [Order_status.PAID, Order_status.PARTLY_PAID].includes(originalStatus)
-    ) {
-      await this.updateFull(
-        id,
-        {
-          status: Order_status.WAITING,
-          paid_amount: 0,
-          sold_at: null,
-        },
-        {
-          id: requester.id,
-          roles: requester.roles,
-          note: 'Rollback to waiting',
-          audit: false,
-        },
-      );
-    } else {
-      await this.updateFull(
-        id,
-        {
-          status: Order_status.WAITING,
-          to_be_paid: 0,
-          sold_at: null,
-        },
-        {
-          id: requester.id,
-          roles: requester.roles,
-          note: 'Rollback to waiting',
-          audit: false,
-        },
-      );
-    }
+      // Single final status write inside the transaction, then commit.
+      if (
+        rollbackTarget === 'cancelled' ||
+        rollbackTarget === 'cancelled_sent'
+      ) {
+        finalStatus = Order_status.CANCELLED;
+        await this.updateFull(
+          id,
+          {
+            status: Order_status.CANCELLED,
+            canceled_post_id: null,
+            return_requested: false,
+            sold_at: null,
+          },
+          {
+            id: requester.id,
+            roles: requester.roles,
+            note: `Rollback to ${rollbackTarget}`,
+            audit: false,
+          },
+          tx,
+        );
+      } else if (
+        isSuperAdmin &&
+        [Order_status.PAID, Order_status.PARTLY_PAID].includes(originalStatus)
+      ) {
+        finalStatus = Order_status.WAITING;
+        await this.updateFull(
+          id,
+          { status: Order_status.WAITING, paid_amount: 0, sold_at: null },
+          {
+            id: requester.id,
+            roles: requester.roles,
+            note: 'Rollback to waiting',
+            audit: false,
+          },
+          tx,
+        );
+      } else {
+        finalStatus = Order_status.WAITING;
+        await this.updateFull(
+          id,
+          { status: Order_status.WAITING, to_be_paid: 0, sold_at: null },
+          {
+            id: requester.id,
+            roles: requester.roles,
+            note: 'Rollback to waiting',
+            audit: false,
+          },
+          tx,
+        );
+      }
 
-    const logRollback = (toStatus: Order_status): Promise<void> =>
-      this.activityLog.log({
-        entity_type: 'Order',
-        entity_id: String(order.id),
-        action: 'order.rollback',
-        old_value: { status: originalStatus },
-        new_value: { status: toStatus },
-        ...this.auditActor(requester),
-        metadata: { rollback_target: rollbackTarget },
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.handleDbError(error);
+      throw new RpcException({
+        statusCode: 500,
+        message:
+          error instanceof Error ? error.message : 'Internal server error',
       });
-
-    if (rollbackTarget === 'cancelled') {
-      await this.updateFull(
-        id,
-        {
-          status: Order_status.CANCELLED,
-          canceled_post_id: null,
-          return_requested: false,
-          sold_at: null,
-        },
-        {
-          id: requester.id,
-          roles: requester.roles,
-          note: 'Rollback to cancelled',
-          audit: false,
-        },
-      );
-
-      await logRollback(Order_status.CANCELLED);
-      return successRes({}, 200, 'Order CANCELLED holatiga qaytarildi');
+    } finally {
+      await queryRunner.release();
     }
 
+    // Post-commit side-effects (non-DB). The reversal + status flip are already
+    // durable; these are best-effort follow-ups and must not roll back money.
     if (rollbackTarget === 'cancelled_sent') {
-      await this.updateFull(
-        id,
-        {
-          status: Order_status.CANCELLED,
-          canceled_post_id: null,
-          return_requested: false,
-          sold_at: null,
-        },
-        {
-          id: requester.id,
-          roles: requester.roles,
-          note: 'Rollback to cancelled_sent',
-          audit: false,
-        },
-      );
-
       await rmqSend(
         this.logisticsClient,
         { cmd: 'logistics.post.cancel.create' },
@@ -2432,12 +2539,24 @@ export class OrderServiceService implements OnModuleInit {
           requester: { id: String(requester.id), roles: requester.roles ?? [] },
         },
       );
-
-      await logRollback(Order_status.CANCELLED);
-      return successRes({}, 200, "Order bekor qilinib pochtaga qo'shildi");
     }
 
-    await logRollback(Order_status.WAITING);
+    await this.activityLog.log({
+      entity_type: 'Order',
+      entity_id: String(order.id),
+      action: 'order.rollback',
+      old_value: { status: originalStatus },
+      new_value: { status: finalStatus },
+      ...this.auditActor(requester),
+      metadata: { rollback_target: rollbackTarget },
+    });
+
+    if (rollbackTarget === 'cancelled') {
+      return successRes({}, 200, 'Order CANCELLED holatiga qaytarildi');
+    }
+    if (rollbackTarget === 'cancelled_sent') {
+      return successRes({}, 200, "Order bekor qilinib pochtaga qo'shildi");
+    }
     return successRes({}, 200, 'Order WAITING holatiga qaytarildi');
   }
 
@@ -2519,6 +2638,21 @@ export class OrderServiceService implements OnModuleInit {
     if (order.status === Order_status.RETURNED_TO_MARKET) {
       this.badRequest('Order allaqachon RETURNED_TO_MARKET holatida');
     }
+    // A money-bearing order (COD collected) must be rolled back FIRST — which
+    // reverses the sale's cashbox legs + settlement — before it can be returned
+    // to the market. Otherwise the collected cash would be left owed up the
+    // chain while the parcel is marked returned. (Audit I11.)
+    if (
+      [
+        Order_status.SOLD,
+        Order_status.PAID,
+        Order_status.PARTLY_PAID,
+      ].includes(order.status)
+    ) {
+      this.badRequest(
+        "Sotilgan/to'langan buyurtmani to'g'ridan-to'g'ri marketga qaytarib bo'lmaydi — avval rollback qiling (pul qaytariladi), keyin qaytaring",
+      );
+    }
 
     // A returned order may be handed to the market at HQ or at its home
     // (owning) branch. Two physical paths reach a valid handover point:
@@ -2589,9 +2723,19 @@ export class OrderServiceService implements OnModuleInit {
     try {
       const orderRepo = queryRunner.manager.getRepository(Order);
       const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+      const custodyRepo = queryRunner.manager.getRepository(OrderCustodyEvent);
+
+      // Capture the prior custody holder before closing the chain.
+      const priorHolderType = order.holder_type ?? null;
+      const priorHolderBranchId = order.holder_branch_id ?? null;
+      const priorHolderCourierId = order.holder_courier_id ?? null;
 
       order.status = Order_status.RETURNED_TO_MARKET;
       order.return_requested = false;
+      // Close the custody chain: the goods are back with the market. (Audit I10.)
+      order.holder_type = OrderHolderType.MARKET;
+      order.holder_branch_id = null;
+      order.holder_courier_id = null;
       await orderRepo.save(order);
 
       await this.createTrackingEvent(
@@ -2606,6 +2750,25 @@ export class OrderServiceService implements OnModuleInit {
           note: `Xodim ${String(requester?.id ?? 'unknown')} market egasiga topshirdi`,
         },
         trackingRepo,
+      );
+
+      // Closing custody event: parcel handed back to the market.
+      await this.createCustodyEvent(
+        {
+          order_id: String(order.id),
+          from_holder_type: priorHolderType,
+          to_holder_type: OrderHolderType.MARKET,
+          from_branch_id: priorHolderBranchId,
+          to_branch_id: null,
+          from_courier_id: priorHolderCourierId,
+          to_courier_id: null,
+          changed_by: String(requester?.id ?? 'system'),
+          changed_by_role: requester?.id
+            ? this.toTrackingRole(requester.roles)
+            : 'system',
+          note: 'Market egasiga qaytarib topshirildi',
+        },
+        custodyRepo,
       );
 
       await this.syncOrderToSearch(order, queryRunner.manager);
@@ -3873,6 +4036,7 @@ export class OrderServiceService implements OnModuleInit {
     await queryRunner.startTransaction();
     try {
       const tx = queryRunner.manager;
+      await this.lockWaitingOrder(tx, id);
       const pay = (
         data: Parameters<typeof this.updateCashboxBalance>[0],
       ): Promise<void> =>
@@ -4173,6 +4337,7 @@ export class OrderServiceService implements OnModuleInit {
 
     try {
       const tx = queryRunner.manager;
+      await this.lockWaitingOrder(tx, id);
       const pay = (
         data: Parameters<typeof this.updateCashboxBalance>[0],
       ): Promise<void> =>
@@ -4689,6 +4854,7 @@ export class OrderServiceService implements OnModuleInit {
     await queryRunner.startTransaction();
     try {
       const tx = queryRunner.manager;
+      await this.lockWaitingOrder(tx, id);
       const txOrderItemRepo = tx.getRepository(OrderItem);
       const pay = (
         data: Parameters<typeof this.updateCashboxBalance>[0],
@@ -6759,12 +6925,34 @@ export class OrderServiceService implements OnModuleInit {
         'region_id',
         'market_id',
         'total_price',
+        'status',
       ],
     });
 
     if (orders.length !== orderIds.length) {
       this.badRequest(
         'Some orders are not found or already assigned to another batch',
+      );
+    }
+
+    // Status eligibility (Audit I11): money-bearing (SOLD/PAID/PARTLY_PAID) and
+    // already-terminal (RETURNED_TO_MARKET/CLOSED) orders must NOT enter a RETURN
+    // batch — a sold order would otherwise reach RETURNED_TO_MARKET with its
+    // collected COD still owed up the chain. Roll such orders back first.
+    const ineligibleReturn = orders.filter((order) =>
+      [
+        Order_status.SOLD,
+        Order_status.PAID,
+        Order_status.PARTLY_PAID,
+        Order_status.RETURNED_TO_MARKET,
+        Order_status.CLOSED,
+      ].includes(order.status),
+    );
+    if (ineligibleReturn.length) {
+      this.badRequest(
+        `Quyidagi buyurtmalar holati return paketiga mos emas (avval rollback qiling): ${ineligibleReturn
+          .map((order) => String(order.id))
+          .join(', ')}`,
       );
     }
 
@@ -7878,6 +8066,7 @@ export class OrderServiceService implements OnModuleInit {
       );
       const orderRepo = queryRunner.manager.getRepository(Order);
       const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+      const custodyRepo = queryRunner.manager.getRepository(OrderCustodyEvent);
       const historyRepo = queryRunner.manager.getRepository(
         BranchTransferBatchHistory,
       );
@@ -7916,21 +8105,42 @@ export class OrderServiceService implements OnModuleInit {
       const savedBatch = await batchRepo.save(batch);
 
       if (orderIds.length) {
+        const destinationBranchId = String(batch.destination_branch_id);
+        const handoverAt = new Date();
+
+        // Capture prior status/holder BEFORE overwriting, so tracking + custody
+        // reflect the real previous state. (Audit I9 — the whole-batch receive
+        // used to set only branch_id, leaving holder_branch_id stale at the
+        // source and writing no custody event, which mis-scoped bulk assign.)
+        const orders = await orderRepo.find({
+          where: { id: In(orderIds), isDeleted: false },
+          select: [
+            'id',
+            'region_id',
+            'status',
+            'holder_type',
+            'holder_branch_id',
+            'holder_courier_id',
+          ],
+        });
+
         await orderRepo
           .createQueryBuilder()
           .update(Order)
           .set({
             current_batch_id: null,
-            branch_id: String(batch.destination_branch_id),
+            branch_id: destinationBranchId,
+            // Custody moves to the receiving branch (mirror of the per-order
+            // receive path) — the goods physically arrived here.
+            holder_type: OrderHolderType.BRANCH,
+            holder_branch_id: destinationBranchId,
+            holder_courier_id: null,
+            last_handover_at: handoverAt,
+            last_handover_by: requesterId,
           })
           .where('id IN (:...orderIds)', { orderIds })
           .andWhere('"is_deleted" = false')
           .execute();
-
-        const orders = await orderRepo.find({
-          where: { id: In(orderIds), isDeleted: false },
-          select: ['id', 'region_id', 'status'],
-        });
 
         const localOrderIds = orders
           .filter(
@@ -7983,6 +8193,35 @@ export class OrderServiceService implements OnModuleInit {
                 note: `Batch #${batchId} qabul qilindi`,
               },
               trackingRepo,
+            );
+          }
+        }
+
+        // Custody handover into the receiving branch for ALL received orders
+        // (local + transit — transit orders are physically here until re-sent).
+        for (const order of orders) {
+          const fromHolderType = order.holder_type ?? null;
+          const fromBranchId = order.holder_branch_id ?? null;
+          const fromCourierId = order.holder_courier_id ?? null;
+          const custodyChanged =
+            fromHolderType !== OrderHolderType.BRANCH ||
+            String(fromBranchId ?? '') !== destinationBranchId ||
+            Boolean(fromCourierId);
+          if (custodyChanged) {
+            await this.createCustodyEvent(
+              {
+                order_id: String(order.id),
+                from_holder_type: fromHolderType,
+                to_holder_type: OrderHolderType.BRANCH,
+                from_branch_id: fromBranchId,
+                to_branch_id: destinationBranchId,
+                from_courier_id: fromCourierId,
+                to_courier_id: null,
+                changed_by: requesterId,
+                changed_by_role: 'system',
+                note: `Batch #${batchId} dan filialga qabul qilindi`,
+              },
+              custodyRepo,
             );
           }
         }

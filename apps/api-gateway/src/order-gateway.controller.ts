@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   GatewayTimeoutException,
   Get,
   Inject,
@@ -13,6 +14,7 @@ import {
   Req,
   UseGuards,
 } from '@nestjs/common';
+import { IsArray, IsNotEmpty, IsString } from 'class-validator';
 import { ClientProxy } from '@nestjs/microservices';
 import {
   ApiBearerAuth,
@@ -57,7 +59,11 @@ type BranchAssignment = {
 };
 
 class ReceiveExternalOrdersDto {
+  @IsString()
+  @IsNotEmpty()
   integration_id!: string;
+
+  @IsArray()
   orders!: any[];
 }
 
@@ -187,6 +193,69 @@ export class OrderGatewayController {
   ): boolean {
     const role = String(assignment?.role ?? '').toUpperCase();
     return role === 'MANAGER' || role === 'REGISTRATOR' || role === 'BRANCH';
+  }
+
+  /**
+   * Object-level authorization for reading a SINGLE order (find_by_id, tracking).
+   * Order ids are sequential bigints, so without this any authenticated account
+   * could enumerate every order's financials + customer PII (IDOR). Mirrors the
+   * list-endpoint scoping. Throws ForbiddenException when not allowed.
+   */
+  private async assertCanViewOrder(
+    reqUser: JwtUser | undefined,
+    order: Record<string, any> | null | undefined,
+  ): Promise<void> {
+    if (!order || typeof order !== 'object') {
+      return; // nothing fetched (not-found) — let the normal response through
+    }
+    const roles = this.normalizeRoles(reqUser?.roles);
+    // Internal full-access staff (consistent with the unscoped list endpoint).
+    if (
+      roles.includes(RoleEnum.SUPERADMIN) ||
+      roles.includes(RoleEnum.ADMIN) ||
+      roles.includes(RoleEnum.OPERATOR) ||
+      roles.includes(RoleEnum.MARKET_OPERATOR)
+    ) {
+      return;
+    }
+    const sub = String(reqUser?.sub ?? '').trim();
+    const field = (key: string): string =>
+      String(order?.[key] ?? order?.[this.toCamelKey(key)] ?? '').trim();
+    const denied = (): never => {
+      throw new ForbiddenException("Bu buyurtmani ko'rishga ruxsat yo'q");
+    };
+
+    if (roles.includes(RoleEnum.MARKET)) {
+      return sub && field('market_id') === sub ? undefined : denied();
+    }
+    if (roles.includes(RoleEnum.CUSTOMER)) {
+      return sub && field('customer_id') === sub ? undefined : denied();
+    }
+    if (roles.includes(RoleEnum.COURIER)) {
+      return sub && field('courier_id') === sub ? undefined : denied();
+    }
+    if (
+      roles.includes(RoleEnum.BRANCH) ||
+      roles.includes(RoleEnum.MANAGER) ||
+      roles.includes(RoleEnum.REGISTRATOR)
+    ) {
+      const assignment = await this.resolveBranchAssignment(reqUser as JwtUser);
+      const branchId = String(assignment?.branch_id ?? '').trim();
+      const orderBranches = [
+        field('branch_id'),
+        field('holder_branch_id'),
+        field('home_branch_id'),
+      ];
+      return branchId && orderBranches.includes(branchId)
+        ? undefined
+        : denied();
+    }
+    // investor / unknown roles: no per-order access.
+    return denied();
+  }
+
+  private toCamelKey(snake: string): string {
+    return snake.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
   }
 
   private async resolveBranchAssignment(
@@ -401,6 +470,26 @@ export class OrderGatewayController {
     let resolvedMarketId = orderDto.market_id;
     if (roles.includes(RoleEnum.MARKET)) {
       resolvedMarketId = req.user.sub;
+    } else if (roles.includes(RoleEnum.MARKET_OPERATOR)) {
+      // An operator (incl. the telegram bot) is linked to a market via
+      // user.market_id — resolve it server-side. The bot DTO carries no
+      // market_id, so without this the order.create insert hit a NOT-NULL
+      // violation and orphaned the just-created customer. Resolving BEFORE the
+      // customer is created also avoids the orphan on failure. (Audit I6.)
+      const operatorProfile = await this.sendIdentityWithTimeout(
+        { cmd: 'identity.user.find_by_id' },
+        { id: req.user.sub },
+      ).catch(() => null);
+      const operatorData =
+        (operatorProfile as { data?: { market_id?: string | null } })?.data ??
+        null;
+      resolvedMarketId =
+        String(operatorData?.market_id ?? '').trim() || undefined;
+      if (!resolvedMarketId) {
+        throw new BadRequestException(
+          "Operator hech qaysi marketga biriktirilmagan — buyurtma yaratib bo'lmaydi",
+        );
+      }
     } else if (
       (roles.includes(RoleEnum.ADMIN) ||
         roles.includes(RoleEnum.SUPERADMIN) ||
@@ -887,7 +976,16 @@ export class OrderGatewayController {
     @Query('source') source?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Req() req?: { user: JwtUser },
   ) {
+    // A market role may only list its OWN orders — block cross-market reads.
+    const roles = this.normalizeRoles(req?.user?.roles);
+    if (
+      roles.includes(RoleEnum.MARKET) &&
+      String(req?.user?.sub ?? '') !== String(marketId)
+    ) {
+      throw new ForbiddenException('market role cannot query other market_id');
+    }
     const pagination = this.parsePaginationQuery(page, limit);
 
     return this.sendOrderWithFallback(
@@ -1092,6 +1190,12 @@ export class OrderGatewayController {
   ) {
     const roles = req?.user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
+    if (
+      normalizedRoles.includes(RoleEnum.MARKET) &&
+      String(req?.user?.sub ?? '') !== String(marketId)
+    ) {
+      throw new ForbiddenException('market role cannot query other market_id');
+    }
     const isBranchScopedRequester =
       normalizedRoles.includes(RoleEnum.BRANCH) ||
       normalizedRoles.includes(RoleEnum.MANAGER) ||
@@ -1128,12 +1232,14 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get order by ID' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
-  async findById(@Param('id') id: string) {
-    return this.sendOrderWithFallback(
+  async findById(@Param('id') id: string, @Req() req?: { user: JwtUser }) {
+    const response = await this.sendOrderWithFallback(
       { cmd: 'order.find_by_id_enriched' },
       { cmd: 'order.find_by_id' },
       { id },
     );
+    await this.assertCanViewOrder(req?.user, (response as any)?.data);
+    return response;
   }
 
   @Get('qr-code/:token')
@@ -1207,7 +1313,14 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get order tracking history by ID' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
-  getTracking(@Param('id') id: string) {
+  async getTracking(@Param('id') id: string, @Req() req?: { user: JwtUser }) {
+    // Authorize against the order itself before exposing its movement history.
+    const order = await this.sendOrderWithFallback(
+      { cmd: 'order.find_by_id_enriched' },
+      { cmd: 'order.find_by_id' },
+      { id },
+    ).catch(() => null);
+    await this.assertCanViewOrder(req?.user, (order as any)?.data);
     return firstValueFrom(
       this.orderClient
         .send({ cmd: 'order.tracking' }, { id })

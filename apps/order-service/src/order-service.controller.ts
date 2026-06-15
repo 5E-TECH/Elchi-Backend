@@ -390,6 +390,29 @@ export class OrderServiceController {
     );
   }
 
+  // State-only FIFO advance, called by the gateway right after a production
+  // finance.cashbox.payment_* succeeds, so order_settlement tracks which orders'
+  // COD reached which level (keeps the rollback guard accurate). (Audit I1/I2.)
+  @MessagePattern({ cmd: 'order.settlement.advance' })
+  settlementAdvance(
+    @Payload()
+    data: {
+      level: 'courier_to_branch' | 'branch_to_hq' | 'hq_to_market';
+      match_value: string;
+      amount: number;
+      requester_id?: string;
+      request_id?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.runIdempotent(
+      context,
+      'order.settlement.advance',
+      data.request_id,
+      () => this.orderService.advanceSettlement(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.settlement.find_by_order' })
   settlementFindByOrder(
     @Payload() data: { id: string },

@@ -146,6 +146,80 @@ async function main(): Promise<void> {
     `\n📊 Total: ${rows.length} cashboxes audited, ${drifted.length} drifted (tol=${EPSILON}).`,
   );
 
+  // -----------------------------------------------------------------
+  // Cross-system settlement reconciliation (Audit I3) — INFORMATIONAL.
+  // The per-order FIFO order_settlement ledger (order_schema) and the cashbox
+  // balances (finance_schema) are two views of the same money. If the
+  // production cash path stops advancing order_settlement (the split-brain
+  // failure), settlement rows pile up at PENDING while cashboxes keep moving.
+  // This section surfaces that drift. It never changes the exit code (the SQL
+  // spans two schemas and tolerates extra-cost/correction noise), so it cannot
+  // false-fail the migration gate — but it gives ops a real divergence signal.
+  // -----------------------------------------------------------------
+  try {
+    const statusDist: Array<{ status: string; n: string; total: string }> =
+      await ds.query(`
+        SELECT status::text AS status, COUNT(*)::text AS n,
+               COALESCE(SUM(market_amount),0)::text AS total
+        FROM order_schema.order_settlement
+        WHERE is_deleted = false
+        GROUP BY status
+        ORDER BY status
+      `);
+    if (statusDist.length) {
+      console.log('\n🔗 order_settlement status distribution:');
+      for (const s of statusDist) {
+        console.log(
+          `       ${s.status.padEnd(16)} count=${s.n}  Σmarket_amount=${s.total}`,
+        );
+      }
+    }
+
+    // Per-market: FOR_MARKET cashbox balance (what HQ owes the market) vs the
+    // sum of market_amount for that market's not-yet-MARKET_SETTLED orders.
+    const marketRecon: Array<{
+      market_id: string;
+      cashbox_balance: string;
+      unsettled_owed: string;
+      diff: string;
+    }> = await ds.query(`
+      SELECT os.market_id AS market_id,
+             cb.balance::text AS cashbox_balance,
+             COALESCE(SUM(os.market_amount),0)::text AS unsettled_owed,
+             (cb.balance - COALESCE(SUM(os.market_amount),0))::text AS diff
+      FROM order_schema.order_settlement os
+      JOIN finance_schema.cashboxes cb
+        ON cb.user_id = os.market_id
+       AND cb.cashbox_type = 'markets'
+       AND cb.is_deleted = false
+      WHERE os.is_deleted = false AND os.status <> 'market_settled'
+      GROUP BY os.market_id, cb.balance
+      ORDER BY ABS(cb.balance - COALESCE(SUM(os.market_amount),0)) DESC
+      LIMIT 20
+    `);
+    const RECON_TOL = 1; // som; absorbs extra-cost/correction noise
+    const diverging = marketRecon.filter((m) => Math.abs(Number(m.diff)) > RECON_TOL);
+    if (diverging.length) {
+      console.log(
+        `\n⚠️  Settlement↔cashbox divergence (top ${diverging.length} markets, informational):`,
+      );
+      for (const m of diverging) {
+        console.log(
+          `       market=${m.market_id}  for_market_balance=${m.cashbox_balance}  unsettled_owed=${m.unsettled_owed}  diff=${m.diff}`,
+        );
+      }
+      console.log(
+        '       (large/persistent diffs = settlement not advancing with the cashbox — investigate.)',
+      );
+    } else {
+      console.log('\n✅ Settlement ledger reconciles with FOR_MARKET cashboxes (within tol).');
+    }
+  } catch (err) {
+    console.log(
+      `\nℹ️  settlement reconciliation skipped: ${(err as Error)?.message ?? err}`,
+    );
+  }
+
   await ds.destroy();
 
   // -----------------------------------------------------------------

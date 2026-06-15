@@ -494,11 +494,19 @@ export class FinanceServiceService implements OnModuleInit {
     amount: number,
     operation: Operation_type,
     method: PaymentMethod,
+    // System-generated sale/settlement legs (via the outbox `update_balance`
+    // path) may drive a BRANCH cashbox negative — a sub-share sale legitimately
+    // leaves the branch owing negative (HQ tops up). Without this the branch
+    // EXPENSE leg threw, the outbox retried 10x and silently dropped, so HQ's
+    // view of branch debt was understated. Manual remittances keep the strict
+    // check (override stays false). (Audit I13.)
+    allowNegativeOverride = false,
   ) {
     const sign = operation === Operation_type.INCOME ? 1 : -1;
     const allowNegativeBalance =
       cashbox.cashbox_type === Cashbox_type.FOR_MARKET ||
-      cashbox.cashbox_type === Cashbox_type.FOR_COURIER;
+      cashbox.cashbox_type === Cashbox_type.FOR_COURIER ||
+      allowNegativeOverride;
 
     if (method === PaymentMethod.CASH) {
       const nextCash = Number(cashbox.balance_cash) + sign * amount;
@@ -733,6 +741,9 @@ export class FinanceServiceService implements OnModuleInit {
           Number(dto.amount),
           dto.operation_type,
           paymentMethod,
+          // System sale/settlement leg: a BRANCH cashbox may go negative here
+          // (sub-share sale; HQ tops up) so the leg is never poison-dropped.
+          cashbox.cashbox_type === Cashbox_type.BRANCH,
         );
 
         const savedCashbox = await queryRunner.manager.save(cashbox);
@@ -1587,6 +1598,40 @@ export class FinanceServiceService implements OnModuleInit {
     }
   }
 
+  /**
+   * Idempotency pre-check for a manual lump-sum transfer (courier/branch/market
+   * payment). Returns true when this exact payment — keyed by the gateway's
+   * per-request `dedup_epoch` token on the source-cashbox leg — has already been
+   * applied (duplicate RMQ delivery or operator double-submit). The caller must
+   * already hold the source cashbox row lock so it sees committed prior rows.
+   * (Audit P0-3.) When no token is supplied the transfer is not deduped
+   * (backward-compatible with callers that don't send one).
+   */
+  private async isDuplicateTransfer(
+    manager: EntityManager,
+    params: {
+      cashbox_id: string;
+      source_type: Source_type;
+      source_id: string;
+      operation_type: Operation_type;
+      dedup_epoch: string;
+    },
+  ): Promise<boolean> {
+    if (!params.dedup_epoch) {
+      return false;
+    }
+    const existing = await manager.findOne(CashboxHistory, {
+      where: {
+        cashbox_id: String(params.cashbox_id),
+        source_type: params.source_type,
+        source_id: String(params.source_id),
+        operation_type: params.operation_type,
+        dedup_epoch: params.dedup_epoch,
+      },
+    });
+    return !!existing;
+  }
+
   async paymentsFromCourier(data: {
     courier_id: string;
     amount: number;
@@ -1597,6 +1642,9 @@ export class FinanceServiceService implements OnModuleInit {
     created_by?: string;
     receiver_user_id?: string;
     receiver_cashbox_type?: Cashbox_type;
+    // Per-request idempotency token from the gateway; dedupes RMQ redelivery /
+    // double-submit so the cash is never moved twice. (Audit P0-3.)
+    dedup_epoch?: string;
   }) {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -1628,6 +1676,27 @@ export class FinanceServiceService implements OnModuleInit {
       });
       if (!courierCashbox)
         throw new NotFoundException('Courier cashbox not found');
+
+      // Idempotency: under the courier-cashbox lock, bail out if this exact
+      // payment was already applied (duplicate delivery / double-submit).
+      const dedupKey = String(data.dedup_epoch ?? '').trim();
+      const paymentSourceId = dedupKey ? String(data.courier_id) : null;
+      if (
+        await this.isDuplicateTransfer(queryRunner.manager, {
+          cashbox_id: String(courierCashbox.id),
+          source_type: Source_type.COURIER_PAYMENT,
+          source_id: String(data.courier_id),
+          operation_type: Operation_type.EXPENSE,
+          dedup_epoch: dedupKey,
+        })
+      ) {
+        await queryRunner.commitTransaction();
+        return this.successRes(
+          { idempotent: true },
+          200,
+          "To'lov allaqachon qabul qilingan (takroriy so'rov)",
+        );
+      }
 
       const receiverUserId = String(
         data.receiver_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
@@ -1667,6 +1736,8 @@ export class FinanceServiceService implements OnModuleInit {
         operation_type: Operation_type.EXPENSE,
         cashbox_id: courierCashbox.id,
         source_type: Source_type.COURIER_PAYMENT,
+        source_id: paymentSourceId,
+        dedup_epoch: dedupKey,
         amount: Number(data.amount),
         balance_after: courierCashbox.balance,
         balance_cash_after: courierCashbox.balance_cash,
@@ -1847,6 +1918,8 @@ export class FinanceServiceService implements OnModuleInit {
     payment_date?: string;
     comment?: string;
     created_by?: string;
+    // Per-request idempotency token from the gateway. (Audit P0-3.)
+    dedup_epoch?: string;
   }) {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -1864,6 +1937,26 @@ export class FinanceServiceService implements OnModuleInit {
       });
       if (!branchCashbox)
         throw new NotFoundException('Branch cashbox not found');
+
+      // Idempotency: under the branch-cashbox lock, bail out if already applied.
+      const dedupKey = String(data.dedup_epoch ?? '').trim();
+      const paymentSourceId = dedupKey ? String(data.branch_id) : null;
+      if (
+        await this.isDuplicateTransfer(queryRunner.manager, {
+          cashbox_id: String(branchCashbox.id),
+          source_type: Source_type.BRANCH_TO_MAIN,
+          source_id: String(data.branch_id),
+          operation_type: Operation_type.EXPENSE,
+          dedup_epoch: dedupKey,
+        })
+      ) {
+        await queryRunner.commitTransaction();
+        return this.successRes(
+          { idempotent: true },
+          200,
+          "To'lov allaqachon qabul qilingan (takroriy so'rov)",
+        );
+      }
 
       let mainCashbox = await queryRunner.manager.findOne(Cashbox, {
         where: {
@@ -1896,6 +1989,8 @@ export class FinanceServiceService implements OnModuleInit {
         operation_type: Operation_type.EXPENSE,
         cashbox_id: branchCashbox.id,
         source_type: Source_type.BRANCH_TO_MAIN,
+        source_id: paymentSourceId,
+        dedup_epoch: dedupKey,
         amount: Number(data.amount),
         balance_after: branchCashbox.balance,
         balance_cash_after: branchCashbox.balance_cash,
@@ -1974,6 +2069,8 @@ export class FinanceServiceService implements OnModuleInit {
     payment_date?: string;
     comment?: string;
     created_by?: string;
+    // Per-request idempotency token from the gateway. (Audit P0-3.)
+    dedup_epoch?: string;
   }) {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -2006,6 +2103,27 @@ export class FinanceServiceService implements OnModuleInit {
       if (!marketCashbox)
         throw new NotFoundException('Market cashbox not found');
 
+      // Idempotency: under the main+market cashbox locks, bail out if already
+      // applied (duplicate delivery / double-submit). (Audit P0-3.)
+      const dedupKey = String(data.dedup_epoch ?? '').trim();
+      const paymentSourceId = dedupKey ? String(data.market_id) : null;
+      if (
+        await this.isDuplicateTransfer(queryRunner.manager, {
+          cashbox_id: String(mainCashbox.id),
+          source_type: Source_type.MARKET_PAYMENT,
+          source_id: String(data.market_id),
+          operation_type: Operation_type.EXPENSE,
+          dedup_epoch: dedupKey,
+        })
+      ) {
+        await queryRunner.commitTransaction();
+        return this.successRes(
+          { idempotent: true },
+          200,
+          "To'lov allaqachon bajarilgan (takroriy so'rov)",
+        );
+      }
+
       this.updateBalancesByMethod(
         mainCashbox,
         Number(data.amount),
@@ -2018,6 +2136,8 @@ export class FinanceServiceService implements OnModuleInit {
           operation_type: Operation_type.EXPENSE,
           cashbox_id: mainCashbox.id,
           source_type: Source_type.MARKET_PAYMENT,
+          source_id: paymentSourceId,
+          dedup_epoch: dedupKey,
           amount: Number(data.amount),
           balance_after: mainCashbox.balance,
           balance_cash_after: mainCashbox.balance_cash,

@@ -1299,6 +1299,9 @@ export class LogisticsServiceService implements OnModuleInit {
         await this.updateOrder(orderId, {
           post_id: sentPost.id,
           status: Order_status.ON_THE_ROAD,
+          // Hand custody to the courier so the order's holder becomes COURIER
+          // (the parcel is now on the road with them). (Audit I12.)
+          courier_id: dto.courierId,
         }, trackingRequester);
       }
 
@@ -1345,7 +1348,12 @@ export class LogisticsServiceService implements OnModuleInit {
     for (const orderId of selectedIds) {
       await this.updateOrder(
         orderId,
-        { post_id: id, status: Order_status.ON_THE_ROAD },
+        {
+          post_id: id,
+          status: Order_status.ON_THE_ROAD,
+          // Hand custody to the courier (holder → COURIER). (Audit I12.)
+          courier_id: dto.courierId,
+        },
         trackingRequester,
       );
     }

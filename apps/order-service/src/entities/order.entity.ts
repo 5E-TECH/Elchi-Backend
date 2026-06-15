@@ -24,6 +24,10 @@ export enum OrderHolderType {
   HQ = 'HQ',
   BRANCH = 'BRANCH',
   COURIER = 'COURIER',
+  // Terminal custody state: the parcel was handed back to the market (returned /
+  // cancelled-and-returned). Closes the custody chain so a returned parcel is no
+  // longer attributed to a courier/branch. (Audit I10.)
+  MARKET = 'MARKET',
 }
 
 @Entity({ name: 'orders' })

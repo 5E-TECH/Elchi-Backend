@@ -3,6 +3,7 @@ import { OrderServiceService } from './order-service.service';
 import { Order_status, BranchTransferBatchStatus, BranchTransferDirection } from '@app/common';
 import { Order, OrderHolderType } from './entities/order.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
+import { OrderCustodyEvent } from './entities/order-custody-event.entity';
 
 describe('OrderServiceService return flow', () => {
   function makeService(options?: {
@@ -50,6 +51,11 @@ describe('OrderServiceService return flow', () => {
       save: jest.fn(async (x) => x),
     };
 
+    const custodyRepo = {
+      create: jest.fn((x) => x),
+      save: jest.fn(async (x) => x),
+    };
+
     const queryRunner = {
       connect: jest.fn(),
       startTransaction: jest.fn(),
@@ -60,6 +66,7 @@ describe('OrderServiceService return flow', () => {
         getRepository: jest.fn((entity: { name: string }) => {
           if (entity.name === Order.name) return orderRepo;
           if (entity.name === OrderTracking.name) return trackingRepo;
+          if (entity.name === OrderCustodyEvent.name) return custodyRepo;
           return {};
         }),
       },

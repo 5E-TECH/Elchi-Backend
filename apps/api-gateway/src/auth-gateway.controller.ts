@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  GatewayTimeoutException,
   Get,
   Inject,
   Patch,
@@ -11,7 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -52,6 +53,25 @@ export class AuthGatewayController {
 
   private static readonly REFRESH_COOKIE_NAME = 'refreshToken';
   private static readonly FALLBACK_REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+
+  /**
+   * Send to identity-service with a hard timeout. Without it, login/refresh and
+   * the other auth calls hang indefinitely when identity is down or a reply is
+   * lost, holding the socket until Cloudflare 524s it. (Audit P1-6.)
+   */
+  private sendIdentity<T = unknown>(
+    pattern: { cmd: string },
+    payload: object,
+  ): Promise<T> {
+    return firstValueFrom(
+      this.identityClient.send<T>(pattern, payload).pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Identity service response timeout');
+      }
+      throw error;
+    });
+  }
 
   private readCookie(req: Request, name: string): string | null {
     const cookieHeader = req.headers.cookie;
@@ -142,8 +162,9 @@ export class AuthGatewayController {
     @Body() dto: LoginRequestDto,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const response = (await firstValueFrom(
-      this.identityClient.send({ cmd: 'identity.login' }, dto),
+    const response = (await this.sendIdentity(
+      { cmd: 'identity.login' },
+      dto,
     )) as Record<string, unknown>;
 
     const refreshToken =
@@ -182,11 +203,9 @@ export class AuthGatewayController {
       throw new UnauthorizedException('Refresh token not found');
     }
 
-    const response = (await firstValueFrom(
-      this.identityClient.send(
-        { cmd: 'identity.refresh' },
-        { refreshToken },
-      ),
+    const response = (await this.sendIdentity(
+      { cmd: 'identity.refresh' },
+      { refreshToken },
     )) as Record<string, unknown>;
 
     const nextRefreshToken =
@@ -211,11 +230,9 @@ export class AuthGatewayController {
     @Req() req: { user: JwtUser },
     @Res({ passthrough: true }) res: Response,
   ) {
-    const response = await firstValueFrom(
-      this.identityClient.send(
-        { cmd: 'identity.logout' },
-        { userId: req.user.sub },
-      ),
+    const response = await this.sendIdentity(
+      { cmd: 'identity.logout' },
+      { userId: req.user.sub },
     );
     this.clearRefreshCookie(res);
     return response;
@@ -228,7 +245,10 @@ export class AuthGatewayController {
   @ApiOkResponse({ description: 'Token valid' })
   @ApiUnauthorizedResponse({ description: 'Unauthorized' })
   validate(@Req() req: { user: JwtUser }) {
-    return this.identityClient.send({ cmd: 'identity.validate' }, { userId: req.user.sub });
+    return this.sendIdentity(
+      { cmd: 'identity.validate' },
+      { userId: req.user.sub },
+    );
   }
 
   @Get('my-profile')
@@ -238,7 +258,10 @@ export class AuthGatewayController {
   @ApiOkResponse({ description: 'Current user profile' })
   @ApiUnauthorizedResponse({ description: 'Unauthorized' })
   myProfile(@Req() req: { user: JwtUser }) {
-    return this.identityClient.send({ cmd: 'identity.user.profile' }, { id: req.user.sub });
+    return this.sendIdentity(
+      { cmd: 'identity.user.profile' },
+      { id: req.user.sub },
+    );
   }
 
   @Patch('my-profile')
@@ -252,7 +275,7 @@ export class AuthGatewayController {
     @Req() req: { user: JwtUser },
     @Body() dto: UpdateAdminRequestDto,
   ) {
-    return this.identityClient.send(
+    return this.sendIdentity(
       { cmd: 'identity.user.update' },
       { id: req.user.sub, dto, requester: this.toRequester(req) },
     );
@@ -268,7 +291,7 @@ export class AuthGatewayController {
     @Req() req: { user: JwtUser },
     @Body() body: { settings: Record<string, unknown> | null },
   ) {
-    return this.identityClient.send(
+    return this.sendIdentity(
       { cmd: 'identity.me.update_settings' },
       { id: req.user.sub, settings: body?.settings ?? null },
     );

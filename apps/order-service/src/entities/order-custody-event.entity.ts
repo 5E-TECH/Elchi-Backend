@@ -10,7 +10,7 @@ import {
 import { Order } from './order.entity';
 import type { OrderHolderType } from './order.entity';
 
-const ORDER_HOLDER_TYPES = ['HQ', 'BRANCH', 'COURIER'] as const;
+const ORDER_HOLDER_TYPES = ['HQ', 'BRANCH', 'COURIER', 'MARKET'] as const;
 
 @Entity({ name: 'order_custody_events' })
 @Index('IDX_order_custody_events_order_id_created_at', ['order_id', 'created_at'])

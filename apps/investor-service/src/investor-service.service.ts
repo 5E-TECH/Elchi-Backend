@@ -615,7 +615,24 @@ export class InvestorServiceService {
     );
 
     const result: ProfitShare[] = [];
+    let skipped_count = 0;
     for (const investor of investors) {
+      // Idempotency: a profit-share for this investor + exact period already
+      // exists → skip, so a double-click or re-run does not create a duplicate
+      // obligation the operator could pay twice. (Audit P1-10.)
+      const existing = await this.profitShareRepo.findOne({
+        where: {
+          investor_id: investor.id,
+          period_start,
+          period_end,
+          isDeleted: false,
+        },
+      });
+      if (existing) {
+        skipped_count += 1;
+        continue;
+      }
+
       const totalInvestment = totalsMap.get(String(investor.id)) ?? 0;
       const amount = Number(((totalInvestment * percentage) / 100).toFixed(2));
 
@@ -648,10 +665,13 @@ export class InvestorServiceService {
     return successRes(
       {
         calculated_count: result.length,
+        skipped_count,
         items: result,
       },
       201,
-      'profit calculated',
+      skipped_count > 0
+        ? `profit calculated (${skipped_count} ta investor uchun bu davr allaqachon hisoblangan — o'tkazib yuborildi)`
+        : 'profit calculated',
     );
   }
 
