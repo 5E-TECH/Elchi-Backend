@@ -44,6 +44,9 @@ interface OrderRow {
   post_id?: string | null;
   canceled_post_id?: string | null;
   branch_id?: string | null;
+  holder_type?: 'HQ' | 'BRANCH' | 'COURIER' | null;
+  holder_branch_id?: string | null;
+  holder_courier_id?: string | null;
   courier_id?: string | null;
   assigned_at?: string | Date | null;
   region_id?: string | null;
@@ -2643,7 +2646,13 @@ export class LogisticsServiceService implements OnModuleInit {
           'Some orders are not in CANCELED or CANCELED_SENT status',
         );
       }
-      if (String(order.branch_id ?? '') !== sourceBranchId) {
+      const orderBranchId = String(
+        order.holder_branch_id ?? order.branch_id ?? '',
+      ).trim();
+      if (
+        orderBranchId !== sourceBranchId ||
+        (order.holder_type && order.holder_type !== 'BRANCH')
+      ) {
         this.forbidden(
           'Manager faqat o‘z branchidagi bekor qilingan orderlarni HQga jo‘nata oladi',
         );
