@@ -3,12 +3,16 @@ import { OrderServiceService } from './order-service.service';
 describe('OrderServiceService filters', () => {
   function setup() {
     const qb = {
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
       leftJoinAndSelect: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
       skip: jest.fn().mockReturnThis(),
       take: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue([]),
       getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
     };
 
@@ -109,6 +113,33 @@ describe('OrderServiceService filters', () => {
     expect(qb.skip).not.toHaveBeenCalled();
     expect(qb.take).not.toHaveBeenCalled();
     expect(result).toEqual({ data: [], total: 0 });
+  });
+
+  it('groups only unassigned CANCELLED orders held by the requested scope', async () => {
+    const { service, qb } = setup();
+
+    const result = await service.findCancelledMarkets({
+      branch_id: '16',
+      holder_type: 'BRANCH' as any,
+    });
+
+    expect(qb.andWhere).toHaveBeenCalledWith('order.status = :status', {
+      status: 'cancelled',
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'order.holder_type = :holder_type',
+      {
+        holder_type: 'BRANCH',
+      },
+    );
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'order.holder_branch_id = :branch_id',
+      {
+        branch_id: '16',
+      },
+    );
+    expect(qb.andWhere).toHaveBeenCalledWith('order.canceled_post_id IS NULL');
+    expect(result).toEqual([]);
   });
 
   it('credits the full order amount to branch cashbox for manager-direct sales', () => {

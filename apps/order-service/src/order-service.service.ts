@@ -3211,6 +3211,85 @@ export class OrderServiceService implements OnModuleInit {
     });
   }
 
+  async findCancelledMarkets(options: {
+    market_id?: string;
+    branch_id?: string;
+    holder_type?: OrderHolderType;
+    exclude_branch_source?: boolean;
+  }) {
+    const qb = this.orderRepo
+      .createQueryBuilder('order')
+      .select('order.market_id', 'market_id')
+      .addSelect('COUNT(order.id)', 'orders_count')
+      .addSelect('COALESCE(SUM(order.total_price), 0)', 'total_price_sum')
+      .where('order.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('order.status = :status', {
+        status: Order_status.CANCELLED,
+      })
+      .andWhere('order.canceled_post_id IS NULL')
+      .groupBy('order.market_id')
+      .orderBy('orders_count', 'DESC');
+
+    if (options.market_id) {
+      qb.andWhere('order.market_id = :market_id', {
+        market_id: options.market_id,
+      });
+    }
+    if (options.holder_type) {
+      qb.andWhere('order.holder_type = :holder_type', {
+        holder_type: options.holder_type,
+      });
+    }
+    if (options.branch_id) {
+      qb.andWhere('order.holder_branch_id = :branch_id', {
+        branch_id: options.branch_id,
+      });
+    }
+    if (options.exclude_branch_source) {
+      qb.andWhere('order.source != :branch_source', {
+        branch_source: Order_source.BRANCH,
+      });
+    }
+
+    let rows: Array<{
+      market_id: string;
+      orders_count: string;
+      total_price_sum: string;
+    }>;
+    try {
+      rows = await qb.getRawMany();
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    return rows.map((row) => ({
+      market_id: row.market_id,
+      orders_count: Number(row.orders_count),
+      total_price_sum: Number(row.total_price_sum),
+    }));
+  }
+
+  async findCancelledOrdersByMarket(
+    market_id: string,
+    options: {
+      branch_id?: string;
+      holder_type?: OrderHolderType;
+      exclude_branch_source?: boolean;
+    },
+  ) {
+    return this.findAll({
+      market_id,
+      branch_id: options.branch_id,
+      status: Order_status.CANCELLED,
+      holder_type: options.holder_type,
+      canceled_post_unassigned: true,
+      ...(options.exclude_branch_source
+        ? { exclude_sources: [Order_source.BRANCH] }
+        : {}),
+      disable_pagination: true,
+    });
+  }
+
   async findAllExternal(query: {
     market_id?: string;
     status?: Order_status | Order_status[] | string | string[];
@@ -5838,6 +5917,54 @@ export class OrderServiceService implements OnModuleInit {
       branch_id,
       exclude_branch_source,
     );
+    const enriched = await this.enrichOrders(result.data);
+    return {
+      data: enriched,
+      total: result.total,
+    };
+  }
+
+  async findCancelledMarketsEnriched(options: {
+    market_id?: string;
+    branch_id?: string;
+    holder_type?: OrderHolderType;
+    exclude_branch_source?: boolean;
+  }) {
+    const rows = await this.findCancelledMarkets(options);
+    const marketIds = rows.map((row) => row.market_id).filter(Boolean);
+
+    if (!marketIds.length) return rows;
+
+    const marketsRes = await rmqSend<{
+      data: Array<{ id: string; [key: string]: any }>;
+    }>(
+      this.identityClient,
+      { cmd: 'identity.market.find_by_ids' },
+      { ids: marketIds },
+    ).catch(() => ({ data: [] as Array<{ id: string; [key: string]: any }> }));
+
+    const marketMap = new Map(
+      (marketsRes?.data ?? []).map((market): [string, typeof market] => [
+        String(market.id),
+        market,
+      ]),
+    );
+
+    return rows.map((row) => ({
+      ...row,
+      market: marketMap.get(row.market_id) ?? null,
+    }));
+  }
+
+  async findCancelledByMarketEnriched(
+    market_id: string,
+    options: {
+      branch_id?: string;
+      holder_type?: OrderHolderType;
+      exclude_branch_source?: boolean;
+    },
+  ) {
+    const result = await this.findCancelledOrdersByMarket(market_id, options);
     const enriched = await this.enrichOrders(result.data);
     return {
       data: enriched,
