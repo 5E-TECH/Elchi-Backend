@@ -3,6 +3,7 @@ import {
   BadRequestException,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Inject,
   Param,
@@ -112,13 +113,31 @@ export class FileGatewayController {
     return this.fileClient.send({ cmd: 'file.get_url' }, { key, expires_in });
   }
 
+  // Object-key prefixes that may be served UNAUTHENTICATED (so plain <img src>
+  // works): public catalog images and operational batch photos only. Everything
+  // else — expense-proof / COD-evidence / ad-hoc uploads — is private and must
+  // go through the authenticated signed-URL route (GET files/:key). (Audit P1-7.)
+  private static readonly PUBLIC_VIEW_PREFIXES = [
+    'products-',
+    'branch-transfer-batches-',
+  ];
+
   @Get('files/view/:key')
-  @ApiOperation({ summary: 'Public redirect to file URL for image/file viewing' })
+  @ApiOperation({ summary: 'Public view for whitelisted (catalog/batch) images' })
   @ApiParam({ name: 'key', description: 'Object key in MinIO' })
   async viewFile(
     @Param('key') key: string,
     @Res() res: Response,
   ) {
+    const safeKey = String(key ?? '');
+    const isPublic = FileGatewayController.PUBLIC_VIEW_PREFIXES.some((prefix) =>
+      safeKey.startsWith(prefix),
+    );
+    if (!isPublic) {
+      throw new ForbiddenException(
+        'Bu fayl ochiq ko‘rishga ruxsat etilmagan; autentifikatsiyalangan imzolangan URL ishlating',
+      );
+    }
     const response = await firstValueFrom(
       this.fileClient.send<{ data?: { body_base64?: string; mime_type?: string } }>(
         { cmd: 'file.read' },

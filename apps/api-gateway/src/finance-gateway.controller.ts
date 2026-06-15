@@ -21,6 +21,7 @@ import {
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
+import { randomUUID } from 'node:crypto';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { Roles } from './auth/roles.decorator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -595,6 +596,11 @@ export class FinanceGatewayController {
           ? managerTariffCenter
           : managerTariffHome;
       const courierId = String(order?.courier_id ?? '').trim();
+      // Prefer the snapshotted courier_share (what the courier actually KEEPS —
+      // 0 for SALARY_ONLY couriers) so this display matches the authoritative
+      // settlement ledger. Fall back to the snapshotted tariff, then live tariff
+      // for older orders that predate share snapshots. (Audit I4.)
+      const courierShareFromOrder = Number(order?.courier_share ?? NaN);
       const courierTariffFromOrder = Number(order?.courier_tariff ?? NaN);
       const courierTariffByUser =
         courierId && courierTariffMap.has(courierId)
@@ -603,9 +609,11 @@ export class FinanceGatewayController {
             : Number(courierTariffMap.get(courierId)?.home ?? 0)
           : 0;
       const courierShare = Math.max(
-        Number.isFinite(courierTariffFromOrder)
-          ? courierTariffFromOrder
-          : courierTariffByUser,
+        Number.isFinite(courierShareFromOrder)
+          ? courierShareFromOrder
+          : Number.isFinite(courierTariffFromOrder)
+            ? courierTariffFromOrder
+            : courierTariffByUser,
         0,
       );
 
@@ -1139,6 +1147,40 @@ export class FinanceGatewayController {
     return this.attachCreatedByUsersToHistory(response);
   }
 
+  /**
+   * After a production cash handover moves the cashbox, advance the per-order
+   * FIFO order_settlement ledger to the matching level (state only, no extra
+   * cashbox posting). Best-effort + idempotent (reuses the payment's dedup
+   * token): the cash already moved, so a failure here is caught by the
+   * reconciliation job, never blocks the payment. (Audit I1/I2.)
+   */
+  private async advanceOrderSettlement(
+    level: 'courier_to_branch' | 'branch_to_hq' | 'hq_to_market',
+    matchValue: string,
+    amount: number,
+    requesterId: string,
+    requestId: string,
+  ): Promise<void> {
+    try {
+      await firstValueFrom(
+        this.orderClient
+          .send(
+            { cmd: 'order.settlement.advance' },
+            {
+              level,
+              match_value: String(matchValue ?? ''),
+              amount: Number(amount ?? 0),
+              requester_id: requesterId,
+              request_id: requestId,
+            },
+          )
+          .pipe(timeout(8000)),
+      );
+    } catch {
+      // Best-effort — cashbox is already moved; reconciliation flags any drift.
+    }
+  }
+
   @Post('cashbox/payment/courier')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
@@ -1190,11 +1232,16 @@ export class FinanceGatewayController {
       }
     }
 
-    return this.send(
+    // Per-request idempotency token: a redelivered RMQ message reuses it so the
+    // cash transfer is applied at most once (P0-3), and the settlement advance
+    // reuses the same token so it dedupes too (I1/I2).
+    const token = randomUUID();
+    const result = await this.send(
       { cmd: 'finance.cashbox.payment_courier' },
       {
         ...dto,
         created_by: req.user.sub,
+        dedup_epoch: token,
         ...(isManager
           ? {
               receiver_user_id: receiverBranchId,
@@ -1203,6 +1250,15 @@ export class FinanceGatewayController {
           : {}),
       },
     );
+    // courier → branch: advance the courier's oldest PENDING orders by FIFO.
+    await this.advanceOrderSettlement(
+      'courier_to_branch',
+      String(dto.courier_id),
+      Number(dto.amount),
+      String(req.user.sub),
+      token,
+    );
+    return result;
   }
 
   @Post('cashbox/payment/market')
@@ -1211,19 +1267,29 @@ export class FinanceGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Payment to market' })
   @ApiBody({ type: PaymentToMarketRequestDto })
-  paymentToMarket(
+  async paymentToMarket(
     @Req() req: { user: JwtUser },
     @Body() dto: PaymentToMarketRequestDto,
   ) {
-    return this.send(
+    const token = randomUUID();
+    const result = await this.send(
       { cmd: 'finance.cashbox.payment_market' },
-      { ...dto, created_by: req.user.sub },
+      { ...dto, created_by: req.user.sub, dedup_epoch: token },
     );
+    // HQ → market: advance the market's oldest BRANCH_SETTLED orders by FIFO.
+    await this.advanceOrderSettlement(
+      'hq_to_market',
+      String(dto.market_id),
+      Number(dto.amount),
+      String(req.user.sub),
+      token,
+    );
+    return result;
   }
 
   @Post('cashbox/payment/branch-to-main')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER)
   @ApiBearerAuth()
   @ApiOperation({
     summary: 'Transfer money from branch manager cashbox to HQ main cashbox',
@@ -1233,7 +1299,26 @@ export class FinanceGatewayController {
     @Req() req: { user: JwtUser },
     @Body() dto: PaymentBranchToMainRequestDto,
   ) {
-    const branchId = String(dto.branch_id ?? '').trim();
+    let branchId = String(dto.branch_id ?? '').trim();
+
+    // A manager may remit ONLY their own branch's cash to HQ — force the branch
+    // to their assignment and reject any attempt to remit another branch.
+    // (Audit I5: managers now have a real branch→HQ settle action.)
+    if (this.isManager(req?.user) && !this.isPrivileged(req?.user)) {
+      const managerBranchId =
+        this.extractBranchId(req.user) ||
+        (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
+      if (!managerBranchId) {
+        throw new ForbiddenException("Managerning branch'i topilmadi");
+      }
+      if (branchId && branchId !== String(managerBranchId)) {
+        throw new ForbiddenException(
+          "Siz faqat o'z branch'ingiz pulini HQ ga topshira olasiz",
+        );
+      }
+      branchId = String(managerBranchId);
+    }
+
     if (!branchId) {
       throw new ForbiddenException('branch_id yuborilishi shart');
     }
@@ -1243,7 +1328,8 @@ export class FinanceGatewayController {
       { id: branchId, requester: this.toRequester(req.user) },
     );
 
-    return this.send(
+    const token = randomUUID();
+    const result = await this.send(
       { cmd: 'finance.cashbox.payment_branch_main' },
       {
         branch_id: branchId,
@@ -1252,8 +1338,18 @@ export class FinanceGatewayController {
         payment_date: dto.payment_date,
         comment: dto.comment,
         created_by: req.user.sub,
+        dedup_epoch: token,
       },
     );
+    // branch → HQ: advance the branch's oldest COURIER_SETTLED orders by FIFO.
+    await this.advanceOrderSettlement(
+      'branch_to_hq',
+      branchId,
+      Number(dto.amount),
+      String(req.user.sub),
+      token,
+    );
+    return result;
   }
 
   @Get('cashbox/all-info')

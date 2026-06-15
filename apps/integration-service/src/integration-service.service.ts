@@ -369,6 +369,9 @@ export class IntegrationServiceService {
         method,
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload),
+        // Bound the outbound call so a slow/hung provider cannot wedge the sync
+        // worker (which holds the session advisory lock). (Audit P1-11.)
+        signal: AbortSignal.timeout(15_000),
       });
 
       if (!response.ok) {
@@ -720,6 +723,14 @@ export class IntegrationServiceService {
     delete safe.api_key;
     delete safe.api_secret;
     delete safe.password;
+    delete safe.token;
+    delete safe.access_token;
+    // Webhook HMAC secret is the ONLY auth for inbound provider webhooks — it
+    // must never leave the service, even to a SUPERADMIN read. Expose only
+    // whether one is configured.
+    safe.has_webhook_secret = !!safe.webhook_secret;
+    delete safe.webhook_secret;
+    delete safe.webhook_secret_previous;
     safe.credentials = this.maskCredentials(safe.credentials);
 
     return {
@@ -803,10 +814,17 @@ export class IntegrationServiceService {
       const finalUrl = `${url}${query}`;
       await this.assertOutboundUrlSafe(finalUrl);
 
+      // Apply the (now-honoured) request timeout so a stalled provider can't
+      // wedge the sync pipeline while holding the advisory lock. (Audit P1-11.)
+      const timeoutMs = Math.min(
+        Math.max(Number(input.timeout_ms ?? 0) || 15_000, 1_000),
+        60_000,
+      );
       const response = await fetch(finalUrl, {
         method,
         headers,
         body: typeof input.body === 'undefined' || method === 'GET' ? undefined : JSON.stringify(input.body),
+        signal: AbortSignal.timeout(timeoutMs),
       });
 
       const rawText = await response.text();

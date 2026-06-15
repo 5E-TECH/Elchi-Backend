@@ -13,6 +13,7 @@ import { ApiBearerAuth, ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { Roles as RoleEnum } from '@app/common';
+import { ArrayNotEmpty, IsArray, IsString } from 'class-validator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
@@ -23,6 +24,9 @@ import {
 } from './printer/printer.util';
 
 class PrintOrdersDto {
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsString({ each: true })
   order_ids!: string[];
 }
 

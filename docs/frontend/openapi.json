@@ -994,6 +994,29 @@
         ]
       }
     },
+    "/auth/my-settings": {
+      "patch": {
+        "operationId": "AuthGatewayController_updateMySettings",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Settings updated"
+          },
+          "401": {
+            "description": "Unauthorized"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update current user UI settings/preferences",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
     "/product/health": {
       "get": {
         "operationId": "CatalogGatewayController_health",
@@ -1908,30 +1931,6 @@
             "description": "Market ID (id)",
             "schema": {
               "type": "string"
-            }
-          },
-          {
-            "name": "page",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "default": 1,
-              "minimum": 1
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "default": 10,
-              "enum": [
-                10,
-                25,
-                50,
-                100
-              ],
-              "type": "number"
             }
           }
         ],
@@ -4689,8 +4688,9 @@
             "schema": {
               "enum": [
                 "main",
-                "for_courier",
-                "for_market"
+                "couriers",
+                "markets",
+                "branch"
               ],
               "type": "string"
             }
@@ -4703,8 +4703,9 @@
             "schema": {
               "enum": [
                 "main",
-                "for_courier",
-                "for_market"
+                "couriers",
+                "markets",
+                "branch"
               ],
               "type": "string"
             }
@@ -5225,6 +5226,253 @@
           }
         },
         "summary": "Notification service health check",
+        "tags": [
+          "Notification"
+        ]
+      }
+    },
+    "/notifications/inbox": {
+      "get": {
+        "operationId": "NotificationGatewayController_listInbox",
+        "parameters": [
+          {
+            "name": "is_read",
+            "required": false,
+            "in": "query",
+            "description": "Filter by read state",
+            "schema": {
+              "example": false,
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "type",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "order.sold",
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "order",
+                "finance",
+                "branch",
+                "logistics",
+                "account",
+                "system",
+                "marketing"
+              ]
+            }
+          },
+          {
+            "name": "priority",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "low",
+                "normal",
+                "high",
+                "critical"
+              ]
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Current user's notification inbox",
+        "tags": [
+          "Notification"
+        ]
+      }
+    },
+    "/notifications/inbox/unread-count": {
+      "get": {
+        "operationId": "NotificationGatewayController_unreadCount",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Current user unread notification count",
+        "tags": [
+          "Notification"
+        ]
+      }
+    },
+    "/notifications/inbox/{id}": {
+      "get": {
+        "operationId": "NotificationGatewayController_findOneInbox",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "10",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get one of my notifications",
+        "tags": [
+          "Notification"
+        ]
+      },
+      "delete": {
+        "operationId": "NotificationGatewayController_deleteInbox",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "10",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Delete one of my notifications",
+        "tags": [
+          "Notification"
+        ]
+      }
+    },
+    "/notifications/inbox/read-all": {
+      "patch": {
+        "operationId": "NotificationGatewayController_markAllRead",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Mark all my notifications read",
+        "tags": [
+          "Notification"
+        ]
+      }
+    },
+    "/notifications/inbox/{id}/read": {
+      "patch": {
+        "operationId": "NotificationGatewayController_markRead",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "10",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Mark one of my notifications read (or unread)",
+        "tags": [
+          "Notification"
+        ]
+      }
+    },
+    "/notifications/dispatch": {
+      "post": {
+        "operationId": "NotificationGatewayController_dispatch",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DispatchNotificationRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Manually dispatch a notification (admin/testing)",
         "tags": [
           "Notification"
         ]
@@ -8172,6 +8420,36 @@
         ]
       }
     },
+    "/files/view/{key}": {
+      "get": {
+        "operationId": "FileGatewayController_viewFile",
+        "parameters": [
+          {
+            "name": "key",
+            "required": true,
+            "in": "path",
+            "description": "Object key in MinIO",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Public redirect to file URL for image/file viewing",
+        "tags": [
+          "File"
+        ]
+      }
+    },
     "/files/qr": {
       "post": {
         "operationId": "FileGatewayController_generateQr",
@@ -8762,6 +9040,357 @@
         "summary": "Smenalarni Excel (.xlsx) ga eksport qilish",
         "tags": [
           "Excel Export"
+        ]
+      }
+    },
+    "/activity-logs/actions": {
+      "get": {
+        "operationId": "AuditGatewayController_actions",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Known audit action verbs (for filter dropdowns)",
+        "tags": [
+          "Activity Log"
+        ]
+      }
+    },
+    "/activity-logs": {
+      "get": {
+        "operationId": "AuditGatewayController_list",
+        "parameters": [
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Max 100",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "service",
+            "required": false,
+            "in": "query",
+            "description": "Restrict to one service schema",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "identity",
+                "order",
+                "finance",
+                "branch",
+                "integration",
+                "logistics",
+                "catalog",
+                "investor",
+                "notification"
+              ]
+            }
+          },
+          {
+            "name": "entity_type",
+            "required": false,
+            "in": "query",
+            "description": "entity_type filter",
+            "schema": {
+              "example": "Order",
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "123",
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "status_change",
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "required": false,
+            "in": "query",
+            "description": "Actor user id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_role",
+            "required": false,
+            "in": "query",
+            "description": "Actor role contains",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trace_id",
+            "required": false,
+            "in": "query",
+            "description": "Correlation id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "created_at lower bound (ISO date or datetime)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "created_at upper bound (ISO date or datetime)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Free-text across type/id/action/actor name",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Audit-log feed (merged across services, enriched)",
+        "tags": [
+          "Activity Log"
+        ]
+      }
+    },
+    "/activity-logs/entity/{entity_type}/{entity_id}": {
+      "get": {
+        "operationId": "AuditGatewayController_entityHistory",
+        "parameters": [
+          {
+            "name": "entity_type",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "Order",
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity_id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "123",
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Full history of one entity (merged across services)",
+        "tags": [
+          "Activity Log"
+        ]
+      }
+    },
+    "/activity-logs/user/{user_id}": {
+      "get": {
+        "operationId": "AuditGatewayController_userHistory",
+        "parameters": [
+          {
+            "name": "user_id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "42",
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "description": "Max 100",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "service",
+            "required": false,
+            "in": "query",
+            "description": "Restrict to one service schema",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "identity",
+                "order",
+                "finance",
+                "branch",
+                "integration",
+                "logistics",
+                "catalog",
+                "investor",
+                "notification"
+              ]
+            }
+          },
+          {
+            "name": "entity_type",
+            "required": false,
+            "in": "query",
+            "description": "entity_type filter",
+            "schema": {
+              "example": "Order",
+              "type": "string"
+            }
+          },
+          {
+            "name": "entity_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "123",
+              "type": "string"
+            }
+          },
+          {
+            "name": "action",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "status_change",
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_role",
+            "required": false,
+            "in": "query",
+            "description": "Actor role contains",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "trace_id",
+            "required": false,
+            "in": "query",
+            "description": "Correlation id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "created_at lower bound (ISO date or datetime)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "created_at upper bound (ISO date or datetime)",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "description": "Free-text across type/id/action/actor name",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Everything a user did (merged across services)",
+        "tags": [
+          "Activity Log"
         ]
       }
     },
@@ -10453,6 +11082,119 @@
         "required": [
           "operator_id",
           "amount"
+        ]
+      },
+      "DispatchNotificationRequestDto": {
+        "type": "object",
+        "properties": {
+          "recipient_id": {
+            "type": "string",
+            "example": "42",
+            "description": "Single recipient user id"
+          },
+          "recipient_ids": {
+            "example": [
+              "42",
+              "43"
+            ],
+            "description": "Explicit recipient list",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "roles": {
+            "example": [
+              "courier",
+              "manager"
+            ],
+            "description": "Target all users of these roles",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "broadcast": {
+            "type": "boolean",
+            "example": false,
+            "description": "Send to every active user"
+          },
+          "type": {
+            "type": "string",
+            "example": "order.sold",
+            "description": "Event key `{domain}.{event}`"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "order",
+              "finance",
+              "branch",
+              "logistics",
+              "account",
+              "system",
+              "marketing"
+            ],
+            "example": "order"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "critical"
+            ],
+            "example": "normal"
+          },
+          "title": {
+            "type": "string",
+            "example": "Buyurtma sotildi"
+          },
+          "body": {
+            "type": "string",
+            "example": "#123 buyurtma muvaffaqiyatli yetkazildi."
+          },
+          "data": {
+            "type": "object",
+            "example": {
+              "order_id": "123"
+            }
+          },
+          "link": {
+            "type": "string",
+            "example": "/orders/123"
+          },
+          "channels": {
+            "type": "array",
+            "example": [
+              "in_app",
+              "realtime"
+            ],
+            "items": {
+              "type": "string",
+              "enum": [
+                "in_app",
+                "realtime",
+                "telegram",
+                "email",
+                "sms"
+              ]
+            }
+          },
+          "group_key": {
+            "type": "string",
+            "example": "order-123",
+            "description": "Dedupe/collapse key"
+          },
+          "telegram": {
+            "type": "object",
+            "description": "Optional telegram relay target"
+          }
+        },
+        "required": [
+          "type",
+          "title"
         ]
       },
       "CreateTelegramMarketRequestDto": {

@@ -46,13 +46,31 @@ describe('FinanceGatewayController', () => {
     return { controller, financeClient, branchClient };
   }
 
-  it('does not allow managers to create branch-to-main payments', () => {
+  it('allows managers to create branch-to-main payments (scoped to own branch)', () => {
+    // Audit I5: managers now have a real branch→HQ settle action — they were
+    // previously locked out with no way to record remitting their branch's cash.
     const roles = Reflect.getMetadata(
       ROLES_KEY,
       FinanceGatewayController.prototype.paymentBranchToMain,
     );
 
-    expect(roles).toEqual(['superadmin', 'admin']);
+    expect(roles).toEqual(['superadmin', 'admin', 'manager']);
+  });
+
+  it('forbids a manager remitting another branch to HQ', async () => {
+    const { controller } = setup();
+    const req = {
+      user: { sub: 'm1', roles: ['manager'], branch_id: 'B1' },
+    } as any;
+
+    // Manager belongs to B1 but tries to remit B2 → rejected before any send.
+    await expect(
+      controller.paymentBranchToMain(req, {
+        branch_id: 'B2',
+        amount: 1000,
+        payment_method: 'cash',
+      } as any),
+    ).rejects.toThrow();
   });
 
   it('shows all payment history from the manager branch cashbox', async () => {

@@ -206,9 +206,16 @@ export class AnalyticsGatewayController {
   }
 
   @Get('reports/couriers')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.MANAGER,
+    RoleEnum.BRANCH,
+    RoleEnum.REGISTRATOR,
+  )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Courier report' })
+  @ApiOperation({ summary: 'Courier report (operational staff only)' })
   @ApiQuery({ name: 'fromDate', required: false, type: String })
   @ApiQuery({ name: 'toDate', required: false, type: String })
   getCourierReport(

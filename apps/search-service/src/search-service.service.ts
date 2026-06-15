@@ -26,7 +26,14 @@ interface QueryPayload {
   source?: string;
   page?: number;
   limit?: number;
+  // Set by the gateway from the JWT. Used to scope results so a low-privilege
+  // account cannot harvest cross-tenant PII / order financials from the index.
+  requester?: { id?: string; roles?: string[] };
 }
+
+// Sources that contain user/staff PII (phones, usernames) — privileged-only.
+const PII_SOURCES = ['identity', 'identity_fallback'];
+const PRIVILEGED_SEARCH_ROLES = ['superadmin', 'admin'];
 
 @Injectable()
 export class SearchServiceService {
@@ -95,6 +102,14 @@ export class SearchServiceService {
     const skip = (page - 1) * limit;
     const q = payload.q?.trim();
 
+    const roles = (payload.requester?.roles ?? []).map((r) =>
+      String(r ?? '').toLowerCase(),
+    );
+    const requesterId = String(payload.requester?.id ?? '').trim();
+    const isPrivileged = roles.some((r) =>
+      PRIVILEGED_SEARCH_ROLES.includes(r),
+    );
+
     const qb = this.docs
       .createQueryBuilder('doc')
       .where('doc.isDeleted = :isDeleted', { isDeleted: false });
@@ -105,6 +120,25 @@ export class SearchServiceService {
 
     if (payload.source) {
       qb.andWhere('doc.source = :source', { source: payload.source });
+    }
+
+    if (!isPrivileged) {
+      // Never expose user/staff PII (phones, usernames) to non-privileged roles.
+      qb.andWhere('doc.source NOT IN (:...piiSources)', {
+        piiSources: PII_SOURCES,
+      });
+      // Order documents are owner-scoped: a non-privileged caller sees an order
+      // row only when its metadata market_id/courier_id/customer_id is theirs.
+      qb.andWhere(
+        `(doc.source <> :orderSource OR (
+            :rid <> '' AND (
+              doc.metadata->>'market_id' = :rid OR
+              doc.metadata->>'courier_id' = :rid OR
+              doc.metadata->>'customer_id' = :rid
+            )
+          ))`,
+        { orderSource: 'order', rid: requesterId },
+      );
     }
 
     if (q) {
@@ -120,10 +154,22 @@ export class SearchServiceService {
       .take(limit)
       .getManyAndCount();
 
+    // Strip content/metadata/tags for non-privileged callers — the projection
+    // returns only enough to render a result and navigate to the entity.
+    const items = isPrivileged
+      ? rows
+      : rows.map((r) => ({
+          id: r.id,
+          source: r.source,
+          type: r.type,
+          sourceId: r.sourceId,
+          title: r.title,
+        }));
+
     return {
       success: true,
       data: {
-        items: rows,
+        items,
         meta: {
           page,
           limit,

@@ -7,7 +7,11 @@ import * as Joi from 'joi';
  */
 const rejectWeakSecret: Joi.CustomValidator<string> = (value, helpers) => {
   const v = String(value);
-  if (/replace|changeme|example|your[_-]?secret|^secret$|^password$/i.test(v)) {
+  if (
+    /replace|change[_-]?me|example|placeholder|your[_-]?secret|^secret$|^password$|minioadmin/i.test(
+      v,
+    )
+  ) {
     return helpers.error('any.invalid');
   }
   if (/^(.)\1+$/.test(v)) {
@@ -19,9 +23,40 @@ const rejectWeakSecret: Joi.CustomValidator<string> = (value, helpers) => {
   return value;
 };
 
+/**
+ * Reject obviously weak / default admin passwords (e.g. `superadmin123`,
+ * `admin`, `change_me`). Less strict than rejectWeakSecret (a human-typed
+ * password need not be high-entropy hex), but blocks the shipped placeholders.
+ */
+const rejectWeakPassword: Joi.CustomValidator<string> = (value, helpers) => {
+  const v = String(value);
+  if (
+    /^(superadmin|admin|password|change[_-]?me|qwerty|123|test)/i.test(v) ||
+    /(123456|password|superadmin123|admin123)/i.test(v)
+  ) {
+    return helpers.error('any.invalid');
+  }
+  return value;
+};
+
+/** Strong signing/encryption key: >=32 chars, high entropy, not a placeholder. */
+const strongKey = (description: string) =>
+  Joi.string()
+    .min(32)
+    .custom(rejectWeakSecret, 'weak-secret check')
+    .required()
+    .description(description)
+    .messages({
+      'any.invalid':
+        'looks weak/placeholder. Generate a strong value: openssl rand -hex 32',
+      'string.min': 'must be at least 32 characters of random entropy',
+    });
+
 export const gatewayValidationSchema = Joi.object({
   PORT: Joi.number().default(2004),
-  ACCESS_TOKEN_KEY: Joi.string().required(),
+  ACCESS_TOKEN_KEY: strongKey(
+    'JWT access-token signing key. MUST match identity-service. A weak key allows forging a JWT for any role (full account takeover).',
+  ),
   ACCESS_TOKEN_TIME: Joi.string().default('15m'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
@@ -58,16 +93,28 @@ export const gatewayValidationSchema = Joi.object({
 export const identityValidationSchema = Joi.object({
   POSTGRES_URI: Joi.string().required(),
   DB_SCHEMA: Joi.string().default('identity_schema'),
-  ACCESS_TOKEN_KEY: Joi.string().required(),
+  ACCESS_TOKEN_KEY: strongKey(
+    'JWT access-token signing key. MUST match api-gateway. A weak key allows forging a JWT for any role (full account takeover).',
+  ),
   ACCESS_TOKEN_TIME: Joi.string().default('15m'),
-  REFRESH_TOKEN_KEY: Joi.string().required(),
+  REFRESH_TOKEN_KEY: strongKey(
+    'JWT refresh-token signing key. A weak key allows minting refresh tokens (persistent account takeover).',
+  ),
   REFRESH_TOKEN_TIME: Joi.string().default('7d'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
   RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
   SUPERADMIN_NAME: Joi.string().required(),
   SUPERADMIN_PHONE_NUMBER: Joi.string().required(),
-  SUPERADMIN_PASSWORD: Joi.string().required(),
+  SUPERADMIN_PASSWORD: Joi.string()
+    .min(12)
+    .custom(rejectWeakPassword, 'weak-password check')
+    .required()
+    .messages({
+      'any.invalid':
+        'SUPERADMIN_PASSWORD is a known weak/default password. Use a strong, unique password (>=12 chars).',
+      'string.min': 'SUPERADMIN_PASSWORD must be at least 12 characters.',
+    }),
 });
 
 export const orderValidationSchema = Joi.object({
@@ -220,7 +267,15 @@ export const fileValidationSchema = Joi.object({
   MINIO_PORT: Joi.number().default(9000),
   MINIO_USE_SSL: Joi.boolean().truthy('true').falsy('false').default(false),
   MINIO_ACCESS_KEY: Joi.string().required(),
-  MINIO_SECRET_KEY: Joi.string().required(),
+  MINIO_SECRET_KEY: Joi.string()
+    .min(16)
+    .custom(rejectWeakSecret, 'weak-secret check')
+    .required()
+    .messages({
+      'any.invalid':
+        'MINIO_SECRET_KEY looks weak/default (e.g. minioadmin). Use: openssl rand -hex 24',
+      'string.min': 'MINIO_SECRET_KEY must be at least 16 characters.',
+    }),
   MINIO_BUCKET: Joi.string().default('elchi-files'),
   FILE_SIGNED_URL_EXPIRES: Joi.number().default(3600),
   // Hard upper bound on client-provided expires_in. AWS S3 max is 7 days (604800s).

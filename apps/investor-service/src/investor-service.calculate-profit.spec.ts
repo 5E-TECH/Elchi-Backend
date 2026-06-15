@@ -23,6 +23,10 @@ function makeService(opts: {
   const investmentRepo: any = { createQueryBuilder: jest.fn(() => qb) };
   const savedRows: any[] = [];
   const profitShareRepo: any = {
+    // Dedup pre-check (Audit P1-10): default to "no existing share for this
+    // period" so calculateProfit creates a fresh row. Override per-test to
+    // simulate a re-run that should skip.
+    findOne: jest.fn().mockResolvedValue(opts.existingShare ?? null),
     create: jest.fn((dto: any) => dto),
     save: jest.fn(async (row: any) => {
       const saved = { id: `ps${savedRows.length + 1}`, ...row };
@@ -117,5 +121,23 @@ describe('InvestorServiceService.calculateProfit', () => {
     await service.calculateProfit({ ...period, percentage: 25 } as never);
 
     expect(savedRows[0].amount).toBe(0);
+  });
+
+  it('skips an investor whose profit for the same period already exists (idempotent re-run)', async () => {
+    const { service, savedRows } = makeService({
+      investors: [{ id: 'inv1' }],
+      totals: [{ investor_id: 'inv1', total_amount: '1000000' }],
+      existingShare: { id: 'ps-existing', investor_id: 'inv1' },
+    });
+
+    const res = (await service.calculateProfit({
+      ...period,
+      percentage: 10,
+    } as never)) as { data?: { calculated_count?: number; skipped_count?: number } };
+
+    // No new obligation created — the re-run is a no-op for this investor.
+    expect(savedRows).toHaveLength(0);
+    expect(res?.data?.calculated_count).toBe(0);
+    expect(res?.data?.skipped_count).toBe(1);
   });
 });

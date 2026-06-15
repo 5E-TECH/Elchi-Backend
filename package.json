@@ -56,7 +56,9 @@
     "infra:up": "docker compose up rabbitmq postgres -d",
     "infra:down": "docker compose down",
     "infra:up:prod": "docker compose --env-file .env.production -f docker-compose.prod.yml up -d",
-    "infra:down:prod": "docker compose -f docker-compose.prod.yml down"
+    "infra:down:prod": "docker compose -f docker-compose.prod.yml down",
+    "db:backup": "bash scripts/backup-db.sh",
+    "migration:run:safe": "bash scripts/pre-migration-backup.sh && npm run migration:run"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1045.0",
