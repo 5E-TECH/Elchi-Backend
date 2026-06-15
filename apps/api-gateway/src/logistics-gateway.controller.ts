@@ -486,28 +486,54 @@ export class LogisticsGatewayController {
 
   @Post('post/cancel')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.COURIER)
+  @Roles(RoleEnum.COURIER, RoleEnum.MANAGER)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Create canceled post (courier)' })
+  @ApiOperation({
+    summary: 'Create canceled post (courier → branch, manager → HQ)',
+  })
   @ApiBody({ type: ReceivePostRequestDto })
   createCanceledPost(@Body() dto: ReceivePostRequestDto, @Req() req: { user: JwtUser }) {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.cancel.create' },
-      { dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+      {
+        dto,
+        requester: {
+          id: req.user.sub,
+          roles: req.user.roles ?? [],
+          branch_id: req.user.branch_id ?? null,
+        },
+      },
     );
   }
 
   @Post('post/cancel/receive/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
+  @Roles(
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.ADMIN,
+    RoleEnum.SUPERADMIN,
+  )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Receive canceled post (admin)' })
+  @ApiOperation({ summary: 'Receive canceled post (branch manager or HQ)' })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   @ApiBody({ type: ReceivePostRequestDto })
-  receiveCanceledPost(@Param('id') id: string, @Body() dto: ReceivePostRequestDto) {
+  receiveCanceledPost(
+    @Param('id') id: string,
+    @Body() dto: ReceivePostRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.cancel.receive' },
-      { id, dto },
+      {
+        id,
+        dto,
+        requester: {
+          id: req.user.sub,
+          roles: req.user.roles ?? [],
+          branch_id: req.user.branch_id ?? null,
+        },
+      },
     );
   }
 

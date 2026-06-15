@@ -26,9 +26,7 @@ describe('OrderServiceService settlement (FIFO)', () => {
         const where = opts?.where ?? {};
         return store
           .filter((row) =>
-            Object.entries(where).every(
-              ([k, v]) => (row as any)[k] === v,
-            ),
+            Object.entries(where).every(([k, v]) => (row as any)[k] === v),
           )
           .sort((a, b) => Number(a.id) - Number(b.id));
       }),
@@ -37,6 +35,7 @@ describe('OrderServiceService settlement (FIFO)', () => {
         if (row) Object.assign(row, patch);
         return { affected: row ? 1 : 0 };
       }),
+      createQueryBuilder: jest.fn(),
     };
 
     const queryRunner = {
@@ -136,5 +135,59 @@ describe('OrderServiceService settlement (FIFO)', () => {
     expect(store[1].status).toBe(SettlementStatus.PENDING);
     // branch EXPENSE + MAIN INCOME for the one settled order.
     expect(outbox.enqueue).toHaveBeenCalledTimes(2);
+  });
+
+  it('summarizes open branch receivables and market payables', async () => {
+    const { service, settlementRepo } = makeService([]);
+    const makeQb = (rows: any[]) => ({
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue(rows),
+    });
+    const branchQb = makeQb([
+      { branch_id: '10', amount: '150000' },
+      { branch_id: '11', amount: '50000' },
+    ]);
+    const marketQb = makeQb([
+      { market_id: '20', amount: '120000' },
+      { market_id: '21', amount: '30000' },
+    ]);
+    settlementRepo.createQueryBuilder
+      .mockReturnValueOnce(branchQb)
+      .mockReturnValueOnce(marketQb);
+
+    const response: any = await service.getFinancialBalanceSettlementSummary();
+
+    expect(response.data).toEqual({
+      branch_receivable: 200000,
+      market_payable: 150000,
+      branches: [
+        { branch_id: '10', amount: 150000 },
+        { branch_id: '11', amount: 50000 },
+      ],
+      markets: [
+        { market_id: '20', amount: 120000 },
+        { market_id: '21', amount: 30000 },
+      ],
+    });
+    expect(branchQb.andWhere).toHaveBeenCalledWith(
+      'settlement.status IN (:...statuses)',
+      {
+        statuses: [SettlementStatus.PENDING, SettlementStatus.COURIER_SETTLED],
+      },
+    );
+    expect(marketQb.andWhere).toHaveBeenCalledWith(
+      'settlement.status IN (:...statuses)',
+      {
+        statuses: [
+          SettlementStatus.PENDING,
+          SettlementStatus.COURIER_SETTLED,
+          SettlementStatus.BRANCH_SETTLED,
+        ],
+      },
+    );
   });
 });

@@ -14,7 +14,7 @@ import {
 } from '@app/common';
 import { Order_status, Where_deliver } from '@app/common';
 import { OrderServiceService } from './order-service.service';
-import { Order_source } from './entities/order.entity';
+import { OrderHolderType, Order_source } from './entities/order.entity';
 
 @Controller()
 export class OrderServiceController {
@@ -110,6 +110,8 @@ export class OrderServiceController {
         post_ids?: string[];
         exclude_statuses?: Order_status[];
         canceled_post_id?: string;
+        canceled_post_unassigned?: boolean;
+        holder_type?: OrderHolderType;
         qr_code_token?: string;
         status?: Order_status | Order_status[] | string | string[];
         return_requested?: boolean;
@@ -423,6 +425,13 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.settlement.financial_balance_summary' })
+  settlementFinancialBalanceSummary(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getFinancialBalanceSettlementSummary(),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.initiate_return' })
   initiateReturn(
     @Payload()
@@ -681,51 +690,66 @@ export class OrderServiceController {
 
   @MessagePattern({ cmd: 'order.analytics.overview' })
   analyticsOverview(
-    @Payload() data: { startDate?: string; endDate?: string },
+    @Payload()
+    data: { startDate?: string; endDate?: string; branch_id?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getOverviewStats(data.startDate, data.endDate),
+      this.orderService.getOverviewStats(
+        data.startDate,
+        data.endDate,
+        data.branch_id,
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'order.analytics.market_stats' })
   analyticsMarketStats(
-    @Payload() data: { startDate?: string; endDate?: string },
+    @Payload()
+    data: { startDate?: string; endDate?: string; branch_id?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getMarketStats(data.startDate, data.endDate),
+      this.orderService.getMarketStats(
+        data.startDate,
+        data.endDate,
+        data.branch_id,
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'order.analytics.courier_stats' })
   analyticsCourierStats(
-    @Payload() data: { startDate?: string; endDate?: string },
+    @Payload()
+    data: { startDate?: string; endDate?: string; branch_id?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getCourierStats(data.startDate, data.endDate),
+      this.orderService.getCourierStats(
+        data.startDate,
+        data.endDate,
+        data.branch_id,
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'order.analytics.top_markets' })
   analyticsTopMarkets(
-    @Payload() data: { limit?: number },
+    @Payload() data: { limit?: number; branch_id?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getTopMarkets(data.limit),
+      this.orderService.getTopMarkets(data.limit, data.branch_id),
     );
   }
 
   @MessagePattern({ cmd: 'order.analytics.top_couriers' })
   analyticsTopCouriers(
-    @Payload() data: { limit?: number },
+    @Payload() data: { limit?: number; branch_id?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getTopCouriers(data.limit),
+      this.orderService.getTopCouriers(data.limit, data.branch_id),
     );
   }
 

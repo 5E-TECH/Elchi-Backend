@@ -212,6 +212,43 @@ describe('FinanceServiceService.findCashboxByUser', () => {
   });
 });
 
+describe('FinanceServiceService.financialBalance', () => {
+  it('uses main + branch receivable - market payable', async () => {
+    const manager = makeManager();
+    const { service, cashboxRepo } = makeService(manager);
+    cashboxRepo.findOne.mockResolvedValue({
+      id: 'main-1',
+      user_id: '0',
+      cashbox_type: 'main',
+      balance: 500000,
+    });
+    cashboxRepo.find = jest
+      .fn()
+      .mockResolvedValue([
+        { id: 'market-cashbox', user_id: '20', balance: 999999 },
+      ]);
+    rmqSendMock.mockResolvedValue({
+      data: {
+        branch_receivable: 200000,
+        market_payable: 150000,
+        branches: [{ branch_id: '10', amount: 200000 }],
+        markets: [{ market_id: '20', amount: 150000 }],
+      },
+    });
+
+    const response: any = await service.financialBalance();
+
+    expect(response.data.currentSituation).toBe(550000);
+    expect(response.data.branches.branchReceivable).toBe(200000);
+    expect(response.data.markets.marketPayable).toBe(150000);
+    expect(response.data.markets.marketsTotalBalans).toBe(-150000);
+    expect(response.data.couriers.couriersTotalBalanse).toBe(0);
+    expect(response.data.formula).toBe(
+      'main_cashbox + branch_receivable - market_payable',
+    );
+  });
+});
+
 describe('FinanceServiceService.updateBalance', () => {
   beforeEach(() => {
     captureExceptionMock.mockReset();

@@ -44,6 +44,9 @@ interface OrderRow {
   post_id?: string | null;
   canceled_post_id?: string | null;
   branch_id?: string | null;
+  holder_type?: 'HQ' | 'BRANCH' | 'COURIER' | null;
+  holder_branch_id?: string | null;
+  holder_courier_id?: string | null;
   courier_id?: string | null;
   assigned_at?: string | Date | null;
   region_id?: string | null;
@@ -71,7 +74,8 @@ export class LogisticsServiceService implements OnModuleInit {
   constructor(
     @InjectRepository(Post) private readonly postRepo: Repository<Post>,
     @InjectRepository(Region) private readonly regionRepo: Repository<Region>,
-    @InjectRepository(District) private readonly districtRepo: Repository<District>,
+    @InjectRepository(District)
+    private readonly districtRepo: Repository<District>,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
@@ -84,9 +88,10 @@ export class LogisticsServiceService implements OnModuleInit {
    * activity-log expects. user_id + role pair is enough to attribute every
    * action; user_name is resolved by the gateway during enrichment.
    */
-  private auditActor(
-    requester?: { id?: string; roles?: string[] } | null,
-  ): { user_id: string | null; user_role: string | null } {
+  private auditActor(requester?: { id?: string; roles?: string[] } | null): {
+    user_id: string | null;
+    user_role: string | null;
+  } {
     const roles = requester?.roles ?? [];
     return {
       user_id: requester?.id ? String(requester.id) : null,
@@ -98,7 +103,11 @@ export class LogisticsServiceService implements OnModuleInit {
     return this.activityLog.query(q ?? {});
   }
 
-  async auditLogByEntity(entity_type: string, entity_id: string, limit?: number) {
+  async auditLogByEntity(
+    entity_type: string,
+    entity_id: string,
+    limit?: number,
+  ) {
     return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
   }
 
@@ -119,11 +128,15 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   private isSystemPrivileged(requester?: RequesterContext): boolean {
-    const roles = (requester?.roles ?? []).map((role) => String(role ?? '').toLowerCase());
+    const roles = (requester?.roles ?? []).map((role) =>
+      String(role ?? '').toLowerCase(),
+    );
     return roles.includes(Roles.SUPERADMIN) || roles.includes(Roles.ADMIN);
   }
 
-  private async resolveScopedBranchId(requester?: RequesterContext): Promise<string | null> {
+  private async resolveScopedBranchId(
+    requester?: RequesterContext,
+  ): Promise<string | null> {
     if (this.isSystemPrivileged(requester)) {
       return null;
     }
@@ -135,7 +148,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const requesterId = String(requester?.id ?? '').trim();
     if (!requesterId) {
-      this.forbidden("Foydalanuvchi aniqlanmadi");
+      this.forbidden('Foydalanuvchi aniqlanmadi');
     }
 
     const assignment = await this.findBranchAssignmentByUserId(requesterId, {
@@ -144,7 +157,7 @@ export class LogisticsServiceService implements OnModuleInit {
     });
     const branchId = String(assignment?.branch_id ?? '').trim();
     if (!branchId) {
-      this.forbidden("Foydalanuvchi branchga biriktirilmagan");
+      this.forbidden('Foydalanuvchi branchga biriktirilmagan');
     }
     return branchId;
   }
@@ -164,7 +177,12 @@ export class LogisticsServiceService implements OnModuleInit {
               type: 'post',
               sourceId: post.id,
               title: `Post #${post.id}`,
-              content: [post.qr_code_token, post.region_id, post.courier_id, post.status]
+              content: [
+                post.qr_code_token,
+                post.region_id,
+                post.courier_id,
+                post.status,
+              ]
                 .filter(Boolean)
                 .join(' '),
               tags: ['logistics', 'post', post.status].filter(Boolean),
@@ -258,7 +276,11 @@ export class LogisticsServiceService implements OnModuleInit {
               type: 'district',
               sourceId: district.id,
               title: district.name,
-              content: [district.sato_code, district.region_id, district.assigned_region]
+              content: [
+                district.sato_code,
+                district.region_id,
+                district.assigned_region,
+              ]
                 .filter(Boolean)
                 .join(' '),
               tags: ['logistics', 'district'],
@@ -298,7 +320,9 @@ export class LogisticsServiceService implements OnModuleInit {
   private async findOrderById(id: string): Promise<OrderRow> {
     try {
       return await lastValueFrom(
-        this.orderClient.send({ cmd: 'order.find_by_id' }, { id }).pipe(timeout(5000)),
+        this.orderClient
+          .send({ cmd: 'order.find_by_id' }, { id })
+          .pipe(timeout(5000)),
       );
     } catch {
       this.notFound(`Order #${id} not found`);
@@ -360,7 +384,10 @@ export class LogisticsServiceService implements OnModuleInit {
         if (Array.isArray(candidate)) {
           return candidate;
         }
-        if (candidate && Array.isArray((candidate as { data?: unknown }).data)) {
+        if (
+          candidate &&
+          Array.isArray((candidate as { data?: unknown }).data)
+        ) {
           return (candidate as { data: OrderRow[] }).data;
         }
       }
@@ -404,11 +431,7 @@ export class LogisticsServiceService implements OnModuleInit {
           .pipe(timeout(5000)),
       );
 
-      const candidates = [
-        response?.data?.data,
-        response?.data,
-        response,
-      ];
+      const candidates = [response?.data?.data, response?.data, response];
 
       for (const candidate of candidates) {
         if (candidate && typeof candidate === 'object' && 'id' in candidate) {
@@ -422,10 +445,12 @@ export class LogisticsServiceService implements OnModuleInit {
     this.notFound('Order topilmadi');
   }
 
-  private async findCourierBranchId(requester: RequesterContext): Promise<string> {
+  private async findCourierBranchId(
+    requester: RequesterContext,
+  ): Promise<string> {
     const requesterId = String(requester?.id ?? '').trim();
     if (!requesterId) {
-      this.forbidden("Courier aniqlanmadi");
+      this.forbidden('Courier aniqlanmadi');
     }
 
     try {
@@ -435,7 +460,10 @@ export class LogisticsServiceService implements OnModuleInit {
             { cmd: 'branch.user.find_by_user' },
             {
               user_id: requesterId,
-              requester: { id: requesterId, roles: requester.roles ?? [Roles.COURIER] },
+              requester: {
+                id: requesterId,
+                roles: requester.roles ?? [Roles.COURIER],
+              },
             },
           )
           .pipe(timeout(5000)),
@@ -443,7 +471,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
       const branchId = String(response?.data?.branch_id ?? '').trim();
       if (!branchId) {
-        this.forbidden("Courier filialga biriktirilmagan");
+        this.forbidden('Courier filialga biriktirilmagan');
       }
 
       return branchId;
@@ -452,6 +480,26 @@ export class LogisticsServiceService implements OnModuleInit {
         throw error;
       }
       this.forbidden("Courier filialini aniqlab bo'lmadi");
+    }
+  }
+
+  private async findHqBranchId(): Promise<string> {
+    try {
+      const response = await lastValueFrom(
+        this.branchClient
+          .send({ cmd: 'branch.find_hq' }, {})
+          .pipe(timeout(5000)),
+      );
+      const branchId = String(response?.data?.id ?? '').trim();
+      if (!branchId) {
+        this.notFound('HQ branch topilmadi');
+      }
+      return branchId;
+    } catch (error) {
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.forbidden("HQ branchini aniqlab bo'lmadi");
     }
   }
 
@@ -471,7 +519,10 @@ export class LogisticsServiceService implements OnModuleInit {
             { cmd: 'branch.user.find_by_user' },
             {
               user_id: normalizedUserId,
-              requester: { id: requester.id, roles: requester.roles ?? [Roles.BRANCH] },
+              requester: {
+                id: requester.id,
+                roles: requester.roles ?? [Roles.BRANCH],
+              },
             },
           )
           .pipe(timeout(5000)),
@@ -499,7 +550,10 @@ export class LogisticsServiceService implements OnModuleInit {
             { cmd: 'branch.user.find_by_branch' },
             {
               branch_id: normalizedBranchId,
-              requester: { id: requester.id, roles: requester.roles ?? [Roles.BRANCH] },
+              requester: {
+                id: requester.id,
+                roles: requester.roles ?? [Roles.BRANCH],
+              },
             },
           )
           .pipe(timeout(5000)),
@@ -512,11 +566,16 @@ export class LogisticsServiceService implements OnModuleInit {
     }
   }
 
-  private async listCouriers(search?: string): Promise<Array<Record<string, unknown>>> {
+  private async listCouriers(
+    search?: string,
+  ): Promise<Array<Record<string, unknown>>> {
     try {
       const res = await lastValueFrom(
         this.identityClient
-          .send({ cmd: 'identity.courier.find_all' }, { query: { search, page: 1, limit: 1000 } })
+          .send(
+            { cmd: 'identity.courier.find_all' },
+            { query: { search, page: 1, limit: 1000 } },
+          )
           .pipe(timeout(5000)),
       );
 
@@ -526,7 +585,9 @@ export class LogisticsServiceService implements OnModuleInit {
     }
   }
 
-  private async listCouriersByRegion(regionId: string): Promise<Array<Record<string, unknown>>> {
+  private async listCouriersByRegion(
+    regionId: string,
+  ): Promise<Array<Record<string, unknown>>> {
     try {
       const res = await lastValueFrom(
         this.identityClient
@@ -552,13 +613,17 @@ export class LogisticsServiceService implements OnModuleInit {
       );
 
       const rows = res?.data ?? [];
-      return Array.isArray(rows) && rows.length ? (rows[0] as CourierRow) : null;
+      return Array.isArray(rows) && rows.length
+        ? (rows[0] as CourierRow)
+        : null;
     } catch {
       return null;
     }
   }
 
-  private async findCouriersByIds(ids: string[]): Promise<Map<string, Record<string, unknown>>> {
+  private async findCouriersByIds(
+    ids: string[],
+  ): Promise<Map<string, Record<string, unknown>>> {
     const uniqueIds = Array.from(new Set(ids.filter(Boolean)));
     if (!uniqueIds.length) {
       return new Map();
@@ -575,7 +640,10 @@ export class LogisticsServiceService implements OnModuleInit {
       return new Map(
         rows
           .filter((item) => item && typeof item === 'object' && 'id' in item)
-          .map((item) => [String((item as { id: string }).id), item as Record<string, unknown>]),
+          .map((item) => [
+            String((item as { id: string }).id),
+            item as Record<string, unknown>,
+          ]),
       );
     } catch {
       return new Map();
@@ -608,7 +676,10 @@ export class LogisticsServiceService implements OnModuleInit {
         void this.syncRegionToSearch(regionEntity);
       }
 
-      for (const [districtIndex, districtNameRaw] of regionData.districts.entries()) {
+      for (const [
+        districtIndex,
+        districtNameRaw,
+      ] of regionData.districts.entries()) {
         const districtName = districtNameRaw.trim();
         const exists = await this.districtRepo.findOne({
           where: { name: districtName, region_id: regionEntity.id },
@@ -656,8 +727,9 @@ export class LogisticsServiceService implements OnModuleInit {
       { id: dto.courier_id, roles: [Roles.COURIER] },
     );
     const branchId =
-      (courierAssignment?.branch_id ? String(courierAssignment.branch_id) : null) ??
-      branchIdFromOrders;
+      (courierAssignment?.branch_id
+        ? String(courierAssignment.branch_id)
+        : null) ?? branchIdFromOrders;
 
     const post = this.postRepo.create({
       courier_id: dto.courier_id,
@@ -705,8 +777,12 @@ export class LogisticsServiceService implements OnModuleInit {
     const skip = (Math.max(1, page) - 1) * take;
 
     const scopedBranchId = await this.resolveScopedBranchId(requester);
-    const branchId = scopedBranchId ?? (filters?.branch_id ? String(filters.branch_id).trim() : '');
-    const status = filters?.status ? String(filters.status).trim().toLowerCase() : '';
+    const branchId =
+      scopedBranchId ??
+      (filters?.branch_id ? String(filters.branch_id).trim() : '');
+    const status = filters?.status
+      ? String(filters.status).trim().toLowerCase()
+      : '';
     const where: Record<string, unknown> = { status: Not(Post_status.NEW) };
     if (branchId) {
       where.branch_id = branchId;
@@ -723,9 +799,20 @@ export class LogisticsServiceService implements OnModuleInit {
         where.status = status;
       }
     }
+    if (status === Post_status.CANCELED && this.isSystemPrivileged(requester)) {
+      where.branch_id = await this.findHqBranchId();
+    }
+    let queryWhere: Record<string, unknown> | Record<string, unknown>[] = where;
+    if (!status && this.isSystemPrivileged(requester)) {
+      const hqBranchId = await this.findHqBranchId();
+      queryWhere = [
+        { status: Not(In([Post_status.NEW, Post_status.CANCELED])) },
+        { status: Post_status.CANCELED, branch_id: hqBranchId },
+      ];
+    }
 
     const [data, total] = await this.postRepo.findAndCount({
-      where,
+      where: queryWhere,
       relations: ['region'],
       order: { createdAt: 'DESC' },
       skip,
@@ -747,7 +834,11 @@ export class LogisticsServiceService implements OnModuleInit {
 
   async newPosts(query?: { search?: string }, requester?: RequesterContext) {
     const scopedBranchId = await this.resolveScopedBranchId(requester);
-    const orphanOrders = await this.findOrders({ status: Order_status.RECEIVED, page: 1, limit: 1000 });
+    const orphanOrders = await this.findOrders({
+      status: Order_status.RECEIVED,
+      page: 1,
+      limit: 1000,
+    });
     const candidates = orphanOrders.filter(
       (order) =>
         !order.post_id &&
@@ -756,13 +847,21 @@ export class LogisticsServiceService implements OnModuleInit {
         (!scopedBranchId || String(order.branch_id) === scopedBranchId),
     );
 
-    const byBranchRegion = new Map<string, { regionId: string; branchId: string; ids: string[]; total: number }>();
+    const byBranchRegion = new Map<
+      string,
+      { regionId: string; branchId: string; ids: string[]; total: number }
+    >();
 
     for (const order of candidates) {
       const regionId = String(order.region_id);
       const branchId = String(order.branch_id);
       const key = `${branchId}:${regionId}`;
-      const current = byBranchRegion.get(key) ?? { regionId, branchId, ids: [], total: 0 };
+      const current = byBranchRegion.get(key) ?? {
+        regionId,
+        branchId,
+        ids: [],
+        total: 0,
+      };
       current.ids.push(order.id);
       current.total += Number(order.total_price ?? 0);
       byBranchRegion.set(key, current);
@@ -813,7 +912,9 @@ export class LogisticsServiceService implements OnModuleInit {
         })
         .where('id = :id', { id: post.id })
         .execute();
-      const refreshedPost = await this.postRepo.findOne({ where: { id: post.id } });
+      const refreshedPost = await this.postRepo.findOne({
+        where: { id: post.id },
+      });
       if (refreshedPost) {
         void this.syncPostToSearch(refreshedPost);
       }
@@ -851,7 +952,10 @@ export class LogisticsServiceService implements OnModuleInit {
           limit: 100,
         })
       : [];
-    const orderStatsByPostId = new Map<string, { count: number; total: number }>();
+    const orderStatsByPostId = new Map<
+      string,
+      { count: number; total: number }
+    >();
     for (const order of postOrders) {
       const postId = String(order.post_id ?? '').trim();
       if (!postId) {
@@ -864,7 +968,11 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     const regionIds = Array.from(
-      new Set(allPosts.map((post) => post.region_id).filter((id): id is string => Boolean(id))),
+      new Set(
+        allPosts
+          .map((post) => post.region_id)
+          .filter((id): id is string => Boolean(id)),
+      ),
     );
 
     const regionsById = new Map<string, Region>();
@@ -881,7 +989,7 @@ export class LogisticsServiceService implements OnModuleInit {
       ...post,
       order_quantity: orderStatsByPostId.get(String(post.id))?.count ?? 0,
       post_total_price: orderStatsByPostId.get(String(post.id))?.total ?? 0,
-      region: post.region_id ? regionsById.get(post.region_id) ?? null : null,
+      region: post.region_id ? (regionsById.get(post.region_id) ?? null) : null,
     }));
 
     const searchFilter = query?.search?.trim().toLowerCase();
@@ -908,6 +1016,8 @@ export class LogisticsServiceService implements OnModuleInit {
     const where: Record<string, unknown> = { status: Post_status.CANCELED };
     if (scopedBranchId) {
       where.branch_id = scopedBranchId;
+    } else if (this.isSystemPrivileged(requester)) {
+      where.branch_id = await this.findHqBranchId();
     }
 
     const allPosts = await this.postRepo.find({
@@ -920,7 +1030,9 @@ export class LogisticsServiceService implements OnModuleInit {
     );
     const enrichedPosts = allPosts.map((post) => ({
       ...post,
-      courier: post.courier_id ? courierMap.get(post.courier_id) ?? null : null,
+      courier: post.courier_id
+        ? (courierMap.get(post.courier_id) ?? null)
+        : null,
     }));
     return successRes(enrichedPosts, 200, 'All rejected posts');
   }
@@ -934,7 +1046,11 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(allPosts, 200, 'All on-the-road posts');
   }
 
-  async oldPostsForCourier(page: number, limit: number, requester: RequesterContext) {
+  async oldPostsForCourier(
+    page: number,
+    limit: number,
+    requester: RequesterContext,
+  ) {
     const take = limit > 100 ? 100 : Math.max(1, limit);
     const skip = (Math.max(1, page) - 1) * take;
 
@@ -973,12 +1089,18 @@ export class LogisticsServiceService implements OnModuleInit {
     );
     const enrichedRows = rows.map((post) => ({
       ...post,
-      courier: post.courier_id ? courierMap.get(post.courier_id) ?? null : null,
+      courier: post.courier_id
+        ? (courierMap.get(post.courier_id) ?? null)
+        : null,
     }));
     return successRes(enrichedRows, 200, 'All rejected posts for courier');
   }
 
-  async myPostsForCourier(page: number, limit: number, requester: RequesterContext) {
+  async myPostsForCourier(
+    page: number,
+    limit: number,
+    requester: RequesterContext,
+  ) {
     const take = limit > 100 ? 100 : Math.max(1, limit);
     const skip = (Math.max(1, page) - 1) * take;
 
@@ -1059,7 +1181,9 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   async findPostWithQr(token: string) {
-    const post = await this.postRepo.findOne({ where: { qr_code_token: token } });
+    const post = await this.postRepo.findOne({
+      where: { qr_code_token: token },
+    });
     if (!post) {
       this.notFound('Post not found');
     }
@@ -1097,10 +1221,15 @@ export class LogisticsServiceService implements OnModuleInit {
     const isCourier = (requester.roles ?? []).some(
       (role) => String(role).toLowerCase() === Roles.COURIER,
     );
-    const isOwnCourierPost = isCourier && String(post.courier_id ?? '') === String(requester.id ?? '');
+    const isOwnCourierPost =
+      isCourier && String(post.courier_id ?? '') === String(requester.id ?? '');
 
     const scopedBranchId = await this.resolveScopedBranchId(requester);
-    if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId && !isOwnCourierPost) {
+    if (
+      scopedBranchId &&
+      String(post.branch_id ?? '') !== scopedBranchId &&
+      !isOwnCourierPost
+    ) {
       this.forbidden("Siz bu branch pochtasidagi orderlarni ko'ra olmaysiz");
     }
 
@@ -1125,7 +1254,9 @@ export class LogisticsServiceService implements OnModuleInit {
     let orders = Array.from(orderMap.values());
 
     if (post.status === Post_status.SENT && isCourier) {
-      orders = orders.filter((order) => order.status === Order_status.ON_THE_ROAD);
+      orders = orders.filter(
+        (order) => order.status === Order_status.ON_THE_ROAD,
+      );
     }
 
     let homeOrders = 0;
@@ -1155,7 +1286,9 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   async getCourierSentPostOrders(id: string, requester: RequesterContext) {
-    const post = await this.postRepo.findOne({ where: { id, courier_id: requester.id } });
+    const post = await this.postRepo.findOne({
+      where: { id, courier_id: requester.id },
+    });
     if (!post) {
       this.notFound('Post not found');
     }
@@ -1174,10 +1307,18 @@ export class LogisticsServiceService implements OnModuleInit {
     const isCourier = (requester?.roles ?? []).some(
       (role) => String(role).toLowerCase() === Roles.COURIER,
     );
-    const isOwnCourierPost = isCourier && String(post.courier_id ?? '') === String(requester?.id ?? '');
+    const isOwnCourierPost =
+      isCourier &&
+      String(post.courier_id ?? '') === String(requester?.id ?? '');
     const scopedBranchId = await this.resolveScopedBranchId(requester);
-    if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId && !isOwnCourierPost) {
-      this.forbidden("Siz bu branch pochtasidagi rejected orderlarni ko'ra olmaysiz");
+    if (
+      scopedBranchId &&
+      String(post.branch_id ?? '') !== scopedBranchId &&
+      !isOwnCourierPost
+    ) {
+      this.forbidden(
+        "Siz bu branch pochtasidagi rejected orderlarni ko'ra olmaysiz",
+      );
     }
 
     const orders = await this.findOrders({
@@ -1205,7 +1346,11 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Order not found');
     }
 
-    return successRes({ order: { id: orders[0].id } }, 200, "Order checked and it's exist");
+    return successRes(
+      { order: { id: orders[0].id } },
+      200,
+      "Order checked and it's exist",
+    );
   }
 
   async checkCancelPost(qrToken: string, dto: PostIdDto) {
@@ -1225,7 +1370,11 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Order not found');
     }
 
-    return successRes({ order: { id: orders[0].id } }, 200, "Order checked and it's exist");
+    return successRes(
+      { order: { id: orders[0].id } },
+      200,
+      "Order checked and it's exist",
+    );
   }
 
   async sendPost(id: string, dto: SendPostDto, requester?: RequesterContext) {
@@ -1243,18 +1392,26 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest('You can not send an empty post');
     }
 
-    const currentOrders = await this.findOrders({ post_id: id, page: 1, limit: 1000 });
+    const currentOrders = await this.findOrders({
+      post_id: id,
+      page: 1,
+      limit: 1000,
+    });
     if (!currentOrders.length) {
       this.badRequest('Post has no orders');
     }
 
     const currentIds = currentOrders.map((o) => o.id);
     const selectedIds = [...new Set(dto.orderIds.filter(Boolean))];
-    const invalidIds = selectedIds.filter((orderId) => !currentIds.includes(orderId));
+    const invalidIds = selectedIds.filter(
+      (orderId) => !currentIds.includes(orderId),
+    );
     if (invalidIds.length) {
       this.badRequest('Some selected orders are not inside this post');
     }
-    const remainingIds = currentIds.filter((orderId) => !selectedIds.includes(orderId));
+    const remainingIds = currentIds.filter(
+      (orderId) => !selectedIds.includes(orderId),
+    );
     const trackingNote =
       dto.description?.trim() ||
       "Post jo'natildi: status received dan on_the_road ga o'tdi";
@@ -1281,7 +1438,10 @@ export class LogisticsServiceService implements OnModuleInit {
       for (const orderId of remainingIds) {
         const order = currentOrders.find((item) => item.id === orderId);
         remainingTotal += Number(order?.total_price ?? 0);
-        await this.updateOrder(orderId, { post_id: post.id, status: Order_status.RECEIVED });
+        await this.updateOrder(orderId, {
+          post_id: post.id,
+          status: Order_status.RECEIVED,
+        });
       }
 
       const sentPost = await this.postRepo.save(
@@ -1296,13 +1456,17 @@ export class LogisticsServiceService implements OnModuleInit {
       );
 
       for (const orderId of selectedIds) {
-        await this.updateOrder(orderId, {
-          post_id: sentPost.id,
-          status: Order_status.ON_THE_ROAD,
-          // Hand custody to the courier so the order's holder becomes COURIER
-          // (the parcel is now on the road with them). (Audit I12.)
-          courier_id: dto.courierId,
-        }, trackingRequester);
+        await this.updateOrder(
+          orderId,
+          {
+            post_id: sentPost.id,
+            status: Order_status.ON_THE_ROAD,
+            // Hand custody to the courier so the order's holder becomes COURIER
+            // (the parcel is now on the road with them). (Audit I12.)
+            courier_id: dto.courierId,
+          },
+          trackingRequester,
+        );
       }
 
       post.courier_id = '0';
@@ -1394,19 +1558,30 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
-  async receivePost(requester: RequesterContext, id: string, dto: ReceivePostDto) {
+  async receivePost(
+    requester: RequesterContext,
+    id: string,
+    dto: ReceivePostDto,
+  ) {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) {
       this.notFound('Post not found');
     }
-    const requesterRoles = (requester?.roles ?? []).map((role) => String(role ?? '').toLowerCase());
+    const requesterRoles = (requester?.roles ?? []).map((role) =>
+      String(role ?? '').toLowerCase(),
+    );
     const requesterId = String(requester?.id ?? '').trim();
     const requesterIsCourier = requesterRoles.includes(Roles.COURIER);
-    const isOwnCourierPost = requesterIsCourier && String(post.courier_id ?? '') === requesterId;
+    const isOwnCourierPost =
+      requesterIsCourier && String(post.courier_id ?? '') === requesterId;
 
     const scopedBranchId = await this.resolveScopedBranchId(requester);
-    if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId && !isOwnCourierPost) {
-      this.forbidden("Siz bu branch pochtasini qabul qila olmaysiz");
+    if (
+      scopedBranchId &&
+      String(post.branch_id ?? '') !== scopedBranchId &&
+      !isOwnCourierPost
+    ) {
+      this.forbidden('Siz bu branch pochtasini qabul qila olmaysiz');
     }
 
     if (
@@ -1415,17 +1590,27 @@ export class LogisticsServiceService implements OnModuleInit {
       requesterId &&
       String(post.courier_id ?? '') !== requesterId
     ) {
-      this.forbidden("Courier faqat o'ziga biriktirilgan pochtani qabul qilishi mumkin");
+      this.forbidden(
+        "Courier faqat o'ziga biriktirilgan pochtani qabul qilishi mumkin",
+      );
     }
 
     if (post.status !== Post_status.SENT) {
       this.badRequest('Cannot receive post with this status');
     }
 
-    const waitingOrderIds = [...new Set((dto.order_ids ?? []).map((orderId) => String(orderId)))];
+    const waitingOrderIds = [
+      ...new Set((dto.order_ids ?? []).map((orderId) => String(orderId))),
+    ];
     const waitingOrderIdSet = new Set(waitingOrderIds);
-    const allOrders = await this.findOrders({ post_id: id, page: 1, limit: 1000 });
-    const orderById = new Map(allOrders.map((order) => [String(order.id), order]));
+    const allOrders = await this.findOrders({
+      post_id: id,
+      page: 1,
+      limit: 1000,
+    });
+    const orderById = new Map(
+      allOrders.map((order) => [String(order.id), order]),
+    );
     const targetBranchId = String(post.branch_id ?? '').trim() || undefined;
 
     // receivePost spans multiple updateOrder RMQ calls + a local postRepo.save
@@ -1451,7 +1636,9 @@ export class LogisticsServiceService implements OnModuleInit {
       }
     }
 
-    const remaining = allOrders.filter((o) => !waitingOrderIdSet.has(String(o.id)));
+    const remaining = allOrders.filter(
+      (o) => !waitingOrderIdSet.has(String(o.id)),
+    );
 
     if (remaining.length) {
       for (const order of remaining) {
@@ -1515,7 +1702,9 @@ export class LogisticsServiceService implements OnModuleInit {
     });
 
     const waitingOrders = waitingOrderIds.length
-      ? await Promise.all(waitingOrderIds.map((orderId) => this.findOrderById(orderId)))
+      ? await Promise.all(
+          waitingOrderIds.map((orderId) => this.findOrderById(orderId)),
+        )
       : [];
 
     return successRes(waitingOrders, 200, 'Post received successfully');
@@ -1527,7 +1716,7 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Post not found');
     }
     if (post.status !== Post_status.SENT) {
-      this.badRequest("Only sent post can be reassigned");
+      this.badRequest('Only sent post can be reassigned');
     }
     if (post.courier_id === courierId) {
       this.badRequest('Post already assigned to this courier');
@@ -1575,7 +1764,11 @@ export class LogisticsServiceService implements OnModuleInit {
     });
 
     const postIds = Array.from(
-      new Set(orders.map((order) => order.post_id).filter((id): id is string => Boolean(id))),
+      new Set(
+        orders
+          .map((order) => order.post_id)
+          .filter((id): id is string => Boolean(id)),
+      ),
     );
     const posts = postIds.length
       ? await this.postRepo.find({ where: { id: In(postIds) } })
@@ -1583,23 +1776,33 @@ export class LogisticsServiceService implements OnModuleInit {
     const postMap = new Map(posts.map((post) => [post.id, post]));
 
     const courierIds = Array.from(
-      new Set(posts.map((post) => post.courier_id).filter((id): id is string => Boolean(id))),
+      new Set(
+        posts
+          .map((post) => post.courier_id)
+          .filter((id): id is string => Boolean(id)),
+      ),
     );
     const courierMap = await this.findCouriersByIds(courierIds);
 
     const groups = new Map<
       string,
-      { courier: Record<string, unknown> | null; courier_id: string | null; orders: OrderRow[] }
+      {
+        courier: Record<string, unknown> | null;
+        courier_id: string | null;
+        orders: OrderRow[];
+      }
     >();
 
     for (const order of orders) {
-      const post = order.post_id ? postMap.get(String(order.post_id)) : undefined;
+      const post = order.post_id
+        ? postMap.get(String(order.post_id))
+        : undefined;
       const courierId = post?.courier_id ?? null;
       const key = courierId ?? 'unknown';
 
       if (!groups.has(key)) {
         groups.set(key, {
-          courier: courierId ? courierMap.get(courierId) ?? null : null,
+          courier: courierId ? (courierMap.get(courierId) ?? null) : null,
           courier_id: courierId,
           orders: [],
         });
@@ -1614,8 +1817,13 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
-  async approveReturnRequests(dto: ReceivePostDto, requester?: RequesterContext) {
-    const orderIds = [...new Set((dto.order_ids ?? []).map((id) => String(id)).filter(Boolean))];
+  async approveReturnRequests(
+    dto: ReceivePostDto,
+    requester?: RequesterContext,
+  ) {
+    const orderIds = [
+      ...new Set((dto.order_ids ?? []).map((id) => String(id)).filter(Boolean)),
+    ];
     if (!orderIds.length) {
       this.badRequest('Order IDs required');
     }
@@ -1649,7 +1857,9 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const ordersByRegion = new Map<string, OrderRow[]>();
     for (const order of eligibleOrders) {
-      const fallbackRegion = order.post_id ? currentPostMap.get(order.post_id)?.region_id : null;
+      const fallbackRegion = order.post_id
+        ? currentPostMap.get(order.post_id)?.region_id
+        : null;
       const regionId = String(order.region_id ?? fallbackRegion ?? '');
       if (!regionId) {
         this.badRequest(`Order #${order.id} has no region`);
@@ -1681,15 +1891,21 @@ export class LogisticsServiceService implements OnModuleInit {
 
       let addedTotal = 0;
       for (const order of regionOrders) {
-        await this.updateOrder(order.id, {
-          status: Order_status.RECEIVED,
-          return_requested: false,
-          post_id: newPost.id,
-        }, {
-          id: requester?.id ?? 'system',
-          roles: requester?.roles ?? [],
-          note: requester?.note ?? "Qaytarish so'rovi tasdiqlandi — buyurtma pochtaga qaytarildi",
-        });
+        await this.updateOrder(
+          order.id,
+          {
+            status: Order_status.RECEIVED,
+            return_requested: false,
+            post_id: newPost.id,
+          },
+          {
+            id: requester?.id ?? 'system',
+            roles: requester?.roles ?? [],
+            note:
+              requester?.note ??
+              "Qaytarish so'rovi tasdiqlandi — buyurtma pochtaga qaytarildi",
+          },
+        );
         addedTotal += Number(order.total_price ?? 0);
       }
 
@@ -1704,7 +1920,9 @@ export class LogisticsServiceService implements OnModuleInit {
         })
         .where('id = :id', { id: newPost.id })
         .execute();
-      const savedNewPost = await this.postRepo.findOne({ where: { id: newPost.id } });
+      const savedNewPost = await this.postRepo.findOne({
+        where: { id: newPost.id },
+      });
       if (savedNewPost) {
         void this.syncPostToSearch(savedNewPost);
       }
@@ -1732,8 +1950,13 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
-  async rejectReturnRequests(dto: ReceivePostDto, requester?: RequesterContext) {
-    const orderIds = [...new Set((dto.order_ids ?? []).map((id) => String(id)).filter(Boolean))];
+  async rejectReturnRequests(
+    dto: ReceivePostDto,
+    requester?: RequesterContext,
+  ) {
+    const orderIds = [
+      ...new Set((dto.order_ids ?? []).map((id) => String(id)).filter(Boolean)),
+    ];
     if (!orderIds.length) {
       this.badRequest('Order IDs required');
     }
@@ -1752,7 +1975,9 @@ export class LogisticsServiceService implements OnModuleInit {
           {
             id: requester?.id ?? 'system',
             roles: requester?.roles ?? [],
-            note: requester?.note ?? "Qaytarish so'rovi rad etildi — buyurtma kuryerda qoldi",
+            note:
+              requester?.note ??
+              "Qaytarish so'rovi rad etildi — buyurtma kuryerda qoldi",
           },
         );
         rejected += 1;
@@ -1775,15 +2000,13 @@ export class LogisticsServiceService implements OnModuleInit {
       },
     });
 
-    return successRes(
-      { rejected },
-      200,
-      'Return requests rejected',
-    );
+    return successRes({ rejected }, 200, 'Return requests rejected');
   }
 
   async receivePostWithScanner(requester: RequesterContext, token: string) {
-    const post = await this.postRepo.findOne({ where: { qr_code_token: token, courier_id: requester.id } });
+    const post = await this.postRepo.findOne({
+      where: { qr_code_token: token, courier_id: requester.id },
+    });
     if (!post) {
       this.notFound('Post not found');
     }
@@ -1825,13 +2048,18 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes({}, 200, 'Post received successfully');
   }
 
-  async receiveOrderWithScannerCourier(requester: RequesterContext, orderId: string) {
+  async receiveOrderWithScannerCourier(
+    requester: RequesterContext,
+    orderId: string,
+  ) {
     const order = await this.findOrderById(orderId);
     if (!order.post_id) {
       this.notFound('Order has no post');
     }
 
-    const post = await this.postRepo.findOne({ where: { id: String(order.post_id), courier_id: requester.id } });
+    const post = await this.postRepo.findOne({
+      where: { id: String(order.post_id), courier_id: requester.id },
+    });
     if (!post) {
       this.notFound('Post not found or not assigned to this courier');
     }
@@ -1883,22 +2111,23 @@ export class LogisticsServiceService implements OnModuleInit {
     const orderBranchId = String(order.branch_id ?? '').trim();
 
     if (!orderBranchId) {
-      this.badRequest("Order filialga biriktirilmagan");
+      this.badRequest('Order filialga biriktirilmagan');
     }
 
     if (orderBranchId !== courierBranchId) {
-      this.forbidden("Boshqa filial orderi — qabul qila olmaysiz");
+      this.forbidden('Boshqa filial orderi — qabul qila olmaysiz');
     }
 
     const requesterId = String(requester.id);
     const currentCourierId = String(order.courier_id ?? '').trim();
     if (currentCourierId && currentCourierId !== requesterId) {
-      this.badRequest("Order allaqachon boshqa courierga biriktirilgan");
+      this.badRequest('Order allaqachon boshqa courierga biriktirilgan');
     }
 
     const currentStatus = order.status;
     const isAlreadyAssignedToCurrentCourier =
-      currentCourierId === requesterId && currentStatus === Order_status.ON_THE_ROAD;
+      currentCourierId === requesterId &&
+      currentStatus === Order_status.ON_THE_ROAD;
 
     if (!isAlreadyAssignedToCurrentCourier) {
       if (
@@ -1980,7 +2209,8 @@ export class LogisticsServiceService implements OnModuleInit {
       },
     );
 
-    const alreadyInTargetPost = String(order.post_id ?? '') === String(targetPost.id);
+    const alreadyInTargetPost =
+      String(order.post_id ?? '') === String(targetPost.id);
     if (!alreadyInTargetPost) {
       // Atomic UPDATE — read-modify-write would lose increments under
       // concurrent scans for the same post (two couriers, two QR scans).
@@ -1991,11 +2221,14 @@ export class LogisticsServiceService implements OnModuleInit {
           .update(Post)
           .set({
             order_quantity: () => 'order_quantity + 1',
-            post_total_price: () => `post_total_price + ${Number.isFinite(delta) ? delta : 0}`,
+            post_total_price: () =>
+              `post_total_price + ${Number.isFinite(delta) ? delta : 0}`,
           })
           .where('id = :id', { id: targetPost.id })
           .execute();
-        const refreshedPost = await this.postRepo.findOne({ where: { id: targetPost.id } });
+        const refreshedPost = await this.postRepo.findOne({
+          where: { id: targetPost.id },
+        });
         if (refreshedPost) {
           void this.syncPostToSearch(refreshedPost);
         }
@@ -2039,7 +2272,11 @@ export class LogisticsServiceService implements OnModuleInit {
     requester: RequesterContext,
     dto: { order_ids: string[]; courier_id: string },
   ) {
-    const orderIds = Array.from(new Set((dto?.order_ids ?? []).map((id) => String(id).trim()).filter(Boolean)));
+    const orderIds = Array.from(
+      new Set(
+        (dto?.order_ids ?? []).map((id) => String(id).trim()).filter(Boolean),
+      ),
+    );
     const courierId = String(dto?.courier_id ?? '').trim();
 
     if (!orderIds.length) {
@@ -2058,14 +2295,23 @@ export class LogisticsServiceService implements OnModuleInit {
       requesterId,
       requester,
     );
-    const requesterBranchId = String(requesterAssignment?.branch_id ?? '').trim();
-    const requesterBranchRole = String(requesterAssignment?.role ?? '').trim().toUpperCase();
+    const requesterBranchId = String(
+      requesterAssignment?.branch_id ?? '',
+    ).trim();
+    const requesterBranchRole = String(requesterAssignment?.role ?? '')
+      .trim()
+      .toUpperCase();
 
     if (!requesterBranchId) {
-      this.forbidden("Manager yoki registrator filialga biriktirilmagan");
+      this.forbidden('Manager yoki registrator filialga biriktirilmagan');
     }
-    if (requesterBranchRole !== 'MANAGER' && requesterBranchRole !== 'REGISTRATOR') {
-      this.forbidden('Faqat MANAGER yoki REGISTRATOR orderlarni courierga ommaviy biriktira oladi');
+    if (
+      requesterBranchRole !== 'MANAGER' &&
+      requesterBranchRole !== 'REGISTRATOR'
+    ) {
+      this.forbidden(
+        'Faqat MANAGER yoki REGISTRATOR orderlarni courierga ommaviy biriktira oladi',
+      );
     }
 
     const branchUsers = await this.findBranchUsersByBranchId(
@@ -2075,32 +2321,44 @@ export class LogisticsServiceService implements OnModuleInit {
     const courierInBranch = branchUsers.find(
       (item) =>
         String(item?.user_id ?? '').trim() === courierId &&
-        String(item?.role ?? '').trim().toUpperCase() === 'COURIER',
+        String(item?.role ?? '')
+          .trim()
+          .toUpperCase() === 'COURIER',
     );
 
     if (!courierInBranch) {
-      this.badRequest('Courier ushbu filialga COURIER sifatida biriktirilmagan');
+      this.badRequest(
+        'Courier ushbu filialga COURIER sifatida biriktirilmagan',
+      );
     }
 
-    const orders = await Promise.all(orderIds.map((id) => this.findOrderById(id)));
+    const orders = await Promise.all(
+      orderIds.map((id) => this.findOrderById(id)),
+    );
 
-    const resolveOrderBranchScope = (order: { holder_branch_id?: string | null; branch_id?: string | null }) =>
-      String(order?.holder_branch_id ?? order?.branch_id ?? '').trim();
+    const resolveOrderBranchScope = (order: {
+      holder_branch_id?: string | null;
+      branch_id?: string | null;
+    }) => String(order?.holder_branch_id ?? order?.branch_id ?? '').trim();
 
     const firstBranchId = resolveOrderBranchScope(orders[0]);
     if (!firstBranchId) {
-      this.badRequest("Order(lar) filialga biriktirilmagan");
+      this.badRequest('Order(lar) filialga biriktirilmagan');
     }
 
     if (firstBranchId !== requesterBranchId) {
-      this.forbidden("Manager/registrator faqat o'z filiali orderlarini biriktira oladi");
+      this.forbidden(
+        "Manager/registrator faqat o'z filiali orderlarini biriktira oladi",
+      );
     }
 
     const hasMixedBranch = orders.some(
       (order) => resolveOrderBranchScope(order) !== firstBranchId,
     );
     if (hasMixedBranch) {
-      this.badRequest('Orderlar aralash filialdan: faqat bitta filial orderlarini tanlang');
+      this.badRequest(
+        'Orderlar aralash filialdan: faqat bitta filial orderlarini tanlang',
+      );
     }
 
     const invalidStatusOrder = orders.find(
@@ -2200,8 +2458,10 @@ export class LogisticsServiceService implements OnModuleInit {
         affectedTotal += Number(order.total_price ?? 0);
       }
 
-      targetPost.order_quantity = Number(targetPost.order_quantity ?? 0) + affectedCount;
-      targetPost.post_total_price = Number(targetPost.post_total_price ?? 0) + affectedTotal;
+      targetPost.order_quantity =
+        Number(targetPost.order_quantity ?? 0) + affectedCount;
+      targetPost.post_total_price =
+        Number(targetPost.post_total_price ?? 0) + affectedTotal;
       const savedPost = await this.postRepo.save(targetPost);
       void this.syncPostToSearch(savedPost);
     } catch (error) {
@@ -2268,10 +2528,18 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   async createCanceledPost(requester: RequesterContext, dto: ReceivePostDto) {
+    const isManager = (requester.roles ?? []).some(
+      (role) => String(role).toLowerCase() === Roles.MANAGER,
+    );
+    if (isManager) {
+      return this.createCanceledPostToHq(requester, dto);
+    }
+
     const orderIds = [...new Set(dto.order_ids ?? [])];
     if (!orderIds.length) {
       this.badRequest('No orders provided');
     }
+    const courierBranchId = await this.findCourierBranchId(requester);
 
     const orders: OrderRow[] = [];
     for (const orderId of orderIds) {
@@ -2283,13 +2551,18 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     let canceledPost = await this.postRepo.findOne({
-      where: { courier_id: requester.id, status: Post_status.CANCELED },
+      where: {
+        courier_id: requester.id,
+        branch_id: courierBranchId,
+        status: Post_status.CANCELED,
+      },
     });
 
     if (!canceledPost) {
       canceledPost = await this.postRepo.save(
         this.postRepo.create({
           courier_id: requester.id,
+          branch_id: courierBranchId,
           region_id: orders.find((o) => o.region_id)?.region_id ?? null,
           post_total_price: 0,
           order_quantity: 0,
@@ -2317,8 +2590,10 @@ export class LogisticsServiceService implements OnModuleInit {
       addedTotal += Number(order.total_price ?? 0);
     }
 
-    canceledPost.order_quantity = Number(canceledPost.order_quantity ?? 0) + orders.length;
-    canceledPost.post_total_price = Number(canceledPost.post_total_price ?? 0) + addedTotal;
+    canceledPost.order_quantity =
+      Number(canceledPost.order_quantity ?? 0) + orders.length;
+    canceledPost.post_total_price =
+      Number(canceledPost.post_total_price ?? 0) + addedTotal;
     const savedCanceledPost = await this.postRepo.save(canceledPost);
     void this.syncPostToSearch(savedCanceledPost);
 
@@ -2332,23 +2607,171 @@ export class LogisticsServiceService implements OnModuleInit {
         order_count: orders.length,
         order_ids: orderIds.slice(0, 10),
         canceled: true,
+        branch_id: courierBranchId,
       },
     });
 
     return successRes(
       { post_id: canceledPost.id, order_ids: orderIds },
       200,
-      'Canceled orders successfully sent to central post',
+      'Canceled orders successfully sent to courier branch',
     );
   }
 
-  async receiveCanceledPost(id: string, dto: ReceivePostDto) {
+  async createCanceledPostToHq(
+    requester: RequesterContext,
+    dto: ReceivePostDto,
+  ) {
+    const isManager = (requester.roles ?? []).some(
+      (role) => String(role).toLowerCase() === Roles.MANAGER,
+    );
+    if (!isManager) {
+      this.forbidden('Canceled postni HQga faqat manager jo‘nata oladi');
+    }
+
+    const sourceBranchId = await this.resolveScopedBranchId(requester);
+    if (!sourceBranchId) {
+      this.forbidden('Manager branchga biriktirilmagan');
+    }
+    const hqBranchId = await this.findHqBranchId();
+    if (sourceBranchId === hqBranchId) {
+      this.badRequest('HQ manager canceled postni o‘ziga jo‘nata olmaydi');
+    }
+
+    const orderIds = [...new Set(dto.order_ids ?? [])];
+    if (!orderIds.length) {
+      this.badRequest('No orders provided');
+    }
+
+    const orders: OrderRow[] = [];
+    for (const orderId of orderIds) {
+      const order = await this.findOrderById(orderId);
+      if (
+        order.status !== Order_status.CANCELLED &&
+        order.status !== Order_status.CANCELLED_SENT
+      ) {
+        this.badRequest(
+          'Some orders are not in CANCELED or CANCELED_SENT status',
+        );
+      }
+      const orderBranchId = String(
+        order.holder_branch_id ?? order.branch_id ?? '',
+      ).trim();
+      if (
+        orderBranchId !== sourceBranchId ||
+        (order.holder_type && order.holder_type !== 'BRANCH')
+      ) {
+        this.forbidden(
+          'Manager faqat o‘z branchidagi bekor qilingan orderlarni HQga jo‘nata oladi',
+        );
+      }
+      orders.push(order);
+    }
+
+    let canceledPost = await this.postRepo.findOne({
+      where: {
+        courier_id: requester.id,
+        branch_id: hqBranchId,
+        status: Post_status.CANCELED,
+      },
+    });
+    if (!canceledPost) {
+      canceledPost = await this.postRepo.save(
+        this.postRepo.create({
+          courier_id: requester.id,
+          branch_id: hqBranchId,
+          region_id: orders.find((order) => order.region_id)?.region_id ?? null,
+          post_total_price: 0,
+          order_quantity: 0,
+          qr_code_token: this.generateToken(),
+          status: Post_status.CANCELED,
+        }),
+      );
+    }
+
+    let addedTotal = 0;
+    for (const order of orders) {
+      await this.updateOrder(
+        order.id,
+        {
+          canceled_post_id: canceledPost.id,
+          status: Order_status.CANCELLED_SENT,
+        },
+        {
+          id: requester.id,
+          roles: requester.roles ?? [Roles.MANAGER],
+          note: 'Branch canceled post sent to HQ',
+        },
+      );
+      addedTotal += Number(order.total_price ?? 0);
+    }
+
+    canceledPost.order_quantity =
+      Number(canceledPost.order_quantity ?? 0) + orders.length;
+    canceledPost.post_total_price =
+      Number(canceledPost.post_total_price ?? 0) + addedTotal;
+    const savedPost = await this.postRepo.save(canceledPost);
+    void this.syncPostToSearch(savedPost);
+
+    await this.activityLog.log({
+      entity_type: 'Post',
+      entity_id: String(savedPost.id),
+      action: ActivityAction.CREATED,
+      ...this.auditActor(requester),
+      metadata: {
+        source_branch_id: sourceBranchId,
+        destination_branch_id: hqBranchId,
+        order_count: orders.length,
+        order_ids: orderIds.slice(0, 10),
+        canceled: true,
+      },
+    });
+
+    return successRes(
+      {
+        post_id: savedPost.id,
+        order_ids: orderIds,
+        source_branch_id: sourceBranchId,
+        destination_branch_id: hqBranchId,
+      },
+      200,
+      'Canceled orders sent to HQ post',
+    );
+  }
+
+  async receiveCanceledPost(
+    requester: RequesterContext,
+    id: string,
+    dto: ReceivePostDto,
+  ) {
     const post = await this.postRepo.findOne({ where: { id } });
     if (!post) {
       this.notFound('Post not found');
     }
     if (post.status !== Post_status.CANCELED) {
       this.badRequest('Post with this status can not be received');
+    }
+    const scopedBranchId = await this.resolveScopedBranchId(requester);
+    const targetBranchId =
+      String(post.branch_id ?? '').trim() ||
+      (await this.findCourierBranchId({
+        id: String(post.courier_id),
+        roles: [Roles.COURIER],
+      }));
+    const hqBranchId = await this.findHqBranchId();
+    const isHqReceipt = targetBranchId === hqBranchId;
+    if (this.isSystemPrivileged(requester) && !isHqReceipt) {
+      this.forbidden(
+        'HQ xodimi faqat HQga yuborilgan bekor qilingan pochtani qabul qila oladi',
+      );
+    }
+    if (scopedBranchId && scopedBranchId !== targetBranchId) {
+      this.forbidden(
+        'Siz boshqa branchning bekor qilingan pochtasini qabul qila olmaysiz',
+      );
+    }
+    if (!post.branch_id) {
+      post.branch_id = targetBranchId;
     }
 
     const allOrders = await this.findOrders({
@@ -2360,25 +2783,48 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const canceledOrderIds = [...new Set(dto.order_ids ?? [])];
     const allOrderIdsForPost = allOrders.map((o) => o.id);
-    const invalidIds = canceledOrderIds.filter((orderId) => !allOrderIdsForPost.includes(orderId));
+    const invalidIds = canceledOrderIds.filter(
+      (orderId) => !allOrderIdsForPost.includes(orderId),
+    );
 
     if (invalidIds.length) {
-      this.badRequest(`Some order_ids do not belong to this post: ${invalidIds.join(', ')}`);
+      this.badRequest(
+        `Some order_ids do not belong to this post: ${invalidIds.join(', ')}`,
+      );
     }
 
     for (const orderId of canceledOrderIds) {
-      await this.updateOrder(orderId, { status: Order_status.CLOSED });
+      await this.updateOrder(
+        orderId,
+        {
+          status: isHqReceipt
+            ? Order_status.CLOSED
+            : Order_status.CANCELLED_SENT,
+          branch_id: targetBranchId,
+          courier_id: null,
+          assigned_at: null,
+          canceled_post_id: null,
+        },
+        {
+          id: requester.id,
+          roles: requester.roles ?? [Roles.MANAGER],
+          note: isHqReceipt
+            ? 'Canceled order received by HQ'
+            : 'Canceled order received by branch manager',
+        },
+      );
     }
 
-    const remainingOrderIds = allOrderIdsForPost.filter((orderId) => !canceledOrderIds.includes(orderId));
-    for (const orderId of remainingOrderIds) {
-      await this.updateOrder(orderId, {
-        status: Order_status.CANCELLED,
-        canceled_post_id: null,
-      });
-    }
-
-    post.status = Post_status.CANCELED_RECEIVED;
+    const remainingOrderIds = allOrderIdsForPost.filter(
+      (orderId) => !canceledOrderIds.includes(orderId),
+    );
+    post.order_quantity = remainingOrderIds.length;
+    post.post_total_price = allOrders
+      .filter((order) => remainingOrderIds.includes(String(order.id)))
+      .reduce((sum, order) => sum + Number(order.total_price ?? 0), 0);
+    post.status = remainingOrderIds.length
+      ? Post_status.CANCELED
+      : Post_status.CANCELED_RECEIVED;
     const savedPost = await this.postRepo.save(post);
     void this.syncPostToSearch(savedPost);
 
@@ -2386,18 +2832,33 @@ export class LogisticsServiceService implements OnModuleInit {
       entity_type: 'Post',
       entity_id: String(savedPost.id),
       action: ActivityAction.STATUS_CHANGE,
-      new_value: { status: Post_status.CANCELED_RECEIVED },
+      new_value: { status: savedPost.status },
       metadata: {
         order_count: canceledOrderIds.length,
+        order_ids: canceledOrderIds.slice(0, 10),
+        remaining_order_count: remainingOrderIds.length,
+        branch_id: targetBranchId,
         courier_id: savedPost.courier_id,
       },
     });
 
-    return successRes({}, 200, 'Post received successfully');
+    return successRes(
+      {
+        order_ids: canceledOrderIds,
+        remaining_order_ids: remainingOrderIds,
+        branch_id: targetBranchId,
+      },
+      200,
+      isHqReceipt
+        ? 'Canceled orders received by HQ'
+        : 'Canceled orders received by branch',
+    );
   }
 
   async createDistrict(dto: CreateDistrictDto) {
-    const region = await this.regionRepo.findOne({ where: { id: dto.region_id } });
+    const region = await this.regionRepo.findOne({
+      where: { id: dto.region_id },
+    });
     if (!region) {
       this.notFound('Region not found');
     }
@@ -2434,7 +2895,11 @@ export class LogisticsServiceService implements OnModuleInit {
       entity_type: 'District',
       entity_id: String(saved.id),
       action: ActivityAction.CREATED,
-      new_value: { name: saved.name, sato_code: saved.sato_code, region_id: saved.region_id },
+      new_value: {
+        name: saved.name,
+        sato_code: saved.sato_code,
+        region_id: saved.region_id,
+      },
       metadata: { region_id: dto.region_id },
     });
 
@@ -2593,7 +3058,11 @@ export class LogisticsServiceService implements OnModuleInit {
       relations: ['region'],
     });
 
-    return successRes(matchDistricts(dbDistricts), 200, 'SATO matching natijasi');
+    return successRes(
+      matchDistricts(dbDistricts),
+      200,
+      'SATO matching natijasi',
+    );
   }
 
   async applyDistrictSatoCodes() {
@@ -2750,7 +3219,12 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const statsByRegion = new Map<
       string,
-      { totalOrders: number; deliveredOrders: number; cancelledOrders: number; revenue: number }
+      {
+        totalOrders: number;
+        deliveredOrders: number;
+        cancelledOrders: number;
+        revenue: number;
+      }
     >();
 
     for (const regionId of regionIds) {
@@ -2800,7 +3274,9 @@ export class LogisticsServiceService implements OnModuleInit {
         id: region.id,
         name: region.name,
         sato_code: region.sato_code,
-        districts_count: Array.isArray(region.districts) ? region.districts.length : 0,
+        districts_count: Array.isArray(region.districts)
+          ? region.districts.length
+          : 0,
         ...stats,
       };
     });
@@ -2833,7 +3309,11 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
-  async getRegionDetailedStats(id: string, startDate?: string, endDate?: string) {
+  async getRegionDetailedStats(
+    id: string,
+    startDate?: string,
+    endDate?: string,
+  ) {
     const regionId = String(id ?? '').trim();
     if (!regionId) {
       this.badRequest('Region id is required');
@@ -2890,7 +3370,10 @@ export class LogisticsServiceService implements OnModuleInit {
         }
       }
 
-      const pendingOrders = Math.max(0, totalOrders - deliveredOrders - cancelledOrders);
+      const pendingOrders = Math.max(
+        0,
+        totalOrders - deliveredOrders - cancelledOrders,
+      );
       const successRate =
         totalOrders > 0 ? Math.round((deliveredOrders / totalOrders) * 100) : 0;
 
@@ -2916,7 +3399,9 @@ export class LogisticsServiceService implements OnModuleInit {
       return {
         id: courierId || null,
         name: String(courier?.name ?? ''),
-        phoneNumber: String(courier?.phone_number ?? courier?.phoneNumber ?? ''),
+        phoneNumber: String(
+          courier?.phone_number ?? courier?.phoneNumber ?? '',
+        ),
         status: courier?.status ?? null,
         districtId: districtId || null,
         totalOrders: stats.totalOrders,
@@ -2927,7 +3412,9 @@ export class LogisticsServiceService implements OnModuleInit {
       };
     });
 
-    const districts = (Array.isArray(region.districts) ? region.districts : []).map((district) => {
+    const districts = (
+      Array.isArray(region.districts) ? region.districts : []
+    ).map((district) => {
       const districtId = String(district.id);
       const districtOrders = regionOrders.filter(
         (order) => String(order.district_id ?? '').trim() === districtId,
@@ -2988,7 +3475,9 @@ export class LogisticsServiceService implements OnModuleInit {
           activeCouriers,
           totalDistricts: districts.length,
         },
-        couriers: couriers.sort((a, b) => b.deliveredOrders - a.deliveredOrders),
+        couriers: couriers.sort(
+          (a, b) => b.deliveredOrders - a.deliveredOrders,
+        ),
         districts: districts.sort((a, b) => b.totalOrders - a.totalOrders),
       },
       200,
@@ -3082,7 +3571,8 @@ export class LogisticsServiceService implements OnModuleInit {
         addedTotal += Number(ro.total_price ?? 0);
       }
 
-      post.order_quantity = Number(post.order_quantity ?? 0) + regionOrders.length;
+      post.order_quantity =
+        Number(post.order_quantity ?? 0) + regionOrders.length;
       post.post_total_price = Number(post.post_total_price ?? 0) + addedTotal;
       const saved = await this.postRepo.save(post);
       void this.syncPostToSearch(saved);
@@ -3127,7 +3617,9 @@ export class LogisticsServiceService implements OnModuleInit {
       if (!nextName) {
         this.badRequest('name cannot be empty');
       }
-      const existing = await this.regionRepo.findOne({ where: { name: nextName } });
+      const existing = await this.regionRepo.findOne({
+        where: { name: nextName },
+      });
       if (existing && existing.id !== id) {
         this.conflict('Region name already exists');
       }

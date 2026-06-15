@@ -16,6 +16,7 @@ interface JwtUser {
   sub: string;
   username: string;
   roles?: string[];
+  branch_id?: string;
 }
 
 @ApiTags('Analytics')
@@ -29,6 +30,7 @@ export class AnalyticsGatewayController {
     return {
       id: req.user.sub,
       roles: req.user.roles ?? [],
+      branch_id: req.user.branch_id,
     };
   }
 
@@ -38,18 +40,34 @@ export class AnalyticsGatewayController {
   @ApiOperation({ summary: 'Dashboard statistics by requester role' })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
+  @ApiQuery({ name: 'start_day', required: false, type: String })
+  @ApiQuery({ name: 'end_day', required: false, type: String })
+  @ApiQuery({
+    name: 'period',
+    required: false,
+    enum: ['today', 'week', 'month'],
+  })
   getDashboard(
     @Req() req: { user: JwtUser },
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('period') period?: string,
+    @Query('start_day') startDay?: string,
+    @Query('end_day') endDay?: string,
   ) {
+    const resolvedStartDate = startDate ?? startDay;
+    const resolvedEndDate = endDate ?? endDay;
     return firstValueFrom(
       this.analyticsClient
         .send(
           { cmd: 'analytics.dashboard' },
           {
             requester: this.toRequester(req),
-            filter: { startDate, endDate },
+            filter: {
+              startDate: resolvedStartDate,
+              endDate: resolvedEndDate,
+              period,
+            },
           },
         )
         .pipe(timeout(8000)),
@@ -65,6 +83,8 @@ export class AnalyticsGatewayController {
   @ApiOperation({ summary: 'Revenue stats by period' })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
+  @ApiQuery({ name: 'start_day', required: false, type: String })
+  @ApiQuery({ name: 'end_day', required: false, type: String })
   @ApiQuery({
     name: 'period',
     required: false,
@@ -75,14 +95,22 @@ export class AnalyticsGatewayController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
     @Query('period') period = 'daily',
+    @Query('start_day') startDay?: string,
+    @Query('end_day') endDay?: string,
   ) {
+    const resolvedStartDate = startDate ?? startDay;
+    const resolvedEndDate = endDate ?? endDay;
     return firstValueFrom(
       this.analyticsClient
         .send(
           { cmd: 'analytics.revenue' },
           {
             requester: this.toRequester(req),
-            filter: { startDate, endDate, period },
+            filter: {
+              startDate: resolvedStartDate,
+              endDate: resolvedEndDate,
+              period,
+            },
           },
         )
         .pipe(timeout(8000)),
@@ -96,18 +124,27 @@ export class AnalyticsGatewayController {
   @ApiOperation({ summary: 'KPI stats report' })
   @ApiQuery({ name: 'startDate', required: false, type: String })
   @ApiQuery({ name: 'endDate', required: false, type: String })
+  @ApiQuery({ name: 'start_day', required: false, type: String })
+  @ApiQuery({ name: 'end_day', required: false, type: String })
   getKpi(
     @Req() req: { user: JwtUser },
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
+    @Query('start_day') startDay?: string,
+    @Query('end_day') endDay?: string,
   ) {
+    const resolvedStartDate = startDate ?? startDay;
+    const resolvedEndDate = endDate ?? endDay;
     return firstValueFrom(
       this.analyticsClient
         .send(
           { cmd: 'analytics.kpi' },
           {
             requester: this.toRequester(req),
-            filter: { startDate, endDate },
+            filter: {
+              startDate: resolvedStartDate,
+              endDate: resolvedEndDate,
+            },
           },
         )
         .pipe(timeout(10000)),

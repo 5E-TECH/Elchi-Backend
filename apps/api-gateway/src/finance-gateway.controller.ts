@@ -1511,8 +1511,83 @@ export class FinanceGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get financial balance' })
-  financialBalance() {
-    return this.send({ cmd: 'finance.cashbox.financial_balance' }, {});
+  async financialBalance(@Req() req: { user: JwtUser }) {
+    const [financeResponse, branchesResponse] = await Promise.all([
+      this.send<{
+        data?: {
+          mainCashboxTotal?: number | string;
+          marketCashboxTotal?: number | string;
+        };
+      }>(
+        { cmd: 'finance.cashbox.all_info' },
+        {
+          page: 1,
+          limit: 1,
+        },
+      ),
+      this.sendBranch<{
+        data?: {
+          items?: Array<{
+            type?: string;
+            olinishi_kerak?: number | string;
+          }>;
+        };
+      }>(
+        { cmd: 'branch.find_all' },
+        {
+          requester: this.toRequester(req.user),
+          query: {
+            status: 'active',
+            page: 1,
+            limit: 1000,
+          },
+        },
+      ).catch(() => null),
+    ]);
+
+    const branchReceivable = (branchesResponse?.data?.items ?? []).reduce(
+      (sum, branch) => {
+        if (String(branch?.type ?? '').toUpperCase() === 'HQ') {
+          return sum;
+        }
+        const amount = Number(branch?.olinishi_kerak ?? 0);
+        return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
+      },
+      0,
+    );
+    const mainCashboxTotal = Number(
+      financeResponse?.data?.mainCashboxTotal ?? 0,
+    );
+    const marketPayable = Math.max(
+      Number(financeResponse?.data?.marketCashboxTotal ?? 0),
+      0,
+    );
+    const difference = branchReceivable - marketPayable;
+
+    return {
+      statusCode: 200,
+      message: 'Financial balance infos',
+      data: {
+        currentSituation: mainCashboxTotal + difference,
+        main: {
+          balance: mainCashboxTotal,
+        },
+        branches: {
+          branchReceivable,
+        },
+        markets: {
+          marketPayable,
+          marketsTotalBalans: -marketPayable,
+        },
+        // Frontend still reads the legacy courier fields for receivables.
+        couriers: {
+          allCourierCashboxes: [],
+          couriersTotalBalanse: branchReceivable,
+        },
+        difference,
+        formula: 'main_cashbox + branch_receivable - market_payable',
+      },
+    };
   }
 
   // --- Financial balance ledger (company-wide P&L history) ---

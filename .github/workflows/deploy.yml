@@ -82,5 +82,10 @@ jobs:
             test -f .env.production || cp -f /tmp/elchi-env-backup .env.production
             docker compose -f docker-compose.prod.yml pull || true
             docker compose -f docker-compose.prod.yml down --remove-orphans || true
-            docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
+            if ! docker compose -f docker-compose.prod.yml up -d --build --remove-orphans; then
+              echo "Docker build failed; pruning BuildKit cache and retrying once..."
+              docker builder prune -af || true
+              docker buildx prune -af || true
+              docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
+            fi
             docker compose -f docker-compose.prod.yml ps

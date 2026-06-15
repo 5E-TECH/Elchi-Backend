@@ -2,7 +2,6 @@ import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import {
-  Between,
   Brackets,
   DataSource,
   In,
@@ -89,9 +88,10 @@ export class OrderServiceService implements OnModuleInit {
    * left null (the audit table denormalises it but tolerates absence); the
    * user_id + role pair is enough to attribute every action.
    */
-  private auditActor(
-    requester?: { id?: string; roles?: string[] } | null,
-  ): { user_id: string | null; user_role: string | null } {
+  private auditActor(requester?: { id?: string; roles?: string[] } | null): {
+    user_id: string | null;
+    user_role: string | null;
+  } {
     const roles = requester?.roles ?? [];
     return {
       user_id: requester?.id ? String(requester.id) : null,
@@ -788,6 +788,18 @@ export class OrderServiceService implements OnModuleInit {
 
   private soldStatuses() {
     return [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID];
+  }
+
+  private applyAnalyticsBranchScope<
+    T extends { andWhere: (...args: any[]) => T },
+  >(query: T, branchId?: string): T {
+    if (!branchId) {
+      return query;
+    }
+    return query.andWhere(
+      '(o.branch_id = :analyticsBranchId OR o.holder_branch_id = :analyticsBranchId)',
+      { analyticsBranchId: branchId },
+    );
   }
 
   private dateKey(date: Date) {
@@ -1623,6 +1635,63 @@ export class OrderServiceService implements OnModuleInit {
       where: { order_id: id },
     });
     return successRes(settlement ?? null, 200, 'Order settlement');
+  }
+
+  async getFinancialBalanceSettlementSummary() {
+    const activeStatuses = [
+      SettlementStatus.PENDING,
+      SettlementStatus.COURIER_SETTLED,
+      SettlementStatus.BRANCH_SETTLED,
+    ];
+    const branchReceivableStatuses = [
+      SettlementStatus.PENDING,
+      SettlementStatus.COURIER_SETTLED,
+    ];
+
+    const [branchRows, marketRows] = await Promise.all([
+      this.orderSettlementRepo
+        .createQueryBuilder('settlement')
+        .select('settlement.branch_id', 'branch_id')
+        .addSelect('COALESCE(SUM(settlement.branch_amount), 0)', 'amount')
+        .where('settlement.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('settlement.branch_id IS NOT NULL')
+        .andWhere('settlement.status IN (:...statuses)', {
+          statuses: branchReceivableStatuses,
+        })
+        .groupBy('settlement.branch_id')
+        .getRawMany<{ branch_id: string; amount: string }>(),
+      this.orderSettlementRepo
+        .createQueryBuilder('settlement')
+        .select('settlement.market_id', 'market_id')
+        .addSelect('COALESCE(SUM(settlement.market_amount), 0)', 'amount')
+        .where('settlement.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('settlement.market_id IS NOT NULL')
+        .andWhere('settlement.status IN (:...statuses)', {
+          statuses: activeStatuses,
+        })
+        .groupBy('settlement.market_id')
+        .getRawMany<{ market_id: string; amount: string }>(),
+    ]);
+
+    const branches = branchRows.map((row) => ({
+      branch_id: String(row.branch_id),
+      amount: Math.max(Number(row.amount) || 0, 0),
+    }));
+    const markets = marketRows.map((row) => ({
+      market_id: String(row.market_id),
+      amount: Math.max(Number(row.amount) || 0, 0),
+    }));
+
+    return successRes(
+      {
+        branch_receivable: branches.reduce((sum, row) => sum + row.amount, 0),
+        market_payable: markets.reduce((sum, row) => sum + row.amount, 0),
+        branches,
+        markets,
+      },
+      200,
+      'Financial balance settlement summary',
+    );
   }
 
   private static readonly MAIN_CASHBOX_USER_ID = '0';
@@ -3024,6 +3093,8 @@ export class OrderServiceService implements OnModuleInit {
     post_ids?: string[];
     exclude_statuses?: Order_status[];
     canceled_post_id?: string;
+    canceled_post_unassigned?: boolean;
+    holder_type?: OrderHolderType;
     qr_code_token?: string;
     status?: Order_status | Order_status[] | string | string[];
     return_requested?: boolean;
@@ -3051,6 +3122,8 @@ export class OrderServiceService implements OnModuleInit {
       post_ids,
       exclude_statuses,
       canceled_post_id,
+      canceled_post_unassigned,
+      holder_type,
       qr_code_token,
       status,
       return_requested,
@@ -3108,6 +3181,11 @@ export class OrderServiceService implements OnModuleInit {
       qb.andWhere('order.canceled_post_id = :canceled_post_id', {
         canceled_post_id,
       });
+    } else if (canceled_post_unassigned) {
+      qb.andWhere('order.canceled_post_id IS NULL');
+    }
+    if (holder_type) {
+      qb.andWhere('order.holder_type = :holder_type', { holder_type });
     }
     if (qr_code_token) {
       qb.andWhere('order.qr_code_token = :qr_code_token', { qr_code_token });
@@ -4465,7 +4543,12 @@ export class OrderServiceService implements OnModuleInit {
       {
         status: Order_status.WAITING_CUSTOMER,
       },
-      { id: requester.id, roles: requester.roles, note: trackingNote, audit: false },
+      {
+        id: requester.id,
+        roles: requester.roles,
+        note: trackingNote,
+        audit: false,
+      },
     );
 
     await this.activityLog.log({
@@ -4801,6 +4884,28 @@ export class OrderServiceService implements OnModuleInit {
           item !== null,
       );
 
+    if (!cancelledItems.length) {
+      this.badRequest(
+        'Qisman sotishda kamida bitta mahsulot soni kamaytirilishi kerak',
+      );
+    }
+    const cancelledTotalPrice = Math.max(oldTotalPrice - price, 0);
+    const cancelledBranchId = String(
+      order.holder_branch_id ??
+        order.branch_id ??
+        order.home_branch_id ??
+        requester.branch_id ??
+        '',
+    ).trim();
+    if (!cancelledBranchId) {
+      this.badRequest('Qisman bekor qilingan order uchun branch aniqlanmadi');
+    }
+    const cancelledCourierId = isManagerRequester ? null : actorCourierId;
+    const cancelledHolder = await this.resolveHolderFromState(
+      cancelledBranchId,
+      cancelledCourierId,
+    );
+
     // Decoupled COD legs (partial price as the operation total). See sellOrder
     // for the model: market / courier / branch each settle independently.
     const marketIncome = Math.max(price - marketTariff, 0);
@@ -5020,6 +5125,87 @@ export class OrderServiceService implements OnModuleInit {
         hasCourier: Boolean(courierCashbox),
       });
 
+      const cancelledOrderRepo = tx.getRepository(Order);
+      const cancelledOrderItemRepo = tx.getRepository(OrderItem);
+      const cancelledTrackingRepo = tx.getRepository(OrderTracking);
+      const cancelledCustodyRepo = tx.getRepository(OrderCustodyEvent);
+      const cancelledOrder = await cancelledOrderRepo.save(
+        cancelledOrderRepo.create({
+          market_id: String(order.market_id),
+          customer_id: String(order.customer_id),
+          where_deliver: order.where_deliver,
+          total_price: cancelledTotalPrice,
+          to_be_paid: 0,
+          paid_amount: 0,
+          status: Order_status.CANCELLED,
+          comment: 'Qisman bekor qilingan mahsulotlar',
+          operator: order.operator ?? null,
+          operator_id: order.operator_id ?? null,
+          post_id: order.post_id ?? null,
+          canceled_post_id: null,
+          branch_id: cancelledBranchId,
+          home_branch_id: order.home_branch_id ?? order.branch_id ?? null,
+          courier_id: cancelledCourierId,
+          assigned_at: cancelledCourierId
+            ? (order.assigned_at ?? new Date())
+            : null,
+          holder_type: cancelledHolder.holder_type,
+          holder_branch_id: cancelledHolder.holder_branch_id,
+          holder_courier_id: cancelledHolder.holder_courier_id,
+          last_handover_at: new Date(),
+          last_handover_by: String(requester.id),
+          district_id: order.district_id ?? null,
+          region_id: order.region_id ?? null,
+          address: order.address ?? null,
+          qr_code_token: `CANCEL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
+          parent_order_id: String(order.id),
+          source: order.source,
+          product_quantity: cancelledItems.reduce(
+            (sum, item) => sum + item.quantity,
+            0,
+          ),
+          isDeleted: false,
+        }),
+      );
+      await cancelledOrderItemRepo
+        .createQueryBuilder()
+        .insert()
+        .values(
+          cancelledItems.map((item) => ({
+            order_id: cancelledOrder.id,
+            product_id: item.product_id,
+            quantity: item.quantity,
+          })),
+        )
+        .execute();
+      await this.createTrackingEvent(
+        {
+          order_id: cancelledOrder.id,
+          from_status: null,
+          to_status: Order_status.CANCELLED,
+          changed_by: String(requester.id),
+          changed_by_role: this.toTrackingRole(requester.roles),
+          note: 'Partly-sell unsold items canceled',
+        },
+        cancelledTrackingRepo,
+      );
+      await this.createCustodyEvent(
+        {
+          order_id: cancelledOrder.id,
+          from_holder_type: null,
+          to_holder_type: cancelledHolder.holder_type,
+          from_branch_id: null,
+          to_branch_id: cancelledHolder.holder_branch_id,
+          from_courier_id: null,
+          to_courier_id: cancelledHolder.holder_courier_id,
+          changed_by: String(requester.id),
+          changed_by_role: this.toTrackingRole(requester.roles),
+          note: 'Partly-sell canceled items custody assigned',
+        },
+        cancelledCustodyRepo,
+      );
+      await this.syncOrderToSearch(cancelledOrder, tx);
+
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -5051,41 +5237,6 @@ export class OrderServiceService implements OnModuleInit {
       }
     } catch {
       // External sync is best-effort.
-    }
-
-    // Spawn the CANCELLED child order capturing the returned line items. The
-    // main sale is already committed; if this fails the financial state stays
-    // correct, so we log and continue rather than fail the whole operation.
-    if (cancelledItems.length > 0) {
-      const cancelledTotalPrice = Math.max(oldTotalPrice - price, 0);
-      try {
-        await this.create({
-          market_id: String(order.market_id),
-          customer_id: String(order.customer_id),
-          where_deliver: order.where_deliver,
-          total_price: cancelledTotalPrice,
-          to_be_paid: 0,
-          paid_amount: 0,
-          status: Order_status.CANCELLED,
-          comment: 'Qisman bekor qilingan mahsulotlar',
-          operator: order.operator ?? null,
-          post_id: order.post_id ?? null,
-          canceled_post_id: order.canceled_post_id ?? null,
-          home_branch_id: order.home_branch_id ?? order.branch_id ?? null,
-          district_id: order.district_id ?? null,
-          region_id: order.region_id ?? null,
-          address: order.address ?? null,
-          qr_code_token: `CANCEL-${Date.now()}-${Math.random().toString(36).substring(2, 8)}`,
-          parent_order_id: String(order.id),
-          items: cancelledItems,
-        });
-      } catch (childError) {
-        this.logger.error(
-          `Partly-sell ${id}: failed to create cancelled child order: ${
-            (childError as Error)?.message ?? childError
-          }`,
-        );
-      }
     }
 
     await this.activityLog.log({
@@ -5755,6 +5906,9 @@ export class OrderServiceService implements OnModuleInit {
     market_id?: string;
     customer_id?: string;
     post_ids?: string[];
+    branch_id?: string;
+    canceled_post_unassigned?: boolean;
+    holder_type?: OrderHolderType;
     exclude_statuses?: Order_status[];
     status?: Order_status | Order_status[] | string | string[];
     search?: string;
@@ -5857,7 +6011,11 @@ export class OrderServiceService implements OnModuleInit {
     };
   }
 
-  async getOverviewStats(startDate?: string, endDate?: string) {
+  async getOverviewStats(
+    startDate?: string,
+    endDate?: string,
+    branchId?: string,
+  ) {
     const { start, end } = this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
     const startMs = String(start.getTime());
@@ -5865,30 +6023,43 @@ export class OrderServiceService implements OnModuleInit {
 
     const [acceptedCount, cancelled, soldAndPaid, soldOrders] =
       await Promise.all([
-        this.orderRepo.count({
-          where: {
-            isDeleted: false,
-            createdAt: Between(start, end),
-          },
-        }),
-        this.orderRepo
-          .createQueryBuilder('o')
-          .where('o.isDeleted = :isDeleted', { isDeleted: false })
-          .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-          .andWhere('o.status = :status', { status: Order_status.CANCELLED })
-          .getCount(),
-        this.orderRepo
-          .createQueryBuilder('o')
-          .where('o.isDeleted = :isDeleted', { isDeleted: false })
-          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-          .getCount(),
-        this.orderRepo
-          .createQueryBuilder('o')
-          .where('o.isDeleted = :isDeleted', { isDeleted: false })
-          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-          .getMany(),
+        this.applyAnalyticsBranchScope(
+          this.orderRepo
+            .createQueryBuilder('o')
+            .where('o.isDeleted = :isDeleted', { isDeleted: false })
+            .andWhere('o.createdAt BETWEEN :start AND :end', { start, end }),
+          branchId,
+        ).getCount(),
+        this.applyAnalyticsBranchScope(
+          this.orderRepo
+            .createQueryBuilder('o')
+            .where('o.isDeleted = :isDeleted', { isDeleted: false })
+            .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+            .andWhere('o.status = :status', { status: Order_status.CANCELLED }),
+          branchId,
+        ).getCount(),
+        this.applyAnalyticsBranchScope(
+          this.orderRepo
+            .createQueryBuilder('o')
+            .where('o.isDeleted = :isDeleted', { isDeleted: false })
+            .andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
+              startMs,
+              endMs,
+            })
+            .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses }),
+          branchId,
+        ).getCount(),
+        this.applyAnalyticsBranchScope(
+          this.orderRepo
+            .createQueryBuilder('o')
+            .where('o.isDeleted = :isDeleted', { isDeleted: false })
+            .andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
+              startMs,
+              endMs,
+            })
+            .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses }),
+          branchId,
+        ).getMany(),
       ]);
 
     const marketIds = [
@@ -5937,30 +6108,40 @@ export class OrderServiceService implements OnModuleInit {
     };
   }
 
-  async getMarketStats(startDate?: string, endDate?: string) {
+  async getMarketStats(
+    startDate?: string,
+    endDate?: string,
+    branchId?: string,
+  ) {
     const { start, end } = this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
     const startMs = String(start.getTime());
     const endMs = String(end.getTime());
 
-    const totalsRaw = await this.orderRepo
-      .createQueryBuilder('o')
-      .select('o.market_id', 'market_id')
-      .addSelect('COUNT(*)', 'total')
-      .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.createdAt BETWEEN :start AND :end', { start, end })
-      .andWhere('o.market_id IS NOT NULL')
+    const totalsRaw = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .select('o.market_id', 'market_id')
+        .addSelect('COUNT(*)', 'total')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.createdAt BETWEEN :start AND :end', { start, end })
+        .andWhere('o.market_id IS NOT NULL'),
+      branchId,
+    )
       .groupBy('o.market_id')
       .getRawMany<{ market_id: string; total: string }>();
 
-    const soldsRaw = await this.orderRepo
-      .createQueryBuilder('o')
-      .select('o.market_id', 'market_id')
-      .addSelect('COUNT(*)', 'sold')
-      .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-      .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-      .andWhere('o.market_id IS NOT NULL')
+    const soldsRaw = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .select('o.market_id', 'market_id')
+        .addSelect('COUNT(*)', 'sold')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
+        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+        .andWhere('o.market_id IS NOT NULL'),
+      branchId,
+    )
       .groupBy('o.market_id')
       .getRawMany<{ market_id: string; sold: string }>();
 
@@ -5989,17 +6170,24 @@ export class OrderServiceService implements OnModuleInit {
     return result;
   }
 
-  async getCourierStats(startDate?: string, endDate?: string) {
+  async getCourierStats(
+    startDate?: string,
+    endDate?: string,
+    branchId?: string,
+  ) {
     const { start, end } = this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
     const startMs = start.getTime();
     const endMs = end.getTime();
-    const postRows = await this.orderRepo
-      .createQueryBuilder('o')
-      .select('o.post_id', 'post_id')
-      .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-      .andWhere('o.post_id IS NOT NULL')
+    const postRows = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .select('o.post_id', 'post_id')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+        .andWhere('o.post_id IS NOT NULL'),
+      branchId,
+    )
       .groupBy('o.post_id')
       .getRawMany<{ post_id: string }>();
     const postIds = postRows.map((row) => String(row.post_id)).filter(Boolean);
@@ -6010,13 +6198,16 @@ export class OrderServiceService implements OnModuleInit {
 
     const posts = await this.getPostsByIds(postIds);
 
-    const orders = await this.orderRepo
-      .createQueryBuilder('o')
-      .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.post_id IN (:...postIds)', {
-        postIds,
-      })
-      .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+    const orders = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.post_id IN (:...postIds)', {
+          postIds,
+        })
+        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end }),
+      branchId,
+    )
       .select(['o.id', 'o.status', 'o.post_id', 'o.sold_at'])
       .getMany();
 
@@ -6074,21 +6265,24 @@ export class OrderServiceService implements OnModuleInit {
     return result;
   }
 
-  async getTopMarkets(limit = 10) {
+  async getTopMarkets(limit = 10, branchId?: string) {
     const soldStatuses = this.soldStatuses();
     const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-    const totalsRaw = await this.orderRepo
-      .createQueryBuilder('o')
-      .select('o.market_id', 'market_id')
-      .addSelect('COUNT(*)', 'total_orders')
-      .addSelect(
-        `SUM(CASE WHEN o.status IN (:...statuses) THEN 1 ELSE 0 END)`,
-        'successful_orders',
-      )
-      .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.createdAt >= :lastMonth', { lastMonth })
-      .andWhere('o.market_id IS NOT NULL')
+    const totalsRaw = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .select('o.market_id', 'market_id')
+        .addSelect('COUNT(*)', 'total_orders')
+        .addSelect(
+          `SUM(CASE WHEN o.status IN (:...statuses) THEN 1 ELSE 0 END)`,
+          'successful_orders',
+        )
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.createdAt >= :lastMonth', { lastMonth })
+        .andWhere('o.market_id IS NOT NULL'),
+      branchId,
+    )
       .setParameter('statuses', soldStatuses)
       .groupBy('o.market_id')
       .getRawMany<{
@@ -6126,15 +6320,18 @@ export class OrderServiceService implements OnModuleInit {
     return result;
   }
 
-  async getTopCouriers(limit = 10) {
+  async getTopCouriers(limit = 10, branchId?: string) {
     const soldStatuses = this.soldStatuses();
     const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
 
-    const orders = await this.orderRepo
-      .createQueryBuilder('o')
-      .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('o.createdAt >= :lastMonth', { lastMonth })
-      .andWhere('o.post_id IS NOT NULL')
+    const orders = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.createdAt >= :lastMonth', { lastMonth })
+        .andWhere('o.post_id IS NOT NULL'),
+      branchId,
+    )
       .select(['o.post_id', 'o.status'])
       .getMany();
 
