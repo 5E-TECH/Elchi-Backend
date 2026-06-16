@@ -339,7 +339,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
     );
   });
 
-  it('closes canceled orders when HQ receives the manager post', async () => {
+  it('keeps canceled orders open when HQ receives the manager post', async () => {
     const orderClient = {
       send: jest.fn((pattern: { cmd: string }) => {
         if (pattern.cmd === 'order.find_all') {
@@ -393,7 +393,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       {
         id: '101',
         dto: {
-          status: Order_status.CLOSED,
+          status: Order_status.CANCELLED_SENT,
           branch_id: '1',
           courier_id: null,
           assigned_at: null,
@@ -402,7 +402,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
         requester: {
           id: '1',
           roles: ['admin'],
-          note: 'Canceled order received by HQ',
+          note: 'Canceled order received by HQ and held for market handover',
         },
       },
     );
