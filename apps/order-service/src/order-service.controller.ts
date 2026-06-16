@@ -247,7 +247,12 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.runIdempotent(context, 'order.sell', data.request_id, () =>
-      this.orderService.sellOrder(data.requester, data.id, data.dto ?? {}),
+      this.orderService.sellOrder(
+        data.requester,
+        data.id,
+        data.dto ?? {},
+        data.request_id,
+      ),
     );
   }
 
@@ -263,7 +268,12 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.runIdempotent(context, 'order.cancel', data.request_id, () =>
-      this.orderService.cancelOrder(data.requester, data.id, data.dto ?? {}),
+      this.orderService.cancelOrder(
+        data.requester,
+        data.id,
+        data.dto ?? {},
+        data.request_id,
+      ),
     );
   }
 
@@ -313,7 +323,12 @@ export class OrderServiceController {
       'order.partly_sell',
       data.request_id,
       () =>
-        this.orderService.partlySellOrder(data.requester, data.id, data.dto),
+        this.orderService.partlySellOrder(
+          data.requester,
+          data.id,
+          data.dto,
+          data.request_id,
+        ),
     );
   }
 
@@ -337,6 +352,7 @@ export class OrderServiceController {
           data.requester,
           data.id,
           data.dto,
+          data.request_id,
         ),
     );
   }

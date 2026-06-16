@@ -9,6 +9,7 @@ import {
   DatabaseModule,
   financeValidationSchema,
   ActivityLogModule,
+  OutboxModule,
 } from '@app/common';
 import { Cashbox } from './entities/cashbox.entity';
 import { CashboxHistory } from './entities/cashbox-history.entity';
@@ -30,6 +31,10 @@ import { FinancialBalanceHistory } from './entities/financial-balance-history.en
     RmqModule.register({ name: 'ORDER' }),
     RmqModule.register({ name: 'IDENTITY' }),
     DatabaseModule,
+    // Transactional outbox: finance publishes `order.settlement.advance` to
+    // order-service inside the cashbox-move transaction (Faza 2a). Reliable,
+    // retried, DLQ-backed delivery replaces the old best-effort gateway bridge.
+    OutboxModule.forService({ targets: ['ORDER'] }),
     ActivityLogModule.forService('finance-service'),
     TypeOrmModule.forFeature([
       Cashbox,

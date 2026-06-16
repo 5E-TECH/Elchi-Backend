@@ -141,6 +141,7 @@ function makeService(manager: MockManager) {
   };
   const orderClient: any = {};
   const identityClient: any = {};
+  const outbox: any = { enqueue: jest.fn().mockResolvedValue(undefined) };
 
   const service = new FinanceServiceService(
     cashboxRepo,
@@ -154,6 +155,7 @@ function makeService(manager: MockManager) {
     activityLog,
     orderClient,
     identityClient,
+    outbox,
   );
 
   return {
@@ -166,6 +168,7 @@ function makeService(manager: MockManager) {
     paymentRepo,
     financialHistoryRepo,
     activityLog,
+    outbox,
   };
 }
 
@@ -815,5 +818,118 @@ describe('FinanceServiceService financial balance ledger', () => {
     expect(res.data.total).toBe(2);
     expect(res.data.currentBalance).toBe(125000);
     expect(res.data.rows).toHaveLength(2);
+  });
+});
+
+describe('FinanceServiceService.paymentsFromCourier over-remit guard (Faza 1c)', () => {
+  it('rejects a remit larger than the courier cashbox balance (no negative drive)', async () => {
+    const manager = makeManager();
+    // 1st findOne → courier cashbox (balance 500); 2nd findOne → duplicate
+    // pre-check returns null (not a replay) so we reach the over-remit guard.
+    manager.findOne
+      .mockResolvedValueOnce({
+        id: 'cb-courier',
+        user_id: '7',
+        cashbox_type: 'for_courier',
+        balance: 500,
+        balance_cash: 500,
+        balance_card: 0,
+      })
+      .mockResolvedValueOnce(null);
+    const { service } = makeService(manager);
+
+    await expect(
+      service.paymentsFromCourier({
+        courier_id: '7',
+        amount: 1000, // > 500 balance
+        payment_method: 'cash' as any,
+        dedup_epoch: 'tok-new',
+      }),
+    ).rejects.toThrow();
+
+    // The cashbox was never saved (no balance mutation) — guard fired first.
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('returns idempotent for a replay BEFORE the over-remit guard runs', async () => {
+    const manager = makeManager();
+    // Courier cashbox at balance 0; duplicate pre-check finds an existing row.
+    manager.findOne
+      .mockResolvedValueOnce({
+        id: 'cb-courier',
+        user_id: '7',
+        cashbox_type: 'for_courier',
+        balance: 0,
+        balance_cash: 0,
+        balance_card: 0,
+      })
+      .mockResolvedValueOnce({ id: 'existing-history-row' });
+    const { service, outbox } = makeService(manager);
+
+    // amount 1000 > balance 0, but the replay short-circuits first → no throw.
+    const res: any = await service.paymentsFromCourier({
+      courier_id: '7',
+      amount: 1000,
+      payment_method: 'cash' as any,
+      dedup_epoch: 'tok-replayed',
+    });
+
+    expect(res.data.idempotent).toBe(true);
+    // A replay must NOT enqueue another settlement advance (the original did).
+    expect(outbox.enqueue).not.toHaveBeenCalled();
+  });
+});
+
+describe('FinanceServiceService.paymentsFromCourier settlement advance via outbox (Faza 2a)', () => {
+  it('enqueues order.settlement.advance INSIDE the cashbox tx, keyed by the payment token', async () => {
+    const manager = makeManager();
+    manager.findOne
+      // 1) courier cashbox (balance covers the remit)
+      .mockResolvedValueOnce({
+        id: 'cb-courier',
+        user_id: '7',
+        cashbox_type: 'for_courier',
+        balance: 1000,
+        balance_cash: 1000,
+        balance_card: 0,
+      })
+      // 2) duplicate pre-check → not a replay
+      .mockResolvedValueOnce(null)
+      // 3) receiver (main) cashbox
+      .mockResolvedValueOnce({
+        id: 'cb-main',
+        user_id: '1',
+        cashbox_type: 'main',
+        balance: 0,
+        balance_cash: 0,
+        balance_card: 0,
+      });
+    const { service, queryRunner, outbox } = makeService(manager);
+
+    await service.paymentsFromCourier({
+      courier_id: '7',
+      amount: 1000,
+      payment_method: 'cash' as any,
+      created_by: '42',
+      dedup_epoch: 'tok-1',
+    });
+
+    expect(outbox.enqueue).toHaveBeenCalledTimes(1);
+    expect(outbox.enqueue).toHaveBeenCalledWith(
+      'ORDER',
+      'order.settlement.advance',
+      expect.objectContaining({
+        level: 'courier_to_branch',
+        match_value: '7',
+        amount: 1000,
+        requester_id: '42',
+      }),
+      expect.objectContaining({
+        manager: queryRunner.manager,
+        requestId: 'tok-1',
+      }),
+    );
+    // The outbox row is written before the transaction commits (atomicity).
+    expect(queryRunner.commitTransaction).toHaveBeenCalled();
   });
 });

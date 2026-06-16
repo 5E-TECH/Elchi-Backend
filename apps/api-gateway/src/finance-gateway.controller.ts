@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   GatewayTimeoutException,
   Get,
+  Headers,
   Inject,
   Param,
   Patch,
@@ -1148,38 +1149,24 @@ export class FinanceGatewayController {
   }
 
   /**
-   * After a production cash handover moves the cashbox, advance the per-order
-   * FIFO order_settlement ledger to the matching level (state only, no extra
-   * cashbox posting). Best-effort + idempotent (reuses the payment's dedup
-   * token): the cash already moved, so a failure here is caught by the
-   * reconciliation job, never blocks the payment. (Audit I1/I2.)
+   * Resolve the idempotency token for a manual cash transfer.
+   *
+   * Prefers a client-supplied `Idempotency-Key` header so a UI double-click /
+   * accidental resubmit of the SAME logical payment reuses the SAME token and
+   * finance dedupes it (the cash is moved at most once). Only when the client
+   * sends no key do we mint a fresh UUID — that still dedupes an RMQ redelivery
+   * of this single request, just not a second independent HTTP submit. (P0-3.)
    */
-  private async advanceOrderSettlement(
-    level: 'courier_to_branch' | 'branch_to_hq' | 'hq_to_market',
-    matchValue: string,
-    amount: number,
-    requesterId: string,
-    requestId: string,
-  ): Promise<void> {
-    try {
-      await firstValueFrom(
-        this.orderClient
-          .send(
-            { cmd: 'order.settlement.advance' },
-            {
-              level,
-              match_value: String(matchValue ?? ''),
-              amount: Number(amount ?? 0),
-              requester_id: requesterId,
-              request_id: requestId,
-            },
-          )
-          .pipe(timeout(8000)),
-      );
-    } catch {
-      // Best-effort — cashbox is already moved; reconciliation flags any drift.
-    }
+  private resolveTransferToken(idempotencyKey?: string): string {
+    const key = String(idempotencyKey ?? '').trim();
+    return key.length > 0 ? key : randomUUID();
   }
+
+  // NOTE: the per-order FIFO settlement advance is no longer triggered from the
+  // gateway. finance-service now enqueues `order.settlement.advance` via the
+  // transactional outbox INSIDE the cashbox-move transaction (Faza 2a), so the
+  // advance has at-least-once, retried, DLQ-backed delivery instead of the old
+  // best-effort fire-and-forget that silently lost it on any failure.
 
   @Post('cashbox/payment/courier')
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -1190,6 +1177,7 @@ export class FinanceGatewayController {
   async paymentFromCourier(
     @Req() req: { user: JwtUser },
     @Body() dto: PaymentFromCourierRequestDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
     const isManager = this.isManager(req?.user);
     let receiverBranchId = '';
@@ -1232,10 +1220,11 @@ export class FinanceGatewayController {
       }
     }
 
-    // Per-request idempotency token: a redelivered RMQ message reuses it so the
-    // cash transfer is applied at most once (P0-3), and the settlement advance
-    // reuses the same token so it dedupes too (I1/I2).
-    const token = randomUUID();
+    // Idempotency token: prefer the client's Idempotency-Key (stops a UI
+    // double-click double-paying); fall back to a fresh UUID. A redelivered RMQ
+    // message reuses it so the cash transfer is applied at most once (P0-3), and
+    // the settlement advance reuses the same token so it dedupes too (I1/I2).
+    const token = this.resolveTransferToken(idempotencyKey);
     const result = await this.send(
       { cmd: 'finance.cashbox.payment_courier' },
       {
@@ -1250,14 +1239,8 @@ export class FinanceGatewayController {
           : {}),
       },
     );
-    // courier → branch: advance the courier's oldest PENDING orders by FIFO.
-    await this.advanceOrderSettlement(
-      'courier_to_branch',
-      String(dto.courier_id),
-      Number(dto.amount),
-      String(req.user.sub),
-      token,
-    );
+    // courier → branch settlement advance is enqueued by finance-service via the
+    // transactional outbox in the same tx as the cashbox move (Faza 2a).
     return result;
   }
 
@@ -1270,20 +1253,15 @@ export class FinanceGatewayController {
   async paymentToMarket(
     @Req() req: { user: JwtUser },
     @Body() dto: PaymentToMarketRequestDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    const token = randomUUID();
+    const token = this.resolveTransferToken(idempotencyKey);
     const result = await this.send(
       { cmd: 'finance.cashbox.payment_market' },
       { ...dto, created_by: req.user.sub, dedup_epoch: token },
     );
-    // HQ → market: advance the market's oldest BRANCH_SETTLED orders by FIFO.
-    await this.advanceOrderSettlement(
-      'hq_to_market',
-      String(dto.market_id),
-      Number(dto.amount),
-      String(req.user.sub),
-      token,
-    );
+    // HQ → market settlement advance is enqueued by finance-service via the
+    // transactional outbox in the same tx as the cashbox move (Faza 2a).
     return result;
   }
 
@@ -1298,6 +1276,7 @@ export class FinanceGatewayController {
   async paymentBranchToMain(
     @Req() req: { user: JwtUser },
     @Body() dto: PaymentBranchToMainRequestDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
     let branchId = String(dto.branch_id ?? '').trim();
 
@@ -1328,7 +1307,7 @@ export class FinanceGatewayController {
       { id: branchId, requester: this.toRequester(req.user) },
     );
 
-    const token = randomUUID();
+    const token = this.resolveTransferToken(idempotencyKey);
     const result = await this.send(
       { cmd: 'finance.cashbox.payment_branch_main' },
       {
@@ -1341,14 +1320,8 @@ export class FinanceGatewayController {
         dedup_epoch: token,
       },
     );
-    // branch → HQ: advance the branch's oldest COURIER_SETTLED orders by FIFO.
-    await this.advanceOrderSettlement(
-      'branch_to_hq',
-      branchId,
-      Number(dto.amount),
-      String(req.user.sub),
-      token,
-    );
+    // branch → HQ settlement advance is enqueued by finance-service via the
+    // transactional outbox in the same tx as the cashbox move (Faza 2a).
     return result;
   }
 

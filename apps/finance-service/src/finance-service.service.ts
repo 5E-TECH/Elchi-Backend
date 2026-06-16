@@ -38,8 +38,10 @@ import {
   PaymentMethod,
   Source_type,
   rmqSend,
+  OutboxService,
 } from '@app/common';
 import { ClientProxy } from '@nestjs/microservices';
+import { firstValueFrom, timeout } from 'rxjs';
 import { CreateCashboxDto } from './dto/cashbox/create-cashbox.dto';
 import { FindCashboxByUserDto } from './dto/cashbox/find-cashbox-by-user.dto';
 import { UpdateCashboxBalanceDto } from './dto/cashbox/update-cashbox-balance.dto';
@@ -73,6 +75,7 @@ export class FinanceServiceService implements OnModuleInit {
     private readonly activityLog: ActivityLogService,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    private readonly outbox: OutboxService,
   ) {}
 
   async onModuleInit() {
@@ -1637,6 +1640,72 @@ export class FinanceServiceService implements OnModuleInit {
     return !!existing;
   }
 
+  /**
+   * Enqueue the per-order FIFO settlement advance for a committed cash handover,
+   * INSIDE the caller's cashbox transaction (Faza 2a). The transactional outbox
+   * gives at-least-once, retried, DLQ-backed delivery to order-service, so the
+   * order_settlement ledger always catches up with the cashbox movement —
+   * replacing the old best-effort gateway call that silently swallowed any
+   * failure (re-opening the cashbox↔settlement split-brain and blinding the
+   * rollback guard). Idempotent: the shared per-payment `token` becomes the
+   * request_id, so a redelivered outbox event is deduped by order-service's
+   * runIdempotent and order_settlement is never advanced twice. (Audit I1/I2.)
+   */
+  private async enqueueSettlementAdvance(
+    manager: EntityManager,
+    level: 'courier_to_branch' | 'branch_to_hq' | 'hq_to_market',
+    matchValue: string,
+    amount: number,
+    requesterId: string | null | undefined,
+    token: string,
+  ): Promise<Record<string, unknown>> {
+    const payload: Record<string, unknown> = {
+      level,
+      match_value: String(matchValue ?? ''),
+      amount: Number(amount ?? 0),
+      requester_id: requesterId ? String(requesterId) : undefined,
+    };
+    // Bake the shared idempotency key into the payload so the in-tx outbox row
+    // AND the post-commit immediate publish (Faza 2c) carry the SAME request_id
+    // and order-service dedupes them — the advance runs exactly once.
+    if (token) {
+      payload.request_id = token;
+    }
+    await this.outbox.enqueue('ORDER', 'order.settlement.advance', payload, {
+      manager,
+      requestId: token || undefined,
+    });
+    return payload;
+  }
+
+  /**
+   * Best-effort IMMEDIATE publish of the settlement advance, right after the
+   * cashbox transaction commits (Faza 2c). Closes the ~1s outbox-poll lag window
+   * during which order_settlement would otherwise be stale and the rollback
+   * guard inaccurate (cash already moved up-chain, status not yet advanced). It
+   * is purely a latency optimization: the outbox row enqueued in the committed
+   * transaction is the durability guarantee, so a failure here is swallowed and
+   * the relay delivers the same (idempotent, same request_id) event. Only fires
+   * when an idempotency key is present, so the immediate send and the relay can
+   * never double-advance.
+   */
+  private async tryPublishAdvanceNow(
+    payload: Record<string, unknown>,
+  ): Promise<void> {
+    if (!payload?.request_id) {
+      return;
+    }
+    try {
+      await firstValueFrom(
+        this.orderClient
+          .send({ cmd: 'order.settlement.advance' }, payload)
+          .pipe(timeout(2000)),
+      );
+    } catch {
+      // Swallowed — the transactional outbox relay guarantees eventual delivery.
+    }
+  }
+
   async paymentsFromCourier(data: {
     courier_id: string;
     amount: number;
@@ -1700,6 +1769,20 @@ export class FinanceServiceService implements OnModuleInit {
           { idempotent: true },
           200,
           "To'lov allaqachon qabul qilingan (takroriy so'rov)",
+        );
+      }
+
+      // Over-remit guard (Faza 1c / Audit I1): a courier cannot remit more cash
+      // than their cashbox holds. FOR_COURIER allows a negative balance (so
+      // sale-time COD legs work), which means a duplicate-key-evading double
+      // submit, or a wrong amount, would otherwise silently drive the courier
+      // cashbox negative — cash that never physically existed. We check AFTER the
+      // idempotency short-circuit so a genuine retry still returns idempotent.
+      if (Number(data.amount) > Number(courierCashbox.balance)) {
+        throw new BadRequestException(
+          `To'lov miqdori courier qoldig'idan oshib ketdi (qoldiq: ${Number(
+            courierCashbox.balance,
+          )})`,
         );
       }
 
@@ -1842,7 +1925,21 @@ export class FinanceServiceService implements OnModuleInit {
         );
       }
 
+      // Advance the per-order FIFO settlement ledger (courier → branch) in the
+      // SAME transaction as the cashbox move (Faza 2a). Reliable outbox delivery
+      // to order-service replaces the old best-effort gateway bridge.
+      const advancePayload = await this.enqueueSettlementAdvance(
+        queryRunner.manager,
+        'courier_to_branch',
+        String(data.courier_id),
+        Number(data.amount),
+        data.created_by,
+        dedupKey,
+      );
+
       await queryRunner.commitTransaction();
+      // Immediate best-effort publish to close the outbox-poll lag (Faza 2c).
+      await this.tryPublishAdvanceNow(advancePayload);
       auditedCourierCashboxId = String(courierCashbox.id);
 
       if (
@@ -2032,7 +2129,21 @@ export class FinanceServiceService implements OnModuleInit {
       });
       await queryRunner.manager.save(mainHistory);
 
+      // Advance the per-order FIFO settlement ledger (branch → HQ) in the SAME
+      // transaction as the cashbox move (Faza 2a). Reliable outbox delivery to
+      // order-service replaces the old best-effort gateway bridge.
+      const advancePayload = await this.enqueueSettlementAdvance(
+        queryRunner.manager,
+        'branch_to_hq',
+        String(data.branch_id),
+        Number(data.amount),
+        data.created_by,
+        dedupKey,
+      );
+
       await queryRunner.commitTransaction();
+      // Immediate best-effort publish to close the outbox-poll lag (Faza 2c).
+      await this.tryPublishAdvanceNow(advancePayload);
       auditedBranchCashboxId = String(branchCashbox.id);
       return this.successRes(
         {
@@ -2179,7 +2290,21 @@ export class FinanceServiceService implements OnModuleInit {
         }),
       );
 
+      // Advance the per-order FIFO settlement ledger (HQ → market) in the SAME
+      // transaction as the cashbox move (Faza 2a). Reliable outbox delivery to
+      // order-service replaces the old best-effort gateway bridge.
+      const advancePayload = await this.enqueueSettlementAdvance(
+        queryRunner.manager,
+        'hq_to_market',
+        String(data.market_id),
+        Number(data.amount),
+        data.created_by,
+        dedupKey,
+      );
+
       await queryRunner.commitTransaction();
+      // Immediate best-effort publish to close the outbox-poll lag (Faza 2c).
+      await this.tryPublishAdvanceNow(advancePayload);
       auditedMarketCashboxId = String(marketCashbox.id);
       await this.syncMarketPaymentsSafely(data.market_id, Number(data.amount));
 
