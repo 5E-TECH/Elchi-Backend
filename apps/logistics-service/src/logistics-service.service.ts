@@ -2906,8 +2906,10 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(saved, 201, 'New district added');
   }
 
-  async findAllDistricts() {
+  async findAllDistricts(regionId?: string) {
+    const normalizedRegionId = String(regionId ?? '').trim();
     const districts = await this.districtRepo.find({
+      where: normalizedRegionId ? { region_id: normalizedRegionId } : {},
       relations: ['region', 'assignedToRegion'],
       order: { createdAt: 'DESC' },
     });

@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Delete,
+  GatewayTimeoutException,
   Get,
   Inject,
   Param,
@@ -13,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { Roles as RoleEnum } from '@app/common';
-import { firstValueFrom, timeout } from 'rxjs';
+import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import {
   ApiCreatedResponse,
   ApiBearerAuth,
@@ -54,6 +55,17 @@ export class LogisticsGatewayController {
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
   ) {}
+
+  private sendLogisticsWithTimeout(pattern: { cmd: string }, payload: object) {
+    return firstValueFrom(
+      this.logisticsClient.send(pattern, payload).pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Logistics service response timeout');
+      }
+      throw error;
+    });
+  }
 
   private async enrichOrdersByPostResponse(response: {
     data?: {
@@ -593,7 +605,7 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Get all regions' })
   @ApiOkResponse({ description: 'Region list' })
   getAllRegions() {
-    return this.logisticsClient.send({ cmd: 'logistics.region.find_all' }, {});
+    return this.sendLogisticsWithTimeout({ cmd: 'logistics.region.find_all' }, {});
   }
 
   @Get('region/stats/all')
@@ -671,7 +683,7 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Get region by id' })
   @ApiParam({ name: 'id', description: 'Region ID (id)' })
   getRegionById(@Param('id') id: string) {
-    return this.logisticsClient.send({ cmd: 'logistics.region.find_by_id' }, { id });
+    return this.sendLogisticsWithTimeout({ cmd: 'logistics.region.find_by_id' }, { id });
   }
 
   @Patch('region/:id')
@@ -708,9 +720,10 @@ export class LogisticsGatewayController {
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all districts' })
+  @ApiQuery({ name: 'region_id', required: false, type: String })
   @ApiOkResponse({ description: 'District list' })
-  getAll() {
-    return this.logisticsClient.send({ cmd: 'logistics.district.find_all' }, {});
+  getAll(@Query('region_id') region_id?: string) {
+    return this.sendLogisticsWithTimeout({ cmd: 'logistics.district.find_all' }, { region_id });
   }
 
   @Post('district')

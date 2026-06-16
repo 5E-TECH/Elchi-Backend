@@ -427,8 +427,13 @@ export class LogisticsServiceController {
   }
 
   @MessagePattern({ cmd: 'logistics.district.find_all' })
-  findAllDistricts(@Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.logisticsService.findAllDistricts());
+  findAllDistricts(
+    @Payload() payload: { region_id?: string } | undefined,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.findAllDistricts(payload?.region_id),
+    );
   }
 
   @MessagePattern({ cmd: 'logistics.district.find_by_id' })
