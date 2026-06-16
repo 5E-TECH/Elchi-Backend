@@ -49,6 +49,7 @@
     "migration:run": "npx typeorm-ts-node-commonjs migration:run -d typeorm.config.ts",
     "db:prepare": "node -r ts-node/register -r tsconfig-paths/register scripts/db-prepare.ts",
     "db:check-cashbox": "node -r ts-node/register -r tsconfig-paths/register scripts/check-cashbox-invariant.ts",
+    "db:reconcile": "node -r ts-node/register -r tsconfig-paths/register scripts/check-cashbox-invariant.ts --reconcile-strict",
     "db:sync:sato": "node -r ts-node/register -r tsconfig-paths/register scripts/sync-logistics-sato.ts",
     "openapi:generate": "node -r ts-node/register -r tsconfig-paths/register scripts/generate-openapi.ts",
     "audit:frontend": "node scripts/audit-frontend-coverage.mjs",

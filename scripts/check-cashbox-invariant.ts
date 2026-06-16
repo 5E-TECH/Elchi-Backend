@@ -16,11 +16,22 @@
  *                              Use before a migration to capture pre-existing drift.
  *   --compare=<path>         → diff against a baseline; exit 1 if any drift
  *                              is new or has *grown*. Equal/unchanged drift is fine.
+ *   --reconcile-strict       → MONITORED-CRON mode (Faza 3). Exits 1 AND reports
+ *   (alias: --alert)           to Sentry if EITHER cashbox I1/I2 drift OR the
+ *                              settlement↔cashbox cross-system divergence is
+ *                              present. This is the enforced money-conservation
+ *                              invariant — unlike the always-informational recon
+ *                              section, this mode fails so a scheduler can alert.
  *
  * Run order on a deploy:
  *   npm run db:check-cashbox -- --snapshot=/tmp/cb-pre.json   # before migration
  *   npm run migration:run
  *   npm run db:check-cashbox -- --compare=/tmp/cb-pre.json    # after migration
+ *
+ * Scheduling (the DB is server-local, so this runs ON the server, not in CI).
+ * Add a system crontab entry (e.g. hourly) with SENTRY_DSN exported so a
+ * divergence pages ops:
+ *   0 * * * * cd /app && SENTRY_DSN=... npm run db:reconcile >> /var/log/elchi-recon.log 2>&1
  *
  * Tolerance: money is now stored as `numeric(14,2)` (audit 2026-06-07; previously
  * `float`). Live values no longer accumulate binary-float drift. EPSILON=0.01 is
@@ -33,6 +44,11 @@ import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as dotenv from 'dotenv';
 import { DataSource } from 'typeorm';
+import {
+  initSentry,
+  captureException,
+  flushSentry,
+} from '../libs/common/src/sentry/sentry.helper';
 
 dotenv.config();
 // Allow override for production: `node ... --env=.env.production`
@@ -68,6 +84,9 @@ function absFloat(n: string): number {
 async function main(): Promise<void> {
   const snapshotPath = parseArg('--snapshot=');
   const comparePath = parseArg('--compare=');
+  const reconcileStrict =
+    process.argv.includes('--reconcile-strict') ||
+    process.argv.includes('--alert');
 
   const postgresUri = process.env.POSTGRES_URI;
   if (!postgresUri) {
@@ -156,6 +175,13 @@ async function main(): Promise<void> {
   // spans two schemas and tolerates extra-cost/correction noise), so it cannot
   // false-fail the migration gate — but it gives ops a real divergence signal.
   // -----------------------------------------------------------------
+  // Lifted so --reconcile-strict can fail/alert on it after the report below.
+  let reconDiverging: Array<{
+    market_id: string;
+    cashbox_balance: string;
+    unsettled_owed: string;
+    diff: string;
+  }> = [];
   try {
     const statusDist: Array<{ status: string; n: string; total: string }> =
       await ds.query(`
@@ -199,6 +225,7 @@ async function main(): Promise<void> {
     `);
     const RECON_TOL = 1; // som; absorbs extra-cost/correction noise
     const diverging = marketRecon.filter((m) => Math.abs(Number(m.diff)) > RECON_TOL);
+    reconDiverging = diverging;
     if (diverging.length) {
       console.log(
         `\n⚠️  Settlement↔cashbox divergence (top ${diverging.length} markets, informational):`,
@@ -221,6 +248,42 @@ async function main(): Promise<void> {
   }
 
   await ds.destroy();
+
+  // -----------------------------------------------------------------
+  // RECONCILE-STRICT mode (Faza 3) — the ENFORCED money-conservation
+  // invariant for a monitored cron. Fails (exit 1) and reports to Sentry if
+  // EITHER cashbox I1/I2 drift OR settlement↔cashbox divergence is present, so
+  // a silent split-brain (cash moved, settlement ledger not advanced) pages ops
+  // instead of being a print-only signal nobody watches.
+  // -----------------------------------------------------------------
+  if (reconcileStrict) {
+    const problems: string[] = [];
+    if (drifted.length) {
+      problems.push(`${drifted.length} cashbox(es) with I1/I2 drift`);
+    }
+    if (reconDiverging.length) {
+      problems.push(
+        `${reconDiverging.length} market(s) with settlement↔cashbox divergence`,
+      );
+    }
+    if (problems.length === 0) {
+      console.log(
+        '\n✅ reconcile-strict: cashboxes and the settlement ledger reconcile.',
+      );
+      process.exit(0);
+    }
+    const summary = `Money reconciliation FAILED: ${problems.join('; ')}`;
+    console.error(`\n❌ ${summary}`);
+    initSentry({ serviceName: 'cashbox-reconciliation' });
+    captureException(new Error(summary), {
+      drifted_cashboxes: drifted
+        .slice(0, 20)
+        .map((r) => ({ id: r.cashbox_id, diff: r.diff })),
+      settlement_divergence: reconDiverging.slice(0, 20),
+    });
+    await flushSentry();
+    process.exit(1);
+  }
 
   // -----------------------------------------------------------------
   // SNAPSHOT mode — capture baseline, never exit non-zero

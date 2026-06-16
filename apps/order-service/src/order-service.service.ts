@@ -1305,6 +1305,52 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   /**
+   * Stable per-request dedup token for a money operation's cashbox legs.
+   *
+   * Derived from the caller's `request_id` (minted once per HTTP request at the
+   * gateway) so an RMQ redelivery / idempotency-retry of the SAME operation
+   * reuses the SAME `dedup_epoch`; finance's unique idempotency index then
+   * collapses the duplicate and the cash is never posted twice — INDEPENDENTLY
+   * of the controller-level idempotency cache (defense in depth).
+   *
+   * A genuinely new operation on the same order (e.g. a re-sell after a
+   * rollback) arrives with a fresh `request_id` → a fresh epoch → it correctly
+   * re-applies. The dedup tuple for a sell leg is
+   * (cashbox, source_type, order_id, operation_type, dedup_epoch); for a re-sell
+   * every field but the epoch is identical, so the epoch MUST differ between
+   * attempts and MUST be stable across retries — exactly what request_id gives.
+   *
+   * Falls back to a wall-clock value ONLY when no request_id is supplied
+   * (idempotency disabled), preserving the previous behaviour with no regression.
+   * NOTE: this is the dedup discriminator only — it is NOT a timestamp. Use a
+   * separate `Date.now()` value for `sold_at` (read as a number by analytics).
+   */
+  private resolveDedupEpoch(requestId?: string): string {
+    const id = String(requestId ?? '').trim();
+    return id.length > 0 ? `req:${id}` : String(Date.now());
+  }
+
+  /**
+   * Path A retired (Faza 2b). The legacy `order.settlement.{courier_to_branch,
+   * branch_to_hq,hq_to_market}` handlers used to MOVE cashbox money themselves
+   * (posting legs keyed by source_id = order_id, no dedup_epoch). That
+   * duplicated the production `finance.cashbox.payment_*` path (which posts legs
+   * keyed by source_id = actor_id + a dedup token) — different keys, so finance's
+   * idempotency index could NOT collapse them and one physical handover posted
+   * twice (double-debit). Cash now moves ONLY through the finance payment
+   * endpoints, which advance the per-order settlement ledger via the
+   * transactional outbox (Faza 2a). These endpoints are disabled so the two
+   * money-movers can never both run for the same handover.
+   */
+  private deprecatedSettlementPath(level: string): never {
+    this.badRequest(
+      `order.settlement.${level} endi qo'llab-quvvatlanmaydi (Faza 2b): ` +
+        `pul faqat cashbox to'lov endpointlari orqali ko'chiriladi, ular ` +
+        `settlement'ni outbox orqali avtomatik advance qiladi.`,
+    );
+  }
+
+  /**
    * Reset an order's settlement row on rollback (it returns to an unsold state).
    * Only callable while the order has NOT reached HQ (guarded by the caller).
    */
@@ -1819,9 +1865,14 @@ export class OrderServiceService implements OnModuleInit {
           Number(settlement[params.amountField] ?? 0),
           0,
         );
-        // Zero-amount legs (nothing owed at this hop) still advance status.
+        // Strict FIFO (Faza 4 / Audit I16): if the OLDEST still-unsettled order's
+        // leg does not fully fit in the remaining lump-sum, STOP — never skip
+        // ahead to settle a newer, smaller order before an older one. Skipping
+        // violates oldest-first accounting and lets a deliberate resubmit
+        // over-allocate to the next orders. Zero-amount legs (nothing owed at
+        // this hop) still advance for free without consuming the lump-sum.
         if (legAmount > remaining && legAmount > 0) {
-          continue;
+          break;
         }
         await repo.update(
           { id: settlement.id },
@@ -1945,55 +1996,10 @@ export class OrderServiceService implements OnModuleInit {
    * the branch was already credited at sale time.
    */
   async settleCourierToBranch(
-    requester: { id: string; roles?: string[] },
-    dto: { courier_id: string; amount: number },
+    _requester: { id: string; roles?: string[] },
+    _dto: { courier_id: string; amount: number },
   ) {
-    const courierId = String(dto?.courier_id ?? '').trim();
-    if (!courierId) {
-      this.badRequest('courier_id is required');
-    }
-    const requesterId = String(requester?.id ?? 'system');
-    const result = await this.runFifoSettlement({
-      matchColumn: 'courier_id',
-      matchValue: courierId,
-      fromStatus: SettlementStatus.PENDING,
-      toStatus: SettlementStatus.COURIER_SETTLED,
-      amountField: 'courier_amount',
-      lumpSum: Number(dto?.amount ?? 0),
-      requesterId,
-      stamp: (now) => ({
-        courier_to_branch_at: now,
-        courier_to_branch_by: requesterId,
-      }),
-      postLeg: async (manager, settlement, amount) => {
-        await this.updateCashboxBalance(
-          {
-            user_id: courierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            amount,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.COURIER_PAYMENT,
-            source_id: String(settlement.order_id),
-            created_by: requesterId,
-            comment: 'Kuryer filialga topshirdi',
-          },
-          manager,
-        );
-      },
-    });
-    await this.activityLog.log({
-      entity_type: 'OrderSettlement',
-      entity_id: courierId,
-      action: ActivityAction.PAYMENT,
-      ...this.auditActor(requester),
-      metadata: {
-        courier_id: courierId,
-        order_count: result.settled_order_ids.length,
-        order_ids: result.settled_order_ids.slice(0, 20),
-        total: result.allocated,
-      },
-    });
-    return successRes(result, 200, 'Courier→branch settlement applied');
+    return this.deprecatedSettlementPath('courier_to_branch');
   }
 
   /**
@@ -2001,70 +2007,10 @@ export class OrderServiceService implements OnModuleInit {
    * COURIER_SETTLED orders (branch → HQ): branch owed-balance down, MAIN up.
    */
   async settleBranchToHq(
-    requester: { id: string; roles?: string[] },
-    dto: { branch_id: string; amount: number },
+    _requester: { id: string; roles?: string[] },
+    _dto: { branch_id: string; amount: number },
   ) {
-    const branchId = String(dto?.branch_id ?? '').trim();
-    if (!branchId) {
-      this.badRequest('branch_id is required');
-    }
-    const requesterId = String(requester?.id ?? 'system');
-    await this.ensureBranchCashbox(branchId);
-    await this.ensureMainCashbox();
-    const result = await this.runFifoSettlement({
-      matchColumn: 'branch_id',
-      matchValue: branchId,
-      fromStatus: SettlementStatus.COURIER_SETTLED,
-      toStatus: SettlementStatus.BRANCH_SETTLED,
-      amountField: 'branch_amount',
-      lumpSum: Number(dto?.amount ?? 0),
-      requesterId,
-      stamp: (now) => ({
-        branch_to_hq_at: now,
-        branch_to_hq_by: requesterId,
-      }),
-      postLeg: async (manager, settlement, amount) => {
-        await this.updateCashboxBalance(
-          {
-            user_id: branchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.BRANCH_TO_MAIN,
-            source_id: String(settlement.order_id),
-            created_by: requesterId,
-            comment: 'Filial bosh ofisga topshirdi',
-          },
-          manager,
-        );
-        await this.updateCashboxBalance(
-          {
-            user_id: OrderServiceService.MAIN_CASHBOX_USER_ID,
-            cashbox_type: Cashbox_type.MAIN,
-            amount,
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.BRANCH_TO_MAIN,
-            source_id: String(settlement.order_id),
-            created_by: requesterId,
-            comment: 'Filialdan qabul qilindi',
-          },
-          manager,
-        );
-      },
-    });
-    await this.activityLog.log({
-      entity_type: 'OrderSettlement',
-      entity_id: branchId,
-      action: ActivityAction.PAYMENT,
-      ...this.auditActor(requester),
-      metadata: {
-        branch_id: branchId,
-        order_count: result.settled_order_ids.length,
-        order_ids: result.settled_order_ids.slice(0, 20),
-        total: result.allocated,
-      },
-    });
-    return successRes(result, 200, 'Branch→HQ settlement applied');
+    return this.deprecatedSettlementPath('branch_to_hq');
   }
 
   /**
@@ -2072,75 +2018,17 @@ export class OrderServiceService implements OnModuleInit {
    * BRANCH_SETTLED orders (HQ → market): MAIN down, market owed-balance down.
    */
   async settleHqToMarket(
-    requester: { id: string; roles?: string[] },
-    dto: { market_id: string; amount: number },
+    _requester: { id: string; roles?: string[] },
+    _dto: { market_id: string; amount: number },
   ) {
-    const marketId = String(dto?.market_id ?? '').trim();
-    if (!marketId) {
-      this.badRequest('market_id is required');
-    }
-    const requesterId = String(requester?.id ?? 'system');
-    await this.ensureMainCashbox();
-    const result = await this.runFifoSettlement({
-      matchColumn: 'market_id',
-      matchValue: marketId,
-      fromStatus: SettlementStatus.BRANCH_SETTLED,
-      toStatus: SettlementStatus.MARKET_SETTLED,
-      amountField: 'market_amount',
-      lumpSum: Number(dto?.amount ?? 0),
-      requesterId,
-      stamp: (now) => ({
-        hq_to_market_at: now,
-        hq_to_market_by: requesterId,
-      }),
-      postLeg: async (manager, settlement, amount) => {
-        await this.updateCashboxBalance(
-          {
-            user_id: OrderServiceService.MAIN_CASHBOX_USER_ID,
-            cashbox_type: Cashbox_type.MAIN,
-            amount,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.MARKET_PAYMENT,
-            source_id: String(settlement.order_id),
-            created_by: requesterId,
-            comment: 'Marketga toʼlandi',
-          },
-          manager,
-        );
-        await this.updateCashboxBalance(
-          {
-            user_id: marketId,
-            cashbox_type: Cashbox_type.FOR_MARKET,
-            amount,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.MARKET_PAYMENT,
-            source_id: String(settlement.order_id),
-            created_by: requesterId,
-            comment: 'Marketga toʼlandi',
-          },
-          manager,
-        );
-      },
-    });
-    await this.activityLog.log({
-      entity_type: 'OrderSettlement',
-      entity_id: marketId,
-      action: ActivityAction.PAYMENT,
-      ...this.auditActor(requester),
-      metadata: {
-        market_id: marketId,
-        order_count: result.settled_order_ids.length,
-        order_ids: result.settled_order_ids.slice(0, 20),
-        total: result.allocated,
-      },
-    });
-    return successRes(result, 200, 'HQ→market settlement applied');
+    return this.deprecatedSettlementPath('hq_to_market');
   }
 
   async rollbackOrderToWaiting(
     requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,
     dto?: { target_status?: 'waiting' | 'cancelled' | 'cancelled_sent' },
+    requestId?: string,
   ) {
     const rollbackTarget = String(dto?.target_status ?? 'waiting')
       .trim()
@@ -2356,7 +2244,10 @@ export class OrderServiceService implements OnModuleInit {
     // SOLD (split state), and a redelivered/concurrent call could double-reverse.
     // Now everything commits together, under a row lock, with an in-transaction
     // status re-check that makes the reversal idempotent.
-    const rollbackEpoch = String(Date.now());
+    // Stable per-request dedup token: a redelivery / retry of THIS rollback
+    // reuses the same epoch so finance dedupes the correction legs; the
+    // per-leg `:seq` suffix keeps the multiple reversal legs distinct.
+    const rollbackEpoch = this.resolveDedupEpoch(requestId);
     let rollbackSeq = 0;
     let finalStatus: Order_status = Order_status.WAITING;
     const queryRunner = this.dataSource.createQueryRunner();
@@ -4371,6 +4262,7 @@ export class OrderServiceService implements OnModuleInit {
       paidAmount?: number;
       proofFileKeys?: string[];
     },
+    requestId?: string,
   ) {
     const order = await this.findById(id);
     if (order.status !== Order_status.WAITING) {
@@ -4534,10 +4426,14 @@ export class OrderServiceService implements OnModuleInit {
           ? Order_status.PARTLY_PAID
           : Order_status.SOLD;
 
-    // Per-attempt idempotency epoch (also used as sold_at) so a sell → rollback
-    // → sell cycle re-applies money instead of being deduped against the prior
-    // attempt's cashbox rows. See CashboxHistory.dedup_epoch.
-    const saleEpoch = String(Date.now());
+    // Stable per-request dedup token: an RMQ redelivery / retry of THIS sell
+    // reuses the same epoch so finance dedupes it; a re-sell after rollback
+    // arrives with a new request_id → new epoch → re-applies. See
+    // resolveDedupEpoch + CashboxHistory.dedup_epoch.
+    const dedupEpoch = this.resolveDedupEpoch(requestId);
+    // sold_at is a real wall-clock timestamp (read as a number by analytics) —
+    // kept separate from the dedup token above.
+    const soldAt = String(Date.now());
 
     // Atomic block: outbox enqueues for cashbox updates + order status save must
     // commit together. Otherwise a crash between them produces missing finance
@@ -4551,7 +4447,7 @@ export class OrderServiceService implements OnModuleInit {
       const pay = (
         data: Parameters<typeof this.updateCashboxBalance>[0],
       ): Promise<void> =>
-        this.updateCashboxBalance({ ...data, dedup_epoch: saleEpoch }, tx);
+        this.updateCashboxBalance({ ...data, dedup_epoch: dedupEpoch }, tx);
 
       // ---- Market leg (HQ ↔ market) ----
       if (marketIncome > 0) {
@@ -4665,7 +4561,7 @@ export class OrderServiceService implements OnModuleInit {
           status: nextStatus,
           to_be_paid: netToBePaid,
           paid_amount: paidAfter,
-          sold_at: saleEpoch,
+          sold_at: soldAt,
           // Snapshot tariffs + the actually-kept shares so SELL_PROFIT
           // (marketTariff − courierShare − branchShare) and rollback are exact.
           market_tariff: order.market_tariff ?? marketTariff,
@@ -4752,6 +4648,7 @@ export class OrderServiceService implements OnModuleInit {
     requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,
     dto: { comment?: string; extraCost?: number; proofFileKeys?: string[] },
+    requestId?: string,
   ) {
     const isManagerRequester =
       this.hasRole(requester, Roles.MANAGER) &&
@@ -4842,9 +4739,10 @@ export class OrderServiceService implements OnModuleInit {
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
-    // Per-attempt idempotency epoch so a cancel → rollback → cancel cycle
-    // re-applies the extra-cost expense instead of being deduped.
-    const cancelEpoch = String(Date.now());
+    // Stable per-request dedup token so a redelivery / retry of THIS cancel
+    // reuses the same epoch (finance dedupes the extra-cost expense), while a
+    // cancel after rollback gets a fresh request_id → fresh epoch → re-applies.
+    const dedupEpoch = this.resolveDedupEpoch(requestId);
 
     try {
       const tx = queryRunner.manager;
@@ -4852,7 +4750,7 @@ export class OrderServiceService implements OnModuleInit {
       const pay = (
         data: Parameters<typeof this.updateCashboxBalance>[0],
       ): Promise<void> =>
-        this.updateCashboxBalance({ ...data, dedup_epoch: cancelEpoch }, tx);
+        this.updateCashboxBalance({ ...data, dedup_epoch: dedupEpoch }, tx);
 
       if (extraCost > 0) {
         await pay({
@@ -5132,6 +5030,7 @@ export class OrderServiceService implements OnModuleInit {
       comment?: string;
       proofFileKeys?: string[];
     },
+    requestId?: string,
   ) {
     const isManagerRequester =
       this.hasRole(requester, Roles.MANAGER) &&
@@ -5377,9 +5276,12 @@ export class OrderServiceService implements OnModuleInit {
           ? Order_status.PARTLY_PAID
           : Order_status.SOLD;
 
-    // Per-attempt idempotency epoch so a (partly-)sell → rollback → sell cycle
-    // re-applies money instead of being deduped against the prior attempt.
-    const saleEpoch = String(Date.now());
+    // Stable per-request dedup token so a redelivery / retry of THIS partly-sell
+    // reuses the same epoch (finance dedupes it), while a re-sell after rollback
+    // gets a fresh request_id → fresh epoch → re-applies. See resolveDedupEpoch.
+    const dedupEpoch = this.resolveDedupEpoch(requestId);
+    // sold_at is a real wall-clock timestamp (analytics reads it as a number).
+    const soldAt = String(Date.now());
 
     // Atomic block: item-quantity reduction, cashbox movements (outbox enqueues)
     // and the order status flip must commit together. Previously these ran
@@ -5397,7 +5299,7 @@ export class OrderServiceService implements OnModuleInit {
       const pay = (
         data: Parameters<typeof this.updateCashboxBalance>[0],
       ): Promise<void> =>
-        this.updateCashboxBalance({ ...data, dedup_epoch: saleEpoch }, tx);
+        this.updateCashboxBalance({ ...data, dedup_epoch: dedupEpoch }, tx);
 
       // Persist the reduced quantities for partially-returned line items.
       for (const existingItem of existingItems) {
@@ -5525,7 +5427,7 @@ export class OrderServiceService implements OnModuleInit {
           status: nextStatus,
           to_be_paid: netToBePaid,
           paid_amount: paidAfter,
-          sold_at: order.sold_at ?? saleEpoch,
+          sold_at: order.sold_at ?? soldAt,
           total_price: price,
           market_tariff: order.market_tariff ?? marketTariff,
           courier_tariff: order.courier_tariff ?? courierTariff,

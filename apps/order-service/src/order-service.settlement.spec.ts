@@ -85,17 +85,23 @@ describe('OrderServiceService settlement (FIFO)', () => {
     return { service, store, outbox, settlementRepo };
   }
 
-  it('courier→branch settles oldest orders whole until the lump-sum runs out', async () => {
+  // The live settlement path is the STATE-ONLY advance: the finance payment
+  // endpoints move the cashbox, then enqueue order.settlement.advance via the
+  // outbox (Faza 2a). The advance runs the same FIFO allocation but posts NO
+  // cashbox legs. The legacy cashbox-posting settle* path is retired (Faza 2b).
+  it('advance courier→branch settles oldest orders whole until the lump-sum runs out (state-only)', async () => {
     const { service, store, outbox } = makeService([
       { order_id: '101', courier_id: '7', courier_amount: 60 },
       { order_id: '102', courier_id: '7', courier_amount: 50 },
       { order_id: '103', courier_id: '7', courier_amount: 40 },
     ]);
 
-    const res: any = await service.settleCourierToBranch(
-      { id: '1', roles: ['manager'] },
-      { courier_id: '7', amount: 120 },
-    );
+    const res: any = await service.advanceSettlement({
+      level: 'courier_to_branch',
+      match_value: '7',
+      amount: 120,
+      requester_id: '1',
+    });
 
     // 60 + 50 = 110 settled (whole orders); 40 doesn't fit in remaining 10.
     expect(res.data.settled_order_ids).toEqual(['101', '102']);
@@ -104,11 +110,11 @@ describe('OrderServiceService settlement (FIFO)', () => {
     expect(store[0].status).toBe(SettlementStatus.COURIER_SETTLED);
     expect(store[1].status).toBe(SettlementStatus.COURIER_SETTLED);
     expect(store[2].status).toBe(SettlementStatus.PENDING);
-    // One courier EXPENSE enqueued per settled order.
-    expect(outbox.enqueue).toHaveBeenCalledTimes(2);
+    // State-only: the cashbox was already moved by the finance payment path.
+    expect(outbox.enqueue).not.toHaveBeenCalled();
   });
 
-  it('branch→HQ only advances COURIER_SETTLED orders and posts two legs each', async () => {
+  it('advance branch→HQ only advances COURIER_SETTLED orders (state-only)', async () => {
     const { service, store, outbox } = makeService([
       {
         order_id: '201',
@@ -124,17 +130,61 @@ describe('OrderServiceService settlement (FIFO)', () => {
       },
     ]);
 
-    const res: any = await service.settleBranchToHq(
-      { id: '1', roles: ['manager'] },
-      { branch_id: '10', amount: 100 },
-    );
+    const res: any = await service.advanceSettlement({
+      level: 'branch_to_hq',
+      match_value: '10',
+      amount: 100,
+      requester_id: '1',
+    });
 
     expect(res.data.settled_order_ids).toEqual(['201']);
     expect(store[0].status).toBe(SettlementStatus.BRANCH_SETTLED);
     // 202 was only PENDING (courier hasn't settled it) → untouched by branch→HQ.
     expect(store[1].status).toBe(SettlementStatus.PENDING);
-    // branch EXPENSE + MAIN INCOME for the one settled order.
-    expect(outbox.enqueue).toHaveBeenCalledTimes(2);
+    expect(outbox.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('strict FIFO: does NOT skip an older non-fitting order to settle a newer one', async () => {
+    const { service, store } = makeService([
+      { order_id: '101', courier_id: '7', courier_amount: 100 }, // oldest, too big
+      { order_id: '102', courier_id: '7', courier_amount: 30 }, // newer, would fit
+    ]);
+
+    const res: any = await service.advanceSettlement({
+      level: 'courier_to_branch',
+      match_value: '7',
+      amount: 50, // covers 102 but NOT the older 101
+      requester_id: '1',
+    });
+
+    // Strict oldest-first: 101 doesn't fit → STOP. 102 must NOT leapfrog it.
+    expect(res.data.settled_order_ids).toEqual([]);
+    expect(res.data.allocated).toBe(0);
+    expect(res.data.leftover).toBe(50);
+    expect(store[0].status).toBe(SettlementStatus.PENDING);
+    expect(store[1].status).toBe(SettlementStatus.PENDING);
+  });
+
+  it('legacy cashbox-posting settle* path is retired (throws) so it cannot double-debit', async () => {
+    const { service } = makeService([]);
+    await expect(
+      service.settleCourierToBranch(
+        { id: '1', roles: ['manager'] },
+        { courier_id: '7', amount: 100 },
+      ),
+    ).rejects.toThrow();
+    await expect(
+      service.settleBranchToHq(
+        { id: '1', roles: ['manager'] },
+        { branch_id: '10', amount: 100 },
+      ),
+    ).rejects.toThrow();
+    await expect(
+      service.settleHqToMarket(
+        { id: '1', roles: ['manager'] },
+        { market_id: '20', amount: 100 },
+      ),
+    ).rejects.toThrow();
   });
 
   it('summarizes open branch receivables and market payables', async () => {
