@@ -123,8 +123,8 @@ describe('OrderServiceService filters', () => {
       holder_type: 'BRANCH' as any,
     });
 
-    expect(qb.andWhere).toHaveBeenCalledWith('order.status = :status', {
-      status: 'cancelled',
+    expect(qb.andWhere).toHaveBeenCalledWith('order.status IN (:...statuses)', {
+      statuses: ['cancelled', 'cancelled (sent)'],
     });
     expect(qb.andWhere).toHaveBeenCalledWith(
       'order.holder_type = :holder_type',
