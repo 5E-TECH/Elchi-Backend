@@ -2739,6 +2739,101 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
+  private async requeueUnreceivedCanceledOrders(params: {
+    sourcePost: Post;
+    orders: OrderRow[];
+    targetBranchId: string;
+    isHqReceipt: boolean;
+    requester: RequesterContext;
+  }): Promise<string[]> {
+    const { sourcePost, orders, targetBranchId, isHqReceipt, requester } =
+      params;
+    const requeuedPostIds = new Set<string>();
+    const groups = new Map<
+      string,
+      {
+        branchId: string;
+        regionId: string | null;
+        orders: OrderRow[];
+      }
+    >();
+
+    for (const order of orders) {
+      const regionId =
+        String(order.region_id ?? sourcePost.region_id ?? '').trim() || null;
+      const branchId = isHqReceipt
+        ? String(
+            order.holder_branch_id ??
+              order.branch_id ??
+              sourcePost.branch_id ??
+              targetBranchId,
+          ).trim()
+        : String(sourcePost.branch_id ?? targetBranchId).trim();
+      const key = `${branchId || 'none'}:${regionId || 'none'}`;
+      const group = groups.get(key) ?? { branchId, regionId, orders: [] };
+      group.orders.push(order);
+      groups.set(key, group);
+    }
+
+    for (const group of groups.values()) {
+      let returnPost = await this.postRepo.findOne({
+        where: {
+          id: Not(sourcePost.id),
+          courier_id: sourcePost.courier_id,
+          branch_id: group.branchId,
+          region_id: group.regionId,
+          status: Post_status.CANCELED,
+        } as any,
+      });
+
+      if (!returnPost) {
+        returnPost = await this.postRepo.save(
+          this.postRepo.create({
+            courier_id: sourcePost.courier_id,
+            branch_id: group.branchId,
+            region_id: group.regionId,
+            post_total_price: 0,
+            order_quantity: 0,
+            qr_code_token: this.generateToken(),
+            status: Post_status.CANCELED,
+          }),
+        );
+      }
+
+      let returnedTotal = 0;
+      for (const order of group.orders) {
+        await this.updateOrder(
+          order.id,
+          {
+            status: Order_status.CANCELLED_SENT,
+            branch_id: group.branchId,
+            courier_id: isHqReceipt ? null : sourcePost.courier_id,
+            assigned_at: null,
+            canceled_post_id: returnPost.id,
+          },
+          {
+            id: requester.id,
+            roles: requester.roles ?? [Roles.MANAGER],
+            note: isHqReceipt
+              ? 'Canceled order returned to branch after partial HQ receive'
+              : 'Canceled order returned to courier after partial branch receive',
+          },
+        );
+        returnedTotal += Number(order.total_price ?? 0);
+      }
+
+      returnPost.order_quantity =
+        Number(returnPost.order_quantity ?? 0) + group.orders.length;
+      returnPost.post_total_price =
+        Number(returnPost.post_total_price ?? 0) + returnedTotal;
+      const savedReturnPost = await this.postRepo.save(returnPost);
+      void this.syncPostToSearch(savedReturnPost);
+      requeuedPostIds.add(String(savedReturnPost.id));
+    }
+
+    return Array.from(requeuedPostIds);
+  }
+
   async receiveCanceledPost(
     requester: RequesterContext,
     id: string,
@@ -2816,13 +2911,22 @@ export class LogisticsServiceService implements OnModuleInit {
     const remainingOrderIds = allOrderIdsForPost.filter(
       (orderId) => !canceledOrderIds.includes(orderId),
     );
-    post.order_quantity = remainingOrderIds.length;
-    post.post_total_price = allOrders
-      .filter((order) => remainingOrderIds.includes(String(order.id)))
-      .reduce((sum, order) => sum + Number(order.total_price ?? 0), 0);
-    post.status = remainingOrderIds.length
-      ? Post_status.CANCELED
-      : Post_status.CANCELED_RECEIVED;
+    const remainingOrders = allOrders.filter((order) =>
+      remainingOrderIds.includes(String(order.id)),
+    );
+    const requeuedPostIds = remainingOrders.length
+      ? await this.requeueUnreceivedCanceledOrders({
+          sourcePost: post,
+          orders: remainingOrders,
+          targetBranchId,
+          isHqReceipt,
+          requester,
+        })
+      : [];
+
+    post.order_quantity = 0;
+    post.post_total_price = 0;
+    post.status = Post_status.CANCELED_RECEIVED;
     const savedPost = await this.postRepo.save(post);
     void this.syncPostToSearch(savedPost);
 
@@ -2836,6 +2940,7 @@ export class LogisticsServiceService implements OnModuleInit {
           order_count: canceledOrderIds.length,
           order_ids: canceledOrderIds.slice(0, 10),
           remaining_order_count: remainingOrderIds.length,
+          requeued_post_ids: requeuedPostIds,
           branch_id: targetBranchId,
           courier_id: savedPost.courier_id,
         },
@@ -2846,6 +2951,7 @@ export class LogisticsServiceService implements OnModuleInit {
       {
         order_ids: canceledOrderIds,
         remaining_order_ids: remainingOrderIds,
+        requeued_post_ids: requeuedPostIds,
         branch_id: targetBranchId,
       },
       200,

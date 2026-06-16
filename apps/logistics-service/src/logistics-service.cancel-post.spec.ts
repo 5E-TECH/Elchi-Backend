@@ -159,6 +159,101 @@ describe('LogisticsServiceService createCanceledPost', () => {
     );
   });
 
+  it('returns unreceived courier canceled orders back to the courier post', async () => {
+    const orderClient = {
+      send: jest.fn((pattern: { cmd: string }) => {
+        if (pattern.cmd === 'order.find_all') {
+          return of({
+            data: {
+              data: [
+                {
+                  id: '101',
+                  status: Order_status.CANCELLED_SENT,
+                  canceled_post_id: '55',
+                  total_price: 1_000_000,
+                  region_id: '14',
+                },
+                {
+                  id: '102',
+                  status: Order_status.CANCELLED_SENT,
+                  canceled_post_id: '55',
+                  total_price: 500_000,
+                  region_id: '14',
+                },
+              ],
+            },
+          });
+        }
+        return of({ statusCode: 200 });
+      }),
+    };
+    const sourcePost = {
+      id: '55',
+      courier_id: '7',
+      branch_id: '10',
+      region_id: '14',
+      status: Post_status.CANCELED,
+      order_quantity: 2,
+      post_total_price: 1_500_000,
+    };
+    const postRepo = {
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce(sourcePost)
+        .mockResolvedValueOnce(null),
+      create: jest.fn((payload) => payload),
+      save: jest.fn(async (post) => ({ ...post, id: post.id ?? '66' })),
+    };
+    const branchClient = {
+      send: jest.fn(() => of({ data: { id: '1', type: 'HQ' } })),
+    };
+    const service = new LogisticsServiceService(
+      postRepo as any,
+      {} as any,
+      {} as any,
+      orderClient as any,
+      branchClient as any,
+      {} as any,
+      {} as any,
+      { log: jest.fn(), query: jest.fn() } as any,
+    );
+
+    const response = await service.receiveCanceledPost(
+      { id: '8', roles: ['manager'], branch_id: '10' },
+      '55',
+      { order_ids: ['101'] },
+    );
+
+    expect(response.data).toEqual(
+      expect.objectContaining({
+        order_ids: ['101'],
+        remaining_order_ids: ['102'],
+        requeued_post_ids: ['66'],
+      }),
+    );
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.update' },
+      expect.objectContaining({
+        id: '102',
+        dto: {
+          status: Order_status.CANCELLED_SENT,
+          branch_id: '10',
+          courier_id: '7',
+          assigned_at: null,
+          canceled_post_id: '66',
+        },
+      }),
+    );
+    expect(postRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: '55',
+        status: Post_status.CANCELED_RECEIVED,
+        order_quantity: 0,
+        post_total_price: 0,
+      }),
+    );
+  });
+
   it('creates an HQ canceled post from the manager branch', async () => {
     const orderClient = {
       send: jest.fn((pattern: { cmd: string }) => {
@@ -405,6 +500,115 @@ describe('LogisticsServiceService createCanceledPost', () => {
           note: 'Canceled order received by HQ and held for market handover',
         },
       },
+    );
+  });
+
+  it('returns unreceived HQ canceled orders back to the manager branch post', async () => {
+    const orderClient = {
+      send: jest.fn((pattern: { cmd: string }) => {
+        if (pattern.cmd === 'order.find_all') {
+          return of({
+            data: {
+              data: [
+                {
+                  id: '101',
+                  status: Order_status.CANCELLED_SENT,
+                  canceled_post_id: '77',
+                  total_price: 1_000_000,
+                  region_id: '14',
+                  branch_id: '10',
+                  holder_type: 'BRANCH',
+                  holder_branch_id: '10',
+                },
+                {
+                  id: '102',
+                  status: Order_status.CANCELLED_SENT,
+                  canceled_post_id: '77',
+                  total_price: 500_000,
+                  region_id: '14',
+                  branch_id: '10',
+                  holder_type: 'BRANCH',
+                  holder_branch_id: '10',
+                },
+              ],
+            },
+          });
+        }
+        return of({ statusCode: 200 });
+      }),
+    };
+    const sourcePost = {
+      id: '77',
+      courier_id: '8',
+      branch_id: '1',
+      region_id: '14',
+      status: Post_status.CANCELED,
+      order_quantity: 2,
+      post_total_price: 1_500_000,
+    };
+    const branchClient = {
+      send: jest.fn(() => of({ data: { id: '1', type: 'HQ' } })),
+    };
+    const postRepo = {
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce(sourcePost)
+        .mockResolvedValueOnce(null),
+      create: jest.fn((payload) => payload),
+      save: jest.fn(async (post) => ({ ...post, id: post.id ?? '88' })),
+    };
+    const service = new LogisticsServiceService(
+      postRepo as any,
+      {} as any,
+      {} as any,
+      orderClient as any,
+      branchClient as any,
+      {} as any,
+      {} as any,
+      { log: jest.fn(), query: jest.fn() } as any,
+    );
+
+    const response = await service.receiveCanceledPost(
+      { id: '1', roles: ['admin'] },
+      '77',
+      { order_ids: ['101'] },
+    );
+
+    expect(response.data).toEqual(
+      expect.objectContaining({
+        order_ids: ['101'],
+        remaining_order_ids: ['102'],
+        requeued_post_ids: ['88'],
+      }),
+    );
+    expect(postRepo.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        courier_id: '8',
+        branch_id: '10',
+        region_id: '14',
+        status: Post_status.CANCELED,
+      }),
+    );
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.update' },
+      expect.objectContaining({
+        id: '102',
+        dto: {
+          status: Order_status.CANCELLED_SENT,
+          branch_id: '10',
+          courier_id: null,
+          assigned_at: null,
+          canceled_post_id: '88',
+        },
+      }),
+    );
+    expect(postRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: '77',
+        status: Post_status.CANCELED_RECEIVED,
+        order_quantity: 0,
+        post_total_price: 0,
+      }),
     );
   });
 });
