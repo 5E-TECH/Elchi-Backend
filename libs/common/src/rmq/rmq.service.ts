@@ -51,6 +51,15 @@ export class RmqService {
 
   getOptions(queueId: string, noAck = false): RmqOptions {
     const ttl = Number(this.configService.get<string>('RMQ_RPC_TTL_MS') ?? 10000);
+    // Per-consumer prefetch: bound how many unacked messages a single service
+    // instance holds (Scale NOW-1). With prefetch UNSET (NestJS default 0 =
+    // unlimited) a burst shovels unbounded messages into one Node event loop,
+    // inflating per-message latency past the 5s/8s RPC timeouts and triggering
+    // retry storms; a finite window turns the queue into real backpressure.
+    // Money-safe: messages are still individually acked/nacked (noAck=false) and
+    // every handler is idempotent (request_id + the cashbox UNIQUE dedup index),
+    // so a redelivery from the bounded window can never double-post.
+    const prefetch = Number(this.configService.get<string>('RMQ_PREFETCH') ?? 20);
     const { main, dlq, dlx } = this.getQueueNames(queueId);
 
     return {
@@ -58,6 +67,8 @@ export class RmqService {
       options: {
         urls: [this.configService.get<string>('RABBITMQ_URI')!],
         queue: main,
+        prefetchCount: Number.isFinite(prefetch) && prefetch > 0 ? prefetch : 20,
+        isGlobalPrefetchCount: false,
         queueOptions: {
           durable: true,
           messageTtl: Number.isFinite(ttl) && ttl > 0 ? ttl : 10000,
