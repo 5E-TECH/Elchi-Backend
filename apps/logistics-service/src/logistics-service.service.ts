@@ -2743,11 +2743,18 @@ export class LogisticsServiceService implements OnModuleInit {
     sourcePost: Post;
     orders: OrderRow[];
     targetBranchId: string;
+    fallbackBranchId?: string | null;
     isHqReceipt: boolean;
     requester: RequesterContext;
   }): Promise<string[]> {
-    const { sourcePost, orders, targetBranchId, isHqReceipt, requester } =
-      params;
+    const {
+      sourcePost,
+      orders,
+      targetBranchId,
+      fallbackBranchId,
+      isHqReceipt,
+      requester,
+    } = params;
     const requeuedPostIds = new Set<string>();
     const groups = new Map<
       string,
@@ -2765,10 +2772,16 @@ export class LogisticsServiceService implements OnModuleInit {
         ? String(
             order.holder_branch_id ??
               order.branch_id ??
+              fallbackBranchId ??
               sourcePost.branch_id ??
               targetBranchId,
           ).trim()
         : String(sourcePost.branch_id ?? targetBranchId).trim();
+      if (!branchId) {
+        this.badRequest(
+          'Qolgan bekor qilingan orderlarni qaytarish uchun branch aniqlanmadi',
+        );
+      }
       const key = `${branchId || 'none'}:${regionId || 'none'}`;
       const group = groups.get(key) ?? { branchId, regionId, orders: [] };
       group.orders.push(order);
@@ -2914,20 +2927,48 @@ export class LogisticsServiceService implements OnModuleInit {
     const remainingOrders = allOrders.filter((order) =>
       remainingOrderIds.includes(String(order.id)),
     );
-    const requeuedPostIds = remainingOrders.length
-      ? await this.requeueUnreceivedCanceledOrders({
+    let requeuedPostIds: string[] = [];
+    if (remainingOrders.length) {
+      const fallbackReturnBranchId = isHqReceipt
+        ? String(
+            (
+              await this.findBranchAssignmentByUserId(String(post.courier_id), {
+                id: String(post.courier_id),
+                roles: [Roles.MANAGER],
+              })
+            )?.branch_id ?? '',
+          ).trim()
+        : targetBranchId;
+      requeuedPostIds = await this.requeueUnreceivedCanceledOrders({
           sourcePost: post,
           orders: remainingOrders,
           targetBranchId,
+          fallbackBranchId: fallbackReturnBranchId,
           isHqReceipt,
           requester,
-        })
-      : [];
+      });
+    }
 
     post.order_quantity = 0;
     post.post_total_price = 0;
     post.status = Post_status.CANCELED_RECEIVED;
-    const savedPost = await this.postRepo.save(post);
+    let savedPost: Post;
+    try {
+      savedPost = await this.postRepo.save(post);
+    } catch (error) {
+      this.logger.warn(
+        `post ${post.id} save failed after canceled receive, retrying minimal update: ${
+          (error as Error)?.message ?? error
+        }`,
+      );
+      await this.postRepo.update(post.id, {
+        order_quantity: 0,
+        post_total_price: 0,
+        status: Post_status.CANCELED_RECEIVED,
+      });
+      savedPost =
+        (await this.postRepo.findOne({ where: { id: post.id } })) ?? post;
+    }
     void this.syncPostToSearch(savedPost);
 
     await this.activityLog

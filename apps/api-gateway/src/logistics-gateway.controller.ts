@@ -559,7 +559,7 @@ export class LogisticsGatewayController {
     @Body() dto: ReceivePostRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return this.logisticsClient.send(
+    return this.sendLogisticsWithTimeout(
       { cmd: 'logistics.post.cancel.receive' },
       {
         id,
