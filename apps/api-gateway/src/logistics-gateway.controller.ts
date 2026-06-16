@@ -48,6 +48,14 @@ interface JwtUser {
   branch_id?: string | null;
 }
 
+interface OrderRowForEnrichment {
+  market_id?: string;
+  customer_id?: string;
+  district_id?: string | null;
+  region_id?: string | null;
+  [key: string]: unknown;
+}
+
 @ApiTags('Logistics')
 @Controller()
 export class LogisticsGatewayController {
@@ -67,19 +75,7 @@ export class LogisticsGatewayController {
     });
   }
 
-  private async enrichOrdersByPostResponse(response: {
-    data?: {
-      allOrdersByPostId?: Array<{
-        market_id?: string;
-        customer_id?: string;
-        district_id?: string | null;
-        region_id?: string | null;
-      }>;
-      [key: string]: unknown;
-    };
-    [key: string]: unknown;
-  }) {
-    const rows = response?.data?.allOrdersByPostId ?? [];
+  private async enrichOrderRows(rows: OrderRowForEnrichment[]) {
     const marketIds = Array.from(new Set(rows.map((row) => row.market_id).filter(Boolean) as string[]));
     const customerIds = Array.from(new Set(rows.map((row) => row.customer_id).filter(Boolean) as string[]));
     const districtIds = Array.from(
@@ -135,12 +131,23 @@ export class LogisticsGatewayController {
     const customerMap = new Map(customers);
     const districtMap = new Map(districts);
 
-    const enrichedRows = rows.map((row) => ({
+    return rows.map((row) => ({
       ...row,
       market: row.market_id ? marketMap.get(row.market_id) ?? null : null,
       customer: row.customer_id ? customerMap.get(row.customer_id) ?? null : null,
       district: row.district_id ? districtMap.get(row.district_id) ?? null : null,
     }));
+  }
+
+  private async enrichOrdersByPostResponse(response: {
+    data?: {
+      allOrdersByPostId?: OrderRowForEnrichment[];
+      [key: string]: unknown;
+    };
+    [key: string]: unknown;
+  }) {
+    const rows = response?.data?.allOrdersByPostId ?? [];
+    const enrichedRows = await this.enrichOrderRows(rows);
 
     return {
       ...response,
@@ -148,6 +155,19 @@ export class LogisticsGatewayController {
         ...(response?.data ?? {}),
         allOrdersByPostId: enrichedRows,
       },
+    };
+  }
+
+  private async enrichRejectedOrdersByPostResponse(response: {
+    data?: OrderRowForEnrichment[];
+    [key: string]: unknown;
+  }) {
+    const rows = Array.isArray(response?.data) ? response.data : [];
+    const enrichedRows = await this.enrichOrderRows(rows);
+
+    return {
+      ...response,
+      data: enrichedRows,
     };
   }
 
@@ -399,17 +419,21 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Get rejected orders by post id' })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   getRejectedOrdersByPost(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.rejected_orders_by_post' },
-      {
-        id,
-        requester: {
-          id: req?.user?.sub,
-          roles: req?.user?.roles ?? [],
-          branch_id: req?.user?.branch_id ?? null,
-        },
-      },
-    );
+    return firstValueFrom(
+      this.logisticsClient
+        .send(
+          { cmd: 'logistics.post.rejected_orders_by_post' },
+          {
+            id,
+            requester: {
+              id: req?.user?.sub,
+              roles: req?.user?.roles ?? [],
+              branch_id: req?.user?.branch_id ?? null,
+            },
+          },
+        )
+        .pipe(timeout(8000)),
+    ).then((response) => this.enrichRejectedOrdersByPostResponse(response));
   }
 
   @Post('post/check/:id')
