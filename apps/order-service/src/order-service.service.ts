@@ -3121,7 +3121,7 @@ export class OrderServiceService implements OnModuleInit {
         where: {
           id: In(orderIds),
           market_id: marketId,
-          status: Order_status.CANCELLED,
+          status: In([Order_status.CANCELLED, Order_status.CANCELLED_SENT]),
           holder_type: OrderHolderType.HQ,
           canceled_post_id: IsNull(),
           isDeleted: false,
@@ -3136,6 +3136,7 @@ export class OrderServiceService implements OnModuleInit {
       }
 
       for (const order of handedOverOrders) {
+        const previousStatus = order.status;
         const previousHolderType = order.holder_type ?? null;
         const previousHolderBranchId = order.holder_branch_id ?? null;
         const previousHolderCourierId = order.holder_courier_id ?? null;
@@ -3152,7 +3153,7 @@ export class OrderServiceService implements OnModuleInit {
         await this.createTrackingEvent(
           {
             order_id: String(order.id),
-            from_status: Order_status.CANCELLED,
+            from_status: previousStatus,
             to_status: Order_status.CLOSED,
             changed_by: requesterId,
             changed_by_role: this.toTrackingRole(input.requester.roles),
@@ -3740,8 +3741,8 @@ export class OrderServiceService implements OnModuleInit {
       .addSelect('COUNT(order.id)', 'orders_count')
       .addSelect('COALESCE(SUM(order.total_price), 0)', 'total_price_sum')
       .where('order.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('order.status = :status', {
-        status: Order_status.CANCELLED,
+      .andWhere('order.status IN (:...statuses)', {
+        statuses: [Order_status.CANCELLED, Order_status.CANCELLED_SENT],
       })
       .andWhere('order.canceled_post_id IS NULL')
       .groupBy('order.market_id')
@@ -3797,7 +3798,7 @@ export class OrderServiceService implements OnModuleInit {
     return this.findAll({
       market_id,
       branch_id: options.branch_id,
-      status: Order_status.CANCELLED,
+      status: [Order_status.CANCELLED, Order_status.CANCELLED_SENT],
       holder_type: options.holder_type,
       canceled_post_unassigned: true,
       ...(options.exclude_branch_source

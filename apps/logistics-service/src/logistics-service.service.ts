@@ -2797,9 +2797,7 @@ export class LogisticsServiceService implements OnModuleInit {
       await this.updateOrder(
         orderId,
         {
-          status: isHqReceipt
-            ? Order_status.CLOSED
-            : Order_status.CANCELLED_SENT,
+          status: Order_status.CANCELLED_SENT,
           branch_id: targetBranchId,
           courier_id: null,
           assigned_at: null,
@@ -2809,7 +2807,7 @@ export class LogisticsServiceService implements OnModuleInit {
           id: requester.id,
           roles: requester.roles ?? [Roles.MANAGER],
           note: isHqReceipt
-            ? 'Canceled order received by HQ'
+            ? 'Canceled order received by HQ and held for market handover'
             : 'Canceled order received by branch manager',
         },
       );
@@ -2828,19 +2826,21 @@ export class LogisticsServiceService implements OnModuleInit {
     const savedPost = await this.postRepo.save(post);
     void this.syncPostToSearch(savedPost);
 
-    await this.activityLog.log({
-      entity_type: 'Post',
-      entity_id: String(savedPost.id),
-      action: ActivityAction.STATUS_CHANGE,
-      new_value: { status: savedPost.status },
-      metadata: {
-        order_count: canceledOrderIds.length,
-        order_ids: canceledOrderIds.slice(0, 10),
-        remaining_order_count: remainingOrderIds.length,
-        branch_id: targetBranchId,
-        courier_id: savedPost.courier_id,
-      },
-    });
+    await this.activityLog
+      .log({
+        entity_type: 'Post',
+        entity_id: String(savedPost.id),
+        action: ActivityAction.STATUS_CHANGE,
+        new_value: { status: savedPost.status },
+        metadata: {
+          order_count: canceledOrderIds.length,
+          order_ids: canceledOrderIds.slice(0, 10),
+          remaining_order_count: remainingOrderIds.length,
+          branch_id: targetBranchId,
+          courier_id: savedPost.courier_id,
+        },
+      })
+      .catch(() => undefined);
 
     return successRes(
       {
