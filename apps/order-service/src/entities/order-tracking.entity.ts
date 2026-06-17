@@ -29,11 +29,26 @@ export class OrderTracking {
   @Column({ type: 'enum', enum: Order_status })
   to_status!: Order_status;
 
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  action!: string | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  old_value!: Record<string, unknown> | null;
+
+  @Column({ type: 'jsonb', nullable: true })
+  new_value!: Record<string, unknown> | null;
+
+  @Column({ type: 'text', nullable: true })
+  description!: string | null;
+
   @Column({ type: 'varchar', length: 64 })
   changed_by!: string;
 
   @Column({ type: 'varchar', length: 32 })
   changed_by_role!: 'admin' | 'courier' | 'market' | 'system';
+
+  @Column({ type: 'jsonb', nullable: true })
+  metadata!: Record<string, unknown> | null;
 
   @Column({ type: 'text', nullable: true })
   note!: string | null;

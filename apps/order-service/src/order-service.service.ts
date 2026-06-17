@@ -578,20 +578,163 @@ export class OrderServiceService implements OnModuleInit {
       to_status: Order_status;
       changed_by: string;
       changed_by_role: 'admin' | 'courier' | 'market' | 'system';
+      action?: string | null;
+      old_value?: Record<string, unknown> | null;
+      new_value?: Record<string, unknown> | null;
+      description?: string | null;
+      metadata?: Record<string, unknown> | null;
       note?: string | null;
     },
     repository?: Repository<OrderTracking>,
   ) {
     const repo = repository ?? this.orderTrackingRepo;
+    const action =
+      data.action ??
+      this.inferTrackingAction(data.from_status, data.to_status);
     const entity = repo.create({
       order_id: data.order_id,
       from_status: data.from_status,
       to_status: data.to_status,
+      action,
+      old_value:
+        data.old_value ??
+        (data.from_status ? { status: data.from_status } : null),
+      new_value: data.new_value ?? { status: data.to_status },
+      description:
+        data.description ??
+        data.note ??
+        this.describeTrackingAction(action, data.from_status, data.to_status),
       changed_by: data.changed_by,
       changed_by_role: data.changed_by_role,
+      metadata: data.metadata ?? null,
       note: data.note ?? null,
     });
     await repo.save(entity);
+  }
+
+  private inferTrackingAction(
+    fromStatus: Order_status | null,
+    toStatus: Order_status,
+  ): string {
+    if (!fromStatus) {
+      return toStatus === Order_status.CREATED || toStatus === Order_status.NEW
+        ? 'created'
+        : 'status_change';
+    }
+
+    if (fromStatus === toStatus) {
+      return 'note';
+    }
+
+    const byTarget: Partial<Record<Order_status, string>> = {
+      [Order_status.CREATED]: 'created',
+      [Order_status.NEW]: 'created',
+      [Order_status.RECEIVED]: 'received',
+      [Order_status.ON_THE_ROAD]: 'sent',
+      [Order_status.WAITING]: 'waiting',
+      [Order_status.WAITING_CUSTOMER]: 'waiting_customer',
+      [Order_status.SOLD]: 'sold',
+      [Order_status.PAID]: 'paid',
+      [Order_status.PARTLY_PAID]: 'partly_paid',
+      [Order_status.CANCELLED]: 'cancelled',
+      [Order_status.CANCELLED_SENT]: 'cancelled_sent',
+      [Order_status.RETURNED_TO_MARKET]: 'returned_to_market',
+      [Order_status.CLOSED]: 'closed',
+    };
+
+    return byTarget[toStatus] ?? 'status_change';
+  }
+
+  private describeTrackingAction(
+    action: string,
+    fromStatus: Order_status | null,
+    toStatus: Order_status,
+  ): string {
+    const descriptions: Record<string, string> = {
+      created: 'Buyurtma yaratildi',
+      received: 'Buyurtma qabul qilindi',
+      sent: "Buyurtma yo'lga chiqdi",
+      waiting: 'Buyurtma kutilmoqda holatiga qaytarildi',
+      waiting_customer: "Mijoz kutilmoqda holatiga o'tkazildi",
+      sold: 'Buyurtma sotildi',
+      paid: "Buyurtma to'landi",
+      partly_paid: 'Buyurtma qisman sotildi',
+      cancelled: 'Buyurtma bekor qilindi',
+      cancelled_sent: "Bekor qilingan buyurtma jo'natildi",
+      returned_to_market: 'Buyurtma marketga qaytarildi',
+      closed: 'Buyurtma yopildi',
+      note: 'Buyurtma trackingiga izoh yozildi',
+    };
+
+    return (
+      descriptions[action] ??
+      `${fromStatus ?? 'empty'} holatidan ${toStatus} holatiga o'zgartirildi`
+    );
+  }
+
+  private extractUserPayload(response: unknown): Record<string, unknown> | null {
+    if (!response || typeof response !== 'object') {
+      return null;
+    }
+
+    const payload = response as Record<string, unknown>;
+    const data = payload.data;
+    if (data && typeof data === 'object' && !Array.isArray(data)) {
+      return data as Record<string, unknown>;
+    }
+
+    return payload;
+  }
+
+  private normalizeTrackingActor(user: Record<string, unknown> | null) {
+    if (!user) {
+      return null;
+    }
+
+    return {
+      id: user.id != null ? String(user.id) : null,
+      name:
+        typeof user.name === 'string'
+          ? user.name
+          : typeof user.full_name === 'string'
+            ? user.full_name
+            : null,
+      username: typeof user.username === 'string' ? user.username : null,
+      phone_number:
+        typeof user.phone_number === 'string' ? user.phone_number : null,
+      role: typeof user.role === 'string' ? user.role : null,
+      status: typeof user.status === 'string' ? user.status : null,
+    };
+  }
+
+  private async resolveTrackingActors(actorIds: string[]) {
+    const uniqueIds = Array.from(
+      new Set(actorIds.filter((id) => id && id !== 'system')),
+    );
+    const actors = new Map<
+      string,
+      ReturnType<OrderServiceService['normalizeTrackingActor']>
+    >();
+
+    await Promise.all(
+      uniqueIds.map(async (id) => {
+        try {
+          const response = await lastValueFrom(
+            this.identityClient
+              .send({ cmd: 'identity.user.find_by_id' }, { id })
+              .pipe(timeout(RMQ_SERVICE_TIMEOUT)),
+          );
+          actors.set(
+            id,
+            this.normalizeTrackingActor(this.extractUserPayload(response)),
+          );
+        } catch {
+          actors.set(id, null);
+        }
+      }),
+    );
+
+    return actors;
   }
 
   private async getHqBranchId(): Promise<string | null> {
@@ -5805,17 +5948,53 @@ export class OrderServiceService implements OnModuleInit {
       this.handleDbError(error);
     }
 
+    const actorMap = await this.resolveTrackingActors(
+      rows.map((row) => row.changed_by),
+    );
+
     return {
-      data: rows.map((row) => ({
-        id: row.id,
-        order_id: row.order_id,
-        from_status: row.from_status,
-        to_status: row.to_status,
-        changed_by: row.changed_by,
-        changed_by_role: row.changed_by_role,
-        note: row.note,
-        created_at: this.toUzIsoString(row.created_at),
-      })),
+      data: rows.map((row) => {
+        const action =
+          row.action ??
+          this.inferTrackingAction(row.from_status, row.to_status);
+        const actor =
+          row.changed_by === 'system'
+            ? {
+                id: 'system',
+                name: 'System',
+                username: null,
+                phone_number: null,
+                role: 'system',
+                status: null,
+              }
+            : (actorMap.get(row.changed_by) ?? null);
+
+        return {
+          id: row.id,
+          order_id: row.order_id,
+          action,
+          from_status: row.from_status,
+          to_status: row.to_status,
+          old_value:
+            row.old_value ??
+            (row.from_status ? { status: row.from_status } : null),
+          new_value: row.new_value ?? { status: row.to_status },
+          description:
+            row.description ??
+            row.note ??
+            this.describeTrackingAction(
+              action,
+              row.from_status,
+              row.to_status,
+            ),
+          changed_by: row.changed_by,
+          changed_by_role: row.changed_by_role,
+          actor,
+          metadata: row.metadata ?? null,
+          note: row.note,
+          created_at: this.toUzIsoString(row.created_at),
+        };
+      }),
       total,
       page,
       limit,
