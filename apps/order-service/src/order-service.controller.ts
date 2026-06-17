@@ -1063,6 +1063,7 @@ export class OrderServiceController {
       batch_id?: string;
       requester_id?: string;
       requester_name?: string;
+      requester_roles?: string[];
     },
     @Ctx() context: RmqContext,
   ) {
@@ -1079,6 +1080,7 @@ export class OrderServiceController {
       order_ids?: string[];
       requester_id?: string;
       requester_name?: string;
+      requester_roles?: string[];
     },
     @Ctx() context: RmqContext,
   ) {

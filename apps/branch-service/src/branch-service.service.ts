@@ -98,9 +98,10 @@ export class BranchServiceService implements OnModuleInit {
     throw new RpcException(errorRes(message, 403));
   }
 
-  private auditActor(
-    requester?: { id?: string; roles?: string[] } | null,
-  ): { user_id: string | null; user_role: string | null } {
+  private auditActor(requester?: { id?: string; roles?: string[] } | null): {
+    user_id: string | null;
+    user_role: string | null;
+  } {
     const roles = requester?.roles ?? [];
     return {
       user_id: requester?.id ? String(requester.id) : null,
@@ -112,7 +113,11 @@ export class BranchServiceService implements OnModuleInit {
     return this.activityLog.query(q ?? {});
   }
 
-  async auditLogByEntity(entity_type: string, entity_id: string, limit?: number) {
+  async auditLogByEntity(
+    entity_type: string,
+    entity_id: string,
+    limit?: number,
+  ) {
     return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
   }
 
@@ -1297,15 +1302,18 @@ export class BranchServiceService implements OnModuleInit {
     await this.assertCanCreateTransferBatch(sourceBranchId, requester);
 
     const requesterId = String(requester?.id ?? '').trim() || '0';
-    const sendResult = await this.sendOrderCommand('order.transfer_batch.send', {
-      batch_id: id,
-      order_ids: orderIds,
-      vehicle_plate: vehiclePlate,
-      driver_name: driverName,
-      driver_phone: driverPhone,
-      requester_id: requesterId,
-      requester_name: requesterId,
-    });
+    const sendResult = await this.sendOrderCommand(
+      'order.transfer_batch.send',
+      {
+        batch_id: id,
+        order_ids: orderIds,
+        vehicle_plate: vehiclePlate,
+        driver_name: driverName,
+        driver_phone: driverPhone,
+        requester_id: requesterId,
+        requester_name: requesterId,
+      },
+    );
 
     await this.activityLog.log({
       entity_type: 'TransferBatch',
@@ -1739,11 +1747,15 @@ export class BranchServiceService implements OnModuleInit {
     await this.assertRequesterWorksInBranch(destinationBranchId, requester);
 
     const requesterId = String(requester?.id ?? '').trim() || '0';
-    const receiveResult = await this.sendOrderCommand('order.transfer_batch.receive', {
-      batch_id: id,
-      requester_id: requesterId,
-      requester_name: requesterId,
-    });
+    const receiveResult = await this.sendOrderCommand(
+      'order.transfer_batch.receive',
+      {
+        batch_id: id,
+        requester_id: requesterId,
+        requester_name: requesterId,
+        requester_roles: requester?.roles ?? [],
+      },
+    );
 
     await this.activityLog.log({
       entity_type: 'TransferBatch',
@@ -1793,12 +1805,16 @@ export class BranchServiceService implements OnModuleInit {
     await this.assertRequesterWorksInBranch(destinationBranchId, requester);
 
     const requesterId = String(requester?.id ?? '').trim() || '0';
-    const receiveOrdersResult = await this.sendOrderCommand('order.transfer_batch.receive_orders', {
-      batch_id: id,
-      order_ids: uniqueOrderIds,
-      requester_id: requesterId,
-      requester_name: requesterId,
-    });
+    const receiveOrdersResult = await this.sendOrderCommand(
+      'order.transfer_batch.receive_orders',
+      {
+        batch_id: id,
+        order_ids: uniqueOrderIds,
+        requester_id: requesterId,
+        requester_name: requesterId,
+        requester_roles: requester?.roles ?? [],
+      },
+    );
 
     await this.activityLog.log({
       entity_type: 'TransferBatch',
@@ -2164,18 +2180,21 @@ export class BranchServiceService implements OnModuleInit {
     return response;
   }
 
-  async createBranch(dto: {
-    name?: string;
-    location?: string;
-    address?: string;
-    phone_number?: string;
-    region_id?: string | null;
-    district_id?: string | null;
-    parent_id?: string | null;
-    type?: BranchType | string;
-    code?: string;
-    manager_id?: string | null;
-  }, requester?: RequesterContext) {
+  async createBranch(
+    dto: {
+      name?: string;
+      location?: string;
+      address?: string;
+      phone_number?: string;
+      region_id?: string | null;
+      district_id?: string | null;
+      parent_id?: string | null;
+      type?: BranchType | string;
+      code?: string;
+      manager_id?: string | null;
+    },
+    requester?: RequesterContext,
+  ) {
     const name = String(dto?.name ?? '').trim();
     if (!name) {
       this.badRequest('name is required');

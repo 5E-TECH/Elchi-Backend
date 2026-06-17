@@ -13,7 +13,10 @@ import type { OrderHolderType } from './order.entity';
 const ORDER_HOLDER_TYPES = ['HQ', 'BRANCH', 'COURIER', 'MARKET'] as const;
 
 @Entity({ name: 'order_custody_events' })
-@Index('IDX_order_custody_events_order_id_created_at', ['order_id', 'created_at'])
+@Index('IDX_order_custody_events_order_id_created_at', [
+  'order_id',
+  'created_at',
+])
 export class OrderCustodyEvent {
   @PrimaryGeneratedColumn('uuid')
   id!: string;
@@ -21,7 +24,9 @@ export class OrderCustodyEvent {
   @Column({ type: 'bigint' })
   order_id!: string;
 
-  @ManyToOne(() => Order, (order) => order.custody_events, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Order, (order) => order.custody_events, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'order_id' })
   order!: Order;
 
@@ -47,7 +52,7 @@ export class OrderCustodyEvent {
   changed_by!: string;
 
   @Column({ type: 'varchar', length: 32 })
-  changed_by_role!: 'admin' | 'courier' | 'market' | 'system';
+  changed_by_role!: string;
 
   @Column({ type: 'text', nullable: true })
   note!: string | null;
