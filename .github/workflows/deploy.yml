@@ -86,13 +86,6 @@ jobs:
             DEPLOY_ALL=false
             RUN_MIGRATIONS=false
 
-            add_service() {
-              case " $DEPLOY_SERVICES " in
-                *" $1 "*) ;;
-                *) DEPLOY_SERVICES="$DEPLOY_SERVICES $1" ;;
-              esac
-            }
-
             if [ -z "$OLD_SHA" ]; then
               DEPLOY_ALL=true
             elif [ "$OLD_SHA" != "$NEW_SHA" ]; then
@@ -127,9 +120,10 @@ jobs:
               while IFS= read -r service; do
                 case "$service" in
                   ""|__all__|__migrations__) ;;
-                  *) add_service "$service" ;;
+                  *) DEPLOY_SERVICES="$DEPLOY_SERVICES $service" ;;
                 esac
               done < /tmp/elchi-changed-services
+              DEPLOY_SERVICES="$(echo "$DEPLOY_SERVICES" | xargs -n1 | sort -u | xargs)"
             fi
 
             if [ "$DEPLOY_ALL" = true ]; then
