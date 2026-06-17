@@ -336,7 +336,9 @@ export class OrderServiceService implements OnModuleInit {
     if (
       normalized.has(Roles.SUPERADMIN) ||
       normalized.has(Roles.ADMIN) ||
-      normalized.has(Roles.REGISTRATOR)
+      normalized.has(Roles.REGISTRATOR) ||
+      normalized.has(Roles.MANAGER) ||
+      normalized.has(Roles.OPERATOR)
     ) {
       return 'admin';
     }
@@ -590,7 +592,7 @@ export class OrderServiceService implements OnModuleInit {
     const repo = repository ?? this.orderTrackingRepo;
     const action =
       data.action ??
-      this.inferTrackingAction(data.from_status, data.to_status);
+      this.inferTrackingAction(data.from_status, data.to_status, data.note);
     const entity = repo.create({
       order_id: data.order_id,
       from_status: data.from_status,
@@ -602,7 +604,7 @@ export class OrderServiceService implements OnModuleInit {
       new_value: data.new_value ?? { status: data.to_status },
       description:
         data.description ??
-        data.note ??
+        this.describeTrackingNote(data.note) ??
         this.describeTrackingAction(action, data.from_status, data.to_status),
       changed_by: data.changed_by,
       changed_by_role: data.changed_by_role,
@@ -615,7 +617,16 @@ export class OrderServiceService implements OnModuleInit {
   private inferTrackingAction(
     fromStatus: Order_status | null,
     toStatus: Order_status,
+    note?: string | null,
   ): string {
+    const normalizedNote = String(note ?? '').toLowerCase();
+    if (normalizedNote.includes('partly')) {
+      return 'partly_sold';
+    }
+    if (normalizedNote.includes('rollback')) {
+      return 'rollback';
+    }
+
     if (!fromStatus) {
       return toStatus === Order_status.CREATED || toStatus === Order_status.NEW
         ? 'created'
@@ -658,11 +669,13 @@ export class OrderServiceService implements OnModuleInit {
       waiting_customer: "Mijoz kutilmoqda holatiga o'tkazildi",
       sold: 'Buyurtma sotildi',
       paid: "Buyurtma to'landi",
+      partly_sold: 'Buyurtma qisman sotildi',
       partly_paid: 'Buyurtma qisman sotildi',
       cancelled: 'Buyurtma bekor qilindi',
       cancelled_sent: "Bekor qilingan buyurtma jo'natildi",
       returned_to_market: 'Buyurtma marketga qaytarildi',
       closed: 'Buyurtma yopildi',
+      rollback: 'Buyurtma oldingi holatga qaytarildi',
       note: 'Buyurtma trackingiga izoh yozildi',
     };
 
@@ -670,6 +683,29 @@ export class OrderServiceService implements OnModuleInit {
       descriptions[action] ??
       `${fromStatus ?? 'empty'} holatidan ${toStatus} holatiga o'zgartirildi`
     );
+  }
+
+  private describeTrackingNote(note?: string | null): string | null {
+    const normalized = String(note ?? '').trim().toLowerCase();
+    if (!normalized) return null;
+
+    const descriptions: Record<string, string> = {
+      'order created': 'Buyurtma yaratildi',
+      'order sold': 'Buyurtma sotildi',
+      'order partly sold': 'Buyurtma qisman sotildi',
+      'order canceled': 'Buyurtma bekor qilindi',
+      'rollback to waiting': "Buyurtma kutilmoqda holatiga qaytarildi",
+      'rollback to cancelled': 'Buyurtma bekor qilingan holatiga qaytarildi',
+      'rollback to cancelled_sent':
+        "Buyurtma bekor qilinib pochtaga qo'shildi",
+      'order assigned to post': "Buyurtma pochtaga biriktirildi",
+      'partly-sell unsold items canceled':
+        'Qisman sotishdan qolgan mahsulotlar bekor qilindi',
+      'partly-sell canceled items custody assigned':
+        'Qisman sotishdan bekor qilingan buyurtma egasi belgilandi',
+    };
+
+    return descriptions[normalized] ?? note ?? null;
   }
 
   private extractUserPayload(response: unknown): Record<string, unknown> | null {
@@ -5856,9 +5892,16 @@ export class OrderServiceService implements OnModuleInit {
 
     return {
       data: rows.map((row) => {
+        const inferredAction = this.inferTrackingAction(
+          row.from_status,
+          row.to_status,
+          row.note,
+        );
         const action =
-          row.action ??
-          this.inferTrackingAction(row.from_status, row.to_status);
+          ['partly_sold', 'rollback'].includes(inferredAction) ||
+          !row.action
+            ? inferredAction
+            : row.action;
         const actor =
           row.changed_by === 'system'
             ? {
@@ -5868,8 +5911,13 @@ export class OrderServiceService implements OnModuleInit {
                 phone_number: null,
                 role: 'system',
                 status: null,
-              }
+            }
             : (actorMap.get(row.changed_by) ?? null);
+        const changedByRole =
+          row.changed_by_role === 'system' && actor?.role
+            ? this.toTrackingRole([actor.role])
+            : row.changed_by_role;
+        const noteDescription = this.describeTrackingNote(row.note);
 
         return {
           id: row.id,
@@ -5882,15 +5930,15 @@ export class OrderServiceService implements OnModuleInit {
             (row.from_status ? { status: row.from_status } : null),
           new_value: row.new_value ?? { status: row.to_status },
           description:
+            noteDescription ??
             row.description ??
-            row.note ??
             this.describeTrackingAction(
               action,
               row.from_status,
               row.to_status,
             ),
           changed_by: row.changed_by,
-          changed_by_role: row.changed_by_role,
+          changed_by_role: changedByRole,
           actor,
           metadata: row.metadata ?? null,
           note: row.note,
@@ -8960,7 +9008,9 @@ export class OrderServiceService implements OnModuleInit {
                 from_status: fromStatus,
                 to_status: Order_status.RECEIVED,
                 changed_by: requesterId,
-                changed_by_role: 'system',
+                changed_by_role: 'admin',
+                action: 'branch_batch_received',
+                description: `Pochta #${batchId} filial tomonidan qabul qilindi`,
                 note: `Batch #${batchId} qabul qilindi`,
               },
               trackingRepo,
@@ -8979,7 +9029,9 @@ export class OrderServiceService implements OnModuleInit {
                 from_status: fromStatus,
                 to_status: Order_status.NEW,
                 changed_by: requesterId,
-                changed_by_role: 'system',
+                changed_by_role: 'admin',
+                action: 'branch_batch_requeued',
+                description: `Pochta #${batchId} tranzit uchun qayta navbatga qo'yildi`,
                 note: `Batch #${batchId} tranzit uchun qayta navbatga qo'yildi`,
               },
               trackingRepo,
@@ -9008,7 +9060,7 @@ export class OrderServiceService implements OnModuleInit {
                 from_courier_id: fromCourierId,
                 to_courier_id: null,
                 changed_by: requesterId,
-                changed_by_role: 'system',
+                changed_by_role: 'admin',
                 note: `Batch #${batchId} dan filialga qabul qilindi`,
               },
               custodyRepo,
@@ -9193,7 +9245,9 @@ export class OrderServiceService implements OnModuleInit {
               from_status: fromStatus,
               to_status: Order_status.RECEIVED,
               changed_by: requesterId,
-              changed_by_role: 'system',
+              changed_by_role: 'admin',
+              action: 'branch_batch_received',
+              description: `Pochta #${batchId} dan tanlangan buyurtma qabul qilindi`,
               note: `Batch #${batchId} dan qabul qilindi`,
             },
             trackingRepo,
@@ -9219,7 +9273,7 @@ export class OrderServiceService implements OnModuleInit {
               from_courier_id: fromCourierId,
               to_courier_id: null,
               changed_by: requesterId,
-              changed_by_role: 'system',
+              changed_by_role: 'admin',
               note: `Batch #${batchId} dan filialga qabul qilindi`,
             },
             custodyRepo,
@@ -9280,7 +9334,9 @@ export class OrderServiceService implements OnModuleInit {
               from_status: remainingOrder.status,
               to_status: Order_status.NEW,
               changed_by: requesterId,
-              changed_by_role: 'system',
+              changed_by_role: 'admin',
+              action: 'branch_batch_requeued',
+              description: `Pochta #${batchId} qisman qabul qilindi, buyurtma jo'natuvchiga qaytarildi`,
               note: `Batch #${batchId} qisman qabul qilindi, order qayta navbatga qo'yildi`,
             },
             trackingRepo,
