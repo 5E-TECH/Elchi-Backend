@@ -327,28 +327,34 @@ export class OrderServiceService implements OnModuleInit {
     throw error;
   }
 
-  private toTrackingRole(
-    roles?: string[],
-  ): 'admin' | 'courier' | 'market' | 'system' {
-    const normalized = new Set(
-      (roles ?? []).map((role) => String(role).toLowerCase()),
+  private toTrackingRole(roles?: string[]): string {
+    const normalized = (roles ?? [])
+      .map((role) =>
+        String(role ?? '')
+          .trim()
+          .toLowerCase(),
+      )
+      .filter(Boolean);
+
+    const priority = [
+      Roles.SUPERADMIN,
+      Roles.ADMIN,
+      Roles.MANAGER,
+      Roles.REGISTRATOR,
+      Roles.OPERATOR,
+      Roles.COURIER,
+      Roles.MARKET,
+      Roles.MARKET_OPERATOR,
+      Roles.BRANCH,
+      Roles.INVESTOR,
+      Roles.CUSTOMER,
+    ].map((role) => String(role).toLowerCase());
+
+    return (
+      priority.find((role) => normalized.includes(role)) ??
+      normalized[0] ??
+      'system'
     );
-    if (
-      normalized.has(Roles.SUPERADMIN) ||
-      normalized.has(Roles.ADMIN) ||
-      normalized.has(Roles.REGISTRATOR) ||
-      normalized.has(Roles.MANAGER) ||
-      normalized.has(Roles.OPERATOR)
-    ) {
-      return 'admin';
-    }
-    if (normalized.has(Roles.COURIER)) {
-      return 'courier';
-    }
-    if (normalized.has(Roles.MARKET)) {
-      return 'market';
-    }
-    return 'system';
   }
 
   private hashHandoverToken(token: string): string {
@@ -579,7 +585,7 @@ export class OrderServiceService implements OnModuleInit {
       from_status: Order_status | null;
       to_status: Order_status;
       changed_by: string;
-      changed_by_role: 'admin' | 'courier' | 'market' | 'system';
+      changed_by_role: string;
       action?: string | null;
       old_value?: Record<string, unknown> | null;
       new_value?: Record<string, unknown> | null;
@@ -686,7 +692,9 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   private describeTrackingNote(note?: string | null): string | null {
-    const normalized = String(note ?? '').trim().toLowerCase();
+    const normalized = String(note ?? '')
+      .trim()
+      .toLowerCase();
     if (!normalized) return null;
 
     const descriptions: Record<string, string> = {
@@ -694,11 +702,18 @@ export class OrderServiceService implements OnModuleInit {
       'order sold': 'Buyurtma sotildi',
       'order partly sold': 'Buyurtma qisman sotildi',
       'order canceled': 'Buyurtma bekor qilindi',
-      'rollback to waiting': "Buyurtma kutilmoqda holatiga qaytarildi",
+      'rollback to waiting': 'Buyurtma kutilmoqda holatiga qaytarildi',
       'rollback to cancelled': 'Buyurtma bekor qilingan holatiga qaytarildi',
-      'rollback to cancelled_sent':
-        "Buyurtma bekor qilinib pochtaga qo'shildi",
-      'order assigned to post': "Buyurtma pochtaga biriktirildi",
+      'rollback to cancelled_sent': "Buyurtma bekor qilinib pochtaga qo'shildi",
+      'order assigned to post': 'Buyurtma pochtaga biriktirildi',
+      'branch canceled post sent to hq':
+        "Branch bekor qilingan pochtani HQga jo'natdi",
+      'canceled order received by hq and held for market handover':
+        'HQ bekor qilingan pochtani qabul qildi',
+      'canceled order received by branch manager':
+        'Branch manager bekor qilingan pochtani qabul qildi',
+      'canceled post created':
+        "Courier bekor qilingan pochtani branchga jo'natdi",
       'partly-sell unsold items canceled':
         'Qisman sotishdan qolgan mahsulotlar bekor qilindi',
       'partly-sell canceled items custody assigned':
@@ -708,7 +723,9 @@ export class OrderServiceService implements OnModuleInit {
     return descriptions[normalized] ?? note ?? null;
   }
 
-  private extractUserPayload(response: unknown): Record<string, unknown> | null {
+  private extractUserPayload(
+    response: unknown,
+  ): Record<string, unknown> | null {
     if (!response || typeof response !== 'object') {
       return null;
     }
@@ -743,6 +760,49 @@ export class OrderServiceService implements OnModuleInit {
     };
   }
 
+  private async resolveBranchTrackingLabel(
+    branchId?: string | null,
+    requester?: { id?: string; roles?: string[] } | null,
+  ): Promise<string | null> {
+    const id = String(branchId ?? '').trim();
+    if (!id) {
+      return null;
+    }
+
+    try {
+      const response = await rmqSend<{
+        data?: {
+          id?: string;
+          name?: string | null;
+          code?: string | null;
+          type?: string | null;
+        };
+      }>(
+        this.branchClient,
+        { cmd: 'branch.find_by_id' },
+        {
+          id,
+          requester: requester?.id
+            ? { id: String(requester.id), roles: requester.roles ?? [] }
+            : { id: 'system', roles: [Roles.SUPERADMIN] },
+        },
+        { attachRequestId: false, retries: 1 },
+      );
+
+      const branch = response?.data;
+      if (branch?.name) {
+        return branch.code
+          ? `${branch.name} (${branch.code}, ID: ${id})`
+          : `${branch.name} (ID: ${id})`;
+      }
+    } catch {
+      // Tracking should still be written even if branch-service is unavailable
+      // or the requester cannot read the branch.
+    }
+
+    return `branch ID: ${id}`;
+  }
+
   private async resolveTrackingActors(actorIds: string[]) {
     const uniqueIds = Array.from(
       new Set(actorIds.filter((id) => id && id !== 'system')),
@@ -771,6 +831,65 @@ export class OrderServiceService implements OnModuleInit {
     );
 
     return actors;
+  }
+
+  private trackingActorLabel(
+    actor: ReturnType<OrderServiceService['normalizeTrackingActor']>,
+    fallbackId?: string | null,
+  ): string {
+    if (!actor) {
+      return fallbackId ? `user ID: ${fallbackId}` : 'Nomaʼlum foydalanuvchi';
+    }
+
+    const name = actor.name ?? actor.username ?? actor.phone_number;
+    const role = actor.role ? `, role: ${actor.role}` : '';
+    return name
+      ? `${name}${role}, ID: ${actor.id ?? fallbackId ?? '-'}`
+      : `user ID: ${actor.id ?? fallbackId ?? '-'}`;
+  }
+
+  private custodyHolderLabel(
+    holderType: OrderHolderType | null,
+    branchId: string | null,
+    courierId: string | null,
+    branchLabels: Map<string, string>,
+    actorMap: Map<
+      string,
+      ReturnType<OrderServiceService['normalizeTrackingActor']>
+    >,
+  ): string {
+    if (!holderType) {
+      return 'tizimdan';
+    }
+
+    if (holderType === OrderHolderType.HQ) {
+      return 'HQ';
+    }
+
+    if (holderType === OrderHolderType.BRANCH) {
+      return branchId
+        ? (branchLabels.get(String(branchId)) ?? `branch ID: ${branchId}`)
+        : 'branch';
+    }
+
+    if (holderType === OrderHolderType.COURIER) {
+      const courierLabel = courierId
+        ? this.trackingActorLabel(
+            actorMap.get(String(courierId)) ?? null,
+            courierId,
+          )
+        : 'courier';
+      const branchLabel = branchId
+        ? (branchLabels.get(String(branchId)) ?? `branch ID: ${branchId}`)
+        : null;
+      return branchLabel ? `${courierLabel} (${branchLabel})` : courierLabel;
+    }
+
+    if (holderType === OrderHolderType.MARKET) {
+      return 'market';
+    }
+
+    return String(holderType);
   }
 
   private async getHqBranchId(): Promise<string | null> {
@@ -841,7 +960,7 @@ export class OrderServiceService implements OnModuleInit {
       from_courier_id: string | null;
       to_courier_id: string | null;
       changed_by: string;
-      changed_by_role: 'admin' | 'courier' | 'market' | 'system';
+      changed_by_role: string;
       note?: string | null;
     },
     repository?: Repository<OrderCustodyEvent>,
@@ -5874,77 +5993,192 @@ export class OrderServiceService implements OnModuleInit {
     const limit = Math.min(100, Math.max(1, Number(limitRaw) || 20));
 
     let rows: OrderTracking[] = [];
-    let total = 0;
+    let custodyRows: OrderCustodyEvent[] = [];
     try {
-      [rows, total] = await this.orderTrackingRepo.findAndCount({
+      rows = await this.orderTrackingRepo.find({
         where: { order_id: id },
         order: { created_at: 'DESC' },
-        skip: (page - 1) * limit,
-        take: limit,
+      });
+      custodyRows = await this.orderCustodyEventRepo.find({
+        where: { order_id: id },
+        order: { created_at: 'DESC' },
       });
     } catch (error) {
       this.handleDbError(error);
     }
 
     const actorMap = await this.resolveTrackingActors(
-      rows.map((row) => row.changed_by),
+      [
+        ...rows.map((row) => row.changed_by),
+        ...custodyRows.flatMap((row) => [
+          row.changed_by,
+          row.from_courier_id,
+          row.to_courier_id,
+        ]),
+      ].filter((id): id is string => Boolean(id)),
+    );
+    const branchIds = Array.from(
+      new Set(
+        custodyRows
+          .flatMap((row) => [row.from_branch_id, row.to_branch_id])
+          .filter((branchId): branchId is string => Boolean(branchId)),
+      ),
+    );
+    const branchLabels = new Map<string, string>();
+    await Promise.all(
+      branchIds.map(async (branchId) => {
+        const label = await this.resolveBranchTrackingLabel(branchId);
+        branchLabels.set(branchId, label ?? `branch ID: ${branchId}`);
+      }),
     );
 
-    return {
-      data: rows.map((row) => {
-        const inferredAction = this.inferTrackingAction(
-          row.from_status,
-          row.to_status,
-          row.note,
-        );
-        const action =
-          ['partly_sold', 'rollback'].includes(inferredAction) ||
-          !row.action
-            ? inferredAction
-            : row.action;
-        const actor =
-          row.changed_by === 'system'
-            ? {
-                id: 'system',
-                name: 'System',
-                username: null,
-                phone_number: null,
-                role: 'system',
-                status: null,
+    const trackingEvents = rows.map((row) => {
+      const inferredAction = this.inferTrackingAction(
+        row.from_status,
+        row.to_status,
+        row.note,
+      );
+      const action =
+        ['partly_sold', 'rollback'].includes(inferredAction) || !row.action
+          ? inferredAction
+          : row.action;
+      const actor =
+        row.changed_by === 'system'
+          ? {
+              id: 'system',
+              name: 'System',
+              username: null,
+              phone_number: null,
+              role: 'system',
+              status: null,
             }
-            : (actorMap.get(row.changed_by) ?? null);
-        const changedByRole =
-          row.changed_by_role === 'system' && actor?.role
-            ? this.toTrackingRole([actor.role])
-            : row.changed_by_role;
-        const noteDescription = this.describeTrackingNote(row.note);
+          : (actorMap.get(row.changed_by) ?? null);
+      const changedByRole =
+        actor?.role && row.changed_by !== 'system'
+          ? String(actor.role)
+          : row.changed_by_role;
+      const noteDescription = this.describeTrackingNote(row.note);
 
-        return {
-          id: row.id,
-          order_id: row.order_id,
-          action,
-          from_status: row.from_status,
-          to_status: row.to_status,
-          old_value:
-            row.old_value ??
-            (row.from_status ? { status: row.from_status } : null),
-          new_value: row.new_value ?? { status: row.to_status },
-          description:
-            noteDescription ??
-            row.description ??
-            this.describeTrackingAction(
-              action,
-              row.from_status,
-              row.to_status,
-            ),
-          changed_by: row.changed_by,
-          changed_by_role: changedByRole,
-          actor,
-          metadata: row.metadata ?? null,
-          note: row.note,
-          created_at: this.toUzIsoString(row.created_at),
-        };
-      }),
+      return {
+        id: row.id,
+        event_type: 'status',
+        order_id: row.order_id,
+        action,
+        from_status: row.from_status,
+        to_status: row.to_status,
+        old_value:
+          row.old_value ??
+          (row.from_status ? { status: row.from_status } : null),
+        new_value: row.new_value ?? { status: row.to_status },
+        description:
+          row.description ??
+          noteDescription ??
+          this.describeTrackingAction(action, row.from_status, row.to_status),
+        changed_by: row.changed_by,
+        changed_by_role: changedByRole,
+        actor,
+        metadata: row.metadata ?? null,
+        note: row.note,
+        created_at: this.toUzIsoString(row.created_at),
+        created_at_ms: row.created_at.getTime(),
+      };
+    });
+
+    const custodyEvents = custodyRows.map((row) => {
+      const actor =
+        row.changed_by === 'system'
+          ? {
+              id: 'system',
+              name: 'System',
+              username: null,
+              phone_number: null,
+              role: 'system',
+              status: null,
+            }
+          : (actorMap.get(row.changed_by) ?? null);
+      const changedByRole =
+        actor?.role && row.changed_by !== 'system'
+          ? String(actor.role)
+          : row.changed_by_role;
+      const noteDescription = this.describeTrackingNote(row.note);
+      const fromLabel = this.custodyHolderLabel(
+        row.from_holder_type,
+        row.from_branch_id,
+        row.from_courier_id,
+        branchLabels,
+        actorMap,
+      );
+      const toLabel = this.custodyHolderLabel(
+        row.to_holder_type,
+        row.to_branch_id,
+        row.to_courier_id,
+        branchLabels,
+        actorMap,
+      );
+      const actorLabel = this.trackingActorLabel(actor, row.changed_by);
+      const custodyDescription = `${actorLabel} buyurtmani ${fromLabel}dan ${toLabel}ga o'tkazdi${
+        noteDescription ? `. Izoh: ${noteDescription}` : ''
+      }`;
+
+      return {
+        id: row.id,
+        event_type: 'custody',
+        order_id: row.order_id,
+        action: 'custody_changed',
+        from_status: null,
+        to_status: null,
+        old_value: {
+          holder_type: row.from_holder_type,
+          holder_branch_id: row.from_branch_id,
+          holder_branch: row.from_branch_id
+            ? (branchLabels.get(String(row.from_branch_id)) ?? null)
+            : null,
+          holder_courier_id: row.from_courier_id,
+          holder_courier: row.from_courier_id
+            ? this.trackingActorLabel(
+                actorMap.get(String(row.from_courier_id)) ?? null,
+                row.from_courier_id,
+              )
+            : null,
+        },
+        new_value: {
+          holder_type: row.to_holder_type,
+          holder_branch_id: row.to_branch_id,
+          holder_branch: row.to_branch_id
+            ? (branchLabels.get(String(row.to_branch_id)) ?? null)
+            : null,
+          holder_courier_id: row.to_courier_id,
+          holder_courier: row.to_courier_id
+            ? this.trackingActorLabel(
+                actorMap.get(String(row.to_courier_id)) ?? null,
+                row.to_courier_id,
+              )
+            : null,
+        },
+        description: custodyDescription,
+        changed_by: row.changed_by,
+        changed_by_role: changedByRole,
+        actor,
+        metadata: {
+          from_label: fromLabel,
+          to_label: toLabel,
+        },
+        note: row.note,
+        created_at: this.toUzIsoString(row.created_at),
+        created_at_ms: row.created_at.getTime(),
+      };
+    });
+
+    const timeline = [...trackingEvents, ...custodyEvents].sort(
+      (a, b) => b.created_at_ms - a.created_at_ms,
+    );
+    const total = timeline.length;
+    const pageData = timeline
+      .slice((page - 1) * limit, page * limit)
+      .map(({ created_at_ms, ...event }) => event);
+
+    return {
+      data: pageData,
       total,
       page,
       limit,
@@ -6066,6 +6300,7 @@ export class OrderServiceService implements OnModuleInit {
       await this.assertDeliveryDetailsEditable(order, dto);
     }
     const oldStatus = order.status;
+    const previousCanceledPostId = order.canceled_post_id;
     const previousHolderType = order.holder_type;
     const previousHolderBranchId = order.holder_branch_id;
     const previousHolderCourierId = order.holder_courier_id;
@@ -6193,7 +6428,36 @@ export class OrderServiceService implements OnModuleInit {
       const custodyRepo = manager.getRepository(OrderCustodyEvent);
       await orderRepo.save(order);
 
-      if (oldStatus !== order.status) {
+      const canceledPostAccepted =
+        oldStatus === Order_status.CANCELLED_SENT &&
+        order.status === Order_status.CANCELLED_SENT &&
+        previousCanceledPostId &&
+        typeof dto.canceled_post_id !== 'undefined' &&
+        dto.canceled_post_id === null;
+      const canceledPostSourceBranchLabel = canceledPostAccepted
+        ? await this.resolveBranchTrackingLabel(
+            previousHolderBranchId,
+            requester,
+          )
+        : null;
+      const canceledPostDestinationBranchLabel = canceledPostAccepted
+        ? await this.resolveBranchTrackingLabel(
+            order.holder_branch_id,
+            requester,
+          )
+        : null;
+      const canceledPostAcceptedByHq =
+        canceledPostAccepted &&
+        (requester?.note ?? '').toLowerCase().includes('hq');
+      const canceledPostSource = canceledPostSourceBranchLabel ?? 'branch';
+      const canceledPostDestination = canceledPostAcceptedByHq
+        ? 'HQ'
+        : (canceledPostDestinationBranchLabel ?? 'branch');
+      const canceledPostDescription = canceledPostAccepted
+        ? `${canceledPostDestination} bekor qilingan pochtani ${canceledPostSource}dan qabul qildi`
+        : undefined;
+
+      if (oldStatus !== order.status || canceledPostAccepted) {
         await this.createTrackingEvent(
           {
             order_id: order.id,
@@ -6203,6 +6467,38 @@ export class OrderServiceService implements OnModuleInit {
             changed_by_role: requester?.id
               ? this.toTrackingRole(requester.roles)
               : 'system',
+            action: canceledPostAccepted
+              ? 'cancelled_post_received'
+              : undefined,
+            description: canceledPostDescription,
+            old_value: canceledPostAccepted
+              ? {
+                  status: oldStatus,
+                  canceled_post_id: previousCanceledPostId,
+                  holder_type: previousHolderType,
+                  holder_branch_id: previousHolderBranchId,
+                  holder_courier_id: previousHolderCourierId,
+                }
+              : undefined,
+            new_value: canceledPostAccepted
+              ? {
+                  status: order.status,
+                  canceled_post_id: order.canceled_post_id,
+                  holder_type: order.holder_type,
+                  holder_branch_id: order.holder_branch_id,
+                  holder_courier_id: order.holder_courier_id,
+                }
+              : undefined,
+            metadata: canceledPostAccepted
+              ? {
+                  canceled_post_id: previousCanceledPostId,
+                  source_branch_id: previousHolderBranchId,
+                  source_branch: canceledPostSourceBranchLabel,
+                  destination_branch_id: order.holder_branch_id,
+                  destination_branch: canceledPostDestinationBranchLabel,
+                  received_by_hq: canceledPostAcceptedByHq,
+                }
+              : undefined,
             note: requester?.note ?? null,
           },
           trackingRepo,
@@ -8865,6 +9161,7 @@ export class OrderServiceService implements OnModuleInit {
     batch_id?: string;
     requester_id?: string;
     requester_name?: string;
+    requester_roles?: string[];
   }) {
     const batchId = String(input?.batch_id ?? '').trim();
     if (!batchId) {
@@ -8874,6 +9171,7 @@ export class OrderServiceService implements OnModuleInit {
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
     const requesterName =
       String(input?.requester_name ?? '').trim() || requesterId || 'unknown';
+    const requesterRole = this.toTrackingRole(input?.requester_roles);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -9008,7 +9306,7 @@ export class OrderServiceService implements OnModuleInit {
                 from_status: fromStatus,
                 to_status: Order_status.RECEIVED,
                 changed_by: requesterId,
-                changed_by_role: 'admin',
+                changed_by_role: requesterRole,
                 action: 'branch_batch_received',
                 description: `Pochta #${batchId} filial tomonidan qabul qilindi`,
                 note: `Batch #${batchId} qabul qilindi`,
@@ -9029,7 +9327,7 @@ export class OrderServiceService implements OnModuleInit {
                 from_status: fromStatus,
                 to_status: Order_status.NEW,
                 changed_by: requesterId,
-                changed_by_role: 'admin',
+                changed_by_role: requesterRole,
                 action: 'branch_batch_requeued',
                 description: `Pochta #${batchId} tranzit uchun qayta navbatga qo'yildi`,
                 note: `Batch #${batchId} tranzit uchun qayta navbatga qo'yildi`,
@@ -9060,7 +9358,7 @@ export class OrderServiceService implements OnModuleInit {
                 from_courier_id: fromCourierId,
                 to_courier_id: null,
                 changed_by: requesterId,
-                changed_by_role: 'admin',
+                changed_by_role: requesterRole,
                 note: `Batch #${batchId} dan filialga qabul qilindi`,
               },
               custodyRepo,
@@ -9105,6 +9403,7 @@ export class OrderServiceService implements OnModuleInit {
     order_ids?: string[];
     requester_id?: string;
     requester_name?: string;
+    requester_roles?: string[];
   }) {
     const batchId = String(input?.batch_id ?? '').trim();
     if (!batchId) {
@@ -9124,6 +9423,7 @@ export class OrderServiceService implements OnModuleInit {
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
     const requesterName =
       String(input?.requester_name ?? '').trim() || requesterId || 'unknown';
+    const requesterRole = this.toTrackingRole(input?.requester_roles);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -9245,7 +9545,7 @@ export class OrderServiceService implements OnModuleInit {
               from_status: fromStatus,
               to_status: Order_status.RECEIVED,
               changed_by: requesterId,
-              changed_by_role: 'admin',
+              changed_by_role: requesterRole,
               action: 'branch_batch_received',
               description: `Pochta #${batchId} dan tanlangan buyurtma qabul qilindi`,
               note: `Batch #${batchId} dan qabul qilindi`,
@@ -9273,7 +9573,7 @@ export class OrderServiceService implements OnModuleInit {
               from_courier_id: fromCourierId,
               to_courier_id: null,
               changed_by: requesterId,
-              changed_by_role: 'admin',
+              changed_by_role: requesterRole,
               note: `Batch #${batchId} dan filialga qabul qilindi`,
             },
             custodyRepo,
@@ -9334,7 +9634,7 @@ export class OrderServiceService implements OnModuleInit {
               from_status: remainingOrder.status,
               to_status: Order_status.NEW,
               changed_by: requesterId,
-              changed_by_role: 'admin',
+              changed_by_role: requesterRole,
               action: 'branch_batch_requeued',
               description: `Pochta #${batchId} qisman qabul qilindi, buyurtma jo'natuvchiga qaytarildi`,
               note: `Batch #${batchId} qisman qabul qilindi, order qayta navbatga qo'yildi`,

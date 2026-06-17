@@ -45,7 +45,7 @@ export class OrderTracking {
   changed_by!: string;
 
   @Column({ type: 'varchar', length: 32 })
-  changed_by_role!: 'admin' | 'courier' | 'market' | 'system';
+  changed_by_role!: string;
 
   @Column({ type: 'jsonb', nullable: true })
   metadata!: Record<string, unknown> | null;
