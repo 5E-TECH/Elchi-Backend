@@ -89,41 +89,20 @@ jobs:
             if [ -z "$OLD_SHA" ]; then
               DEPLOY_ALL=true
             elif [ "$OLD_SHA" != "$NEW_SHA" ]; then
-              CHANGED_FILES="$(git diff --name-only "$OLD_SHA" "$NEW_SHA")"
-              echo "$CHANGED_FILES" | while IFS= read -r file; do
-                case "$file" in
-                  apps/api-gateway/*) echo api-gateway ;;
-                  apps/identity-service/*) echo identity-service ;;
-                  apps/order-service/*) echo order-service ;;
-                  apps/catalog-service/*) echo catalog-service ;;
-                  apps/logistics-service/*) echo logistics-service ;;
-                  apps/finance-service/*) echo finance-service ;;
-                  apps/notification-service/*) echo notification-service ;;
-                  apps/integration-service/*) echo integration-service ;;
-                  apps/analytics-service/*) echo analytics-service ;;
-                  apps/branch-service/*) echo branch-service ;;
-                  apps/investor-service/*) echo investor-service ;;
-                  apps/file-service/*) echo file-service ;;
-                  apps/c2c-service/*) echo c2c-service ;;
-                  apps/search-service/*) echo search-service ;;
-                  migrations/*|scripts/init-schemas.sql) echo __migrations__ ;;
-                  libs/*|package.json|package-lock.json|nest-cli.json|tsconfig*.json|docker-compose.prod.yml|.github/workflows/deploy.yml) echo __all__ ;;
-                esac
-              done > /tmp/elchi-changed-services
+              git diff --name-only "$OLD_SHA" "$NEW_SHA" > /tmp/elchi-changed-files
+              cat /tmp/elchi-changed-files
 
-              if grep -qx "__all__" /tmp/elchi-changed-services; then
+              if grep -Eq '^(libs/|package\.json$|package-lock\.json$|nest-cli\.json$|tsconfig.*\.json$|docker-compose\.prod\.yml$|\.github/workflows/deploy\.yml$)' /tmp/elchi-changed-files; then
                 DEPLOY_ALL=true
               fi
-              if grep -qx "__migrations__" /tmp/elchi-changed-services; then
+              if grep -Eq '^(migrations/|scripts/init-schemas\.sql$)' /tmp/elchi-changed-files; then
                 RUN_MIGRATIONS=true
               fi
-              while IFS= read -r service; do
-                case "$service" in
-                  ""|__all__|__migrations__) ;;
-                  *) DEPLOY_SERVICES="$DEPLOY_SERVICES $service" ;;
-                esac
-              done < /tmp/elchi-changed-services
-              DEPLOY_SERVICES="$(echo "$DEPLOY_SERVICES" | xargs -n1 | sort -u | xargs)"
+              for service in $APP_SERVICES; do
+                if grep -q "^apps/$service/" /tmp/elchi-changed-files; then
+                  DEPLOY_SERVICES="$DEPLOY_SERVICES $service"
+                fi
+              done
             fi
 
             if [ "$DEPLOY_ALL" = true ]; then
