@@ -1036,6 +1036,7 @@ export class OrderServiceController {
       driver_phone?: string;
       requester_id?: string;
       requester_name?: string;
+      requester_roles?: string[];
     },
     @Ctx() context: RmqContext,
   ) {
@@ -1097,6 +1098,7 @@ export class OrderServiceController {
       reason?: string;
       requester_id?: string;
       requester_name?: string;
+      requester_roles?: string[];
     },
     @Ctx() context: RmqContext,
   ) {

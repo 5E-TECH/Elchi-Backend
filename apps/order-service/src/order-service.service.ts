@@ -9038,6 +9038,7 @@ export class OrderServiceService implements OnModuleInit {
     driver_phone?: string;
     requester_id?: string;
     requester_name?: string;
+    requester_roles?: string[];
   }) {
     const batchId = String(input?.batch_id ?? '').trim();
     const vehiclePlate = String(input?.vehicle_plate ?? '').trim();
@@ -9062,6 +9063,8 @@ export class OrderServiceService implements OnModuleInit {
     if (!vehiclePlate || !driverName || !driverPhone) {
       this.badRequest("Avtomobil ma'lumotlari majburiy");
     }
+    const requesterId = String(input?.requester_id ?? '').trim() || '0';
+    const requesterRole = this.toTrackingRole(input?.requester_roles);
 
     const batch = await this.transferBatchRepo.findOne({
       where: { id: batchId, isDeleted: false },
@@ -9110,6 +9113,46 @@ export class OrderServiceService implements OnModuleInit {
       item.sent_at = now;
     });
     await this.transferBatchItemRepo.save(toMark);
+
+    const toMarkOrderIds = toMark.map((item) => String(item.order_id));
+    const priorOrders = await this.orderRepo.find({
+      where: { id: In(toMarkOrderIds), isDeleted: false },
+      select: ['id', 'status'],
+    });
+    const priorById = new Map(
+      priorOrders.map((order) => [String(order.id), order.status]),
+    );
+
+    if (
+      batch.direction === BranchTransferDirection.FORWARD &&
+      toMarkOrderIds.length
+    ) {
+      await this.orderRepo
+        .createQueryBuilder()
+        .update(Order)
+        .set({ status: Order_status.ON_THE_ROAD })
+        .where('id IN (:...orderIds)', { orderIds: toMarkOrderIds })
+        .andWhere('"current_batch_id" = :batchId', { batchId })
+        .andWhere('"is_deleted" = false')
+        .execute();
+
+      for (const orderId of toMarkOrderIds) {
+        const fromStatus = priorById.get(orderId);
+        if (!fromStatus || fromStatus === Order_status.ON_THE_ROAD) {
+          continue;
+        }
+        await this.createTrackingEvent({
+          order_id: orderId,
+          from_status: fromStatus,
+          to_status: Order_status.ON_THE_ROAD,
+          changed_by: requesterId,
+          changed_by_role: requesterRole,
+          action: 'branch_batch_sent',
+          description: `Pochta #${batchId} filialdan jo'natildi`,
+          note: `Batch #${batchId} jo'natildi`,
+        });
+      }
+    }
 
     const refreshedItems = await this.transferBatchItemRepo.find({
       where: { batch_id: batchId, isDeleted: false },
@@ -9736,6 +9779,7 @@ export class OrderServiceService implements OnModuleInit {
     reason?: string;
     requester_id?: string;
     requester_name?: string;
+    requester_roles?: string[];
   }) {
     const batchId = String(input?.batch_id ?? '').trim();
     if (!batchId) {
@@ -9752,6 +9796,7 @@ export class OrderServiceService implements OnModuleInit {
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
     const requesterName =
       String(input?.requester_name ?? '').trim() || requesterId || 'unknown';
+    const requesterRole = this.toTrackingRole(input?.requester_roles);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -9789,13 +9834,48 @@ export class OrderServiceService implements OnModuleInit {
       batch.cancelled_at = new Date();
       const savedBatch = await batchRepo.save(batch);
 
+      const batchOrders = await orderRepo.find({
+        where: { current_batch_id: String(batch.id), isDeleted: false },
+        select: ['id', 'status'],
+      });
+      const batchOrderIds = batchOrders.map((order) => String(order.id));
+      const shouldRequeueForwardOrders =
+        batch.direction === BranchTransferDirection.FORWARD &&
+        batchOrderIds.length > 0;
+
       await orderRepo
         .createQueryBuilder()
         .update(Order)
-        .set({ current_batch_id: null })
+        .set(
+          shouldRequeueForwardOrders
+            ? { current_batch_id: null, status: Order_status.NEW }
+            : { current_batch_id: null },
+        )
         .where('"current_batch_id" = :batchId', { batchId: String(batch.id) })
         .andWhere('"is_deleted" = false')
         .execute();
+
+      if (shouldRequeueForwardOrders) {
+        const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+        for (const order of batchOrders) {
+          if (order.status === Order_status.NEW) {
+            continue;
+          }
+          await this.createTrackingEvent(
+            {
+              order_id: String(order.id),
+              from_status: order.status,
+              to_status: Order_status.NEW,
+              changed_by: requesterId,
+              changed_by_role: requesterRole,
+              action: 'branch_batch_cancelled',
+              description: `Pochta #${batchId} bekor qilindi, buyurtma qayta yangi holatga qaytarildi`,
+              note: `Batch #${batchId} bekor qilindi`,
+            },
+            trackingRepo,
+          );
+        }
+      }
 
       await historyRepo.save(
         historyRepo.create({
