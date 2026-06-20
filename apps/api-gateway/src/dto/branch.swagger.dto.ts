@@ -1,6 +1,14 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { BranchTransferDirection, BranchType } from '@app/common';
-import { IsArray, IsEnum, IsNumberString, IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import {
+  IsArray,
+  IsEnum,
+  IsNumberString,
+  IsOptional,
+  IsString,
+  Matches,
+  MinLength,
+} from 'class-validator';
 import { BranchUserRole } from '@app/common';
 
 export class CreateBranchRequestDto {
@@ -19,17 +27,26 @@ export class CreateBranchRequestDto {
   @IsString()
   phone_number?: string;
 
-  @ApiPropertyOptional({ example: '5', description: 'Region ID (bigint string)' })
+  @ApiPropertyOptional({
+    example: '5',
+    description: 'Region ID (bigint string)',
+  })
   @IsOptional()
   @IsNumberString()
   region_id?: string;
 
-  @ApiPropertyOptional({ example: '60', description: 'District ID (bigint string)' })
+  @ApiPropertyOptional({
+    example: '60',
+    description: 'District ID (bigint string)',
+  })
   @IsOptional()
   @IsNumberString()
   district_id?: string;
 
-  @ApiPropertyOptional({ example: '1', description: 'Parent branch ID (bigint string)' })
+  @ApiPropertyOptional({
+    example: '1',
+    description: 'Parent branch ID (bigint string)',
+  })
   @IsOptional()
   @IsNumberString()
   parent_id?: string;
@@ -41,7 +58,10 @@ export class CreateBranchRequestDto {
   @ApiProperty({ example: 'SAM' })
   @Matches(/^[A-Z0-9-]{2,32}$/)
   code!: string;
-  @ApiPropertyOptional({ example: '12', description: 'Manager user ID (bigint string)' })
+  @ApiPropertyOptional({
+    example: '12',
+    description: 'Manager user ID (bigint string)',
+  })
   @IsOptional()
   @IsNumberString()
   manager_id?: string;
@@ -54,7 +74,9 @@ export class UpdateBranchRequestDto {
   @MinLength(2)
   name?: string;
 
-  @ApiPropertyOptional({ example: "Namangan shahar, Alisher Navoiy ko'chasi 20" })
+  @ApiPropertyOptional({
+    example: "Namangan shahar, Alisher Navoiy ko'chasi 20",
+  })
   @IsOptional()
   @IsString()
   address?: string;
@@ -64,17 +86,26 @@ export class UpdateBranchRequestDto {
   @IsString()
   phone_number?: string;
 
-  @ApiPropertyOptional({ example: '5', description: 'Region ID (bigint string)' })
+  @ApiPropertyOptional({
+    example: '5',
+    description: 'Region ID (bigint string)',
+  })
   @IsOptional()
   @IsNumberString()
   region_id?: string;
 
-  @ApiPropertyOptional({ example: '60', description: 'District ID (bigint string)' })
+  @ApiPropertyOptional({
+    example: '60',
+    description: 'District ID (bigint string)',
+  })
   @IsOptional()
   @IsNumberString()
   district_id?: string;
 
-  @ApiPropertyOptional({ example: '1', description: 'Parent branch ID (bigint string)' })
+  @ApiPropertyOptional({
+    example: '1',
+    description: 'Parent branch ID (bigint string)',
+  })
   @IsOptional()
   @IsNumberString()
   parent_id?: string;
@@ -93,7 +124,10 @@ export class UpdateBranchRequestDto {
   @IsEnum(['active', 'inactive'])
   status?: string;
 
-  @ApiPropertyOptional({ example: '12', description: 'Manager user ID (bigint string)' })
+  @ApiPropertyOptional({
+    example: '12',
+    description: 'Manager user ID (bigint string)',
+  })
   @IsOptional()
   @IsNumberString()
   manager_id?: string;
@@ -104,7 +138,10 @@ export class AssignBranchUserRequestDto {
   @IsNumberString()
   user_id!: string;
 
-  @ApiPropertyOptional({ enum: BranchUserRole, example: BranchUserRole.REGISTRATOR })
+  @ApiPropertyOptional({
+    enum: BranchUserRole,
+    example: BranchUserRole.REGISTRATOR,
+  })
   @IsOptional()
   @IsEnum(BranchUserRole)
   role?: BranchUserRole;
@@ -136,27 +173,66 @@ export class UpdateBranchConfigRequestDto {
 }
 
 export class CreateBranchTransferBatchesRequestDto {
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: ['46', '47', '48'],
     description: "Batchga o'tkaziladigan NEW order ID'lari",
     type: [String],
   })
+  @IsOptional()
   @IsArray()
   @IsString({ each: true })
   @MinLength(1, { each: true })
-  orderIds!: string[];
+  orderIds?: string[];
+
+  @ApiPropertyOptional({
+    example: ['46', '47', '48'],
+    description: "Batchga o'tkaziladigan NEW order ID'lari (snake_case)",
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  order_ids?: string[];
 }
 
 export class SendTransferBatchRequestDto {
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: ['46', '47', '48'],
     description: "Yuborilayotgan batch ichidagi order ID'lar",
     type: [String],
   })
+  @IsOptional()
   @IsArray()
   @IsString({ each: true })
   @MinLength(1, { each: true })
-  orderIds!: string[];
+  orderIds?: string[];
+
+  @ApiPropertyOptional({
+    example: ['46', '47', '48'],
+    description: "Yuborilayotgan batch ichidagi order ID'lar (snake_case)",
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  order_ids?: string[];
+
+  @ApiPropertyOptional({ example: '01A123AA' })
+  @IsOptional()
+  @IsString()
+  vehicle_plate?: string;
+
+  @ApiPropertyOptional({ example: 'Ali Valiyev' })
+  @IsOptional()
+  @IsString()
+  driver_name?: string;
+
+  @ApiPropertyOptional({ example: '+998901234567' })
+  @IsOptional()
+  @IsString()
+  driver_phone?: string;
 }
 
 export class CreateReturnBatchesRequestDto {
@@ -195,13 +271,25 @@ export class CancelTransferBatchRequestDto {
 }
 
 export class ReceiveTransferBatchOrdersRequestDto {
-  @ApiProperty({
+  @ApiPropertyOptional({
     example: ['46', '47'],
     description: "Qabul qilinadigan batch ichidagi order ID'lar",
     type: [String],
   })
+  @IsOptional()
   @IsArray()
   @IsString({ each: true })
   @MinLength(1, { each: true })
-  orderIds!: string[];
+  orderIds?: string[];
+
+  @ApiPropertyOptional({
+    example: ['46', '47'],
+    description: "Qabul qilinadigan batch ichidagi order ID'lar (snake_case)",
+    type: [String],
+  })
+  @IsOptional()
+  @IsArray()
+  @IsString({ each: true })
+  @MinLength(1, { each: true })
+  order_ids?: string[];
 }

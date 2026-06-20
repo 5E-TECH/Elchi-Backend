@@ -999,14 +999,19 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const qrFiles: Array<{ batch_id: string; key: string; url: string }> = [];
-    try {
-      for (const batch of createdBatches) {
-        const token = String(batch?.qr_code_token ?? '').trim();
-        if (!token) {
-          throw new RpcException(
-            errorRes('QR token missing for created batch', 500),
-          );
-        }
+    const qrErrors: Array<{ batch_id: string; message: string }> = [];
+    for (const batch of createdBatches) {
+      const batchId = String(batch.id);
+      const token = String(batch?.qr_code_token ?? '').trim();
+      if (!token) {
+        qrErrors.push({
+          batch_id: batchId,
+          message: 'QR token missing for created batch',
+        });
+        continue;
+      }
+
+      try {
         const qrResponse = await this.sendFileCommand<{
           data?: { key?: string; url?: string };
         }>('file.generate_qr', {
@@ -1016,41 +1021,34 @@ export class BranchServiceService implements OnModuleInit {
         });
 
         await this.sendOrderCommand('order.transfer_batch.history.add', {
-          batch_id: String(batch.id),
+          batch_id: batchId,
           user_id: requesterId,
           action: 'CREATED',
           notes: '[STEP] QR_GENERATED',
         });
 
         qrFiles.push({
-          batch_id: String(batch.id),
+          batch_id: batchId,
           key: String(qrResponse?.data?.key ?? ''),
           url: String(qrResponse?.data?.url ?? ''),
         });
+      } catch (error) {
+        const parsed = this.extractRpcError(error);
+        const message =
+          parsed?.message ??
+          (error instanceof Error ? error.message : 'QR generation failed');
+        qrErrors.push({ batch_id: batchId, message });
+        try {
+          await this.sendOrderCommand('order.transfer_batch.history.add', {
+            batch_id: batchId,
+            user_id: requesterId,
+            action: 'CREATED',
+            notes: `[WARN] QR_GENERATION_FAILED: ${message}`,
+          });
+        } catch {
+          // Batch creation must not fail only because warning history failed.
+        }
       }
-    } catch (error) {
-      await Promise.all(
-        qrFiles
-          .filter((file) => Boolean(file.key))
-          .map(async (file) => {
-            try {
-              await this.sendFileCommand('file.delete', { key: file.key });
-            } catch {
-              return null;
-            }
-            return null;
-          }),
-      );
-
-      if (batchIds.length) {
-        await this.sendOrderCommand('order.transfer_batch.cancel_many', {
-          batch_ids: batchIds,
-          remove_order_bindings: true,
-          requester_id: requesterId,
-          notes: '[AUTO_ROLLBACK] QR generation failed',
-        });
-      }
-      throw error;
     }
 
     const qrByBatchId = new Map(qrFiles.map((item) => [item.batch_id, item]));
@@ -1069,6 +1067,7 @@ export class BranchServiceService implements OnModuleInit {
         order_count: orderIds.length,
         order_ids: orderIds.slice(0, 20),
         batch_ids: batchIds,
+        qr_generation_errors: qrErrors,
       },
       ...this.auditActor(requester),
     });
@@ -1077,9 +1076,12 @@ export class BranchServiceService implements OnModuleInit {
       {
         idempotent: false,
         batches: enriched,
+        qr_generation_errors: qrErrors,
       },
       201,
-      'Transfer batches created',
+      qrErrors.length
+        ? 'Transfer batches created, but QR file generation failed'
+        : 'Transfer batches created',
     );
   }
 
@@ -1174,14 +1176,19 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const qrFiles: Array<{ batch_id: string; key: string; url: string }> = [];
-    try {
-      for (const batch of createdBatches) {
-        const token = String(batch?.qr_code_token ?? '').trim();
-        if (!token) {
-          throw new RpcException(
-            errorRes('QR token missing for created batch', 500),
-          );
-        }
+    const qrErrors: Array<{ batch_id: string; message: string }> = [];
+    for (const batch of createdBatches) {
+      const batchId = String(batch.id);
+      const token = String(batch?.qr_code_token ?? '').trim();
+      if (!token) {
+        qrErrors.push({
+          batch_id: batchId,
+          message: 'QR token missing for created batch',
+        });
+        continue;
+      }
+
+      try {
         const qrResponse = await this.sendFileCommand<{
           data?: { key?: string; url?: string };
         }>('file.generate_qr', {
@@ -1191,41 +1198,34 @@ export class BranchServiceService implements OnModuleInit {
         });
 
         await this.sendOrderCommand('order.transfer_batch.history.add', {
-          batch_id: String(batch.id),
+          batch_id: batchId,
           user_id: requesterId,
           action: 'CREATED',
           notes: '[STEP] QR_GENERATED',
         });
 
         qrFiles.push({
-          batch_id: String(batch.id),
+          batch_id: batchId,
           key: String(qrResponse?.data?.key ?? ''),
           url: String(qrResponse?.data?.url ?? ''),
         });
+      } catch (error) {
+        const parsed = this.extractRpcError(error);
+        const message =
+          parsed?.message ??
+          (error instanceof Error ? error.message : 'QR generation failed');
+        qrErrors.push({ batch_id: batchId, message });
+        try {
+          await this.sendOrderCommand('order.transfer_batch.history.add', {
+            batch_id: batchId,
+            user_id: requesterId,
+            action: 'CREATED',
+            notes: `[WARN] QR_GENERATION_FAILED: ${message}`,
+          });
+        } catch {
+          // Batch creation must not fail only because warning history failed.
+        }
       }
-    } catch (error) {
-      await Promise.all(
-        qrFiles
-          .filter((file) => Boolean(file.key))
-          .map(async (file) => {
-            try {
-              await this.sendFileCommand('file.delete', { key: file.key });
-            } catch {
-              return null;
-            }
-            return null;
-          }),
-      );
-
-      if (batchIds.length) {
-        await this.sendOrderCommand('order.transfer_batch.cancel_many', {
-          batch_ids: batchIds,
-          remove_order_bindings: true,
-          requester_id: requesterId,
-          notes: '[AUTO_ROLLBACK] QR generation failed',
-        });
-      }
-      throw error;
     }
 
     const qrByBatchId = new Map(qrFiles.map((item) => [item.batch_id, item]));
@@ -1243,6 +1243,7 @@ export class BranchServiceService implements OnModuleInit {
         order_count: orderIds.length,
         order_ids: orderIds.slice(0, 20),
         batch_ids: batchIds,
+        qr_generation_errors: qrErrors,
       },
       ...this.auditActor(requester),
     });
@@ -1251,9 +1252,12 @@ export class BranchServiceService implements OnModuleInit {
       {
         idempotent: false,
         batches: enriched,
+        qr_generation_errors: qrErrors,
       },
       201,
-      'Return batches created',
+      qrErrors.length
+        ? 'Return batches created, but QR file generation failed'
+        : 'Return batches created',
     );
   }
 
@@ -1312,6 +1316,7 @@ export class BranchServiceService implements OnModuleInit {
         driver_phone: driverPhone,
         requester_id: requesterId,
         requester_name: requesterId,
+        requester_roles: requester?.roles ?? [],
       },
     );
 
@@ -1648,7 +1653,13 @@ export class BranchServiceService implements OnModuleInit {
       response?.data?.destination_branch_id ?? '',
     ).trim();
 
-    if (sourceBranchId) {
+    if (sourceBranchId && destinationBranchId) {
+      try {
+        await this.assertCanReadBranch(sourceBranchId, requester);
+      } catch {
+        await this.assertCanReadBranch(destinationBranchId, requester);
+      }
+    } else if (sourceBranchId) {
       await this.assertCanReadBranch(sourceBranchId, requester);
     } else if (destinationBranchId) {
       await this.assertCanReadBranch(destinationBranchId, requester);
@@ -1773,7 +1784,7 @@ export class BranchServiceService implements OnModuleInit {
 
   async receiveTransferBatchOrders(
     batchId: string,
-    dto: { orderIds?: string[] },
+    dto: { orderIds?: string[]; order_ids?: string[] },
     requester?: RequesterContext,
   ) {
     const id = String(batchId ?? '').trim();
@@ -1781,14 +1792,18 @@ export class BranchServiceService implements OnModuleInit {
       this.badRequest('batch id is required');
     }
 
-    const orderIds = Array.isArray(dto?.orderIds)
-      ? dto.orderIds.map((value) => String(value ?? '').trim()).filter(Boolean)
-      : [];
+    const orderIds = Array.from(
+      new Set(
+        (dto?.orderIds ?? dto?.order_ids ?? [])
+          .map((value) => String(value ?? '').trim())
+          .filter(Boolean),
+      ),
+    );
     if (!orderIds.length) {
-      this.badRequest("orderIds bo'sh bo'lmasligi kerak");
+      this.badRequest("orderIds/order_ids bo'sh bo'lmasligi kerak");
     }
 
-    const uniqueOrderIds = [...new Set(orderIds)];
+    const uniqueOrderIds = orderIds;
 
     const batchRes = await this.sendOrderCommand<{
       data?: { destination_branch_id?: string };
@@ -1873,6 +1888,7 @@ export class BranchServiceService implements OnModuleInit {
         reason,
         requester_id: requesterId,
         requester_name: requesterName,
+        requester_roles: requester?.roles ?? [],
       },
     );
 
