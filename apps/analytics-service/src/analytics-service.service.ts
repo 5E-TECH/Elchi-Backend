@@ -394,9 +394,17 @@ export class AnalyticsServiceService {
 
   async getDashboard(
     requester: RequesterContext | undefined,
-    filter: { startDate?: string; endDate?: string; period?: string },
+    filter: {
+      startDate?: string;
+      endDate?: string;
+      period?: string;
+      all?: boolean;
+    },
   ) {
-    const normalized = this.normalizeDashboardDateRange(filter);
+    const isAllTime = filter.all === true;
+    const normalized = isAllTime
+      ? { all: true }
+      : this.normalizeDashboardDateRange(filter);
     const roles = this.roleSet(requester);
     const isBranchRole =
       roles.has(Roles.BRANCH) ||
@@ -476,6 +484,27 @@ export class AnalyticsServiceService {
         },
         200,
         'Dashboard infos',
+      );
+    }
+
+    if (isAllTime) {
+      const orders = await rmqSend(
+        this.orderClient,
+        { cmd: 'order.analytics.overview' },
+        scopedRange,
+      ).catch(() => null);
+
+      return successRes(
+        {
+          orders: this.unwrap(orders),
+          markets: [],
+          couriers: [],
+          topMarkets: [],
+          topCouriers: [],
+          branchDashboard: null,
+        },
+        200,
+        'Dashboard infos (all time)',
       );
     }
 

@@ -104,6 +104,29 @@ describe('AnalyticsServiceService', () => {
     expect(res.data).not.toHaveProperty('newUsersCount');
   });
 
+  it('getDashboard uses the lightweight overview-only path for all time', async () => {
+    rmqSendMock.mockResolvedValue({
+      data: { acceptedCount: 100, soldAndPaid: 70, totalRevenue: 5000 },
+    });
+
+    const res = await service.getDashboard(
+      { id: 'admin', roles: ['superadmin'] },
+      { all: true },
+    );
+
+    expect(res.data.orders).toEqual({
+      acceptedCount: 100,
+      soldAndPaid: 70,
+      totalRevenue: 5000,
+    });
+    expect(rmqSendMock).toHaveBeenCalledTimes(1);
+    expect(rmqSendMock).toHaveBeenCalledWith(
+      expect.anything(),
+      { cmd: 'order.analytics.overview' },
+      { all: true },
+    );
+  });
+
   it.each([
     ['today', '2026-06-10T19:00:00.000Z'],
     ['week', '2026-06-07T19:00:00.000Z'],

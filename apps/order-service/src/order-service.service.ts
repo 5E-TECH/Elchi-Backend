@@ -6933,52 +6933,55 @@ export class OrderServiceService implements OnModuleInit {
     startDate?: string,
     endDate?: string,
     branchId?: string,
+    all = false,
   ) {
-    const { start, end } = this.analyticsDateRange(startDate, endDate);
+    const range = all ? null : this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
-    const startMs = String(start.getTime());
-    const endMs = String(end.getTime());
 
-    const [acceptedCount, cancelled, soldAndPaid, soldOrders] =
-      await Promise.all([
-        this.applyAnalyticsBranchScope(
-          this.orderRepo
-            .createQueryBuilder('o')
-            .where('o.isDeleted = :isDeleted', { isDeleted: false })
-            .andWhere('o.createdAt BETWEEN :start AND :end', { start, end }),
-          branchId,
-        ).getCount(),
-        this.applyAnalyticsBranchScope(
-          this.orderRepo
-            .createQueryBuilder('o')
-            .where('o.isDeleted = :isDeleted', { isDeleted: false })
-            .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-            .andWhere('o.status = :status', { status: Order_status.CANCELLED }),
-          branchId,
-        ).getCount(),
-        this.applyAnalyticsBranchScope(
-          this.orderRepo
-            .createQueryBuilder('o')
-            .where('o.isDeleted = :isDeleted', { isDeleted: false })
-            .andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
-              startMs,
-              endMs,
-            })
-            .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses }),
-          branchId,
-        ).getCount(),
-        this.applyAnalyticsBranchScope(
-          this.orderRepo
-            .createQueryBuilder('o')
-            .where('o.isDeleted = :isDeleted', { isDeleted: false })
-            .andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
-              startMs,
-              endMs,
-            })
-            .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses }),
-          branchId,
-        ).getMany(),
-      ]);
+    const acceptedQuery = this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false }),
+      branchId,
+    );
+    const cancelledQuery = this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.status = :status', { status: Order_status.CANCELLED }),
+      branchId,
+    );
+    const soldOrdersQuery = this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses }),
+      branchId,
+    ).select([
+      'o.id',
+      'o.market_id',
+      'o.post_id',
+      'o.where_deliver',
+      'o.total_price',
+    ]);
+
+    if (range) {
+      const startMs = String(range.start.getTime());
+      const endMs = String(range.end.getTime());
+      acceptedQuery.andWhere('o.createdAt BETWEEN :start AND :end', range);
+      cancelledQuery.andWhere('o.updatedAt BETWEEN :start AND :end', range);
+      soldOrdersQuery.andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
+        startMs,
+        endMs,
+      });
+    }
+
+    const [acceptedCount, cancelled, soldOrders] = await Promise.all([
+      acceptedQuery.getCount(),
+      cancelledQuery.getCount(),
+      soldOrdersQuery.getMany(),
+    ]);
+    const soldAndPaid = soldOrders.length;
 
     const marketIds = [
       ...new Set(soldOrders.map((o) => o.market_id).filter(Boolean)),
@@ -7024,8 +7027,8 @@ export class OrderServiceService implements OnModuleInit {
       soldAndPaid,
       profit,
       totalRevenue,
-      from: start.getTime(),
-      to: end.getTime(),
+      from: range?.start.getTime(),
+      to: range?.end.getTime(),
     };
   }
 

@@ -795,7 +795,12 @@ export class OrderServiceController {
   @MessagePattern({ cmd: 'order.analytics.overview' })
   analyticsOverview(
     @Payload()
-    data: { startDate?: string; endDate?: string; branch_id?: string },
+    data: {
+      startDate?: string;
+      endDate?: string;
+      branch_id?: string;
+      all?: boolean;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -803,6 +808,7 @@ export class OrderServiceController {
         data.startDate,
         data.endDate,
         data.branch_id,
+        data.all,
       ),
     );
   }
