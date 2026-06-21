@@ -127,6 +127,28 @@ describe('AnalyticsServiceService', () => {
     );
   });
 
+  it('removes all financial totals from registrator all-time dashboard', async () => {
+    rmqSendMock.mockResolvedValue({
+      data: {
+        acceptedCount: 100,
+        soldAndPaid: 70,
+        profit: 1200,
+        totalRevenue: 5000,
+        total_revenue: 5000,
+      },
+    });
+
+    const res = await service.getDashboard(
+      { id: 'registrator-1', roles: ['registrator'], branch_id: '16' },
+      { all: true },
+    );
+
+    expect(res.data.orders).toEqual({
+      acceptedCount: 100,
+      soldAndPaid: 70,
+    });
+  });
+
   it.each([
     ['today', '2026-06-10T19:00:00.000Z'],
     ['week', '2026-06-07T19:00:00.000Z'],
