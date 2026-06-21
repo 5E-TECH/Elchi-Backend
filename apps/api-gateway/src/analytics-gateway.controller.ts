@@ -42,6 +42,7 @@ export class AnalyticsGatewayController {
   @ApiQuery({ name: 'endDate', required: false, type: String })
   @ApiQuery({ name: 'start_day', required: false, type: String })
   @ApiQuery({ name: 'end_day', required: false, type: String })
+  @ApiQuery({ name: 'all', required: false, type: Boolean })
   @ApiQuery({
     name: 'period',
     required: false,
@@ -54,6 +55,7 @@ export class AnalyticsGatewayController {
     @Query('period') period?: string,
     @Query('start_day') startDay?: string,
     @Query('end_day') endDay?: string,
+    @Query('all') all?: string,
   ) {
     const resolvedStartDate = startDate ?? startDay;
     const resolvedEndDate = endDate ?? endDay;
@@ -67,6 +69,7 @@ export class AnalyticsGatewayController {
               startDate: resolvedStartDate,
               endDate: resolvedEndDate,
               period,
+              all: all === 'true',
             },
           },
         )
