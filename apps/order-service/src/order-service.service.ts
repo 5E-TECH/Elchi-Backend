@@ -7000,7 +7000,9 @@ export class OrderServiceService implements OnModuleInit {
     const courierMap = new Map(couriers.map((c) => [String(c.id), c]));
 
     let profit = 0;
+    let totalRevenue = 0;
     for (const order of soldOrders) {
+      totalRevenue += Number(order.total_price ?? 0);
       const market = marketMap.get(String(order.market_id));
       const courierId = order.post_id
         ? postMap.get(String(order.post_id))?.courier_id
@@ -7021,6 +7023,7 @@ export class OrderServiceService implements OnModuleInit {
       cancelled,
       soldAndPaid,
       profit,
+      totalRevenue,
       from: start.getTime(),
       to: end.getTime(),
     };

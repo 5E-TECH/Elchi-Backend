@@ -237,6 +237,21 @@ describe('AnalyticsServiceService', () => {
     expect(res.data.courierEfficiency).toBe(5);
   });
 
+  it('getKpiStats groups long all-time ranges yearly', async () => {
+    rmqSendMock.mockResolvedValue({ data: [] });
+
+    await service.getKpiStats({ id: 'a', roles: ['admin'] }, {
+      startDate: '1970-01-01',
+      endDate: '2026-06-20',
+    } as any);
+
+    expect(rmqSendMock).toHaveBeenCalledWith(
+      expect.anything(),
+      { cmd: 'order.analytics.revenue' },
+      expect.objectContaining({ period: 'yearly' }),
+    );
+  });
+
   it('getOrderReport returns status distribution object', async () => {
     rmqSendMock.mockImplementation((_client: any, pattern: any) => {
       if (pattern.cmd === 'order.analytics.overview')
