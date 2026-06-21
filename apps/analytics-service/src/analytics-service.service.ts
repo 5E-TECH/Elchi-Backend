@@ -583,6 +583,15 @@ export class AnalyticsServiceService {
   ) {
     this.assertFinancialAccess(requester);
     const normalized = this.normalizeDateRangeAny(filter);
+    const rangeMs =
+      new Date(normalized.endDate).getTime() -
+      new Date(normalized.startDate).getTime();
+    const revenuePeriod: RevenuePeriod =
+      rangeMs > 5 * 365 * 24 * 60 * 60 * 1000
+        ? 'yearly'
+        : rangeMs > 90 * 24 * 60 * 60 * 1000
+          ? 'monthly'
+          : 'daily';
     const [overview, revenue, courierStats, topMarkets] = await Promise.all([
       rmqSend(
         this.orderClient,
@@ -592,7 +601,7 @@ export class AnalyticsServiceService {
       rmqSend(
         this.orderClient,
         { cmd: 'order.analytics.revenue' },
-        { ...normalized, period: 'daily' },
+        { ...normalized, period: revenuePeriod },
       ).catch(() => null),
       rmqSend(
         this.orderClient,
