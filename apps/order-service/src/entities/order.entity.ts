@@ -154,12 +154,6 @@ export class Order extends BaseEntity {
   @Column({ type: 'jsonb', nullable: true })
   proof_files!: string[] | null;
 
-  @Column({ type: 'boolean', default: false })
-  sell_requires_media!: boolean;
-
-  @Column({ type: 'boolean', default: false })
-  cancel_requires_media!: boolean;
-
   @Column({ type: 'bigint', nullable: true })
   sold_at!: string | null;
 
