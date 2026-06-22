@@ -72,6 +72,8 @@ type UploadedProofFile = {
   buffer: Buffer;
 };
 
+const PROOF_OPERATION_TIMEOUT_MS = 60000;
+
 class ReceiveExternalOrdersDto {
   @IsString()
   @IsNotEmpty()
@@ -228,7 +230,7 @@ export class OrderGatewayController {
             folder: 'proof',
           },
         )
-        .pipe(timeout(25000)),
+        .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException('File service response timeout');
@@ -1760,7 +1762,7 @@ export class OrderGatewayController {
             request_id: randomUUID(),
           },
         )
-        .pipe(timeout(25000)),
+        .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException('Order service response timeout');
@@ -1805,7 +1807,7 @@ export class OrderGatewayController {
             request_id: randomUUID(),
           },
         )
-        .pipe(timeout(25000)),
+        .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException('Order service response timeout');
@@ -2017,7 +2019,7 @@ export class OrderGatewayController {
             request_id: randomUUID(),
           },
         )
-        .pipe(timeout(25000)),
+        .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException('Order service response timeout');
