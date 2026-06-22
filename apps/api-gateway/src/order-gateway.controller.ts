@@ -228,7 +228,7 @@ export class OrderGatewayController {
             folder: 'proof',
           },
         )
-        .pipe(timeout(8000)),
+        .pipe(timeout(25000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException('File service response timeout');
@@ -247,7 +247,9 @@ export class OrderGatewayController {
     return [key];
   }
 
-  private async withUploadedProof<T extends { proofFileKeys?: string[] }>(
+  private async withUploadedProof<
+    T extends { proofFileKeys?: string[]; proofFileKeysVerified?: boolean },
+  >(
     dto: T,
     file?: UploadedProofFile,
   ): Promise<T> {
@@ -256,6 +258,7 @@ export class OrderGatewayController {
     return {
       ...dto,
       proofFileKeys: Array.from(new Set([...existingKeys, ...uploadedKeys])),
+      proofFileKeysVerified: uploadedKeys.length > 0 && existingKeys.length === 0,
     };
   }
 
@@ -1757,7 +1760,7 @@ export class OrderGatewayController {
             request_id: randomUUID(),
           },
         )
-        .pipe(timeout(8000)),
+        .pipe(timeout(25000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException('Order service response timeout');
@@ -1802,7 +1805,7 @@ export class OrderGatewayController {
             request_id: randomUUID(),
           },
         )
-        .pipe(timeout(8000)),
+        .pipe(timeout(25000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException('Order service response timeout');
@@ -2014,7 +2017,7 @@ export class OrderGatewayController {
             request_id: randomUUID(),
           },
         )
-        .pipe(timeout(8000)),
+        .pipe(timeout(25000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException('Order service response timeout');
