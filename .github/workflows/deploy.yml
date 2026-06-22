@@ -122,12 +122,15 @@ jobs:
               docker compose -f docker-compose.prod.yml rm -f migration-runner || true
             fi
 
-            if [ -n "$DEPLOY_SERVICES" ]; then
-              echo "Deploying services:$DEPLOY_SERVICES"
-              docker compose -f docker-compose.prod.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES
-            else
-              echo "No application service changes detected; keeping running containers as-is."
-            fi
+            case "$DEPLOY_SERVICES" in
+              "")
+                echo "No application service changes detected; keeping running containers as-is."
+                ;;
+              *)
+                echo "Deploying services:$DEPLOY_SERVICES"
+                docker compose -f docker-compose.prod.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES
+                ;;
+            esac
 
             docker compose -f docker-compose.prod.yml up -d --no-deps cloudflared || true
             docker compose -f docker-compose.prod.yml ps
