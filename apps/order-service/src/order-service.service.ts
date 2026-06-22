@@ -1773,6 +1773,7 @@ export class OrderServiceService implements OnModuleInit {
     totalPrice: number;
     proofFileKeys?: string[];
     forceRequired?: boolean;
+    proofFileKeysVerified?: boolean;
   }): Promise<string[]> {
     const {
       market,
@@ -1781,6 +1782,7 @@ export class OrderServiceService implements OnModuleInit {
       totalPrice,
       proofFileKeys,
       forceRequired = false,
+      proofFileKeysVerified = false,
     } = params;
 
     const keys = Array.from(
@@ -1815,22 +1817,24 @@ export class OrderServiceService implements OnModuleInit {
       );
     }
 
-    // Verify every key actually points to an uploaded object.
-    const checks = await Promise.all(
-      keys.map((key) =>
-        rmqSend<{ data?: { exists?: boolean } }>(
-          this.fileClient,
-          { cmd: 'file.exists' },
-          { key },
-        )
-          .then((res) => Boolean(res?.data?.exists))
-          .catch(() => false),
-      ),
-    );
-    if (checks.some((ok) => !ok)) {
-      this.badRequest(
-        'Isbot fayl topilmadi yoki yuklanmagan. Iltimos, isbotni qaytadan yuklang.',
+    if (!proofFileKeysVerified) {
+      // Verify every key actually points to an uploaded object.
+      const checks = await Promise.all(
+        keys.map((key) =>
+          rmqSend<{ data?: { exists?: boolean } }>(
+            this.fileClient,
+            { cmd: 'file.exists' },
+            { key },
+          )
+            .then((res) => Boolean(res?.data?.exists))
+            .catch(() => false),
+        ),
       );
+      if (checks.some((ok) => !ok)) {
+        this.badRequest(
+          'Isbot fayl topilmadi yoki yuklanmagan. Iltimos, isbotni qaytadan yuklang.',
+        );
+      }
     }
 
     return keys;
@@ -4568,6 +4572,7 @@ export class OrderServiceService implements OnModuleInit {
       extraCost?: number;
       paidAmount?: number;
       proofFileKeys?: string[];
+      proofFileKeysVerified?: boolean;
     },
     requestId?: string,
   ) {
@@ -4677,6 +4682,7 @@ export class OrderServiceService implements OnModuleInit {
       extraCost,
       totalPrice,
       proofFileKeys: dto?.proofFileKeys,
+      proofFileKeysVerified: dto?.proofFileKeysVerified,
     });
     const finalComment = this.generateSaleComment(
       order.comment,
@@ -4954,7 +4960,12 @@ export class OrderServiceService implements OnModuleInit {
   async cancelOrder(
     requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,
-    dto: { comment?: string; extraCost?: number; proofFileKeys?: string[] },
+    dto: {
+      comment?: string;
+      extraCost?: number;
+      proofFileKeys?: string[];
+      proofFileKeysVerified?: boolean;
+    },
     requestId?: string,
   ) {
     const isManagerRequester =
@@ -5000,6 +5011,7 @@ export class OrderServiceService implements OnModuleInit {
       extraCost,
       totalPrice,
       proofFileKeys: dto?.proofFileKeys,
+      proofFileKeysVerified: dto?.proofFileKeysVerified,
     });
 
     // Look up cashboxes (remote reads) before opening the transaction.
@@ -5336,6 +5348,7 @@ export class OrderServiceService implements OnModuleInit {
       extraCost?: number;
       comment?: string;
       proofFileKeys?: string[];
+      proofFileKeysVerified?: boolean;
     },
     requestId?: string,
   ) {
@@ -5452,6 +5465,7 @@ export class OrderServiceService implements OnModuleInit {
       extraCost,
       totalPrice: price,
       proofFileKeys: dto?.proofFileKeys,
+      proofFileKeysVerified: dto?.proofFileKeysVerified,
     });
     const finalComment = this.generateSaleComment(
       order.comment,
