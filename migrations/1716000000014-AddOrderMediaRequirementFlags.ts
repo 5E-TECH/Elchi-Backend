@@ -1,9 +1,9 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddOrderMediaRequirementFlags1716000014
+export class AddOrderMediaRequirementFlags1716000000014
   implements MigrationInterface
 {
-  name = 'AddOrderMediaRequirementFlags1716000014';
+  name = 'AddOrderMediaRequirementFlags1716000000014';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
