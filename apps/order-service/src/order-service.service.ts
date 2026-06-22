@@ -1772,8 +1772,16 @@ export class OrderServiceService implements OnModuleInit {
     extraCost: number;
     totalPrice: number;
     proofFileKeys?: string[];
+    forceRequired?: boolean;
   }): Promise<string[]> {
-    const { market, action, extraCost, totalPrice, proofFileKeys } = params;
+    const {
+      market,
+      action,
+      extraCost,
+      totalPrice,
+      proofFileKeys,
+      forceRequired = false,
+    } = params;
 
     const keys = Array.from(
       new Set(
@@ -1786,7 +1794,7 @@ export class OrderServiceService implements OnModuleInit {
     const enabled = Array.isArray(market?.expense_proof_conditions)
       ? market!.expense_proof_conditions!
       : [];
-    if (enabled.length === 0) {
+    if (enabled.length === 0 && !forceRequired) {
       // Market never requires proof; still persist any keys the courier sent.
       return keys;
     }
@@ -1796,7 +1804,7 @@ export class OrderServiceService implements OnModuleInit {
       extraCost,
       totalPrice,
     });
-    const required = enabled.some((c) => matched.has(c));
+    const required = forceRequired || enabled.some((c) => matched.has(c));
     if (!required) {
       return keys;
     }
@@ -3469,6 +3477,8 @@ export class OrderServiceService implements OnModuleInit {
       parent_order_id?: string | null;
       external_id?: string | null;
       source?: Order_source;
+      sell_requires_media?: boolean;
+      cancel_requires_media?: boolean;
       items?: Array<{ product_id: string; quantity?: number }>;
     },
     requester?: { id: string; roles?: string[] },
@@ -3536,6 +3546,8 @@ export class OrderServiceService implements OnModuleInit {
         parent_order_id: dto.parent_order_id ?? null,
         external_id: dto.external_id ?? null,
         source: dto.source ?? Order_source.INTERNAL,
+        sell_requires_media: Boolean(dto.sell_requires_media),
+        cancel_requires_media: Boolean(dto.cancel_requires_media),
         isDeleted: false,
       });
 
@@ -4669,6 +4681,7 @@ export class OrderServiceService implements OnModuleInit {
       extraCost,
       totalPrice,
       proofFileKeys: dto?.proofFileKeys,
+      forceRequired: Boolean(order.sell_requires_media),
     });
     const finalComment = this.generateSaleComment(
       order.comment,
@@ -4992,6 +5005,7 @@ export class OrderServiceService implements OnModuleInit {
       extraCost,
       totalPrice,
       proofFileKeys: dto?.proofFileKeys,
+      forceRequired: Boolean(order.cancel_requires_media),
     });
 
     // Look up cashboxes (remote reads) before opening the transaction.
@@ -5444,6 +5458,7 @@ export class OrderServiceService implements OnModuleInit {
       extraCost,
       totalPrice: price,
       proofFileKeys: dto?.proofFileKeys,
+      forceRequired: Boolean(order.sell_requires_media),
     });
     const finalComment = this.generateSaleComment(
       order.comment,
