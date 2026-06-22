@@ -2,6 +2,7 @@ import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
   ArrayNotEmpty,
   IsArray,
+  IsBoolean,
   IsEnum,
   IsISO8601,
   MinLength,
@@ -29,6 +30,36 @@ const parseFormattedNumber = (value: unknown): number | unknown => {
     return cleaned ? Number(cleaned) : value;
   }
   return value;
+};
+
+const parseStringArray = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (Array.isArray(parsed)) return parsed;
+  } catch {
+    // Plain comma-separated form-data values are still accepted.
+  }
+  return trimmed
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
+const parseJsonArray = (value: unknown): unknown => {
+  if (Array.isArray(value)) return value;
+  if (typeof value !== 'string') return value;
+  const trimmed = value.trim();
+  if (!trimmed) return [];
+  try {
+    const parsed = JSON.parse(trimmed);
+    return Array.isArray(parsed) ? parsed : value;
+  } catch {
+    return value;
+  }
 };
 
 export class OrderItemDto {
@@ -186,6 +217,26 @@ export class CreateOrderRequestDto {
   @IsOptional()
   @IsString()
   address?: string | null;
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      'If true, selling this order requires photo/video proof from the courier.',
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true' || value === '1')
+  @IsBoolean()
+  sell_requires_media?: boolean;
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      'If true, cancelling this order requires photo/video proof from the courier.',
+  })
+  @IsOptional()
+  @Transform(({ value }) => value === true || value === 'true' || value === '1')
+  @IsBoolean()
+  cancel_requires_media?: boolean;
 
   @ApiPropertyOptional({
     enum: OrderSourceDto,
@@ -437,11 +488,13 @@ export class SellOrderRequestDto {
 
   @ApiPropertyOptional({ example: 5000, minimum: 0 })
   @IsOptional()
+  @Transform(({ value }) => parseFormattedNumber(value))
   @IsNumber()
   extraCost?: number;
 
   @ApiPropertyOptional({ example: 20000, minimum: 0 })
   @IsOptional()
+  @Transform(({ value }) => parseFormattedNumber(value))
   @IsNumber()
   paidAmount?: number;
 
@@ -452,6 +505,7 @@ export class SellOrderRequestDto {
     example: ['proof-1700000000000-uuid-video.mp4'],
   })
   @IsOptional()
+  @Transform(({ value }) => parseStringArray(value))
   @IsArray()
   @IsString({ each: true })
   proofFileKeys?: string[];
@@ -480,6 +534,7 @@ export class PartlySoldItemDto {
 
 export class PartlySellOrderRequestDto {
   @ApiProperty({ type: [PartlySoldItemDto] })
+  @Transform(({ value }) => parseJsonArray(value))
   @IsArray()
   @ArrayNotEmpty()
   @ValidateNested({ each: true })
@@ -509,6 +564,7 @@ export class PartlySellOrderRequestDto {
     example: ['proof-1700000000000-uuid-photo.jpg'],
   })
   @IsOptional()
+  @Transform(({ value }) => parseStringArray(value))
   @IsArray()
   @IsString({ each: true })
   proofFileKeys?: string[];
