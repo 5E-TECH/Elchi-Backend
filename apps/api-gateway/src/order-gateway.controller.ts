@@ -1692,7 +1692,8 @@ export class OrderGatewayController {
   }
 
   @Get(':id/tracking')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get order tracking history by ID' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
