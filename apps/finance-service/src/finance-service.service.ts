@@ -852,6 +852,10 @@ export class FinanceServiceService implements OnModuleInit {
         this.assertBigIntId(dto.source_id, 'source_id');
         where.source_id = dto.source_id;
       }
+      if (dto.source_user_id) {
+        this.assertBigIntId(dto.source_user_id, 'source_user_id');
+        where.source_user_id = dto.source_user_id;
+      }
       if (dto.created_by) {
         this.assertBigIntId(dto.created_by, 'created_by');
         where.created_by = dto.created_by;
@@ -2336,11 +2340,17 @@ export class FinanceServiceService implements OnModuleInit {
 
   async allCashboxesTotal(filters?: {
     operationType?: Operation_type;
+    operation_type?: Operation_type;
     sourceType?: Source_type;
+    source_type?: Source_type;
     createdBy?: string;
+    created_by?: string;
     cashboxType?: Cashbox_type;
+    cashbox_type?: Cashbox_type;
     fromDate?: string;
+    from_date?: string;
     toDate?: string;
+    to_date?: string;
     page?: number;
     limit?: number;
   }) {
@@ -2383,29 +2393,36 @@ export class FinanceServiceService implements OnModuleInit {
         qb.skip((page - 1) * limit).take(limit);
       }
 
-      if (filters?.operationType)
+      const operationType = filters?.operationType ?? filters?.operation_type;
+      const sourceType = filters?.sourceType ?? filters?.source_type;
+      const createdBy = filters?.createdBy ?? filters?.created_by;
+      const cashboxType = filters?.cashboxType ?? filters?.cashbox_type;
+      const fromDate = filters?.fromDate ?? filters?.from_date;
+      const toDate = filters?.toDate ?? filters?.to_date;
+
+      if (operationType)
         qb.andWhere('h.operation_type = :operationType', {
-          operationType: filters.operationType,
+          operationType,
         });
-      if (filters?.sourceType)
+      if (sourceType)
         qb.andWhere('h.source_type = :sourceType', {
-          sourceType: filters.sourceType,
+          sourceType,
         });
-      if (filters?.createdBy)
+      if (createdBy)
         qb.andWhere('h.created_by = :createdBy', {
-          createdBy: filters.createdBy,
+          createdBy,
         });
-      if (filters?.cashboxType)
+      if (cashboxType)
         qb.andWhere('cashbox.cashbox_type = :cashboxType', {
-          cashboxType: filters.cashboxType,
+          cashboxType,
         });
-      if (filters?.fromDate)
+      if (fromDate)
         qb.andWhere('h.createdAt >= :fromDate', {
-          fromDate: this.parseDate(filters.fromDate),
+          fromDate: this.parseDate(fromDate),
         });
-      if (filters?.toDate)
+      if (toDate)
         qb.andWhere('h.createdAt <= :toDate', {
-          toDate: this.parseDate(filters.toDate),
+          toDate: this.parseDate(toDate),
         });
 
       const [allCashboxHistories, total] = await qb.getManyAndCount();
