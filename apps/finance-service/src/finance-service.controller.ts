@@ -198,11 +198,17 @@ export class FinanceServiceController {
     @Payload()
     data: {
       operationType?: any;
+      operation_type?: any;
       sourceType?: any;
+      source_type?: any;
       createdBy?: string;
+      created_by?: string;
       cashboxType?: any;
+      cashbox_type?: any;
       fromDate?: string;
+      from_date?: string;
       toDate?: string;
+      to_date?: string;
       page?: number;
       limit?: number;
     },

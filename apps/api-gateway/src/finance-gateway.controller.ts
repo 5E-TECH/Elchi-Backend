@@ -1716,13 +1716,22 @@ export class FinanceGatewayController {
       if (!branchId) {
         throw new ForbiddenException("Managerning branch'i topilmadi");
       }
+      const isBranchToMainHistory =
+        String(query?.source_type ?? '') === String(Source_type.BRANCH_TO_MAIN);
+
       return this.send(
         { cmd: 'finance.history.find_all' },
-        {
-          ...query,
-          user_id: branchId,
-          cashbox_type: Cashbox_type.BRANCH,
-        },
+        isBranchToMainHistory
+          ? {
+              ...query,
+              source_user_id: branchId,
+              operation_type: Operation_type.EXPENSE,
+            }
+          : {
+              ...query,
+              user_id: branchId,
+              cashbox_type: Cashbox_type.BRANCH,
+            },
       );
     }
 
