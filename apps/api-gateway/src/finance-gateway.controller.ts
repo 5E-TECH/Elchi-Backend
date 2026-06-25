@@ -57,6 +57,7 @@ import {
 
 interface JwtUser {
   sub: string;
+  role?: string;
   roles?: string[];
   branch_id?: string | null;
 }
@@ -179,8 +180,21 @@ export class FinanceGatewayController {
     }));
   }
 
+  private getUserRoles(user: JwtUser | undefined) {
+    return Array.from(
+      new Set(
+        [
+          ...(Array.isArray(user?.roles) ? user.roles : []),
+          user?.role,
+        ]
+          .map((item) => String(item ?? '').trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    );
+  }
+
   private hasRole(user: JwtUser | undefined, role: RoleEnum) {
-    return (user?.roles ?? []).some(
+    return this.getUserRoles(user).some(
       (item) => String(item ?? '').toLowerCase() === String(role).toLowerCase(),
     );
   }
@@ -209,7 +223,7 @@ export class FinanceGatewayController {
   private toRequester(user: JwtUser | undefined) {
     return {
       id: String(user?.sub ?? ''),
-      roles: Array.isArray(user?.roles) ? user?.roles : [],
+      roles: this.getUserRoles(user),
       branch_id: user?.branch_id ?? null,
     };
   }
@@ -1131,6 +1145,13 @@ export class FinanceGatewayController {
     @Req() req: { user: JwtUser },
     @Query() query: MainCashboxFilterQueryDto,
   ) {
+    const isMarket = this.hasRole(req?.user, RoleEnum.MARKET);
+    const isManager = this.isManager(req?.user);
+    const cashboxType = isMarket
+      ? Cashbox_type.FOR_MARKET
+      : isManager
+        ? Cashbox_type.BRANCH
+        : Cashbox_type.FOR_COURIER;
     const branchId = this.isManager(req?.user)
       ? this.extractBranchId(req.user) ||
         (await this.resolveBranchIdByUserId(String(req.user.sub), req.user))
@@ -1140,7 +1161,8 @@ export class FinanceGatewayController {
       {
         user_id: req.user.sub,
         branch_id: branchId,
-        roles: req.user.roles ?? [],
+        roles: this.getUserRoles(req.user),
+        cashbox_type: cashboxType,
         ...query,
       },
     );

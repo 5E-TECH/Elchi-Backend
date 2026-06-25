@@ -1473,6 +1473,7 @@ export class FinanceServiceService implements OnModuleInit {
     user_id: string;
     branch_id?: string | null;
     roles?: string[];
+    cashbox_type?: Cashbox_type;
     fromDate?: string;
     toDate?: string;
   }) {
@@ -1483,11 +1484,13 @@ export class FinanceServiceService implements OnModuleInit {
         roles.includes('manager') &&
         !roles.includes('superadmin') &&
         !roles.includes('admin');
-      const cashboxType = roles.includes('market')
-        ? Cashbox_type.FOR_MARKET
-        : isManager
-          ? Cashbox_type.BRANCH
-          : Cashbox_type.FOR_COURIER;
+      const cashboxType =
+        data.cashbox_type ??
+        (roles.includes('market')
+          ? Cashbox_type.FOR_MARKET
+          : isManager
+            ? Cashbox_type.BRANCH
+            : Cashbox_type.FOR_COURIER);
       const targetUserId =
         cashboxType === Cashbox_type.BRANCH
           ? String(data.branch_id ?? '').trim()

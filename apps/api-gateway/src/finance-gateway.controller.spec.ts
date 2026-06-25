@@ -121,6 +121,25 @@ describe('FinanceGatewayController', () => {
     );
   });
 
+  it('requests the market cashbox explicitly for my cashbox', async () => {
+    const { controller, financeClient } = setup();
+    const req = {
+      user: { sub: '3', role: 'market' },
+    } as any;
+    financeClient.send.mockReturnValue(of({ data: { cashboxHistory: [] } }));
+
+    await controller.myCashbox(req, {} as any);
+
+    expect(financeClient.send).toHaveBeenCalledWith(
+      { cmd: 'finance.cashbox.my' },
+      expect.objectContaining({
+        user_id: '3',
+        roles: ['market'],
+        cashbox_type: 'for_market',
+      }),
+    );
+  });
+
   it('scopes courier payment history to the current courier cashbox', async () => {
     const { controller, financeClient } = setup();
     const req = {
