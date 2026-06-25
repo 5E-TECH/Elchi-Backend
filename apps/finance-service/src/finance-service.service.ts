@@ -1429,6 +1429,7 @@ export class FinanceServiceService implements OnModuleInit {
     fromDate?: string;
     toDate?: string;
     cashbox_type?: Cashbox_type;
+    history_source_type?: Source_type;
   }) {
     try {
       this.assertBigIntId(data.id, 'id');
@@ -1449,6 +1450,9 @@ export class FinanceServiceService implements OnModuleInit {
         cashbox_id: cashbox.id,
         isDeleted: false,
       };
+      if (data.history_source_type) {
+        historyWhere.source_type = data.history_source_type;
+      }
       if (start && end) historyWhere.createdAt = Between(start, end);
       else if (start) historyWhere.createdAt = MoreThanOrEqual(start);
       else if (end) historyWhere.createdAt = LessThanOrEqual(end);
@@ -1495,6 +1499,13 @@ export class FinanceServiceService implements OnModuleInit {
         cashboxType === Cashbox_type.BRANCH
           ? String(data.branch_id ?? '').trim()
           : data.user_id;
+      const historySourceType =
+        cashboxType === Cashbox_type.FOR_MARKET
+          ? Source_type.MARKET_PAYMENT
+          : cashboxType === Cashbox_type.BRANCH
+            ? Source_type.BRANCH_TO_MAIN
+            : Source_type.COURIER_PAYMENT;
+
       if (cashboxType === Cashbox_type.BRANCH && !targetUserId) {
         throw new BadRequestException('Manager uchun branch_id majburiy');
       }
@@ -1521,6 +1532,7 @@ export class FinanceServiceService implements OnModuleInit {
       return this.getCashboxByUserId({
         id: targetUserId,
         cashbox_type: cashboxType,
+        history_source_type: historySourceType,
         fromDate: data.fromDate,
         toDate: data.toDate,
       });
