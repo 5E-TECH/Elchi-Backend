@@ -811,6 +811,77 @@ describe('FinanceServiceService manual branch cashbox operations', () => {
   });
 });
 
+describe('FinanceServiceService.paymentsToMarket', () => {
+  it('records HQ expense and market income for the same payout', async () => {
+    const mainCashbox = {
+      id: 'main-1',
+      user_id: '0',
+      cashbox_type: 'main',
+      balance: 100000,
+      balance_cash: 100000,
+      balance_card: 0,
+    };
+    const marketCashbox = {
+      id: 'market-1',
+      user_id: '24',
+      cashbox_type: 'markets',
+      balance: 0,
+      balance_cash: 0,
+      balance_card: 0,
+    };
+    const manager = makeManager({
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce(mainCashbox)
+        .mockResolvedValueOnce(marketCashbox),
+      create: jest.fn((_entity: any, dto: any) => dto),
+      save: jest.fn(async (entity: any) => entity),
+    });
+    const { service } = makeService(manager);
+    jest
+      .spyOn(service as any, 'syncMarketPaymentsSafely')
+      .mockResolvedValue(undefined);
+
+    await service.paymentsToMarket({
+      market_id: '24',
+      amount: 12000,
+      payment_method: 'cash' as any,
+      created_by: '1',
+    });
+
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'main-1',
+        balance: 88000,
+        balance_cash: 88000,
+      }),
+    );
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cashbox_id: 'main-1',
+        source_type: 'market_payment',
+        operation_type: 'expense',
+        amount: 12000,
+      }),
+    );
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'market-1',
+        balance: 12000,
+        balance_cash: 12000,
+      }),
+    );
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cashbox_id: 'market-1',
+        source_type: 'market_payment',
+        operation_type: 'income',
+        amount: 12000,
+      }),
+    );
+  });
+});
+
 describe('FinanceServiceService financial balance ledger', () => {
   beforeEach(() => {
     captureExceptionMock.mockReset();

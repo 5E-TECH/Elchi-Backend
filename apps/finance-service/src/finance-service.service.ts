@@ -2288,13 +2288,13 @@ export class FinanceServiceService implements OnModuleInit {
       this.updateBalancesByMethod(
         marketCashbox,
         Number(data.amount),
-        Operation_type.EXPENSE,
+        Operation_type.INCOME,
         data.payment_method ?? PaymentMethod.CASH,
       );
       await queryRunner.manager.save(marketCashbox);
       await queryRunner.manager.save(
         queryRunner.manager.create(CashboxHistory, {
-          operation_type: Operation_type.EXPENSE,
+          operation_type: Operation_type.INCOME,
           cashbox_id: marketCashbox.id,
           source_type: Source_type.MARKET_PAYMENT,
           amount: Number(data.amount),
