@@ -1680,6 +1680,8 @@ export class FinanceGatewayController {
     RoleEnum.ADMIN,
     RoleEnum.REGISTRATOR,
     RoleEnum.MANAGER,
+    RoleEnum.COURIER,
+    RoleEnum.MARKET,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Find cashbox history list' })
@@ -1706,6 +1708,34 @@ export class FinanceGatewayController {
     @Query() query: FindHistoryQueryDto,
     @Req() req: { user: JwtUser },
   ) {
+    if (
+      this.hasRole(req?.user, RoleEnum.MARKET) &&
+      !this.isPrivileged(req?.user)
+    ) {
+      return this.send(
+        { cmd: 'finance.history.find_all' },
+        {
+          ...query,
+          user_id: String(req.user.sub),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+        },
+      );
+    }
+
+    if (
+      this.hasRole(req?.user, RoleEnum.COURIER) &&
+      !this.isPrivileged(req?.user)
+    ) {
+      return this.send(
+        { cmd: 'finance.history.find_all' },
+        {
+          ...query,
+          user_id: String(req.user.sub),
+          cashbox_type: Cashbox_type.FOR_COURIER,
+        },
+      );
+    }
+
     if (
       this.hasRole(req?.user, RoleEnum.MANAGER) &&
       !this.isPrivileged(req?.user)
@@ -1794,7 +1824,14 @@ export class FinanceGatewayController {
       this.hasRole(req?.user, RoleEnum.COURIER) ||
       this.hasRole(req?.user, RoleEnum.MARKET)
     ) {
-      if (String(cashbox?.user_id ?? '') !== String(req.user.sub)) {
+      const expectedCashboxType = this.hasRole(req?.user, RoleEnum.MARKET)
+        ? Cashbox_type.FOR_MARKET
+        : Cashbox_type.FOR_COURIER;
+
+      if (
+        String(cashbox?.user_id ?? '') !== String(req.user.sub) ||
+        cashbox?.cashbox_type !== expectedCashboxType
+      ) {
         throw new ForbiddenException(
           "Siz faqat o'zingizning kassa tarixingizni ko'ra olasiz",
         );
