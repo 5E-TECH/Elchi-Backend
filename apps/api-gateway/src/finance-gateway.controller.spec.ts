@@ -108,7 +108,7 @@ describe('FinanceGatewayController', () => {
     const req = {
       user: { sub: 'manager-1', roles: ['manager'], branch_id: '16' },
     } as any;
-    financeClient.send.mockReturnValue(of({ data: { items: [] } }));
+    financeClient.send.mockReturnValue(of({ data: { items: [{ id: 'h1' }] } }));
 
     await controller.findHistory(
       {
@@ -131,6 +131,54 @@ describe('FinanceGatewayController', () => {
         page: 1,
         limit: 100,
       }),
+    );
+  });
+
+  it('returns pending manager branch-to-HQ payable when payment history is empty', async () => {
+    const { controller, financeClient } = setup();
+    const req = {
+      user: { sub: 'manager-1', roles: ['manager'], branch_id: '16' },
+    } as any;
+    financeClient.send.mockReturnValue(
+      of({
+        data: {
+          items: [],
+          pagination: { total: 0, page: 1, limit: 100, totalPages: 0 },
+        },
+      }),
+    );
+    jest.spyOn(controller as any, 'buildManagerSettlement').mockResolvedValue({
+      berilishi_kerak: 24830000,
+      cashbox: {
+        id: 'cashbox-16',
+        user_id: '16',
+        cashbox_type: 'branch',
+        balance: 0,
+      },
+    });
+
+    const response = await controller.findHistory(
+      {
+        source_type: 'branch_to_main',
+        page: 1,
+        limit: 100,
+      } as any,
+      req,
+    );
+
+    expect(response.data.items).toEqual([
+      expect.objectContaining({
+        id: 'pending-branch-to-hq-16',
+        is_virtual: true,
+        status: 'pending',
+        source_type: 'branch_to_main',
+        operation_type: 'expense',
+        source_user_id: '16',
+        amount: 24830000,
+      }),
+    ]);
+    expect(response.data.pagination).toEqual(
+      expect.objectContaining({ total: 1, totalPages: 1 }),
     );
   });
 
