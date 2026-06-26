@@ -1771,7 +1771,7 @@ export class FinanceGatewayController {
       const isBranchToMainHistory =
         String(query?.source_type ?? '') === String(Source_type.BRANCH_TO_MAIN);
 
-      return this.send(
+      const historyResponse = await this.send(
         { cmd: 'finance.history.find_all' },
         isBranchToMainHistory
           ? {
@@ -1787,6 +1787,51 @@ export class FinanceGatewayController {
               cashbox_type: Cashbox_type.BRANCH,
             },
       );
+
+      const items = historyResponse?.data?.items;
+      if (
+        isBranchToMainHistory &&
+        Array.isArray(items) &&
+        items.length === 0
+      ) {
+        const settlement = await this.buildManagerSettlement(req.user, {
+          fromDate: query?.from_date,
+          toDate: query?.to_date,
+        });
+        const pendingAmount = Number(settlement?.berilishi_kerak ?? 0);
+        if (pendingAmount > 0) {
+          historyResponse.data.items = [
+            {
+              id: `pending-branch-to-hq-${branchId}`,
+              is_virtual: true,
+              status: 'pending',
+              operation_type: Operation_type.EXPENSE,
+              cashbox_id: settlement?.cashbox?.id ?? null,
+              source_type: Source_type.BRANCH_TO_MAIN,
+              source_id: null,
+              source_user_id: branchId,
+              amount: pendingAmount,
+              balance_after: settlement?.cashbox?.balance ?? 0,
+              balance_cash_after: settlement?.cashbox?.balance_cash ?? null,
+              balance_card_after: settlement?.cashbox?.balance_card ?? null,
+              payment_method: null,
+              comment: 'HQ ga berilishi kerak',
+              created_by: req.user.sub,
+              payment_date: null,
+              cashbox: settlement?.cashbox ?? null,
+            },
+          ];
+          historyResponse.data.pagination = {
+            ...(historyResponse.data.pagination ?? {}),
+            total: 1,
+            page: Number(query?.page ?? 1),
+            limit: Number(query?.limit ?? 20),
+            totalPages: 1,
+          };
+        }
+      }
+
+      return historyResponse;
     }
 
     const hasCashboxSelector = Boolean(
