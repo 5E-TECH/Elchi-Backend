@@ -1776,7 +1776,9 @@ export class FinanceGatewayController {
         isBranchToMainHistory
           ? {
               ...query,
-              source_user_id: branchId,
+              user_id: branchId,
+              cashbox_type: Cashbox_type.BRANCH,
+              source_type: Source_type.BRANCH_TO_MAIN,
               operation_type: Operation_type.EXPENSE,
             }
           : {
