@@ -371,9 +371,17 @@ export class FinanceServiceService implements OnModuleInit {
     }
 
     const ids: string[] = [];
+    const userBackedSources = new Set<Source_type>([
+      Source_type.COURIER_PAYMENT,
+      Source_type.MARKET_PAYMENT,
+    ]);
+
     for (const history of histories) {
       if (history?.created_by) {
         ids.push(String(history.created_by));
+      }
+      if (history?.source_user_id && userBackedSources.has(history.source_type)) {
+        ids.push(String(history.source_user_id));
       }
       if (history?.cashbox?.user_id) {
         ids.push(String(history.cashbox.user_id));
@@ -387,11 +395,18 @@ export class FinanceServiceService implements OnModuleInit {
         history.created_by != null
           ? (usersMap.get(String(history.created_by)) ?? null)
           : null;
+      const sourceUser =
+        history.source_user_id != null && userBackedSources.has(history.source_type)
+          ? (usersMap.get(String(history.source_user_id)) ?? null)
+          : null;
 
       if (!history.cashbox) {
         return {
           ...history,
           createdByUser,
+          created_by_user: createdByUser,
+          sourceUser,
+          source_user: sourceUser,
         };
       }
 
@@ -400,6 +415,9 @@ export class FinanceServiceService implements OnModuleInit {
       return {
         ...history,
         createdByUser,
+        created_by_user: createdByUser,
+        sourceUser,
+        source_user: sourceUser,
         cashbox: {
           ...history.cashbox,
           user: cashboxUser,
