@@ -103,6 +103,37 @@ describe('FinanceGatewayController', () => {
     );
   });
 
+  it('shows manager branch-to-HQ history from the branch cashbox', async () => {
+    const { controller, financeClient } = setup();
+    const req = {
+      user: { sub: 'manager-1', roles: ['manager'], branch_id: '16' },
+    } as any;
+    financeClient.send.mockReturnValue(of({ data: { items: [] } }));
+
+    await controller.findHistory(
+      {
+        user_id: 'manager-1',
+        cashbox_type: 'main',
+        source_type: 'branch_to_main',
+        page: 1,
+        limit: 100,
+      } as any,
+      req,
+    );
+
+    expect(financeClient.send).toHaveBeenCalledWith(
+      { cmd: 'finance.history.find_all' },
+      expect.objectContaining({
+        user_id: '16',
+        cashbox_type: 'branch',
+        source_type: 'branch_to_main',
+        operation_type: 'expense',
+        page: 1,
+        limit: 100,
+      }),
+    );
+  });
+
   it('scopes market payment history to the current market cashbox', async () => {
     const { controller, financeClient } = setup();
     const req = {
