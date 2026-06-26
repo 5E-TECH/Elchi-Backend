@@ -512,24 +512,103 @@ export class ApiGatewayController {
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
   @ApiOkResponse({ description: 'Manager list' })
-  getManagers(
+  async getManagers(
     @Query('search') search?: string,
     @Query('status') status?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Req() req?: { user: JwtUser },
   ) {
-    return this.identityClient.send(
-      { cmd: 'identity.user.find_all' },
-      {
-        query: {
-          role: RoleEnum.MANAGER,
-          search,
-          status,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
+    const response = await firstValueFrom(
+      this.identityClient.send(
+        { cmd: 'identity.user.find_all' },
+        {
+          query: {
+            role: RoleEnum.MANAGER,
+            search,
+            status,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
         },
-      },
+      ),
     );
+
+    const items = Array.isArray(response?.data?.items)
+      ? response.data.items
+      : [];
+    if (!items.length) {
+      return response;
+    }
+
+    const requester = req?.user ? this.toRequester(req) : undefined;
+    const branchRows = await firstValueFrom(
+      this.branchClient.send(
+        { cmd: 'branch.find_all' },
+        {
+          requester,
+          query: {
+            status: 'active',
+            page: 1,
+            limit: 10000,
+          },
+        },
+      ),
+    ).catch(() => null);
+    const branches = Array.isArray(branchRows?.data?.items)
+      ? branchRows.data.items
+      : [];
+
+    const branchByManagerId = new Map<string, any>();
+    for (const branch of branches) {
+      const managerIds = [
+        branch?.manager_id,
+        branch?.payment?.user_id,
+        branch?.payment?.manager_id,
+      ]
+        .map((id) => String(id ?? '').trim())
+        .filter(Boolean);
+      for (const managerId of managerIds) {
+        if (!branchByManagerId.has(managerId)) {
+          branchByManagerId.set(managerId, branch);
+        }
+      }
+    }
+
+    response.data.items = await Promise.all(
+      items.map(async (manager: any) => {
+        const managerId = String(manager?.id ?? '').trim();
+        let branch = branchByManagerId.get(managerId) ?? null;
+
+        if (!branch && managerId) {
+          const assignment = await firstValueFrom(
+            this.branchClient.send(
+              { cmd: 'branch.user.find_by_user' },
+              { user_id: managerId, requester },
+            ),
+          ).catch(() => null);
+          branch = assignment?.data?.branch ?? null;
+        }
+
+        const branchId = String(branch?.id ?? '').trim();
+        const cashbox = branchId
+          ? await this.findUserCashbox(branchId, Cashbox_type.BRANCH)
+          : null;
+        const payableToHq = Math.max(Number(branch?.olinishi_kerak ?? 0), 0);
+
+        return {
+          ...manager,
+          branch,
+          branch_id: branchId || (manager?.branch_id ?? null),
+          cashbox,
+          payable_to_hq: payableToHq,
+          berilishi_kerak: payableToHq,
+          olinishi_kerak: payableToHq,
+        };
+      }),
+    );
+
+    return response;
   }
 
   @Get('couriers/region/:id')
