@@ -344,6 +344,52 @@ export class OrderGatewayController {
     return denied();
   }
 
+  private async assertCanViewOrderTracking(
+    reqUser: JwtUser | undefined,
+    order: Record<string, any> | null | undefined,
+  ): Promise<void> {
+    if (!order || typeof order !== 'object') {
+      return;
+    }
+
+    const roles = this.normalizeRoles(reqUser?.roles);
+    if (roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN)) {
+      return;
+    }
+
+    const sub = String(reqUser?.sub ?? '').trim();
+    const field = (key: string): string =>
+      String(order?.[key] ?? order?.[this.toCamelKey(key)] ?? '').trim();
+    const holderType = field('holder_type').toUpperCase();
+    const denied = (): never => {
+      throw new ForbiddenException("Bu buyurtma trackingini ko'rishga ruxsat yo'q");
+    };
+
+    if (roles.includes(RoleEnum.COURIER)) {
+      return sub &&
+        holderType === 'COURIER' &&
+        field('holder_courier_id') === sub
+        ? undefined
+        : denied();
+    }
+
+    if (
+      roles.includes(RoleEnum.BRANCH) ||
+      roles.includes(RoleEnum.MANAGER) ||
+      roles.includes(RoleEnum.REGISTRATOR)
+    ) {
+      const assignment = await this.resolveBranchAssignment(reqUser as JwtUser);
+      const branchId = String(assignment?.branch_id ?? '').trim();
+      return branchId &&
+        holderType === 'BRANCH' &&
+        field('holder_branch_id') === branchId
+        ? undefined
+        : denied();
+    }
+
+    return denied();
+  }
+
   private toCamelKey(snake: string): string {
     return snake.replace(/_([a-z])/g, (_, c: string) => c.toUpperCase());
   }
@@ -1693,7 +1739,14 @@ export class OrderGatewayController {
 
   @Get(':id/tracking')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.COURIER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get order tracking history by ID' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
@@ -1714,7 +1767,7 @@ export class OrderGatewayController {
       { cmd: 'order.find_by_id' },
       { id },
     );
-    await this.assertCanViewOrder(req?.user, (order as any)?.data);
+    await this.assertCanViewOrderTracking(req?.user, (order as any)?.data);
     return firstValueFrom(
       this.orderClient
         .send({ cmd: 'order.tracking' }, { id, page, limit })

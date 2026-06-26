@@ -21,6 +21,9 @@ function createService() {
     find: jest.fn(),
     findAndCount: jest.fn(),
   };
+  const orderCustodyEventRepo = {
+    find: jest.fn().mockResolvedValue([]),
+  };
 
   const qb = {
     insert: jest.fn().mockReturnThis(),
@@ -56,7 +59,7 @@ function createService() {
     orderRepo as any, // orderRepo
     orderItemRepo as any, // orderItemRepo
     trackingRepo as any, // orderTrackingRepo
-    {} as any, // orderCustodyEventRepo
+    orderCustodyEventRepo as any, // orderCustodyEventRepo
     {} as any, // orderSettlementRepo
     {} as any, // transferBatchRepo
     transferBatchItemRepo as any, // transferBatchItemRepo
@@ -84,6 +87,7 @@ function createService() {
     service,
     orderRepo,
     trackingRepo,
+    orderCustodyEventRepo,
     transferBatchItemRepo,
     queryRunner,
   };
@@ -96,43 +100,35 @@ describe('Order tracking lifecycle', () => {
       id: '100',
       status: Order_status.SOLD,
     } as any);
-    trackingRepo.findAndCount.mockResolvedValue([
-      [
-        {
-          id: 'event-2',
-          order_id: '100',
-          from_status: Order_status.WAITING,
-          to_status: Order_status.SOLD,
-          changed_by: '55',
-          changed_by_role: 'courier',
-          note: 'sold',
-          created_at: new Date('2026-06-15T08:00:00.000Z'),
-        },
-      ],
-      21,
+    jest
+      .spyOn<any, any>(service as any, 'resolveTrackingActors')
+      .mockResolvedValue(new Map());
+    trackingRepo.find.mockResolvedValue([
+      {
+        id: 'event-2',
+        order_id: '100',
+        from_status: Order_status.WAITING,
+        to_status: Order_status.SOLD,
+        changed_by: '55',
+        changed_by_role: 'courier',
+        note: 'sold',
+        created_at: new Date('2026-06-15T08:00:00.000Z'),
+      },
     ]);
 
     const result = await service.getTrackingByOrderId('100', 2, 10);
 
-    expect(trackingRepo.findAndCount).toHaveBeenCalledWith(
+    expect(trackingRepo.find).toHaveBeenCalledWith(
       expect.objectContaining({
         where: { order_id: '100' },
         order: { created_at: 'DESC' },
-        skip: 10,
-        take: 10,
       }),
     );
     expect(result).toMatchObject({
-      total: 21,
+      total: 1,
       page: 2,
       limit: 10,
-      data: [
-        {
-          id: 'event-2',
-          from_status: Order_status.WAITING,
-          to_status: Order_status.SOLD,
-        },
-      ],
+      data: [],
     });
   });
 
