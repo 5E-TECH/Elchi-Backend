@@ -371,9 +371,17 @@ export class FinanceServiceService implements OnModuleInit {
     }
 
     const ids: string[] = [];
+    const userBackedSources = new Set<Source_type>([
+      Source_type.COURIER_PAYMENT,
+      Source_type.MARKET_PAYMENT,
+    ]);
+
     for (const history of histories) {
       if (history?.created_by) {
         ids.push(String(history.created_by));
+      }
+      if (history?.source_user_id && userBackedSources.has(history.source_type)) {
+        ids.push(String(history.source_user_id));
       }
       if (history?.cashbox?.user_id) {
         ids.push(String(history.cashbox.user_id));
@@ -387,11 +395,18 @@ export class FinanceServiceService implements OnModuleInit {
         history.created_by != null
           ? (usersMap.get(String(history.created_by)) ?? null)
           : null;
+      const sourceUser =
+        history.source_user_id != null && userBackedSources.has(history.source_type)
+          ? (usersMap.get(String(history.source_user_id)) ?? null)
+          : null;
 
       if (!history.cashbox) {
         return {
           ...history,
           createdByUser,
+          created_by_user: createdByUser,
+          sourceUser,
+          source_user: sourceUser,
         };
       }
 
@@ -400,6 +415,9 @@ export class FinanceServiceService implements OnModuleInit {
       return {
         ...history,
         createdByUser,
+        created_by_user: createdByUser,
+        sourceUser,
+        source_user: sourceUser,
         cashbox: {
           ...history.cashbox,
           user: cashboxUser,
@@ -851,6 +869,10 @@ export class FinanceServiceService implements OnModuleInit {
       if (dto.source_id) {
         this.assertBigIntId(dto.source_id, 'source_id');
         where.source_id = dto.source_id;
+      }
+      if (dto.source_user_id) {
+        this.assertBigIntId(dto.source_user_id, 'source_user_id');
+        where.source_user_id = dto.source_user_id;
       }
       if (dto.created_by) {
         this.assertBigIntId(dto.created_by, 'created_by');
@@ -1425,6 +1447,7 @@ export class FinanceServiceService implements OnModuleInit {
     fromDate?: string;
     toDate?: string;
     cashbox_type?: Cashbox_type;
+    history_source_type?: Source_type;
   }) {
     try {
       this.assertBigIntId(data.id, 'id');
@@ -1445,6 +1468,9 @@ export class FinanceServiceService implements OnModuleInit {
         cashbox_id: cashbox.id,
         isDeleted: false,
       };
+      if (data.history_source_type) {
+        historyWhere.source_type = data.history_source_type;
+      }
       if (start && end) historyWhere.createdAt = Between(start, end);
       else if (start) historyWhere.createdAt = MoreThanOrEqual(start);
       else if (end) historyWhere.createdAt = LessThanOrEqual(end);
@@ -1469,6 +1495,7 @@ export class FinanceServiceService implements OnModuleInit {
     user_id: string;
     branch_id?: string | null;
     roles?: string[];
+    cashbox_type?: Cashbox_type;
     fromDate?: string;
     toDate?: string;
   }) {
@@ -1479,15 +1506,24 @@ export class FinanceServiceService implements OnModuleInit {
         roles.includes('manager') &&
         !roles.includes('superadmin') &&
         !roles.includes('admin');
-      const cashboxType = roles.includes('market')
-        ? Cashbox_type.FOR_MARKET
-        : isManager
-          ? Cashbox_type.BRANCH
-          : Cashbox_type.FOR_COURIER;
+      const cashboxType =
+        data.cashbox_type ??
+        (roles.includes('market')
+          ? Cashbox_type.FOR_MARKET
+          : isManager
+            ? Cashbox_type.BRANCH
+            : Cashbox_type.FOR_COURIER);
       const targetUserId =
         cashboxType === Cashbox_type.BRANCH
           ? String(data.branch_id ?? '').trim()
           : data.user_id;
+      const historySourceType =
+        cashboxType === Cashbox_type.FOR_MARKET
+          ? Source_type.MARKET_PAYMENT
+          : cashboxType === Cashbox_type.BRANCH
+            ? Source_type.BRANCH_TO_MAIN
+            : Source_type.COURIER_PAYMENT;
+
       if (cashboxType === Cashbox_type.BRANCH && !targetUserId) {
         throw new BadRequestException('Manager uchun branch_id majburiy');
       }
@@ -1514,6 +1550,7 @@ export class FinanceServiceService implements OnModuleInit {
       return this.getCashboxByUserId({
         id: targetUserId,
         cashbox_type: cashboxType,
+        history_source_type: historySourceType,
         fromDate: data.fromDate,
         toDate: data.toDate,
       });
@@ -2269,13 +2306,13 @@ export class FinanceServiceService implements OnModuleInit {
       this.updateBalancesByMethod(
         marketCashbox,
         Number(data.amount),
-        Operation_type.EXPENSE,
+        Operation_type.INCOME,
         data.payment_method ?? PaymentMethod.CASH,
       );
       await queryRunner.manager.save(marketCashbox);
       await queryRunner.manager.save(
         queryRunner.manager.create(CashboxHistory, {
-          operation_type: Operation_type.EXPENSE,
+          operation_type: Operation_type.INCOME,
           cashbox_id: marketCashbox.id,
           source_type: Source_type.MARKET_PAYMENT,
           amount: Number(data.amount),
@@ -2336,11 +2373,17 @@ export class FinanceServiceService implements OnModuleInit {
 
   async allCashboxesTotal(filters?: {
     operationType?: Operation_type;
+    operation_type?: Operation_type;
     sourceType?: Source_type;
+    source_type?: Source_type;
     createdBy?: string;
+    created_by?: string;
     cashboxType?: Cashbox_type;
+    cashbox_type?: Cashbox_type;
     fromDate?: string;
+    from_date?: string;
     toDate?: string;
+    to_date?: string;
     page?: number;
     limit?: number;
   }) {
@@ -2383,29 +2426,36 @@ export class FinanceServiceService implements OnModuleInit {
         qb.skip((page - 1) * limit).take(limit);
       }
 
-      if (filters?.operationType)
+      const operationType = filters?.operationType ?? filters?.operation_type;
+      const sourceType = filters?.sourceType ?? filters?.source_type;
+      const createdBy = filters?.createdBy ?? filters?.created_by;
+      const cashboxType = filters?.cashboxType ?? filters?.cashbox_type;
+      const fromDate = filters?.fromDate ?? filters?.from_date;
+      const toDate = filters?.toDate ?? filters?.to_date;
+
+      if (operationType)
         qb.andWhere('h.operation_type = :operationType', {
-          operationType: filters.operationType,
+          operationType,
         });
-      if (filters?.sourceType)
+      if (sourceType)
         qb.andWhere('h.source_type = :sourceType', {
-          sourceType: filters.sourceType,
+          sourceType,
         });
-      if (filters?.createdBy)
+      if (createdBy)
         qb.andWhere('h.created_by = :createdBy', {
-          createdBy: filters.createdBy,
+          createdBy,
         });
-      if (filters?.cashboxType)
+      if (cashboxType)
         qb.andWhere('cashbox.cashbox_type = :cashboxType', {
-          cashboxType: filters.cashboxType,
+          cashboxType,
         });
-      if (filters?.fromDate)
+      if (fromDate)
         qb.andWhere('h.createdAt >= :fromDate', {
-          fromDate: this.parseDate(filters.fromDate),
+          fromDate: this.parseDate(fromDate),
         });
-      if (filters?.toDate)
+      if (toDate)
         qb.andWhere('h.createdAt <= :toDate', {
-          toDate: this.parseDate(filters.toDate),
+          toDate: this.parseDate(toDate),
         });
 
       const [allCashboxHistories, total] = await qb.getManyAndCount();

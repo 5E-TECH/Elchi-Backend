@@ -15,6 +15,7 @@ jest.mock('@app/common', () => ({
   Roles: {
     SUPERADMIN: 'superadmin',
     ADMIN: 'admin',
+    REGISTRATOR: 'registrator',
     COURIER: 'courier',
     MARKET: 'market',
     MANAGER: 'manager',
@@ -102,6 +103,140 @@ describe('FinanceGatewayController', () => {
     );
   });
 
+  it('shows manager branch-to-HQ history from the branch cashbox', async () => {
+    const { controller, financeClient } = setup();
+    const req = {
+      user: { sub: 'manager-1', roles: ['manager'], branch_id: '16' },
+    } as any;
+    financeClient.send.mockReturnValue(of({ data: { items: [{ id: 'h1' }] } }));
+
+    await controller.findHistory(
+      {
+        user_id: 'manager-1',
+        cashbox_type: 'main',
+        source_type: 'branch_to_main',
+        page: 1,
+        limit: 100,
+      } as any,
+      req,
+    );
+
+    expect(financeClient.send).toHaveBeenCalledWith(
+      { cmd: 'finance.history.find_all' },
+      expect.objectContaining({
+        user_id: '16',
+        cashbox_type: 'branch',
+        source_type: 'branch_to_main',
+        operation_type: 'expense',
+        page: 1,
+        limit: 100,
+      }),
+    );
+  });
+
+  it('returns pending manager branch-to-HQ payable when payment history is empty', async () => {
+    const { controller, financeClient } = setup();
+    const req = {
+      user: { sub: 'manager-1', roles: ['manager'], branch_id: '16' },
+    } as any;
+    financeClient.send.mockReturnValue(
+      of({
+        data: {
+          items: [],
+          pagination: { total: 0, page: 1, limit: 100, totalPages: 0 },
+        },
+      }),
+    );
+    jest.spyOn(controller as any, 'buildManagerSettlement').mockResolvedValue({
+      berilishi_kerak: 24830000,
+      cashbox: {
+        id: 'cashbox-16',
+        user_id: '16',
+        cashbox_type: 'branch',
+        balance: 0,
+      },
+    });
+
+    const response = await controller.findHistory(
+      {
+        source_type: 'branch_to_main',
+        page: 1,
+        limit: 100,
+      } as any,
+      req,
+    );
+
+    expect(response.data.items).toEqual([
+      expect.objectContaining({
+        id: 'pending-branch-to-hq-16',
+        is_virtual: true,
+        status: 'pending',
+        source_type: 'branch_to_main',
+        operation_type: 'expense',
+        source_user_id: '16',
+        amount: 24830000,
+      }),
+    ]);
+    expect(response.data.pagination).toEqual(
+      expect.objectContaining({ total: 1, totalPages: 1 }),
+    );
+  });
+
+  it('scopes market payment history to the current market cashbox', async () => {
+    const { controller, financeClient } = setup();
+    const req = {
+      user: { sub: '16', roles: ['market'] },
+    } as any;
+    financeClient.send.mockReturnValue(of({ data: { items: [] } }));
+
+    await controller.findHistory({ cashbox_type: 'main' } as any, req);
+
+    expect(financeClient.send).toHaveBeenCalledWith(
+      { cmd: 'finance.history.find_all' },
+      expect.objectContaining({
+        user_id: '16',
+        cashbox_type: 'for_market',
+      }),
+    );
+  });
+
+  it('requests the market cashbox explicitly for my cashbox', async () => {
+    const { controller, financeClient } = setup();
+    const req = {
+      user: { sub: '3', role: 'market' },
+    } as any;
+    financeClient.send.mockReturnValue(of({ data: { cashboxHistory: [] } }));
+
+    await controller.myCashbox(req, {} as any);
+
+    expect(financeClient.send).toHaveBeenCalledWith(
+      { cmd: 'finance.cashbox.my' },
+      expect.objectContaining({
+        user_id: '3',
+        roles: ['market'],
+        cashbox_type: 'for_market',
+      }),
+    );
+  });
+
+  it('scopes courier payment history to the current courier cashbox', async () => {
+    const { controller, financeClient } = setup();
+    const req = {
+      user: { sub: '8', roles: ['courier'] },
+    } as any;
+    financeClient.send.mockReturnValue(of({ data: { items: [] } }));
+
+    await controller.findHistory({ cashbox_type: 'main' } as any, req);
+
+    expect(financeClient.send).toHaveBeenCalledWith(
+      { cmd: 'finance.history.find_all' },
+      expect.objectContaining({
+        user_id: '8',
+        cashbox_type: 'for_courier',
+      }),
+    );
+  });
+
   it('resolves manager user ID to their branch cashbox without 403', async () => {
     const { controller, financeClient, branchClient } = setup();
     const req = {
@@ -166,6 +301,25 @@ describe('FinanceGatewayController', () => {
 
     await expect(controller.findHistoryById('2', req)).rejects.toThrow(
       "Siz faqat o'z branch'ingiz tarixini ko'ra olasiz",
+    );
+  });
+
+  it('forbids market users from opening non-market cashbox history details', async () => {
+    const { controller, financeClient } = setup();
+    const req = {
+      user: { sub: '16', roles: ['market'] },
+    } as any;
+    financeClient.send.mockReturnValue(
+      of({
+        data: {
+          id: 'history-branch',
+          cashbox: { user_id: '16', cashbox_type: 'branch' },
+        },
+      }),
+    );
+
+    await expect(controller.findHistoryById('1', req)).rejects.toThrow(
+      "Siz faqat o'zingizning kassa tarixingizni ko'ra olasiz",
     );
   });
 });

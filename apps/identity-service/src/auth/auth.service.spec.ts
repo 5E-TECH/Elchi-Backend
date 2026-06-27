@@ -110,7 +110,7 @@ describe('AuthService.refresh', () => {
   const VALID_TOKEN = 'plaintext-refresh-token-value';
   const VALID_HASH = sha256(VALID_TOKEN);
 
-  it('rotates the token and stores SHA-256 hash (not plaintext) on success', async () => {
+  it('renews only the access token and preserves refresh expiry on success', async () => {
     const user: MockUser = {
       id: 'u1',
       username: 'alice',
@@ -120,20 +120,21 @@ describe('AuthService.refresh', () => {
     };
     const { service, usersRepo, jwtService } = buildService(user);
 
-    // The new refresh token issued by signAsync becomes the next stored hash.
-    jwtService.signAsync = jest
-      .fn()
-      .mockResolvedValueOnce('new-access-token')
-      .mockResolvedValueOnce('new-refresh-token');
+    jwtService.signAsync = jest.fn().mockResolvedValue('new-access-token');
+    const refreshExpirySeconds = Math.floor(Date.now() / 1000) + 3600;
+    jwtService.decode = jest.fn().mockImplementation((token: string) => ({
+      exp: token === VALID_TOKEN ? refreshExpirySeconds : refreshExpirySeconds - 1800,
+    }));
 
     const res = await service.refresh({ refreshToken: VALID_TOKEN } as any);
 
     expect(res.statusCode).toBe(200);
-    // saveRefreshToken stores the hash of the NEW token, never plaintext.
-    expect(usersRepo.update).toHaveBeenCalledTimes(1);
-    const updateCall = usersRepo.update.mock.calls[0];
-    expect(updateCall[1].refresh_token).toBe(sha256('new-refresh-token'));
-    expect(updateCall[1].refresh_token).not.toBe('new-refresh-token');
+    expect(res.accessToken).toBe('new-access-token');
+    expect(res).not.toHaveProperty('refreshToken');
+    expect(res.refreshTokenExpiresAt).toBe(refreshExpirySeconds * 1000);
+    expect(res.refreshTokenWarnAt).toBe(refreshExpirySeconds * 1000 - 15 * 60 * 1000);
+    expect(usersRepo.update).not.toHaveBeenCalled();
+    expect(jwtService.signAsync).toHaveBeenCalledTimes(1);
   });
 
   it('rejects when no refresh token is stored (already logged out)', async () => {
@@ -152,13 +153,12 @@ describe('AuthService.refresh', () => {
   });
 
   it('detects reuse: stored hash differs → invalidates session AND rejects', async () => {
-    // Stolen token replay: legitimate user has already rotated to a new
-    // hash, attacker presents the old plaintext.
+    // A validly signed but stale token does not match the active DB hash.
     const user: MockUser = {
       id: 'u1',
       username: 'alice',
       status: 'active',
-      refresh_token: sha256('different-token'), // a rotated newer one
+      refresh_token: sha256('different-token'),
       isDeleted: false,
     };
     const { service, usersRepo } = buildService(user);
@@ -167,8 +167,7 @@ describe('AuthService.refresh', () => {
       service.refresh({ refreshToken: VALID_TOKEN } as any),
     ).rejects.toBeInstanceOf(RpcException);
 
-    // CRITICAL: session must be wiped (refresh_token = null) so the
-    // attacker's previously-rotated token is also invalidated.
+    // CRITICAL: the active session is wiped when a stale token is presented.
     expect(usersRepo.save).toHaveBeenCalledTimes(1);
     const savedUser = usersRepo.save.mock.calls[0][0];
     expect(savedUser.refresh_token).toBeNull();

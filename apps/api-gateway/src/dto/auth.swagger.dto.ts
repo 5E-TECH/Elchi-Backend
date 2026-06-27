@@ -46,6 +46,24 @@ export class AuthUserDto {
 export class MinimalAuthResponseDto {
   @ApiProperty({ example: 'eyJhbGciOiJIUzI1NiIs...' })
   accessToken!: string;
+
+  @ApiPropertyOptional({ example: 1792497600000, nullable: true })
+  accessTokenExpiresAt?: number | null;
+
+  @ApiPropertyOptional({ example: 1793102400000, nullable: true })
+  refreshTokenExpiresAt?: number | null;
+
+  @ApiPropertyOptional({ example: 1793101500000, nullable: true })
+  refreshTokenWarnAt?: number | null;
+
+  @ApiPropertyOptional({ example: 1792497600000, nullable: true })
+  access_token_expires_at?: number | null;
+
+  @ApiPropertyOptional({ example: 1793102400000, nullable: true })
+  refresh_token_expires_at?: number | null;
+
+  @ApiPropertyOptional({ example: 1793101500000, nullable: true })
+  refresh_token_warn_at?: number | null;
 }
 
 export class ValidateResponseDto {

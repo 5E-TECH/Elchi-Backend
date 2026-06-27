@@ -158,11 +158,8 @@ export class AuthService {
     }
 
     if (user.refresh_token !== presentedHash) {
-      // Reuse detected: signature is valid but this token is no longer the
-      // active one for the user. Either an attacker is replaying a stolen
-      // token after a legitimate rotation, or the legitimate user is using
-      // a stale token. In both cases the safe response is to invalidate the
-      // entire session — the real user can log in again.
+      // The signature is valid but this is not the active token stored for
+      // the user. Invalidate the session instead of accepting a stale token.
       this.logger.warn(
         `Refresh token reuse detected for user ${user.id} — invalidating session`,
       );
@@ -180,16 +177,23 @@ export class AuthService {
       throw new RpcException(errorRes('Invalid refresh token', 401));
     }
 
-    const tokens = await this.issueTokens(user);
-    await this.saveRefreshToken(user.id, tokens.refreshToken);
+    const accessToken = await this.issueAccessToken(user);
+    const refreshTokenExpiresAt = this.extractExpMs(dto.refreshToken);
+    const refreshTokenWarnAt =
+      refreshTokenExpiresAt !== null
+        ? refreshTokenExpiresAt - 15 * 60 * 1000
+        : null;
+
     return {
       statusCode: 200,
       message: 'success',
       user: this.sanitize(user),
-      ...tokens,
-      access_token_expires_at: tokens.accessTokenExpiresAt,
-      refresh_token_expires_at: tokens.refreshTokenExpiresAt,
-      refresh_token_warn_at: tokens.refreshTokenWarnAt,
+      ...accessToken,
+      refreshTokenExpiresAt,
+      refreshTokenWarnAt,
+      access_token_expires_at: accessToken.accessTokenExpiresAt,
+      refresh_token_expires_at: refreshTokenExpiresAt,
+      refresh_token_warn_at: refreshTokenWarnAt,
     };
   }
 
@@ -233,23 +237,15 @@ export class AuthService {
   }
 
   private async issueTokens(user: User) {
-    const branchId = await this.resolveBranchId(user.id);
+    const accessTokenResult = await this.issueAccessToken(user);
+    const payload = await this.createTokenPayload(user);
 
-    const payload: Record<string, unknown> = {
-      sub: user.id,
-      username: user.username,
-      roles: [user.role],
-      branch_id: branchId,
-    };
-
-    const accessToken = await this.jwtService.signAsync(payload);
     const refreshToken = await this.jwtService.signAsync(payload, {
       secret: this.configService.get<string>('REFRESH_TOKEN_KEY'),
       expiresIn: (this.configService.get<string>('REFRESH_TOKEN_TIME') ??
         '7d') as StringValue,
     });
 
-    const accessTokenExpiresAt = this.extractExpMs(accessToken);
     const refreshTokenExpiresAt = this.extractExpMs(refreshToken);
     const refreshTokenWarnAt =
       refreshTokenExpiresAt !== null
@@ -257,11 +253,31 @@ export class AuthService {
         : null;
 
     return {
-      accessToken,
+      ...accessTokenResult,
       refreshToken,
-      accessTokenExpiresAt,
       refreshTokenExpiresAt,
       refreshTokenWarnAt,
+    };
+  }
+
+  private async issueAccessToken(user: User) {
+    const payload = await this.createTokenPayload(user);
+    const accessToken = await this.jwtService.signAsync(payload);
+
+    return {
+      accessToken,
+      accessTokenExpiresAt: this.extractExpMs(accessToken),
+    };
+  }
+
+  private async createTokenPayload(user: User) {
+    const branchId = await this.resolveBranchId(user.id);
+
+    return {
+      sub: user.id,
+      username: user.username,
+      roles: [user.role],
+      branch_id: branchId,
     };
   }
 

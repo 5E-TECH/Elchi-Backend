@@ -240,6 +240,7 @@ export class OrderServiceController {
         extraCost?: number;
         paidAmount?: number;
         proofFileKeys?: string[];
+        proofFileKeysVerified?: boolean;
       };
       requester: { id: string; roles?: string[] };
       request_id?: string;
@@ -261,7 +262,12 @@ export class OrderServiceController {
     @Payload()
     data: {
       id: string;
-      dto: { comment?: string; extraCost?: number; proofFileKeys?: string[] };
+      dto: {
+        comment?: string;
+        extraCost?: number;
+        proofFileKeys?: string[];
+        proofFileKeysVerified?: boolean;
+      };
       requester: { id: string; roles?: string[] };
       request_id?: string;
     },
@@ -312,6 +318,7 @@ export class OrderServiceController {
         extraCost?: number;
         comment?: string;
         proofFileKeys?: string[];
+        proofFileKeysVerified?: boolean;
       };
       requester: { id: string; roles?: string[] };
       request_id?: string;
@@ -795,7 +802,12 @@ export class OrderServiceController {
   @MessagePattern({ cmd: 'order.analytics.overview' })
   analyticsOverview(
     @Payload()
-    data: { startDate?: string; endDate?: string; branch_id?: string },
+    data: {
+      startDate?: string;
+      endDate?: string;
+      branch_id?: string;
+      all?: boolean;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -803,6 +815,7 @@ export class OrderServiceController {
         data.startDate,
         data.endDate,
         data.branch_id,
+        data.all,
       ),
     );
   }
@@ -1036,6 +1049,7 @@ export class OrderServiceController {
       driver_phone?: string;
       requester_id?: string;
       requester_name?: string;
+      requester_roles?: string[];
     },
     @Ctx() context: RmqContext,
   ) {
@@ -1063,6 +1077,7 @@ export class OrderServiceController {
       batch_id?: string;
       requester_id?: string;
       requester_name?: string;
+      requester_roles?: string[];
     },
     @Ctx() context: RmqContext,
   ) {
@@ -1079,6 +1094,7 @@ export class OrderServiceController {
       order_ids?: string[];
       requester_id?: string;
       requester_name?: string;
+      requester_roles?: string[];
     },
     @Ctx() context: RmqContext,
   ) {
@@ -1095,6 +1111,7 @@ export class OrderServiceController {
       reason?: string;
       requester_id?: string;
       requester_name?: string;
+      requester_roles?: string[];
     },
     @Ctx() context: RmqContext,
   ) {

@@ -104,6 +104,51 @@ describe('AnalyticsServiceService', () => {
     expect(res.data).not.toHaveProperty('newUsersCount');
   });
 
+  it('getDashboard uses the lightweight overview-only path for all time', async () => {
+    rmqSendMock.mockResolvedValue({
+      data: { acceptedCount: 100, soldAndPaid: 70, totalRevenue: 5000 },
+    });
+
+    const res = await service.getDashboard(
+      { id: 'admin', roles: ['superadmin'] },
+      { all: true },
+    );
+
+    expect(res.data.orders).toEqual({
+      acceptedCount: 100,
+      soldAndPaid: 70,
+      totalRevenue: 5000,
+    });
+    expect(rmqSendMock).toHaveBeenCalledTimes(1);
+    expect(rmqSendMock).toHaveBeenCalledWith(
+      expect.anything(),
+      { cmd: 'order.analytics.overview' },
+      { all: true },
+    );
+  });
+
+  it('removes all financial totals from registrator all-time dashboard', async () => {
+    rmqSendMock.mockResolvedValue({
+      data: {
+        acceptedCount: 100,
+        soldAndPaid: 70,
+        profit: 1200,
+        totalRevenue: 5000,
+        total_revenue: 5000,
+      },
+    });
+
+    const res = await service.getDashboard(
+      { id: 'registrator-1', roles: ['registrator'], branch_id: '16' },
+      { all: true },
+    );
+
+    expect(res.data.orders).toEqual({
+      acceptedCount: 100,
+      soldAndPaid: 70,
+    });
+  });
+
   it.each([
     ['today', '2026-06-10T19:00:00.000Z'],
     ['week', '2026-06-07T19:00:00.000Z'],
@@ -235,6 +280,21 @@ describe('AnalyticsServiceService', () => {
     expect(res.data.averageOrderValue).toBe(200);
     expect(res.data.cancellationRate).toBe(20);
     expect(res.data.courierEfficiency).toBe(5);
+  });
+
+  it('getKpiStats groups long all-time ranges yearly', async () => {
+    rmqSendMock.mockResolvedValue({ data: [] });
+
+    await service.getKpiStats({ id: 'a', roles: ['admin'] }, {
+      startDate: '1970-01-01',
+      endDate: '2026-06-20',
+    } as any);
+
+    expect(rmqSendMock).toHaveBeenCalledWith(
+      expect.anything(),
+      { cmd: 'order.analytics.revenue' },
+      expect.objectContaining({ period: 'yearly' }),
+    );
   });
 
   it('getOrderReport returns status distribution object', async () => {

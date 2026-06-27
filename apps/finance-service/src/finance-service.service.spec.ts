@@ -13,6 +13,7 @@ jest.mock('@app/common', () => ({
   },
   Operation_type: { INCOME: 'income', EXPENSE: 'expense' },
   Source_type: {
+    BRANCH_TO_MAIN: 'branch_to_main',
     SELL: 'sell',
     COURIER_PAYMENT: 'courier_payment',
     MARKET_PAYMENT: 'market_payment',
@@ -106,6 +107,7 @@ function makeService(manager: MockManager) {
 
   const cashboxRepo: any = { findOne: jest.fn(), save: jest.fn() };
   const historyRepo: any = {
+    find: jest.fn(),
     findAndCount: jest.fn(),
     createQueryBuilder: jest.fn(),
   };
@@ -212,6 +214,117 @@ describe('FinanceServiceService.findCashboxByUser', () => {
     );
     expect(response.data.history).toEqual([marketPayment]);
     expect(response.data.pagination.total).toBe(1);
+  });
+});
+
+describe('FinanceServiceService.myCashbox', () => {
+  it('shows only HQ-market payment history for market users', async () => {
+    const manager = makeManager();
+    const { service, cashboxRepo, historyRepo } = makeService(manager);
+    const cashbox = {
+      id: '16',
+      user_id: '24',
+      cashbox_type: 'markets',
+      balance: 4950000,
+    };
+    const hqMarketPayment = {
+      id: '90',
+      cashbox_id: '16',
+      source_type: 'market_payment',
+      amount: 1950000,
+    };
+
+    cashboxRepo.findOne.mockResolvedValue(cashbox);
+    historyRepo.find.mockResolvedValue([hqMarketPayment]);
+
+    const response = await service.myCashbox({
+      user_id: '24',
+      roles: ['market'],
+    });
+
+    expect(historyRepo.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          cashbox_id: '16',
+          isDeleted: false,
+          source_type: 'market_payment',
+        },
+      }),
+    );
+    expect(response.data.cashboxHistory).toEqual([hqMarketPayment]);
+  });
+
+  it('shows only HQ-branch payment history for manager users', async () => {
+    const manager = makeManager();
+    const { service, cashboxRepo, historyRepo } = makeService(manager);
+    const cashbox = {
+      id: '20',
+      user_id: '7',
+      cashbox_type: 'branch',
+      balance: 1000000,
+    };
+    const branchPayment = {
+      id: '91',
+      cashbox_id: '20',
+      source_type: 'branch_to_main',
+      amount: 1000000,
+    };
+
+    cashboxRepo.findOne.mockResolvedValue(cashbox);
+    historyRepo.find.mockResolvedValue([branchPayment]);
+
+    const response = await service.myCashbox({
+      user_id: '55',
+      branch_id: '7',
+      roles: ['manager'],
+    });
+
+    expect(historyRepo.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          cashbox_id: '20',
+          isDeleted: false,
+          source_type: 'branch_to_main',
+        },
+      }),
+    );
+    expect(response.data.cashboxHistory).toEqual([branchPayment]);
+  });
+
+  it('shows only manager-courier payment history for courier users', async () => {
+    const manager = makeManager();
+    const { service, cashboxRepo, historyRepo } = makeService(manager);
+    const cashbox = {
+      id: '21',
+      user_id: '8',
+      cashbox_type: 'for_courier',
+      balance: 500000,
+    };
+    const courierPayment = {
+      id: '92',
+      cashbox_id: '21',
+      source_type: 'courier_payment',
+      amount: 500000,
+    };
+
+    cashboxRepo.findOne.mockResolvedValue(cashbox);
+    historyRepo.find.mockResolvedValue([courierPayment]);
+
+    const response = await service.myCashbox({
+      user_id: '8',
+      roles: ['courier'],
+    });
+
+    expect(historyRepo.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          cashbox_id: '21',
+          isDeleted: false,
+          source_type: 'courier_payment',
+        },
+      }),
+    );
+    expect(response.data.cashboxHistory).toEqual([courierPayment]);
   });
 });
 
@@ -693,6 +806,77 @@ describe('FinanceServiceService manual branch cashbox operations', () => {
         cashbox_type: 'branch',
         source_type: 'manual_expense',
         operation_type: 'expense',
+      }),
+    );
+  });
+});
+
+describe('FinanceServiceService.paymentsToMarket', () => {
+  it('records HQ expense and market income for the same payout', async () => {
+    const mainCashbox = {
+      id: 'main-1',
+      user_id: '0',
+      cashbox_type: 'main',
+      balance: 100000,
+      balance_cash: 100000,
+      balance_card: 0,
+    };
+    const marketCashbox = {
+      id: 'market-1',
+      user_id: '24',
+      cashbox_type: 'markets',
+      balance: 0,
+      balance_cash: 0,
+      balance_card: 0,
+    };
+    const manager = makeManager({
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce(mainCashbox)
+        .mockResolvedValueOnce(marketCashbox),
+      create: jest.fn((_entity: any, dto: any) => dto),
+      save: jest.fn(async (entity: any) => entity),
+    });
+    const { service } = makeService(manager);
+    jest
+      .spyOn(service as any, 'syncMarketPaymentsSafely')
+      .mockResolvedValue(undefined);
+
+    await service.paymentsToMarket({
+      market_id: '24',
+      amount: 12000,
+      payment_method: 'cash' as any,
+      created_by: '1',
+    });
+
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'main-1',
+        balance: 88000,
+        balance_cash: 88000,
+      }),
+    );
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cashbox_id: 'main-1',
+        source_type: 'market_payment',
+        operation_type: 'expense',
+        amount: 12000,
+      }),
+    );
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: 'market-1',
+        balance: 12000,
+        balance_cash: 12000,
+      }),
+    );
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cashbox_id: 'market-1',
+        source_type: 'market_payment',
+        operation_type: 'income',
+        amount: 12000,
       }),
     );
   });

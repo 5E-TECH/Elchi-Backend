@@ -139,7 +139,34 @@ export class AuthGatewayController {
       throw new UnauthorizedException('Access token not found');
     }
 
-    return { accessToken };
+    const accessTokenExpiresAt =
+      typeof payload.accessTokenExpiresAt === 'number'
+        ? payload.accessTokenExpiresAt
+        : typeof payload.access_token_expires_at === 'number'
+          ? payload.access_token_expires_at
+          : null;
+    const refreshTokenExpiresAt =
+      typeof payload.refreshTokenExpiresAt === 'number'
+        ? payload.refreshTokenExpiresAt
+        : typeof payload.refresh_token_expires_at === 'number'
+          ? payload.refresh_token_expires_at
+          : null;
+    const refreshTokenWarnAt =
+      typeof payload.refreshTokenWarnAt === 'number'
+        ? payload.refreshTokenWarnAt
+        : typeof payload.refresh_token_warn_at === 'number'
+          ? payload.refresh_token_warn_at
+          : null;
+
+    return {
+      accessToken,
+      accessTokenExpiresAt,
+      refreshTokenExpiresAt,
+      refreshTokenWarnAt,
+      access_token_expires_at: accessTokenExpiresAt,
+      refresh_token_expires_at: refreshTokenExpiresAt,
+      refresh_token_warn_at: refreshTokenWarnAt,
+    };
   }
 
   private toRequester(req: { user: JwtUser }) {

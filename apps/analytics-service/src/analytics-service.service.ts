@@ -211,6 +211,20 @@ export class AnalyticsServiceService {
     );
   }
 
+  private sanitizeDashboardOverview(overview: any, hideFinancials: boolean) {
+    if (!hideFinancials || !overview || typeof overview !== 'object') {
+      return overview;
+    }
+
+    const {
+      profit: _profit,
+      totalRevenue: _totalRevenue,
+      total_revenue: _totalRevenueSnake,
+      ...safeOverview
+    } = overview;
+    return safeOverview;
+  }
+
   private normalizeRevenuePeriod(period?: string): RevenuePeriod {
     const normalized = String(period ?? 'daily').toLowerCase();
     if (
@@ -394,10 +408,19 @@ export class AnalyticsServiceService {
 
   async getDashboard(
     requester: RequesterContext | undefined,
-    filter: { startDate?: string; endDate?: string; period?: string },
+    filter: {
+      startDate?: string;
+      endDate?: string;
+      period?: string;
+      all?: boolean;
+    },
   ) {
-    const normalized = this.normalizeDashboardDateRange(filter);
+    const isAllTime = filter.all === true;
+    const normalized = isAllTime
+      ? { all: true }
+      : this.normalizeDashboardDateRange(filter);
     const roles = this.roleSet(requester);
+    const isRegistrator = roles.has(Roles.REGISTRATOR);
     const isBranchRole =
       roles.has(Roles.BRANCH) ||
       roles.has(Roles.MANAGER) ||
@@ -479,6 +502,30 @@ export class AnalyticsServiceService {
       );
     }
 
+    if (isAllTime) {
+      const orders = await rmqSend(
+        this.orderClient,
+        { cmd: 'order.analytics.overview' },
+        scopedRange,
+      ).catch(() => null);
+
+      return successRes(
+        {
+          orders: this.sanitizeDashboardOverview(
+            this.unwrap(orders),
+            isRegistrator,
+          ),
+          markets: [],
+          couriers: [],
+          topMarkets: [],
+          topCouriers: [],
+          branchDashboard: null,
+        },
+        200,
+        'Dashboard infos (all time)',
+      );
+    }
+
     const [orders, markets, couriers, topMarkets, topCouriers] =
       await Promise.all([
         rmqSend(
@@ -512,14 +559,10 @@ export class AnalyticsServiceService {
       : null;
 
     const ordersOverview = this.unwrap<any>(orders as any);
-    const isRegistrator = roles.has(Roles.REGISTRATOR);
-    const safeOrdersOverview =
-      isRegistrator && ordersOverview && typeof ordersOverview === 'object'
-        ? (() => {
-            const { profit: _profit, ...rest } = ordersOverview;
-            return rest;
-          })()
-        : ordersOverview;
+    const safeOrdersOverview = this.sanitizeDashboardOverview(
+      ordersOverview,
+      isRegistrator,
+    );
 
     return successRes(
       {
@@ -583,6 +626,15 @@ export class AnalyticsServiceService {
   ) {
     this.assertFinancialAccess(requester);
     const normalized = this.normalizeDateRangeAny(filter);
+    const rangeMs =
+      new Date(normalized.endDate).getTime() -
+      new Date(normalized.startDate).getTime();
+    const revenuePeriod: RevenuePeriod =
+      rangeMs > 5 * 365 * 24 * 60 * 60 * 1000
+        ? 'yearly'
+        : rangeMs > 90 * 24 * 60 * 60 * 1000
+          ? 'monthly'
+          : 'daily';
     const [overview, revenue, courierStats, topMarkets] = await Promise.all([
       rmqSend(
         this.orderClient,
@@ -592,7 +644,7 @@ export class AnalyticsServiceService {
       rmqSend(
         this.orderClient,
         { cmd: 'order.analytics.revenue' },
-        { ...normalized, period: 'daily' },
+        { ...normalized, period: revenuePeriod },
       ).catch(() => null),
       rmqSend(
         this.orderClient,

@@ -76,16 +76,59 @@ jobs:
             cd ${{ secrets.SERVER_APP_PATH }}
             git config --global --add safe.directory ${{ secrets.SERVER_APP_PATH }} || true
             cp -f .env.production /tmp/elchi-env-backup 2>/dev/null || true
+
+            OLD_SHA="$(git rev-parse HEAD 2>/dev/null || true)"
             git fetch origin main
+            NEW_SHA="$(git rev-parse origin/main)"
+
+            APP_SERVICES="api-gateway identity-service order-service catalog-service logistics-service finance-service notification-service integration-service analytics-service branch-service investor-service file-service c2c-service search-service"
+            DEPLOY_SERVICES=""
+            DEPLOY_ALL=false
+            RUN_MIGRATIONS=false
+
+            if [ -z "$OLD_SHA" ]; then
+              DEPLOY_ALL=true
+            elif [ "$OLD_SHA" != "$NEW_SHA" ]; then
+              git diff --name-only "$OLD_SHA" "$NEW_SHA" > /tmp/elchi-changed-files
+              cat /tmp/elchi-changed-files
+
+              if grep -Eq '^(libs/|package\.json$|package-lock\.json$|nest-cli\.json$|tsconfig.*\.json$|docker-compose\.prod\.yml$|\.github/workflows/deploy\.yml$)' /tmp/elchi-changed-files; then
+                DEPLOY_ALL=true
+              fi
+              if grep -Eq '^(migrations/|scripts/init-schemas\.sql$)' /tmp/elchi-changed-files; then
+                RUN_MIGRATIONS=true
+              fi
+              for service in $APP_SERVICES; do
+                if grep -q "^apps/$service/" /tmp/elchi-changed-files; then
+                  DEPLOY_SERVICES="$DEPLOY_SERVICES $service"
+                fi
+              done
+            fi
+
+            if [ "$DEPLOY_ALL" = true ]; then
+              DEPLOY_SERVICES="$APP_SERVICES"
+              RUN_MIGRATIONS=true
+            fi
+
             git checkout -f main
             git reset --hard origin/main
             test -f .env.production || cp -f /tmp/elchi-env-backup .env.production
-            docker compose -f docker-compose.prod.yml pull || true
-            docker compose -f docker-compose.prod.yml down --remove-orphans || true
-            if ! docker compose -f docker-compose.prod.yml up -d --build --remove-orphans; then
-              echo "Docker build failed; pruning BuildKit cache and retrying once..."
-              docker builder prune -af || true
-              docker buildx prune -af || true
-              docker compose -f docker-compose.prod.yml up -d --build --remove-orphans
+
+            docker compose -f docker-compose.prod.yml pull rabbitmq postgres minio cloudflared || true
+            docker compose -f docker-compose.prod.yml up -d --remove-orphans rabbitmq postgres minio
+
+            if [ "$RUN_MIGRATIONS" = true ]; then
+              docker compose -f docker-compose.prod.yml up --build --force-recreate --abort-on-container-exit migration-runner
+              docker compose -f docker-compose.prod.yml rm -f migration-runner || true
             fi
+
+            if [ -n "$DEPLOY_SERVICES" ]; then
+              echo "Deploying services:$DEPLOY_SERVICES"
+              docker compose -f docker-compose.prod.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES
+            else
+              echo "No application service changes detected; keeping running containers as-is."
+              true
+            fi
+
+            docker compose -f docker-compose.prod.yml up -d --no-deps cloudflared || true
             docker compose -f docker-compose.prod.yml ps

@@ -8,18 +8,22 @@ import {
   Get,
   HttpCode,
   Inject,
+  Optional,
   Param,
   Patch,
   Post,
   Query,
   Req,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import { IsArray, IsNotEmpty, IsString } from 'class-validator';
 import { ClientProxy } from '@nestjs/microservices';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiConsumes,
   ApiOperation,
   ApiParam,
   ApiQuery,
@@ -27,6 +31,8 @@ import {
 } from '@nestjs/swagger';
 import { randomUUID } from 'node:crypto';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import {
   AssignOrdersToCourierRequestDto,
@@ -60,6 +66,14 @@ type BranchAssignment = {
   role?: string | null;
 };
 
+type UploadedProofFile = {
+  originalname: string;
+  mimetype: string;
+  buffer: Buffer;
+};
+
+const PROOF_OPERATION_TIMEOUT_MS = 60000;
+
 class ReceiveExternalOrdersDto {
   @IsString()
   @IsNotEmpty()
@@ -77,6 +91,7 @@ export class OrderGatewayController {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
+    @Optional() @Inject('FILE') private readonly fileClient?: ClientProxy,
   ) {}
 
   private normalizeRoles(roles?: string[]) {
@@ -176,6 +191,79 @@ export class OrderGatewayController {
     });
   }
 
+  private normalizeProofFileKeys(value: unknown): string[] {
+    if (Array.isArray(value)) {
+      return value
+        .flatMap((item) => this.normalizeProofFileKeys(item))
+        .filter(Boolean);
+    }
+    if (typeof value !== 'string') return [];
+
+    const trimmed = value.trim();
+    if (!trimmed) return [];
+    try {
+      const parsed = JSON.parse(trimmed);
+      if (Array.isArray(parsed)) return this.normalizeProofFileKeys(parsed);
+    } catch {
+      // Keep plain form-data values such as "key1,key2" supported.
+    }
+    return trimmed
+      .split(',')
+      .map((key) => key.trim())
+      .filter(Boolean);
+  }
+
+  private async uploadProofFile(file?: UploadedProofFile): Promise<string[]> {
+    if (!file) return [];
+    if (!this.fileClient) {
+      throw new BadRequestException('File service is not configured');
+    }
+
+    const response = await firstValueFrom(
+      this.fileClient
+        .send(
+          { cmd: 'file.upload' },
+          {
+            file_name: file.originalname,
+            mime_type: file.mimetype,
+            file_base64: file.buffer.toString('base64'),
+            folder: 'proof',
+          },
+        )
+        .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('File service response timeout');
+      }
+      throw error;
+    });
+
+    const key = String(
+      (response as { data?: { key?: unknown }; key?: unknown })?.data?.key ??
+        (response as { key?: unknown })?.key ??
+        '',
+    ).trim();
+    if (!key) {
+      throw new BadRequestException('Proof file upload did not return a key');
+    }
+    return [key];
+  }
+
+  private async withUploadedProof<
+    T extends { proofFileKeys?: string[]; proofFileKeysVerified?: boolean },
+  >(
+    dto: T,
+    file?: UploadedProofFile,
+  ): Promise<T> {
+    const existingKeys = this.normalizeProofFileKeys(dto?.proofFileKeys);
+    const uploadedKeys = await this.uploadProofFile(file);
+    return {
+      ...dto,
+      proofFileKeys: Array.from(new Set([...existingKeys, ...uploadedKeys])),
+      proofFileKeysVerified: uploadedKeys.length > 0 && existingKeys.length === 0,
+    };
+  }
+
   private async sendBranchWithTimeout(
     pattern: { cmd: string },
     payload: object,
@@ -253,6 +341,52 @@ export class OrderGatewayController {
         : denied();
     }
     // investor / unknown roles: no per-order access.
+    return denied();
+  }
+
+  private async assertCanViewOrderTracking(
+    reqUser: JwtUser | undefined,
+    order: Record<string, any> | null | undefined,
+  ): Promise<void> {
+    if (!order || typeof order !== 'object') {
+      return;
+    }
+
+    const roles = this.normalizeRoles(reqUser?.roles);
+    if (roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN)) {
+      return;
+    }
+
+    const sub = String(reqUser?.sub ?? '').trim();
+    const field = (key: string): string =>
+      String(order?.[key] ?? order?.[this.toCamelKey(key)] ?? '').trim();
+    const holderType = field('holder_type').toUpperCase();
+    const denied = (): never => {
+      throw new ForbiddenException("Bu buyurtma trackingini ko'rishga ruxsat yo'q");
+    };
+
+    if (roles.includes(RoleEnum.COURIER)) {
+      return sub &&
+        holderType === 'COURIER' &&
+        field('holder_courier_id') === sub
+        ? undefined
+        : denied();
+    }
+
+    if (
+      roles.includes(RoleEnum.BRANCH) ||
+      roles.includes(RoleEnum.MANAGER) ||
+      roles.includes(RoleEnum.REGISTRATOR)
+    ) {
+      const assignment = await this.resolveBranchAssignment(reqUser as JwtUser);
+      const branchId = String(assignment?.branch_id ?? '').trim();
+      return branchId &&
+        holderType === 'BRANCH' &&
+        field('holder_branch_id') === branchId
+        ? undefined
+        : denied();
+    }
+
     return denied();
   }
 
@@ -1604,7 +1738,15 @@ export class OrderGatewayController {
   }
 
   @Get(':id/tracking')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.COURIER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get order tracking history by ID' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
@@ -1625,7 +1767,7 @@ export class OrderGatewayController {
       { cmd: 'order.find_by_id' },
       { id },
     );
-    await this.assertCanViewOrder(req?.user, (order as any)?.data);
+    await this.assertCanViewOrderTracking(req?.user, (order as any)?.data);
     return firstValueFrom(
       this.orderClient
         .send({ cmd: 'order.tracking' }, { id, page, limit })
@@ -1644,19 +1786,28 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Sell order (courier)' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
+  @ApiConsumes('multipart/form-data', 'application/json')
   @ApiBody({ type: SellOrderRequestDto })
-  sellOrder(
+  @UseInterceptors(
+    FileInterceptor('proof', {
+      storage: memoryStorage(),
+      limits: { fileSize: 50 * 1024 * 1024 },
+    }),
+  )
+  async sellOrder(
     @Param('id') id: string,
     @Body() dto: SellOrderRequestDto,
+    @UploadedFile() proof: UploadedProofFile | undefined,
     @Req() req: { user: JwtUser },
   ) {
+    const dtoWithProof = await this.withUploadedProof(dto, proof);
     return firstValueFrom(
       this.orderClient
         .send(
           { cmd: 'order.sell' },
           {
             id,
-            dto,
+            dto: dtoWithProof,
             requester: {
               id: req.user.sub,
               roles: this.normalizeRoles(req.user.roles),
@@ -1665,7 +1816,7 @@ export class OrderGatewayController {
             request_id: randomUUID(),
           },
         )
-        .pipe(timeout(8000)),
+        .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException('Order service response timeout');
@@ -1680,19 +1831,28 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Cancel order (courier)' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
+  @ApiConsumes('multipart/form-data', 'application/json')
   @ApiBody({ type: SellOrderRequestDto })
-  cancelOrder(
+  @UseInterceptors(
+    FileInterceptor('proof', {
+      storage: memoryStorage(),
+      limits: { fileSize: 50 * 1024 * 1024 },
+    }),
+  )
+  async cancelOrder(
     @Param('id') id: string,
     @Body() dto: SellOrderRequestDto,
+    @UploadedFile() proof: UploadedProofFile | undefined,
     @Req() req: { user: JwtUser },
   ) {
+    const dtoWithProof = await this.withUploadedProof(dto, proof);
     return firstValueFrom(
       this.orderClient
         .send(
           { cmd: 'order.cancel' },
           {
             id,
-            dto,
+            dto: dtoWithProof,
             requester: {
               id: req.user.sub,
               roles: this.normalizeRoles(req.user.roles),
@@ -1701,7 +1861,7 @@ export class OrderGatewayController {
             request_id: randomUUID(),
           },
         )
-        .pipe(timeout(8000)),
+        .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException('Order service response timeout');
@@ -1883,19 +2043,28 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Partly sell order (courier)' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
+  @ApiConsumes('multipart/form-data', 'application/json')
   @ApiBody({ type: PartlySellOrderRequestDto })
-  partlySellOrder(
+  @UseInterceptors(
+    FileInterceptor('proof', {
+      storage: memoryStorage(),
+      limits: { fileSize: 50 * 1024 * 1024 },
+    }),
+  )
+  async partlySellOrder(
     @Param('id') id: string,
     @Body() dto: PartlySellOrderRequestDto,
+    @UploadedFile() proof: UploadedProofFile | undefined,
     @Req() req: { user: JwtUser },
   ) {
+    const dtoWithProof = await this.withUploadedProof(dto, proof);
     return firstValueFrom(
       this.orderClient
         .send(
           { cmd: 'order.partly_sell' },
           {
             id,
-            dto,
+            dto: dtoWithProof,
             requester: {
               id: req.user.sub,
               roles: this.normalizeRoles(req.user.roles),
@@ -1904,7 +2073,7 @@ export class OrderGatewayController {
             request_id: randomUUID(),
           },
         )
-        .pipe(timeout(8000)),
+        .pipe(timeout(PROOF_OPERATION_TIMEOUT_MS)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException('Order service response timeout');

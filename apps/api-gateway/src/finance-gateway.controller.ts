@@ -57,6 +57,7 @@ import {
 
 interface JwtUser {
   sub: string;
+  role?: string;
   roles?: string[];
   branch_id?: string | null;
 }
@@ -179,8 +180,21 @@ export class FinanceGatewayController {
     }));
   }
 
+  private getUserRoles(user: JwtUser | undefined) {
+    return Array.from(
+      new Set(
+        [
+          ...(Array.isArray(user?.roles) ? user.roles : []),
+          user?.role,
+        ]
+          .map((item) => String(item ?? '').trim().toLowerCase())
+          .filter(Boolean),
+      ),
+    );
+  }
+
   private hasRole(user: JwtUser | undefined, role: RoleEnum) {
-    return (user?.roles ?? []).some(
+    return this.getUserRoles(user).some(
       (item) => String(item ?? '').toLowerCase() === String(role).toLowerCase(),
     );
   }
@@ -209,7 +223,7 @@ export class FinanceGatewayController {
   private toRequester(user: JwtUser | undefined) {
     return {
       id: String(user?.sub ?? ''),
-      roles: Array.isArray(user?.roles) ? user?.roles : [],
+      roles: this.getUserRoles(user),
       branch_id: user?.branch_id ?? null,
     };
   }
@@ -1131,6 +1145,13 @@ export class FinanceGatewayController {
     @Req() req: { user: JwtUser },
     @Query() query: MainCashboxFilterQueryDto,
   ) {
+    const isMarket = this.hasRole(req?.user, RoleEnum.MARKET);
+    const isManager = this.isManager(req?.user);
+    const cashboxType = isMarket
+      ? Cashbox_type.FOR_MARKET
+      : isManager
+        ? Cashbox_type.BRANCH
+        : Cashbox_type.FOR_COURIER;
     const branchId = this.isManager(req?.user)
       ? this.extractBranchId(req.user) ||
         (await this.resolveBranchIdByUserId(String(req.user.sub), req.user))
@@ -1140,7 +1161,8 @@ export class FinanceGatewayController {
       {
         user_id: req.user.sub,
         branch_id: branchId,
-        roles: req.user.roles ?? [],
+        roles: this.getUserRoles(req.user),
+        cashbox_type: cashboxType,
         ...query,
       },
     );
@@ -1680,6 +1702,8 @@ export class FinanceGatewayController {
     RoleEnum.ADMIN,
     RoleEnum.REGISTRATOR,
     RoleEnum.MANAGER,
+    RoleEnum.COURIER,
+    RoleEnum.MARKET,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Find cashbox history list' })
@@ -1707,6 +1731,34 @@ export class FinanceGatewayController {
     @Req() req: { user: JwtUser },
   ) {
     if (
+      this.hasRole(req?.user, RoleEnum.MARKET) &&
+      !this.isPrivileged(req?.user)
+    ) {
+      return this.send(
+        { cmd: 'finance.history.find_all' },
+        {
+          ...query,
+          user_id: String(req.user.sub),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+        },
+      );
+    }
+
+    if (
+      this.hasRole(req?.user, RoleEnum.COURIER) &&
+      !this.isPrivileged(req?.user)
+    ) {
+      return this.send(
+        { cmd: 'finance.history.find_all' },
+        {
+          ...query,
+          user_id: String(req.user.sub),
+          cashbox_type: Cashbox_type.FOR_COURIER,
+        },
+      );
+    }
+
+    if (
       this.hasRole(req?.user, RoleEnum.MANAGER) &&
       !this.isPrivileged(req?.user)
     ) {
@@ -1716,14 +1768,70 @@ export class FinanceGatewayController {
       if (!branchId) {
         throw new ForbiddenException("Managerning branch'i topilmadi");
       }
-      return this.send(
+      const isBranchToMainHistory =
+        String(query?.source_type ?? '') === String(Source_type.BRANCH_TO_MAIN);
+
+      const historyResponse = await this.send(
         { cmd: 'finance.history.find_all' },
-        {
-          ...query,
-          user_id: branchId,
-          cashbox_type: Cashbox_type.BRANCH,
-        },
+        isBranchToMainHistory
+          ? {
+              ...query,
+              user_id: branchId,
+              cashbox_type: Cashbox_type.BRANCH,
+              source_type: Source_type.BRANCH_TO_MAIN,
+              operation_type: Operation_type.EXPENSE,
+            }
+          : {
+              ...query,
+              user_id: branchId,
+              cashbox_type: Cashbox_type.BRANCH,
+            },
       );
+
+      const items = historyResponse?.data?.items;
+      if (
+        isBranchToMainHistory &&
+        Array.isArray(items) &&
+        items.length === 0
+      ) {
+        const settlement = await this.buildManagerSettlement(req.user, {
+          fromDate: query?.from_date,
+          toDate: query?.to_date,
+        });
+        const pendingAmount = Number(settlement?.berilishi_kerak ?? 0);
+        if (pendingAmount > 0) {
+          historyResponse.data.items = [
+            {
+              id: `pending-branch-to-hq-${branchId}`,
+              is_virtual: true,
+              status: 'pending',
+              operation_type: Operation_type.EXPENSE,
+              cashbox_id: settlement?.cashbox?.id ?? null,
+              source_type: Source_type.BRANCH_TO_MAIN,
+              source_id: null,
+              source_user_id: branchId,
+              amount: pendingAmount,
+              balance_after: settlement?.cashbox?.balance ?? 0,
+              balance_cash_after: settlement?.cashbox?.balance_cash ?? null,
+              balance_card_after: settlement?.cashbox?.balance_card ?? null,
+              payment_method: null,
+              comment: 'HQ ga berilishi kerak',
+              created_by: req.user.sub,
+              payment_date: null,
+              cashbox: settlement?.cashbox ?? null,
+            },
+          ];
+          historyResponse.data.pagination = {
+            ...(historyResponse.data.pagination ?? {}),
+            total: 1,
+            page: Number(query?.page ?? 1),
+            limit: Number(query?.limit ?? 20),
+            totalPages: 1,
+          };
+        }
+      }
+
+      return historyResponse;
     }
 
     const hasCashboxSelector = Boolean(
@@ -1785,7 +1893,14 @@ export class FinanceGatewayController {
       this.hasRole(req?.user, RoleEnum.COURIER) ||
       this.hasRole(req?.user, RoleEnum.MARKET)
     ) {
-      if (String(cashbox?.user_id ?? '') !== String(req.user.sub)) {
+      const expectedCashboxType = this.hasRole(req?.user, RoleEnum.MARKET)
+        ? Cashbox_type.FOR_MARKET
+        : Cashbox_type.FOR_COURIER;
+
+      if (
+        String(cashbox?.user_id ?? '') !== String(req.user.sub) ||
+        cashbox?.cashbox_type !== expectedCashboxType
+      ) {
         throw new ForbiddenException(
           "Siz faqat o'zingizning kassa tarixingizni ko'ra olasiz",
         );
