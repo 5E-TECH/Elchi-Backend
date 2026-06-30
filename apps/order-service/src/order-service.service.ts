@@ -9153,19 +9153,96 @@ export class OrderServiceService implements OnModuleInit {
       priorOrders.map((order) => [String(order.id), order.status]),
     );
 
-    if (
-      batch.direction === BranchTransferDirection.FORWARD &&
-      toMarkOrderIds.length
-    ) {
+    const refreshedItems = await this.transferBatchItemRepo.find({
+      where: { batch_id: batchId, isDeleted: false },
+    });
+    const allSent =
+      refreshedItems.length > 0 &&
+      refreshedItems.every((item) => Boolean(item.sent_at));
+
+    let sentBatch = batch;
+    if (!allSent) {
+      const sentTotalPrice = toMark.reduce(
+        (sum, item) => sum + Number(item.snapshot_price ?? 0),
+        0,
+      );
+      const sentQrToken = await this.generateTransferQrToken(
+        this.transferBatchRepo,
+        batch.direction,
+      );
+      sentBatch = await this.transferBatchRepo.save(
+        this.transferBatchRepo.create({
+          qr_code_token: sentQrToken,
+          request_key: `split_send_${batchId}_${Date.now()}_${randomBytes(4).toString('hex')}`,
+          source_branch_id: batch.source_branch_id,
+          destination_branch_id: batch.destination_branch_id,
+          direction: batch.direction,
+          target_region_id: batch.target_region_id,
+          status: BranchTransferBatchStatus.SENT,
+          order_count: toMark.length,
+          total_price: sentTotalPrice,
+          vehicle_plate: vehiclePlate,
+          driver_name: driverName,
+          driver_phone: driverPhone,
+          sent_at: now,
+          received_at: null,
+          cancelled_at: null,
+        }),
+      );
+
+      await this.transferBatchItemRepo
+        .createQueryBuilder()
+        .update(BranchTransferBatchItem)
+        .set({ batch_id: String(sentBatch.id) })
+        .where('batch_id = :batchId', { batchId })
+        .andWhere('order_id IN (:...orderIds)', { orderIds: toMarkOrderIds })
+        .andWhere('"is_deleted" = false')
+        .execute();
+
+      const remainingItems = refreshedItems.filter((item) => !item.sent_at);
+      batch.status = BranchTransferBatchStatus.PENDING;
+      batch.sent_at = null;
+      batch.order_count = remainingItems.length;
+      batch.total_price = remainingItems.reduce(
+        (sum, item) => sum + Number(item.snapshot_price ?? 0),
+        0,
+      );
+      batch.vehicle_plate = null;
+      batch.driver_name = null;
+      batch.driver_phone = null;
+      await this.transferBatchRepo.save(batch);
+    } else {
+      batch.status = BranchTransferBatchStatus.SENT;
+      batch.sent_at = now;
+      batch.vehicle_plate = vehiclePlate;
+      batch.driver_name = driverName;
+      batch.driver_phone = driverPhone;
+      sentBatch = await this.transferBatchRepo.save(batch);
+    }
+
+    const sentBatchId = String(sentBatch.id);
+    if (toMarkOrderIds.length) {
       await this.orderRepo
         .createQueryBuilder()
         .update(Order)
-        .set({ status: Order_status.ON_THE_ROAD })
+        .set(
+          batch.direction === BranchTransferDirection.FORWARD
+            ? {
+                current_batch_id: sentBatchId,
+                status: Order_status.ON_THE_ROAD,
+              }
+            : { current_batch_id: sentBatchId },
+        )
         .where('id IN (:...orderIds)', { orderIds: toMarkOrderIds })
         .andWhere('"current_batch_id" = :batchId', { batchId })
         .andWhere('"is_deleted" = false')
         .execute();
+    }
 
+    if (
+      batch.direction === BranchTransferDirection.FORWARD &&
+      toMarkOrderIds.length
+    ) {
       for (const orderId of toMarkOrderIds) {
         const fromStatus = priorById.get(orderId);
         if (!fromStatus || fromStatus === Order_status.ON_THE_ROAD) {
@@ -9178,28 +9255,11 @@ export class OrderServiceService implements OnModuleInit {
           changed_by: requesterId,
           changed_by_role: requesterRole,
           action: 'branch_batch_sent',
-          description: `Pochta #${batchId} filialdan jo'natildi`,
-          note: `Batch #${batchId} jo'natildi`,
+          description: `Pochta #${sentBatchId} filialdan jo'natildi`,
+          note: `Batch #${sentBatchId} jo'natildi`,
         });
       }
     }
-
-    const refreshedItems = await this.transferBatchItemRepo.find({
-      where: { batch_id: batchId, isDeleted: false },
-    });
-    const allSent =
-      refreshedItems.length > 0 &&
-      refreshedItems.every((item) => Boolean(item.sent_at));
-
-    batch.status = allSent
-      ? BranchTransferBatchStatus.SENT
-      : BranchTransferBatchStatus.PENDING;
-    batch.sent_at = allSent ? now : null;
-    batch.vehicle_plate = vehiclePlate;
-    batch.driver_name = driverName;
-    batch.driver_phone = driverPhone;
-
-    const saved = await this.transferBatchRepo.save(batch);
 
     const actor =
       String(input?.requester_name ?? '').trim() ||
@@ -9207,7 +9267,7 @@ export class OrderServiceService implements OnModuleInit {
       'unknown';
     await this.transferBatchHistoryRepo.save(
       this.transferBatchHistoryRepo.create({
-        batch_id: batchId,
+        batch_id: sentBatchId,
         user_id: String(input?.requester_id ?? '').trim() || '0',
         action: BranchTransferBatchAction.SENT,
         notes: `Operator ${actor} paketni jo'natdi. Avtomobil: ${vehiclePlate}`,
@@ -9216,18 +9276,19 @@ export class OrderServiceService implements OnModuleInit {
 
     await this.activityLog.log({
       entity_type: 'BranchTransferBatch',
-      entity_id: batchId,
+      entity_id: sentBatchId,
       action: ActivityAction.STATUS_CHANGE,
-      new_value: { status: saved.status },
+      new_value: { status: sentBatch.status },
       ...this.auditActor({ id: String(input?.requester_id ?? '').trim() }),
       metadata: {
-        batch_id: batchId,
+        batch_id: sentBatchId,
+        source_batch_id: batchId,
         order_count: toMark.length,
         order_ids: orderIds.slice(0, 20),
       },
     });
 
-    return successRes(saved, 200, 'Transfer batch sent');
+    return successRes(sentBatch, 200, 'Transfer batch sent');
   }
 
   async receiveBranchTransferBatch(input: {
