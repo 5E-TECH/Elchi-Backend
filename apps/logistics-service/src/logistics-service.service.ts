@@ -423,6 +423,72 @@ export class LogisticsServiceService implements OnModuleInit {
     }
   }
 
+  private async collapseDuplicateNewPosts(posts: Post[]): Promise<Post[]> {
+    const byRegion = new Map<string, Post[]>();
+    for (const post of posts) {
+      const regionId = String(post.region_id ?? '').trim();
+      if (!regionId) {
+        continue;
+      }
+      const group = byRegion.get(regionId) ?? [];
+      group.push(post);
+      byRegion.set(regionId, group);
+    }
+
+    const removedPostIds = new Set<string>();
+
+    for (const regionPosts of byRegion.values()) {
+      const sorted = [...regionPosts].sort(
+        (a, b) =>
+          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+      );
+      const canonical = sorted[0];
+
+      if (String(canonical.branch_id ?? '').trim()) {
+        canonical.branch_id = null;
+      }
+
+      if (sorted.length > 1) {
+        const duplicateIds = sorted.slice(1).map((post) => String(post.id));
+        if (!duplicateIds.length) {
+          continue;
+        }
+
+        const duplicateOrders = await this.findOrders({
+          post_ids: duplicateIds,
+          fetch_all: true,
+          limit: 1000,
+        });
+        for (const order of duplicateOrders) {
+          await this.updateOrder(order.id, { post_id: canonical.id });
+        }
+
+        const allGroupOrders = await this.findOrders({
+          post_ids: [String(canonical.id), ...duplicateIds],
+          fetch_all: true,
+          limit: 1000,
+        });
+        canonical.order_quantity = allGroupOrders.length;
+        canonical.post_total_price = allGroupOrders.reduce(
+          (sum, order) => sum + Number(order.total_price ?? 0),
+          0,
+        );
+
+        const duplicates = sorted.slice(1);
+        for (const duplicate of duplicates) {
+          await this.postRepo.remove(duplicate);
+          void this.removePostFromSearch(duplicate);
+          removedPostIds.add(String(duplicate.id));
+        }
+      }
+
+      const savedCanonical = await this.postRepo.save(canonical);
+      void this.syncPostToSearch(savedCanonical);
+    }
+
+    return posts.filter((post) => !removedPostIds.has(String(post.id)));
+  }
+
   private async findOrderByQrToken(qrToken: string): Promise<OrderRow> {
     try {
       const response = await lastValueFrom(
@@ -731,15 +797,28 @@ export class LogisticsServiceService implements OnModuleInit {
         ? String(courierAssignment.branch_id)
         : null) ?? branchIdFromOrders;
 
-    const post = this.postRepo.create({
-      courier_id: dto.courier_id,
-      qr_code_token: dto.qr_code_token?.trim() || this.generateToken(),
-      region_id: regionId,
-      branch_id: branchId,
-      post_total_price: totalPrice,
-      order_quantity: uniqueOrderIds.length,
-      status: Post_status.NEW,
-    });
+    let post = regionId
+      ? await this.postRepo.findOne({
+          where: { region_id: regionId, status: Post_status.NEW },
+        })
+      : null;
+
+    if (!post) {
+      post = this.postRepo.create({
+        courier_id: dto.courier_id,
+        qr_code_token: dto.qr_code_token?.trim() || this.generateToken(),
+        region_id: regionId,
+        branch_id: null,
+        post_total_price: 0,
+        order_quantity: 0,
+        status: Post_status.NEW,
+      });
+    }
+
+    post.branch_id = null;
+    post.post_total_price = Number(post.post_total_price ?? 0) + totalPrice;
+    post.order_quantity =
+      Number(post.order_quantity ?? 0) + uniqueOrderIds.length;
 
     const savedPost = await this.postRepo.save(post);
     void this.syncPostToSearch(savedPost);
@@ -833,52 +912,54 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   async newPosts(query?: { search?: string }, requester?: RequesterContext) {
-    const scopedBranchId = await this.resolveScopedBranchId(requester);
     const orphanOrders = await this.findOrders({
       status: Order_status.RECEIVED,
       page: 1,
       limit: 1000,
     });
     const candidates = orphanOrders.filter(
-      (order) =>
-        !order.post_id &&
-        order.region_id &&
-        order.branch_id &&
-        (!scopedBranchId || String(order.branch_id) === scopedBranchId),
+      (order) => !order.post_id && order.region_id,
     );
 
-    const byBranchRegion = new Map<
+    const byRegion = new Map<
       string,
-      { regionId: string; branchId: string; ids: string[]; total: number }
+      { regionId: string; branchIds: Set<string>; ids: string[]; total: number }
     >();
 
     for (const order of candidates) {
       const regionId = String(order.region_id);
-      const branchId = String(order.branch_id);
-      const key = `${branchId}:${regionId}`;
-      const current = byBranchRegion.get(key) ?? {
+      const current = byRegion.get(regionId) ?? {
         regionId,
-        branchId,
+        branchIds: new Set<string>(),
         ids: [],
         total: 0,
       };
+      const branchId = String(order.branch_id ?? '').trim();
+      if (branchId) {
+        current.branchIds.add(branchId);
+      }
       current.ids.push(order.id);
       current.total += Number(order.total_price ?? 0);
-      byBranchRegion.set(key, current);
+      byRegion.set(regionId, current);
     }
 
     const touchedBranchIds = new Set<string>();
     const touchedRegionIds = new Set<string>();
     let assignedOrderCount = 0;
 
-    for (const payload of byBranchRegion.values()) {
+    for (const payload of byRegion.values()) {
       let post = await this.postRepo.findOne({
         where: {
           region_id: payload.regionId,
-          branch_id: payload.branchId,
           status: Post_status.NEW,
         },
       });
+
+      if (post && String(post.branch_id ?? '').trim()) {
+        post.branch_id = null;
+        post = await this.postRepo.save(post);
+        void this.syncPostToSearch(post);
+      }
 
       if (!post) {
         post = await this.postRepo.save(
@@ -886,7 +967,7 @@ export class LogisticsServiceService implements OnModuleInit {
             courier_id: '0',
             qr_code_token: this.generateToken(),
             region_id: payload.regionId,
-            branch_id: payload.branchId,
+            branch_id: null,
             status: Post_status.NEW,
             post_total_price: 0,
             order_quantity: 0,
@@ -918,12 +999,14 @@ export class LogisticsServiceService implements OnModuleInit {
       if (refreshedPost) {
         void this.syncPostToSearch(refreshedPost);
       }
-      touchedBranchIds.add(payload.branchId);
+      for (const branchId of payload.branchIds) {
+        touchedBranchIds.add(branchId);
+      }
       touchedRegionIds.add(payload.regionId);
       assignedOrderCount += payload.ids.length;
     }
 
-    if (byBranchRegion.size > 0) {
+    if (byRegion.size > 0) {
       await this.activityLog.log({
         entity_type: 'Post',
         entity_id: 'auto_batch',
@@ -932,17 +1015,18 @@ export class LogisticsServiceService implements OnModuleInit {
         metadata: {
           branch_id: Array.from(touchedBranchIds).slice(0, 10),
           region_id: Array.from(touchedRegionIds).slice(0, 10),
-          post_count: byBranchRegion.size,
+          post_count: byRegion.size,
           order_count: assignedOrderCount,
         },
       });
     }
 
-    const allPosts = await this.postRepo.find({
+    let allPosts = await this.postRepo.find({
       where: { status: Post_status.NEW },
       relations: ['region'],
       order: { createdAt: 'DESC' },
     });
+    allPosts = await this.collapseDuplicateNewPosts(allPosts);
 
     const postIds = allPosts.map((post) => String(post.id)).filter(Boolean);
     const postOrders = postIds.length
@@ -995,9 +1079,6 @@ export class LogisticsServiceService implements OnModuleInit {
     const searchFilter = query?.search?.trim().toLowerCase();
 
     const filteredPosts = postsWithRegion.filter((post) => {
-      if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId) {
-        return false;
-      }
       if (searchFilter) {
         const regionName = String(post.region?.name ?? '').toLowerCase();
         if (!regionName.includes(searchFilter)) {
@@ -2940,12 +3021,12 @@ export class LogisticsServiceService implements OnModuleInit {
           ).trim()
         : targetBranchId;
       requeuedPostIds = await this.requeueUnreceivedCanceledOrders({
-          sourcePost: post,
-          orders: remainingOrders,
-          targetBranchId,
-          fallbackBranchId: fallbackReturnBranchId,
-          isHqReceipt,
-          requester,
+        sourcePost: post,
+        orders: remainingOrders,
+        targetBranchId,
+        fallbackBranchId: fallbackReturnBranchId,
+        isHqReceipt,
+        requester,
       });
     }
 
@@ -3658,7 +3739,7 @@ export class LogisticsServiceService implements OnModuleInit {
       return successRes([]);
     }
 
-    const byBranchRegion = new Map<
+    const byRegionStatus = new Map<
       string,
       Array<{
         order_id: string;
@@ -3669,43 +3750,50 @@ export class LogisticsServiceService implements OnModuleInit {
       }>
     >();
     for (const order of orders) {
-      const branchId = String(order.assigned_branch ?? '').trim();
       const regionId = String(order.assigned_region ?? '').trim();
       const targetPostStatus = order.assigned_post_status ?? Post_status.NEW;
-      const key = `${branchId}:${regionId}`;
-      const group = byBranchRegion.get(key) ?? [];
+      const key = `${targetPostStatus}:${regionId}`;
+      const group = byRegionStatus.get(key) ?? [];
       group.push({
         order_id: order.order_id,
         total_price: order.total_price,
         assigned_region: regionId,
-        assigned_branch: branchId || undefined,
+        assigned_branch: order.assigned_branch,
         assigned_post_status: targetPostStatus,
       });
-      byBranchRegion.set(key, group);
+      byRegionStatus.set(key, group);
     }
 
     const assignments: Array<{ order_id: string; post_id: string }> = [];
     const touchedPostIds: string[] = [];
 
-    for (const regionOrders of byBranchRegion.values()) {
+    for (const regionOrders of byRegionStatus.values()) {
       const first = regionOrders[0];
       const regionId = String(first?.assigned_region ?? '').trim();
-      const branchId = String(first?.assigned_branch ?? '').trim();
       const targetPostStatus = first?.assigned_post_status ?? Post_status.NEW;
       let post = await this.postRepo.findOne({
         where: {
           region_id: regionId,
-          ...(branchId ? { branch_id: branchId } : {}),
           status: targetPostStatus,
         },
       });
+
+      if (
+        post &&
+        targetPostStatus === Post_status.NEW &&
+        String(post.branch_id ?? '').trim()
+      ) {
+        post.branch_id = null;
+        post = await this.postRepo.save(post);
+        void this.syncPostToSearch(post);
+      }
 
       if (!post) {
         post = this.postRepo.create({
           courier_id: '0',
           qr_code_token: this.generateToken(),
           region_id: regionId,
-          branch_id: branchId || null,
+          branch_id: null,
           status: targetPostStatus,
           post_total_price: 0,
           order_quantity: 0,
