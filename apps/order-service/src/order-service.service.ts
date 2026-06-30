@@ -4275,6 +4275,7 @@ export class OrderServiceService implements OnModuleInit {
     const logisticsPayload: Array<{
       order_id: string;
       assigned_region: string;
+      assigned_branch?: string;
       total_price: number;
     }> = [];
     for (const order of orders) {
@@ -4291,6 +4292,7 @@ export class OrderServiceService implements OnModuleInit {
       logisticsPayload.push({
         order_id: order.id,
         assigned_region: assignedRegion,
+        assigned_branch: order.branch_id ? String(order.branch_id) : undefined,
         total_price: Number(order.total_price ?? 0),
       });
     }
