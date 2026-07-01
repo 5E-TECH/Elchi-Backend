@@ -921,13 +921,16 @@ export class LogisticsServiceService implements OnModuleInit {
     const candidatePosts = await this.postRepo.find({
       where: {
         status: Post_status.SENT,
-        branch_id: IsNull(),
       },
       take: 100,
     });
     if (!candidatePosts.length) return;
 
     for (const post of candidatePosts) {
+      const courierId = String(post.courier_id ?? '').trim();
+      if (courierId && courierId !== '0') continue;
+      if (String(post.branch_id ?? '').trim() === normalizedBranchId) continue;
+
       const orders = await this.findOrders({
         post_id: String(post.id),
         fetch_all: true,
@@ -1248,8 +1251,42 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Post not found');
     }
     const scopedBranchId = await this.resolveScopedBranchId(requester);
+    let belongsToScopedBranch = false;
     if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId) {
+      const orders = await this.findOrders({
+        post_id: id,
+        page: 1,
+        limit: 1000,
+      });
+      const orderBranchIds = new Set(
+        orders
+          .map((order) => String(order.branch_id ?? '').trim())
+          .filter(Boolean),
+      );
+      belongsToScopedBranch =
+        orderBranchIds.size === 1 && orderBranchIds.has(String(scopedBranchId));
+    }
+
+    if (
+      scopedBranchId &&
+      String(post.branch_id ?? '') !== scopedBranchId &&
+      !belongsToScopedBranch
+    ) {
       this.forbidden("Siz bu branch pochtasini ko'ra olmaysiz");
+    }
+    const isBranchTransferPost =
+      !String(post.courier_id ?? '').trim() ||
+      String(post.courier_id ?? '').trim() === '0';
+    if (
+      scopedBranchId &&
+      belongsToScopedBranch &&
+      isBranchTransferPost &&
+      String(post.branch_id ?? '').trim() !== scopedBranchId
+    ) {
+      post.branch_id = scopedBranchId;
+      const saved = await this.postRepo.save(post);
+      void this.syncPostToSearch(saved);
+      return successRes(saved, 200, 'Post found');
     }
     return successRes(post, 200, 'Post found');
   }
@@ -1342,14 +1379,6 @@ export class LogisticsServiceService implements OnModuleInit {
       isCourier && String(post.courier_id ?? '') === String(requester.id ?? '');
 
     const scopedBranchId = await this.resolveScopedBranchId(requester);
-    if (
-      scopedBranchId &&
-      String(post.branch_id ?? '') !== scopedBranchId &&
-      !isOwnCourierPost
-    ) {
-      this.forbidden("Siz bu branch pochtasidagi orderlarni ko'ra olmaysiz");
-    }
-
     const [ordersByPostId, ordersByCanceledPostId] = await Promise.all([
       this.findOrders({
         post_id: id,
@@ -1362,6 +1391,37 @@ export class LogisticsServiceService implements OnModuleInit {
         limit: 1000,
       }),
     ]);
+    const orderBranchIds = new Set(
+      [...ordersByPostId, ...ordersByCanceledPostId]
+        .map((order) => String(order.branch_id ?? '').trim())
+        .filter(Boolean),
+    );
+    const belongsToScopedBranch =
+      Boolean(scopedBranchId) &&
+      orderBranchIds.size === 1 &&
+      orderBranchIds.has(String(scopedBranchId));
+
+    if (
+      scopedBranchId &&
+      String(post.branch_id ?? '') !== scopedBranchId &&
+      !belongsToScopedBranch &&
+      !isOwnCourierPost
+    ) {
+      this.forbidden("Siz bu branch pochtasidagi orderlarni ko'ra olmaysiz");
+    }
+
+    const isBranchTransferPost =
+      !String(post.courier_id ?? '').trim() ||
+      String(post.courier_id ?? '').trim() === '0';
+    if (
+      belongsToScopedBranch &&
+      isBranchTransferPost &&
+      String(post.branch_id ?? '').trim() !== scopedBranchId
+    ) {
+      post.branch_id = scopedBranchId;
+      const saved = await this.postRepo.save(post);
+      void this.syncPostToSearch(saved);
+    }
 
     const orderMap = new Map<string, OrderRow>();
     for (const order of [...ordersByPostId, ...ordersByCanceledPostId]) {
@@ -1692,10 +1752,30 @@ export class LogisticsServiceService implements OnModuleInit {
     const isOwnCourierPost =
       requesterIsCourier && String(post.courier_id ?? '') === requesterId;
 
+    const waitingOrderIds = [
+      ...new Set((dto.order_ids ?? []).map((orderId) => String(orderId))),
+    ];
+    const waitingOrderIdSet = new Set(waitingOrderIds);
+    const allOrders = await this.findOrders({
+      post_id: id,
+      page: 1,
+      limit: 1000,
+    });
     const scopedBranchId = await this.resolveScopedBranchId(requester);
+    const orderBranchIds = new Set(
+      allOrders
+        .map((order) => String(order.branch_id ?? '').trim())
+        .filter(Boolean),
+    );
+    const belongsToScopedBranch =
+      Boolean(scopedBranchId) &&
+      orderBranchIds.size === 1 &&
+      orderBranchIds.has(String(scopedBranchId));
+
     if (
       scopedBranchId &&
       String(post.branch_id ?? '') !== scopedBranchId &&
+      !belongsToScopedBranch &&
       !isOwnCourierPost
     ) {
       this.forbidden('Siz bu branch pochtasini qabul qila olmaysiz');
@@ -1716,19 +1796,25 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest('Cannot receive post with this status');
     }
 
-    const waitingOrderIds = [
-      ...new Set((dto.order_ids ?? []).map((orderId) => String(orderId))),
-    ];
-    const waitingOrderIdSet = new Set(waitingOrderIds);
-    const allOrders = await this.findOrders({
-      post_id: id,
-      page: 1,
-      limit: 1000,
-    });
+    const isBranchTransferPost =
+      !String(post.courier_id ?? '').trim() ||
+      String(post.courier_id ?? '').trim() === '0';
+    if (
+      scopedBranchId &&
+      belongsToScopedBranch &&
+      isBranchTransferPost &&
+      String(post.branch_id ?? '').trim() !== scopedBranchId
+    ) {
+      post.branch_id = scopedBranchId;
+    }
+
     const orderById = new Map(
       allOrders.map((order) => [String(order.id), order]),
     );
-    const targetBranchId = String(post.branch_id ?? '').trim() || undefined;
+    const targetBranchId =
+      String(post.branch_id ?? '').trim() ||
+      (belongsToScopedBranch ? String(scopedBranchId) : '') ||
+      undefined;
 
     // receivePost spans multiple updateOrder RMQ calls + a local postRepo.save
     // across two services — no atomic TX possible. Track which transitions
