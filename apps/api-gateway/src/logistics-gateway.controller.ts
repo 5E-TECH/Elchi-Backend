@@ -195,10 +195,12 @@ export class LogisticsGatewayController {
     required: false,
     enum: ['new', 'sent', 'received', 'canceled', 'canceled_received'],
   })
+  @ApiQuery({ name: 'branch_id', required: false, type: String })
   getAllPosts(
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('status') status?: string,
+    @Query('branch_id') branchId?: string,
     @Req() req?: { user?: JwtUser },
   ) {
     return this.logisticsClient.send(
@@ -208,6 +210,7 @@ export class LogisticsGatewayController {
           page: page ? Number(page) : 1,
           limit: limit ? Number(limit) : 8,
           status: status ? String(status).trim().toLowerCase() : undefined,
+          branch_id: branchId ? String(branchId).trim() : undefined,
         },
         requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
       },

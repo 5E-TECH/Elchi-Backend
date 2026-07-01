@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { In, Not, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
 import { Post } from './entities/post.entity';
 import { Region } from './entities/region.entity';
@@ -881,6 +881,9 @@ export class LogisticsServiceService implements OnModuleInit {
     if (status === Post_status.CANCELED && this.isSystemPrivileged(requester)) {
       where.branch_id = await this.findHqBranchId();
     }
+    if (branchId && (!status || status === Post_status.SENT)) {
+      await this.repairSentPostBranchAssignments(branchId);
+    }
     let queryWhere: Record<string, unknown> | Record<string, unknown>[] = where;
     if (!status && this.isSystemPrivileged(requester)) {
       const hqBranchId = await this.findHqBranchId();
@@ -909,6 +912,39 @@ export class LogisticsServiceService implements OnModuleInit {
       200,
       'All posts (paginated)',
     );
+  }
+
+  private async repairSentPostBranchAssignments(branchId: string): Promise<void> {
+    const normalizedBranchId = String(branchId ?? '').trim();
+    if (!normalizedBranchId) return;
+
+    const candidatePosts = await this.postRepo.find({
+      where: {
+        status: Post_status.SENT,
+        branch_id: IsNull(),
+      },
+      take: 100,
+    });
+    if (!candidatePosts.length) return;
+
+    for (const post of candidatePosts) {
+      const orders = await this.findOrders({
+        post_id: String(post.id),
+        fetch_all: true,
+        limit: 1000,
+      });
+      const branchIds = new Set(
+        orders
+          .map((order) => String(order.branch_id ?? '').trim())
+          .filter(Boolean),
+      );
+
+      if (branchIds.size === 1 && branchIds.has(normalizedBranchId)) {
+        post.branch_id = normalizedBranchId;
+        const saved = await this.postRepo.save(post);
+        void this.syncPostToSearch(saved);
+      }
+    }
   }
 
   async newPosts(query?: { search?: string }, requester?: RequesterContext) {
@@ -3752,13 +3788,14 @@ export class LogisticsServiceService implements OnModuleInit {
     for (const order of orders) {
       const regionId = String(order.assigned_region ?? '').trim();
       const targetPostStatus = order.assigned_post_status ?? Post_status.NEW;
-      const key = `${targetPostStatus}:${regionId}`;
+      const assignedBranch = String(order.assigned_branch ?? '').trim();
+      const key = `${targetPostStatus}:${regionId}:${assignedBranch}`;
       const group = byRegionStatus.get(key) ?? [];
       group.push({
         order_id: order.order_id,
         total_price: order.total_price,
         assigned_region: regionId,
-        assigned_branch: order.assigned_branch,
+        assigned_branch: assignedBranch,
         assigned_post_status: targetPostStatus,
       });
       byRegionStatus.set(key, group);
@@ -3771,10 +3808,12 @@ export class LogisticsServiceService implements OnModuleInit {
       const first = regionOrders[0];
       const regionId = String(first?.assigned_region ?? '').trim();
       const targetPostStatus = first?.assigned_post_status ?? Post_status.NEW;
+      const assignedBranch = String(first?.assigned_branch ?? '').trim();
       let post = await this.postRepo.findOne({
         where: {
           region_id: regionId,
           status: targetPostStatus,
+          branch_id: assignedBranch || IsNull(),
         },
       });
 
@@ -3793,13 +3832,17 @@ export class LogisticsServiceService implements OnModuleInit {
           courier_id: '0',
           qr_code_token: this.generateToken(),
           region_id: regionId,
-          branch_id: null,
+          branch_id: assignedBranch || null,
           status: targetPostStatus,
           post_total_price: 0,
           order_quantity: 0,
         });
         post = await this.postRepo.save(post);
         void this.syncPostToSearch(post);
+      }
+
+      if (assignedBranch && String(post.branch_id ?? '').trim() !== assignedBranch) {
+        post.branch_id = assignedBranch;
       }
 
       let addedTotal = 0;
