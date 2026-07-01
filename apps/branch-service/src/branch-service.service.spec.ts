@@ -993,4 +993,34 @@ describe('BranchServiceService', () => {
       ),
     ).rejects.toBeInstanceOf(RpcException);
   });
+
+  it('dispatchPostToBranch rejects destination branch without manager', async () => {
+    branchRepo.findOne
+      .mockResolvedValueOnce({
+        id: '10',
+        type: 'HQ',
+        status: 'active',
+        isDeleted: false,
+      })
+      .mockResolvedValueOnce({
+        id: '20',
+        type: 'REGIONAL',
+        status: 'active',
+        isDeleted: false,
+      });
+    branchUserRepo.findOne.mockResolvedValueOnce(null);
+
+    await expect(
+      service.dispatchPostToBranch(
+        '10',
+        '900',
+        '20',
+        ['1001'],
+        { id: '1', roles: ['admin'] },
+      ),
+    ).rejects.toBeInstanceOf(RpcException);
+
+    expect(logisticsClient.send).not.toHaveBeenCalled();
+    expect(orderClient.send).not.toHaveBeenCalled();
+  });
 });

@@ -256,6 +256,21 @@ export class BranchServiceService implements OnModuleInit {
     }
   }
 
+  private async assertBranchHasManager(branchId: string): Promise<void> {
+    const managerAssignment = await this.branchUserRepo.findOne({
+      where: {
+        branch_id: String(branchId),
+        role: BranchUserRole.MANAGER,
+        isDeleted: false,
+      },
+      select: ['id'],
+    });
+
+    if (!managerAssignment) {
+      this.badRequest('Siz birinchi bu branchga manager biriktiring');
+    }
+  }
+
   private normalizePagination(page?: number, limit?: number) {
     const safePage = Number(page) > 0 ? Number(page) : 1;
     const safeLimit = Number(limit) > 0 ? Math.min(Number(limit), 100) : 10;
@@ -1941,6 +1956,7 @@ export class BranchServiceService implements OnModuleInit {
     if (sourceBranch.type !== BranchType.HQ) {
       this.forbidden("Post dispatch faqat HQ branch'dan ruxsat etilgan");
     }
+    await this.assertBranchHasManager(destinationBranchId);
     await this.assertCanWriteBranch(sourceBranchId, requester);
 
     const requesterPayload = {
