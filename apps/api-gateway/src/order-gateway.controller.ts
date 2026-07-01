@@ -1389,7 +1389,7 @@ export class OrderGatewayController {
 
     let branchId: string | undefined;
     let holderType: 'HQ' | 'BRANCH' | undefined = 'HQ';
-    let excludeBranchSource = true;
+    let excludeBranchSource = false;
     let marketId: string | undefined;
 
     if (isMarket) {
@@ -1568,7 +1568,7 @@ export class OrderGatewayController {
 
     let branchId: string | undefined;
     let holderType: 'HQ' | 'BRANCH' | undefined = 'HQ';
-    let excludeBranchSource = true;
+    let excludeBranchSource = false;
 
     if (isMarket) {
       if (!req?.user?.sub || String(req.user.sub) !== String(marketId)) {
