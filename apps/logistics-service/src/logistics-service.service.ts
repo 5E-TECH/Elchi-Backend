@@ -127,6 +127,13 @@ export class LogisticsServiceService implements OnModuleInit {
     throw new RpcException(errorRes(message, 409));
   }
 
+  private getOrderBranchScope(order: {
+    holder_branch_id?: string | null;
+    branch_id?: string | null;
+  }): string {
+    return String(order?.holder_branch_id ?? order?.branch_id ?? '').trim();
+  }
+
   private isSystemPrivileged(requester?: RequesterContext): boolean {
     const roles = (requester?.roles ?? []).map((role) =>
       String(role ?? '').toLowerCase(),
@@ -938,7 +945,7 @@ export class LogisticsServiceService implements OnModuleInit {
       });
       const branchIds = new Set(
         orders
-          .map((order) => String(order.branch_id ?? '').trim())
+          .map((order) => this.getOrderBranchScope(order))
           .filter(Boolean),
       );
 
@@ -1260,7 +1267,7 @@ export class LogisticsServiceService implements OnModuleInit {
       });
       const orderBranchIds = new Set(
         orders
-          .map((order) => String(order.branch_id ?? '').trim())
+          .map((order) => this.getOrderBranchScope(order))
           .filter(Boolean),
       );
       belongsToScopedBranch =
@@ -1393,7 +1400,7 @@ export class LogisticsServiceService implements OnModuleInit {
     ]);
     const orderBranchIds = new Set(
       [...ordersByPostId, ...ordersByCanceledPostId]
-        .map((order) => String(order.branch_id ?? '').trim())
+        .map((order) => this.getOrderBranchScope(order))
         .filter(Boolean),
     );
     const belongsToScopedBranch =
@@ -1764,7 +1771,7 @@ export class LogisticsServiceService implements OnModuleInit {
     const scopedBranchId = await this.resolveScopedBranchId(requester);
     const orderBranchIds = new Set(
       allOrders
-        .map((order) => String(order.branch_id ?? '').trim())
+        .map((order) => this.getOrderBranchScope(order))
         .filter(Boolean),
     );
     const belongsToScopedBranch =

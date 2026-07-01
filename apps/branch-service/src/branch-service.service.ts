@@ -2120,6 +2120,9 @@ export class BranchServiceService implements OnModuleInit {
         id: orderId,
         dto: {
           branch_id: destinationBranchId,
+          holder_type: 'BRANCH',
+          holder_branch_id: destinationBranchId,
+          holder_courier_id: null,
           post_id: destinationPostId,
           current_batch_id: null,
           status: Order_status.ON_THE_ROAD,
