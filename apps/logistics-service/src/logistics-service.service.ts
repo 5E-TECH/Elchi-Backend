@@ -1799,7 +1799,20 @@ export class LogisticsServiceService implements OnModuleInit {
       );
     }
 
-    if (post.status !== Post_status.SENT) {
+    const orderById = new Map(
+      allOrders.map((order) => [String(order.id), order]),
+    );
+    const selectedOrders = waitingOrderIds
+      .map((orderId) => orderById.get(orderId))
+      .filter((order): order is OrderRow => Boolean(order));
+    const selectedHasReceivableOrder = selectedOrders.some(
+      (order) => order.status === Order_status.ON_THE_ROAD,
+    );
+
+    if (
+      post.status !== Post_status.SENT &&
+      !(post.status === Post_status.RECEIVED && selectedHasReceivableOrder)
+    ) {
       this.badRequest('Cannot receive post with this status');
     }
 
@@ -1815,9 +1828,6 @@ export class LogisticsServiceService implements OnModuleInit {
       post.branch_id = scopedBranchId;
     }
 
-    const orderById = new Map(
-      allOrders.map((order) => [String(order.id), order]),
-    );
     const targetBranchId =
       String(post.branch_id ?? '').trim() ||
       (belongsToScopedBranch ? String(scopedBranchId) : '') ||
@@ -1847,7 +1857,9 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     const remaining = allOrders.filter(
-      (o) => !waitingOrderIdSet.has(String(o.id)),
+      (o) =>
+        !waitingOrderIdSet.has(String(o.id)) &&
+        o.status === Order_status.ON_THE_ROAD,
     );
 
     if (remaining.length) {
@@ -1894,7 +1906,10 @@ export class LogisticsServiceService implements OnModuleInit {
       );
     }
 
-    post.status = Post_status.RECEIVED;
+    const hasRemainingReceivableOrders = remaining.length > 0;
+    post.status = hasRemainingReceivableOrders
+      ? Post_status.SENT
+      : Post_status.RECEIVED;
     const savedPost = await this.postRepo.save(post);
     void this.syncPostToSearch(savedPost);
 
@@ -1902,7 +1917,7 @@ export class LogisticsServiceService implements OnModuleInit {
       entity_type: 'Post',
       entity_id: String(savedPost.id),
       action: ActivityAction.STATUS_CHANGE,
-      new_value: { status: Post_status.RECEIVED },
+      new_value: { status: savedPost.status },
       ...this.auditActor(requester),
       metadata: {
         order_count: allOrders.length,
