@@ -1648,6 +1648,7 @@ export class OrderGatewayController {
         market_id: marketId,
         order_ids: dto.order_ids,
         authorization_token: dto.authorization_token,
+        manual_overrides: dto.manual_overrides,
         requester: {
           id: req.user.sub,
           roles: this.normalizeRoles(req.user.roles),

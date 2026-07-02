@@ -770,6 +770,7 @@ export class OrderServiceController {
       market_id: string;
       order_ids: string[];
       authorization_token: string;
+      manual_overrides?: Array<{ order_id: string; reason: string }>;
       requester: { id: string; roles?: string[] };
     },
     @Ctx() context: RmqContext,

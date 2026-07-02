@@ -449,6 +449,18 @@ export class OrdersArrayDto {
   order_ids!: string[];
 }
 
+export class CancelledManualOverrideDto {
+  @ApiProperty({ example: '101' })
+  @IsNotEmpty()
+  @IsString()
+  order_id!: string;
+
+  @ApiProperty({ example: 'QR yirtilgan' })
+  @IsNotEmpty()
+  @IsString()
+  reason!: string;
+}
+
 export class HandoverCancelledOrdersToMarketRequestDto extends OrdersArrayDto {
   @ApiProperty({
     example: 'MHA-secure-one-time-token',
@@ -457,6 +469,18 @@ export class HandoverCancelledOrdersToMarketRequestDto extends OrdersArrayDto {
   @IsNotEmpty()
   @IsString()
   authorization_token!: string;
+
+  @ApiPropertyOptional({
+    description:
+      'QR buzilgani sabab qo‘lda tasdiqlangan orderlar ro‘yxati. Faqat HQ xodimlari uchun audit metadata.',
+    example: [{ order_id: '101', reason: 'QR yirtilgan' }],
+    type: () => [CancelledManualOverrideDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CancelledManualOverrideDto)
+  manual_overrides?: CancelledManualOverrideDto[];
 }
 
 export class SellOrderRequestDto {
