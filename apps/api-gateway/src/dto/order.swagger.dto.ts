@@ -464,11 +464,13 @@ export class CancelledManualOverrideDto {
 export class HandoverCancelledOrdersToMarketRequestDto extends OrdersArrayDto {
   @ApiProperty({
     example: 'MHA-secure-one-time-token',
-    description: 'QR scan orqali olingan 5 daqiqalik authorization token',
+    description:
+      'QR scan orqali olingan 5 daqiqalik authorization token. Marketda QR talab o‘chirilgan bo‘lsa yuborilmasligi mumkin.',
+    required: false,
   })
-  @IsNotEmpty()
+  @IsOptional()
   @IsString()
-  authorization_token!: string;
+  authorization_token?: string;
 
   @ApiPropertyOptional({
     description:
