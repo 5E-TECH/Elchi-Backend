@@ -3256,6 +3256,7 @@ export class OrderServiceService implements OnModuleInit {
     market_id: string;
     order_ids: string[];
     authorization_token: string;
+    manual_overrides?: Array<{ order_id: string; reason: string }>;
     requester: { id: string; roles?: string[] };
   }) {
     const marketId = String(input?.market_id ?? '').trim();
@@ -3266,6 +3267,15 @@ export class OrderServiceService implements OnModuleInit {
         (input?.order_ids ?? []).map((id) => String(id).trim()).filter(Boolean),
       ),
     );
+    const manualOverrides = (input?.manual_overrides ?? [])
+      .map((item) => ({
+        order_id: String(item?.order_id ?? '').trim(),
+        reason: String(item?.reason ?? '').trim(),
+      }))
+      .filter((item) => item.order_id && item.reason);
+    const manualOverrideByOrderId = new Map(
+      manualOverrides.map((item) => [item.order_id, item.reason]),
+    );
 
     if (!marketId || !requesterId || !authorizationToken) {
       this.badRequest('market_id, requester va authorization_token majburiy');
@@ -3275,6 +3285,17 @@ export class OrderServiceService implements OnModuleInit {
     }
     if (!orderIds.length) {
       this.badRequest('order_ids is required');
+    }
+    if (manualOverrideByOrderId.size !== manualOverrides.length) {
+      this.badRequest('manual_overrides ichida takror order bor');
+    }
+    const invalidManualOverrideIds = [...manualOverrideByOrderId.keys()].filter(
+      (orderId) => !orderIds.includes(orderId),
+    );
+    if (invalidManualOverrideIds.length) {
+      this.badRequest(
+        `manual_overrides faqat tanlangan orderlar uchun bo'lishi kerak: ${invalidManualOverrideIds.join(', ')}`,
+      );
     }
 
     await this.assertMarketHandoverHqRequester(input.requester);
@@ -3337,6 +3358,9 @@ export class OrderServiceService implements OnModuleInit {
       }
 
       for (const order of handedOverOrders) {
+        const manualOverrideReason = manualOverrideByOrderId.get(
+          String(order.id),
+        );
         const previousStatus = order.status;
         const previousHolderType = order.holder_type ?? null;
         const previousHolderBranchId = order.holder_branch_id ?? null;
@@ -3358,7 +3382,19 @@ export class OrderServiceService implements OnModuleInit {
             to_status: Order_status.CLOSED,
             changed_by: requesterId,
             changed_by_role: this.toTrackingRole(input.requester.roles),
-            note: `Bekor qilingan order market ${marketId}ga QR tasdiqi bilan topshirildi`,
+            note: manualOverrideReason
+              ? `Bekor qilingan order market ${marketId}ga QR buzilgani sabab qo'lda tasdiqlanib topshirildi: ${manualOverrideReason}`
+              : `Bekor qilingan order market ${marketId}ga QR tasdiqi bilan topshirildi`,
+            action: manualOverrideReason
+              ? 'cancelled_market_handover_manual'
+              : undefined,
+            metadata: manualOverrideReason
+              ? {
+                  manual_override: true,
+                  manual_reason: manualOverrideReason,
+                  market_id: marketId,
+                }
+              : undefined,
           },
           trackingRepo,
         );
@@ -3374,7 +3410,9 @@ export class OrderServiceService implements OnModuleInit {
             to_courier_id: null,
             changed_by: requesterId,
             changed_by_role: this.toTrackingRole(input.requester.roles),
-            note: `Bekor qilingan order market ${marketId}ga topshirildi`,
+            note: manualOverrideReason
+              ? `Bekor qilingan order market ${marketId}ga qo'lda tasdiqlanib topshirildi: ${manualOverrideReason}`
+              : `Bekor qilingan order market ${marketId}ga topshirildi`,
           },
           custodyRepo,
         );
@@ -3402,6 +3440,10 @@ export class OrderServiceService implements OnModuleInit {
       metadata: {
         handover_type: 'market_cancelled_qr',
         order_count: handedOverOrders.length,
+        manual_override_count: manualOverrideByOrderId.size,
+        manual_overrides: [...manualOverrideByOrderId.entries()].map(
+          ([order_id, reason]) => ({ order_id, reason }),
+        ),
         order_ids: handedOverOrders
           .slice(0, 20)
           .map((order) => String(order.id)),
