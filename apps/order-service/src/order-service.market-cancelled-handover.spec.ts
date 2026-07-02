@@ -1,4 +1,5 @@
 import { RpcException } from '@nestjs/microservices';
+import { of } from 'rxjs';
 import { Order_status } from '@app/common';
 import { OrderServiceService } from './order-service.service';
 import { MarketCancelledHandoverSession } from './entities/market-cancelled-handover-session.entity';
@@ -10,6 +11,7 @@ describe('OrderServiceService market cancelled handover', () => {
   function setup(options?: {
     qrExpired?: boolean;
     authorizationExpired?: boolean;
+    marketQrRequired?: boolean;
   }) {
     const now = Date.now();
     const session = {
@@ -105,6 +107,20 @@ describe('OrderServiceService market cancelled handover', () => {
       log: jest.fn().mockResolvedValue(undefined),
       logChange: jest.fn().mockResolvedValue(undefined),
     };
+    const identityClient = {
+      send: jest.fn(() =>
+        of({
+          data: [
+            {
+              id: '16',
+              name: 'Yandex',
+              cancelled_handover_qr_required:
+                options?.marketQrRequired ?? true,
+            },
+          ],
+        }),
+      ),
+    };
 
     const service = new OrderServiceService(
       dataSource as any,
@@ -117,7 +133,7 @@ describe('OrderServiceService market cancelled handover', () => {
       {} as any,
       {} as any,
       {} as any,
-      {} as any,
+      identityClient as any,
       {} as any,
       {} as any,
       {} as any,
@@ -137,6 +153,7 @@ describe('OrderServiceService market cancelled handover', () => {
       trackingRepo,
       custodyRepo,
       queryRunner,
+      identityClient,
     };
   }
 
@@ -236,6 +253,45 @@ describe('OrderServiceService market cancelled handover', () => {
     );
     expect(queryRunner.commitTransaction).toHaveBeenCalled();
     expect(response.data.closed_count).toBe(1);
+  });
+
+  it('closes HQ-held cancelled orders without authorization when market QR is disabled', async () => {
+    const { service, sessionRepo, orderRepo, queryRunner } = setup({
+      marketQrRequired: false,
+    });
+
+    const response: any = await service.completeMarketCancelledHandover({
+      market_id: '16',
+      order_ids: ['101'],
+      requester: { id: '9', roles: ['admin'] },
+    });
+
+    expect(sessionRepo.findOne).not.toHaveBeenCalled();
+    expect(sessionRepo.save).not.toHaveBeenCalledWith(
+      expect.objectContaining({ consumed_at: expect.any(Date) }),
+    );
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: Order_status.CLOSED,
+        holder_type: OrderHolderType.MARKET,
+      }),
+    );
+    expect(queryRunner.commitTransaction).toHaveBeenCalled();
+    expect(response.data.closed_count).toBe(1);
+  });
+
+  it('rejects unknown manual override reasons', async () => {
+    const { service } = setup({ marketQrRequired: false });
+
+    await expectRpc(
+      service.completeMarketCancelledHandover({
+        market_id: '16',
+        order_ids: ['101'],
+        manual_overrides: [{ order_id: '101', reason: 'random text' }],
+        requester: { id: '9', roles: ['admin'] },
+      }),
+      400,
+    );
   });
 
   it('rejects an expired five-minute authorization', async () => {
