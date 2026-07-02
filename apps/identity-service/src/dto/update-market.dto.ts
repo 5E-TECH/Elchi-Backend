@@ -51,6 +51,10 @@ export class UpdateMarketDto {
   add_order?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  cancelled_handover_qr_required?: boolean;
+
+  @IsOptional()
   @IsArray()
   @IsEnum(ExpenseProofCondition, { each: true })
   expense_proof_conditions?: ExpenseProofCondition[];

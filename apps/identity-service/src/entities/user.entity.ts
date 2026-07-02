@@ -94,6 +94,9 @@ export class User extends BaseEntity {
   @Column({ type: 'boolean', default: false })
   add_order: boolean;
 
+  @Column({ type: 'boolean', default: true })
+  cancelled_handover_qr_required: boolean;
+
   // Per-market proof policy: the SET of situations in which a courier MUST
   // attach file proof (image/video) for a sell/cancel operation of this
   // market's orders. NULL / empty = proof never required. See

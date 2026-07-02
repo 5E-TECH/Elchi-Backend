@@ -1347,6 +1347,7 @@ export class OrderServiceService implements OnModuleInit {
         tariff_home?: number;
         tariff_center?: number;
         expense_proof_conditions?: ExpenseProofCondition[] | null;
+        cancelled_handover_qr_required?: boolean | null;
       }>;
     }>(
       this.identityClient,
@@ -3255,7 +3256,7 @@ export class OrderServiceService implements OnModuleInit {
   async completeMarketCancelledHandover(input: {
     market_id: string;
     order_ids: string[];
-    authorization_token: string;
+    authorization_token?: string;
     manual_overrides?: Array<{ order_id: string; reason: string }>;
     requester: { id: string; roles?: string[] };
   }) {
@@ -3277,11 +3278,8 @@ export class OrderServiceService implements OnModuleInit {
       manualOverrides.map((item) => [item.order_id, item.reason]),
     );
 
-    if (!marketId || !requesterId || !authorizationToken) {
-      this.badRequest('market_id, requester va authorization_token majburiy');
-    }
-    if (!authorizationToken.startsWith('MHA-')) {
-      this.badRequest('authorization_token noto‘g‘ri');
+    if (!marketId || !requesterId) {
+      this.badRequest('market_id va requester majburiy');
     }
     if (!orderIds.length) {
       this.badRequest('order_ids is required');
@@ -3300,6 +3298,18 @@ export class OrderServiceService implements OnModuleInit {
 
     await this.assertMarketHandoverHqRequester(input.requester);
 
+    const [market] = await this.getMarketsByIds([marketId]);
+    if (!market) {
+      this.badRequest('Market topilmadi');
+    }
+    const isQrRequired = market?.cancelled_handover_qr_required !== false;
+    if (isQrRequired && !authorizationToken) {
+      this.badRequest('authorization_token majburiy');
+    }
+    if (isQrRequired && !authorizationToken.startsWith('MHA-')) {
+      this.badRequest('authorization_token noto‘g‘ri');
+    }
+
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -3313,30 +3323,34 @@ export class OrderServiceService implements OnModuleInit {
       const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
       const custodyRepo = queryRunner.manager.getRepository(OrderCustodyEvent);
 
-      const session = await sessionRepo.findOne({
-        where: {
-          authorization_token_hash: this.hashHandoverToken(authorizationToken),
-          isDeleted: false,
-        },
-        lock: { mode: 'pessimistic_write' },
-      });
-
-      if (!session || !session.authorization_expires_at) {
-        this.forbidden('Topshirish ruxsati topilmadi');
-      }
-      if (String(session.market_id) !== marketId) {
-        this.forbidden('Ruxsat boshqa market uchun berilgan');
-      }
-      if (String(session.scanned_by_user_id ?? '') !== requesterId) {
-        this.forbidden('Ruxsat boshqa xodimga tegishli');
-      }
-      if (session.consumed_at) {
-        this.forbidden('Topshirish ruxsati allaqachon ishlatilgan');
-      }
-
       const now = new Date();
-      if (session.authorization_expires_at.getTime() <= now.getTime()) {
-        this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
+      let session: MarketCancelledHandoverSession | null = null;
+      if (isQrRequired) {
+        session = await sessionRepo.findOne({
+          where: {
+            authorization_token_hash: this.hashHandoverToken(
+              authorizationToken!,
+            ),
+            isDeleted: false,
+          },
+          lock: { mode: 'pessimistic_write' },
+        });
+
+        if (!session || !session.authorization_expires_at) {
+          this.forbidden('Topshirish ruxsati topilmadi');
+        }
+        if (String(session.market_id) !== marketId) {
+          this.forbidden('Ruxsat boshqa market uchun berilgan');
+        }
+        if (String(session.scanned_by_user_id ?? '') !== requesterId) {
+          this.forbidden('Ruxsat boshqa xodimga tegishli');
+        }
+        if (session.consumed_at) {
+          this.forbidden('Topshirish ruxsati allaqachon ishlatilgan');
+        }
+        if (session.authorization_expires_at.getTime() <= now.getTime()) {
+          this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
+        }
       }
 
       handedOverOrders = await orderRepo.find({
@@ -3384,7 +3398,9 @@ export class OrderServiceService implements OnModuleInit {
             changed_by_role: this.toTrackingRole(input.requester.roles),
             note: manualOverrideReason
               ? `Bekor qilingan order market ${marketId}ga QR buzilgani sabab qo'lda tasdiqlanib topshirildi: ${manualOverrideReason}`
-              : `Bekor qilingan order market ${marketId}ga QR tasdiqi bilan topshirildi`,
+              : isQrRequired
+                ? `Bekor qilingan order market ${marketId}ga QR tasdiqi bilan topshirildi`
+                : `Bekor qilingan order market ${marketId}ga QR talab qilinmasdan topshirildi`,
             action: manualOverrideReason
               ? 'cancelled_market_handover_manual'
               : undefined,
@@ -3420,8 +3436,10 @@ export class OrderServiceService implements OnModuleInit {
         await this.syncOrderToSearch(order, queryRunner.manager);
       }
 
-      session.consumed_at = now;
-      await sessionRepo.save(session);
+      if (session) {
+        session.consumed_at = now;
+        await sessionRepo.save(session);
+      }
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -3438,7 +3456,10 @@ export class OrderServiceService implements OnModuleInit {
       new_value: { status: Order_status.CLOSED },
       ...this.auditActor(input.requester),
       metadata: {
-        handover_type: 'market_cancelled_qr',
+        handover_type: isQrRequired
+          ? 'market_cancelled_qr'
+          : 'market_cancelled_without_qr',
+        qr_required: isQrRequired,
         order_count: handedOverOrders.length,
         manual_override_count: manualOverrideByOrderId.size,
         manual_overrides: [...manualOverrideByOrderId.entries()].map(

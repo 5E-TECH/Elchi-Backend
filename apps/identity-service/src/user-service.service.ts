@@ -1109,6 +1109,8 @@ export class UserServiceService implements OnModuleInit {
       tariff_home: dto.tariff_home,
       tariff_center: dto.tariff_center,
       add_order: dto.add_order ?? false,
+      cancelled_handover_qr_required:
+        dto.cancelled_handover_qr_required ?? true,
       expense_proof_conditions: dto.expense_proof_conditions ?? null,
       default_tariff: dto.default_tariff,
       isDeleted: false,
@@ -1291,6 +1293,7 @@ export class UserServiceService implements OnModuleInit {
       tariff_center: market.tariff_center,
       default_tariff: market.default_tariff,
       add_order: market.add_order,
+      cancelled_handover_qr_required: market.cancelled_handover_qr_required,
       expense_proof_conditions: market.expense_proof_conditions,
       password_changed: false,
     };
@@ -1332,6 +1335,11 @@ export class UserServiceService implements OnModuleInit {
       market.add_order = dto.add_order;
     }
 
+    if (typeof dto.cancelled_handover_qr_required !== 'undefined') {
+      market.cancelled_handover_qr_required =
+        dto.cancelled_handover_qr_required;
+    }
+
     if (typeof dto.expense_proof_conditions !== 'undefined') {
       // De-dupe; empty array clears the policy (proof never required).
       market.expense_proof_conditions = Array.from(
@@ -1355,6 +1363,8 @@ export class UserServiceService implements OnModuleInit {
         tariff_center: saved.tariff_center,
         default_tariff: saved.default_tariff,
         add_order: saved.add_order,
+        cancelled_handover_qr_required:
+          saved.cancelled_handover_qr_required,
         expense_proof_conditions: saved.expense_proof_conditions,
         password_changed: Boolean(dto.password),
       },
