@@ -4,6 +4,7 @@ import {
   IsArray,
   IsEnum,
   IsISO8601,
+  MaxLength,
   MinLength,
   IsNotEmpty,
   IsNumber,
@@ -18,6 +19,13 @@ enum OrderSourceDto {
   INTERNAL = 'internal',
   EXTERNAL = 'external',
   BRANCH = 'branch',
+}
+
+enum CancelledManualOverrideReasonDto {
+  TORN = 'QR yirtilgan',
+  UNREADABLE = "QR o'qilmayapti",
+  MISSING = "Label yo'qolgan",
+  WET = 'QR namlangan yoki xiralashgan',
 }
 
 const parseFormattedNumber = (value: unknown): number | unknown => {
@@ -455,9 +463,14 @@ export class CancelledManualOverrideDto {
   @IsString()
   order_id!: string;
 
-  @ApiProperty({ example: 'QR yirtilgan' })
+  @ApiProperty({
+    example: CancelledManualOverrideReasonDto.TORN,
+    enum: CancelledManualOverrideReasonDto,
+  })
   @IsNotEmpty()
   @IsString()
+  @IsEnum(CancelledManualOverrideReasonDto)
+  @MaxLength(80)
   reason!: string;
 }
 

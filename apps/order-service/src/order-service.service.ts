@@ -49,6 +49,14 @@ import {
 import type { EntityManager } from 'typeorm';
 import { successRes } from '../../../libs/common/helpers/response';
 
+const CANCELLED_HANDOVER_MANUAL_REASONS = new Set([
+  'QR yirtilgan',
+  "QR o'qilmayapti",
+  "Label yo'qolgan",
+  'QR namlangan yoki xiralashgan',
+]);
+const CANCELLED_HANDOVER_MANUAL_REASON_MAX_LENGTH = 80;
+
 @Injectable()
 export class OrderServiceService implements OnModuleInit {
   private readonly logger = new Logger(OrderServiceService.name);
@@ -3286,6 +3294,16 @@ export class OrderServiceService implements OnModuleInit {
     }
     if (manualOverrideByOrderId.size !== manualOverrides.length) {
       this.badRequest('manual_overrides ichida takror order bor');
+    }
+    const invalidManualOverrideReasons = manualOverrides.filter(
+      (item) =>
+        item.reason.length > CANCELLED_HANDOVER_MANUAL_REASON_MAX_LENGTH ||
+        !CANCELLED_HANDOVER_MANUAL_REASONS.has(item.reason),
+    );
+    if (invalidManualOverrideReasons.length) {
+      this.badRequest(
+        'manual_overrides.reason noto‘g‘ri yoki juda uzun',
+      );
     }
     const invalidManualOverrideIds = [...manualOverrideByOrderId.keys()].filter(
       (orderId) => !orderIds.includes(orderId),
