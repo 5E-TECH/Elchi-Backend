@@ -2596,16 +2596,19 @@ export class BranchServiceService implements OnModuleInit {
             : managerTariffHome;
           const courierId = String(order?.courier_id ?? '').trim();
           const courierTariffs = courierTariffMap.get(courierId);
+          const savedCourierShare = Number(order?.courier_share ?? NaN);
           const savedCourierTariff = Number(order?.courier_tariff ?? NaN);
-          const courierTariff = Number.isFinite(savedCourierTariff)
-            ? Math.max(savedCourierTariff, 0)
-            : isCenter
-              ? Number(courierTariffs?.center ?? 0)
-              : Number(courierTariffs?.home ?? 0);
+          const courierShare = Number.isFinite(savedCourierShare)
+            ? Math.max(savedCourierShare, 0)
+            : Number.isFinite(savedCourierTariff)
+              ? Math.max(savedCourierTariff, 0)
+              : isCenter
+                ? Number(courierTariffs?.center ?? 0)
+                : Number(courierTariffs?.home ?? 0);
 
           return {
             courierId,
-            courierReceivable: Math.max(totalPrice - courierTariff, 0),
+            courierReceivable: Math.max(totalPrice - courierShare, 0),
             hqPayable: Math.max(totalPrice - managerTariff, 0),
           };
         };

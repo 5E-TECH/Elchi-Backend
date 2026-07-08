@@ -1152,6 +1152,28 @@ export class OrderServiceService implements OnModuleInit {
     return [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID];
   }
 
+  private async countHistoricallyCancelledOrders(
+    range: { start: Date; end: Date } | null,
+    branchId?: string,
+  ) {
+    const statuses = [Order_status.CANCELLED, Order_status.CANCELLED_SENT];
+    const query = this.applyAnalyticsBranchScope(
+      this.orderTrackingRepo
+        .createQueryBuilder('t')
+        .innerJoin(Order, 'o', 'o.id = t.order_id')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('t.to_status IN (:...statuses)', { statuses }),
+      branchId,
+    ).select('COUNT(DISTINCT t.order_id)', 'count');
+
+    if (range) {
+      query.andWhere('t.created_at BETWEEN :start AND :end', range);
+    }
+
+    const row = await query.getRawOne<{ count?: string | number }>();
+    return Number(row?.count ?? 0);
+  }
+
   private applyAnalyticsBranchScope<
     T extends { andWhere: (...args: any[]) => T },
   >(query: T, branchId?: string): T {
@@ -7049,13 +7071,6 @@ export class OrderServiceService implements OnModuleInit {
         .where('o.isDeleted = :isDeleted', { isDeleted: false }),
       branchId,
     );
-    const cancelledQuery = this.applyAnalyticsBranchScope(
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.status = :status', { status: Order_status.CANCELLED }),
-      branchId,
-    );
     const soldOrdersQuery = this.applyAnalyticsBranchScope(
       this.orderRepo
         .createQueryBuilder('o')
@@ -7074,7 +7089,6 @@ export class OrderServiceService implements OnModuleInit {
       const startMs = String(range.start.getTime());
       const endMs = String(range.end.getTime());
       acceptedQuery.andWhere('o.createdAt BETWEEN :start AND :end', range);
-      cancelledQuery.andWhere('o.updatedAt BETWEEN :start AND :end', range);
       soldOrdersQuery.andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
         startMs,
         endMs,
@@ -7083,7 +7097,7 @@ export class OrderServiceService implements OnModuleInit {
 
     const [acceptedCount, cancelled, soldOrders] = await Promise.all([
       acceptedQuery.getCount(),
-      cancelledQuery.getCount(),
+      this.countHistoricallyCancelledOrders(range, branchId),
       soldOrdersQuery.getMany(),
     ]);
     const soldAndPaid = soldOrders.length;
