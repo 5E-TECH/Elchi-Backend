@@ -233,7 +233,8 @@ describe('AnalyticsServiceService', () => {
   it('getRevenueStats builds empty chart when revenue data is empty', async () => {
     rmqSendMock
       .mockResolvedValueOnce({ data: { data: [] } })
-      .mockResolvedValueOnce({ data: { any: 1 } });
+      .mockResolvedValueOnce({ data: { any: 1 } })
+      .mockResolvedValueOnce({ data: { items: [] } });
 
     const res = await service.getRevenueStats(
       { id: 'a', roles: ['admin'] },
