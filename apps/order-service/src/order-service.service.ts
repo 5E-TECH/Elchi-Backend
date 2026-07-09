@@ -1490,6 +1490,42 @@ export class OrderServiceService implements OnModuleInit {
     return response?.data ?? [];
   }
 
+  private async getBranchesByIds(ids: string[]) {
+    const uniqueIds = Array.from(
+      new Set(ids.map((id) => String(id ?? '').trim()).filter(Boolean)),
+    );
+    if (!uniqueIds.length) return [];
+
+    const rows = await Promise.all(
+      uniqueIds.map((id) =>
+        rmqSend<{
+          data?: {
+            id?: string;
+            name?: string | null;
+            code?: string | null;
+          };
+        }>(
+          this.branchClient,
+          { cmd: 'branch.find_by_id' },
+          { id, requester: { id: 'system', roles: [Roles.SUPERADMIN] } },
+          { attachRequestId: false, retries: 1 },
+        )
+          .then((response) => response?.data ?? null)
+          .catch(() => null),
+      ),
+    );
+
+    return rows
+      .filter((row): row is { id?: string; name?: string | null; code?: string | null } =>
+        Boolean(row?.id),
+      )
+      .map((row) => ({
+        id: String(row.id),
+        name: row.name ?? null,
+        code: row.code ?? null,
+      }));
+  }
+
   private async getUserById(id: string) {
     const response = await rmqSend<{
       data?: {
@@ -7506,6 +7542,67 @@ export class OrderServiceService implements OnModuleInit {
         };
       })
       .filter((row) => row.total_orders >= 30)
+      .sort((a, b) => b.success_rate - a.success_rate)
+      .slice(0, limit);
+  }
+
+  async getTopBranches(limit = 10, branchId?: string) {
+    const soldStatuses = this.soldStatuses();
+    const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+
+    const branchExpression =
+      'COALESCE(o.home_branch_id, o.branch_id, o.holder_branch_id)';
+    const rows = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .select(branchExpression, 'branch_id')
+        .addSelect('COUNT(*)', 'total_orders')
+        .addSelect(
+          `SUM(CASE WHEN o.status IN (:...statuses) THEN 1 ELSE 0 END)`,
+          'successful_orders',
+        )
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.createdAt >= :lastMonth', { lastMonth })
+        .andWhere(
+          '(o.home_branch_id IS NOT NULL OR o.branch_id IS NOT NULL OR o.holder_branch_id IS NOT NULL)',
+        ),
+      branchId,
+    )
+      .setParameter('statuses', soldStatuses)
+      .groupBy(branchExpression)
+      .getRawMany<{
+        branch_id: string;
+        total_orders: string;
+        successful_orders: string;
+      }>();
+
+    const branches = await this.getBranchesByIds(
+      rows.map((row) => String(row.branch_id)),
+    );
+    const branchMap = new Map(branches.map((branch) => [String(branch.id), branch]));
+
+    return rows
+      .filter((row) => Number(row.total_orders) >= 30)
+      .map((row) => {
+        const totalOrders = Number(row.total_orders) || 0;
+        const successfulOrders = Number(row.successful_orders) || 0;
+        const successRate =
+          totalOrders > 0
+            ? Number(((successfulOrders * 100) / totalOrders).toFixed(2))
+            : 0;
+        const branch = branchMap.get(String(row.branch_id));
+        const branchName = branch?.code
+          ? `${branch.name ?? `Filial ${row.branch_id}`} (${branch.code})`
+          : branch?.name;
+
+        return {
+          branch_id: String(row.branch_id),
+          branch_name: branchName ?? `Filial ${row.branch_id}`,
+          total_orders: totalOrders,
+          successful_orders: successfulOrders,
+          success_rate: successRate,
+        };
+      })
       .sort((a, b) => b.success_rate - a.success_rate)
       .slice(0, limit);
   }
