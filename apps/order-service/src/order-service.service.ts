@@ -1198,8 +1198,21 @@ export class OrderServiceService implements OnModuleInit {
     if (!branchId) {
       return query;
     }
+    const custodySubQuery = this.orderCustodyEventRepo
+      .createQueryBuilder('oce')
+      .select('1')
+      .where('oce.order_id = o.id')
+      .andWhere(
+        '(oce.from_branch_id = :analyticsBranchId OR oce.to_branch_id = :analyticsBranchId)',
+      )
+      .getQuery();
+
     return query.andWhere(
-      '(o.branch_id = :analyticsBranchId OR o.holder_branch_id = :analyticsBranchId)',
+      `(
+        o.branch_id = :analyticsBranchId
+        OR o.holder_branch_id = :analyticsBranchId
+        OR EXISTS (${custodySubQuery})
+      )`,
       { analyticsBranchId: branchId },
     );
   }
