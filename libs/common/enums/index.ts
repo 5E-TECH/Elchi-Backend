@@ -99,6 +99,8 @@ export enum Source_type {
  */
 export enum FinancialSource_type {
   SELL_PROFIT = 'sell_profit', // Net profit from a sold order (market tariff - courier tariff)
+  SELL_EXTRA_COST = 'sell_extra_cost', // Extra cost withheld when an order is sold
+  CANCEL_EXTRA_COST = 'cancel_extra_cost', // Extra cost withheld when an order is cancelled
   MANUAL_INCOME = 'manual_income', // Manually recorded income
   MANUAL_EXPENSE = 'manual_expense', // Manually recorded expense
   SALARY = 'salary', // Salary paid out

@@ -2775,6 +2775,29 @@ export class OrderServiceService implements OnModuleInit {
             comment: "Qo'shimcha xarajat orqaga qaytarildi",
           });
         }
+
+        const rolledBackExtraCost = Math.max(
+          shouldRollbackMarketExtraCost
+            ? Number(marketExtraCost?.amount ?? 0)
+            : 0,
+          shouldRollbackCourierExtraCost
+            ? Number(courierExtraCost?.amount ?? 0)
+            : 0,
+        );
+        if (rolledBackExtraCost > 0) {
+          await this.outbox.enqueue(
+            'FINANCE',
+            'finance.financial_balance.record',
+            {
+              amount: rolledBackExtraCost,
+              source_type: 'correction',
+              order_id: String(order.id),
+              related_user_id: order.market_id ? String(order.market_id) : null,
+              comment: `Order #${order.id} extra cost rollback`,
+            },
+            { manager: tx },
+          );
+        }
       }
 
       // Reverse the sale's cashbox legs EXACTLY (decoupled, snapshot-based) — the
@@ -5092,6 +5115,19 @@ export class OrderServiceService implements OnModuleInit {
             proof_files: proofFiles.length ? proofFiles : undefined,
           });
         }
+
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.financial_balance.record',
+          {
+            amount: -extraCost,
+            source_type: 'sell_extra_cost',
+            order_id: String(order.id),
+            related_user_id: order.market_id ? String(order.market_id) : null,
+            comment: `Order #${order.id} sell extra cost`,
+          },
+          { manager: tx },
+        );
       }
 
       await this.updateFull(
@@ -5322,6 +5358,19 @@ export class OrderServiceService implements OnModuleInit {
             proof_files: proofFiles.length ? proofFiles : undefined,
           });
         }
+
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.financial_balance.record',
+          {
+            amount: -extraCost,
+            source_type: 'cancel_extra_cost',
+            order_id: String(order.id),
+            related_user_id: order.market_id ? String(order.market_id) : null,
+            comment: `Order #${order.id} cancel extra cost`,
+          },
+          { manager: tx },
+        );
       }
 
       await this.updateFull(
@@ -5966,6 +6015,19 @@ export class OrderServiceService implements OnModuleInit {
             proof_files: proofFiles.length ? proofFiles : undefined,
           });
         }
+
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.financial_balance.record',
+          {
+            amount: -extraCost,
+            source_type: 'sell_extra_cost',
+            order_id: String(order.id),
+            related_user_id: order.market_id ? String(order.market_id) : null,
+            comment: `Order #${order.id} sell extra cost`,
+          },
+          { manager: tx },
+        );
       }
 
       await this.updateFull(
