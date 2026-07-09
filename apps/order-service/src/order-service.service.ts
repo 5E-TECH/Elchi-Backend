@@ -1157,6 +1157,15 @@ export class OrderServiceService implements OnModuleInit {
     branchId?: string,
   ) {
     const statuses = [Order_status.CANCELLED, Order_status.CANCELLED_SENT];
+    const custodySubQuery = this.orderCustodyEventRepo
+      .createQueryBuilder('oce')
+      .select('1')
+      .where('oce.order_id = o.id')
+      .andWhere(
+        '(oce.from_branch_id = :analyticsBranchId OR oce.to_branch_id = :analyticsBranchId)',
+      )
+      .getQuery();
+
     const query = this.orderTrackingRepo
       .createQueryBuilder('t')
       .innerJoin(Order, 'o', 'o.id = t.order_id')
@@ -1169,15 +1178,7 @@ export class OrderServiceService implements OnModuleInit {
         `(
           o.branch_id = :analyticsBranchId
           OR o.holder_branch_id = :analyticsBranchId
-          OR EXISTS (
-            SELECT 1
-            FROM order_custody_events oce
-            WHERE oce.order_id = o.id
-              AND (
-                oce.from_branch_id = :analyticsBranchId
-                OR oce.to_branch_id = :analyticsBranchId
-              )
-          )
+          OR EXISTS (${custodySubQuery})
         )`,
         { analyticsBranchId: branchId },
       );
