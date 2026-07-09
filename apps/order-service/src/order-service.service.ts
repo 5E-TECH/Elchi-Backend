@@ -1157,14 +1157,31 @@ export class OrderServiceService implements OnModuleInit {
     branchId?: string,
   ) {
     const statuses = [Order_status.CANCELLED, Order_status.CANCELLED_SENT];
-    const query = this.applyAnalyticsBranchScope(
-      this.orderTrackingRepo
-        .createQueryBuilder('t')
-        .innerJoin(Order, 'o', 'o.id = t.order_id')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('t.to_status IN (:...statuses)', { statuses }),
-      branchId,
-    ).select('COUNT(DISTINCT t.order_id)', 'count');
+    const query = this.orderTrackingRepo
+      .createQueryBuilder('t')
+      .innerJoin(Order, 'o', 'o.id = t.order_id')
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('t.to_status IN (:...statuses)', { statuses })
+      .select('COUNT(DISTINCT t.order_id)', 'count');
+
+    if (branchId) {
+      query.andWhere(
+        `(
+          o.branch_id = :analyticsBranchId
+          OR o.holder_branch_id = :analyticsBranchId
+          OR EXISTS (
+            SELECT 1
+            FROM order_custody_events oce
+            WHERE oce.order_id = o.id
+              AND (
+                oce.from_branch_id = :analyticsBranchId
+                OR oce.to_branch_id = :analyticsBranchId
+              )
+          )
+        )`,
+        { analyticsBranchId: branchId },
+      );
+    }
 
     if (range) {
       query.andWhere('t.created_at BETWEEN :start AND :end', range);
