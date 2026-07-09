@@ -871,6 +871,16 @@ export class OrderServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'order.analytics.top_branches' })
+  analyticsTopBranches(
+    @Payload() data: { limit?: number; branch_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getTopBranches(data.limit, data.branch_id),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.analytics.top_operators_by_market' })
   analyticsTopOperatorsByMarket(
     @Payload() data: { requester: { id: string }; limit?: number },

@@ -518,7 +518,7 @@ export class AnalyticsServiceService {
           markets: [],
           couriers: [],
           topMarkets: [],
-          topCouriers: [],
+          topBranches: [],
           branchDashboard: null,
         },
         200,
@@ -526,7 +526,7 @@ export class AnalyticsServiceService {
       );
     }
 
-    const [orders, markets, couriers, topMarkets, topCouriers] =
+    const [orders, markets, couriers, topMarkets, topBranches] =
       await Promise.all([
         rmqSend(
           this.orderClient,
@@ -550,7 +550,7 @@ export class AnalyticsServiceService {
         ).catch(() => null),
         rmqSend(
           this.orderClient,
-          { cmd: 'order.analytics.top_couriers' },
+          { cmd: 'order.analytics.top_branches' },
           branchId ? { branch_id: branchId } : {},
         ).catch(() => null),
       ]);
@@ -570,7 +570,7 @@ export class AnalyticsServiceService {
         markets: this.unwrap(markets),
         couriers: this.unwrap(couriers),
         topMarkets: this.unwrap(topMarkets),
-        topCouriers: this.unwrap(topCouriers),
+        topBranches: this.unwrap(topBranches),
         branchDashboard,
       },
       200,
