@@ -1721,6 +1721,8 @@ export class FinanceGatewayController {
   })
   @ApiQuery({ name: 'operation_type', required: false })
   @ApiQuery({ name: 'source_type', required: false })
+  @ApiQuery({ name: 'source_id', required: false })
+  @ApiQuery({ name: 'source_user_id', required: false })
   @ApiQuery({ name: 'created_by', required: false })
   @ApiQuery({ name: 'from_date', required: false })
   @ApiQuery({ name: 'to_date', required: false })
