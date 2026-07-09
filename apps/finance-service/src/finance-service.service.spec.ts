@@ -329,7 +329,7 @@ describe('FinanceServiceService.myCashbox', () => {
 });
 
 describe('FinanceServiceService.financialBalance', () => {
-  it('uses main + branch receivable - market payable', async () => {
+  it('uses main + branch receivable - market cashbox payable', async () => {
     const manager = makeManager();
     const { service, cashboxRepo } = makeService(manager);
     cashboxRepo.findOne.mockResolvedValue({
@@ -354,13 +354,16 @@ describe('FinanceServiceService.financialBalance', () => {
 
     const response: any = await service.financialBalance();
 
-    expect(response.data.currentSituation).toBe(550000);
+    expect(response.data.currentSituation).toBe(-299999);
     expect(response.data.branches.branchReceivable).toBe(200000);
-    expect(response.data.markets.marketPayable).toBe(150000);
-    expect(response.data.markets.marketsTotalBalans).toBe(-150000);
+    expect(response.data.markets.marketPayable).toBe(999999);
+    expect(response.data.markets.marketsTotalBalans).toBe(-999999);
+    expect(response.data.markets.items).toEqual([
+      { market_id: '20', amount: 999999 },
+    ]);
     expect(response.data.couriers.couriersTotalBalanse).toBe(0);
     expect(response.data.formula).toBe(
-      'main_cashbox + branch_receivable - market_payable',
+      'main_cashbox + branch_receivable - market_cashbox_payable',
     );
   });
 });

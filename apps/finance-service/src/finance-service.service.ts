@@ -2519,7 +2519,11 @@ export class FinanceServiceService implements OnModuleInit {
         Number(settlement.branch_receivable ?? 0),
         0,
       );
-      const marketPayable = Math.max(Number(settlement.market_payable ?? 0), 0);
+      const marketCashboxTotal = allMarketCashboxes.reduce(
+        (sum, cashbox) => sum + Number(cashbox.balance ?? 0),
+        0,
+      );
+      const marketPayable = Math.max(marketCashboxTotal, 0);
       const difference = branchReceivable - marketPayable;
       const currentSituation = Number(mainCashbox.balance) + difference;
 
@@ -2535,14 +2539,17 @@ export class FinanceServiceService implements OnModuleInit {
             allMarketCashboxes,
             marketPayable,
             marketsTotalBalans: -marketPayable,
-            items: settlement.markets ?? [],
+            items: allMarketCashboxes.map((cashbox) => ({
+              market_id: String(cashbox.user_id),
+              amount: Math.max(Number(cashbox.balance ?? 0), 0),
+            })),
           },
           couriers: {
             allCourierCashboxes: [],
             couriersTotalBalanse: 0,
           },
           difference,
-          formula: 'main_cashbox + branch_receivable - market_payable',
+          formula: 'main_cashbox + branch_receivable - market_cashbox_payable',
         },
         200,
         'Financial balance infos',
