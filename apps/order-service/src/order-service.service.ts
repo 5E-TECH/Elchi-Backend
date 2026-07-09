@@ -1155,6 +1155,8 @@ export class OrderServiceService implements OnModuleInit {
   private async countHistoricallyCancelledOrders(
     range: { start: Date; end: Date } | null,
     branchId?: string,
+    courierId?: string,
+    postIds: string[] = [],
   ) {
     const statuses = [Order_status.CANCELLED, Order_status.CANCELLED_SENT];
     const custodySubQuery = this.orderCustodyEventRepo
@@ -1181,6 +1183,31 @@ export class OrderServiceService implements OnModuleInit {
           OR EXISTS (${custodySubQuery})
         )`,
         { analyticsBranchId: branchId },
+      );
+    }
+
+    if (courierId) {
+      const courierCustodySubQuery = this.orderCustodyEventRepo
+        .createQueryBuilder('oce_courier')
+        .select('1')
+        .where('oce_courier.order_id = o.id')
+        .andWhere(
+          '(oce_courier.from_courier_id = :analyticsCourierId OR oce_courier.to_courier_id = :analyticsCourierId)',
+        )
+        .getQuery();
+      const hasPostScope = postIds.length > 0;
+
+      query.andWhere(
+        `(
+          o.courier_id = :analyticsCourierId
+          OR o.holder_courier_id = :analyticsCourierId
+          ${hasPostScope ? 'OR o.post_id IN (:...analyticsPostIds)' : ''}
+          OR EXISTS (${courierCustodySubQuery})
+        )`,
+        {
+          analyticsCourierId: courierId,
+          ...(hasPostScope ? { analyticsPostIds: postIds } : {}),
+        },
       );
     }
 
@@ -1214,6 +1241,33 @@ export class OrderServiceService implements OnModuleInit {
         OR EXISTS (${custodySubQuery})
       )`,
       { analyticsBranchId: branchId },
+    );
+  }
+
+  private applyAnalyticsCourierScope<
+    T extends { andWhere: (...args: any[]) => T },
+  >(query: T, courierId: string, postIds: string[] = []): T {
+    const custodySubQuery = this.orderCustodyEventRepo
+      .createQueryBuilder('oce')
+      .select('1')
+      .where('oce.order_id = o.id')
+      .andWhere(
+        '(oce.from_courier_id = :analyticsCourierId OR oce.to_courier_id = :analyticsCourierId)',
+      )
+      .getQuery();
+    const hasPostScope = postIds.length > 0;
+
+    return query.andWhere(
+      `(
+        o.courier_id = :analyticsCourierId
+        OR o.holder_courier_id = :analyticsCourierId
+        ${hasPostScope ? 'OR o.post_id IN (:...analyticsPostIds)' : ''}
+        OR EXISTS (${custodySubQuery})
+      )`,
+      {
+        analyticsCourierId: courierId,
+        ...(hasPostScope ? { analyticsPostIds: postIds } : {}),
+      },
     );
   }
 
@@ -7522,11 +7576,10 @@ export class OrderServiceService implements OnModuleInit {
     courierId: string,
     startDate?: string,
     endDate?: string,
+    all = false,
   ) {
-    const { start, end } = this.analyticsDateRange(startDate, endDate);
+    const range = all ? null : this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
-    const startMs = String(start.getTime());
-    const endMs = String(end.getTime());
     const courierPosts = (await this.getAllPostsForAnalytics()).filter(
       (post) => {
         return String(post.courier_id) === String(courierId);
@@ -7534,46 +7587,38 @@ export class OrderServiceService implements OnModuleInit {
     );
 
     const postIds = courierPosts.map((post) => post.id);
-    if (!postIds.length) {
-      return {
-        totalOrders: 0,
-        soldOrders: 0,
-        canceledOrders: 0,
-        profit: 0,
-        successRate: 0,
-      };
+    const totalOrdersQuery = this.applyAnalyticsCourierScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false }),
+      courierId,
+      postIds,
+    );
+    const soldOrdersQuery = this.applyAnalyticsCourierScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses }),
+      courierId,
+      postIds,
+    );
+
+    if (range) {
+      const startMs = String(range.start.getTime());
+      const endMs = String(range.end.getTime());
+      totalOrdersQuery.andWhere('o.updatedAt BETWEEN :start AND :end', range);
+      soldOrdersQuery.andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
+        startMs,
+        endMs,
+      });
     }
 
-    const [totalOrders, soldOrders, canceledOrders, soldOrderEntities] =
-      await Promise.all([
-        this.orderRepo
-          .createQueryBuilder('o')
-          .where('o.isDeleted = :isDeleted', { isDeleted: false })
-          .andWhere('o.post_id IN (:...postIds)', { postIds })
-          .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-          .getCount(),
-        this.orderRepo
-          .createQueryBuilder('o')
-          .where('o.isDeleted = :isDeleted', { isDeleted: false })
-          .andWhere('o.post_id IN (:...postIds)', { postIds })
-          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-          .getCount(),
-        this.orderRepo
-          .createQueryBuilder('o')
-          .where('o.isDeleted = :isDeleted', { isDeleted: false })
-          .andWhere('o.post_id IN (:...postIds)', { postIds })
-          .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-          .andWhere('o.status = :status', { status: Order_status.CANCELLED })
-          .getCount(),
-        this.orderRepo
-          .createQueryBuilder('o')
-          .where('o.isDeleted = :isDeleted', { isDeleted: false })
-          .andWhere('o.post_id IN (:...postIds)', { postIds })
-          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-          .getMany(),
-      ]);
+    const [totalOrders, canceledOrders, soldOrderEntities] = await Promise.all([
+      totalOrdersQuery.getCount(),
+      this.countHistoricallyCancelledOrders(range, undefined, courierId, postIds),
+      soldOrdersQuery.getMany(),
+    ]);
+    const soldOrders = soldOrderEntities.length;
 
     const couriers = await this.getCouriersByIds([courierId]);
     const courier = couriers[0];
