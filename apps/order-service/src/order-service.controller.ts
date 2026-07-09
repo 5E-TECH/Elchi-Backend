@@ -884,7 +884,12 @@ export class OrderServiceController {
   @MessagePattern({ cmd: 'order.analytics.courier_stat' })
   analyticsCourierStat(
     @Payload()
-    data: { requester: { id: string }; startDate?: string; endDate?: string },
+    data: {
+      requester: { id: string };
+      startDate?: string;
+      endDate?: string;
+      all?: boolean;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -892,6 +897,7 @@ export class OrderServiceController {
         data.requester.id,
         data.startDate,
         data.endDate,
+        data.all,
       ),
     );
   }
