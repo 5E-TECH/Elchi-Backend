@@ -1152,6 +1152,17 @@ export class OrderServiceService implements OnModuleInit {
     return [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID];
   }
 
+  private activeMarketStatuses() {
+    return [
+      Order_status.CREATED,
+      Order_status.NEW,
+      Order_status.RECEIVED,
+      Order_status.ON_THE_ROAD,
+      Order_status.WAITING,
+      Order_status.WAITING_CUSTOMER,
+    ];
+  }
+
   private async countHistoricallyCancelledOrders(
     range: { start: Date; end: Date } | null,
     branchId?: string,
@@ -7822,6 +7833,7 @@ export class OrderServiceService implements OnModuleInit {
         totalOrders: 0,
         soldOrders: 0,
         canceledOrders: 0,
+        inProgress: 0,
         profit: 0,
         successRate: 0,
       };
@@ -7829,29 +7841,37 @@ export class OrderServiceService implements OnModuleInit {
 
     const orderIds = allOrders.map((order) => order.id);
 
-    const [soldOrders, canceledOrders, soldOrderEntities] = await Promise.all([
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.id IN (:...orderIds)', { orderIds })
-        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-        .getCount(),
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.id IN (:...orderIds)', { orderIds })
-        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-        .andWhere('o.status = :status', { status: Order_status.CANCELLED })
-        .getCount(),
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.id IN (:...orderIds)', { orderIds })
-        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-        .getMany(),
-    ]);
+    const activeStatuses = this.activeMarketStatuses();
+    const [soldOrders, canceledOrders, inProgress, soldOrderEntities] =
+      await Promise.all([
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.id IN (:...orderIds)', { orderIds })
+          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
+          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+          .getCount(),
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.id IN (:...orderIds)', { orderIds })
+          .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+          .andWhere('o.status = :status', { status: Order_status.CANCELLED })
+          .getCount(),
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.id IN (:...orderIds)', { orderIds })
+          .andWhere('o.status IN (:...statuses)', { statuses: activeStatuses })
+          .getCount(),
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.id IN (:...orderIds)', { orderIds })
+          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
+          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+          .getMany(),
+      ]);
 
     const profit = soldOrderEntities.reduce(
       (sum, order) => sum + Number(order.to_be_paid ?? 0),
@@ -7866,6 +7886,7 @@ export class OrderServiceService implements OnModuleInit {
       totalOrders: allOrders.length,
       soldOrders,
       canceledOrders,
+      inProgress,
       profit,
       successRate,
     };
