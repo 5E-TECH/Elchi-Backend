@@ -1152,6 +1152,14 @@ export class OrderServiceService implements OnModuleInit {
     return [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID];
   }
 
+  private cancelledMarketStatuses() {
+    return [
+      Order_status.CANCELLED,
+      Order_status.CANCELLED_SENT,
+      Order_status.CLOSED,
+    ];
+  }
+
   private activeMarketStatuses() {
     return [
       Order_status.CREATED,
@@ -1160,6 +1168,7 @@ export class OrderServiceService implements OnModuleInit {
       Order_status.ON_THE_ROAD,
       Order_status.WAITING,
       Order_status.WAITING_CUSTOMER,
+      Order_status.RETURNED_TO_MARKET,
     ];
   }
 
@@ -7842,6 +7851,7 @@ export class OrderServiceService implements OnModuleInit {
     const orderIds = allOrders.map((order) => order.id);
 
     const activeStatuses = this.activeMarketStatuses();
+    const cancelledStatuses = this.cancelledMarketStatuses();
     const [soldOrders, canceledOrders, inProgress, soldOrderEntities] =
       await Promise.all([
         this.orderRepo
@@ -7856,7 +7866,9 @@ export class OrderServiceService implements OnModuleInit {
           .where('o.isDeleted = :isDeleted', { isDeleted: false })
           .andWhere('o.id IN (:...orderIds)', { orderIds })
           .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-          .andWhere('o.status = :status', { status: Order_status.CANCELLED })
+          .andWhere('o.status IN (:...statuses)', {
+            statuses: cancelledStatuses,
+          })
           .getCount(),
         this.orderRepo
           .createQueryBuilder('o')
