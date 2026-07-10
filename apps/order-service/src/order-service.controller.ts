@@ -853,11 +853,16 @@ export class OrderServiceController {
 
   @MessagePattern({ cmd: 'order.analytics.top_markets' })
   analyticsTopMarkets(
-    @Payload() data: { limit?: number; branch_id?: string },
+    @Payload() data: { limit?: number; branch_id?: string; startDate?: string; endDate?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getTopMarkets(data.limit, data.branch_id),
+      this.orderService.getTopMarkets(
+        data.limit,
+        data.branch_id,
+        data.startDate,
+        data.endDate,
+      ),
     );
   }
 

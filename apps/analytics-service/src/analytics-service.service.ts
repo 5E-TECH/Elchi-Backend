@@ -525,7 +525,7 @@ export class AnalyticsServiceService {
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.top_markets' },
-          {},
+          normalized,
         ).catch(() => null),
         rmqSend(
           this.orderClient,
@@ -590,7 +590,7 @@ export class AnalyticsServiceService {
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.top_markets' },
-          branchId ? { branch_id: branchId } : {},
+          branchId ? { ...scopedRange, branch_id: branchId } : scopedRange,
         ).catch(() => null),
         rmqSend(
           this.orderClient,
