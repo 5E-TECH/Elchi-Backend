@@ -7511,9 +7511,16 @@ export class OrderServiceService implements OnModuleInit {
     return result;
   }
 
-  async getTopMarkets(limit = 10, branchId?: string) {
+  async getTopMarkets(
+    limit = 10,
+    branchId?: string,
+    startDate?: string,
+    endDate?: string,
+  ) {
     const soldStatuses = this.soldStatuses();
     const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const fromDate = startDate ? new Date(startDate) : lastMonth;
+    const toDate = endDate ? new Date(endDate) : undefined;
 
     const totalsRaw = await this.applyAnalyticsBranchScope(
       this.orderRepo
@@ -7525,7 +7532,8 @@ export class OrderServiceService implements OnModuleInit {
           'successful_orders',
         )
         .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.createdAt >= :lastMonth', { lastMonth })
+        .andWhere('o.createdAt >= :fromDate', { fromDate })
+        .andWhere(toDate ? 'o.createdAt <= :toDate' : '1=1', { toDate })
         .andWhere('o.market_id IS NOT NULL'),
       branchId,
     )
