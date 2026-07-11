@@ -1523,6 +1523,7 @@ export class OrderServiceService implements OnModuleInit {
             id?: string;
             name?: string | null;
             code?: string | null;
+            type?: BranchType | string | null;
           };
         }>(
           this.branchClient,
@@ -1536,13 +1537,19 @@ export class OrderServiceService implements OnModuleInit {
     );
 
     return rows
-      .filter((row): row is { id?: string; name?: string | null; code?: string | null } =>
-        Boolean(row?.id),
+      .filter(
+        (row): row is {
+          id?: string;
+          name?: string | null;
+          code?: string | null;
+          type?: BranchType | string | null;
+        } => Boolean(row?.id),
       )
       .map((row) => ({
         id: String(row.id),
         name: row.name ?? null,
         code: row.code ?? null,
+        type: row.type ?? null,
       }));
   }
 
@@ -7680,7 +7687,10 @@ export class OrderServiceService implements OnModuleInit {
     const branchMap = new Map(branches.map((branch) => [String(branch.id), branch]));
 
     return rows
-      .filter((row) => Number(row.total_orders) >= 30)
+      .filter((row) => {
+        const branch = branchMap.get(String(row.branch_id));
+        return Number(row.total_orders) >= 30 && branch?.type !== BranchType.HQ;
+      })
       .map((row) => {
         const totalOrders = Number(row.total_orders) || 0;
         const successfulOrders = Number(row.successful_orders) || 0;
