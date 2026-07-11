@@ -547,11 +547,23 @@ export class AnalyticsServiceService {
     }
 
     if (isAllTime) {
-      const orders = await rmqSend(
-        this.orderClient,
-        { cmd: 'order.analytics.overview' },
-        scopedRange,
-      ).catch(() => null);
+      const [orders, topMarkets, topBranches] = await Promise.all([
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.overview' },
+          scopedRange,
+        ).catch(() => null),
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.top_markets' },
+          branchId ? { ...scopedRange, branch_id: branchId } : scopedRange,
+        ).catch(() => null),
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.top_branches' },
+          branchId ? { ...scopedRange, branch_id: branchId } : scopedRange,
+        ).catch(() => null),
+      ]);
 
       return successRes(
         {
@@ -561,8 +573,8 @@ export class AnalyticsServiceService {
           ),
           markets: [],
           couriers: [],
-          topMarkets: [],
-          topBranches: [],
+          topMarkets: this.unwrap(topMarkets),
+          topBranches: this.unwrap(topBranches),
           branchDashboard: null,
         },
         200,
@@ -595,7 +607,7 @@ export class AnalyticsServiceService {
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.top_branches' },
-          branchId ? { branch_id: branchId } : {},
+          branchId ? { ...scopedRange, branch_id: branchId } : scopedRange,
         ).catch(() => null),
       ]);
     const branchDashboard = isBranchRole
