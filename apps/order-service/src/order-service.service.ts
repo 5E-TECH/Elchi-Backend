@@ -7636,9 +7636,16 @@ export class OrderServiceService implements OnModuleInit {
       .slice(0, limit);
   }
 
-  async getTopBranches(limit = 10, branchId?: string) {
+  async getTopBranches(
+    limit = 10,
+    branchId?: string,
+    startDate?: string,
+    endDate?: string,
+  ) {
     const soldStatuses = this.soldStatuses();
     const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const fromDate = startDate ? new Date(startDate) : lastMonth;
+    const toDate = endDate ? new Date(endDate) : undefined;
 
     const branchExpression =
       'COALESCE(o.home_branch_id, o.branch_id, o.holder_branch_id)';
@@ -7652,7 +7659,8 @@ export class OrderServiceService implements OnModuleInit {
           'successful_orders',
         )
         .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.createdAt >= :lastMonth', { lastMonth })
+        .andWhere('o.createdAt >= :fromDate', { fromDate })
+        .andWhere(toDate ? 'o.createdAt <= :toDate' : '1=1', { toDate })
         .andWhere(
           '(o.home_branch_id IS NOT NULL OR o.branch_id IS NOT NULL OR o.holder_branch_id IS NOT NULL)',
         ),
