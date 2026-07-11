@@ -461,7 +461,10 @@ export class AnalyticsServiceService {
   ) {
     const isAllTime = filter.all === true;
     const normalized = isAllTime
-      ? { all: true }
+      ? this.normalizeDashboardDateRange({
+          startDate: '1970-01-01',
+          endDate: new Date().toISOString(),
+        })
       : this.normalizeDashboardDateRange(filter);
     const roles = this.roleSet(requester);
     const isRegistrator = roles.has(Roles.REGISTRATOR);
