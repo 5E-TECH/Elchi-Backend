@@ -7305,11 +7305,16 @@ export class OrderServiceService implements OnModuleInit {
       });
     }
 
-    const [acceptedCount, cancelled, soldOrders] = await Promise.all([
-      acceptedQuery.getCount(),
+    const acceptedCountQuery = acceptedQuery
+      .clone()
+      .select('COUNT(DISTINCT COALESCE(o.parent_order_id, o.id))', 'count');
+
+    const [acceptedCountRow, cancelled, soldOrders] = await Promise.all([
+      acceptedCountQuery.getRawOne<{ count?: string | number }>(),
       this.countHistoricallyCancelledOrders(range, branchId),
       soldOrdersQuery.getMany(),
     ]);
+    const acceptedCount = Number(acceptedCountRow?.count ?? 0);
     const soldAndPaid = soldOrders.length;
 
     const marketIds = [
