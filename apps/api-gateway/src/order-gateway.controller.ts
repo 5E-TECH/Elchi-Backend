@@ -1042,6 +1042,8 @@ export class OrderGatewayController {
     @Query('region_id') region_id?: string,
     @Query('district_id') district_id?: string,
     @Query('branch_id') branch_id?: string,
+    @Query('courier_ids') courier_ids?: string | string[],
+    @Query('fetch_all') fetch_all?: string,
     @Query('source') source?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
@@ -1080,6 +1082,11 @@ export class OrderGatewayController {
     }
 
     const pagination = this.parsePaginationQuery(page, limit);
+    const normalizedCourierIds = (Array.isArray(courier_ids) ? courier_ids : courier_ids ? [courier_ids] : [])
+      .flatMap((value) => String(value).split(','))
+      .map((value) => value.trim())
+      .filter(Boolean);
+    const useFetchAll = String(fetch_all ?? '').toLowerCase() === 'true';
 
     const statuses = this.parseStatusQuery(status);
     const isCancelledTab =
@@ -1105,6 +1112,8 @@ export class OrderGatewayController {
         start_day,
         end_day,
         courier,
+        courier_ids: normalizedCourierIds.length ? normalizedCourierIds : undefined,
+        fetch_all: useFetchAll || undefined,
         region_id,
         district_id,
         branch_id: resolvedBranchId,
@@ -1139,6 +1148,8 @@ export class OrderGatewayController {
   @ApiOperation({ summary: 'List orders by market ID with pagination' })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
   @ApiQuery({ name: 'branch_id', required: false, type: String })
+  @ApiQuery({ name: 'courier_ids', required: false, type: String, isArray: true })
+  @ApiQuery({ name: 'fetch_all', required: false, type: Boolean })
   @ApiQuery({
     name: 'source',
     required: false,
