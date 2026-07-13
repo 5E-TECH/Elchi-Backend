@@ -1178,7 +1178,11 @@ export class OrderServiceService implements OnModuleInit {
     courierId?: string,
     postIds: string[] = [],
   ) {
-    const statuses = [Order_status.CANCELLED, Order_status.CANCELLED_SENT];
+    const statuses = [
+      Order_status.CANCELLED,
+      Order_status.CANCELLED_SENT,
+      Order_status.CLOSED,
+    ];
     const custodySubQuery = this.orderCustodyEventRepo
       .createQueryBuilder('oce')
       .select('1')
@@ -1188,9 +1192,19 @@ export class OrderServiceService implements OnModuleInit {
       )
       .getQuery();
 
+    const parentCustodySubQuery = this.orderCustodyEventRepo
+      .createQueryBuilder('parent_oce')
+      .select('1')
+      .where('parent_oce.order_id = parent_o.id')
+      .andWhere(
+        '(parent_oce.from_branch_id = :analyticsBranchId OR parent_oce.to_branch_id = :analyticsBranchId)',
+      )
+      .getQuery();
+
     const query = this.orderTrackingRepo
       .createQueryBuilder('t')
       .innerJoin(Order, 'o', 'o.id = t.order_id')
+      .leftJoin(Order, 'parent_o', 'parent_o.id = o.parent_order_id')
       .where('o.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('t.to_status IN (:...statuses)', { statuses })
       .select('COUNT(DISTINCT t.order_id)', 'count');
@@ -1201,6 +1215,9 @@ export class OrderServiceService implements OnModuleInit {
           o.branch_id = :analyticsBranchId
           OR o.holder_branch_id = :analyticsBranchId
           OR EXISTS (${custodySubQuery})
+          OR parent_o.branch_id = :analyticsBranchId
+          OR parent_o.holder_branch_id = :analyticsBranchId
+          OR EXISTS (${parentCustodySubQuery})
         )`,
         { analyticsBranchId: branchId },
       );
