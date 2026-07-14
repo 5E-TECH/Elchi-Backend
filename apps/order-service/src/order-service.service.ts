@@ -6341,7 +6341,15 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   async getTrackingByOrderId(id: string, pageRaw = 1, limitRaw = 20) {
-    await this.findById(id);
+    const orderResult = await this.findById(id);
+    const order = (orderResult as { data?: Order })?.data;
+    const trackingOrderIds = Array.from(
+      new Set(
+        [order?.parent_order_id, id]
+          .filter((orderId): orderId is string => Boolean(orderId))
+          .map((orderId) => String(orderId)),
+      ),
+    );
 
     const page = Math.max(1, Number(pageRaw) || 1);
     const limit = Math.min(100, Math.max(1, Number(limitRaw) || 20));
@@ -6350,11 +6358,11 @@ export class OrderServiceService implements OnModuleInit {
     let custodyRows: OrderCustodyEvent[] = [];
     try {
       rows = await this.orderTrackingRepo.find({
-        where: { order_id: id },
+        where: { order_id: In(trackingOrderIds) },
         order: { created_at: 'DESC' },
       });
       custodyRows = await this.orderCustodyEventRepo.find({
-        where: { order_id: id },
+        where: { order_id: In(trackingOrderIds) },
         order: { created_at: 'DESC' },
       });
     } catch (error) {

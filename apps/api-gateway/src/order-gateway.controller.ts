@@ -493,7 +493,13 @@ export class OrderGatewayController {
       );
     }
 
-    return Array.from(new Set(flattened)) as Order_status[];
+    const statuses = flattened.flatMap((value) =>
+      value === Order_status.CANCELLED
+        ? [Order_status.CANCELLED, Order_status.CANCELLED_SENT]
+        : [value],
+    );
+
+    return Array.from(new Set(statuses)) as Order_status[];
   }
 
   private withPaginationMeta(
