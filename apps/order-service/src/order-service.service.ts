@@ -6792,7 +6792,7 @@ export class OrderServiceService implements OnModuleInit {
 
       const canceledPostAccepted =
         oldStatus === Order_status.CANCELLED_SENT &&
-        order.status === Order_status.CANCELLED_SENT &&
+        order.status === Order_status.CANCELLED &&
         previousCanceledPostId &&
         typeof dto.canceled_post_id !== 'undefined' &&
         dto.canceled_post_id === null;

@@ -493,11 +493,7 @@ export class OrderGatewayController {
       );
     }
 
-    const statuses = flattened.flatMap((value) =>
-      value === Order_status.CANCELLED
-        ? [Order_status.CANCELLED, Order_status.CANCELLED_SENT]
-        : [value],
-    );
+    const statuses = flattened;
 
     return Array.from(new Set(statuses)) as Order_status[];
   }
@@ -1104,10 +1100,7 @@ export class OrderGatewayController {
       );
     const isBranchCancelledTab = isBranchScopedRequester && isCancelledTab;
     const isHqCancelledTab = isSystemPrivilegedRequester && isCancelledTab;
-    const resolvedStatuses =
-      isBranchCancelledTab || isHqCancelledTab
-        ? [Order_status.CANCELLED, Order_status.CANCELLED_SENT]
-        : statuses;
+    const resolvedStatuses = statuses;
 
     const payload = {
       query: {
@@ -1141,10 +1134,7 @@ export class OrderGatewayController {
       { cmd: 'order.find_all' },
       payload,
     ).then((response) => {
-      const paginated = this.withPaginationMeta(response, pagination);
-      return isBranchCancelledTab
-        ? this.toManagerCancelledTabResponse(paginated)
-        : paginated;
+      return this.withPaginationMeta(response, pagination);
     });
   }
 
@@ -1491,7 +1481,7 @@ export class OrderGatewayController {
     const payload = {
       query: {
         branch_id: String(assignment.branch_id),
-        status: [Order_status.CANCELLED, Order_status.CANCELLED_SENT],
+        status: [Order_status.CANCELLED],
         holder_type: 'BRANCH',
         canceled_post_unassigned: true,
         page: pagination.page,
