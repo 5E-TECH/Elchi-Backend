@@ -1296,7 +1296,6 @@ export class OrderGatewayController {
               Order_status.ON_THE_ROAD,
             ],
         courier_ids: isCancelledTab && requesterId ? [requesterId] : undefined,
-        holder_type: isCancelledTab ? 'COURIER' : undefined,
         canceled_post_unassigned: isCancelledTab ? true : undefined,
         search,
         start_day: startDate,
