@@ -137,7 +137,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       {
         id: '101',
         dto: {
-          status: Order_status.CANCELLED_SENT,
+          status: Order_status.CANCELLED,
           branch_id: '10',
           courier_id: null,
           assigned_at: null,
@@ -333,7 +333,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
         if (pattern.cmd === 'order.find_by_id') {
           return of({
             id: '101',
-            status: Order_status.CANCELLED_SENT,
+            status: Order_status.CANCELLED,
             branch_id: '1',
             holder_type: 'BRANCH',
             holder_branch_id: '10',
@@ -388,7 +388,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
         if (pattern.cmd === 'order.find_by_id') {
           return of({
             id: '101',
-            status: Order_status.CANCELLED_SENT,
+            status: Order_status.CANCELLED,
             branch_id: '10',
             canceled_post_id: null,
             total_price: 1_000_000,
@@ -488,7 +488,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       {
         id: '101',
         dto: {
-          status: Order_status.CANCELLED_SENT,
+          status: Order_status.CANCELLED,
           branch_id: '1',
           courier_id: null,
           assigned_at: null,

@@ -2871,12 +2871,9 @@ export class LogisticsServiceService implements OnModuleInit {
     const orders: OrderRow[] = [];
     for (const orderId of orderIds) {
       const order = await this.findOrderById(orderId);
-      if (
-        order.status !== Order_status.CANCELLED &&
-        order.status !== Order_status.CANCELLED_SENT
-      ) {
+      if (order.status !== Order_status.CANCELLED) {
         this.badRequest(
-          'Some orders are not in CANCELED or CANCELED_SENT status',
+          'Some orders are not in CANCELED status',
         );
       }
       const orderBranchId = String(
@@ -3130,7 +3127,7 @@ export class LogisticsServiceService implements OnModuleInit {
       await this.updateOrder(
         orderId,
         {
-          status: Order_status.CANCELLED_SENT,
+          status: Order_status.CANCELLED,
           branch_id: targetBranchId,
           courier_id: null,
           assigned_at: null,
@@ -3196,8 +3193,8 @@ export class LogisticsServiceService implements OnModuleInit {
     }
     void this.syncPostToSearch(savedPost);
 
-    await this.activityLog
-      .log({
+    await Promise.resolve(
+      this.activityLog.log({
         entity_type: 'Post',
         entity_id: String(savedPost.id),
         action: ActivityAction.STATUS_CHANGE,
@@ -3210,7 +3207,8 @@ export class LogisticsServiceService implements OnModuleInit {
           branch_id: targetBranchId,
           courier_id: savedPost.courier_id,
         },
-      })
+      }),
+    )
       .catch(() => undefined);
 
     return successRes(
