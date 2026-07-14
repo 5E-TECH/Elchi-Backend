@@ -1262,8 +1262,13 @@ export class OrderGatewayController {
         courierPosts.map((post) => String(post?.id ?? '')).filter(Boolean),
       ),
     );
+    const statuses = this.parseStatusQuery(status);
+    const isCancelledTab =
+      Boolean(statuses?.length) &&
+      statuses!.every((value) => value === Order_status.CANCELLED);
+    const requesterId = req?.user?.sub ? String(req.user.sub) : undefined;
 
-    if (!courierPostIds.length) {
+    if (!courierPostIds.length && !isCancelledTab) {
       return successRes(
         {
           data: [],
@@ -1278,11 +1283,9 @@ export class OrderGatewayController {
       );
     }
 
-    const statuses = this.parseStatusQuery(status);
-
     const payload = {
       query: {
-        post_ids: courierPostIds,
+        post_ids: isCancelledTab ? undefined : courierPostIds,
         status: statuses,
         exclude_statuses: statuses?.length
           ? undefined
@@ -1292,6 +1295,9 @@ export class OrderGatewayController {
               Order_status.RECEIVED,
               Order_status.ON_THE_ROAD,
             ],
+        courier_ids: isCancelledTab && requesterId ? [requesterId] : undefined,
+        holder_type: isCancelledTab ? 'COURIER' : undefined,
+        canceled_post_unassigned: isCancelledTab ? true : undefined,
         search,
         start_day: startDate,
         end_day: endDate,
@@ -1307,13 +1313,17 @@ export class OrderGatewayController {
     );
 
     const resultRows = this.extractRows(result?.data ?? result);
-    const filteredRows = resultRows.filter((row) =>
-      courierPostIds.includes(String(row?.post_id ?? row?.postId ?? '')),
-    );
+    const filteredRows = isCancelledTab
+      ? resultRows
+      : resultRows.filter((row) =>
+          courierPostIds.includes(String(row?.post_id ?? row?.postId ?? '')),
+        );
     const legacyData = this.toLegacyShape(filteredRows).map((row) =>
       this.normalizeLegacyOrderRow(row),
     );
-    const total = Number(result?.total ?? legacyData.length);
+    const total = isCancelledTab
+      ? legacyData.length
+      : Number(result?.total ?? legacyData.length);
     const currentPage = Number(result?.page ?? pagination.page);
     const currentLimit = Number(result?.limit ?? pagination.limit);
     const totalPages = currentLimit > 0 ? Math.ceil(total / currentLimit) : 0;
