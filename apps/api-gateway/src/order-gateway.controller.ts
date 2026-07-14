@@ -1283,48 +1283,87 @@ export class OrderGatewayController {
       );
     }
 
-    const payload = {
-      query: {
-        post_ids: isCancelledTab ? undefined : courierPostIds,
+    let filteredRows: any[];
+    let total: number;
+    let currentPage = pagination.page;
+    let currentLimit = pagination.limit;
+
+    if (isCancelledTab) {
+      const baseQuery = {
         status: statuses,
-        exclude_statuses: statuses?.length
-          ? undefined
-          : [
-              Order_status.CREATED,
-              Order_status.NEW,
-              Order_status.RECEIVED,
-              Order_status.ON_THE_ROAD,
-            ],
-        courier_ids: isCancelledTab && requesterId ? [requesterId] : undefined,
-        canceled_post_unassigned: isCancelledTab ? true : undefined,
+        canceled_post_unassigned: true,
         search,
         start_day: startDate,
         end_day: endDate,
-        page: pagination.page,
-        limit: pagination.limit,
-      },
-    };
+        fetch_all: true,
+        disable_pagination: true,
+      };
+      const cancelledQueries = [
+        requesterId ? { ...baseQuery, courier_ids: [requesterId] } : undefined,
+        courierPostIds.length ? { ...baseQuery, post_ids: courierPostIds } : undefined,
+      ].filter(Boolean) as Record<string, unknown>[];
 
-    const result = await this.sendOrderWithFallback(
-      { cmd: 'order.find_all_enriched' },
-      { cmd: 'order.find_all' },
-      payload,
-    );
+      const cancelledResults = await Promise.all(
+        cancelledQueries.map((query) =>
+          this.sendOrderWithFallback(
+            { cmd: 'order.find_all_enriched' },
+            { cmd: 'order.find_all' },
+            { query },
+          ),
+        ),
+      );
+      const mergedRows = new Map<string, any>();
+      cancelledResults
+        .flatMap((result) => this.extractRows(result?.data ?? result))
+        .forEach((row) => {
+          const orderId = String(row?.id ?? row?.order_id ?? row?.orderId ?? '');
+          if (orderId) {
+            mergedRows.set(orderId, row);
+          }
+        });
 
-    const resultRows = this.extractRows(result?.data ?? result);
-    const filteredRows = isCancelledTab
-      ? resultRows
-      : resultRows.filter((row) =>
-          courierPostIds.includes(String(row?.post_id ?? row?.postId ?? '')),
-        );
+      const allCancelledRows = Array.from(mergedRows.values());
+      total = allCancelledRows.length;
+      const offset = (pagination.page - 1) * pagination.limit;
+      filteredRows = allCancelledRows.slice(offset, offset + pagination.limit);
+    } else {
+      const payload = {
+        query: {
+          post_ids: courierPostIds,
+          status: statuses,
+          exclude_statuses: statuses?.length
+            ? undefined
+            : [
+                Order_status.CREATED,
+                Order_status.NEW,
+                Order_status.RECEIVED,
+                Order_status.ON_THE_ROAD,
+              ],
+          search,
+          start_day: startDate,
+          end_day: endDate,
+          page: pagination.page,
+          limit: pagination.limit,
+        },
+      };
+
+      const result = await this.sendOrderWithFallback(
+        { cmd: 'order.find_all_enriched' },
+        { cmd: 'order.find_all' },
+        payload,
+      );
+      const resultRows = this.extractRows(result?.data ?? result);
+      filteredRows = resultRows.filter((row) =>
+        courierPostIds.includes(String(row?.post_id ?? row?.postId ?? '')),
+      );
+      total = Number(result?.total ?? filteredRows.length);
+      currentPage = Number(result?.page ?? pagination.page);
+      currentLimit = Number(result?.limit ?? pagination.limit);
+    }
+
     const legacyData = this.toLegacyShape(filteredRows).map((row) =>
       this.normalizeLegacyOrderRow(row),
     );
-    const total = isCancelledTab
-      ? legacyData.length
-      : Number(result?.total ?? legacyData.length);
-    const currentPage = Number(result?.page ?? pagination.page);
-    const currentLimit = Number(result?.limit ?? pagination.limit);
     const totalPages = currentLimit > 0 ? Math.ceil(total / currentLimit) : 0;
 
     return successRes(
