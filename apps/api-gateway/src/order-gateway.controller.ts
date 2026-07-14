@@ -1263,9 +1263,13 @@ export class OrderGatewayController {
       ),
     );
     const statuses = this.parseStatusQuery(status);
+    const cancelledTabStatuses = [
+      Order_status.CANCELLED,
+      Order_status.CANCELLED_SENT,
+    ];
     const isCancelledTab =
       Boolean(statuses?.length) &&
-      statuses!.every((value) => value === Order_status.CANCELLED);
+      statuses!.every((value) => cancelledTabStatuses.includes(value));
     const requesterId = req?.user?.sub ? String(req.user.sub) : undefined;
 
     if (!courierPostIds.length && !isCancelledTab) {
@@ -1290,8 +1294,7 @@ export class OrderGatewayController {
 
     if (isCancelledTab) {
       const baseQuery = {
-        status: statuses,
-        canceled_post_unassigned: true,
+        status: cancelledTabStatuses,
         search,
         start_day: startDate,
         end_day: endDate,
