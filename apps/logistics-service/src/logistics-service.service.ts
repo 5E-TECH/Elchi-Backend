@@ -362,6 +362,50 @@ export class LogisticsServiceService implements OnModuleInit {
     return this.isCancelledOrder(status) || this.isCancelledSentOrder(status);
   }
 
+  private isActiveCanceledPostForTarget(
+    post: Post | null | undefined,
+    courierId: string,
+    branchId: string,
+  ): post is Post {
+    return (
+      !!post &&
+      String(post.status) === Post_status.CANCELED &&
+      String(post.courier_id) === String(courierId) &&
+      String(post.branch_id) === String(branchId)
+    );
+  }
+
+  private async isOrderInActiveCanceledPost(
+    order: OrderRow,
+    activePost: Post | null,
+    courierId: string,
+    branchId: string,
+  ): Promise<boolean> {
+    if (!this.isCancelledSentOrder(order.status) || !order.canceled_post_id) {
+      return false;
+    }
+
+    if (
+      activePost &&
+      String(order.canceled_post_id) === String(activePost.id)
+    ) {
+      return this.isActiveCanceledPostForTarget(activePost, courierId, branchId);
+    }
+
+    const existingPost = await this.postRepo.findOne({
+      where: {
+        id: order.canceled_post_id,
+        status: Post_status.CANCELED,
+      },
+    });
+
+    return this.isActiveCanceledPostForTarget(
+      existingPost,
+      courierId,
+      branchId,
+    );
+  }
+
   private async findOrders(query: {
     post_id?: string;
     post_ids?: string[];
@@ -2800,10 +2844,6 @@ export class LogisticsServiceService implements OnModuleInit {
       }
       orders.push(order);
     }
-    const unsentOrders = orders.filter((order) =>
-      this.isCancelledOrder(order.status),
-    );
-
     let canceledPost = await this.postRepo.findOne({
       where: {
         courier_id: requester.id,
@@ -2812,7 +2852,20 @@ export class LogisticsServiceService implements OnModuleInit {
       },
     });
 
-    if (!unsentOrders.length) {
+    const ordersToSend: OrderRow[] = [];
+    for (const order of orders) {
+      const alreadyInActivePost = await this.isOrderInActiveCanceledPost(
+        order,
+        canceledPost,
+        requester.id,
+        courierBranchId,
+      );
+      if (!alreadyInActivePost) {
+        ordersToSend.push(order);
+      }
+    }
+
+    if (!ordersToSend.length) {
       return successRes(
         {
           post_id:
@@ -2842,7 +2895,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     let addedTotal = 0;
-    for (const order of unsentOrders) {
+    for (const order of ordersToSend) {
       await this.updateOrder(
         order.id,
         {
@@ -2859,7 +2912,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     canceledPost.order_quantity =
-      Number(canceledPost.order_quantity ?? 0) + unsentOrders.length;
+      Number(canceledPost.order_quantity ?? 0) + ordersToSend.length;
     canceledPost.post_total_price =
       Number(canceledPost.post_total_price ?? 0) + addedTotal;
     const savedCanceledPost = await this.postRepo.save(canceledPost);
@@ -2932,10 +2985,6 @@ export class LogisticsServiceService implements OnModuleInit {
       }
       orders.push(order);
     }
-    const unsentOrders = orders.filter((order) =>
-      this.isCancelledOrder(order.status),
-    );
-
     let canceledPost = await this.postRepo.findOne({
       where: {
         courier_id: requester.id,
@@ -2943,7 +2992,21 @@ export class LogisticsServiceService implements OnModuleInit {
         status: Post_status.CANCELED,
       },
     });
-    if (!unsentOrders.length) {
+
+    const ordersToSend: OrderRow[] = [];
+    for (const order of orders) {
+      const alreadyInActivePost = await this.isOrderInActiveCanceledPost(
+        order,
+        canceledPost,
+        requester.id,
+        hqBranchId,
+      );
+      if (!alreadyInActivePost) {
+        ordersToSend.push(order);
+      }
+    }
+
+    if (!ordersToSend.length) {
       return successRes(
         {
           post_id:
@@ -2972,7 +3035,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     let addedTotal = 0;
-    for (const order of unsentOrders) {
+    for (const order of ordersToSend) {
       await this.updateOrder(
         order.id,
         {
@@ -2989,7 +3052,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     canceledPost.order_quantity =
-      Number(canceledPost.order_quantity ?? 0) + unsentOrders.length;
+      Number(canceledPost.order_quantity ?? 0) + ordersToSend.length;
     canceledPost.post_total_price =
       Number(canceledPost.post_total_price ?? 0) + addedTotal;
     const savedPost = await this.postRepo.save(canceledPost);
