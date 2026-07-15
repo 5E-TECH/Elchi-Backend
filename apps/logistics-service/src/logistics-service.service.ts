@@ -331,8 +331,17 @@ export class LogisticsServiceService implements OnModuleInit {
           .send({ cmd: 'order.find_by_id' }, { id })
           .pipe(timeout(5000)),
       );
-    } catch {
-      this.notFound(`Order #${id} not found`);
+    } catch (error) {
+      const downstreamError =
+        error instanceof RpcException ? error.getError() : error;
+      if (
+        downstreamError &&
+        typeof downstreamError === 'object' &&
+        Number((downstreamError as { statusCode?: number }).statusCode) >= 400
+      ) {
+        throw new RpcException(downstreamError);
+      }
+      throw new RpcException(errorRes(`Order #${id} lookup failed`, 502));
     }
   }
 
@@ -413,10 +422,7 @@ export class LogisticsServiceService implements OnModuleInit {
     if (String(order.branch_id ?? '') !== String(branchId)) return true;
     if (order.courier_id) return true;
     if (order.holder_type && order.holder_type !== 'BRANCH') return true;
-    if (
-      order.holder_branch_id &&
-      String(order.holder_branch_id) !== String(branchId)
-    ) {
+    if (String(order.holder_branch_id ?? '') !== String(branchId)) {
       return true;
     }
     if (order.holder_courier_id) return true;
@@ -486,9 +492,20 @@ export class LogisticsServiceService implements OnModuleInit {
         }
       }
 
-      return [];
-    } catch {
-      return [];
+      throw new RpcException(
+        errorRes('Order service returned an invalid order list', 502),
+      );
+    } catch (error) {
+      const downstreamError =
+        error instanceof RpcException ? error.getError() : error;
+      if (
+        downstreamError &&
+        typeof downstreamError === 'object' &&
+        Number((downstreamError as { statusCode?: number }).statusCode) >= 400
+      ) {
+        throw new RpcException(downstreamError);
+      }
+      throw new RpcException(errorRes('Order list request failed', 502));
     }
   }
 
@@ -584,22 +601,33 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   private async findOrderByQrToken(qrToken: string): Promise<OrderRow> {
+    let response: any;
+
     try {
-      const response = await lastValueFrom(
+      response = await lastValueFrom(
         this.orderClient
           .send({ cmd: 'order.find_by_qr' }, { token: qrToken })
           .pipe(timeout(5000)),
       );
-
-      const candidates = [response?.data?.data, response?.data, response];
-
-      for (const candidate of candidates) {
-        if (candidate && typeof candidate === 'object' && 'id' in candidate) {
-          return candidate as OrderRow;
-        }
+    } catch (error) {
+      const downstreamError =
+        error instanceof RpcException ? error.getError() : error;
+      if (
+        downstreamError &&
+        typeof downstreamError === 'object' &&
+        Number((downstreamError as { statusCode?: number }).statusCode) >= 400
+      ) {
+        throw new RpcException(downstreamError);
       }
-    } catch {
-      // handled below
+      throw new RpcException(errorRes('Order QR lookup failed', 502));
+    }
+
+    const candidates = [response?.data?.data, response?.data, response];
+
+    for (const candidate of candidates) {
+      if (candidate && typeof candidate === 'object' && 'id' in candidate) {
+        return candidate as OrderRow;
+      }
     }
 
     this.notFound('Order topilmadi');

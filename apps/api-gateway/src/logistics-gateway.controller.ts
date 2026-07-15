@@ -243,7 +243,13 @@ export class LogisticsGatewayController {
   getRejectedPosts(@Req() req?: { user?: JwtUser }) {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.rejected' },
-      { requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] } },
+      {
+        requester: {
+          id: req?.user?.sub,
+          roles: req?.user?.roles ?? [],
+          branch_id: req?.user?.branch_id ?? null,
+        },
+      },
     );
   }
 
