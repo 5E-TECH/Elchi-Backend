@@ -77,6 +77,72 @@ describe('LogisticsServiceService createCanceledPost', () => {
     );
   });
 
+  it('does not fail or duplicate when courier sends an already sent canceled order', async () => {
+    const orderClient = {
+      send: jest.fn((pattern: { cmd: string }) => {
+        if (pattern.cmd === 'order.find_by_id') {
+          return of({
+            id: '101',
+            status: Order_status.CANCELLED_SENT,
+            canceled_post_id: '55',
+            total_price: 1_000_000,
+            region_id: '1',
+          });
+        }
+        return of({ statusCode: 200 });
+      }),
+    };
+    const postRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        id: '55',
+        courier_id: '7',
+        branch_id: '10',
+        status: Post_status.CANCELED,
+        order_quantity: 1,
+        post_total_price: 1_000_000,
+      }),
+      create: jest.fn((payload) => payload),
+      save: jest.fn(async (post) => post),
+    };
+    const branchClient = {
+      send: jest.fn(() =>
+        of({
+          data: {
+            branch_id: '10',
+            role: 'COURIER',
+          },
+        }),
+      ),
+    };
+    const service = new LogisticsServiceService(
+      postRepo as any,
+      {} as any,
+      {} as any,
+      orderClient as any,
+      branchClient as any,
+      {} as any,
+      {} as any,
+      { log: jest.fn(), query: jest.fn() } as any,
+    );
+
+    const response = await service.createCanceledPost(
+      { id: '7', roles: ['courier'] },
+      { order_ids: ['101'] },
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.data).toEqual({
+      post_id: '55',
+      order_ids: ['101'],
+    });
+    expect(
+      orderClient.send.mock.calls.some(
+        ([pattern]) => pattern.cmd === 'order.update',
+      ),
+    ).toBe(false);
+    expect(postRepo.save).not.toHaveBeenCalled();
+  });
+
   it('keeps received branch orders sent until HQ receives them', async () => {
     const orderClient = {
       send: jest.fn((pattern: { cmd: string }) => {
