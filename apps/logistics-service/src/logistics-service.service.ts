@@ -406,6 +406,23 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
+  private shouldRepairCanceledPostOrderHolder(
+    order: OrderRow,
+    branchId: string,
+  ): boolean {
+    if (String(order.branch_id ?? '') !== String(branchId)) return true;
+    if (order.courier_id) return true;
+    if (order.holder_type && order.holder_type !== 'BRANCH') return true;
+    if (
+      order.holder_branch_id &&
+      String(order.holder_branch_id) !== String(branchId)
+    ) {
+      return true;
+    }
+    if (order.holder_courier_id) return true;
+    return false;
+  }
+
   private async findOrders(query: {
     post_id?: string;
     post_ids?: string[];
@@ -2853,6 +2870,7 @@ export class LogisticsServiceService implements OnModuleInit {
     });
 
     const ordersToSend: OrderRow[] = [];
+    const ordersToRepair: OrderRow[] = [];
     for (const order of orders) {
       const alreadyInActivePost = await this.isOrderInActiveCanceledPost(
         order,
@@ -2862,7 +2880,29 @@ export class LogisticsServiceService implements OnModuleInit {
       );
       if (!alreadyInActivePost) {
         ordersToSend.push(order);
+      } else if (
+        this.shouldRepairCanceledPostOrderHolder(order, courierBranchId)
+      ) {
+        ordersToRepair.push(order);
       }
+    }
+
+    for (const order of ordersToRepair) {
+      await this.updateOrder(
+        order.id,
+        {
+          canceled_post_id: canceledPost?.id ?? order.canceled_post_id,
+          status: Order_status.CANCELLED_SENT,
+          branch_id: courierBranchId,
+          courier_id: null,
+          assigned_at: null,
+        },
+        {
+          id: requester.id,
+          roles: requester.roles ?? [Roles.COURIER],
+          note: 'Canceled post holder repaired',
+        },
+      );
     }
 
     if (!ordersToSend.length) {
@@ -2901,6 +2941,9 @@ export class LogisticsServiceService implements OnModuleInit {
         {
           canceled_post_id: canceledPost.id,
           status: Order_status.CANCELLED_SENT,
+          branch_id: courierBranchId,
+          courier_id: null,
+          assigned_at: null,
         },
         {
           id: requester.id,
@@ -2994,6 +3037,7 @@ export class LogisticsServiceService implements OnModuleInit {
     });
 
     const ordersToSend: OrderRow[] = [];
+    const ordersToRepair: OrderRow[] = [];
     for (const order of orders) {
       const alreadyInActivePost = await this.isOrderInActiveCanceledPost(
         order,
@@ -3003,7 +3047,27 @@ export class LogisticsServiceService implements OnModuleInit {
       );
       if (!alreadyInActivePost) {
         ordersToSend.push(order);
+      } else if (this.shouldRepairCanceledPostOrderHolder(order, hqBranchId)) {
+        ordersToRepair.push(order);
       }
+    }
+
+    for (const order of ordersToRepair) {
+      await this.updateOrder(
+        order.id,
+        {
+          canceled_post_id: canceledPost?.id ?? order.canceled_post_id,
+          status: Order_status.CANCELLED_SENT,
+          branch_id: hqBranchId,
+          courier_id: null,
+          assigned_at: null,
+        },
+        {
+          id: requester.id,
+          roles: requester.roles ?? [Roles.MANAGER],
+          note: 'Canceled post holder repaired',
+        },
+      );
     }
 
     if (!ordersToSend.length) {
@@ -3041,6 +3105,9 @@ export class LogisticsServiceService implements OnModuleInit {
         {
           canceled_post_id: canceledPost.id,
           status: Order_status.CANCELLED_SENT,
+          branch_id: hqBranchId,
+          courier_id: null,
+          assigned_at: null,
         },
         {
           id: requester.id,
