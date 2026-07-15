@@ -1,5 +1,5 @@
 import { RpcException } from '@nestjs/microservices';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { LogisticsServiceService } from './logistics-service.service';
 import { Order_status, Post_status } from '@app/common';
 
@@ -9,6 +9,7 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     branchId?: string;
     openPost?: Record<string, unknown> | null;
     linkedPost?: Record<string, unknown> | null;
+    orderLookupError?: unknown;
   }) {
     const order = {
       id: '101',
@@ -24,6 +25,9 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     const orderClient = {
       send: jest.fn((pattern: { cmd: string }) => {
         if (pattern.cmd === 'order.find_by_qr') {
+          if (options?.orderLookupError) {
+            return throwError(() => options.orderLookupError);
+          }
           return of({ data: order });
         }
         if (pattern.cmd === 'order.update') {
@@ -162,6 +166,24 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       service.scanAssignOrder({ id: 'c1', roles: ['courier'] }, { qr_token: 'ORD-abc123' }),
       403,
       'Boshqa filial orderi',
+    );
+  });
+
+  it('preserves downstream QR lookup errors', async () => {
+    const { service } = setup({
+      orderLookupError: new RpcException({
+        statusCode: 500,
+        message: 'Order service failed',
+      }),
+    });
+
+    await expectRpcStatus(
+      service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      ),
+      500,
+      'Order service failed',
     );
   });
 

@@ -1249,14 +1249,46 @@ export class OrderGatewayController {
       { cmd: 'logistics.post.my_for_courier' },
       {
         page: 1,
-        limit: 1000,
+        limit: 100,
         requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
       },
     );
 
-    const courierPosts = this.extractRows(
-      courierPostsResponse?.data ?? courierPostsResponse,
+    const courierPostsBody = courierPostsResponse?.data ?? courierPostsResponse;
+    const courierPosts = this.extractRows(courierPostsBody);
+    const courierPostTotalPages = Math.max(
+      1,
+      Number(
+        courierPostsBody?.totalPages ??
+          courierPostsBody?.total_pages ??
+          1,
+      ),
     );
+    if (courierPostTotalPages > 1) {
+      const remainingCourierPostPages = await Promise.all(
+        Array.from(
+          { length: courierPostTotalPages - 1 },
+          (_, index) => index + 2,
+        ).map((courierPostPage) =>
+          this.sendLogisticsWithTimeout(
+            { cmd: 'logistics.post.my_for_courier' },
+            {
+              page: courierPostPage,
+              limit: 100,
+              requester: {
+                id: req?.user?.sub,
+                roles: req?.user?.roles ?? [],
+              },
+            },
+          ),
+        ),
+      );
+      remainingCourierPostPages.forEach((response) => {
+        courierPosts.push(
+          ...this.extractRows(response?.data ?? response),
+        );
+      });
+    }
     const courierPostIds = Array.from(
       new Set(
         courierPosts.map((post) => String(post?.id ?? '')).filter(Boolean),
