@@ -1294,7 +1294,7 @@ export class OrderGatewayController {
 
     if (isCancelledTab) {
       const baseQuery = {
-        status: cancelledTabStatuses,
+        status: statuses,
         search,
         start_day: startDate,
         end_day: endDate,
@@ -1303,7 +1303,6 @@ export class OrderGatewayController {
       };
       const cancelledQueries = [
         requesterId ? { ...baseQuery, courier_ids: [requesterId] } : undefined,
-        courierPostIds.length ? { ...baseQuery, post_ids: courierPostIds } : undefined,
       ].filter(Boolean) as Record<string, unknown>[];
 
       const cancelledResults = await Promise.all(
