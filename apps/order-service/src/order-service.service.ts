@@ -3585,7 +3585,7 @@ export class OrderServiceService implements OnModuleInit {
         where: {
           id: In(orderIds),
           market_id: marketId,
-          status: In([Order_status.CANCELLED, Order_status.CANCELLED_SENT]),
+          status: Order_status.CANCELLED,
           holder_type: OrderHolderType.HQ,
           canceled_post_id: IsNull(),
           isDeleted: false,
@@ -4234,7 +4234,7 @@ export class OrderServiceService implements OnModuleInit {
       .addSelect('COALESCE(SUM(order.total_price), 0)', 'total_price_sum')
       .where('order.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('order.status IN (:...statuses)', {
-        statuses: [Order_status.CANCELLED, Order_status.CANCELLED_SENT],
+        statuses: [Order_status.CANCELLED],
       })
       .andWhere('order.canceled_post_id IS NULL')
       .groupBy('order.market_id')
@@ -4290,7 +4290,7 @@ export class OrderServiceService implements OnModuleInit {
     return this.findAll({
       market_id,
       branch_id: options.branch_id,
-      status: [Order_status.CANCELLED, Order_status.CANCELLED_SENT],
+      status: Order_status.CANCELLED,
       holder_type: options.holder_type,
       canceled_post_unassigned: true,
       ...(options.exclude_branch_source

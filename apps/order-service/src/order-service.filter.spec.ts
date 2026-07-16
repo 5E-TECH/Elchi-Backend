@@ -20,13 +20,23 @@ describe('OrderServiceService filters', () => {
       createQueryBuilder: jest.fn().mockReturnValue(qb),
     };
 
+    const custodyQb = {
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getQuery: jest.fn().mockReturnValue('SELECT 1'),
+    };
+    const orderCustodyEventRepo = {
+      createQueryBuilder: jest.fn().mockReturnValue(custodyQb),
+    };
+
     // OrderServiceService konstruktori — 16 ta pozitsion bog'liqlik.
     const service = new OrderServiceService(
       {} as any, // dataSource
       orderRepo as any, // orderRepo
       {} as any, // orderItemRepo
       {} as any, // orderTrackingRepo
-      {} as any, // orderCustodyEventRepo
+      orderCustodyEventRepo as any, // orderCustodyEventRepo
       {} as any, // orderSettlementRepo
       {} as any, // transferBatchRepo
       {} as any, // transferBatchItemRepo
@@ -52,7 +62,7 @@ describe('OrderServiceService filters', () => {
       } as any, // activityLog
     );
 
-    return { service, qb };
+    return { service, qb, custodyQb };
   }
 
   it('filters by source=BRANCH and branch_id/holder_branch_id', async () => {
@@ -98,6 +108,36 @@ describe('OrderServiceService filters', () => {
     expect(qb.andWhere).toHaveBeenCalledWith('order.canceled_post_id IS NULL');
   });
 
+  it('filters courier orders by current courier ownership only', async () => {
+    const { service, qb } = setup();
+
+    await service.findAll({
+      status: ['cancelled'],
+      courier_ids: ['77'],
+      page: 1,
+      limit: 10,
+    });
+
+    const courierScope = qb.andWhere.mock.calls.find(
+      ([value]) => typeof value === 'object' && value !== null,
+    );
+    expect(courierScope).toBeDefined();
+
+    const nested = {
+      where: jest.fn().mockReturnThis(),
+      orWhere: jest.fn().mockReturnThis(),
+    };
+    courierScope?.[0]?.whereFactory?.(nested);
+    expect(nested.where).toHaveBeenCalledWith(
+      'order.courier_id IN (:...courier_ids)',
+      { courier_ids: ['77'] },
+    );
+    expect(nested.orWhere).toHaveBeenCalledWith(
+      'order.holder_courier_id IN (:...courier_ids)',
+      { courier_ids: ['77'] },
+    );
+  });
+
   it('returns all NEW market orders without pagination', async () => {
     const { service, qb } = setup();
 
@@ -123,8 +163,8 @@ describe('OrderServiceService filters', () => {
       holder_type: 'BRANCH' as any,
     });
 
-    expect(qb.andWhere).toHaveBeenCalledWith('order.status = :status', {
-      status: 'cancelled',
+    expect(qb.andWhere).toHaveBeenCalledWith('order.status IN (:...statuses)', {
+      statuses: ['cancelled'],
     });
     expect(qb.andWhere).toHaveBeenCalledWith(
       'order.holder_type = :holder_type',
@@ -140,6 +180,22 @@ describe('OrderServiceService filters', () => {
     );
     expect(qb.andWhere).toHaveBeenCalledWith('order.canceled_post_id IS NULL');
     expect(result).toEqual([]);
+  });
+
+  it('returns only received CANCELLED orders for a market handover list', async () => {
+    const { service, qb } = setup();
+
+    await service.findCancelledOrdersByMarket('16', {
+      holder_type: 'HQ' as any,
+    });
+
+    expect(qb.andWhere).toHaveBeenCalledWith('order.market_id = :market_id', {
+      market_id: '16',
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith('order.status IN (:...statuses)', {
+      statuses: ['cancelled'],
+    });
+    expect(qb.andWhere).toHaveBeenCalledWith('order.canceled_post_id IS NULL');
   });
 
   it('credits the full order amount to branch cashbox for manager-direct sales', () => {
@@ -184,9 +240,17 @@ describe('OrderServiceService filters', () => {
     const result = (service as any).applyAnalyticsBranchScope(qb, '16');
 
     expect(result).toBe(qb);
-    expect(qb.andWhere).toHaveBeenCalledWith(
-      '(o.branch_id = :analyticsBranchId OR o.holder_branch_id = :analyticsBranchId)',
-      { analyticsBranchId: '16' },
+    const analyticsScope = qb.andWhere.mock.calls.find(
+      ([value]) =>
+        typeof value === 'string' && value.includes('analyticsBranchId'),
     );
+    expect(analyticsScope?.[0]).toContain(
+      'o.branch_id = :analyticsBranchId',
+    );
+    expect(analyticsScope?.[0]).toContain(
+      'o.holder_branch_id = :analyticsBranchId',
+    );
+    expect(analyticsScope?.[0]).toContain('EXISTS (SELECT 1)');
+    expect(analyticsScope?.[1]).toEqual({ analyticsBranchId: '16' });
   });
 });
