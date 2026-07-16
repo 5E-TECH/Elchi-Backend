@@ -233,6 +233,7 @@ describe('OrderGatewayController pagination', () => {
     const payload = orderClient.send.mock.calls[0][1];
     expect(payload.query.status).toEqual(['cancelled']);
     expect(payload.query.courier_ids).toEqual(['77']);
+    expect(payload.query.include_courier_history).toBe(true);
     expect(payload.query.branch_id).toBeUndefined();
     expect(payload.query.holder_type).toBeUndefined();
     expect(payload.query.canceled_post_unassigned).toBeUndefined();
