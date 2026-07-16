@@ -236,7 +236,9 @@ export class OrderGatewayController {
       return [];
     }
 
-    const courierPostIds = await this.findAllCourierPostIds(reqUser);
+    const courierPostIds = await this.findAllCourierPostIds(reqUser).catch(
+      () => [],
+    );
     const baseQuery = {
       ...filters,
       status: [Order_status.CANCELLED],

@@ -1,5 +1,5 @@
 import { BadRequestException } from '@nestjs/common';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { OrderGatewayController } from './order-gateway.controller';
 
 describe('OrderGatewayController pagination', () => {
@@ -252,6 +252,51 @@ describe('OrderGatewayController pagination', () => {
     );
     expect(response.data).toEqual([{ id: '84', post_id: 'old-post' }]);
     expect(branchClient.send).not.toHaveBeenCalled();
+  });
+
+  it('courier cancelled tab still works when logistics post history is unavailable', async () => {
+    const { controller, orderClient, logisticsClient } = makeController();
+    logisticsClient.send.mockReturnValue(
+      throwError(() => new Error('logistics unavailable')),
+    );
+    orderClient.send.mockReturnValue(
+      of({ data: [{ id: '84', status: 'cancelled' }], total: 1 }),
+    );
+
+    const response: any = await controller.findAll(
+      undefined,
+      undefined,
+      'cancelled,cancelled (sent)',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      '1',
+      '10',
+      {
+        user: {
+          sub: '77',
+          username: 'courier',
+          roles: ['courier', 'branch'],
+        },
+      },
+    );
+
+    const payload = orderClient.send.mock.calls[0][1];
+    expect(payload.query).toEqual(
+      expect.objectContaining({
+        status: ['cancelled'],
+        courier_ids: ['77'],
+        include_courier_history: true,
+      }),
+    );
+    expect(response.data).toEqual([{ id: '84', status: 'cancelled' }]);
   });
 
   it('legacy courier cancelled list includes exact cancelled orders from every post page', async () => {
