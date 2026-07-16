@@ -6,7 +6,11 @@ describe('OrderGatewayController pagination', () => {
   const makeController = () => {
     const orderClient = { send: jest.fn() };
     const identityClient = { send: jest.fn() };
-    const logisticsClient = { send: jest.fn() };
+    const logisticsClient = {
+      send: jest.fn().mockReturnValue(
+        of({ data: { data: [], total: 0, page: 1, totalPages: 1, limit: 100 } }),
+      ),
+    };
     const branchClient = { send: jest.fn() };
     const controller = new OrderGatewayController(
       orderClient as any,
@@ -14,10 +18,9 @@ describe('OrderGatewayController pagination', () => {
       logisticsClient as any,
       branchClient as any,
     );
-    return { controller, orderClient, branchClient };
+    return { controller, orderClient, logisticsClient, branchClient };
   };
 
-  // findAll() 14 ta pozitsion argument oladi: 11 ta filtr query + page + limit + req.
   // Test uchun faqat page/limit/req kerak, qolgan filtrlar undefined.
   const callFindAll = (
     controller: OrderGatewayController,
@@ -36,6 +39,8 @@ describe('OrderGatewayController pagination', () => {
       undefined, // region_id
       undefined, // district_id
       undefined, // branch_id
+      undefined, // courier_ids
+      undefined, // fetch_all
       undefined, // source
       page,
       limit,
@@ -83,5 +88,224 @@ describe('OrderGatewayController pagination', () => {
         user: { sub: '1', username: 'u', roles: ['admin'] },
       }),
     ).rejects.toBeInstanceOf(BadRequestException);
+  });
+
+  it('manager cancelled tab returns only received branch cancellations', async () => {
+    const { controller, orderClient, branchClient } = makeController();
+    orderClient.send.mockReturnValue(
+      of({ data: [], total: 0, page: 1, limit: 10 }),
+    );
+
+    await controller.findAll(
+      undefined,
+      undefined,
+      'cancelled,cancelled (sent)',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      '1',
+      '10',
+      {
+        user: {
+          sub: '55',
+          username: 'manager',
+          roles: ['manager'],
+          branch_id: '16',
+        },
+      },
+    );
+
+    const payload = orderClient.send.mock.calls[0][1];
+    expect(payload.query).toEqual(
+      expect.objectContaining({
+        status: ['cancelled'],
+        branch_id: '16',
+        holder_type: 'BRANCH',
+        canceled_post_unassigned: true,
+      }),
+    );
+    expect(branchClient.send).not.toHaveBeenCalled();
+  });
+
+  it('HQ cancelled tab excludes cancellations still in transit', async () => {
+    const { controller, orderClient, branchClient } = makeController();
+    orderClient.send.mockReturnValue(
+      of({ data: [], total: 0, page: 1, limit: 10 }),
+    );
+
+    await controller.findAll(
+      undefined,
+      undefined,
+      'cancelled,cancelled (sent)',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      '1',
+      '10',
+      {
+        user: {
+          sub: '1',
+          username: 'admin',
+          roles: ['admin'],
+        },
+      },
+    );
+
+    const payload = orderClient.send.mock.calls[0][1];
+    expect(payload.query).toEqual(
+      expect.objectContaining({
+        status: ['cancelled'],
+        holder_type: 'HQ',
+        canceled_post_unassigned: true,
+      }),
+    );
+    expect(payload.query.branch_id).toBeUndefined();
+    expect(branchClient.send).not.toHaveBeenCalled();
+  });
+
+  it('courier cancelled tab merges current ownership with historical posts', async () => {
+    const { controller, orderClient, logisticsClient, branchClient } =
+      makeController();
+    logisticsClient.send
+      .mockReturnValueOnce(
+        of({
+          data: {
+            data: [{ id: 'post-1' }],
+            totalPages: 2,
+            page: 1,
+            limit: 100,
+          },
+        }),
+      )
+      .mockReturnValueOnce(
+        of({
+          data: {
+            data: [{ id: 'old-post' }],
+            totalPages: 2,
+            page: 2,
+            limit: 100,
+          },
+        }),
+      );
+    orderClient.send.mockReturnValue(
+      of({ data: [{ id: '84', post_id: 'old-post' }], total: 1 }),
+    );
+
+    const response: any = await controller.findAll(
+      undefined,
+      undefined,
+      'cancelled,cancelled (sent)',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      '1',
+      '10',
+      {
+        user: {
+          sub: '77',
+          username: 'courier',
+          roles: ['courier', 'branch'],
+        },
+      },
+    );
+
+    const payload = orderClient.send.mock.calls[0][1];
+    expect(payload.query.status).toEqual(['cancelled']);
+    expect(payload.query.courier_ids).toEqual(['77']);
+    expect(payload.query.branch_id).toBeUndefined();
+    expect(payload.query.holder_type).toBeUndefined();
+    expect(payload.query.canceled_post_unassigned).toBeUndefined();
+    expect(orderClient.send.mock.calls).toEqual(
+      expect.arrayContaining([
+        expect.arrayContaining([
+          expect.anything(),
+          expect.objectContaining({
+            query: expect.objectContaining({
+              status: ['cancelled'],
+              post_ids: ['post-1', 'old-post'],
+            }),
+          }),
+        ]),
+      ]),
+    );
+    expect(response.data).toEqual([{ id: '84', post_id: 'old-post' }]);
+    expect(branchClient.send).not.toHaveBeenCalled();
+  });
+
+  it('legacy courier cancelled list includes exact cancelled orders from every post page', async () => {
+    const { controller, orderClient, logisticsClient } = makeController();
+    logisticsClient.send
+      .mockReturnValueOnce(
+        of({ data: { data: [{ id: 'new-post' }], totalPages: 2 } }),
+      )
+      .mockReturnValueOnce(
+        of({ data: { data: [{ id: 'old-post' }], totalPages: 2 } }),
+      );
+    orderClient.send.mockImplementation((_pattern, payload) => {
+      if (payload?.query?.post_ids) {
+        return of({
+          data: [{ id: '84', post_id: 'old-post', status: 'cancelled' }],
+          total: 1,
+        });
+      }
+      return of({ data: [], total: 0 });
+    });
+
+    const response: any = await controller.findCourierOrdersLegacy(
+      'cancelled',
+      undefined,
+      undefined,
+      undefined,
+      '1',
+      '10',
+      {
+        user: {
+          sub: '77',
+          username: 'courier',
+          roles: ['courier'],
+        },
+      },
+    );
+
+    const orderQueries = orderClient.send.mock.calls
+      .map((call) => call[1]?.query)
+      .filter(Boolean);
+    expect(orderQueries).toContainEqual(
+      expect.objectContaining({
+        status: ['cancelled'],
+        courier_ids: ['77'],
+      }),
+    );
+    expect(orderQueries).toContainEqual(
+      expect.objectContaining({
+        status: ['cancelled'],
+        post_ids: ['new-post', 'old-post'],
+      }),
+    );
+    expect(logisticsClient.send).toHaveBeenCalledTimes(2);
+    expect(response.data.data).toEqual([
+      expect.objectContaining({ id: '84', status: 'cancelled' }),
+    ]);
   });
 });

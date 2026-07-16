@@ -371,6 +371,21 @@ export class LogisticsServiceService implements OnModuleInit {
     return this.isCancelledOrder(status) || this.isCancelledSentOrder(status);
   }
 
+  private isCancelledOrderOwnedByCourier(
+    order: OrderRow,
+    courierId: string,
+    branchId: string,
+  ): boolean {
+    const orderCourierId = String(
+      order.holder_courier_id ?? order.courier_id ?? '',
+    ).trim();
+    if (orderCourierId !== String(courierId)) return false;
+    if (order.holder_type && order.holder_type !== 'COURIER') return false;
+
+    const orderBranchId = this.getOrderBranchScope(order);
+    return !orderBranchId || orderBranchId === String(branchId);
+  }
+
   private isActiveCanceledPostForTarget(
     post: Post | null | undefined,
     courierId: string,
@@ -2880,15 +2895,6 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest('No orders provided');
     }
     const courierBranchId = await this.findCourierBranchId(requester);
-
-    const orders: OrderRow[] = [];
-    for (const orderId of orderIds) {
-      const order = await this.findOrderById(orderId);
-      if (!this.isCancelledPostEligibleOrder(order.status)) {
-        this.badRequest('Some orders are not in CANCELED status');
-      }
-      orders.push(order);
-    }
     let canceledPost = await this.postRepo.findOne({
       where: {
         courier_id: requester.id,
@@ -2896,6 +2902,40 @@ export class LogisticsServiceService implements OnModuleInit {
         status: Post_status.CANCELED,
       },
     });
+
+    const orders: OrderRow[] = [];
+    for (const orderId of orderIds) {
+      const order = await this.findOrderById(orderId);
+      if (!this.isCancelledPostEligibleOrder(order.status)) {
+        this.badRequest('Some orders are not in CANCELED status');
+      }
+      if (
+        this.isCancelledOrder(order.status) &&
+        !this.isCancelledOrderOwnedByCourier(
+          order,
+          requester.id,
+          courierBranchId,
+        )
+      ) {
+        this.forbidden(
+          'Courier faqat o‘ziga biriktirilgan bekor qilingan orderlarni jo‘nata oladi',
+        );
+      }
+      if (
+        this.isCancelledSentOrder(order.status) &&
+        !(await this.isOrderInActiveCanceledPost(
+          order,
+          canceledPost,
+          requester.id,
+          courierBranchId,
+        ))
+      ) {
+        this.forbidden(
+          'Jo‘natilgan bekor order courierning faol bekor postiga tegishli emas',
+        );
+      }
+      orders.push(order);
+    }
 
     const ordersToSend: OrderRow[] = [];
     const ordersToRepair: OrderRow[] = [];
@@ -3035,6 +3075,14 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest('No orders provided');
     }
 
+    let canceledPost = await this.postRepo.findOne({
+      where: {
+        courier_id: requester.id,
+        branch_id: hqBranchId,
+        status: Post_status.CANCELED,
+      },
+    });
+
     const orders: OrderRow[] = [];
     for (const orderId of orderIds) {
       const order = await this.findOrderById(orderId);
@@ -3043,26 +3091,31 @@ export class LogisticsServiceService implements OnModuleInit {
           'Some orders are not in CANCELED status',
         );
       }
-      const orderBranchId = String(
-        order.holder_branch_id ?? order.branch_id ?? '',
-      ).trim();
       if (
-        orderBranchId !== sourceBranchId ||
-        (order.holder_type && order.holder_type !== 'BRANCH')
+        this.isCancelledOrder(order.status) &&
+        (String(order.holder_branch_id ?? order.branch_id ?? '').trim() !==
+          sourceBranchId ||
+          (order.holder_type && order.holder_type !== 'BRANCH'))
       ) {
         this.forbidden(
           'Manager faqat o‘z branchidagi bekor qilingan orderlarni HQga jo‘nata oladi',
         );
       }
+      if (
+        this.isCancelledSentOrder(order.status) &&
+        !(await this.isOrderInActiveCanceledPost(
+          order,
+          canceledPost,
+          requester.id,
+          hqBranchId,
+        ))
+      ) {
+        this.forbidden(
+          'Jo‘natilgan bekor order managerning faol HQ postiga tegishli emas',
+        );
+      }
       orders.push(order);
     }
-    let canceledPost = await this.postRepo.findOne({
-      where: {
-        courier_id: requester.id,
-        branch_id: hqBranchId,
-        status: Post_status.CANCELED,
-      },
-    });
 
     const ordersToSend: OrderRow[] = [];
     const ordersToRepair: OrderRow[] = [];

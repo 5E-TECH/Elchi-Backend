@@ -191,6 +191,91 @@ export class OrderGatewayController {
     });
   }
 
+  private async findAllCourierPostIds(reqUser?: JwtUser): Promise<string[]> {
+    const requester = {
+      id: reqUser?.sub,
+      roles: reqUser?.roles ?? [],
+    };
+    const firstResponse = await this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.post.my_for_courier' },
+      { page: 1, limit: 100, requester },
+    );
+    const firstBody = firstResponse?.data ?? firstResponse;
+    const posts = this.extractRows(firstBody);
+    const totalPages = Math.max(
+      1,
+      Number(firstBody?.totalPages ?? firstBody?.total_pages ?? 1),
+    );
+
+    if (totalPages > 1) {
+      const remainingResponses = await Promise.all(
+        Array.from({ length: totalPages - 1 }, (_, index) => index + 2).map(
+          (postPage) =>
+            this.sendLogisticsWithTimeout(
+              { cmd: 'logistics.post.my_for_courier' },
+              { page: postPage, limit: 100, requester },
+            ),
+        ),
+      );
+      remainingResponses.forEach((response) => {
+        posts.push(...this.extractRows(response?.data ?? response));
+      });
+    }
+
+    return Array.from(
+      new Set(posts.map((post) => String(post?.id ?? '')).filter(Boolean)),
+    );
+  }
+
+  private async findCourierCancelledRows(
+    reqUser: JwtUser | undefined,
+    filters: Record<string, unknown>,
+  ): Promise<Array<Record<string, unknown>>> {
+    const requesterId = String(reqUser?.sub ?? '').trim();
+    if (!requesterId) {
+      return [];
+    }
+
+    const courierPostIds = await this.findAllCourierPostIds(reqUser);
+    const baseQuery = {
+      ...filters,
+      status: [Order_status.CANCELLED],
+      fetch_all: true,
+      disable_pagination: true,
+      page: undefined,
+      limit: undefined,
+    };
+    const requests = [
+      this.sendOrderWithFallback(
+        { cmd: 'order.find_all_enriched' },
+        { cmd: 'order.find_all' },
+        { query: { ...baseQuery, courier_ids: [requesterId] } },
+      ),
+    ];
+
+    if (courierPostIds.length) {
+      requests.push(
+        this.sendOrderWithFallback(
+          { cmd: 'order.find_all_enriched' },
+          { cmd: 'order.find_all' },
+          { query: { ...baseQuery, post_ids: courierPostIds } },
+        ),
+      );
+    }
+
+    const responses = await Promise.all(requests);
+    const uniqueRows = new Map<string, Record<string, unknown>>();
+    responses.flatMap((response) =>
+      this.extractRows(response?.data ?? response),
+    ).forEach((row) => {
+      const id = String(row?.id ?? '').trim();
+      if (id) {
+        uniqueRows.set(id, row);
+      }
+    });
+    return Array.from(uniqueRows.values());
+  }
+
   private normalizeProofFileKeys(value: unknown): string[] {
     if (Array.isArray(value)) {
       return value
@@ -1054,13 +1139,15 @@ export class OrderGatewayController {
     const roles = req?.user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
     const isMarket = normalizedRoles.includes(RoleEnum.MARKET);
+    const isCourier = normalizedRoles.includes(RoleEnum.COURIER);
     const isSystemPrivilegedRequester =
       normalizedRoles.includes(RoleEnum.ADMIN) ||
       normalizedRoles.includes(RoleEnum.SUPERADMIN);
     const isBranchScopedRequester =
-      normalizedRoles.includes(RoleEnum.BRANCH) ||
-      normalizedRoles.includes(RoleEnum.MANAGER) ||
-      normalizedRoles.includes(RoleEnum.REGISTRATOR);
+      !isCourier &&
+      (normalizedRoles.includes(RoleEnum.BRANCH) ||
+        normalizedRoles.includes(RoleEnum.MANAGER) ||
+        normalizedRoles.includes(RoleEnum.REGISTRATOR));
     const requesterId = req?.user?.sub;
 
     if (
@@ -1100,7 +1187,42 @@ export class OrderGatewayController {
       );
     const isBranchCancelledTab = isBranchScopedRequester && isCancelledTab;
     const isHqCancelledTab = isSystemPrivilegedRequester && isCancelledTab;
-    const resolvedStatuses = statuses;
+    const resolvedStatuses =
+      (isCourier || isBranchCancelledTab || isHqCancelledTab) && isCancelledTab
+        ? [Order_status.CANCELLED]
+        : statuses;
+    const resolvedCourierIds =
+      isCourier && requesterId
+        ? [String(requesterId)]
+        : normalizedCourierIds.length
+          ? normalizedCourierIds
+          : undefined;
+
+    if (isCourier && isCancelledTab) {
+      const allCancelledRows = await this.findCourierCancelledRows(req?.user, {
+        market_id: resolvedMarketId,
+        customer_id,
+        search,
+        start_day,
+        end_day,
+        region_id,
+        district_id,
+        source,
+      });
+      const total = allCancelledRows.length;
+      const offset = (pagination.page - 1) * pagination.limit;
+      const data = allCancelledRows.slice(offset, offset + pagination.limit);
+      const totalPages = Math.ceil(total / pagination.limit);
+
+      return {
+        data,
+        total,
+        page: pagination.page,
+        limit: pagination.limit,
+        total_pages: totalPages,
+        totalPages,
+      };
+    }
 
     const payload = {
       query: {
@@ -1111,7 +1233,7 @@ export class OrderGatewayController {
         start_day,
         end_day,
         courier,
-        courier_ids: normalizedCourierIds.length ? normalizedCourierIds : undefined,
+        courier_ids: resolvedCourierIds,
         fetch_all: useFetchAll || undefined,
         region_id,
         district_id,
@@ -1244,56 +1366,6 @@ export class OrderGatewayController {
     @Req() req?: { user: JwtUser },
   ) {
     const pagination = this.parsePaginationQuery(page, limit);
-
-    const courierPostsResponse = await this.sendLogisticsWithTimeout(
-      { cmd: 'logistics.post.my_for_courier' },
-      {
-        page: 1,
-        limit: 100,
-        requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
-      },
-    );
-
-    const courierPostsBody = courierPostsResponse?.data ?? courierPostsResponse;
-    const courierPosts = this.extractRows(courierPostsBody);
-    const courierPostTotalPages = Math.max(
-      1,
-      Number(
-        courierPostsBody?.totalPages ??
-          courierPostsBody?.total_pages ??
-          1,
-      ),
-    );
-    if (courierPostTotalPages > 1) {
-      const remainingCourierPostPages = await Promise.all(
-        Array.from(
-          { length: courierPostTotalPages - 1 },
-          (_, index) => index + 2,
-        ).map((courierPostPage) =>
-          this.sendLogisticsWithTimeout(
-            { cmd: 'logistics.post.my_for_courier' },
-            {
-              page: courierPostPage,
-              limit: 100,
-              requester: {
-                id: req?.user?.sub,
-                roles: req?.user?.roles ?? [],
-              },
-            },
-          ),
-        ),
-      );
-      remainingCourierPostPages.forEach((response) => {
-        courierPosts.push(
-          ...this.extractRows(response?.data ?? response),
-        );
-      });
-    }
-    const courierPostIds = Array.from(
-      new Set(
-        courierPosts.map((post) => String(post?.id ?? '')).filter(Boolean),
-      ),
-    );
     const statuses = this.parseStatusQuery(status);
     const cancelledTabStatuses = [
       Order_status.CANCELLED,
@@ -1302,9 +1374,39 @@ export class OrderGatewayController {
     const isCancelledTab =
       Boolean(statuses?.length) &&
       statuses!.every((value) => cancelledTabStatuses.includes(value));
-    const requesterId = req?.user?.sub ? String(req.user.sub) : undefined;
+    if (isCancelledTab) {
+      const allCancelledRows = await this.findCourierCancelledRows(req?.user, {
+        search,
+        start_day: startDate,
+        end_day: endDate,
+      });
+      const total = allCancelledRows.length;
+      const offset = (pagination.page - 1) * pagination.limit;
+      const pageRows = allCancelledRows.slice(
+        offset,
+        offset + pagination.limit,
+      );
+      const legacyData = this.toLegacyShape(pageRows).map((row) =>
+        this.normalizeLegacyOrderRow(row),
+      );
+      const totalPages = Math.ceil(total / pagination.limit);
 
-    if (!courierPostIds.length && !isCancelledTab) {
+      return successRes(
+        {
+          data: legacyData,
+          total,
+          page: pagination.page,
+          limit: pagination.limit,
+          total_pages: totalPages,
+          totalPages,
+        },
+        200,
+        'All my orders',
+      );
+    }
+
+    const courierPostIds = await this.findAllCourierPostIds(req?.user);
+    if (!courierPostIds.length) {
       return successRes(
         {
           data: [],
@@ -1324,79 +1426,38 @@ export class OrderGatewayController {
     let currentPage = pagination.page;
     let currentLimit = pagination.limit;
 
-    if (isCancelledTab) {
-      const baseQuery = {
+    const payload = {
+      query: {
+        post_ids: courierPostIds,
         status: statuses,
+        exclude_statuses: statuses?.length
+          ? undefined
+          : [
+              Order_status.CREATED,
+              Order_status.NEW,
+              Order_status.RECEIVED,
+              Order_status.ON_THE_ROAD,
+            ],
         search,
         start_day: startDate,
         end_day: endDate,
-        fetch_all: true,
-        disable_pagination: true,
-      };
-      const cancelledQueries = [
-        requesterId ? { ...baseQuery, courier_ids: [requesterId] } : undefined,
-        courierPostIds.length
-          ? { ...baseQuery, post_ids: courierPostIds }
-          : undefined,
-      ].filter(Boolean) as Record<string, unknown>[];
+        page: pagination.page,
+        limit: pagination.limit,
+      },
+    };
 
-      const cancelledResults = await Promise.all(
-        cancelledQueries.map((query) =>
-          this.sendOrderWithFallback(
-            { cmd: 'order.find_all_enriched' },
-            { cmd: 'order.find_all' },
-            { query },
-          ),
-        ),
-      );
-      const mergedRows = new Map<string, any>();
-      cancelledResults
-        .flatMap((result) => this.extractRows(result?.data ?? result))
-        .forEach((row) => {
-          const orderId = String(row?.id ?? row?.order_id ?? row?.orderId ?? '');
-          if (orderId) {
-            mergedRows.set(orderId, row);
-          }
-        });
-
-      const allCancelledRows = Array.from(mergedRows.values());
-      total = allCancelledRows.length;
-      const offset = (pagination.page - 1) * pagination.limit;
-      filteredRows = allCancelledRows.slice(offset, offset + pagination.limit);
-    } else {
-      const payload = {
-        query: {
-          post_ids: courierPostIds,
-          status: statuses,
-          exclude_statuses: statuses?.length
-            ? undefined
-            : [
-                Order_status.CREATED,
-                Order_status.NEW,
-                Order_status.RECEIVED,
-                Order_status.ON_THE_ROAD,
-              ],
-          search,
-          start_day: startDate,
-          end_day: endDate,
-          page: pagination.page,
-          limit: pagination.limit,
-        },
-      };
-
-      const result = await this.sendOrderWithFallback(
-        { cmd: 'order.find_all_enriched' },
-        { cmd: 'order.find_all' },
-        payload,
-      );
-      const resultRows = this.extractRows(result?.data ?? result);
-      filteredRows = resultRows.filter((row) =>
-        courierPostIds.includes(String(row?.post_id ?? row?.postId ?? '')),
-      );
-      total = Number(result?.total ?? filteredRows.length);
-      currentPage = Number(result?.page ?? pagination.page);
-      currentLimit = Number(result?.limit ?? pagination.limit);
-    }
+    const result = await this.sendOrderWithFallback(
+      { cmd: 'order.find_all_enriched' },
+      { cmd: 'order.find_all' },
+      payload,
+    );
+    const resultRows = this.extractRows(result?.data ?? result);
+    filteredRows = resultRows.filter((row) =>
+      courierPostIds.includes(String(row?.post_id ?? row?.postId ?? '')),
+    );
+    total = Number(result?.total ?? filteredRows.length);
+    currentPage = Number(result?.page ?? pagination.page);
+    currentLimit = Number(result?.limit ?? pagination.limit);
 
     const legacyData = this.toLegacyShape(filteredRows).map((row) =>
       this.normalizeLegacyOrderRow(row),

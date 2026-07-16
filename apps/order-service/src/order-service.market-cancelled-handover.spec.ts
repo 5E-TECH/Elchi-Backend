@@ -246,6 +246,11 @@ describe('OrderServiceService market cancelled handover', () => {
         holder_type: OrderHolderType.MARKET,
       }),
     );
+    expect(orderRepo.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ status: Order_status.CANCELLED }),
+      }),
+    );
     expect(trackingRepo.save).toHaveBeenCalled();
     expect(custodyRepo.save).toHaveBeenCalled();
     expect(sessionRepo.save).toHaveBeenCalledWith(
