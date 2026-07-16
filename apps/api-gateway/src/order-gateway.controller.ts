@@ -242,6 +242,7 @@ export class OrderGatewayController {
       status: [Order_status.CANCELLED],
       fetch_all: true,
       disable_pagination: true,
+      include_courier_history: true,
       page: undefined,
       limit: undefined,
     };

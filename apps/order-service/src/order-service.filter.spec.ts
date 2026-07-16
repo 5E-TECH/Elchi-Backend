@@ -136,6 +136,37 @@ describe('OrderServiceService filters', () => {
       'order.holder_courier_id IN (:...courier_ids)',
       { courier_ids: ['77'] },
     );
+    expect(
+      nested.orWhere.mock.calls.some(([value]) =>
+        String(value).includes('order_custody_events'),
+      ),
+    ).toBe(false);
+  });
+
+  it('includes courier custody history only when requested', async () => {
+    const { service, qb } = setup();
+
+    await service.findAll({
+      status: ['cancelled'],
+      courier_ids: ['77'],
+      include_courier_history: true,
+      page: 1,
+      limit: 10,
+    });
+
+    const courierScope = qb.andWhere.mock.calls.find(
+      ([value]) => typeof value === 'object' && value !== null,
+    );
+    const nested = {
+      where: jest.fn().mockReturnThis(),
+      orWhere: jest.fn().mockReturnThis(),
+    };
+    courierScope?.[0]?.whereFactory?.(nested);
+
+    expect(nested.orWhere).toHaveBeenCalledWith(
+      expect.stringContaining('FROM order_custody_events courier_history'),
+      { courier_ids: ['77'] },
+    );
   });
 
   it('returns all NEW market orders without pagination', async () => {

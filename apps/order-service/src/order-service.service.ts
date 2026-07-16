@@ -3949,6 +3949,7 @@ export class OrderServiceService implements OnModuleInit {
     end_day?: string;
     courier?: string;
     courier_ids?: string[];
+    include_courier_history?: boolean | string;
     region_id?: string;
     district_id?: string;
     branch_id?: string;
@@ -3978,6 +3979,7 @@ export class OrderServiceService implements OnModuleInit {
       end_day,
       courier,
       courier_ids,
+      include_courier_history,
       region_id,
       district_id,
       branch_id,
@@ -3996,6 +3998,9 @@ export class OrderServiceService implements OnModuleInit {
       fetchAll === true ||
       String(fetch_all).toLowerCase() === 'true' ||
       String(fetchAll).toLowerCase() === 'true';
+    const useCourierHistory =
+      include_courier_history === true ||
+      String(include_courier_history).toLowerCase() === 'true';
 
     const pagination = this.normalizePagination(page, limit, useFetchAll);
     const statusFilter = this.normalizeStatusFilter(status);
@@ -4110,6 +4115,20 @@ export class OrderServiceService implements OnModuleInit {
               .orWhere('order.holder_courier_id IN (:...courier_ids)', {
                 courier_ids: normalizedCourierIds,
               });
+            if (useCourierHistory) {
+              nested.orWhere(
+                `EXISTS (
+                  SELECT 1
+                  FROM order_custody_events courier_history
+                  WHERE courier_history.order_id = order.id
+                    AND (
+                      courier_history.from_courier_id IN (:...courier_ids)
+                      OR courier_history.to_courier_id IN (:...courier_ids)
+                    )
+                )`,
+                { courier_ids: normalizedCourierIds },
+              );
+            }
           }),
         );
       }
@@ -7148,6 +7167,7 @@ export class OrderServiceService implements OnModuleInit {
     end_day?: string;
     courier?: string;
     courier_ids?: string[];
+    include_courier_history?: boolean | string;
     region_id?: string;
     page?: number;
     limit?: number;
