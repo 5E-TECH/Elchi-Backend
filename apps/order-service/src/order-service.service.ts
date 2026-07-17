@@ -4119,8 +4119,8 @@ export class OrderServiceService implements OnModuleInit {
               nested.orWhere(
                 `EXISTS (
                   SELECT 1
-                  FROM order_custody_events courier_history
-                  WHERE courier_history.order_id = order.id
+                  FROM "order_schema"."order_custody_events" courier_history
+                  WHERE courier_history.order_id = "order"."id"
                     AND (
                       courier_history.from_courier_id IN (:...courier_ids)
                       OR courier_history.to_courier_id IN (:...courier_ids)
