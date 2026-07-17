@@ -106,6 +106,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       }),
     };
     const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
       findOne: jest.fn().mockResolvedValue({
         id: '55',
         courier_id: '7',
@@ -177,6 +178,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       }),
     };
     const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
       findOne: jest.fn().mockResolvedValue({
         id: '55',
         courier_id: '7',
@@ -322,6 +324,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       }),
     };
     const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
       findOne: jest
         .fn()
         .mockResolvedValueOnce(null)
@@ -432,6 +435,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       }),
     };
     const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
       findOne: jest.fn().mockResolvedValue({
         id: '55',
         courier_id: '7',
@@ -531,6 +535,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       post_total_price: 1_500_000,
     };
     const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
       findOne: jest
         .fn()
         .mockResolvedValueOnce(sourcePost)
@@ -799,6 +804,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       send: jest.fn(() => of({ data: { id: '1', type: 'HQ' } })),
     };
     const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
       findOne: jest.fn().mockResolvedValue({
         id: '77',
         courier_id: '8',
@@ -860,6 +866,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       send: jest.fn(() => of({ data: { id: '1', type: 'HQ' } })),
     };
     const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
       findOne: jest.fn().mockResolvedValue({
         id: '77',
         courier_id: '8',
@@ -952,6 +959,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       send: jest.fn(() => of({ data: { id: '1', type: 'HQ' } })),
     };
     const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
       findOne: jest
         .fn()
         .mockResolvedValueOnce(sourcePost)
