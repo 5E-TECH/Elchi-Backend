@@ -164,7 +164,15 @@ describe('OrderServiceService filters', () => {
     courierScope?.[0]?.whereFactory?.(nested);
 
     expect(nested.orWhere).toHaveBeenCalledWith(
-      expect.stringContaining('FROM order_custody_events courier_history'),
+      expect.stringContaining(
+        'FROM "order_schema"."order_custody_events" courier_history',
+      ),
+      { courier_ids: ['77'] },
+    );
+    expect(nested.orWhere).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'WHERE courier_history.order_id = "order"."id"',
+      ),
       { courier_ids: ['77'] },
     );
   });
