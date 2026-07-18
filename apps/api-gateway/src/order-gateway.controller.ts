@@ -529,7 +529,7 @@ export class OrderGatewayController {
     const normalized = { ...row };
     if (String(normalized.status ?? '') === Order_status.CANCELLED_SENT) {
       normalized.status = Order_status.CANCELLED;
-      delete normalized.transport_status;
+      normalized.transport_status = Order_status.CANCELLED_SENT;
     }
     return normalized;
   }
@@ -640,6 +640,7 @@ export class OrderGatewayController {
       return {
         ...row,
         status: Order_status.CANCELLED,
+        transport_status: Order_status.CANCELLED_SENT,
       };
     });
 
