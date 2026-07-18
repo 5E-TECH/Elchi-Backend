@@ -227,6 +227,23 @@ export class OrderGatewayController {
     );
   }
 
+  private async findActiveCourierCanceledPostIds(
+    reqUser?: JwtUser,
+  ): Promise<string[]> {
+    const requester = {
+      id: reqUser?.sub,
+      roles: reqUser?.roles ?? [],
+    };
+    const response = await this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.post.rejected_for_courier' },
+      { requester },
+    );
+    const rows = this.extractRows(response?.data ?? response);
+    return Array.from(
+      new Set(rows.map((post) => String(post?.id ?? '')).filter(Boolean)),
+    );
+  }
+
   private async findCourierCancelledRows(
     reqUser: JwtUser | undefined,
     filters: Record<string, unknown>,
@@ -239,12 +256,15 @@ export class OrderGatewayController {
     const courierPostIds = await this.findAllCourierPostIds(reqUser).catch(
       () => [],
     );
+    const activeCanceledPostIds = new Set(
+      await this.findActiveCourierCanceledPostIds(reqUser).catch(() => []),
+    );
     const baseQuery = {
       ...filters,
-      status: [Order_status.CANCELLED],
-      canceled_post_unassigned: true,
+      status: [Order_status.CANCELLED, Order_status.CANCELLED_SENT],
       fetch_all: true,
       disable_pagination: true,
+      include_courier_history: true,
       page: undefined,
       limit: undefined,
     };
@@ -252,7 +272,7 @@ export class OrderGatewayController {
       this.sendOrderWithFallback(
         { cmd: 'order.find_all_enriched' },
         { cmd: 'order.find_all' },
-        { query: { ...baseQuery, holder_courier_ids: [requesterId] } },
+        { query: { ...baseQuery, courier_ids: [requesterId] } },
       ),
     ];
 
@@ -271,6 +291,10 @@ export class OrderGatewayController {
     responses.flatMap((response) =>
       this.extractRows(response?.data ?? response),
     ).forEach((row) => {
+      const canceledPostId = String(row?.canceled_post_id ?? '').trim();
+      if (canceledPostId && activeCanceledPostIds.has(canceledPostId)) {
+        return;
+      }
       const id = String(row?.id ?? '').trim();
       if (id) {
         uniqueRows.set(id, row);
