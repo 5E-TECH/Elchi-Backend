@@ -184,7 +184,7 @@ describe('OrderGatewayController pagination', () => {
     expect(branchClient.send).not.toHaveBeenCalled();
   });
 
-  it('courier cancelled tab excludes orders already attached to a canceled post', async () => {
+  it('courier cancelled tab returns only unsent cancelled orders for the courier', async () => {
     const { controller, orderClient, logisticsClient, branchClient } =
       makeController();
     logisticsClient.send
@@ -211,20 +211,12 @@ describe('OrderGatewayController pagination', () => {
     orderClient.send.mockImplementation((_pattern, payload) => {
       if (payload?.query?.post_ids) {
         return of({
-          data: [
-            { id: '84', post_id: 'old-post', status: 'cancelled' },
-            {
-              id: '99',
-              post_id: 'old-post',
-              status: 'cancelled (sent)',
-              canceledPostId: 'active-canceled-post',
-            },
-          ],
-          total: 2,
+          data: [{ id: '84', post_id: 'old-post', status: 'cancelled' }],
+          total: 1,
         });
       }
       return of({
-        data: [{ id: '77', status: 'cancelled (sent)' }],
+        data: [{ id: '77', status: 'cancelled' }],
         total: 1,
       });
     });
@@ -255,10 +247,10 @@ describe('OrderGatewayController pagination', () => {
     );
 
     const payload = orderClient.send.mock.calls[0][1];
-    expect(payload.query.status).toEqual(['cancelled', 'cancelled (sent)']);
+    expect(payload.query.status).toEqual(['cancelled']);
     expect(payload.query.courier_ids).toEqual(['77']);
-    expect(payload.query.include_courier_history).toBe(true);
-    expect(payload.query.canceled_post_unassigned).toBeUndefined();
+    expect(payload.query.include_courier_history).toBeUndefined();
+    expect(payload.query.canceled_post_unassigned).toBe(true);
     expect(payload.query.branch_id).toBeUndefined();
     expect(payload.query.holder_type).toBeUndefined();
     expect(orderClient.send.mock.calls).toEqual(
@@ -267,7 +259,8 @@ describe('OrderGatewayController pagination', () => {
           expect.anything(),
           expect.objectContaining({
             query: expect.objectContaining({
-              status: ['cancelled', 'cancelled (sent)'],
+              status: ['cancelled'],
+              canceled_post_unassigned: true,
               post_ids: ['post-1', 'old-post'],
             }),
           }),
@@ -275,7 +268,7 @@ describe('OrderGatewayController pagination', () => {
       ]),
     );
     expect(response.data).toEqual([
-      { id: '77', status: 'cancelled (sent)' },
+      { id: '77', status: 'cancelled' },
       { id: '84', post_id: 'old-post', status: 'cancelled' },
     ]);
     expect(branchClient.send).not.toHaveBeenCalled();
@@ -318,9 +311,9 @@ describe('OrderGatewayController pagination', () => {
     const payload = orderClient.send.mock.calls[0][1];
     expect(payload.query).toEqual(
       expect.objectContaining({
-        status: ['cancelled', 'cancelled (sent)'],
+        status: ['cancelled'],
         courier_ids: ['77'],
-        include_courier_history: true,
+        canceled_post_unassigned: true,
       }),
     );
     expect(response.data).toEqual([{ id: '84', status: 'cancelled' }]);
@@ -334,9 +327,6 @@ describe('OrderGatewayController pagination', () => {
       )
       .mockReturnValueOnce(
         of({ data: { data: [{ id: 'old-post' }], totalPages: 2 } }),
-      )
-      .mockReturnValueOnce(
-        of({ data: [{ id: 'active-canceled-post' }] }),
       );
     orderClient.send.mockImplementation((_pattern, payload) => {
       if (payload?.query?.post_ids) {
@@ -369,14 +359,15 @@ describe('OrderGatewayController pagination', () => {
       .filter(Boolean);
     expect(orderQueries).toContainEqual(
       expect.objectContaining({
-        status: ['cancelled', 'cancelled (sent)'],
+        status: ['cancelled'],
         courier_ids: ['77'],
-        include_courier_history: true,
+        canceled_post_unassigned: true,
       }),
     );
     expect(orderQueries).toContainEqual(
       expect.objectContaining({
-        status: ['cancelled', 'cancelled (sent)'],
+        status: ['cancelled'],
+        canceled_post_unassigned: true,
         post_ids: ['new-post', 'old-post'],
       }),
     );

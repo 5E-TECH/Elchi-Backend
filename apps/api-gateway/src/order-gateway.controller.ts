@@ -241,10 +241,10 @@ export class OrderGatewayController {
     );
     const baseQuery = {
       ...filters,
-      status: [Order_status.CANCELLED, Order_status.CANCELLED_SENT],
+      status: [Order_status.CANCELLED],
+      canceled_post_unassigned: true,
       fetch_all: true,
       disable_pagination: true,
-      include_courier_history: true,
       page: undefined,
       limit: undefined,
     };
@@ -271,12 +271,6 @@ export class OrderGatewayController {
     responses.flatMap((response) =>
       this.extractRows(response?.data ?? response),
     ).forEach((row) => {
-      const canceledPostId = String(
-        row?.canceled_post_id ?? row?.canceledPostId ?? '',
-      ).trim();
-      if (canceledPostId) {
-        return;
-      }
       const id = String(row?.id ?? '').trim();
       if (id) {
         uniqueRows.set(id, row);
