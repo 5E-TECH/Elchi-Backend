@@ -2977,19 +2977,6 @@ export class LogisticsServiceService implements OnModuleInit {
           'Courier faqat o‘ziga biriktirilgan bekor qilingan orderlarni jo‘nata oladi',
         );
       }
-      if (
-        this.isCancelledSentOrder(order.status) &&
-        !(await this.isOrderInActiveCanceledPost(
-          order,
-          canceledPost,
-          requester.id,
-          courierBranchId,
-        ))
-      ) {
-        this.forbidden(
-          'Jo‘natilgan bekor order courierning faol bekor postiga tegishli emas',
-        );
-      }
       orders.push(order);
     }
 
