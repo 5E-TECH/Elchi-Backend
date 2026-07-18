@@ -236,6 +236,9 @@ export class OrderGatewayController {
       return [];
     }
 
+    const courierPostIds = await this.findAllCourierPostIds(reqUser).catch(
+      () => [],
+    );
     const baseQuery = {
       ...filters,
       status: [Order_status.CANCELLED],
@@ -258,6 +261,16 @@ export class OrderGatewayController {
       ),
     ];
 
+    if (courierPostIds.length) {
+      requests.push(
+        this.sendOrderWithFallback(
+          { cmd: 'order.find_all_enriched' },
+          { cmd: 'order.find_all' },
+          { query: { ...baseQuery, post_ids: courierPostIds } },
+        ),
+      );
+    }
+
     const responses = await Promise.all(requests);
     const uniqueRows = new Map<string, Record<string, unknown>>();
     responses
@@ -270,12 +283,21 @@ export class OrderGatewayController {
         const holderCourierId = String(
           row?.holder_courier_id ?? row?.holderCourierId ?? '',
         ).trim();
+        const parentOrderId = String(
+          row?.parent_order_id ?? row?.parentOrderId ?? '',
+        ).trim();
+        const canceledPostId = String(
+          row?.canceled_post_id ?? row?.canceledPostId ?? '',
+        ).trim();
 
-        if (holderType === 'BRANCH' || holderType === 'HQ') {
+        if (parentOrderId || canceledPostId) {
           return false;
         }
         if (holderType === 'COURIER') {
           return holderCourierId === requesterId || courierId === requesterId;
+        }
+        if (holderType === 'BRANCH' || holderType === 'HQ') {
+          return true;
         }
         if (!holderType && !courierId && !holderCourierId) {
           return true;

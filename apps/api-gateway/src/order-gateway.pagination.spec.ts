@@ -222,6 +222,28 @@ describe('OrderGatewayController pagination', () => {
           total: 1,
         });
       }
+      if (payload?.query?.post_ids) {
+        return of({
+          data: [
+            {
+              id: 'post-cancelled',
+              status: 'cancelled',
+              post_id: 'old-post',
+              holder_type: 'BRANCH',
+              canceled_post_id: null,
+            },
+            {
+              id: 'partial-child',
+              status: 'cancelled',
+              post_id: 'old-post',
+              holder_type: 'BRANCH',
+              parent_order_id: '75',
+              canceled_post_id: null,
+            },
+          ],
+          total: 2,
+        });
+      }
       return of({
         data: [{ id: '77', status: 'cancelled' }],
         total: 1,
@@ -281,6 +303,13 @@ describe('OrderGatewayController pagination', () => {
         status: 'cancelled',
         holder_type: 'COURIER',
         holder_courier_id: '77',
+      },
+      {
+        id: 'post-cancelled',
+        status: 'cancelled',
+        post_id: 'old-post',
+        holder_type: 'BRANCH',
+        canceled_post_id: null,
       },
     ]);
     expect(branchClient.send).not.toHaveBeenCalled();
@@ -355,6 +384,28 @@ describe('OrderGatewayController pagination', () => {
           total: 1,
         });
       }
+      if (payload?.query?.post_ids) {
+        return of({
+          data: [
+            {
+              id: 'post-cancelled',
+              status: 'cancelled',
+              post_id: 'old-post',
+              holder_type: 'BRANCH',
+              canceled_post_id: null,
+            },
+            {
+              id: 'partial-child',
+              status: 'cancelled',
+              post_id: 'old-post',
+              holder_type: 'BRANCH',
+              parent_order_id: '75',
+              canceled_post_id: null,
+            },
+          ],
+          total: 2,
+        });
+      }
       return of({
         data: [
           {
@@ -363,6 +414,7 @@ describe('OrderGatewayController pagination', () => {
             post_id: 'old-post',
             holder_type: 'BRANCH',
             holder_branch_id: '11',
+            parent_order_id: '75',
             canceled_post_id: null,
           },
         ],
@@ -403,14 +455,34 @@ describe('OrderGatewayController pagination', () => {
         holder_courier_ids: ['77'],
       }),
     );
-    expect(logisticsClient.send).not.toHaveBeenCalled();
-    expect(response.data.data).toEqual([
+    expect(orderQueries).toContainEqual(
       expect.objectContaining({
-        id: '84',
-        status: 'cancelled',
-        holder_type: 'COURIER',
-        holder_courier_id: '77',
+        status: ['cancelled'],
+        canceled_post_unassigned: true,
+        post_ids: ['new-post', 'old-post'],
       }),
-    ]);
+    );
+    expect(logisticsClient.send).toHaveBeenCalledTimes(2);
+    expect(response.data.data).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: 'post-cancelled',
+          status: 'cancelled',
+          holder_type: 'BRANCH',
+        }),
+        expect.objectContaining({
+          id: '84',
+          status: 'cancelled',
+          holder_type: 'COURIER',
+          holder_courier_id: '77',
+        }),
+      ]),
+    );
+    expect(response.data.data).not.toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: 'branch-held' }),
+        expect.objectContaining({ id: 'partial-child' }),
+      ]),
+    );
   });
 });
