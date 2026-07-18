@@ -240,8 +240,15 @@ describe('OrderGatewayController pagination', () => {
               parent_order_id: '75',
               canceled_post_id: null,
             },
+            {
+              id: 'sent-cancelled',
+              status: 'cancelled (sent)',
+              post_id: 'old-post',
+              holder_type: 'BRANCH',
+              canceled_post_id: '70',
+            },
           ],
-          total: 2,
+          total: 3,
         });
       }
       return of({
@@ -276,10 +283,10 @@ describe('OrderGatewayController pagination', () => {
     );
 
     const payload = orderClient.send.mock.calls[0][1];
-    expect(payload.query.status).toEqual(['cancelled']);
+    expect(payload.query.status).toEqual(['cancelled', 'cancelled (sent)']);
     expect(payload.query.courier_ids).toEqual(['77']);
     expect(payload.query.include_courier_history).toBeUndefined();
-    expect(payload.query.canceled_post_unassigned).toBe(true);
+    expect(payload.query.canceled_post_unassigned).toBeUndefined();
     expect(payload.query.branch_id).toBeUndefined();
     expect(payload.query.holder_type).toBeUndefined();
     expect(orderClient.send.mock.calls).toEqual(
@@ -288,8 +295,7 @@ describe('OrderGatewayController pagination', () => {
           expect.anything(),
           expect.objectContaining({
             query: expect.objectContaining({
-              status: ['cancelled'],
-              canceled_post_unassigned: true,
+              status: ['cancelled', 'cancelled (sent)'],
               holder_courier_ids: ['77'],
             }),
           }),
@@ -309,6 +315,14 @@ describe('OrderGatewayController pagination', () => {
         status: 'cancelled',
         post_id: 'old-post',
         holder_type: 'BRANCH',
+        canceled_post_id: null,
+      },
+      {
+        id: 'partial-child',
+        status: 'cancelled',
+        post_id: 'old-post',
+        holder_type: 'BRANCH',
+        parent_order_id: '75',
         canceled_post_id: null,
       },
     ]);
@@ -352,9 +366,8 @@ describe('OrderGatewayController pagination', () => {
     const payload = orderClient.send.mock.calls[0][1];
     expect(payload.query).toEqual(
       expect.objectContaining({
-        status: ['cancelled'],
+        status: ['cancelled', 'cancelled (sent)'],
         courier_ids: ['77'],
-        canceled_post_unassigned: true,
       }),
     );
     expect(response.data).toEqual([{ id: '84', status: 'cancelled' }]);
@@ -402,8 +415,15 @@ describe('OrderGatewayController pagination', () => {
               parent_order_id: '75',
               canceled_post_id: null,
             },
+            {
+              id: 'sent-cancelled',
+              status: 'cancelled (sent)',
+              post_id: 'old-post',
+              holder_type: 'BRANCH',
+              canceled_post_id: '70',
+            },
           ],
-          total: 2,
+          total: 3,
         });
       }
       return of({
@@ -443,22 +463,19 @@ describe('OrderGatewayController pagination', () => {
       .filter(Boolean);
     expect(orderQueries).toContainEqual(
       expect.objectContaining({
-        status: ['cancelled'],
+        status: ['cancelled', 'cancelled (sent)'],
         courier_ids: ['77'],
-        canceled_post_unassigned: true,
       }),
     );
     expect(orderQueries).toContainEqual(
       expect.objectContaining({
-        status: ['cancelled'],
-        canceled_post_unassigned: true,
+        status: ['cancelled', 'cancelled (sent)'],
         holder_courier_ids: ['77'],
       }),
     );
     expect(orderQueries).toContainEqual(
       expect.objectContaining({
-        status: ['cancelled'],
-        canceled_post_unassigned: true,
+        status: ['cancelled', 'cancelled (sent)'],
         post_ids: ['new-post', 'old-post'],
       }),
     );
@@ -467,6 +484,16 @@ describe('OrderGatewayController pagination', () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: 'post-cancelled',
+          status: 'cancelled',
+          holder_type: 'BRANCH',
+        }),
+        expect.objectContaining({
+          id: 'partial-child',
+          status: 'cancelled',
+          holder_type: 'BRANCH',
+        }),
+        expect.objectContaining({
+          id: 'branch-held',
           status: 'cancelled',
           holder_type: 'BRANCH',
         }),
@@ -480,8 +507,7 @@ describe('OrderGatewayController pagination', () => {
     );
     expect(response.data.data).not.toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: 'branch-held' }),
-        expect.objectContaining({ id: 'partial-child' }),
+        expect.objectContaining({ id: 'sent-cancelled' }),
       ]),
     );
   });
