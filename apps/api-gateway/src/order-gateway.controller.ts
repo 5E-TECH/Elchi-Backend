@@ -271,7 +271,10 @@ export class OrderGatewayController {
     responses.flatMap((response) =>
       this.extractRows(response?.data ?? response),
     ).forEach((row) => {
-      if (String(row?.canceled_post_id ?? '').trim()) {
+      const canceledPostId = String(
+        row?.canceled_post_id ?? row?.canceledPostId ?? '',
+      ).trim();
+      if (canceledPostId) {
         return;
       }
       const id = String(row?.id ?? '').trim();

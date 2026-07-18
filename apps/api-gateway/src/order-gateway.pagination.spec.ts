@@ -217,7 +217,7 @@ describe('OrderGatewayController pagination', () => {
               id: '99',
               post_id: 'old-post',
               status: 'cancelled (sent)',
-              canceled_post_id: 'active-canceled-post',
+              canceledPostId: 'active-canceled-post',
             },
           ],
           total: 2,
