@@ -209,9 +209,16 @@ describe('OrderGatewayController pagination', () => {
         }),
       );
     orderClient.send.mockImplementation((_pattern, payload) => {
-      if (payload?.query?.post_ids) {
+      if (payload?.query?.holder_courier_ids) {
         return of({
-          data: [{ id: '84', post_id: 'old-post', status: 'cancelled' }],
+          data: [
+            {
+              id: '84',
+              status: 'cancelled',
+              holder_type: 'COURIER',
+              holder_courier_id: '77',
+            },
+          ],
           total: 1,
         });
       }
@@ -261,7 +268,7 @@ describe('OrderGatewayController pagination', () => {
             query: expect.objectContaining({
               status: ['cancelled'],
               canceled_post_unassigned: true,
-              post_ids: ['post-1', 'old-post'],
+              holder_courier_ids: ['77'],
             }),
           }),
         ]),
@@ -269,7 +276,12 @@ describe('OrderGatewayController pagination', () => {
     );
     expect(response.data).toEqual([
       { id: '77', status: 'cancelled' },
-      { id: '84', post_id: 'old-post', status: 'cancelled' },
+      {
+        id: '84',
+        status: 'cancelled',
+        holder_type: 'COURIER',
+        holder_courier_id: '77',
+      },
     ]);
     expect(branchClient.send).not.toHaveBeenCalled();
   });
@@ -319,7 +331,7 @@ describe('OrderGatewayController pagination', () => {
     expect(response.data).toEqual([{ id: '84', status: 'cancelled' }]);
   });
 
-  it('legacy courier cancelled list includes exact cancelled orders from every post page', async () => {
+  it('legacy courier cancelled list includes current courier-held cancelled orders only', async () => {
     const { controller, orderClient, logisticsClient } = makeController();
     logisticsClient.send
       .mockReturnValueOnce(
@@ -329,13 +341,33 @@ describe('OrderGatewayController pagination', () => {
         of({ data: { data: [{ id: 'old-post' }], totalPages: 2 } }),
       );
     orderClient.send.mockImplementation((_pattern, payload) => {
-      if (payload?.query?.post_ids) {
+      if (payload?.query?.holder_courier_ids) {
         return of({
-          data: [{ id: '84', post_id: 'old-post', status: 'cancelled' }],
+          data: [
+            {
+              id: '84',
+              status: 'cancelled',
+              holder_type: 'COURIER',
+              holder_courier_id: '77',
+              canceled_post_id: null,
+            },
+          ],
           total: 1,
         });
       }
-      return of({ data: [], total: 0 });
+      return of({
+        data: [
+          {
+            id: 'branch-held',
+            status: 'cancelled',
+            post_id: 'old-post',
+            holder_type: 'BRANCH',
+            holder_branch_id: '11',
+            canceled_post_id: null,
+          },
+        ],
+        total: 1,
+      });
     });
 
     const response: any = await controller.findCourierOrdersLegacy(
@@ -368,12 +400,17 @@ describe('OrderGatewayController pagination', () => {
       expect.objectContaining({
         status: ['cancelled'],
         canceled_post_unassigned: true,
-        post_ids: ['new-post', 'old-post'],
+        holder_courier_ids: ['77'],
       }),
     );
-    expect(logisticsClient.send).toHaveBeenCalledTimes(2);
+    expect(logisticsClient.send).not.toHaveBeenCalled();
     expect(response.data.data).toEqual([
-      expect.objectContaining({ id: '84', status: 'cancelled' }),
+      expect.objectContaining({
+        id: '84',
+        status: 'cancelled',
+        holder_type: 'COURIER',
+        holder_courier_id: '77',
+      }),
     ]);
   });
 });
