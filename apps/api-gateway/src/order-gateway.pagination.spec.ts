@@ -184,7 +184,7 @@ describe('OrderGatewayController pagination', () => {
     expect(branchClient.send).not.toHaveBeenCalled();
   });
 
-  it('courier cancelled tab excludes orders in active canceled posts', async () => {
+  it('courier cancelled tab excludes orders already attached to a canceled post', async () => {
     const { controller, orderClient, logisticsClient, branchClient } =
       makeController();
     logisticsClient.send
@@ -206,11 +206,6 @@ describe('OrderGatewayController pagination', () => {
             page: 2,
             limit: 100,
           },
-        }),
-      )
-      .mockReturnValueOnce(
-        of({
-          data: [{ id: 'active-canceled-post' }],
         }),
       );
     orderClient.send.mockImplementation((_pattern, payload) => {
@@ -385,7 +380,7 @@ describe('OrderGatewayController pagination', () => {
         post_ids: ['new-post', 'old-post'],
       }),
     );
-    expect(logisticsClient.send).toHaveBeenCalledTimes(3);
+    expect(logisticsClient.send).toHaveBeenCalledTimes(2);
     expect(response.data.data).toEqual([
       expect.objectContaining({ id: '84', status: 'cancelled' }),
     ]);
