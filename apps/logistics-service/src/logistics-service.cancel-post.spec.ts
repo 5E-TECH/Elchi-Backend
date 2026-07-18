@@ -308,7 +308,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
     expect(postRepo.save).not.toHaveBeenCalled();
   });
 
-  it('rejects already sent canceled orders when their old post is not active', async () => {
+  it('moves already sent canceled orders from an inactive post into the active post', async () => {
     const orderClient = {
       send: jest.fn((pattern: { cmd: string }) => {
         if (pattern.cmd === 'order.find_by_id') {
@@ -353,18 +353,26 @@ describe('LogisticsServiceService createCanceledPost', () => {
       { log: jest.fn(), query: jest.fn() } as any,
     );
 
-    await expect(
-      service.createCanceledPost(
-        { id: '7', roles: ['courier'] },
-        { order_ids: ['101'] },
-      ),
-    ).rejects.toBeInstanceOf(RpcException);
-    expect(
-      orderClient.send.mock.calls.some(
-        ([pattern]) => pattern.cmd === 'order.update',
-      ),
-    ).toBe(false);
-    expect(postRepo.save).not.toHaveBeenCalled();
+    const response = await service.createCanceledPost(
+      { id: '7', roles: ['courier'] },
+      { order_ids: ['101'] },
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(postRepo.save).toHaveBeenCalled();
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.update' },
+      expect.objectContaining({
+        id: '101',
+        dto: expect.objectContaining({
+          canceled_post_id: '55',
+          status: Order_status.CANCELLED_SENT,
+          branch_id: '10',
+          courier_id: null,
+          assigned_at: null,
+        }),
+      }),
+    );
   });
 
   it('rejects a canceled order owned by another courier', async () => {
