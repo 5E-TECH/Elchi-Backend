@@ -177,7 +177,7 @@ describe('OrderGatewayController pagination', () => {
     expect(branchClient.send).not.toHaveBeenCalled();
   });
 
-  it('courier cancelled tab merges current ownership with historical posts', async () => {
+  it('courier cancelled tab returns only current unsent cancellations', async () => {
     const { controller, orderClient, logisticsClient, branchClient } =
       makeController();
     logisticsClient.send
@@ -233,7 +233,7 @@ describe('OrderGatewayController pagination', () => {
     const payload = orderClient.send.mock.calls[0][1];
     expect(payload.query.status).toEqual(['cancelled']);
     expect(payload.query.courier_ids).toEqual(['77']);
-    expect(payload.query.include_courier_history).toBe(true);
+    expect(payload.query.include_courier_history).toBeUndefined();
     expect(payload.query.canceled_post_unassigned).toBe(true);
     expect(payload.query.branch_id).toBeUndefined();
     expect(payload.query.holder_type).toBeUndefined();
@@ -294,7 +294,6 @@ describe('OrderGatewayController pagination', () => {
       expect.objectContaining({
         status: ['cancelled'],
         courier_ids: ['77'],
-        include_courier_history: true,
         canceled_post_unassigned: true,
       }),
     );
