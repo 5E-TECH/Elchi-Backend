@@ -242,6 +242,7 @@ export class OrderGatewayController {
     const baseQuery = {
       ...filters,
       status: [Order_status.CANCELLED],
+      canceled_post_unassigned: true,
       fetch_all: true,
       disable_pagination: true,
       include_courier_history: true,
