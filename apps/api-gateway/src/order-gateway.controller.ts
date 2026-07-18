@@ -241,8 +241,7 @@ export class OrderGatewayController {
     );
     const baseQuery = {
       ...filters,
-      status: [Order_status.CANCELLED],
-      canceled_post_unassigned: true,
+      status: [Order_status.CANCELLED, Order_status.CANCELLED_SENT],
       fetch_all: true,
       disable_pagination: true,
       page: undefined,
@@ -283,14 +282,19 @@ export class OrderGatewayController {
         const holderCourierId = String(
           row?.holder_courier_id ?? row?.holderCourierId ?? '',
         ).trim();
-        const parentOrderId = String(
-          row?.parent_order_id ?? row?.parentOrderId ?? '',
-        ).trim();
-        const canceledPostId = String(
-          row?.canceled_post_id ?? row?.canceledPostId ?? '',
-        ).trim();
+        const status = String(row?.status ?? '')
+          .trim()
+          .toLowerCase();
+        const transportStatus = String(
+          row?.transport_status ?? row?.transportStatus ?? '',
+        )
+          .trim()
+          .toLowerCase();
 
-        if (parentOrderId || canceledPostId) {
+        if (
+          status === Order_status.CANCELLED_SENT ||
+          transportStatus === Order_status.CANCELLED_SENT
+        ) {
           return false;
         }
         if (holderType === 'COURIER') {
