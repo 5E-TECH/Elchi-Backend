@@ -236,9 +236,6 @@ export class OrderGatewayController {
       return [];
     }
 
-    const courierPostIds = await this.findAllCourierPostIds(reqUser).catch(
-      () => [],
-    );
     const baseQuery = {
       ...filters,
       status: [Order_status.CANCELLED],
@@ -254,28 +251,43 @@ export class OrderGatewayController {
         { cmd: 'order.find_all' },
         { query: { ...baseQuery, courier_ids: [requesterId] } },
       ),
+      this.sendOrderWithFallback(
+        { cmd: 'order.find_all_enriched' },
+        { cmd: 'order.find_all' },
+        { query: { ...baseQuery, holder_courier_ids: [requesterId] } },
+      ),
     ];
-
-    if (courierPostIds.length) {
-      requests.push(
-        this.sendOrderWithFallback(
-          { cmd: 'order.find_all_enriched' },
-          { cmd: 'order.find_all' },
-          { query: { ...baseQuery, post_ids: courierPostIds } },
-        ),
-      );
-    }
 
     const responses = await Promise.all(requests);
     const uniqueRows = new Map<string, Record<string, unknown>>();
-    responses.flatMap((response) =>
-      this.extractRows(response?.data ?? response),
-    ).forEach((row) => {
-      const id = String(row?.id ?? '').trim();
-      if (id) {
-        uniqueRows.set(id, row);
-      }
-    });
+    responses
+      .flatMap((response) => this.extractRows(response?.data ?? response))
+      .filter((row) => {
+        const holderType = String(row?.holder_type ?? row?.holderType ?? '')
+          .trim()
+          .toUpperCase();
+        const courierId = String(row?.courier_id ?? row?.courierId ?? '').trim();
+        const holderCourierId = String(
+          row?.holder_courier_id ?? row?.holderCourierId ?? '',
+        ).trim();
+
+        if (holderType === 'BRANCH' || holderType === 'HQ') {
+          return false;
+        }
+        if (holderType === 'COURIER') {
+          return holderCourierId === requesterId || courierId === requesterId;
+        }
+        if (!holderType && !courierId && !holderCourierId) {
+          return true;
+        }
+        return courierId === requesterId || holderCourierId === requesterId;
+      })
+      .forEach((row) => {
+        const id = String(row?.id ?? '').trim();
+        if (id) {
+          uniqueRows.set(id, row);
+        }
+      });
     return Array.from(uniqueRows.values());
   }
 
