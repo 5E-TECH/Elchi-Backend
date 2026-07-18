@@ -83,7 +83,7 @@ describe('OrderGatewayController pagination', () => {
     expect(payload.query.limit).toBe(25);
     expect(res.total_pages).toBe(3);
     expect(res.data[0].status).toBe('cancelled');
-    expect(res.data[0].transport_status).toBeUndefined();
+    expect(res.data[0].transport_status).toBe('cancelled (sent)');
   });
 
   it('invalid limit rejected with 400', async () => {
