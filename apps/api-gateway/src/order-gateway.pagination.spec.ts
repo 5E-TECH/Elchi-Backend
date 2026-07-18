@@ -241,7 +241,7 @@ describe('OrderGatewayController pagination', () => {
               canceled_post_id: null,
             },
             {
-              id: 'sent-cancelled',
+              id: 'accepted-cancelled',
               status: 'cancelled (sent)',
               post_id: 'old-post',
               holder_type: 'BRANCH',
@@ -318,12 +318,11 @@ describe('OrderGatewayController pagination', () => {
         canceled_post_id: null,
       },
       {
-        id: 'partial-child',
-        status: 'cancelled',
+        id: 'accepted-cancelled',
+        status: 'cancelled (sent)',
         post_id: 'old-post',
         holder_type: 'BRANCH',
-        parent_order_id: '75',
-        canceled_post_id: null,
+        canceled_post_id: '70',
       },
     ]);
     expect(branchClient.send).not.toHaveBeenCalled();
@@ -416,7 +415,7 @@ describe('OrderGatewayController pagination', () => {
               canceled_post_id: null,
             },
             {
-              id: 'sent-cancelled',
+              id: 'accepted-cancelled',
               status: 'cancelled (sent)',
               post_id: 'old-post',
               holder_type: 'BRANCH',
@@ -488,13 +487,9 @@ describe('OrderGatewayController pagination', () => {
           holder_type: 'BRANCH',
         }),
         expect.objectContaining({
-          id: 'partial-child',
+          id: 'accepted-cancelled',
           status: 'cancelled',
-          holder_type: 'BRANCH',
-        }),
-        expect.objectContaining({
-          id: 'branch-held',
-          status: 'cancelled',
+          transport_status: 'cancelled (sent)',
           holder_type: 'BRANCH',
         }),
         expect.objectContaining({
@@ -507,7 +502,8 @@ describe('OrderGatewayController pagination', () => {
     );
     expect(response.data.data).not.toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ id: 'sent-cancelled' }),
+        expect.objectContaining({ id: 'partial-child' }),
+        expect.objectContaining({ id: 'branch-held' }),
       ]),
     );
   });
