@@ -252,7 +252,7 @@ export class OrderGatewayController {
       this.sendOrderWithFallback(
         { cmd: 'order.find_all_enriched' },
         { cmd: 'order.find_all' },
-        { query: { ...baseQuery, courier_ids: [requesterId] } },
+        { query: { ...baseQuery, holder_courier_ids: [requesterId] } },
       ),
     ];
 
@@ -522,6 +522,15 @@ export class OrderGatewayController {
       normalized.deleted = normalized.is_deleted;
       delete normalized.is_deleted;
     }
+    return this.normalizeOrderStatusForDisplay(normalized);
+  }
+
+  private normalizeOrderStatusForDisplay(row: Record<string, unknown>) {
+    const normalized = { ...row };
+    if (String(normalized.status ?? '') === Order_status.CANCELLED_SENT) {
+      normalized.status = Order_status.CANCELLED;
+      delete normalized.transport_status;
+    }
     return normalized;
   }
 
@@ -602,7 +611,11 @@ export class OrderGatewayController {
 
     return {
       ...body,
-      data: Array.isArray(body.data) ? body.data : rows,
+      data: (Array.isArray(body.data) ? body.data : rows).map((row) =>
+        row && typeof row === 'object'
+          ? this.normalizeOrderStatusForDisplay(row as Record<string, unknown>)
+          : row,
+      ),
       total,
       page,
       limit,
@@ -627,7 +640,6 @@ export class OrderGatewayController {
       return {
         ...row,
         status: Order_status.CANCELLED,
-        transport_status: Order_status.CANCELLED_SENT,
       };
     });
 

@@ -67,7 +67,12 @@ describe('OrderGatewayController pagination', () => {
   it('allowed limits are accepted (25/50/100)', async () => {
     const { controller, orderClient } = makeController();
     orderClient.send.mockReturnValue(
-      of({ data: [{ id: '1' }], total: 51, page: 1, limit: 25 }),
+      of({
+        data: [{ id: '1', status: 'cancelled (sent)' }],
+        total: 51,
+        page: 1,
+        limit: 25,
+      }),
     );
 
     const res: any = await callFindAll(controller, '1', '25', {
@@ -77,6 +82,8 @@ describe('OrderGatewayController pagination', () => {
     const payload = orderClient.send.mock.calls[0][1];
     expect(payload.query.limit).toBe(25);
     expect(res.total_pages).toBe(3);
+    expect(res.data[0].status).toBe('cancelled');
+    expect(res.data[0].transport_status).toBeUndefined();
   });
 
   it('invalid limit rejected with 400', async () => {
@@ -232,7 +239,8 @@ describe('OrderGatewayController pagination', () => {
 
     const payload = orderClient.send.mock.calls[0][1];
     expect(payload.query.status).toEqual(['cancelled']);
-    expect(payload.query.courier_ids).toEqual(['77']);
+    expect(payload.query.holder_courier_ids).toEqual(['77']);
+    expect(payload.query.courier_ids).toBeUndefined();
     expect(payload.query.include_courier_history).toBeUndefined();
     expect(payload.query.canceled_post_unassigned).toBe(true);
     expect(payload.query.branch_id).toBeUndefined();
@@ -293,7 +301,7 @@ describe('OrderGatewayController pagination', () => {
     expect(payload.query).toEqual(
       expect.objectContaining({
         status: ['cancelled'],
-        courier_ids: ['77'],
+        holder_courier_ids: ['77'],
         canceled_post_unassigned: true,
       }),
     );
@@ -341,7 +349,7 @@ describe('OrderGatewayController pagination', () => {
     expect(orderQueries).toContainEqual(
       expect.objectContaining({
         status: ['cancelled'],
-        courier_ids: ['77'],
+        holder_courier_ids: ['77'],
         canceled_post_unassigned: true,
       }),
     );
