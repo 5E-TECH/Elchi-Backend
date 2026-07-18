@@ -3949,6 +3949,7 @@ export class OrderServiceService implements OnModuleInit {
     end_day?: string;
     courier?: string;
     courier_ids?: string[];
+    holder_courier_ids?: string[];
     include_courier_history?: boolean | string;
     region_id?: string;
     district_id?: string;
@@ -3979,6 +3980,7 @@ export class OrderServiceService implements OnModuleInit {
       end_day,
       courier,
       courier_ids,
+      holder_courier_ids,
       include_courier_history,
       region_id,
       district_id,
@@ -4131,6 +4133,16 @@ export class OrderServiceService implements OnModuleInit {
             }
           }),
         );
+      }
+    }
+    if (holder_courier_ids?.length) {
+      const normalizedHolderCourierIds = holder_courier_ids
+        .map((id) => String(id))
+        .filter(Boolean);
+      if (normalizedHolderCourierIds.length) {
+        qb.andWhere('order.holder_courier_id IN (:...holder_courier_ids)', {
+          holder_courier_ids: normalizedHolderCourierIds,
+        });
       }
     }
     if (start_day) {
@@ -7167,6 +7179,7 @@ export class OrderServiceService implements OnModuleInit {
     end_day?: string;
     courier?: string;
     courier_ids?: string[];
+    holder_courier_ids?: string[];
     include_courier_history?: boolean | string;
     region_id?: string;
     page?: number;
