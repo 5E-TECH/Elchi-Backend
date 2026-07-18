@@ -290,11 +290,21 @@ export class OrderGatewayController {
         )
           .trim()
           .toLowerCase();
+        const canceledPostId = String(
+          row?.canceled_post_id ?? row?.canceledPostId ?? '',
+        ).trim();
+        const parentOrderId = String(
+          row?.parent_order_id ?? row?.parentOrderId ?? '',
+        ).trim();
 
         if (
-          status === Order_status.CANCELLED_SENT ||
-          transportStatus === Order_status.CANCELLED_SENT
+          (status === Order_status.CANCELLED_SENT ||
+            transportStatus === Order_status.CANCELLED_SENT) &&
+          !canceledPostId
         ) {
+          return false;
+        }
+        if (parentOrderId && !canceledPostId) {
           return false;
         }
         if (holderType === 'COURIER') {
