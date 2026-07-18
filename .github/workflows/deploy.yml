@@ -117,25 +117,9 @@ jobs:
             docker compose -f docker-compose.prod.yml pull rabbitmq postgres minio cloudflared || true
             docker compose -f docker-compose.prod.yml up -d --remove-orphans rabbitmq postgres minio
 
-            case "$RUN_MIGRATIONS" in
-              true)
-                docker compose -f docker-compose.prod.yml up --build --force-recreate --abort-on-container-exit migration-runner
-                docker compose -f docker-compose.prod.yml rm -f migration-runner || true
-                ;;
-              *)
-                echo "No migration changes detected."
-                ;;
-            esac
+            test "$RUN_MIGRATIONS" != true && echo "No migration changes detected." || { docker compose -f docker-compose.prod.yml up --build --force-recreate --abort-on-container-exit migration-runner; docker compose -f docker-compose.prod.yml rm -f migration-runner || true; }
 
-            case "$DEPLOY_SERVICES" in
-              "")
-                echo "No application service changes detected; keeping running containers as-is."
-                ;;
-              *)
-                echo "Deploying services:$DEPLOY_SERVICES"
-                docker compose -f docker-compose.prod.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES
-                ;;
-            esac
+            test -z "$DEPLOY_SERVICES" && echo "No application service changes detected; keeping running containers as-is." || { echo "Deploying services:$DEPLOY_SERVICES"; docker compose -f docker-compose.prod.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES; }
 
             docker compose -f docker-compose.prod.yml up -d --no-deps cloudflared || true
             docker compose -f docker-compose.prod.yml ps
