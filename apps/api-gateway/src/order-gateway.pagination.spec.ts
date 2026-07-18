@@ -234,9 +234,9 @@ describe('OrderGatewayController pagination', () => {
     expect(payload.query.status).toEqual(['cancelled']);
     expect(payload.query.courier_ids).toEqual(['77']);
     expect(payload.query.include_courier_history).toBe(true);
+    expect(payload.query.canceled_post_unassigned).toBe(true);
     expect(payload.query.branch_id).toBeUndefined();
     expect(payload.query.holder_type).toBeUndefined();
-    expect(payload.query.canceled_post_unassigned).toBeUndefined();
     expect(orderClient.send.mock.calls).toEqual(
       expect.arrayContaining([
         expect.arrayContaining([
@@ -244,6 +244,7 @@ describe('OrderGatewayController pagination', () => {
           expect.objectContaining({
             query: expect.objectContaining({
               status: ['cancelled'],
+              canceled_post_unassigned: true,
               post_ids: ['post-1', 'old-post'],
             }),
           }),
@@ -294,6 +295,7 @@ describe('OrderGatewayController pagination', () => {
         status: ['cancelled'],
         courier_ids: ['77'],
         include_courier_history: true,
+        canceled_post_unassigned: true,
       }),
     );
     expect(response.data).toEqual([{ id: '84', status: 'cancelled' }]);
@@ -341,11 +343,13 @@ describe('OrderGatewayController pagination', () => {
       expect.objectContaining({
         status: ['cancelled'],
         courier_ids: ['77'],
+        canceled_post_unassigned: true,
       }),
     );
     expect(orderQueries).toContainEqual(
       expect.objectContaining({
         status: ['cancelled'],
+        canceled_post_unassigned: true,
         post_ids: ['new-post', 'old-post'],
       }),
     );
