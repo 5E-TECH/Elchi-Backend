@@ -4067,7 +4067,8 @@ export class OrderServiceService implements OnModuleInit {
         new Brackets((nested) => {
           nested
             .where('order.branch_id = :branch_id', { branch_id })
-            .orWhere('order.holder_branch_id = :branch_id', { branch_id });
+            .orWhere('order.holder_branch_id = :branch_id', { branch_id })
+            .orWhere('order.home_branch_id = :branch_id', { branch_id });
         }),
       );
     }

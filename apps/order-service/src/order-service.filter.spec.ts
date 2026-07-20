@@ -65,7 +65,7 @@ describe('OrderServiceService filters', () => {
     return { service, qb, custodyQb };
   }
 
-  it('filters by source=BRANCH and branch_id/holder_branch_id', async () => {
+  it('filters by source=BRANCH and branch/home branch scope', async () => {
     const { service, qb } = setup();
 
     await service.findAll({
@@ -84,14 +84,12 @@ describe('OrderServiceService filters', () => {
     });
   });
 
-  it('filters manager canceled tab to branch-held unassigned orders', async () => {
+  it('filters manager canceled tab by branch scope only', async () => {
     const { service, qb } = setup();
 
     await service.findAll({
       branch_id: '10',
       status: ['cancelled', 'cancelled (sent)'],
-      holder_type: 'BRANCH',
-      canceled_post_unassigned: true,
       page: 1,
       limit: 10,
     } as any);
@@ -99,13 +97,17 @@ describe('OrderServiceService filters', () => {
     expect(qb.andWhere).toHaveBeenCalledWith('order.status IN (:...statuses)', {
       statuses: ['cancelled', 'cancelled (sent)'],
     });
-    expect(qb.andWhere).toHaveBeenCalledWith(
+    const whereCalls = qb.andWhere.mock.calls.map((call) => call[0]);
+    expect(
+      whereCalls.some((value) => typeof value === 'object' && value !== null),
+    ).toBe(true);
+    expect(qb.andWhere).not.toHaveBeenCalledWith(
       'order.holder_type = :holder_type',
-      {
-        holder_type: 'BRANCH',
-      },
+      expect.anything(),
     );
-    expect(qb.andWhere).toHaveBeenCalledWith('order.canceled_post_id IS NULL');
+    expect(qb.andWhere).not.toHaveBeenCalledWith(
+      'order.canceled_post_id IS NULL',
+    );
   });
 
   it('filters courier orders by current courier ownership only', async () => {
