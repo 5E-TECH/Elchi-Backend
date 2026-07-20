@@ -46,10 +46,14 @@ describe('AnalyticsServiceService', () => {
   });
 
   it('getDashboard returns courier-specific payload for courier role', async () => {
-    rmqSendMock
-      .mockResolvedValueOnce({ data: { sold: 1 } })
-      .mockResolvedValueOnce({ data: [{ id: 'c1' }] })
-      .mockResolvedValueOnce({ data: [{ id: 'top1' }] });
+    rmqSendMock.mockResolvedValueOnce({
+      data: {
+        totalOrders: 7,
+        soldOrders: 0,
+        canceledOrders: 2,
+        successRate: 0,
+      },
+    });
 
     const res = await service.getDashboard(
       { id: 'u1', roles: ['courier'] },
@@ -57,7 +61,32 @@ describe('AnalyticsServiceService', () => {
     );
 
     expect(res.statusCode).toBe(200);
-    expect(res.data.myStat).toEqual({ sold: 1 });
+    expect(res.data.myStat).toEqual({
+      totalOrders: 7,
+      soldOrders: 0,
+      canceledOrders: 2,
+      successRate: 0,
+    });
+    expect(res.data.couriers).toEqual([
+      {
+        courier: { id: 'u1' },
+        totalOrders: 7,
+        soldOrders: 0,
+        canceledOrders: 2,
+        successRate: 0,
+      },
+    ]);
+    expect(res.data.topCouriers).toEqual([]);
+    expect(
+      rmqSendMock.mock.calls.some(
+        ([, pattern]) => pattern?.cmd === 'order.analytics.courier_stats',
+      ),
+    ).toBe(false);
+    expect(
+      rmqSendMock.mock.calls.some(
+        ([, pattern]) => pattern?.cmd === 'order.analytics.top_couriers',
+      ),
+    ).toBe(false);
   });
 
   it('getDashboard returns market-specific payload for market role', async () => {
@@ -104,7 +133,7 @@ describe('AnalyticsServiceService', () => {
     expect(res.data).not.toHaveProperty('newUsersCount');
   });
 
-  it('getDashboard uses the lightweight overview-only path for all time', async () => {
+  it('getDashboard uses the lightweight all-time path', async () => {
     rmqSendMock.mockResolvedValue({
       data: { acceptedCount: 100, soldAndPaid: 70, totalRevenue: 5000 },
     });
@@ -119,12 +148,21 @@ describe('AnalyticsServiceService', () => {
       soldAndPaid: 70,
       totalRevenue: 5000,
     });
-    expect(rmqSendMock).toHaveBeenCalledTimes(1);
-    expect(rmqSendMock).toHaveBeenCalledWith(
-      expect.anything(),
-      { cmd: 'order.analytics.overview' },
-      { all: true },
-    );
+    expect(
+      rmqSendMock.mock.calls.some(
+        ([, pattern]) => pattern?.cmd === 'order.analytics.overview',
+      ),
+    ).toBe(true);
+    expect(
+      rmqSendMock.mock.calls.some(
+        ([, pattern]) => pattern?.cmd === 'order.analytics.market_stats',
+      ),
+    ).toBe(false);
+    expect(
+      rmqSendMock.mock.calls.some(
+        ([, pattern]) => pattern?.cmd === 'order.analytics.courier_stats',
+      ),
+    ).toBe(false);
   });
 
   it('removes all financial totals from registrator all-time dashboard', async () => {
