@@ -97,7 +97,7 @@ describe('OrderGatewayController pagination', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('manager cancelled tab returns all branch cancelled orders', async () => {
+  it('manager cancelled tab returns only branch-held unsent cancelled orders', async () => {
     const { controller, orderClient, branchClient } = makeController();
     orderClient.send.mockReturnValue(
       of({ data: [], total: 0, page: 1, limit: 10 }),
@@ -132,12 +132,12 @@ describe('OrderGatewayController pagination', () => {
     const payload = orderClient.send.mock.calls[0][1];
     expect(payload.query).toEqual(
       expect.objectContaining({
-        status: ['cancelled', 'cancelled (sent)'],
+        status: ['cancelled'],
         branch_id: '16',
+        holder_type: 'BRANCH',
+        canceled_post_unassigned: true,
       }),
     );
-    expect(payload.query.holder_type).toBeUndefined();
-    expect(payload.query.canceled_post_unassigned).toBeUndefined();
     expect(branchClient.send).not.toHaveBeenCalled();
   });
 
