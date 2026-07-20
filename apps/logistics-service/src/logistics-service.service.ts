@@ -1339,12 +1339,22 @@ export class LogisticsServiceService implements OnModuleInit {
     const courierMap = await this.findCouriersByIds(
       allPosts.map((post) => post.courier_id).filter(Boolean) as string[],
     );
-    const enrichedPosts = allPosts.map((post) => ({
-      ...post,
-      courier: post.courier_id
-        ? (courierMap.get(post.courier_id) ?? null)
-        : null,
-    }));
+    const enrichedPosts = await Promise.all(
+      allPosts.map(async (post) => {
+        const { orders } = await this.findCanceledPostGroup(post);
+        return {
+          ...post,
+          order_quantity: orders.length,
+          post_total_price: orders.reduce(
+            (sum, order) => sum + Number(order.total_price ?? 0),
+            0,
+          ),
+          courier: post.courier_id
+            ? (courierMap.get(post.courier_id) ?? null)
+            : null,
+        };
+      }),
+    );
     return successRes(enrichedPosts, 200, 'All rejected posts');
   }
 
@@ -1398,12 +1408,22 @@ export class LogisticsServiceService implements OnModuleInit {
     const courierMap = await this.findCouriersByIds(
       rows.map((post) => post.courier_id).filter(Boolean) as string[],
     );
-    const enrichedRows = rows.map((post) => ({
-      ...post,
-      courier: post.courier_id
-        ? (courierMap.get(post.courier_id) ?? null)
-        : null,
-    }));
+    const enrichedRows = await Promise.all(
+      rows.map(async (post) => {
+        const { orders } = await this.findCanceledPostGroup(post);
+        return {
+          ...post,
+          order_quantity: orders.length,
+          post_total_price: orders.reduce(
+            (sum, order) => sum + Number(order.total_price ?? 0),
+            0,
+          ),
+          courier: post.courier_id
+            ? (courierMap.get(post.courier_id) ?? null)
+            : null,
+        };
+      }),
+    );
     return successRes(enrichedRows, 200, 'All rejected posts for courier');
   }
 

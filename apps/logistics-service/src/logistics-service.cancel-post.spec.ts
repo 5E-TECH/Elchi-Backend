@@ -4,6 +4,64 @@ import { RpcException } from '@nestjs/microservices';
 import { LogisticsServiceService } from './logistics-service.service';
 
 describe('LogisticsServiceService createCanceledPost', () => {
+  it('uses live canceled order stats for rejected post cards', async () => {
+    const post = {
+      id: '70',
+      courier_id: '8',
+      branch_id: '1',
+      region_id: '12',
+      status: Post_status.CANCELED,
+      order_quantity: 7,
+      post_total_price: 30_000_000,
+    };
+    const orderClient = {
+      send: jest.fn((pattern: { cmd: string }) => {
+        if (pattern.cmd === 'order.find_all') {
+          return of({
+            data: {
+              data: [
+                { id: '101', canceled_post_id: '70', total_price: 2_500_000 },
+                { id: '102', canceled_post_id: '70', total_price: 2_500_000 },
+                { id: '103', canceled_post_id: '70', total_price: 5_000_000 },
+                { id: '104', canceled_post_id: '70', total_price: 12_500_000 },
+              ],
+            },
+          });
+        }
+        return of({ statusCode: 200 });
+      }),
+    };
+    const postRepo = {
+      find: jest.fn().mockResolvedValue([post]),
+    };
+    const branchClient = {
+      send: jest.fn(() => of({ data: { id: '1', type: 'HQ' } })),
+    };
+    const identityClient = {
+      send: jest.fn(() => of({ data: [{ id: '8', name: 'Manager' }] })),
+    };
+    const service = new LogisticsServiceService(
+      postRepo as any,
+      {} as any,
+      {} as any,
+      orderClient as any,
+      branchClient as any,
+      identityClient as any,
+      {} as any,
+      { log: jest.fn(), query: jest.fn() } as any,
+    );
+
+    const response = await service.rejectedPosts({ id: '1', roles: ['admin'] });
+
+    expect(response.data[0]).toEqual(
+      expect.objectContaining({
+        id: '70',
+        order_quantity: 4,
+        post_total_price: 22_500_000,
+      }),
+    );
+  });
+
   it('marks canceled orders as sent with the courier requester', async () => {
     const orderClient = {
       send: jest.fn((pattern: { cmd: string }) => {
