@@ -480,29 +480,29 @@ export class AnalyticsServiceService {
       : normalized;
 
     if (roles.has(Roles.COURIER)) {
-      const [myStat, couriers, topCouriers] = await Promise.all([
-        rmqSend(
-          this.orderClient,
-          { cmd: 'order.analytics.courier_stat' },
-          { requester, ...normalized },
-        ).catch(() => null),
-        rmqSend(
-          this.orderClient,
-          { cmd: 'order.analytics.courier_stats' },
-          normalized,
-        ).catch(() => null),
-        rmqSend(
-          this.orderClient,
-          { cmd: 'order.analytics.top_couriers' },
-          {},
-        ).catch(() => null),
-      ]);
+      const myStat = await rmqSend(
+        this.orderClient,
+        { cmd: 'order.analytics.courier_stat' },
+        { requester, ...normalized },
+      ).catch(() => null);
+      const unwrappedMyStat = this.unwrap<any>(myStat);
+      const courierScopedStats = unwrappedMyStat
+        ? [
+            {
+              courier: { id: requester?.id },
+              totalOrders: this.parseNumber(unwrappedMyStat.totalOrders),
+              soldOrders: this.parseNumber(unwrappedMyStat.soldOrders),
+              canceledOrders: this.parseNumber(unwrappedMyStat.canceledOrders),
+              successRate: this.parseNumber(unwrappedMyStat.successRate),
+            },
+          ]
+        : [];
 
       return successRes(
         {
-          myStat: this.unwrap(myStat),
-          couriers: this.unwrap(couriers),
-          topCouriers: this.unwrap(topCouriers),
+          myStat: unwrappedMyStat,
+          couriers: courierScopedStats,
+          topCouriers: [],
         },
         200,
         'Dashboard infos',
