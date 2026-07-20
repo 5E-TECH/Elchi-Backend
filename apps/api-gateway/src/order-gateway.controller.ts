@@ -1251,7 +1251,7 @@ export class OrderGatewayController {
     const isBranchCancelledTab = isBranchScopedRequester && isCancelledTab;
     const isHqCancelledTab = isSystemPrivilegedRequester && isCancelledTab;
     const resolvedStatuses =
-      (isCourier || isBranchCancelledTab || isHqCancelledTab) && isCancelledTab
+      (isCourier || isHqCancelledTab) && isCancelledTab
         ? [Order_status.CANCELLED]
         : statuses;
     const resolvedCourierIds =

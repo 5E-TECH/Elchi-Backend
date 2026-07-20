@@ -132,7 +132,7 @@ describe('OrderGatewayController pagination', () => {
     const payload = orderClient.send.mock.calls[0][1];
     expect(payload.query).toEqual(
       expect.objectContaining({
-        status: ['cancelled'],
+        status: ['cancelled', 'cancelled (sent)'],
         branch_id: '16',
       }),
     );
