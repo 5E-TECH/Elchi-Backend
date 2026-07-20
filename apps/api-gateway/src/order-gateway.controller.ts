@@ -298,9 +298,8 @@ export class OrderGatewayController {
         ).trim();
 
         if (
-          (status === Order_status.CANCELLED_SENT ||
-            transportStatus === Order_status.CANCELLED_SENT) &&
-          !canceledPostId
+          status === Order_status.CANCELLED_SENT ||
+          transportStatus === Order_status.CANCELLED_SENT
         ) {
           return false;
         }
@@ -311,7 +310,7 @@ export class OrderGatewayController {
           return holderCourierId === requesterId || courierId === requesterId;
         }
         if (holderType === 'BRANCH' || holderType === 'HQ') {
-          return true;
+          return false;
         }
         if (!holderType && !courierId && !holderCourierId) {
           return true;
@@ -1302,13 +1301,11 @@ export class OrderGatewayController {
         region_id,
         district_id,
         branch_id: resolvedBranchId,
-        holder_type: isBranchCancelledTab
-          ? 'BRANCH'
-          : isHqCancelledTab
+        holder_type: isHqCancelledTab
             ? 'HQ'
             : undefined,
         canceled_post_unassigned:
-          isBranchCancelledTab || isHqCancelledTab ? true : undefined,
+          isHqCancelledTab ? true : undefined,
         source,
         page: pagination.page,
         limit: pagination.limit,
