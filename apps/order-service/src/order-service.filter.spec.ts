@@ -84,12 +84,14 @@ describe('OrderServiceService filters', () => {
     });
   });
 
-  it('filters manager canceled tab by branch scope only', async () => {
+  it('filters manager canceled tab to branch-held unassigned orders', async () => {
     const { service, qb } = setup();
 
     await service.findAll({
       branch_id: '10',
       status: ['cancelled', 'cancelled (sent)'],
+      holder_type: 'BRANCH',
+      canceled_post_unassigned: true,
       page: 1,
       limit: 10,
     } as any);
@@ -101,13 +103,13 @@ describe('OrderServiceService filters', () => {
     expect(
       whereCalls.some((value) => typeof value === 'object' && value !== null),
     ).toBe(true);
-    expect(qb.andWhere).not.toHaveBeenCalledWith(
+    expect(qb.andWhere).toHaveBeenCalledWith(
       'order.holder_type = :holder_type',
-      expect.anything(),
+      {
+        holder_type: 'BRANCH',
+      },
     );
-    expect(qb.andWhere).not.toHaveBeenCalledWith(
-      'order.canceled_post_id IS NULL',
-    );
+    expect(qb.andWhere).toHaveBeenCalledWith('order.canceled_post_id IS NULL');
   });
 
   it('filters courier orders by current courier ownership only', async () => {
