@@ -97,7 +97,7 @@ describe('OrderGatewayController pagination', () => {
     ).rejects.toBeInstanceOf(BadRequestException);
   });
 
-  it('manager cancelled tab returns only received branch cancellations', async () => {
+  it('manager cancelled tab returns all branch cancelled orders', async () => {
     const { controller, orderClient, branchClient } = makeController();
     orderClient.send.mockReturnValue(
       of({ data: [], total: 0, page: 1, limit: 10 }),
@@ -134,10 +134,10 @@ describe('OrderGatewayController pagination', () => {
       expect.objectContaining({
         status: ['cancelled'],
         branch_id: '16',
-        holder_type: 'BRANCH',
-        canceled_post_unassigned: true,
       }),
     );
+    expect(payload.query.holder_type).toBeUndefined();
+    expect(payload.query.canceled_post_unassigned).toBeUndefined();
     expect(branchClient.send).not.toHaveBeenCalled();
   });
 
@@ -310,20 +310,6 @@ describe('OrderGatewayController pagination', () => {
         holder_type: 'COURIER',
         holder_courier_id: '77',
       },
-      {
-        id: 'post-cancelled',
-        status: 'cancelled',
-        post_id: 'old-post',
-        holder_type: 'BRANCH',
-        canceled_post_id: null,
-      },
-      {
-        id: 'accepted-cancelled',
-        status: 'cancelled (sent)',
-        post_id: 'old-post',
-        holder_type: 'BRANCH',
-        canceled_post_id: '70',
-      },
     ]);
     expect(branchClient.send).not.toHaveBeenCalled();
   });
@@ -479,29 +465,18 @@ describe('OrderGatewayController pagination', () => {
       }),
     );
     expect(logisticsClient.send).toHaveBeenCalledTimes(2);
-    expect(response.data.data).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({
-          id: 'post-cancelled',
-          status: 'cancelled',
-          holder_type: 'BRANCH',
-        }),
-        expect.objectContaining({
-          id: 'accepted-cancelled',
-          status: 'cancelled',
-          transport_status: 'cancelled (sent)',
-          holder_type: 'BRANCH',
-        }),
-        expect.objectContaining({
-          id: '84',
-          status: 'cancelled',
-          holder_type: 'COURIER',
-          holder_courier_id: '77',
-        }),
-      ]),
-    );
+    expect(response.data.data).toEqual([
+      expect.objectContaining({
+        id: '84',
+        status: 'cancelled',
+        holder_type: 'COURIER',
+        holder_courier_id: '77',
+      }),
+    ]);
     expect(response.data.data).not.toEqual(
       expect.arrayContaining([
+        expect.objectContaining({ id: 'post-cancelled' }),
+        expect.objectContaining({ id: 'accepted-cancelled' }),
         expect.objectContaining({ id: 'partial-child' }),
         expect.objectContaining({ id: 'branch-held' }),
       ]),
