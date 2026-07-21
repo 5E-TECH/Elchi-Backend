@@ -339,7 +339,9 @@ export class OrderGatewayController {
           uniqueRows.set(id, row);
         }
       });
-    return Array.from(uniqueRows.values());
+    return Array.from(uniqueRows.values()).map((row) =>
+      this.normalizeCourierCancelledRowForDisplay(row),
+    );
   }
 
   private normalizeProofFileKeys(value: unknown): string[] {
@@ -595,6 +597,25 @@ export class OrderGatewayController {
       normalized.transport_status = Order_status.CANCELLED_SENT;
     }
     return normalized;
+  }
+
+  private normalizeCourierCancelledRowForDisplay(row: Record<string, unknown>) {
+    const normalized = this.normalizeOrderStatusForDisplay(row);
+    const parentOrderId = String(
+      normalized.parent_order_id ?? normalized.parentOrderId ?? '',
+    ).trim();
+
+    if (!parentOrderId) {
+      return normalized;
+    }
+
+    return {
+      ...normalized,
+      partial_parent_order_id: parentOrderId,
+      partialParentOrderId: parentOrderId,
+      parent_order_id: null,
+      parentOrderId: null,
+    };
   }
 
   private extractRows(payload: unknown): Array<Record<string, unknown>> {
