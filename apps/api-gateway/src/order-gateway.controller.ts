@@ -691,7 +691,7 @@ export class OrderGatewayController {
     const total = Number(body.total ?? rows.length ?? 0);
     const page = Number(body.page ?? fallback.page);
     const limit = Number(body.limit ?? fallback.limit);
-    const totalPages = limit > 0 ? Math.ceil(total / limit) : 0;
+    const paginationMeta = this.buildPaginationMeta(total, page, limit);
 
     return {
       ...body,
@@ -703,8 +703,28 @@ export class OrderGatewayController {
       total,
       page,
       limit,
+      ...paginationMeta,
+    };
+  }
+
+  private buildPaginationMeta(total: number, page: number, limit: number) {
+    const safeTotal = Number.isFinite(total) && total > 0 ? total : 0;
+    const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+    const safeLimit =
+      Number.isFinite(limit) && limit > 0 ? Math.floor(limit) : 10;
+    const totalPages = safeLimit > 0 ? Math.ceil(safeTotal / safeLimit) : 0;
+    const from = safeTotal === 0 ? 0 : (safePage - 1) * safeLimit + 1;
+    const to = Math.min(safeTotal, safePage * safeLimit);
+
+    return {
       total_pages: totalPages,
       totalPages,
+      from,
+      to,
+      has_next: safePage < totalPages,
+      hasNext: safePage < totalPages,
+      has_prev: safePage > 1 && totalPages > 0,
+      hasPrev: safePage > 1 && totalPages > 0,
     };
   }
 
@@ -1318,15 +1338,18 @@ export class OrderGatewayController {
       const total = allCancelledRows.length;
       const offset = (pagination.page - 1) * pagination.limit;
       const data = allCancelledRows.slice(offset, offset + pagination.limit);
-      const totalPages = Math.ceil(total / pagination.limit);
+      const paginationMeta = this.buildPaginationMeta(
+        total,
+        pagination.page,
+        pagination.limit,
+      );
 
       return {
         data,
         total,
         page: pagination.page,
         limit: pagination.limit,
-        total_pages: totalPages,
-        totalPages,
+        ...paginationMeta,
       };
     }
 
@@ -1500,7 +1523,11 @@ export class OrderGatewayController {
       const legacyData = this.toLegacyShape(pageRows).map((row) =>
         this.normalizeLegacyOrderRow(row),
       );
-      const totalPages = Math.ceil(total / pagination.limit);
+      const paginationMeta = this.buildPaginationMeta(
+        total,
+        pagination.page,
+        pagination.limit,
+      );
 
       return successRes(
         {
@@ -1508,8 +1535,7 @@ export class OrderGatewayController {
           total,
           page: pagination.page,
           limit: pagination.limit,
-          total_pages: totalPages,
-          totalPages,
+          ...paginationMeta,
         },
         200,
         'All my orders',
@@ -1573,7 +1599,11 @@ export class OrderGatewayController {
     const legacyData = this.toLegacyShape(filteredRows).map((row) =>
       this.normalizeLegacyOrderRow(row),
     );
-    const totalPages = currentLimit > 0 ? Math.ceil(total / currentLimit) : 0;
+    const paginationMeta = this.buildPaginationMeta(
+      total,
+      currentPage,
+      currentLimit,
+    );
 
     return successRes(
       {
@@ -1581,8 +1611,7 @@ export class OrderGatewayController {
         total,
         page: currentPage,
         limit: currentLimit,
-        total_pages: totalPages,
-        totalPages,
+        ...paginationMeta,
       },
       200,
       'All my orders',
