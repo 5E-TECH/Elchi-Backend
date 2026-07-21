@@ -319,7 +319,10 @@ describe('OrderGatewayController pagination', () => {
         post_id: 'old-post',
         courier_id: '77',
         holder_type: 'BRANCH',
-        parent_order_id: '75',
+        parent_order_id: null,
+        partial_parent_order_id: '75',
+        parentOrderId: null,
+        partialParentOrderId: '75',
         canceled_post_id: null,
       },
     ]);
