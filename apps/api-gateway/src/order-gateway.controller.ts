@@ -473,7 +473,10 @@ export class OrderGatewayController {
       return sub && field('customer_id') === sub ? undefined : denied();
     }
     if (roles.includes(RoleEnum.COURIER)) {
-      return sub && field('courier_id') === sub ? undefined : denied();
+      return sub &&
+        (field('courier_id') === sub || field('holder_courier_id') === sub)
+        ? undefined
+        : denied();
     }
     if (
       roles.includes(RoleEnum.BRANCH) ||
