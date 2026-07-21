@@ -84,6 +84,11 @@ describe('OrderGatewayController pagination', () => {
     const payload = orderClient.send.mock.calls[0][1];
     expect(payload.query.limit).toBe(25);
     expect(res.total_pages).toBe(3);
+    expect(res.totalPages).toBe(3);
+    expect(res.from).toBe(1);
+    expect(res.to).toBe(25);
+    expect(res.has_next).toBe(true);
+    expect(res.has_prev).toBe(false);
     expect(res.data[0].status).toBe('cancelled');
     expect(res.data[0].transport_status).toBe('cancelled (sent)');
   });
@@ -326,6 +331,13 @@ describe('OrderGatewayController pagination', () => {
         canceled_post_id: null,
       },
     ]);
+    expect(response.total).toBe(3);
+    expect(response.page).toBe(1);
+    expect(response.limit).toBe(10);
+    expect(response.total_pages).toBe(1);
+    expect(response.from).toBe(1);
+    expect(response.to).toBe(3);
+    expect(response.has_next).toBe(false);
     expect(branchClient.send).not.toHaveBeenCalled();
   });
 
