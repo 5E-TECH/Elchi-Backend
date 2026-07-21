@@ -2596,14 +2596,6 @@ export class OrderServiceService implements OnModuleInit {
       : { data: undefined };
     const post = rollbackPostRes?.data;
 
-    if (
-      isCourier &&
-      !isSuperAdmin &&
-      String(post?.courier_id ?? '') !== String(requester.id)
-    ) {
-      this.badRequest('Order is not assigned to this courier');
-    }
-
     if (isManager && !isSuperAdmin) {
       const requesterBranchId = String(requester?.branch_id ?? '').trim();
       const orderHolderBranchId = String(order?.holder_branch_id ?? '').trim();
