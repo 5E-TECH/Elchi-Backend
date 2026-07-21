@@ -54,6 +54,22 @@ describe('OrderGatewayController tracking access', () => {
     );
   });
 
+  it('allows courier to read an order they currently hold even when courier_id is empty', async () => {
+    const order = {
+      id: '101',
+      holder_type: 'COURIER',
+      holder_courier_id: '44',
+      courier_id: null,
+    };
+    const { controller } = setup(order);
+
+    await expect(
+      controller.findById('101', {
+        user: { sub: '44', username: 'courier', roles: ['courier'] },
+      } as any),
+    ).resolves.toMatchObject({ data: order });
+  });
+
   it('blocks courier tracking when the order is not currently held by them', async () => {
     const { controller } = setup({
       id: '101',
