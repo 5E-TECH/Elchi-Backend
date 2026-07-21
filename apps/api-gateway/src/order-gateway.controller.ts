@@ -239,6 +239,7 @@ export class OrderGatewayController {
     const courierPostIds = await this.findAllCourierPostIds(reqUser).catch(
       () => [],
     );
+    const courierPostIdSet = new Set(courierPostIds);
     const baseQuery = {
       ...filters,
       status: [Order_status.CANCELLED, Order_status.CANCELLED_SENT],
@@ -271,6 +272,14 @@ export class OrderGatewayController {
     }
 
     const responses = await Promise.all(requests);
+    const postHistoryRowIds = new Set(
+      (courierPostIds.length
+        ? this.extractRows(responses[2]?.data ?? responses[2])
+        : []
+      )
+        .map((row) => String(row?.id ?? '').trim())
+        .filter(Boolean),
+    );
     const uniqueRows = new Map<string, Record<string, unknown>>();
     responses
       .flatMap((response) => this.extractRows(response?.data ?? response))
@@ -278,7 +287,9 @@ export class OrderGatewayController {
         const holderType = String(row?.holder_type ?? row?.holderType ?? '')
           .trim()
           .toUpperCase();
-        const courierId = String(row?.courier_id ?? row?.courierId ?? '').trim();
+        const courierId = String(
+          row?.courier_id ?? row?.courierId ?? '',
+        ).trim();
         const holderCourierId = String(
           row?.holder_courier_id ?? row?.holderCourierId ?? '',
         ).trim();
@@ -296,6 +307,7 @@ export class OrderGatewayController {
         const parentOrderId = String(
           row?.parent_order_id ?? row?.parentOrderId ?? '',
         ).trim();
+        const postId = String(row?.post_id ?? row?.postId ?? '').trim();
 
         if (
           status === Order_status.CANCELLED_SENT ||
@@ -303,14 +315,16 @@ export class OrderGatewayController {
         ) {
           return false;
         }
-        if (parentOrderId && !canceledPostId) {
-          return false;
-        }
         if (holderType === 'COURIER') {
           return holderCourierId === requesterId || courierId === requesterId;
         }
         if (holderType === 'BRANCH' || holderType === 'HQ') {
-          return false;
+          return (
+            Boolean(parentOrderId) &&
+            !canceledPostId &&
+            courierPostIdSet.has(postId) &&
+            postHistoryRowIds.has(String(row?.id ?? '').trim())
+          );
         }
         if (!holderType && !courierId && !holderCourierId) {
           return true;
@@ -386,16 +400,14 @@ export class OrderGatewayController {
 
   private async withUploadedProof<
     T extends { proofFileKeys?: string[]; proofFileKeysVerified?: boolean },
-  >(
-    dto: T,
-    file?: UploadedProofFile,
-  ): Promise<T> {
+  >(dto: T, file?: UploadedProofFile): Promise<T> {
     const existingKeys = this.normalizeProofFileKeys(dto?.proofFileKeys);
     const uploadedKeys = await this.uploadProofFile(file);
     return {
       ...dto,
       proofFileKeys: Array.from(new Set([...existingKeys, ...uploadedKeys])),
-      proofFileKeysVerified: uploadedKeys.length > 0 && existingKeys.length === 0,
+      proofFileKeysVerified:
+        uploadedKeys.length > 0 && existingKeys.length === 0,
     };
   }
 
@@ -497,7 +509,9 @@ export class OrderGatewayController {
       String(order?.[key] ?? order?.[this.toCamelKey(key)] ?? '').trim();
     const holderType = field('holder_type').toUpperCase();
     const denied = (): never => {
-      throw new ForbiddenException("Bu buyurtma trackingini ko'rishga ruxsat yo'q");
+      throw new ForbiddenException(
+        "Bu buyurtma trackingini ko'rishga ruxsat yo'q",
+      );
     };
 
     if (roles.includes(RoleEnum.COURIER)) {
@@ -1234,7 +1248,13 @@ export class OrderGatewayController {
     }
 
     const pagination = this.parsePaginationQuery(page, limit);
-    const normalizedCourierIds = (Array.isArray(courier_ids) ? courier_ids : courier_ids ? [courier_ids] : [])
+    const normalizedCourierIds = (
+      Array.isArray(courier_ids)
+        ? courier_ids
+        : courier_ids
+          ? [courier_ids]
+          : []
+    )
       .flatMap((value) => String(value).split(','))
       .map((value) => value.trim())
       .filter(Boolean);
@@ -1302,9 +1322,9 @@ export class OrderGatewayController {
         district_id,
         branch_id: resolvedBranchId,
         holder_type: isHqCancelledTab
-            ? 'HQ'
-            : isBranchCancelledTab
-              ? 'BRANCH'
+          ? 'HQ'
+          : isBranchCancelledTab
+            ? 'BRANCH'
             : undefined,
         canceled_post_unassigned:
           isHqCancelledTab || isBranchCancelledTab ? true : undefined,
@@ -1329,7 +1349,12 @@ export class OrderGatewayController {
   @ApiOperation({ summary: 'List orders by market ID with pagination' })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
   @ApiQuery({ name: 'branch_id', required: false, type: String })
-  @ApiQuery({ name: 'courier_ids', required: false, type: String, isArray: true })
+  @ApiQuery({
+    name: 'courier_ids',
+    required: false,
+    type: String,
+    isArray: true,
+  })
   @ApiQuery({ name: 'fetch_all', required: false, type: Boolean })
   @ApiQuery({
     name: 'source',

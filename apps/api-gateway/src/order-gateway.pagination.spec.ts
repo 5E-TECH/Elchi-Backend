@@ -8,7 +8,9 @@ describe('OrderGatewayController pagination', () => {
     const identityClient = { send: jest.fn() };
     const logisticsClient = {
       send: jest.fn().mockReturnValue(
-        of({ data: { data: [], total: 0, page: 1, totalPages: 1, limit: 100 } }),
+        of({
+          data: { data: [], total: 0, page: 1, totalPages: 1, limit: 100 },
+        }),
       ),
     };
     const branchClient = { send: jest.fn() };
@@ -310,6 +312,14 @@ describe('OrderGatewayController pagination', () => {
         holder_type: 'COURIER',
         holder_courier_id: '77',
       },
+      {
+        id: 'partial-child',
+        status: 'cancelled',
+        post_id: 'old-post',
+        holder_type: 'BRANCH',
+        parent_order_id: '75',
+        canceled_post_id: null,
+      },
     ]);
     expect(branchClient.send).not.toHaveBeenCalled();
   });
@@ -472,12 +482,12 @@ describe('OrderGatewayController pagination', () => {
         holder_type: 'COURIER',
         holder_courier_id: '77',
       }),
+      expect.objectContaining({ id: 'partial-child' }),
     ]);
     expect(response.data.data).not.toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: 'post-cancelled' }),
         expect.objectContaining({ id: 'accepted-cancelled' }),
-        expect.objectContaining({ id: 'partial-child' }),
         expect.objectContaining({ id: 'branch-held' }),
       ]),
     );
