@@ -376,11 +376,20 @@ export class LogisticsServiceService implements OnModuleInit {
     courierId: string,
     branchId: string,
   ): boolean {
-    const orderCourierId = String(
-      order.holder_courier_id ?? order.courier_id ?? '',
-    ).trim();
-    if (orderCourierId !== String(courierId)) return false;
-    if (order.holder_type && order.holder_type !== 'COURIER') return false;
+    const requesterCourierId = String(courierId).trim();
+    const holderCourierId = String(order.holder_courier_id ?? '').trim();
+    const assignedCourierId = String(order.courier_id ?? '').trim();
+    const holderType = String(order.holder_type ?? '').trim().toUpperCase();
+
+    if (holderCourierId) {
+      return (
+        holderCourierId === requesterCourierId &&
+        (!holderType || holderType === 'COURIER')
+      );
+    }
+
+    if (assignedCourierId !== requesterCourierId) return false;
+    if (holderType && holderType !== 'COURIER') return false;
 
     const orderBranchId = this.getOrderBranchScope(order);
     return !orderBranchId || orderBranchId === String(branchId);
