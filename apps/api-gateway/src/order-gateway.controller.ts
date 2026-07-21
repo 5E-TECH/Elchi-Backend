@@ -322,8 +322,10 @@ export class OrderGatewayController {
           return (
             Boolean(parentOrderId) &&
             !canceledPostId &&
-            courierPostIdSet.has(postId) &&
-            postHistoryRowIds.has(String(row?.id ?? '').trim())
+            (courierId === requesterId ||
+              holderCourierId === requesterId ||
+              (courierPostIdSet.has(postId) &&
+                postHistoryRowIds.has(String(row?.id ?? '').trim())))
           );
         }
         if (!holderType && !courierId && !holderCourierId) {
