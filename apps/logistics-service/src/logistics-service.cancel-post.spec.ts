@@ -143,6 +143,53 @@ describe('LogisticsServiceService createCanceledPost', () => {
     );
   });
 
+  it('allows courier-held canceled orders even when holder branch differs from courier branch', async () => {
+    const orderClient = {
+      send: jest.fn((pattern: { cmd: string }) => {
+        if (pattern.cmd === 'order.find_by_id') {
+          return of({
+            id: '101',
+            status: Order_status.CANCELLED,
+            courier_id: null,
+            holder_type: 'COURIER',
+            holder_branch_id: '99',
+            holder_courier_id: '7',
+            total_price: 1_000_000,
+            region_id: '1',
+          });
+        }
+        return of({ statusCode: 200 });
+      }),
+    };
+    const postRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((payload) => payload),
+      save: jest.fn(async (post) => ({ ...post, id: post.id ?? '55' })),
+    };
+    const branchClient = {
+      send: jest.fn(() =>
+        of({ data: { branch_id: '10', role: 'COURIER' } }),
+      ),
+    };
+    const service = new LogisticsServiceService(
+      postRepo as any,
+      {} as any,
+      {} as any,
+      orderClient as any,
+      branchClient as any,
+      {} as any,
+      {} as any,
+      { log: jest.fn().mockResolvedValue(undefined), query: jest.fn() } as any,
+    );
+
+    await expect(
+      service.createCanceledPost(
+        { id: '7', roles: ['courier'] },
+        { order_ids: ['101'] },
+      ),
+    ).resolves.toMatchObject({ statusCode: 200 });
+  });
+
   it('does not fail or duplicate when courier sends an already sent canceled order', async () => {
     const orderClient = {
       send: jest.fn((pattern: { cmd: string }) => {
