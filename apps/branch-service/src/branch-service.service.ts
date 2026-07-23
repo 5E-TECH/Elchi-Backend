@@ -666,6 +666,36 @@ export class BranchServiceService implements OnModuleInit {
     return new Date(dayStart.getTime() - diffToMonday * 24 * 60 * 60 * 1000);
   }
 
+  private async getAcceptedOrdersCountByBranchIds(
+    branchIds: string[],
+    startDate: Date,
+    endDate: Date,
+  ): Promise<number> {
+    const counts = await Promise.all(
+      branchIds.map(async (branchId) => {
+        try {
+          const response = await lastValueFrom(
+            this.orderClient
+              .send(
+                { cmd: 'order.analytics.overview' },
+                {
+                  branch_id: branchId,
+                  startDate: startDate.toISOString(),
+                  endDate: endDate.toISOString(),
+                },
+              )
+              .pipe(timeout(10000)),
+          );
+          return Number(response?.data?.acceptedCount ?? 0) || 0;
+        } catch {
+          return 0;
+        }
+      }),
+    );
+
+    return counts.reduce((sum, count) => sum + count, 0);
+  }
+
   private extractOrderRows(payload: unknown): OrderAnalyticsRow[] {
     const source = payload as any;
     const candidates = [source?.data?.data, source?.data, source];
@@ -2887,14 +2917,19 @@ export class BranchServiceService implements OnModuleInit {
     const now = new Date();
     const todayStart = this.toTashkentStartOfDay(now);
     const weekStart = this.toTashkentStartOfWeek(now);
+    const todayAcceptedOrdersCount =
+      await this.getAcceptedOrdersCountByBranchIds(
+        targetBranchIds,
+        todayStart,
+        now,
+      );
+    const weekAcceptedOrdersCount =
+      await this.getAcceptedOrdersCountByBranchIds(
+        targetBranchIds,
+        weekStart,
+        now,
+      );
 
-    const todayOrdersCount = orders.filter(
-      (order) => order.createdAt && order.createdAt >= todayStart,
-    ).length;
-
-    const weekOrdersCount = orders.filter(
-      (order) => order.createdAt && order.createdAt >= weekStart,
-    ).length;
     const todayOrders = orders.filter(
       (order) => order.createdAt && order.createdAt >= todayStart,
     );
@@ -2939,7 +2974,7 @@ export class BranchServiceService implements OnModuleInit {
     const returnedStatuses = new Set<string>([Order_status.RETURNED_TO_MARKET]);
 
     const ordersCard = {
-      total: todayOrders.length,
+      total: todayAcceptedOrdersCount,
       new: todayOrders.filter((order) => order.status === Order_status.NEW)
         .length,
       on_the_road: todayOrders.filter(
@@ -3015,8 +3050,8 @@ export class BranchServiceService implements OnModuleInit {
 
     return successRes(
       {
-        today_orders_count: todayOrdersCount,
-        week_orders_count: weekOrdersCount,
+        today_orders_count: todayAcceptedOrdersCount,
+        week_orders_count: weekAcceptedOrdersCount,
         active_batches_count: activeBatchesCount,
         couriers_count: couriersCount,
         role: requesterBranchRole,
