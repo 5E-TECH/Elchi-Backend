@@ -7436,6 +7436,9 @@ export class OrderServiceService implements OnModuleInit {
 
     return {
       acceptedCount,
+      total: acceptedCount,
+      totalOrders: acceptedCount,
+      ordersCount: acceptedCount,
       cancelled,
       soldAndPaid,
       profit,
