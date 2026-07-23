@@ -555,7 +555,8 @@ describe('BranchServiceService', () => {
             },
           ],
         }),
-      );
+      )
+      .mockReturnValue(of({ data: { acceptedCount: 1 } }));
 
     const res = await service.getBranchStats('1', {
       id: '1',
@@ -628,7 +629,8 @@ describe('BranchServiceService', () => {
     branchUserRepo.count.mockResolvedValue(0);
     orderClient.send
       .mockReturnValueOnce(of({ data: [] }))
-      .mockReturnValueOnce(of({ data: [] }));
+      .mockReturnValueOnce(of({ data: [] }))
+      .mockReturnValue(of({ data: { acceptedCount: 0 } }));
 
     const res = await service.getBranchStats('100', {
       id: 'u-manager',
@@ -636,20 +638,25 @@ describe('BranchServiceService', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(orderClient.send).toHaveBeenCalledTimes(2);
-    expect(orderClient.send).toHaveBeenNthCalledWith(
-      1,
-      { cmd: 'order.find_all' },
-      expect.objectContaining({
-        query: expect.objectContaining({ branch_id: '100' }),
-      }),
+    const findAllCalls = orderClient.send.mock.calls.filter(
+      ([pattern]) => pattern.cmd === 'order.find_all',
     );
-    expect(orderClient.send).toHaveBeenNthCalledWith(
-      2,
-      { cmd: 'order.find_all' },
-      expect.objectContaining({
-        query: expect.objectContaining({ branch_id: '200' }),
-      }),
+    expect(findAllCalls).toHaveLength(2);
+    expect(findAllCalls).toEqual(
+      expect.arrayContaining([
+        [
+          { cmd: 'order.find_all' },
+          expect.objectContaining({
+            query: expect.objectContaining({ branch_id: '100' }),
+          }),
+        ],
+        [
+          { cmd: 'order.find_all' },
+          expect.objectContaining({
+            query: expect.objectContaining({ branch_id: '200' }),
+          }),
+        ],
+      ]),
     );
   });
 
@@ -659,7 +666,9 @@ describe('BranchServiceService', () => {
       { branch_id: '300', role: 'REGISTRATOR', isDeleted: false },
     ]);
     branchUserRepo.count.mockResolvedValue(0);
-    orderClient.send.mockReturnValueOnce(of({ data: [] }));
+    orderClient.send
+      .mockReturnValueOnce(of({ data: [] }))
+      .mockReturnValue(of({ data: { acceptedCount: 0 } }));
 
     const res = await service.getBranchStats('300', {
       id: 'u-registrator',
@@ -667,13 +676,17 @@ describe('BranchServiceService', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(orderClient.send).toHaveBeenCalledTimes(1);
-    expect(orderClient.send).toHaveBeenCalledWith(
-      { cmd: 'order.find_all' },
-      expect.objectContaining({
-        query: expect.objectContaining({ branch_id: '300' }),
-      }),
+    const findAllCalls = orderClient.send.mock.calls.filter(
+      ([pattern]) => pattern.cmd === 'order.find_all',
     );
+    expect(findAllCalls).toEqual([
+      [
+        { cmd: 'order.find_all' },
+        expect.objectContaining({
+          query: expect.objectContaining({ branch_id: '300' }),
+        }),
+      ],
+    ]);
   });
 
   it('stats and markets analytics respond under 300ms in local unit run', async () => {
