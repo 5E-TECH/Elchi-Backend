@@ -20,6 +20,17 @@ describe('OrderServiceService filters', () => {
       createQueryBuilder: jest.fn().mockReturnValue(qb),
     };
 
+    const trackingQb = {
+      innerJoin: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      select: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({ count: '0' }),
+    };
+    const orderTrackingRepo = {
+      createQueryBuilder: jest.fn().mockReturnValue(trackingQb),
+    };
+
     const custodyQb = {
       select: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
@@ -35,7 +46,7 @@ describe('OrderServiceService filters', () => {
       {} as any, // dataSource
       orderRepo as any, // orderRepo
       {} as any, // orderItemRepo
-      {} as any, // orderTrackingRepo
+      orderTrackingRepo as any, // orderTrackingRepo
       orderCustodyEventRepo as any, // orderCustodyEventRepo
       {} as any, // orderSettlementRepo
       {} as any, // transferBatchRepo
@@ -62,7 +73,7 @@ describe('OrderServiceService filters', () => {
       } as any, // activityLog
     );
 
-    return { service, qb, custodyQb };
+    return { service, qb, trackingQb, custodyQb };
   }
 
   it('filters by source=BRANCH and branch/home branch scope', async () => {
@@ -295,5 +306,31 @@ describe('OrderServiceService filters', () => {
     );
     expect(analyticsScope?.[0]).toContain('EXISTS (SELECT 1)');
     expect(analyticsScope?.[1]).toEqual({ analyticsBranchId: '16' });
+  });
+
+  it('counts dashboard accepted orders only from branch batch receive events', async () => {
+    const { service, trackingQb } = setup();
+    const range = {
+      start: new Date('2026-07-22T19:00:00.000Z'),
+      end: new Date('2026-07-23T18:59:59.999Z'),
+    };
+    trackingQb.getRawOne.mockResolvedValue({ count: '3' });
+
+    const count = await (service as any).countBranchBatchAcceptedOrders(
+      range,
+      '16',
+    );
+
+    expect(count).toBe(3);
+    expect(trackingQb.andWhere).toHaveBeenCalledWith('t.action = :action', {
+      action: 'branch_batch_received',
+    });
+    expect(trackingQb.andWhere).toHaveBeenCalledWith('t.to_status = :status', {
+      status: 'received',
+    });
+    expect(trackingQb.andWhere).toHaveBeenCalledWith(
+      't.created_at BETWEEN :start AND :end',
+      range,
+    );
   });
 });

@@ -1256,6 +1256,46 @@ export class OrderServiceService implements OnModuleInit {
     return Number(row?.count ?? 0);
   }
 
+  private async countBranchBatchAcceptedOrders(
+    range: { start: Date; end: Date } | null,
+    branchId?: string,
+  ) {
+    const custodySubQuery = this.orderCustodyEventRepo
+      .createQueryBuilder('oce')
+      .select('1')
+      .where('oce.order_id = o.id')
+      .andWhere(
+        '(oce.from_branch_id = :analyticsBranchId OR oce.to_branch_id = :analyticsBranchId)',
+      )
+      .getQuery();
+
+    const query = this.orderTrackingRepo
+      .createQueryBuilder('t')
+      .innerJoin(Order, 'o', 'o.id = t.order_id')
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('t.action = :action', { action: 'branch_batch_received' })
+      .andWhere('t.to_status = :status', { status: Order_status.RECEIVED })
+      .select('COUNT(DISTINCT COALESCE(o.parent_order_id, o.id))', 'count');
+
+    if (branchId) {
+      query.andWhere(
+        `(
+          o.branch_id = :analyticsBranchId
+          OR o.holder_branch_id = :analyticsBranchId
+          OR EXISTS (${custodySubQuery})
+        )`,
+        { analyticsBranchId: branchId },
+      );
+    }
+
+    if (range) {
+      query.andWhere('t.created_at BETWEEN :start AND :end', range);
+    }
+
+    const row = await query.getRawOne<{ count?: string | number }>();
+    return Number(row?.count ?? 0);
+  }
+
   private applyAnalyticsBranchScope<
     T extends { andWhere: (...args: any[]) => T },
   >(query: T, branchId?: string): T {
@@ -7326,12 +7366,6 @@ export class OrderServiceService implements OnModuleInit {
     const range = all ? null : this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
 
-    const acceptedQuery = this.applyAnalyticsBranchScope(
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false }),
-      branchId,
-    );
     const soldOrdersQuery = this.applyAnalyticsBranchScope(
       this.orderRepo
         .createQueryBuilder('o')
@@ -7349,23 +7383,17 @@ export class OrderServiceService implements OnModuleInit {
     if (range) {
       const startMs = String(range.start.getTime());
       const endMs = String(range.end.getTime());
-      acceptedQuery.andWhere('o.createdAt BETWEEN :start AND :end', range);
       soldOrdersQuery.andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
         startMs,
         endMs,
       });
     }
 
-    const acceptedCountQuery = acceptedQuery
-      .clone()
-      .select('COUNT(DISTINCT COALESCE(o.parent_order_id, o.id))', 'count');
-
-    const [acceptedCountRow, cancelled, soldOrders] = await Promise.all([
-      acceptedCountQuery.getRawOne<{ count?: string | number }>(),
+    const [acceptedCount, cancelled, soldOrders] = await Promise.all([
+      this.countBranchBatchAcceptedOrders(range, branchId),
       this.countHistoricallyCancelledOrders(range, branchId),
       soldOrdersQuery.getMany(),
     ]);
-    const acceptedCount = Number(acceptedCountRow?.count ?? 0);
     const soldAndPaid = soldOrders.length;
 
     const marketIds = [
