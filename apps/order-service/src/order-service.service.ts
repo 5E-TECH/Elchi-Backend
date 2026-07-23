@@ -7524,7 +7524,10 @@ export class OrderServiceService implements OnModuleInit {
         .createQueryBuilder('o')
         .select('o.post_id', 'post_id')
         .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+        .andWhere('COALESCE(o.assigned_at, o.createdAt) BETWEEN :start AND :end', {
+          start,
+          end,
+        })
         .andWhere('o.post_id IS NOT NULL'),
       branchId,
     )
@@ -7545,7 +7548,10 @@ export class OrderServiceService implements OnModuleInit {
         .andWhere('o.post_id IN (:...postIds)', {
           postIds,
         })
-        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end }),
+        .andWhere('COALESCE(o.assigned_at, o.createdAt) BETWEEN :start AND :end', {
+          start,
+          end,
+        }),
       branchId,
     )
       .select(['o.id', 'o.status', 'o.post_id', 'o.sold_at'])
@@ -7898,7 +7904,10 @@ export class OrderServiceService implements OnModuleInit {
     if (range) {
       const startMs = String(range.start.getTime());
       const endMs = String(range.end.getTime());
-      totalOrdersQuery.andWhere('o.updatedAt BETWEEN :start AND :end', range);
+      totalOrdersQuery.andWhere(
+        'COALESCE(o.assigned_at, o.createdAt) BETWEEN :start AND :end',
+        range,
+      );
       soldOrdersQuery.andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
         startMs,
         endMs,

@@ -14,6 +14,8 @@ describe('OrderServiceService filters', () => {
       take: jest.fn().mockReturnThis(),
       getRawMany: jest.fn().mockResolvedValue([]),
       getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+      getMany: jest.fn().mockResolvedValue([]),
+      getCount: jest.fn().mockResolvedValue(0),
     };
 
     const orderRepo = {
@@ -22,6 +24,7 @@ describe('OrderServiceService filters', () => {
 
     const trackingQb = {
       innerJoin: jest.fn().mockReturnThis(),
+      leftJoin: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
       select: jest.fn().mockReturnThis(),
@@ -331,6 +334,33 @@ describe('OrderServiceService filters', () => {
     expect(trackingQb.andWhere).toHaveBeenCalledWith(
       't.created_at BETWEEN :start AND :end',
       range,
+    );
+  });
+
+  it('scopes courier dashboard totals by assignment date instead of update date', async () => {
+    const { service, qb } = setup();
+
+    jest
+      .spyOn(service as any, 'getAllPostsForAnalytics')
+      .mockResolvedValue([{ id: 'post-1', courier_id: '77' }]);
+    jest.spyOn(service as any, 'getCouriersByIds').mockResolvedValue([]);
+
+    await service.getCourierStat(
+      '77',
+      '2026-07-01T00:00:00.000Z',
+      '2026-07-31T23:59:59.999Z',
+    );
+
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'COALESCE(o.assigned_at, o.createdAt) BETWEEN :start AND :end',
+      expect.objectContaining({
+        start: expect.any(Date),
+        end: expect.any(Date),
+      }),
+    );
+    expect(qb.andWhere).not.toHaveBeenCalledWith(
+      'o.updatedAt BETWEEN :start AND :end',
+      expect.anything(),
     );
   });
 });
