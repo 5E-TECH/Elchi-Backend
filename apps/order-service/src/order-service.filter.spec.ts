@@ -337,6 +337,27 @@ describe('OrderServiceService filters', () => {
     );
   });
 
+  it('excludes courier cancellations from branch dashboard cancelled totals', async () => {
+    const { service, trackingQb } = setup();
+
+    await (service as any).countHistoricallyCancelledOrders(
+      {
+        start: new Date('2026-07-22T19:00:00.000Z'),
+        end: new Date('2026-07-23T18:59:59.999Z'),
+      },
+      '16',
+    );
+
+    expect(trackingQb.andWhere).toHaveBeenCalledWith(
+      'LOWER(t.changed_by_role) != :courierRole',
+      { courierRole: 'courier' },
+    );
+    expect(trackingQb.andWhere).toHaveBeenCalledWith(
+      '(t.action IS NULL OR t.action != :cancelledPostReceived)',
+      { cancelledPostReceived: 'cancelled_post_received' },
+    );
+  });
+
   it('scopes courier dashboard totals by assignment date instead of update date', async () => {
     const { service, qb } = setup();
 
