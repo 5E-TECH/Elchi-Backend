@@ -1207,6 +1207,9 @@ export class OrderServiceService implements OnModuleInit {
       .leftJoin(Order, 'parent_o', 'parent_o.id = o.parent_order_id')
       .where('o.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('t.to_status IN (:...statuses)', { statuses })
+      .andWhere('(t.action IS NULL OR t.action != :cancelledPostReceived)', {
+        cancelledPostReceived: 'cancelled_post_received',
+      })
       .select('COUNT(DISTINCT t.order_id)', 'count');
 
     if (branchId) {
@@ -1221,6 +1224,12 @@ export class OrderServiceService implements OnModuleInit {
         )`,
         { analyticsBranchId: branchId },
       );
+    }
+
+    if (branchId && !courierId) {
+      query.andWhere('LOWER(t.changed_by_role) != :courierRole', {
+        courierRole: Roles.COURIER,
+      });
     }
 
     if (courierId) {
