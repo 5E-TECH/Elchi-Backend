@@ -18,6 +18,8 @@ import { ProviderWebhookLog } from './entities/provider-webhook-log.entity';
 import { ProviderShipment } from './entities/provider-shipment.entity';
 import { ProviderReceivable } from './entities/provider-receivable.entity';
 import { ProviderRemittance } from './entities/provider-remittance.entity';
+import { Partner } from './entities/partner.entity';
+import { PartnerShipmentRef } from './entities/partner-shipment-ref.entity';
 import { SyncQueueScheduler } from './sync-queue.scheduler';
 
 @Module({
@@ -44,6 +46,8 @@ import { SyncQueueScheduler } from './sync-queue.scheduler';
       ProviderShipment,
       ProviderReceivable,
       ProviderRemittance,
+      Partner,
+      PartnerShipmentRef,
     ]),
   ],
   controllers: [IntegrationServiceController],
