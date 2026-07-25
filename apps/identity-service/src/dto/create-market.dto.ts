@@ -66,6 +66,11 @@ export class CreateMarketDto {
   @IsBoolean()
   add_order?: boolean;
 
+  @ApiPropertyOptional({ example: true, default: true })
+  @IsOptional()
+  @IsBoolean()
+  cancelled_handover_qr_required?: boolean;
+
   @ApiPropertyOptional({
     isArray: true,
     enum: ExpenseProofCondition,

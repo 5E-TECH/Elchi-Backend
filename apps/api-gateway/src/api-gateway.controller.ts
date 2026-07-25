@@ -39,6 +39,7 @@ import {
   CreateRegistratorRequestDto,
   UpdateAdminRequestDto,
   UpdateMarketAddOrderRequestDto,
+  UpdateMarketCancelledHandoverQrRequestDto,
   UpdateMarketExpenseProofRequestDto,
   UpdateUserStatusRequestDto,
 } from './dto/identity.swagger.dto';
@@ -1106,6 +1107,8 @@ export class ApiGatewayController {
           tariff_center: dto.tariff_center,
           default_tariff: dto.default_tariff,
           add_order: dto.add_order,
+          cancelled_handover_qr_required:
+            dto.cancelled_handover_qr_required,
           expense_proof_conditions: dto.expense_proof_conditions,
         },
         requester: this.toRequester(req),
@@ -1194,6 +1197,46 @@ export class ApiGatewayController {
         id,
         dto: {
           add_order: dto.add_order,
+        },
+      },
+    );
+  }
+
+  @Patch('markets/:id/cancelled-handover-qr')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Update whether market cancelled-order handover requires market QR scan',
+  })
+  @ApiParam({ name: 'id', description: 'Market user ID' })
+  @ApiBody({ type: UpdateMarketCancelledHandoverQrRequestDto })
+  @ApiOkResponse({
+    description: 'Market cancelled handover QR policy updated',
+  })
+  @ApiNotFoundResponse({ description: 'Market not found' })
+  updateMarketCancelledHandoverQr(
+    @Param('id') id: string,
+    @Body() dto: UpdateMarketCancelledHandoverQrRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    const requesterRoles = (req.user.roles ?? []).map((role) =>
+      String(role).toLowerCase(),
+    );
+    if (requesterRoles.includes(RoleEnum.MARKET) && String(req.user.sub) !== id) {
+      throw new ForbiddenException(
+        'Market faqat o‘z QR topshirish sozlamasini o‘zgartira oladi',
+      );
+    }
+
+    return this.identityClient.send(
+      { cmd: 'identity.market.update' },
+      {
+        id,
+        dto: {
+          cancelled_handover_qr_required:
+            dto.cancelled_handover_qr_required,
         },
       },
     );

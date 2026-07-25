@@ -181,6 +181,18 @@ export class FindHistoryQueryDto {
   @IsEnum(Source_type)
   source_type?: Source_type;
 
+  @ApiPropertyOptional({ example: '777' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  source_id?: string;
+
+  @ApiPropertyOptional({ example: '555' })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  source_user_id?: string;
+
   @ApiPropertyOptional({ example: '999' })
   @IsOptional()
   @IsString()

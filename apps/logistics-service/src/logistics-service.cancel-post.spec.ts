@@ -1,8 +1,67 @@
 import { of } from 'rxjs';
 import { Order_status, Post_status } from '@app/common';
+import { RpcException } from '@nestjs/microservices';
 import { LogisticsServiceService } from './logistics-service.service';
 
 describe('LogisticsServiceService createCanceledPost', () => {
+  it('uses live canceled order stats for rejected post cards', async () => {
+    const post = {
+      id: '70',
+      courier_id: '8',
+      branch_id: '1',
+      region_id: '12',
+      status: Post_status.CANCELED,
+      order_quantity: 7,
+      post_total_price: 30_000_000,
+    };
+    const orderClient = {
+      send: jest.fn((pattern: { cmd: string }) => {
+        if (pattern.cmd === 'order.find_all') {
+          return of({
+            data: {
+              data: [
+                { id: '101', canceled_post_id: '70', total_price: 2_500_000 },
+                { id: '102', canceled_post_id: '70', total_price: 2_500_000 },
+                { id: '103', canceled_post_id: '70', total_price: 5_000_000 },
+                { id: '104', canceled_post_id: '70', total_price: 12_500_000 },
+              ],
+            },
+          });
+        }
+        return of({ statusCode: 200 });
+      }),
+    };
+    const postRepo = {
+      find: jest.fn().mockResolvedValue([post]),
+    };
+    const branchClient = {
+      send: jest.fn(() => of({ data: { id: '1', type: 'HQ' } })),
+    };
+    const identityClient = {
+      send: jest.fn(() => of({ data: [{ id: '8', name: 'Manager' }] })),
+    };
+    const service = new LogisticsServiceService(
+      postRepo as any,
+      {} as any,
+      {} as any,
+      orderClient as any,
+      branchClient as any,
+      identityClient as any,
+      {} as any,
+      { log: jest.fn(), query: jest.fn() } as any,
+    );
+
+    const response = await service.rejectedPosts({ id: '1', roles: ['admin'] });
+
+    expect(response.data[0]).toEqual(
+      expect.objectContaining({
+        id: '70',
+        order_quantity: 4,
+        post_total_price: 22_500_000,
+      }),
+    );
+  });
+
   it('marks canceled orders as sent with the courier requester', async () => {
     const orderClient = {
       send: jest.fn((pattern: { cmd: string }) => {
@@ -10,6 +69,10 @@ describe('LogisticsServiceService createCanceledPost', () => {
           return of({
             id: '101',
             status: Order_status.CANCELLED,
+            courier_id: '7',
+            holder_type: 'COURIER',
+            holder_branch_id: '10',
+            holder_courier_id: '7',
             total_price: 1_000_000,
             region_id: '1',
           });
@@ -59,6 +122,9 @@ describe('LogisticsServiceService createCanceledPost', () => {
         dto: {
           canceled_post_id: '55',
           status: Order_status.CANCELLED_SENT,
+          branch_id: '10',
+          courier_id: null,
+          assigned_at: null,
         },
         requester: {
           id: '7',
@@ -75,6 +141,390 @@ describe('LogisticsServiceService createCanceledPost', () => {
         post_total_price: 1_000_000,
       }),
     );
+  });
+
+  it('allows courier-held canceled orders even when holder branch differs from courier branch', async () => {
+    const orderClient = {
+      send: jest.fn((pattern: { cmd: string }) => {
+        if (pattern.cmd === 'order.find_by_id') {
+          return of({
+            id: '101',
+            status: Order_status.CANCELLED,
+            courier_id: null,
+            holder_type: 'COURIER',
+            holder_branch_id: '99',
+            holder_courier_id: '7',
+            total_price: 1_000_000,
+            region_id: '1',
+          });
+        }
+        return of({ statusCode: 200 });
+      }),
+    };
+    const postRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((payload) => payload),
+      save: jest.fn(async (post) => ({ ...post, id: post.id ?? '55' })),
+    };
+    const branchClient = {
+      send: jest.fn(() =>
+        of({ data: { branch_id: '10', role: 'COURIER' } }),
+      ),
+    };
+    const service = new LogisticsServiceService(
+      postRepo as any,
+      {} as any,
+      {} as any,
+      orderClient as any,
+      branchClient as any,
+      {} as any,
+      {} as any,
+      { log: jest.fn().mockResolvedValue(undefined), query: jest.fn() } as any,
+    );
+
+    await expect(
+      service.createCanceledPost(
+        { id: '7', roles: ['courier'] },
+        { order_ids: ['101'] },
+      ),
+    ).resolves.toMatchObject({ statusCode: 200 });
+  });
+
+  it('does not fail or duplicate when courier sends an already sent canceled order', async () => {
+    const orderClient = {
+      send: jest.fn((pattern: { cmd: string }) => {
+        if (pattern.cmd === 'order.find_by_id') {
+          return of({
+            id: '101',
+            status: Order_status.CANCELLED_SENT,
+            canceled_post_id: '55',
+            branch_id: '10',
+            courier_id: null,
+            holder_type: 'BRANCH',
+            holder_branch_id: '10',
+            holder_courier_id: null,
+            total_price: 1_000_000,
+            region_id: '1',
+          });
+        }
+        return of({ statusCode: 200 });
+      }),
+    };
+    const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
+      findOne: jest.fn().mockResolvedValue({
+        id: '55',
+        courier_id: '7',
+        branch_id: '10',
+        status: Post_status.CANCELED,
+        order_quantity: 1,
+        post_total_price: 1_000_000,
+      }),
+      create: jest.fn((payload) => payload),
+      save: jest.fn(async (post) => post),
+    };
+    const branchClient = {
+      send: jest.fn(() =>
+        of({
+          data: {
+            branch_id: '10',
+            role: 'COURIER',
+          },
+        }),
+      ),
+    };
+    const service = new LogisticsServiceService(
+      postRepo as any,
+      {} as any,
+      {} as any,
+      orderClient as any,
+      branchClient as any,
+      {} as any,
+      {} as any,
+      { log: jest.fn(), query: jest.fn() } as any,
+    );
+
+    const response = await service.createCanceledPost(
+      { id: '7', roles: ['courier'] },
+      { order_ids: ['101'] },
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.data).toEqual({
+      post_id: '55',
+      order_ids: ['101'],
+    });
+    expect(
+      orderClient.send.mock.calls.some(
+        ([pattern]) => pattern.cmd === 'order.update',
+      ),
+    ).toBe(false);
+    expect(postRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('repairs an already sent canceled order that is still held by the courier', async () => {
+    const orderClient = {
+      send: jest.fn((pattern: { cmd: string }) => {
+        if (pattern.cmd === 'order.find_by_id') {
+          return of({
+            id: '101',
+            status: Order_status.CANCELLED_SENT,
+            canceled_post_id: '55',
+            branch_id: '10',
+            courier_id: '7',
+            holder_type: 'COURIER',
+            holder_branch_id: null,
+            holder_courier_id: '7',
+            total_price: 1_000_000,
+            region_id: '1',
+          });
+        }
+        return of({ statusCode: 200 });
+      }),
+    };
+    const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
+      findOne: jest.fn().mockResolvedValue({
+        id: '55',
+        courier_id: '7',
+        branch_id: '10',
+        status: Post_status.CANCELED,
+        order_quantity: 1,
+        post_total_price: 1_000_000,
+      }),
+      create: jest.fn((payload) => payload),
+      save: jest.fn(async (post) => post),
+    };
+    const branchClient = {
+      send: jest.fn(() =>
+        of({
+          data: {
+            branch_id: '10',
+            role: 'COURIER',
+          },
+        }),
+      ),
+    };
+    const service = new LogisticsServiceService(
+      postRepo as any,
+      {} as any,
+      {} as any,
+      orderClient as any,
+      branchClient as any,
+      {} as any,
+      {} as any,
+      { log: jest.fn(), query: jest.fn() } as any,
+    );
+
+    const response = await service.createCanceledPost(
+      { id: '7', roles: ['courier'] },
+      { order_ids: ['101'] },
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.update' },
+      expect.objectContaining({
+        id: '101',
+        dto: {
+          canceled_post_id: '55',
+          status: Order_status.CANCELLED_SENT,
+          branch_id: '10',
+          courier_id: null,
+          assigned_at: null,
+        },
+      }),
+    );
+    expect(postRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('repairs an already sent canceled order with a missing holder branch', async () => {
+    const orderClient = {
+      send: jest.fn((pattern: { cmd: string }) => {
+        if (pattern.cmd === 'order.find_by_id') {
+          return of({
+            id: '101',
+            status: Order_status.CANCELLED_SENT,
+            canceled_post_id: '55',
+            branch_id: '10',
+            courier_id: null,
+            holder_type: 'BRANCH',
+            holder_branch_id: null,
+            holder_courier_id: null,
+            total_price: 1_000_000,
+            region_id: '1',
+          });
+        }
+        return of({ statusCode: 200 });
+      }),
+    };
+    const postRepo = {
+      findOne: jest.fn().mockResolvedValue({
+        id: '55',
+        courier_id: '7',
+        branch_id: '10',
+        status: Post_status.CANCELED,
+        order_quantity: 1,
+        post_total_price: 1_000_000,
+      }),
+      create: jest.fn((payload) => payload),
+      save: jest.fn(async (post) => post),
+    };
+    const branchClient = {
+      send: jest.fn(() =>
+        of({
+          data: {
+            branch_id: '10',
+            role: 'COURIER',
+          },
+        }),
+      ),
+    };
+    const service = new LogisticsServiceService(
+      postRepo as any,
+      {} as any,
+      {} as any,
+      orderClient as any,
+      branchClient as any,
+      {} as any,
+      {} as any,
+      { log: jest.fn(), query: jest.fn() } as any,
+    );
+
+    const response = await service.createCanceledPost(
+      { id: '7', roles: ['courier'] },
+      { order_ids: ['101'] },
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.update' },
+      expect.objectContaining({
+        id: '101',
+        dto: {
+          canceled_post_id: '55',
+          status: Order_status.CANCELLED_SENT,
+          branch_id: '10',
+          courier_id: null,
+          assigned_at: null,
+        },
+      }),
+    );
+    expect(postRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('moves already sent canceled orders from an inactive post into the active post', async () => {
+    const orderClient = {
+      send: jest.fn((pattern: { cmd: string }) => {
+        if (pattern.cmd === 'order.find_by_id') {
+          return of({
+            id: '101',
+            status: Order_status.CANCELLED_SENT,
+            canceled_post_id: 'old-post',
+            total_price: 1_000_000,
+            region_id: '1',
+          });
+        }
+        return of({ statusCode: 200 });
+      }),
+    };
+    const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null),
+      create: jest.fn((payload) => payload),
+      save: jest.fn(async (post) => ({ ...post, id: post.id ?? '55' })),
+    };
+    const branchClient = {
+      send: jest.fn(() =>
+        of({
+          data: {
+            branch_id: '10',
+            role: 'COURIER',
+          },
+        }),
+      ),
+    };
+    const service = new LogisticsServiceService(
+      postRepo as any,
+      {} as any,
+      {} as any,
+      orderClient as any,
+      branchClient as any,
+      {} as any,
+      {} as any,
+      { log: jest.fn(), query: jest.fn() } as any,
+    );
+
+    const response = await service.createCanceledPost(
+      { id: '7', roles: ['courier'] },
+      { order_ids: ['101'] },
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(postRepo.save).toHaveBeenCalled();
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.update' },
+      expect.objectContaining({
+        id: '101',
+        dto: expect.objectContaining({
+          canceled_post_id: '55',
+          status: Order_status.CANCELLED_SENT,
+          branch_id: '10',
+          courier_id: null,
+          assigned_at: null,
+        }),
+      }),
+    );
+  });
+
+  it('rejects a canceled order owned by another courier', async () => {
+    const orderClient = {
+      send: jest.fn((pattern: { cmd: string }) => {
+        if (pattern.cmd === 'order.find_by_id') {
+          return of({
+            id: '101',
+            status: Order_status.CANCELLED,
+            courier_id: '99',
+            holder_type: 'COURIER',
+            holder_branch_id: '10',
+            holder_courier_id: '99',
+            total_price: 1_000_000,
+          });
+        }
+        return of({ statusCode: 200 });
+      }),
+    };
+    const postRepo = {
+      findOne: jest.fn().mockResolvedValue(null),
+      create: jest.fn((payload) => payload),
+      save: jest.fn(async (post) => ({ ...post, id: post.id ?? '55' })),
+    };
+    const branchClient = {
+      send: jest.fn(() =>
+        of({ data: { branch_id: '10', role: 'COURIER' } }),
+      ),
+    };
+    const service = new LogisticsServiceService(
+      postRepo as any,
+      {} as any,
+      {} as any,
+      orderClient as any,
+      branchClient as any,
+      {} as any,
+      {} as any,
+      { log: jest.fn(), query: jest.fn() } as any,
+    );
+
+    await expect(
+      service.createCanceledPost(
+        { id: '7', roles: ['courier'] },
+        { order_ids: ['101'] },
+      ),
+    ).rejects.toBeInstanceOf(RpcException);
+    expect(postRepo.save).not.toHaveBeenCalled();
   });
 
   it('keeps received branch orders sent until HQ receives them', async () => {
@@ -98,6 +548,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       }),
     };
     const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
       findOne: jest.fn().mockResolvedValue({
         id: '55',
         courier_id: '7',
@@ -137,7 +588,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       {
         id: '101',
         dto: {
-          status: Order_status.CANCELLED_SENT,
+          status: Order_status.CANCELLED,
           branch_id: '10',
           courier_id: null,
           assigned_at: null,
@@ -197,6 +648,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       post_total_price: 1_500_000,
     };
     const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
       findOne: jest
         .fn()
         .mockResolvedValueOnce(sourcePost)
@@ -317,6 +769,9 @@ describe('LogisticsServiceService createCanceledPost', () => {
         dto: {
           canceled_post_id: '77',
           status: Order_status.CANCELLED_SENT,
+          branch_id: '1',
+          courier_id: null,
+          assigned_at: null,
         },
         requester: {
           id: '8',
@@ -333,7 +788,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
         if (pattern.cmd === 'order.find_by_id') {
           return of({
             id: '101',
-            status: Order_status.CANCELLED_SENT,
+            status: Order_status.CANCELLED,
             branch_id: '1',
             holder_type: 'BRANCH',
             holder_branch_id: '10',
@@ -377,6 +832,9 @@ describe('LogisticsServiceService createCanceledPost', () => {
         dto: {
           canceled_post_id: '77',
           status: Order_status.CANCELLED_SENT,
+          branch_id: '1',
+          courier_id: null,
+          assigned_at: null,
         },
       }),
     );
@@ -388,7 +846,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
         if (pattern.cmd === 'order.find_by_id') {
           return of({
             id: '101',
-            status: Order_status.CANCELLED_SENT,
+            status: Order_status.CANCELLED,
             branch_id: '10',
             canceled_post_id: null,
             total_price: 1_000_000,
@@ -429,9 +887,72 @@ describe('LogisticsServiceService createCanceledPost', () => {
         dto: {
           canceled_post_id: '77',
           status: Order_status.CANCELLED_SENT,
+          branch_id: '1',
+          courier_id: null,
+          assigned_at: null,
         },
       }),
     );
+  });
+
+  it('does not reject or duplicate an already sent manager cancellation', async () => {
+    const orderClient = {
+      send: jest.fn((pattern: { cmd: string }) => {
+        if (pattern.cmd === 'order.find_by_id') {
+          return of({
+            id: '101',
+            status: Order_status.CANCELLED_SENT,
+            canceled_post_id: '77',
+            branch_id: '1',
+            holder_type: 'BRANCH',
+            holder_branch_id: '1',
+            total_price: 1_000_000,
+            region_id: '1',
+          });
+        }
+        return of({ statusCode: 200 });
+      }),
+    };
+    const branchClient = {
+      send: jest.fn(() => of({ data: { id: '1', type: 'HQ' } })),
+    };
+    const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
+      findOne: jest.fn().mockResolvedValue({
+        id: '77',
+        courier_id: '8',
+        branch_id: '1',
+        status: Post_status.CANCELED,
+        order_quantity: 1,
+        post_total_price: 1_000_000,
+      }),
+      create: jest.fn((payload) => payload),
+      save: jest.fn(async (post) => post),
+    };
+    const service = new LogisticsServiceService(
+      postRepo as any,
+      {} as any,
+      {} as any,
+      orderClient as any,
+      branchClient as any,
+      {} as any,
+      {} as any,
+      { log: jest.fn(), query: jest.fn() } as any,
+    );
+
+    const response = await service.createCanceledPost(
+      { id: '8', roles: ['manager'], branch_id: '10' },
+      { order_ids: ['101'] },
+    );
+
+    expect(response.statusCode).toBe(200);
+    expect(response.data).toEqual({ post_id: '77', order_ids: ['101'] });
+    expect(
+      orderClient.send.mock.calls.some(
+        ([pattern]) => pattern.cmd === 'order.update',
+      ),
+    ).toBe(false);
+    expect(postRepo.save).not.toHaveBeenCalled();
   });
 
   it('keeps canceled orders open when HQ receives the manager post', async () => {
@@ -458,6 +979,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       send: jest.fn(() => of({ data: { id: '1', type: 'HQ' } })),
     };
     const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
       findOne: jest.fn().mockResolvedValue({
         id: '77',
         courier_id: '8',
@@ -488,7 +1010,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       {
         id: '101',
         dto: {
-          status: Order_status.CANCELLED_SENT,
+          status: Order_status.CANCELLED,
           branch_id: '1',
           courier_id: null,
           assigned_at: null,
@@ -550,6 +1072,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       send: jest.fn(() => of({ data: { id: '1', type: 'HQ' } })),
     };
     const postRepo = {
+      find: jest.fn().mockResolvedValue([]),
       findOne: jest
         .fn()
         .mockResolvedValueOnce(sourcePost)

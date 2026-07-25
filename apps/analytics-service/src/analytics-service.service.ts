@@ -243,6 +243,50 @@ export class AnalyticsServiceService {
     return Number.isFinite(n) ? n : fallback;
   }
 
+  private extractBranchReceivable(branchesResponse: unknown) {
+    const branchData = this.unwrap<any>(branchesResponse);
+    const branches = Array.isArray(branchData?.items) ? branchData.items : [];
+
+    return branches.reduce((sum: number, branch: any) => {
+      if (String(branch?.type ?? '').toUpperCase() === 'HQ') {
+        return sum;
+      }
+
+      const amount = this.parseNumber(branch?.olinishi_kerak);
+      return sum + (amount > 0 ? amount : 0);
+    }, 0);
+  }
+
+  private applyBranchReceivableToFinancialBalance(
+    balanceData: any,
+    branchReceivable: number,
+  ) {
+    if (!balanceData) {
+      return balanceData;
+    }
+
+    const mainBalance = this.parseNumber(balanceData?.main?.balance);
+    const marketPayable = this.parseNumber(
+      balanceData?.markets?.marketPayable,
+      Math.abs(this.parseNumber(balanceData?.markets?.marketsTotalBalans)),
+    );
+    const difference = branchReceivable - marketPayable;
+
+    return {
+      ...balanceData,
+      currentSituation: mainBalance + difference,
+      branches: {
+        ...(balanceData.branches ?? {}),
+        branchReceivable,
+      },
+      couriers: {
+        ...(balanceData.couriers ?? {}),
+        couriersTotalBalanse: branchReceivable,
+      },
+      difference,
+    };
+  }
+
   private parseDateValue(value?: string | number | Date | null) {
     if (!value) return null;
     const d = value instanceof Date ? value : new Date(value);
@@ -417,7 +461,10 @@ export class AnalyticsServiceService {
   ) {
     const isAllTime = filter.all === true;
     const normalized = isAllTime
-      ? { all: true }
+      ? this.normalizeDashboardDateRange({
+          startDate: '1970-01-01',
+          endDate: new Date().toISOString(),
+        })
       : this.normalizeDashboardDateRange(filter);
     const roles = this.roleSet(requester);
     const isRegistrator = roles.has(Roles.REGISTRATOR);
@@ -433,29 +480,29 @@ export class AnalyticsServiceService {
       : normalized;
 
     if (roles.has(Roles.COURIER)) {
-      const [myStat, couriers, topCouriers] = await Promise.all([
-        rmqSend(
-          this.orderClient,
-          { cmd: 'order.analytics.courier_stat' },
-          { requester, ...normalized },
-        ).catch(() => null),
-        rmqSend(
-          this.orderClient,
-          { cmd: 'order.analytics.courier_stats' },
-          normalized,
-        ).catch(() => null),
-        rmqSend(
-          this.orderClient,
-          { cmd: 'order.analytics.top_couriers' },
-          {},
-        ).catch(() => null),
-      ]);
+      const myStat = await rmqSend(
+        this.orderClient,
+        { cmd: 'order.analytics.courier_stat' },
+        { requester, ...normalized },
+      ).catch(() => null);
+      const unwrappedMyStat = this.unwrap<any>(myStat);
+      const courierScopedStats = unwrappedMyStat
+        ? [
+            {
+              courier: { id: requester?.id },
+              totalOrders: this.parseNumber(unwrappedMyStat.totalOrders),
+              soldOrders: this.parseNumber(unwrappedMyStat.soldOrders),
+              canceledOrders: this.parseNumber(unwrappedMyStat.canceledOrders),
+              successRate: this.parseNumber(unwrappedMyStat.successRate),
+            },
+          ]
+        : [];
 
       return successRes(
         {
-          myStat: this.unwrap(myStat),
-          couriers: this.unwrap(couriers),
-          topCouriers: this.unwrap(topCouriers),
+          myStat: unwrappedMyStat,
+          couriers: courierScopedStats,
+          topCouriers: [],
         },
         200,
         'Dashboard infos',
@@ -481,7 +528,7 @@ export class AnalyticsServiceService {
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.top_markets' },
-          {},
+          normalized,
         ).catch(() => null),
         rmqSend(
           this.orderClient,
@@ -503,11 +550,23 @@ export class AnalyticsServiceService {
     }
 
     if (isAllTime) {
-      const orders = await rmqSend(
-        this.orderClient,
-        { cmd: 'order.analytics.overview' },
-        scopedRange,
-      ).catch(() => null);
+      const [orders, topMarkets, topBranches] = await Promise.all([
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.overview' },
+          scopedRange,
+        ).catch(() => null),
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.top_markets' },
+          branchId ? { ...scopedRange, branch_id: branchId } : scopedRange,
+        ).catch(() => null),
+        rmqSend(
+          this.orderClient,
+          { cmd: 'order.analytics.top_branches' },
+          branchId ? { ...scopedRange, branch_id: branchId } : scopedRange,
+        ).catch(() => null),
+      ]);
 
       return successRes(
         {
@@ -517,8 +576,8 @@ export class AnalyticsServiceService {
           ),
           markets: [],
           couriers: [],
-          topMarkets: [],
-          topCouriers: [],
+          topMarkets: this.unwrap(topMarkets),
+          topBranches: this.unwrap(topBranches),
           branchDashboard: null,
         },
         200,
@@ -526,7 +585,7 @@ export class AnalyticsServiceService {
       );
     }
 
-    const [orders, markets, couriers, topMarkets, topCouriers] =
+    const [orders, markets, couriers, topMarkets, topBranches] =
       await Promise.all([
         rmqSend(
           this.orderClient,
@@ -546,12 +605,12 @@ export class AnalyticsServiceService {
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.top_markets' },
-          branchId ? { branch_id: branchId } : {},
+          branchId ? { ...scopedRange, branch_id: branchId } : scopedRange,
         ).catch(() => null),
         rmqSend(
           this.orderClient,
-          { cmd: 'order.analytics.top_couriers' },
-          branchId ? { branch_id: branchId } : {},
+          { cmd: 'order.analytics.top_branches' },
+          branchId ? { ...scopedRange, branch_id: branchId } : scopedRange,
         ).catch(() => null),
       ]);
     const branchDashboard = isBranchRole
@@ -570,7 +629,7 @@ export class AnalyticsServiceService {
         markets: this.unwrap(markets),
         couriers: this.unwrap(couriers),
         topMarkets: this.unwrap(topMarkets),
-        topCouriers: this.unwrap(topCouriers),
+        topBranches: this.unwrap(topBranches),
         branchDashboard,
       },
       200,
@@ -588,7 +647,7 @@ export class AnalyticsServiceService {
 
     // Resilient fan-out: a failed/timed-out downstream degrades that leg to null
     // (handled by unwrap/?. below) instead of crashing the whole report.
-    const [revenue, financialBalance] = await Promise.all([
+    const [revenue, financialBalance, branchesResponse] = await Promise.all([
       rmqSend(
         this.orderClient,
         { cmd: 'order.analytics.revenue' },
@@ -599,9 +658,26 @@ export class AnalyticsServiceService {
         { cmd: 'finance.cashbox.financial_balance' },
         {},
       ).catch(() => null),
+      rmqSend(
+        this.branchClient,
+        { cmd: 'branch.find_all' },
+        {
+          requester,
+          query: {
+            status: 'active',
+            page: 1,
+            limit: 1000,
+          },
+        },
+      ).catch(() => null),
     ]);
 
     const revenueData = this.unwrap<any>(revenue as any);
+    const branchReceivable = this.extractBranchReceivable(branchesResponse);
+    const financeData = this.applyBranchReceivableToFinancialBalance(
+      this.unwrap(financialBalance as any),
+      branchReceivable,
+    );
     const labels = Array.isArray(revenueData?.data)
       ? revenueData.data.map((row: any) => row.label ?? row.period)
       : [];
@@ -613,7 +689,7 @@ export class AnalyticsServiceService {
       {
         ...(revenueData ?? {}),
         chart: { labels, values },
-        finance: this.unwrap(financialBalance as any),
+        finance: financeData,
       },
       200,
       `Revenue stats (${period})`,
@@ -846,7 +922,7 @@ export class AnalyticsServiceService {
     this.assertFinancialAccess(requester);
     const normalized = this.normalizeDateRangeAny(filter);
     const pagination = this.normalizePagination(filter);
-    const [allInfo, balance] = await Promise.all([
+    const [allInfo, balance, branchesResponse] = await Promise.all([
       rmqSend(
         this.financeClient,
         { cmd: 'finance.cashbox.all_info' },
@@ -862,10 +938,26 @@ export class AnalyticsServiceService {
         { cmd: 'finance.cashbox.financial_balance' },
         {},
       ).catch(() => null),
+      rmqSend(
+        this.branchClient,
+        { cmd: 'branch.find_all' },
+        {
+          requester,
+          query: {
+            status: 'active',
+            page: 1,
+            limit: 1000,
+          },
+        },
+      ).catch(() => null),
     ]);
 
     const allInfoData = this.unwrap<any>(allInfo as any);
-    const balanceData = this.unwrap<any>(balance as any);
+    const branchReceivable = this.extractBranchReceivable(branchesResponse);
+    const balanceData = this.applyBranchReceivableToFinancialBalance(
+      this.unwrap<any>(balance as any),
+      branchReceivable,
+    );
     const histories = Array.isArray(allInfoData?.allCashboxHistories)
       ? allInfoData.allCashboxHistories
       : [];

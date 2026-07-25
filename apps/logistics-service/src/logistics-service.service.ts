@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { In, Not, Repository } from 'typeorm';
+import { In, IsNull, Not, Repository } from 'typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
 import { Post } from './entities/post.entity';
 import { Region } from './entities/region.entity';
@@ -125,6 +125,13 @@ export class LogisticsServiceService implements OnModuleInit {
 
   private conflict(message: string): never {
     throw new RpcException(errorRes(message, 409));
+  }
+
+  private getOrderBranchScope(order: {
+    holder_branch_id?: string | null;
+    branch_id?: string | null;
+  }): string {
+    return String(order?.holder_branch_id ?? order?.branch_id ?? '').trim();
   }
 
   private isSystemPrivileged(requester?: RequesterContext): boolean {
@@ -324,9 +331,126 @@ export class LogisticsServiceService implements OnModuleInit {
           .send({ cmd: 'order.find_by_id' }, { id })
           .pipe(timeout(5000)),
       );
-    } catch {
-      this.notFound(`Order #${id} not found`);
+    } catch (error) {
+      const downstreamError =
+        error instanceof RpcException ? error.getError() : error;
+      if (
+        downstreamError &&
+        typeof downstreamError === 'object' &&
+        Number((downstreamError as { statusCode?: number }).statusCode) >= 400
+      ) {
+        throw new RpcException(downstreamError);
+      }
+      throw new RpcException(errorRes(`Order #${id} lookup failed`, 502));
     }
+  }
+
+  private normalizeOrderStatus(status?: Order_status | string | null): string {
+    return String(status ?? '')
+      .trim()
+      .toLowerCase()
+      .replaceAll('_', ' ')
+      .replace('canceled', 'cancelled');
+  }
+
+  private isCancelledOrder(status?: Order_status | string | null): boolean {
+    return this.normalizeOrderStatus(status) === Order_status.CANCELLED;
+  }
+
+  private isCancelledSentOrder(status?: Order_status | string | null): boolean {
+    const normalizedStatus = this.normalizeOrderStatus(status);
+    return (
+      normalizedStatus === Order_status.CANCELLED_SENT ||
+      normalizedStatus === 'cancelled sent'
+    );
+  }
+
+  private isCancelledPostEligibleOrder(
+    status?: Order_status | string | null,
+  ): boolean {
+    return this.isCancelledOrder(status) || this.isCancelledSentOrder(status);
+  }
+
+  private isCancelledOrderOwnedByCourier(
+    order: OrderRow,
+    courierId: string,
+    branchId: string,
+  ): boolean {
+    const requesterCourierId = String(courierId).trim();
+    const holderCourierId = String(order.holder_courier_id ?? '').trim();
+    const assignedCourierId = String(order.courier_id ?? '').trim();
+    const holderType = String(order.holder_type ?? '').trim().toUpperCase();
+
+    if (holderCourierId) {
+      return (
+        holderCourierId === requesterCourierId &&
+        (!holderType || holderType === 'COURIER')
+      );
+    }
+
+    if (assignedCourierId !== requesterCourierId) return false;
+    if (holderType && holderType !== 'COURIER') return false;
+
+    const orderBranchId = this.getOrderBranchScope(order);
+    return !orderBranchId || orderBranchId === String(branchId);
+  }
+
+  private isActiveCanceledPostForTarget(
+    post: Post | null | undefined,
+    courierId: string,
+    branchId: string,
+  ): post is Post {
+    return (
+      !!post &&
+      String(post.status) === Post_status.CANCELED &&
+      String(post.courier_id) === String(courierId) &&
+      String(post.branch_id) === String(branchId)
+    );
+  }
+
+  private async isOrderInActiveCanceledPost(
+    order: OrderRow,
+    activePost: Post | null,
+    courierId: string,
+    branchId: string,
+  ): Promise<boolean> {
+    if (!this.isCancelledSentOrder(order.status) || !order.canceled_post_id) {
+      return false;
+    }
+
+    if (
+      activePost &&
+      String(order.canceled_post_id) === String(activePost.id)
+    ) {
+      return this.isActiveCanceledPostForTarget(activePost, courierId, branchId);
+    }
+
+    const existingPost = await this.postRepo.findOne({
+      where: {
+        id: order.canceled_post_id,
+        status: Post_status.CANCELED,
+      },
+    });
+
+    return this.isActiveCanceledPostForTarget(
+      existingPost,
+      courierId,
+      branchId,
+    );
+  }
+
+  private shouldRepairCanceledPostOrderHolder(
+    order: OrderRow,
+    branchId: string,
+  ): boolean {
+    if (String(order.branch_id ?? '') !== String(branchId)) return true;
+    if (order.courier_id) return true;
+    if (order.holder_type && order.holder_type !== 'BRANCH') return true;
+    if (String(order.holder_branch_id ?? '') !== String(branchId)) {
+      return true;
+    }
+    if (order.holder_courier_id) return true;
+    return false;
   }
 
   private async findOrders(query: {
@@ -392,10 +516,75 @@ export class LogisticsServiceService implements OnModuleInit {
         }
       }
 
-      return [];
-    } catch {
-      return [];
+      throw new RpcException(
+        errorRes('Order service returned an invalid order list', 502),
+      );
+    } catch (error) {
+      const downstreamError =
+        error instanceof RpcException ? error.getError() : error;
+      if (
+        downstreamError &&
+        typeof downstreamError === 'object' &&
+        Number((downstreamError as { statusCode?: number }).statusCode) >= 400
+      ) {
+        throw new RpcException(downstreamError);
+      }
+      throw new RpcException(errorRes('Order list request failed', 502));
     }
+  }
+
+  private async findCanceledPostGroup(sourcePost: Post): Promise<{
+    posts: Post[];
+    orders: OrderRow[];
+  }> {
+    const candidatePosts = await this.postRepo.find({
+      where: {
+        courier_id: sourcePost.courier_id,
+        status: Post_status.CANCELED,
+      },
+    });
+    const sourceBranchId = String(sourcePost.branch_id ?? '').trim();
+    const sourceRegionId = String(sourcePost.region_id ?? '').trim();
+    const postsById = new Map<string, Post>([
+      [String(sourcePost.id), sourcePost],
+    ]);
+
+    for (const candidate of candidatePosts) {
+      const candidateBranchId = String(candidate.branch_id ?? '').trim();
+      const candidateRegionId = String(candidate.region_id ?? '').trim();
+      const sameBranch =
+        !sourceBranchId ||
+        !candidateBranchId ||
+        candidateBranchId === sourceBranchId;
+      const sameRegion =
+        !sourceRegionId ||
+        !candidateRegionId ||
+        candidateRegionId === sourceRegionId;
+
+      if (sameBranch && sameRegion) {
+        postsById.set(String(candidate.id), candidate);
+      }
+    }
+
+    const posts = [...postsById.values()];
+    const orderGroups = await Promise.all(
+      posts.map((candidate) =>
+        this.findOrders({
+          canceled_post_id: String(candidate.id),
+          status: Order_status.CANCELLED_SENT,
+          fetch_all: true,
+          page: 1,
+          limit: 100,
+        }),
+      ),
+    );
+    const ordersById = new Map<string, OrderRow>();
+
+    for (const order of orderGroups.flat()) {
+      ordersById.set(String(order.id), order);
+    }
+
+    return { posts, orders: [...ordersById.values()] };
   }
 
   private async updateOrder(
@@ -423,23 +612,100 @@ export class LogisticsServiceService implements OnModuleInit {
     }
   }
 
+  private async collapseDuplicateNewPosts(posts: Post[]): Promise<Post[]> {
+    const byRegion = new Map<string, Post[]>();
+    for (const post of posts) {
+      const regionId = String(post.region_id ?? '').trim();
+      if (!regionId) {
+        continue;
+      }
+      const group = byRegion.get(regionId) ?? [];
+      group.push(post);
+      byRegion.set(regionId, group);
+    }
+
+    const removedPostIds = new Set<string>();
+
+    for (const regionPosts of byRegion.values()) {
+      const sorted = [...regionPosts].sort(
+        (a, b) =>
+          new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+      );
+      const canonical = sorted[0];
+
+      if (String(canonical.branch_id ?? '').trim()) {
+        canonical.branch_id = null;
+      }
+
+      if (sorted.length > 1) {
+        const duplicateIds = sorted.slice(1).map((post) => String(post.id));
+        if (!duplicateIds.length) {
+          continue;
+        }
+
+        const duplicateOrders = await this.findOrders({
+          post_ids: duplicateIds,
+          fetch_all: true,
+          limit: 1000,
+        });
+        for (const order of duplicateOrders) {
+          await this.updateOrder(order.id, { post_id: canonical.id });
+        }
+
+        const allGroupOrders = await this.findOrders({
+          post_ids: [String(canonical.id), ...duplicateIds],
+          fetch_all: true,
+          limit: 1000,
+        });
+        canonical.order_quantity = allGroupOrders.length;
+        canonical.post_total_price = allGroupOrders.reduce(
+          (sum, order) => sum + Number(order.total_price ?? 0),
+          0,
+        );
+
+        const duplicates = sorted.slice(1);
+        for (const duplicate of duplicates) {
+          await this.postRepo.remove(duplicate);
+          void this.removePostFromSearch(duplicate);
+          removedPostIds.add(String(duplicate.id));
+        }
+      }
+
+      const savedCanonical = await this.postRepo.save(canonical);
+      void this.syncPostToSearch(savedCanonical);
+    }
+
+    return posts.filter((post) => !removedPostIds.has(String(post.id)));
+  }
+
   private async findOrderByQrToken(qrToken: string): Promise<OrderRow> {
+    let response: any;
+
     try {
-      const response = await lastValueFrom(
+      response = await lastValueFrom(
         this.orderClient
           .send({ cmd: 'order.find_by_qr' }, { token: qrToken })
           .pipe(timeout(5000)),
       );
-
-      const candidates = [response?.data?.data, response?.data, response];
-
-      for (const candidate of candidates) {
-        if (candidate && typeof candidate === 'object' && 'id' in candidate) {
-          return candidate as OrderRow;
-        }
+    } catch (error) {
+      const downstreamError =
+        error instanceof RpcException ? error.getError() : error;
+      if (
+        downstreamError &&
+        typeof downstreamError === 'object' &&
+        Number((downstreamError as { statusCode?: number }).statusCode) >= 400
+      ) {
+        throw new RpcException(downstreamError);
       }
-    } catch {
-      // handled below
+      throw new RpcException(errorRes('Order QR lookup failed', 502));
+    }
+
+    const candidates = [response?.data?.data, response?.data, response];
+
+    for (const candidate of candidates) {
+      if (candidate && typeof candidate === 'object' && 'id' in candidate) {
+        return candidate as OrderRow;
+      }
     }
 
     this.notFound('Order topilmadi');
@@ -731,15 +997,28 @@ export class LogisticsServiceService implements OnModuleInit {
         ? String(courierAssignment.branch_id)
         : null) ?? branchIdFromOrders;
 
-    const post = this.postRepo.create({
-      courier_id: dto.courier_id,
-      qr_code_token: dto.qr_code_token?.trim() || this.generateToken(),
-      region_id: regionId,
-      branch_id: branchId,
-      post_total_price: totalPrice,
-      order_quantity: uniqueOrderIds.length,
-      status: Post_status.NEW,
-    });
+    let post = regionId
+      ? await this.postRepo.findOne({
+          where: { region_id: regionId, status: Post_status.NEW },
+        })
+      : null;
+
+    if (!post) {
+      post = this.postRepo.create({
+        courier_id: dto.courier_id,
+        qr_code_token: dto.qr_code_token?.trim() || this.generateToken(),
+        region_id: regionId,
+        branch_id: null,
+        post_total_price: 0,
+        order_quantity: 0,
+        status: Post_status.NEW,
+      });
+    }
+
+    post.branch_id = null;
+    post.post_total_price = Number(post.post_total_price ?? 0) + totalPrice;
+    post.order_quantity =
+      Number(post.order_quantity ?? 0) + uniqueOrderIds.length;
 
     const savedPost = await this.postRepo.save(post);
     void this.syncPostToSearch(savedPost);
@@ -802,6 +1081,9 @@ export class LogisticsServiceService implements OnModuleInit {
     if (status === Post_status.CANCELED && this.isSystemPrivileged(requester)) {
       where.branch_id = await this.findHqBranchId();
     }
+    if (branchId && (!status || status === Post_status.SENT)) {
+      await this.repairSentPostBranchAssignments(branchId);
+    }
     let queryWhere: Record<string, unknown> | Record<string, unknown>[] = where;
     if (!status && this.isSystemPrivileged(requester)) {
       const hqBranchId = await this.findHqBranchId();
@@ -832,53 +1114,91 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
+  private async repairSentPostBranchAssignments(branchId: string): Promise<void> {
+    const normalizedBranchId = String(branchId ?? '').trim();
+    if (!normalizedBranchId) return;
+
+    const candidatePosts = await this.postRepo.find({
+      where: {
+        status: Post_status.SENT,
+      },
+      take: 100,
+    });
+    if (!candidatePosts.length) return;
+
+    for (const post of candidatePosts) {
+      const courierId = String(post.courier_id ?? '').trim();
+      if (courierId && courierId !== '0') continue;
+      if (String(post.branch_id ?? '').trim() === normalizedBranchId) continue;
+
+      const orders = await this.findOrders({
+        post_id: String(post.id),
+        fetch_all: true,
+        limit: 1000,
+      });
+      const branchIds = new Set(
+        orders
+          .map((order) => this.getOrderBranchScope(order))
+          .filter(Boolean),
+      );
+
+      if (branchIds.size === 1 && branchIds.has(normalizedBranchId)) {
+        post.branch_id = normalizedBranchId;
+        const saved = await this.postRepo.save(post);
+        void this.syncPostToSearch(saved);
+      }
+    }
+  }
+
   async newPosts(query?: { search?: string }, requester?: RequesterContext) {
-    const scopedBranchId = await this.resolveScopedBranchId(requester);
     const orphanOrders = await this.findOrders({
       status: Order_status.RECEIVED,
       page: 1,
       limit: 1000,
     });
     const candidates = orphanOrders.filter(
-      (order) =>
-        !order.post_id &&
-        order.region_id &&
-        order.branch_id &&
-        (!scopedBranchId || String(order.branch_id) === scopedBranchId),
+      (order) => !order.post_id && order.region_id,
     );
 
-    const byBranchRegion = new Map<
+    const byRegion = new Map<
       string,
-      { regionId: string; branchId: string; ids: string[]; total: number }
+      { regionId: string; branchIds: Set<string>; ids: string[]; total: number }
     >();
 
     for (const order of candidates) {
       const regionId = String(order.region_id);
-      const branchId = String(order.branch_id);
-      const key = `${branchId}:${regionId}`;
-      const current = byBranchRegion.get(key) ?? {
+      const current = byRegion.get(regionId) ?? {
         regionId,
-        branchId,
+        branchIds: new Set<string>(),
         ids: [],
         total: 0,
       };
+      const branchId = String(order.branch_id ?? '').trim();
+      if (branchId) {
+        current.branchIds.add(branchId);
+      }
       current.ids.push(order.id);
       current.total += Number(order.total_price ?? 0);
-      byBranchRegion.set(key, current);
+      byRegion.set(regionId, current);
     }
 
     const touchedBranchIds = new Set<string>();
     const touchedRegionIds = new Set<string>();
     let assignedOrderCount = 0;
 
-    for (const payload of byBranchRegion.values()) {
+    for (const payload of byRegion.values()) {
       let post = await this.postRepo.findOne({
         where: {
           region_id: payload.regionId,
-          branch_id: payload.branchId,
           status: Post_status.NEW,
         },
       });
+
+      if (post && String(post.branch_id ?? '').trim()) {
+        post.branch_id = null;
+        post = await this.postRepo.save(post);
+        void this.syncPostToSearch(post);
+      }
 
       if (!post) {
         post = await this.postRepo.save(
@@ -886,7 +1206,7 @@ export class LogisticsServiceService implements OnModuleInit {
             courier_id: '0',
             qr_code_token: this.generateToken(),
             region_id: payload.regionId,
-            branch_id: payload.branchId,
+            branch_id: null,
             status: Post_status.NEW,
             post_total_price: 0,
             order_quantity: 0,
@@ -918,12 +1238,14 @@ export class LogisticsServiceService implements OnModuleInit {
       if (refreshedPost) {
         void this.syncPostToSearch(refreshedPost);
       }
-      touchedBranchIds.add(payload.branchId);
+      for (const branchId of payload.branchIds) {
+        touchedBranchIds.add(branchId);
+      }
       touchedRegionIds.add(payload.regionId);
       assignedOrderCount += payload.ids.length;
     }
 
-    if (byBranchRegion.size > 0) {
+    if (byRegion.size > 0) {
       await this.activityLog.log({
         entity_type: 'Post',
         entity_id: 'auto_batch',
@@ -932,17 +1254,18 @@ export class LogisticsServiceService implements OnModuleInit {
         metadata: {
           branch_id: Array.from(touchedBranchIds).slice(0, 10),
           region_id: Array.from(touchedRegionIds).slice(0, 10),
-          post_count: byBranchRegion.size,
+          post_count: byRegion.size,
           order_count: assignedOrderCount,
         },
       });
     }
 
-    const allPosts = await this.postRepo.find({
+    let allPosts = await this.postRepo.find({
       where: { status: Post_status.NEW },
       relations: ['region'],
       order: { createdAt: 'DESC' },
     });
+    allPosts = await this.collapseDuplicateNewPosts(allPosts);
 
     const postIds = allPosts.map((post) => String(post.id)).filter(Boolean);
     const postOrders = postIds.length
@@ -995,9 +1318,6 @@ export class LogisticsServiceService implements OnModuleInit {
     const searchFilter = query?.search?.trim().toLowerCase();
 
     const filteredPosts = postsWithRegion.filter((post) => {
-      if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId) {
-        return false;
-      }
       if (searchFilter) {
         const regionName = String(post.region?.name ?? '').toLowerCase();
         if (!regionName.includes(searchFilter)) {
@@ -1028,12 +1348,22 @@ export class LogisticsServiceService implements OnModuleInit {
     const courierMap = await this.findCouriersByIds(
       allPosts.map((post) => post.courier_id).filter(Boolean) as string[],
     );
-    const enrichedPosts = allPosts.map((post) => ({
-      ...post,
-      courier: post.courier_id
-        ? (courierMap.get(post.courier_id) ?? null)
-        : null,
-    }));
+    const enrichedPosts = await Promise.all(
+      allPosts.map(async (post) => {
+        const { orders } = await this.findCanceledPostGroup(post);
+        return {
+          ...post,
+          order_quantity: orders.length,
+          post_total_price: orders.reduce(
+            (sum, order) => sum + Number(order.total_price ?? 0),
+            0,
+          ),
+          courier: post.courier_id
+            ? (courierMap.get(post.courier_id) ?? null)
+            : null,
+        };
+      }),
+    );
     return successRes(enrichedPosts, 200, 'All rejected posts');
   }
 
@@ -1087,12 +1417,22 @@ export class LogisticsServiceService implements OnModuleInit {
     const courierMap = await this.findCouriersByIds(
       rows.map((post) => post.courier_id).filter(Boolean) as string[],
     );
-    const enrichedRows = rows.map((post) => ({
-      ...post,
-      courier: post.courier_id
-        ? (courierMap.get(post.courier_id) ?? null)
-        : null,
-    }));
+    const enrichedRows = await Promise.all(
+      rows.map(async (post) => {
+        const { orders } = await this.findCanceledPostGroup(post);
+        return {
+          ...post,
+          order_quantity: orders.length,
+          post_total_price: orders.reduce(
+            (sum, order) => sum + Number(order.total_price ?? 0),
+            0,
+          ),
+          courier: post.courier_id
+            ? (courierMap.get(post.courier_id) ?? null)
+            : null,
+        };
+      }),
+    );
     return successRes(enrichedRows, 200, 'All rejected posts for courier');
   }
 
@@ -1131,8 +1471,42 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Post not found');
     }
     const scopedBranchId = await this.resolveScopedBranchId(requester);
+    let belongsToScopedBranch = false;
     if (scopedBranchId && String(post.branch_id ?? '') !== scopedBranchId) {
+      const orders = await this.findOrders({
+        post_id: id,
+        page: 1,
+        limit: 1000,
+      });
+      const orderBranchIds = new Set(
+        orders
+          .map((order) => this.getOrderBranchScope(order))
+          .filter(Boolean),
+      );
+      belongsToScopedBranch =
+        orderBranchIds.size === 1 && orderBranchIds.has(String(scopedBranchId));
+    }
+
+    if (
+      scopedBranchId &&
+      String(post.branch_id ?? '') !== scopedBranchId &&
+      !belongsToScopedBranch
+    ) {
       this.forbidden("Siz bu branch pochtasini ko'ra olmaysiz");
+    }
+    const isBranchTransferPost =
+      !String(post.courier_id ?? '').trim() ||
+      String(post.courier_id ?? '').trim() === '0';
+    if (
+      scopedBranchId &&
+      belongsToScopedBranch &&
+      isBranchTransferPost &&
+      String(post.branch_id ?? '').trim() !== scopedBranchId
+    ) {
+      post.branch_id = scopedBranchId;
+      const saved = await this.postRepo.save(post);
+      void this.syncPostToSearch(saved);
+      return successRes(saved, 200, 'Post found');
     }
     return successRes(post, 200, 'Post found');
   }
@@ -1225,26 +1599,51 @@ export class LogisticsServiceService implements OnModuleInit {
       isCourier && String(post.courier_id ?? '') === String(requester.id ?? '');
 
     const scopedBranchId = await this.resolveScopedBranchId(requester);
-    if (
-      scopedBranchId &&
-      String(post.branch_id ?? '') !== scopedBranchId &&
-      !isOwnCourierPost
-    ) {
-      this.forbidden("Siz bu branch pochtasidagi orderlarni ko'ra olmaysiz");
-    }
-
     const [ordersByPostId, ordersByCanceledPostId] = await Promise.all([
       this.findOrders({
         post_id: id,
         page: 1,
         limit: 1000,
       }),
-      this.findOrders({
-        canceled_post_id: id,
-        page: 1,
-        limit: 1000,
-      }),
+      post.status === Post_status.CANCELED
+        ? this.findCanceledPostGroup(post).then(({ orders }) => orders)
+        : this.findOrders({
+            canceled_post_id: id,
+            page: 1,
+            limit: 1000,
+          }),
     ]);
+    const orderBranchIds = new Set(
+      [...ordersByPostId, ...ordersByCanceledPostId]
+        .map((order) => this.getOrderBranchScope(order))
+        .filter(Boolean),
+    );
+    const belongsToScopedBranch =
+      Boolean(scopedBranchId) &&
+      orderBranchIds.size === 1 &&
+      orderBranchIds.has(String(scopedBranchId));
+
+    if (
+      scopedBranchId &&
+      String(post.branch_id ?? '') !== scopedBranchId &&
+      !belongsToScopedBranch &&
+      !isOwnCourierPost
+    ) {
+      this.forbidden("Siz bu branch pochtasidagi orderlarni ko'ra olmaysiz");
+    }
+
+    const isBranchTransferPost =
+      !String(post.courier_id ?? '').trim() ||
+      String(post.courier_id ?? '').trim() === '0';
+    if (
+      belongsToScopedBranch &&
+      isBranchTransferPost &&
+      String(post.branch_id ?? '').trim() !== scopedBranchId
+    ) {
+      post.branch_id = scopedBranchId;
+      const saved = await this.postRepo.save(post);
+      void this.syncPostToSearch(saved);
+    }
 
     const orderMap = new Map<string, OrderRow>();
     for (const order of [...ordersByPostId, ...ordersByCanceledPostId]) {
@@ -1575,10 +1974,30 @@ export class LogisticsServiceService implements OnModuleInit {
     const isOwnCourierPost =
       requesterIsCourier && String(post.courier_id ?? '') === requesterId;
 
+    const waitingOrderIds = [
+      ...new Set((dto.order_ids ?? []).map((orderId) => String(orderId))),
+    ];
+    const waitingOrderIdSet = new Set(waitingOrderIds);
+    const allOrders = await this.findOrders({
+      post_id: id,
+      page: 1,
+      limit: 1000,
+    });
     const scopedBranchId = await this.resolveScopedBranchId(requester);
+    const orderBranchIds = new Set(
+      allOrders
+        .map((order) => this.getOrderBranchScope(order))
+        .filter(Boolean),
+    );
+    const belongsToScopedBranch =
+      Boolean(scopedBranchId) &&
+      orderBranchIds.size === 1 &&
+      orderBranchIds.has(String(scopedBranchId));
+
     if (
       scopedBranchId &&
       String(post.branch_id ?? '') !== scopedBranchId &&
+      !belongsToScopedBranch &&
       !isOwnCourierPost
     ) {
       this.forbidden('Siz bu branch pochtasini qabul qila olmaysiz');
@@ -1595,23 +2014,39 @@ export class LogisticsServiceService implements OnModuleInit {
       );
     }
 
-    if (post.status !== Post_status.SENT) {
-      this.badRequest('Cannot receive post with this status');
-    }
-
-    const waitingOrderIds = [
-      ...new Set((dto.order_ids ?? []).map((orderId) => String(orderId))),
-    ];
-    const waitingOrderIdSet = new Set(waitingOrderIds);
-    const allOrders = await this.findOrders({
-      post_id: id,
-      page: 1,
-      limit: 1000,
-    });
     const orderById = new Map(
       allOrders.map((order) => [String(order.id), order]),
     );
-    const targetBranchId = String(post.branch_id ?? '').trim() || undefined;
+    const selectedOrders = waitingOrderIds
+      .map((orderId) => orderById.get(orderId))
+      .filter((order): order is OrderRow => Boolean(order));
+    const selectedHasReceivableOrder = selectedOrders.some(
+      (order) => order.status === Order_status.ON_THE_ROAD,
+    );
+
+    if (
+      post.status !== Post_status.SENT &&
+      !(post.status === Post_status.RECEIVED && selectedHasReceivableOrder)
+    ) {
+      this.badRequest('Cannot receive post with this status');
+    }
+
+    const isBranchTransferPost =
+      !String(post.courier_id ?? '').trim() ||
+      String(post.courier_id ?? '').trim() === '0';
+    if (
+      scopedBranchId &&
+      belongsToScopedBranch &&
+      isBranchTransferPost &&
+      String(post.branch_id ?? '').trim() !== scopedBranchId
+    ) {
+      post.branch_id = scopedBranchId;
+    }
+
+    const targetBranchId =
+      String(post.branch_id ?? '').trim() ||
+      (belongsToScopedBranch ? String(scopedBranchId) : '') ||
+      undefined;
 
     // receivePost spans multiple updateOrder RMQ calls + a local postRepo.save
     // across two services — no atomic TX possible. Track which transitions
@@ -1637,7 +2072,9 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     const remaining = allOrders.filter(
-      (o) => !waitingOrderIdSet.has(String(o.id)),
+      (o) =>
+        !waitingOrderIdSet.has(String(o.id)) &&
+        o.status === Order_status.ON_THE_ROAD,
     );
 
     if (remaining.length) {
@@ -1684,7 +2121,10 @@ export class LogisticsServiceService implements OnModuleInit {
       );
     }
 
-    post.status = Post_status.RECEIVED;
+    const hasRemainingReceivableOrders = remaining.length > 0;
+    post.status = hasRemainingReceivableOrders
+      ? Post_status.SENT
+      : Post_status.RECEIVED;
     const savedPost = await this.postRepo.save(post);
     void this.syncPostToSearch(savedPost);
 
@@ -1692,7 +2132,7 @@ export class LogisticsServiceService implements OnModuleInit {
       entity_type: 'Post',
       entity_id: String(savedPost.id),
       action: ActivityAction.STATUS_CHANGE,
-      new_value: { status: Post_status.RECEIVED },
+      new_value: { status: savedPost.status },
       ...this.auditActor(requester),
       metadata: {
         order_count: allOrders.length,
@@ -2540,16 +2980,6 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest('No orders provided');
     }
     const courierBranchId = await this.findCourierBranchId(requester);
-
-    const orders: OrderRow[] = [];
-    for (const orderId of orderIds) {
-      const order = await this.findOrderById(orderId);
-      if (order.status !== Order_status.CANCELLED) {
-        this.badRequest('Some orders are not in CANCELED status');
-      }
-      orders.push(order);
-    }
-
     let canceledPost = await this.postRepo.findOne({
       where: {
         courier_id: requester.id,
@@ -2557,6 +2987,77 @@ export class LogisticsServiceService implements OnModuleInit {
         status: Post_status.CANCELED,
       },
     });
+
+    const orders: OrderRow[] = [];
+    for (const orderId of orderIds) {
+      const order = await this.findOrderById(orderId);
+      if (!this.isCancelledPostEligibleOrder(order.status)) {
+        this.badRequest('Some orders are not in CANCELED status');
+      }
+      if (
+        this.isCancelledOrder(order.status) &&
+        !this.isCancelledOrderOwnedByCourier(
+          order,
+          requester.id,
+          courierBranchId,
+        )
+      ) {
+        this.forbidden(
+          'Courier faqat o‘ziga biriktirilgan bekor qilingan orderlarni jo‘nata oladi',
+        );
+      }
+      orders.push(order);
+    }
+
+    const ordersToSend: OrderRow[] = [];
+    const ordersToRepair: OrderRow[] = [];
+    for (const order of orders) {
+      const alreadyInActivePost = await this.isOrderInActiveCanceledPost(
+        order,
+        canceledPost,
+        requester.id,
+        courierBranchId,
+      );
+      if (!alreadyInActivePost) {
+        ordersToSend.push(order);
+      } else if (
+        this.shouldRepairCanceledPostOrderHolder(order, courierBranchId)
+      ) {
+        ordersToRepair.push(order);
+      }
+    }
+
+    for (const order of ordersToRepair) {
+      await this.updateOrder(
+        order.id,
+        {
+          canceled_post_id: canceledPost?.id ?? order.canceled_post_id,
+          status: Order_status.CANCELLED_SENT,
+          branch_id: courierBranchId,
+          courier_id: null,
+          assigned_at: null,
+        },
+        {
+          id: requester.id,
+          roles: requester.roles ?? [Roles.COURIER],
+          note: 'Canceled post holder repaired',
+        },
+      );
+    }
+
+    if (!ordersToSend.length) {
+      return successRes(
+        {
+          post_id:
+            canceledPost?.id ??
+            orders.find((order) => order.canceled_post_id)?.canceled_post_id ??
+            null,
+          order_ids: orderIds,
+        },
+        200,
+        'Canceled orders already sent to courier branch',
+      );
+    }
 
     if (!canceledPost) {
       canceledPost = await this.postRepo.save(
@@ -2574,12 +3075,15 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     let addedTotal = 0;
-    for (const order of orders) {
+    for (const order of ordersToSend) {
       await this.updateOrder(
         order.id,
         {
           canceled_post_id: canceledPost.id,
           status: Order_status.CANCELLED_SENT,
+          branch_id: courierBranchId,
+          courier_id: null,
+          assigned_at: null,
         },
         {
           id: requester.id,
@@ -2591,7 +3095,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     canceledPost.order_quantity =
-      Number(canceledPost.order_quantity ?? 0) + orders.length;
+      Number(canceledPost.order_quantity ?? 0) + ordersToSend.length;
     canceledPost.post_total_price =
       Number(canceledPost.post_total_price ?? 0) + addedTotal;
     const savedCanceledPost = await this.postRepo.save(canceledPost);
@@ -2643,31 +3147,6 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest('No orders provided');
     }
 
-    const orders: OrderRow[] = [];
-    for (const orderId of orderIds) {
-      const order = await this.findOrderById(orderId);
-      if (
-        order.status !== Order_status.CANCELLED &&
-        order.status !== Order_status.CANCELLED_SENT
-      ) {
-        this.badRequest(
-          'Some orders are not in CANCELED or CANCELED_SENT status',
-        );
-      }
-      const orderBranchId = String(
-        order.holder_branch_id ?? order.branch_id ?? '',
-      ).trim();
-      if (
-        orderBranchId !== sourceBranchId ||
-        (order.holder_type && order.holder_type !== 'BRANCH')
-      ) {
-        this.forbidden(
-          'Manager faqat o‘z branchidagi bekor qilingan orderlarni HQga jo‘nata oladi',
-        );
-      }
-      orders.push(order);
-    }
-
     let canceledPost = await this.postRepo.findOne({
       where: {
         courier_id: requester.id,
@@ -2675,6 +3154,89 @@ export class LogisticsServiceService implements OnModuleInit {
         status: Post_status.CANCELED,
       },
     });
+
+    const orders: OrderRow[] = [];
+    for (const orderId of orderIds) {
+      const order = await this.findOrderById(orderId);
+      if (!this.isCancelledPostEligibleOrder(order.status)) {
+        this.badRequest(
+          'Some orders are not in CANCELED status',
+        );
+      }
+      if (
+        this.isCancelledOrder(order.status) &&
+        (String(order.holder_branch_id ?? order.branch_id ?? '').trim() !==
+          sourceBranchId ||
+          (order.holder_type && order.holder_type !== 'BRANCH'))
+      ) {
+        this.forbidden(
+          'Manager faqat o‘z branchidagi bekor qilingan orderlarni HQga jo‘nata oladi',
+        );
+      }
+      if (
+        this.isCancelledSentOrder(order.status) &&
+        !(await this.isOrderInActiveCanceledPost(
+          order,
+          canceledPost,
+          requester.id,
+          hqBranchId,
+        ))
+      ) {
+        this.forbidden(
+          'Jo‘natilgan bekor order managerning faol HQ postiga tegishli emas',
+        );
+      }
+      orders.push(order);
+    }
+
+    const ordersToSend: OrderRow[] = [];
+    const ordersToRepair: OrderRow[] = [];
+    for (const order of orders) {
+      const alreadyInActivePost = await this.isOrderInActiveCanceledPost(
+        order,
+        canceledPost,
+        requester.id,
+        hqBranchId,
+      );
+      if (!alreadyInActivePost) {
+        ordersToSend.push(order);
+      } else if (this.shouldRepairCanceledPostOrderHolder(order, hqBranchId)) {
+        ordersToRepair.push(order);
+      }
+    }
+
+    for (const order of ordersToRepair) {
+      await this.updateOrder(
+        order.id,
+        {
+          canceled_post_id: canceledPost?.id ?? order.canceled_post_id,
+          status: Order_status.CANCELLED_SENT,
+          branch_id: hqBranchId,
+          courier_id: null,
+          assigned_at: null,
+        },
+        {
+          id: requester.id,
+          roles: requester.roles ?? [Roles.MANAGER],
+          note: 'Canceled post holder repaired',
+        },
+      );
+    }
+
+    if (!ordersToSend.length) {
+      return successRes(
+        {
+          post_id:
+            canceledPost?.id ??
+            orders.find((order) => order.canceled_post_id)?.canceled_post_id ??
+            null,
+          order_ids: orderIds,
+        },
+        200,
+        'Canceled orders already sent to HQ',
+      );
+    }
+
     if (!canceledPost) {
       canceledPost = await this.postRepo.save(
         this.postRepo.create({
@@ -2690,12 +3252,15 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     let addedTotal = 0;
-    for (const order of orders) {
+    for (const order of ordersToSend) {
       await this.updateOrder(
         order.id,
         {
           canceled_post_id: canceledPost.id,
           status: Order_status.CANCELLED_SENT,
+          branch_id: hqBranchId,
+          courier_id: null,
+          assigned_at: null,
         },
         {
           id: requester.id,
@@ -2707,7 +3272,7 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     canceledPost.order_quantity =
-      Number(canceledPost.order_quantity ?? 0) + orders.length;
+      Number(canceledPost.order_quantity ?? 0) + ordersToSend.length;
     canceledPost.post_total_price =
       Number(canceledPost.post_total_price ?? 0) + addedTotal;
     const savedPost = await this.postRepo.save(canceledPost);
@@ -2882,12 +3447,8 @@ export class LogisticsServiceService implements OnModuleInit {
       post.branch_id = targetBranchId;
     }
 
-    const allOrders = await this.findOrders({
-      canceled_post_id: id,
-      status: Order_status.CANCELLED_SENT,
-      page: 1,
-      limit: 1000,
-    });
+    const { posts: groupedCanceledPosts, orders: allOrders } =
+      await this.findCanceledPostGroup(post);
 
     const canceledOrderIds = [...new Set(dto.order_ids ?? [])];
     const allOrderIdsForPost = allOrders.map((o) => o.id);
@@ -2905,7 +3466,7 @@ export class LogisticsServiceService implements OnModuleInit {
       await this.updateOrder(
         orderId,
         {
-          status: Order_status.CANCELLED_SENT,
+          status: Order_status.CANCELLED,
           branch_id: targetBranchId,
           courier_id: null,
           assigned_at: null,
@@ -2927,6 +3488,38 @@ export class LogisticsServiceService implements OnModuleInit {
     const remainingOrders = allOrders.filter((order) =>
       remainingOrderIds.includes(String(order.id)),
     );
+    let savedPost = post;
+    for (const groupedPost of groupedCanceledPosts) {
+      groupedPost.order_quantity = 0;
+      groupedPost.post_total_price = 0;
+      groupedPost.status = Post_status.CANCELED_RECEIVED;
+      let savedGroupedPost: Post;
+
+      try {
+        savedGroupedPost = await this.postRepo.save(groupedPost);
+      } catch (error) {
+        this.logger.warn(
+          `post ${groupedPost.id} save failed after grouped canceled receive, retrying minimal update: ${
+            (error as Error)?.message ?? error
+          }`,
+        );
+        await this.postRepo.update(groupedPost.id, {
+          order_quantity: 0,
+          post_total_price: 0,
+          status: Post_status.CANCELED_RECEIVED,
+        });
+        savedGroupedPost =
+          (await this.postRepo.findOne({
+            where: { id: groupedPost.id },
+          })) ?? groupedPost;
+      }
+
+      if (String(groupedPost.id) === String(post.id)) {
+        savedPost = savedGroupedPost;
+      }
+      void this.syncPostToSearch(savedGroupedPost);
+    }
+
     let requeuedPostIds: string[] = [];
     if (remainingOrders.length) {
       const fallbackReturnBranchId = isHqReceipt
@@ -2940,39 +3533,17 @@ export class LogisticsServiceService implements OnModuleInit {
           ).trim()
         : targetBranchId;
       requeuedPostIds = await this.requeueUnreceivedCanceledOrders({
-          sourcePost: post,
-          orders: remainingOrders,
-          targetBranchId,
-          fallbackBranchId: fallbackReturnBranchId,
-          isHqReceipt,
-          requester,
+        sourcePost: post,
+        orders: remainingOrders,
+        targetBranchId,
+        fallbackBranchId: fallbackReturnBranchId,
+        isHqReceipt,
+        requester,
       });
     }
 
-    post.order_quantity = 0;
-    post.post_total_price = 0;
-    post.status = Post_status.CANCELED_RECEIVED;
-    let savedPost: Post;
-    try {
-      savedPost = await this.postRepo.save(post);
-    } catch (error) {
-      this.logger.warn(
-        `post ${post.id} save failed after canceled receive, retrying minimal update: ${
-          (error as Error)?.message ?? error
-        }`,
-      );
-      await this.postRepo.update(post.id, {
-        order_quantity: 0,
-        post_total_price: 0,
-        status: Post_status.CANCELED_RECEIVED,
-      });
-      savedPost =
-        (await this.postRepo.findOne({ where: { id: post.id } })) ?? post;
-    }
-    void this.syncPostToSearch(savedPost);
-
-    await this.activityLog
-      .log({
+    await Promise.resolve(
+      this.activityLog.log({
         entity_type: 'Post',
         entity_id: String(savedPost.id),
         action: ActivityAction.STATUS_CHANGE,
@@ -2982,10 +3553,12 @@ export class LogisticsServiceService implements OnModuleInit {
           order_ids: canceledOrderIds.slice(0, 10),
           remaining_order_count: remainingOrderIds.length,
           requeued_post_ids: requeuedPostIds,
+          grouped_post_ids: groupedCanceledPosts.map(({ id }) => String(id)),
           branch_id: targetBranchId,
           courier_id: savedPost.courier_id,
         },
-      })
+      }),
+    )
       .catch(() => undefined);
 
     return successRes(
@@ -2993,6 +3566,7 @@ export class LogisticsServiceService implements OnModuleInit {
         order_ids: canceledOrderIds,
         remaining_order_ids: remainingOrderIds,
         requeued_post_ids: requeuedPostIds,
+        grouped_post_ids: groupedCanceledPosts.map(({ id }) => String(id)),
         branch_id: targetBranchId,
       },
       200,
@@ -3658,7 +4232,7 @@ export class LogisticsServiceService implements OnModuleInit {
       return successRes([]);
     }
 
-    const byBranchRegion = new Map<
+    const byRegionStatus = new Map<
       string,
       Array<{
         order_id: string;
@@ -3669,49 +4243,63 @@ export class LogisticsServiceService implements OnModuleInit {
       }>
     >();
     for (const order of orders) {
-      const branchId = String(order.assigned_branch ?? '').trim();
       const regionId = String(order.assigned_region ?? '').trim();
       const targetPostStatus = order.assigned_post_status ?? Post_status.NEW;
-      const key = `${branchId}:${regionId}`;
-      const group = byBranchRegion.get(key) ?? [];
+      const assignedBranch = String(order.assigned_branch ?? '').trim();
+      const key = `${targetPostStatus}:${regionId}:${assignedBranch}`;
+      const group = byRegionStatus.get(key) ?? [];
       group.push({
         order_id: order.order_id,
         total_price: order.total_price,
         assigned_region: regionId,
-        assigned_branch: branchId || undefined,
+        assigned_branch: assignedBranch,
         assigned_post_status: targetPostStatus,
       });
-      byBranchRegion.set(key, group);
+      byRegionStatus.set(key, group);
     }
 
     const assignments: Array<{ order_id: string; post_id: string }> = [];
     const touchedPostIds: string[] = [];
 
-    for (const regionOrders of byBranchRegion.values()) {
+    for (const regionOrders of byRegionStatus.values()) {
       const first = regionOrders[0];
       const regionId = String(first?.assigned_region ?? '').trim();
-      const branchId = String(first?.assigned_branch ?? '').trim();
       const targetPostStatus = first?.assigned_post_status ?? Post_status.NEW;
+      const assignedBranch = String(first?.assigned_branch ?? '').trim();
       let post = await this.postRepo.findOne({
         where: {
           region_id: regionId,
-          ...(branchId ? { branch_id: branchId } : {}),
           status: targetPostStatus,
+          branch_id: assignedBranch || IsNull(),
         },
       });
+
+      if (
+        post &&
+        targetPostStatus === Post_status.NEW &&
+        String(post.branch_id ?? '').trim()
+      ) {
+        post.branch_id = null;
+        post = await this.postRepo.save(post);
+        void this.syncPostToSearch(post);
+      }
 
       if (!post) {
         post = this.postRepo.create({
           courier_id: '0',
           qr_code_token: this.generateToken(),
           region_id: regionId,
-          branch_id: branchId || null,
+          branch_id: assignedBranch || null,
           status: targetPostStatus,
           post_total_price: 0,
           order_quantity: 0,
         });
         post = await this.postRepo.save(post);
         void this.syncPostToSearch(post);
+      }
+
+      if (assignedBranch && String(post.branch_id ?? '').trim() !== assignedBranch) {
+        post.branch_id = assignedBranch;
       }
 
       let addedTotal = 0;

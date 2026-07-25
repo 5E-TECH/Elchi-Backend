@@ -49,6 +49,14 @@ import {
 import type { EntityManager } from 'typeorm';
 import { successRes } from '../../../libs/common/helpers/response';
 
+const CANCELLED_HANDOVER_MANUAL_REASONS = new Set([
+  'QR yirtilgan',
+  "QR o'qilmayapti",
+  "Label yo'qolgan",
+  'QR namlangan yoki xiralashgan',
+]);
+const CANCELLED_HANDOVER_MANUAL_REASON_MAX_LENGTH = 80;
+
 @Injectable()
 export class OrderServiceService implements OnModuleInit {
   private readonly logger = new Logger(OrderServiceService.name);
@@ -1144,15 +1152,208 @@ export class OrderServiceService implements OnModuleInit {
     return [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID];
   }
 
+  private cancelledMarketStatuses() {
+    return [
+      Order_status.CANCELLED,
+      Order_status.CANCELLED_SENT,
+      Order_status.CLOSED,
+    ];
+  }
+
+  private activeMarketStatuses() {
+    return [
+      Order_status.CREATED,
+      Order_status.NEW,
+      Order_status.RECEIVED,
+      Order_status.ON_THE_ROAD,
+      Order_status.WAITING,
+      Order_status.WAITING_CUSTOMER,
+      Order_status.RETURNED_TO_MARKET,
+    ];
+  }
+
+  private async countHistoricallyCancelledOrders(
+    range: { start: Date; end: Date } | null,
+    branchId?: string,
+    courierId?: string,
+    postIds: string[] = [],
+  ) {
+    const statuses = [
+      Order_status.CANCELLED,
+      Order_status.CANCELLED_SENT,
+      Order_status.CLOSED,
+    ];
+    const custodySubQuery = this.orderCustodyEventRepo
+      .createQueryBuilder('oce')
+      .select('1')
+      .where('oce.order_id = o.id')
+      .andWhere(
+        '(oce.from_branch_id = :analyticsBranchId OR oce.to_branch_id = :analyticsBranchId)',
+      )
+      .getQuery();
+
+    const parentCustodySubQuery = this.orderCustodyEventRepo
+      .createQueryBuilder('parent_oce')
+      .select('1')
+      .where('parent_oce.order_id = parent_o.id')
+      .andWhere(
+        '(parent_oce.from_branch_id = :analyticsBranchId OR parent_oce.to_branch_id = :analyticsBranchId)',
+      )
+      .getQuery();
+
+    const query = this.orderTrackingRepo
+      .createQueryBuilder('t')
+      .innerJoin(Order, 'o', 'o.id = t.order_id')
+      .leftJoin(Order, 'parent_o', 'parent_o.id = o.parent_order_id')
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('t.to_status IN (:...statuses)', { statuses })
+      .andWhere('(t.action IS NULL OR t.action != :cancelledPostReceived)', {
+        cancelledPostReceived: 'cancelled_post_received',
+      })
+      .select('COUNT(DISTINCT t.order_id)', 'count');
+
+    if (branchId) {
+      query.andWhere(
+        `(
+          o.branch_id = :analyticsBranchId
+          OR o.holder_branch_id = :analyticsBranchId
+          OR EXISTS (${custodySubQuery})
+          OR parent_o.branch_id = :analyticsBranchId
+          OR parent_o.holder_branch_id = :analyticsBranchId
+          OR EXISTS (${parentCustodySubQuery})
+        )`,
+        { analyticsBranchId: branchId },
+      );
+    }
+
+    if (branchId && !courierId) {
+      query.andWhere('LOWER(t.changed_by_role) != :courierRole', {
+        courierRole: Roles.COURIER,
+      });
+    }
+
+    if (courierId) {
+      const courierCustodySubQuery = this.orderCustodyEventRepo
+        .createQueryBuilder('oce_courier')
+        .select('1')
+        .where('oce_courier.order_id = o.id')
+        .andWhere(
+          '(oce_courier.from_courier_id = :analyticsCourierId OR oce_courier.to_courier_id = :analyticsCourierId)',
+        )
+        .getQuery();
+      const hasPostScope = postIds.length > 0;
+
+      query.andWhere(
+        `(
+          o.courier_id = :analyticsCourierId
+          OR o.holder_courier_id = :analyticsCourierId
+          ${hasPostScope ? 'OR o.post_id IN (:...analyticsPostIds)' : ''}
+          OR EXISTS (${courierCustodySubQuery})
+        )`,
+        {
+          analyticsCourierId: courierId,
+          ...(hasPostScope ? { analyticsPostIds: postIds } : {}),
+        },
+      );
+    }
+
+    if (range) {
+      query.andWhere('t.created_at BETWEEN :start AND :end', range);
+    }
+
+    const row = await query.getRawOne<{ count?: string | number }>();
+    return Number(row?.count ?? 0);
+  }
+
+  private async countBranchBatchAcceptedOrders(
+    range: { start: Date; end: Date } | null,
+    branchId?: string,
+  ) {
+    const custodySubQuery = this.orderCustodyEventRepo
+      .createQueryBuilder('oce')
+      .select('1')
+      .where('oce.order_id = o.id')
+      .andWhere(
+        '(oce.from_branch_id = :analyticsBranchId OR oce.to_branch_id = :analyticsBranchId)',
+      )
+      .getQuery();
+
+    const query = this.orderTrackingRepo
+      .createQueryBuilder('t')
+      .innerJoin(Order, 'o', 'o.id = t.order_id')
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('t.action = :action', { action: 'branch_batch_received' })
+      .andWhere('t.to_status = :status', { status: Order_status.RECEIVED })
+      .select('COUNT(DISTINCT COALESCE(o.parent_order_id, o.id))', 'count');
+
+    if (branchId) {
+      query.andWhere(
+        `(
+          o.branch_id = :analyticsBranchId
+          OR o.holder_branch_id = :analyticsBranchId
+          OR EXISTS (${custodySubQuery})
+        )`,
+        { analyticsBranchId: branchId },
+      );
+    }
+
+    if (range) {
+      query.andWhere('t.created_at BETWEEN :start AND :end', range);
+    }
+
+    const row = await query.getRawOne<{ count?: string | number }>();
+    return Number(row?.count ?? 0);
+  }
+
   private applyAnalyticsBranchScope<
     T extends { andWhere: (...args: any[]) => T },
   >(query: T, branchId?: string): T {
     if (!branchId) {
       return query;
     }
+    const custodySubQuery = this.orderCustodyEventRepo
+      .createQueryBuilder('oce')
+      .select('1')
+      .where('oce.order_id = o.id')
+      .andWhere(
+        '(oce.from_branch_id = :analyticsBranchId OR oce.to_branch_id = :analyticsBranchId)',
+      )
+      .getQuery();
+
     return query.andWhere(
-      '(o.branch_id = :analyticsBranchId OR o.holder_branch_id = :analyticsBranchId)',
+      `(
+        o.branch_id = :analyticsBranchId
+        OR o.holder_branch_id = :analyticsBranchId
+        OR EXISTS (${custodySubQuery})
+      )`,
       { analyticsBranchId: branchId },
+    );
+  }
+
+  private applyAnalyticsCourierScope<
+    T extends { andWhere: (...args: any[]) => T },
+  >(query: T, courierId: string, postIds: string[] = []): T {
+    const custodySubQuery = this.orderCustodyEventRepo
+      .createQueryBuilder('oce')
+      .select('1')
+      .where('oce.order_id = o.id')
+      .andWhere(
+        '(oce.from_courier_id = :analyticsCourierId OR oce.to_courier_id = :analyticsCourierId)',
+      )
+      .getQuery();
+    const hasPostScope = postIds.length > 0;
+
+    return query.andWhere(
+      `(
+        o.courier_id = :analyticsCourierId
+        OR o.holder_courier_id = :analyticsCourierId
+        ${hasPostScope ? 'OR o.post_id IN (:...analyticsPostIds)' : ''}
+        OR EXISTS (${custodySubQuery})
+      )`,
+      {
+        analyticsCourierId: courierId,
+        ...(hasPostScope ? { analyticsPostIds: postIds } : {}),
+      },
     );
   }
 
@@ -1347,6 +1548,7 @@ export class OrderServiceService implements OnModuleInit {
         tariff_home?: number;
         tariff_center?: number;
         expense_proof_conditions?: ExpenseProofCondition[] | null;
+        cancelled_handover_qr_required?: boolean | null;
       }>;
     }>(
       this.identityClient,
@@ -1372,6 +1574,49 @@ export class OrderServiceService implements OnModuleInit {
       { ids },
     ).catch(() => ({ data: [] }));
     return response?.data ?? [];
+  }
+
+  private async getBranchesByIds(ids: string[]) {
+    const uniqueIds = Array.from(
+      new Set(ids.map((id) => String(id ?? '').trim()).filter(Boolean)),
+    );
+    if (!uniqueIds.length) return [];
+
+    const rows = await Promise.all(
+      uniqueIds.map((id) =>
+        rmqSend<{
+          data?: {
+            id?: string;
+            name?: string | null;
+            code?: string | null;
+            type?: BranchType | string | null;
+          };
+        }>(
+          this.branchClient,
+          { cmd: 'branch.find_by_id' },
+          { id, requester: { id: 'system', roles: [Roles.SUPERADMIN] } },
+          { attachRequestId: false, retries: 1 },
+        )
+          .then((response) => response?.data ?? null)
+          .catch(() => null),
+      ),
+    );
+
+    return rows
+      .filter(
+        (row): row is {
+          id?: string;
+          name?: string | null;
+          code?: string | null;
+          type?: BranchType | string | null;
+        } => Boolean(row?.id),
+      )
+      .map((row) => ({
+        id: String(row.id),
+        name: row.name ?? null,
+        code: row.code ?? null,
+        type: row.type ?? null,
+      }));
   }
 
   private async getUserById(id: string) {
@@ -2400,14 +2645,6 @@ export class OrderServiceService implements OnModuleInit {
       : { data: undefined };
     const post = rollbackPostRes?.data;
 
-    if (
-      isCourier &&
-      !isSuperAdmin &&
-      String(post?.courier_id ?? '') !== String(requester.id)
-    ) {
-      this.badRequest('Order is not assigned to this courier');
-    }
-
     if (isManager && !isSuperAdmin) {
       const requesterBranchId = String(requester?.branch_id ?? '').trim();
       const orderHolderBranchId = String(order?.holder_branch_id ?? '').trim();
@@ -2622,6 +2859,29 @@ export class OrderServiceService implements OnModuleInit {
             created_by: String(requester.id),
             comment: "Qo'shimcha xarajat orqaga qaytarildi",
           });
+        }
+
+        const rolledBackExtraCost = Math.max(
+          shouldRollbackMarketExtraCost
+            ? Number(marketExtraCost?.amount ?? 0)
+            : 0,
+          shouldRollbackCourierExtraCost
+            ? Number(courierExtraCost?.amount ?? 0)
+            : 0,
+        );
+        if (rolledBackExtraCost > 0) {
+          await this.outbox.enqueue(
+            'FINANCE',
+            'finance.financial_balance.record',
+            {
+              amount: rolledBackExtraCost,
+              source_type: 'correction',
+              order_id: String(order.id),
+              related_user_id: order.market_id ? String(order.market_id) : null,
+              comment: `Order #${order.id} extra cost rollback`,
+            },
+            { manager: tx },
+          );
         }
       }
 
@@ -3255,7 +3515,8 @@ export class OrderServiceService implements OnModuleInit {
   async completeMarketCancelledHandover(input: {
     market_id: string;
     order_ids: string[];
-    authorization_token: string;
+    authorization_token?: string;
+    manual_overrides?: Array<{ order_id: string; reason: string }>;
     requester: { id: string; roles?: string[] };
   }) {
     const marketId = String(input?.market_id ?? '').trim();
@@ -3266,18 +3527,57 @@ export class OrderServiceService implements OnModuleInit {
         (input?.order_ids ?? []).map((id) => String(id).trim()).filter(Boolean),
       ),
     );
+    const manualOverrides = (input?.manual_overrides ?? [])
+      .map((item) => ({
+        order_id: String(item?.order_id ?? '').trim(),
+        reason: String(item?.reason ?? '').trim(),
+      }))
+      .filter((item) => item.order_id && item.reason);
+    const manualOverrideByOrderId = new Map(
+      manualOverrides.map((item) => [item.order_id, item.reason]),
+    );
 
-    if (!marketId || !requesterId || !authorizationToken) {
-      this.badRequest('market_id, requester va authorization_token majburiy');
-    }
-    if (!authorizationToken.startsWith('MHA-')) {
-      this.badRequest('authorization_token noto‘g‘ri');
+    if (!marketId || !requesterId) {
+      this.badRequest('market_id va requester majburiy');
     }
     if (!orderIds.length) {
       this.badRequest('order_ids is required');
     }
+    if (manualOverrideByOrderId.size !== manualOverrides.length) {
+      this.badRequest('manual_overrides ichida takror order bor');
+    }
+    const invalidManualOverrideReasons = manualOverrides.filter(
+      (item) =>
+        item.reason.length > CANCELLED_HANDOVER_MANUAL_REASON_MAX_LENGTH ||
+        !CANCELLED_HANDOVER_MANUAL_REASONS.has(item.reason),
+    );
+    if (invalidManualOverrideReasons.length) {
+      this.badRequest(
+        'manual_overrides.reason noto‘g‘ri yoki juda uzun',
+      );
+    }
+    const invalidManualOverrideIds = [...manualOverrideByOrderId.keys()].filter(
+      (orderId) => !orderIds.includes(orderId),
+    );
+    if (invalidManualOverrideIds.length) {
+      this.badRequest(
+        `manual_overrides faqat tanlangan orderlar uchun bo'lishi kerak: ${invalidManualOverrideIds.join(', ')}`,
+      );
+    }
 
     await this.assertMarketHandoverHqRequester(input.requester);
+
+    const [market] = await this.getMarketsByIds([marketId]);
+    if (!market) {
+      this.badRequest('Market topilmadi');
+    }
+    const isQrRequired = market?.cancelled_handover_qr_required !== false;
+    if (isQrRequired && !authorizationToken) {
+      this.badRequest('authorization_token majburiy');
+    }
+    if (isQrRequired && !authorizationToken.startsWith('MHA-')) {
+      this.badRequest('authorization_token noto‘g‘ri');
+    }
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -3292,37 +3592,41 @@ export class OrderServiceService implements OnModuleInit {
       const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
       const custodyRepo = queryRunner.manager.getRepository(OrderCustodyEvent);
 
-      const session = await sessionRepo.findOne({
-        where: {
-          authorization_token_hash: this.hashHandoverToken(authorizationToken),
-          isDeleted: false,
-        },
-        lock: { mode: 'pessimistic_write' },
-      });
-
-      if (!session || !session.authorization_expires_at) {
-        this.forbidden('Topshirish ruxsati topilmadi');
-      }
-      if (String(session.market_id) !== marketId) {
-        this.forbidden('Ruxsat boshqa market uchun berilgan');
-      }
-      if (String(session.scanned_by_user_id ?? '') !== requesterId) {
-        this.forbidden('Ruxsat boshqa xodimga tegishli');
-      }
-      if (session.consumed_at) {
-        this.forbidden('Topshirish ruxsati allaqachon ishlatilgan');
-      }
-
       const now = new Date();
-      if (session.authorization_expires_at.getTime() <= now.getTime()) {
-        this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
+      let session: MarketCancelledHandoverSession | null = null;
+      if (isQrRequired) {
+        session = await sessionRepo.findOne({
+          where: {
+            authorization_token_hash: this.hashHandoverToken(
+              authorizationToken!,
+            ),
+            isDeleted: false,
+          },
+          lock: { mode: 'pessimistic_write' },
+        });
+
+        if (!session || !session.authorization_expires_at) {
+          this.forbidden('Topshirish ruxsati topilmadi');
+        }
+        if (String(session.market_id) !== marketId) {
+          this.forbidden('Ruxsat boshqa market uchun berilgan');
+        }
+        if (String(session.scanned_by_user_id ?? '') !== requesterId) {
+          this.forbidden('Ruxsat boshqa xodimga tegishli');
+        }
+        if (session.consumed_at) {
+          this.forbidden('Topshirish ruxsati allaqachon ishlatilgan');
+        }
+        if (session.authorization_expires_at.getTime() <= now.getTime()) {
+          this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
+        }
       }
 
       handedOverOrders = await orderRepo.find({
         where: {
           id: In(orderIds),
           market_id: marketId,
-          status: In([Order_status.CANCELLED, Order_status.CANCELLED_SENT]),
+          status: Order_status.CANCELLED,
           holder_type: OrderHolderType.HQ,
           canceled_post_id: IsNull(),
           isDeleted: false,
@@ -3337,6 +3641,9 @@ export class OrderServiceService implements OnModuleInit {
       }
 
       for (const order of handedOverOrders) {
+        const manualOverrideReason = manualOverrideByOrderId.get(
+          String(order.id),
+        );
         const previousStatus = order.status;
         const previousHolderType = order.holder_type ?? null;
         const previousHolderBranchId = order.holder_branch_id ?? null;
@@ -3358,7 +3665,21 @@ export class OrderServiceService implements OnModuleInit {
             to_status: Order_status.CLOSED,
             changed_by: requesterId,
             changed_by_role: this.toTrackingRole(input.requester.roles),
-            note: `Bekor qilingan order market ${marketId}ga QR tasdiqi bilan topshirildi`,
+            note: manualOverrideReason
+              ? `Bekor qilingan order market ${marketId}ga QR buzilgani sabab qo'lda tasdiqlanib topshirildi: ${manualOverrideReason}`
+              : isQrRequired
+                ? `Bekor qilingan order market ${marketId}ga QR tasdiqi bilan topshirildi`
+                : `Bekor qilingan order market ${marketId}ga QR talab qilinmasdan topshirildi`,
+            action: manualOverrideReason
+              ? 'cancelled_market_handover_manual'
+              : undefined,
+            metadata: manualOverrideReason
+              ? {
+                  manual_override: true,
+                  manual_reason: manualOverrideReason,
+                  market_id: marketId,
+                }
+              : undefined,
           },
           trackingRepo,
         );
@@ -3374,7 +3695,9 @@ export class OrderServiceService implements OnModuleInit {
             to_courier_id: null,
             changed_by: requesterId,
             changed_by_role: this.toTrackingRole(input.requester.roles),
-            note: `Bekor qilingan order market ${marketId}ga topshirildi`,
+            note: manualOverrideReason
+              ? `Bekor qilingan order market ${marketId}ga qo'lda tasdiqlanib topshirildi: ${manualOverrideReason}`
+              : `Bekor qilingan order market ${marketId}ga topshirildi`,
           },
           custodyRepo,
         );
@@ -3382,8 +3705,10 @@ export class OrderServiceService implements OnModuleInit {
         await this.syncOrderToSearch(order, queryRunner.manager);
       }
 
-      session.consumed_at = now;
-      await sessionRepo.save(session);
+      if (session) {
+        session.consumed_at = now;
+        await sessionRepo.save(session);
+      }
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -3400,8 +3725,15 @@ export class OrderServiceService implements OnModuleInit {
       new_value: { status: Order_status.CLOSED },
       ...this.auditActor(input.requester),
       metadata: {
-        handover_type: 'market_cancelled_qr',
+        handover_type: isQrRequired
+          ? 'market_cancelled_qr'
+          : 'market_cancelled_without_qr',
+        qr_required: isQrRequired,
         order_count: handedOverOrders.length,
+        manual_override_count: manualOverrideByOrderId.size,
+        manual_overrides: [...manualOverrideByOrderId.entries()].map(
+          ([order_id, reason]) => ({ order_id, reason }),
+        ),
         order_ids: handedOverOrders
           .slice(0, 20)
           .map((order) => String(order.id)),
@@ -3658,6 +3990,8 @@ export class OrderServiceService implements OnModuleInit {
     end_day?: string;
     courier?: string;
     courier_ids?: string[];
+    holder_courier_ids?: string[];
+    include_courier_history?: boolean | string;
     region_id?: string;
     district_id?: string;
     branch_id?: string;
@@ -3687,6 +4021,8 @@ export class OrderServiceService implements OnModuleInit {
       end_day,
       courier,
       courier_ids,
+      holder_courier_ids,
+      include_courier_history,
       region_id,
       district_id,
       branch_id,
@@ -3705,6 +4041,9 @@ export class OrderServiceService implements OnModuleInit {
       fetchAll === true ||
       String(fetch_all).toLowerCase() === 'true' ||
       String(fetchAll).toLowerCase() === 'true';
+    const useCourierHistory =
+      include_courier_history === true ||
+      String(include_courier_history).toLowerCase() === 'true';
 
     const pagination = this.normalizePagination(page, limit, useFetchAll);
     const statusFilter = this.normalizeStatusFilter(status);
@@ -3769,7 +4108,8 @@ export class OrderServiceService implements OnModuleInit {
         new Brackets((nested) => {
           nested
             .where('order.branch_id = :branch_id', { branch_id })
-            .orWhere('order.holder_branch_id = :branch_id', { branch_id });
+            .orWhere('order.holder_branch_id = :branch_id', { branch_id })
+            .orWhere('order.home_branch_id = :branch_id', { branch_id });
         }),
       );
     }
@@ -3819,8 +4159,32 @@ export class OrderServiceService implements OnModuleInit {
               .orWhere('order.holder_courier_id IN (:...courier_ids)', {
                 courier_ids: normalizedCourierIds,
               });
+            if (useCourierHistory) {
+              nested.orWhere(
+                `EXISTS (
+                  SELECT 1
+                  FROM "order_schema"."order_custody_events" courier_history
+                  WHERE courier_history.order_id = "order"."id"
+                    AND (
+                      courier_history.from_courier_id IN (:...courier_ids)
+                      OR courier_history.to_courier_id IN (:...courier_ids)
+                    )
+                )`,
+                { courier_ids: normalizedCourierIds },
+              );
+            }
           }),
         );
+      }
+    }
+    if (holder_courier_ids?.length) {
+      const normalizedHolderCourierIds = holder_courier_ids
+        .map((id) => String(id))
+        .filter(Boolean);
+      if (normalizedHolderCourierIds.length) {
+        qb.andWhere('order.holder_courier_id IN (:...holder_courier_ids)', {
+          holder_courier_ids: normalizedHolderCourierIds,
+        });
       }
     }
     if (start_day) {
@@ -3943,7 +4307,7 @@ export class OrderServiceService implements OnModuleInit {
       .addSelect('COALESCE(SUM(order.total_price), 0)', 'total_price_sum')
       .where('order.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('order.status IN (:...statuses)', {
-        statuses: [Order_status.CANCELLED, Order_status.CANCELLED_SENT],
+        statuses: [Order_status.CANCELLED],
       })
       .andWhere('order.canceled_post_id IS NULL')
       .groupBy('order.market_id')
@@ -3999,7 +4363,7 @@ export class OrderServiceService implements OnModuleInit {
     return this.findAll({
       market_id,
       branch_id: options.branch_id,
-      status: [Order_status.CANCELLED, Order_status.CANCELLED_SENT],
+      status: Order_status.CANCELLED,
       holder_type: options.holder_type,
       canceled_post_unassigned: true,
       ...(options.exclude_branch_source
@@ -4275,6 +4639,7 @@ export class OrderServiceService implements OnModuleInit {
     const logisticsPayload: Array<{
       order_id: string;
       assigned_region: string;
+      assigned_branch?: string;
       total_price: number;
     }> = [];
     for (const order of orders) {
@@ -4291,6 +4656,7 @@ export class OrderServiceService implements OnModuleInit {
       logisticsPayload.push({
         order_id: order.id,
         assigned_region: assignedRegion,
+        assigned_branch: order.branch_id ? String(order.branch_id) : undefined,
         total_price: Number(order.total_price ?? 0),
       });
     }
@@ -4866,6 +5232,19 @@ export class OrderServiceService implements OnModuleInit {
             proof_files: proofFiles.length ? proofFiles : undefined,
           });
         }
+
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.financial_balance.record',
+          {
+            amount: -extraCost,
+            source_type: 'sell_extra_cost',
+            order_id: String(order.id),
+            related_user_id: order.market_id ? String(order.market_id) : null,
+            comment: `Order #${order.id} sell extra cost`,
+          },
+          { manager: tx },
+        );
       }
 
       await this.updateFull(
@@ -5096,6 +5475,19 @@ export class OrderServiceService implements OnModuleInit {
             proof_files: proofFiles.length ? proofFiles : undefined,
           });
         }
+
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.financial_balance.record',
+          {
+            amount: -extraCost,
+            source_type: 'cancel_extra_cost',
+            order_id: String(order.id),
+            related_user_id: order.market_id ? String(order.market_id) : null,
+            comment: `Order #${order.id} cancel extra cost`,
+          },
+          { manager: tx },
+        );
       }
 
       await this.updateFull(
@@ -5740,6 +6132,19 @@ export class OrderServiceService implements OnModuleInit {
             proof_files: proofFiles.length ? proofFiles : undefined,
           });
         }
+
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.financial_balance.record',
+          {
+            amount: -extraCost,
+            source_type: 'sell_extra_cost',
+            order_id: String(order.id),
+            related_user_id: order.market_id ? String(order.market_id) : null,
+            comment: `Order #${order.id} sell extra cost`,
+          },
+          { manager: tx },
+        );
       }
 
       await this.updateFull(
@@ -6009,7 +6414,15 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   async getTrackingByOrderId(id: string, pageRaw = 1, limitRaw = 20) {
-    await this.findById(id);
+    const orderResult = await this.findById(id);
+    const order = (orderResult as { data?: Order })?.data;
+    const trackingOrderIds = Array.from(
+      new Set(
+        [order?.parent_order_id, id]
+          .filter((orderId): orderId is string => Boolean(orderId))
+          .map((orderId) => String(orderId)),
+      ),
+    );
 
     const page = Math.max(1, Number(pageRaw) || 1);
     const limit = Math.min(100, Math.max(1, Number(limitRaw) || 20));
@@ -6018,11 +6431,11 @@ export class OrderServiceService implements OnModuleInit {
     let custodyRows: OrderCustodyEvent[] = [];
     try {
       rows = await this.orderTrackingRepo.find({
-        where: { order_id: id },
+        where: { order_id: In(trackingOrderIds) },
         order: { created_at: 'DESC' },
       });
       custodyRows = await this.orderCustodyEventRepo.find({
-        where: { order_id: id },
+        where: { order_id: In(trackingOrderIds) },
         order: { created_at: 'DESC' },
       });
     } catch (error) {
@@ -6452,7 +6865,7 @@ export class OrderServiceService implements OnModuleInit {
 
       const canceledPostAccepted =
         oldStatus === Order_status.CANCELLED_SENT &&
-        order.status === Order_status.CANCELLED_SENT &&
+        order.status === Order_status.CANCELLED &&
         previousCanceledPostId &&
         typeof dto.canceled_post_id !== 'undefined' &&
         dto.canceled_post_id === null;
@@ -6808,6 +7221,8 @@ export class OrderServiceService implements OnModuleInit {
     end_day?: string;
     courier?: string;
     courier_ids?: string[];
+    holder_courier_ids?: string[];
+    include_courier_history?: boolean | string;
     region_id?: string;
     page?: number;
     limit?: number;
@@ -6960,19 +7375,6 @@ export class OrderServiceService implements OnModuleInit {
     const range = all ? null : this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
 
-    const acceptedQuery = this.applyAnalyticsBranchScope(
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false }),
-      branchId,
-    );
-    const cancelledQuery = this.applyAnalyticsBranchScope(
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.status = :status', { status: Order_status.CANCELLED }),
-      branchId,
-    );
     const soldOrdersQuery = this.applyAnalyticsBranchScope(
       this.orderRepo
         .createQueryBuilder('o')
@@ -6990,8 +7392,6 @@ export class OrderServiceService implements OnModuleInit {
     if (range) {
       const startMs = String(range.start.getTime());
       const endMs = String(range.end.getTime());
-      acceptedQuery.andWhere('o.createdAt BETWEEN :start AND :end', range);
-      cancelledQuery.andWhere('o.updatedAt BETWEEN :start AND :end', range);
       soldOrdersQuery.andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
         startMs,
         endMs,
@@ -6999,8 +7399,8 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     const [acceptedCount, cancelled, soldOrders] = await Promise.all([
-      acceptedQuery.getCount(),
-      cancelledQuery.getCount(),
+      this.countBranchBatchAcceptedOrders(range, branchId),
+      this.countHistoricallyCancelledOrders(range, branchId),
       soldOrdersQuery.getMany(),
     ]);
     const soldAndPaid = soldOrders.length;
@@ -7045,6 +7445,9 @@ export class OrderServiceService implements OnModuleInit {
 
     return {
       acceptedCount,
+      total: acceptedCount,
+      totalOrders: acceptedCount,
+      ordersCount: acceptedCount,
       cancelled,
       soldAndPaid,
       profit,
@@ -7130,7 +7533,10 @@ export class OrderServiceService implements OnModuleInit {
         .createQueryBuilder('o')
         .select('o.post_id', 'post_id')
         .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+        .andWhere('COALESCE(o.assigned_at, o.createdAt) BETWEEN :start AND :end', {
+          start,
+          end,
+        })
         .andWhere('o.post_id IS NOT NULL'),
       branchId,
     )
@@ -7151,7 +7557,10 @@ export class OrderServiceService implements OnModuleInit {
         .andWhere('o.post_id IN (:...postIds)', {
           postIds,
         })
-        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end }),
+        .andWhere('COALESCE(o.assigned_at, o.createdAt) BETWEEN :start AND :end', {
+          start,
+          end,
+        }),
       branchId,
     )
       .select(['o.id', 'o.status', 'o.post_id', 'o.sold_at'])
@@ -7211,9 +7620,16 @@ export class OrderServiceService implements OnModuleInit {
     return result;
   }
 
-  async getTopMarkets(limit = 10, branchId?: string) {
+  async getTopMarkets(
+    limit = 10,
+    branchId?: string,
+    startDate?: string,
+    endDate?: string,
+  ) {
     const soldStatuses = this.soldStatuses();
     const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const fromDate = startDate ? new Date(startDate) : lastMonth;
+    const toDate = endDate ? new Date(endDate) : undefined;
 
     const totalsRaw = await this.applyAnalyticsBranchScope(
       this.orderRepo
@@ -7225,7 +7641,8 @@ export class OrderServiceService implements OnModuleInit {
           'successful_orders',
         )
         .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.createdAt >= :lastMonth', { lastMonth })
+        .andWhere('o.createdAt >= :fromDate', { fromDate })
+        .andWhere(toDate ? 'o.createdAt <= :toDate' : '1=1', { toDate })
         .andWhere('o.market_id IS NOT NULL'),
       branchId,
     )
@@ -7328,6 +7745,78 @@ export class OrderServiceService implements OnModuleInit {
       .slice(0, limit);
   }
 
+  async getTopBranches(
+    limit = 10,
+    branchId?: string,
+    startDate?: string,
+    endDate?: string,
+  ) {
+    const soldStatuses = this.soldStatuses();
+    const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const fromDate = startDate ? new Date(startDate) : lastMonth;
+    const toDate = endDate ? new Date(endDate) : undefined;
+
+    const branchExpression =
+      'COALESCE(o.home_branch_id, o.branch_id, o.holder_branch_id)';
+    const rows = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .select(branchExpression, 'branch_id')
+        .addSelect('COUNT(*)', 'total_orders')
+        .addSelect(
+          `SUM(CASE WHEN o.status IN (:...statuses) THEN 1 ELSE 0 END)`,
+          'successful_orders',
+        )
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.createdAt >= :fromDate', { fromDate })
+        .andWhere(toDate ? 'o.createdAt <= :toDate' : '1=1', { toDate })
+        .andWhere(
+          '(o.home_branch_id IS NOT NULL OR o.branch_id IS NOT NULL OR o.holder_branch_id IS NOT NULL)',
+        ),
+      branchId,
+    )
+      .setParameter('statuses', soldStatuses)
+      .groupBy(branchExpression)
+      .getRawMany<{
+        branch_id: string;
+        total_orders: string;
+        successful_orders: string;
+      }>();
+
+    const branches = await this.getBranchesByIds(
+      rows.map((row) => String(row.branch_id)),
+    );
+    const branchMap = new Map(branches.map((branch) => [String(branch.id), branch]));
+
+    return rows
+      .filter((row) => {
+        const branch = branchMap.get(String(row.branch_id));
+        return Number(row.total_orders) >= 30 && branch?.type !== BranchType.HQ;
+      })
+      .map((row) => {
+        const totalOrders = Number(row.total_orders) || 0;
+        const successfulOrders = Number(row.successful_orders) || 0;
+        const successRate =
+          totalOrders > 0
+            ? Number(((successfulOrders * 100) / totalOrders).toFixed(2))
+            : 0;
+        const branch = branchMap.get(String(row.branch_id));
+        const branchName = branch?.code
+          ? `${branch.name ?? `Filial ${row.branch_id}`} (${branch.code})`
+          : branch?.name;
+
+        return {
+          branch_id: String(row.branch_id),
+          branch_name: branchName ?? `Filial ${row.branch_id}`,
+          total_orders: totalOrders,
+          successful_orders: successfulOrders,
+          success_rate: successRate,
+        };
+      })
+      .sort((a, b) => b.success_rate - a.success_rate)
+      .slice(0, limit);
+  }
+
   async getTopOperatorsByMarket(marketId: string, limit = 10) {
     const soldStatuses = this.soldStatuses();
     const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
@@ -7394,11 +7883,10 @@ export class OrderServiceService implements OnModuleInit {
     courierId: string,
     startDate?: string,
     endDate?: string,
+    all = false,
   ) {
-    const { start, end } = this.analyticsDateRange(startDate, endDate);
+    const range = all ? null : this.analyticsDateRange(startDate, endDate);
     const soldStatuses = this.soldStatuses();
-    const startMs = String(start.getTime());
-    const endMs = String(end.getTime());
     const courierPosts = (await this.getAllPostsForAnalytics()).filter(
       (post) => {
         return String(post.courier_id) === String(courierId);
@@ -7406,46 +7894,41 @@ export class OrderServiceService implements OnModuleInit {
     );
 
     const postIds = courierPosts.map((post) => post.id);
-    if (!postIds.length) {
-      return {
-        totalOrders: 0,
-        soldOrders: 0,
-        canceledOrders: 0,
-        profit: 0,
-        successRate: 0,
-      };
+    const totalOrdersQuery = this.applyAnalyticsCourierScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false }),
+      courierId,
+      postIds,
+    );
+    const soldOrdersQuery = this.applyAnalyticsCourierScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses }),
+      courierId,
+      postIds,
+    );
+
+    if (range) {
+      const startMs = String(range.start.getTime());
+      const endMs = String(range.end.getTime());
+      totalOrdersQuery.andWhere(
+        'COALESCE(o.assigned_at, o.createdAt) BETWEEN :start AND :end',
+        range,
+      );
+      soldOrdersQuery.andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
+        startMs,
+        endMs,
+      });
     }
 
-    const [totalOrders, soldOrders, canceledOrders, soldOrderEntities] =
-      await Promise.all([
-        this.orderRepo
-          .createQueryBuilder('o')
-          .where('o.isDeleted = :isDeleted', { isDeleted: false })
-          .andWhere('o.post_id IN (:...postIds)', { postIds })
-          .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-          .getCount(),
-        this.orderRepo
-          .createQueryBuilder('o')
-          .where('o.isDeleted = :isDeleted', { isDeleted: false })
-          .andWhere('o.post_id IN (:...postIds)', { postIds })
-          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-          .getCount(),
-        this.orderRepo
-          .createQueryBuilder('o')
-          .where('o.isDeleted = :isDeleted', { isDeleted: false })
-          .andWhere('o.post_id IN (:...postIds)', { postIds })
-          .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-          .andWhere('o.status = :status', { status: Order_status.CANCELLED })
-          .getCount(),
-        this.orderRepo
-          .createQueryBuilder('o')
-          .where('o.isDeleted = :isDeleted', { isDeleted: false })
-          .andWhere('o.post_id IN (:...postIds)', { postIds })
-          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-          .getMany(),
-      ]);
+    const [totalOrders, canceledOrders, soldOrderEntities] = await Promise.all([
+      totalOrdersQuery.getCount(),
+      this.countHistoricallyCancelledOrders(range, undefined, courierId, postIds),
+      soldOrdersQuery.getMany(),
+    ]);
+    const soldOrders = soldOrderEntities.length;
 
     const couriers = await this.getCouriersByIds([courierId]);
     const courier = couriers[0];
@@ -7490,6 +7973,7 @@ export class OrderServiceService implements OnModuleInit {
         totalOrders: 0,
         soldOrders: 0,
         canceledOrders: 0,
+        inProgress: 0,
         profit: 0,
         successRate: 0,
       };
@@ -7497,29 +7981,40 @@ export class OrderServiceService implements OnModuleInit {
 
     const orderIds = allOrders.map((order) => order.id);
 
-    const [soldOrders, canceledOrders, soldOrderEntities] = await Promise.all([
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.id IN (:...orderIds)', { orderIds })
-        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-        .getCount(),
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.id IN (:...orderIds)', { orderIds })
-        .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
-        .andWhere('o.status = :status', { status: Order_status.CANCELLED })
-        .getCount(),
-      this.orderRepo
-        .createQueryBuilder('o')
-        .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.id IN (:...orderIds)', { orderIds })
-        .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
-        .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
-        .getMany(),
-    ]);
+    const activeStatuses = this.activeMarketStatuses();
+    const cancelledStatuses = this.cancelledMarketStatuses();
+    const [soldOrders, canceledOrders, inProgress, soldOrderEntities] =
+      await Promise.all([
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.id IN (:...orderIds)', { orderIds })
+          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
+          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+          .getCount(),
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.id IN (:...orderIds)', { orderIds })
+          .andWhere('o.updatedAt BETWEEN :start AND :end', { start, end })
+          .andWhere('o.status IN (:...statuses)', {
+            statuses: cancelledStatuses,
+          })
+          .getCount(),
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.id IN (:...orderIds)', { orderIds })
+          .andWhere('o.status IN (:...statuses)', { statuses: activeStatuses })
+          .getCount(),
+        this.orderRepo
+          .createQueryBuilder('o')
+          .where('o.isDeleted = :isDeleted', { isDeleted: false })
+          .andWhere('o.id IN (:...orderIds)', { orderIds })
+          .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
+          .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses })
+          .getMany(),
+      ]);
 
     const profit = soldOrderEntities.reduce(
       (sum, order) => sum + Number(order.to_be_paid ?? 0),
@@ -7534,6 +8029,7 @@ export class OrderServiceService implements OnModuleInit {
       totalOrders: allOrders.length,
       soldOrders,
       canceledOrders,
+      inProgress,
       profit,
       successRate,
     };
@@ -9151,19 +9647,96 @@ export class OrderServiceService implements OnModuleInit {
       priorOrders.map((order) => [String(order.id), order.status]),
     );
 
-    if (
-      batch.direction === BranchTransferDirection.FORWARD &&
-      toMarkOrderIds.length
-    ) {
+    const refreshedItems = await this.transferBatchItemRepo.find({
+      where: { batch_id: batchId, isDeleted: false },
+    });
+    const allSent =
+      refreshedItems.length > 0 &&
+      refreshedItems.every((item) => Boolean(item.sent_at));
+
+    let sentBatch = batch;
+    if (!allSent) {
+      const sentTotalPrice = toMark.reduce(
+        (sum, item) => sum + Number(item.snapshot_price ?? 0),
+        0,
+      );
+      const sentQrToken = await this.generateTransferQrToken(
+        this.transferBatchRepo,
+        batch.direction,
+      );
+      sentBatch = await this.transferBatchRepo.save(
+        this.transferBatchRepo.create({
+          qr_code_token: sentQrToken,
+          request_key: `split_send_${batchId}_${Date.now()}_${randomBytes(4).toString('hex')}`,
+          source_branch_id: batch.source_branch_id,
+          destination_branch_id: batch.destination_branch_id,
+          direction: batch.direction,
+          target_region_id: batch.target_region_id,
+          status: BranchTransferBatchStatus.SENT,
+          order_count: toMark.length,
+          total_price: sentTotalPrice,
+          vehicle_plate: vehiclePlate,
+          driver_name: driverName,
+          driver_phone: driverPhone,
+          sent_at: now,
+          received_at: null,
+          cancelled_at: null,
+        }),
+      );
+
+      await this.transferBatchItemRepo
+        .createQueryBuilder()
+        .update(BranchTransferBatchItem)
+        .set({ batch_id: String(sentBatch.id) })
+        .where('batch_id = :batchId', { batchId })
+        .andWhere('order_id IN (:...orderIds)', { orderIds: toMarkOrderIds })
+        .andWhere('"is_deleted" = false')
+        .execute();
+
+      const remainingItems = refreshedItems.filter((item) => !item.sent_at);
+      batch.status = BranchTransferBatchStatus.PENDING;
+      batch.sent_at = null;
+      batch.order_count = remainingItems.length;
+      batch.total_price = remainingItems.reduce(
+        (sum, item) => sum + Number(item.snapshot_price ?? 0),
+        0,
+      );
+      batch.vehicle_plate = null;
+      batch.driver_name = null;
+      batch.driver_phone = null;
+      await this.transferBatchRepo.save(batch);
+    } else {
+      batch.status = BranchTransferBatchStatus.SENT;
+      batch.sent_at = now;
+      batch.vehicle_plate = vehiclePlate;
+      batch.driver_name = driverName;
+      batch.driver_phone = driverPhone;
+      sentBatch = await this.transferBatchRepo.save(batch);
+    }
+
+    const sentBatchId = String(sentBatch.id);
+    if (toMarkOrderIds.length) {
       await this.orderRepo
         .createQueryBuilder()
         .update(Order)
-        .set({ status: Order_status.ON_THE_ROAD })
+        .set(
+          batch.direction === BranchTransferDirection.FORWARD
+            ? {
+                current_batch_id: sentBatchId,
+                status: Order_status.ON_THE_ROAD,
+              }
+            : { current_batch_id: sentBatchId },
+        )
         .where('id IN (:...orderIds)', { orderIds: toMarkOrderIds })
         .andWhere('"current_batch_id" = :batchId', { batchId })
         .andWhere('"is_deleted" = false')
         .execute();
+    }
 
+    if (
+      batch.direction === BranchTransferDirection.FORWARD &&
+      toMarkOrderIds.length
+    ) {
       for (const orderId of toMarkOrderIds) {
         const fromStatus = priorById.get(orderId);
         if (!fromStatus || fromStatus === Order_status.ON_THE_ROAD) {
@@ -9176,28 +9749,11 @@ export class OrderServiceService implements OnModuleInit {
           changed_by: requesterId,
           changed_by_role: requesterRole,
           action: 'branch_batch_sent',
-          description: `Pochta #${batchId} filialdan jo'natildi`,
-          note: `Batch #${batchId} jo'natildi`,
+          description: `Pochta #${sentBatchId} filialdan jo'natildi`,
+          note: `Batch #${sentBatchId} jo'natildi`,
         });
       }
     }
-
-    const refreshedItems = await this.transferBatchItemRepo.find({
-      where: { batch_id: batchId, isDeleted: false },
-    });
-    const allSent =
-      refreshedItems.length > 0 &&
-      refreshedItems.every((item) => Boolean(item.sent_at));
-
-    batch.status = allSent
-      ? BranchTransferBatchStatus.SENT
-      : BranchTransferBatchStatus.PENDING;
-    batch.sent_at = allSent ? now : null;
-    batch.vehicle_plate = vehiclePlate;
-    batch.driver_name = driverName;
-    batch.driver_phone = driverPhone;
-
-    const saved = await this.transferBatchRepo.save(batch);
 
     const actor =
       String(input?.requester_name ?? '').trim() ||
@@ -9205,7 +9761,7 @@ export class OrderServiceService implements OnModuleInit {
       'unknown';
     await this.transferBatchHistoryRepo.save(
       this.transferBatchHistoryRepo.create({
-        batch_id: batchId,
+        batch_id: sentBatchId,
         user_id: String(input?.requester_id ?? '').trim() || '0',
         action: BranchTransferBatchAction.SENT,
         notes: `Operator ${actor} paketni jo'natdi. Avtomobil: ${vehiclePlate}`,
@@ -9214,18 +9770,19 @@ export class OrderServiceService implements OnModuleInit {
 
     await this.activityLog.log({
       entity_type: 'BranchTransferBatch',
-      entity_id: batchId,
+      entity_id: sentBatchId,
       action: ActivityAction.STATUS_CHANGE,
-      new_value: { status: saved.status },
+      new_value: { status: sentBatch.status },
       ...this.auditActor({ id: String(input?.requester_id ?? '').trim() }),
       metadata: {
-        batch_id: batchId,
+        batch_id: sentBatchId,
+        source_batch_id: batchId,
         order_count: toMark.length,
         order_ids: orderIds.slice(0, 20),
       },
     });
 
-    return successRes(saved, 200, 'Transfer batch sent');
+    return successRes(sentBatch, 200, 'Transfer batch sent');
   }
 
   async receiveBranchTransferBatch(input: {

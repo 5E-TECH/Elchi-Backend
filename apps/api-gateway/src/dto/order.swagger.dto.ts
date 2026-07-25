@@ -4,6 +4,7 @@ import {
   IsArray,
   IsEnum,
   IsISO8601,
+  MaxLength,
   MinLength,
   IsNotEmpty,
   IsNumber,
@@ -18,6 +19,13 @@ enum OrderSourceDto {
   INTERNAL = 'internal',
   EXTERNAL = 'external',
   BRANCH = 'branch',
+}
+
+enum CancelledManualOverrideReasonDto {
+  TORN = 'QR yirtilgan',
+  UNREADABLE = "QR o'qilmayapti",
+  MISSING = "Label yo'qolgan",
+  WET = 'QR namlangan yoki xiralashgan',
 }
 
 const parseFormattedNumber = (value: unknown): number | unknown => {
@@ -449,14 +457,45 @@ export class OrdersArrayDto {
   order_ids!: string[];
 }
 
-export class HandoverCancelledOrdersToMarketRequestDto extends OrdersArrayDto {
+export class CancelledManualOverrideDto {
+  @ApiProperty({ example: '101' })
+  @IsNotEmpty()
+  @IsString()
+  order_id!: string;
+
   @ApiProperty({
-    example: 'MHA-secure-one-time-token',
-    description: 'QR scan orqali olingan 5 daqiqalik authorization token',
+    example: CancelledManualOverrideReasonDto.TORN,
+    enum: CancelledManualOverrideReasonDto,
   })
   @IsNotEmpty()
   @IsString()
-  authorization_token!: string;
+  @IsEnum(CancelledManualOverrideReasonDto)
+  @MaxLength(80)
+  reason!: string;
+}
+
+export class HandoverCancelledOrdersToMarketRequestDto extends OrdersArrayDto {
+  @ApiProperty({
+    example: 'MHA-secure-one-time-token',
+    description:
+      'QR scan orqali olingan 5 daqiqalik authorization token. Marketda QR talab o‘chirilgan bo‘lsa yuborilmasligi mumkin.',
+    required: false,
+  })
+  @IsOptional()
+  @IsString()
+  authorization_token?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'QR buzilgani sabab qo‘lda tasdiqlangan orderlar ro‘yxati. Faqat HQ xodimlari uchun audit metadata.',
+    example: [{ order_id: '101', reason: 'QR yirtilgan' }],
+    type: () => [CancelledManualOverrideDto],
+  })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CancelledManualOverrideDto)
+  manual_overrides?: CancelledManualOverrideDto[];
 }
 
 export class SellOrderRequestDto {

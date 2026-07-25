@@ -256,6 +256,21 @@ export class BranchServiceService implements OnModuleInit {
     }
   }
 
+  private async assertBranchHasManager(branchId: string): Promise<void> {
+    const managerAssignment = await this.branchUserRepo.findOne({
+      where: {
+        branch_id: String(branchId),
+        role: BranchUserRole.MANAGER,
+        isDeleted: false,
+      },
+      select: ['id'],
+    });
+
+    if (!managerAssignment) {
+      this.badRequest('Siz birinchi bu branchga manager biriktiring');
+    }
+  }
+
   private normalizePagination(page?: number, limit?: number) {
     const safePage = Number(page) > 0 ? Number(page) : 1;
     const safeLimit = Number(limit) > 0 ? Math.min(Number(limit), 100) : 10;
@@ -649,6 +664,36 @@ export class BranchServiceService implements OnModuleInit {
     const dayOfWeek = shifted.getUTCDay(); // 0=Sun ... 6=Sat
     const diffToMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
     return new Date(dayStart.getTime() - diffToMonday * 24 * 60 * 60 * 1000);
+  }
+
+  private async getAcceptedOrdersCountByBranchIds(
+    branchIds: string[],
+    startDate: Date,
+    endDate: Date,
+  ): Promise<number> {
+    const counts = await Promise.all(
+      branchIds.map(async (branchId) => {
+        try {
+          const response = await lastValueFrom(
+            this.orderClient
+              .send(
+                { cmd: 'order.analytics.overview' },
+                {
+                  branch_id: branchId,
+                  startDate: startDate.toISOString(),
+                  endDate: endDate.toISOString(),
+                },
+              )
+              .pipe(timeout(10000)),
+          );
+          return Number(response?.data?.acceptedCount ?? 0) || 0;
+        } catch {
+          return 0;
+        }
+      }),
+    );
+
+    return counts.reduce((sum, count) => sum + count, 0);
   }
 
   private extractOrderRows(payload: unknown): OrderAnalyticsRow[] {
@@ -1941,6 +1986,7 @@ export class BranchServiceService implements OnModuleInit {
     if (sourceBranch.type !== BranchType.HQ) {
       this.forbidden("Post dispatch faqat HQ branch'dan ruxsat etilgan");
     }
+    await this.assertBranchHasManager(destinationBranchId);
     await this.assertCanWriteBranch(sourceBranchId, requester);
 
     const requesterPayload = {
@@ -2104,6 +2150,9 @@ export class BranchServiceService implements OnModuleInit {
         id: orderId,
         dto: {
           branch_id: destinationBranchId,
+          holder_type: 'BRANCH',
+          holder_branch_id: destinationBranchId,
+          holder_courier_id: null,
           post_id: destinationPostId,
           current_batch_id: null,
           status: Order_status.ON_THE_ROAD,
@@ -2577,16 +2626,19 @@ export class BranchServiceService implements OnModuleInit {
             : managerTariffHome;
           const courierId = String(order?.courier_id ?? '').trim();
           const courierTariffs = courierTariffMap.get(courierId);
+          const savedCourierShare = Number(order?.courier_share ?? NaN);
           const savedCourierTariff = Number(order?.courier_tariff ?? NaN);
-          const courierTariff = Number.isFinite(savedCourierTariff)
-            ? Math.max(savedCourierTariff, 0)
-            : isCenter
-              ? Number(courierTariffs?.center ?? 0)
-              : Number(courierTariffs?.home ?? 0);
+          const courierShare = Number.isFinite(savedCourierShare)
+            ? Math.max(savedCourierShare, 0)
+            : Number.isFinite(savedCourierTariff)
+              ? Math.max(savedCourierTariff, 0)
+              : isCenter
+                ? Number(courierTariffs?.center ?? 0)
+                : Number(courierTariffs?.home ?? 0);
 
           return {
             courierId,
-            courierReceivable: Math.max(totalPrice - courierTariff, 0),
+            courierReceivable: Math.max(totalPrice - courierShare, 0),
             hqPayable: Math.max(totalPrice - managerTariff, 0),
           };
         };
@@ -2865,14 +2917,19 @@ export class BranchServiceService implements OnModuleInit {
     const now = new Date();
     const todayStart = this.toTashkentStartOfDay(now);
     const weekStart = this.toTashkentStartOfWeek(now);
+    const todayAcceptedOrdersCount =
+      await this.getAcceptedOrdersCountByBranchIds(
+        targetBranchIds,
+        todayStart,
+        now,
+      );
+    const weekAcceptedOrdersCount =
+      await this.getAcceptedOrdersCountByBranchIds(
+        targetBranchIds,
+        weekStart,
+        now,
+      );
 
-    const todayOrdersCount = orders.filter(
-      (order) => order.createdAt && order.createdAt >= todayStart,
-    ).length;
-
-    const weekOrdersCount = orders.filter(
-      (order) => order.createdAt && order.createdAt >= weekStart,
-    ).length;
     const todayOrders = orders.filter(
       (order) => order.createdAt && order.createdAt >= todayStart,
     );
@@ -2917,7 +2974,7 @@ export class BranchServiceService implements OnModuleInit {
     const returnedStatuses = new Set<string>([Order_status.RETURNED_TO_MARKET]);
 
     const ordersCard = {
-      total: todayOrders.length,
+      total: todayAcceptedOrdersCount,
       new: todayOrders.filter((order) => order.status === Order_status.NEW)
         .length,
       on_the_road: todayOrders.filter(
@@ -2993,8 +3050,8 @@ export class BranchServiceService implements OnModuleInit {
 
     return successRes(
       {
-        today_orders_count: todayOrdersCount,
-        week_orders_count: weekOrdersCount,
+        today_orders_count: todayAcceptedOrdersCount,
+        week_orders_count: weekAcceptedOrdersCount,
         active_batches_count: activeBatchesCount,
         couriers_count: couriersCount,
         role: requesterBranchRole,

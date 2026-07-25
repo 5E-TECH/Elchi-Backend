@@ -1,4 +1,5 @@
 import { OrderServiceService } from './order-service.service';
+import { Roles } from '@app/common';
 
 /**
  * Money-integrity regression guard (Faza 1a).
@@ -65,5 +66,17 @@ describe('OrderServiceService dedup epoch (Faza 1a)', () => {
       const epoch = resolve(missing);
       expect(/^\d+$/.test(epoch)).toBe(true);
     }
+  });
+
+  it('allows courier rollback actor resolution from order holder when post is missing', () => {
+    const service = makeService() as any;
+
+    expect(
+      service.resolveActorCourierId(
+        { id: '7', roles: [Roles.COURIER] },
+        { courier_id: null, holder_courier_id: '7' },
+        null,
+      ),
+    ).toBe('7');
   });
 });

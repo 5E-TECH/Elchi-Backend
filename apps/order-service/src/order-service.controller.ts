@@ -769,7 +769,8 @@ export class OrderServiceController {
     data: {
       market_id: string;
       order_ids: string[];
-      authorization_token: string;
+      authorization_token?: string;
+      manual_overrides?: Array<{ order_id: string; reason: string }>;
       requester: { id: string; roles?: string[] };
     },
     @Ctx() context: RmqContext,
@@ -852,11 +853,16 @@ export class OrderServiceController {
 
   @MessagePattern({ cmd: 'order.analytics.top_markets' })
   analyticsTopMarkets(
-    @Payload() data: { limit?: number; branch_id?: string },
+    @Payload() data: { limit?: number; branch_id?: string; startDate?: string; endDate?: string },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getTopMarkets(data.limit, data.branch_id),
+      this.orderService.getTopMarkets(
+        data.limit,
+        data.branch_id,
+        data.startDate,
+        data.endDate,
+      ),
     );
   }
 
@@ -867,6 +873,21 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.getTopCouriers(data.limit, data.branch_id),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.analytics.top_branches' })
+  analyticsTopBranches(
+    @Payload() data: { limit?: number; branch_id?: string; startDate?: string; endDate?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.getTopBranches(
+        data.limit,
+        data.branch_id,
+        data.startDate,
+        data.endDate,
+      ),
     );
   }
 
@@ -883,7 +904,12 @@ export class OrderServiceController {
   @MessagePattern({ cmd: 'order.analytics.courier_stat' })
   analyticsCourierStat(
     @Payload()
-    data: { requester: { id: string }; startDate?: string; endDate?: string },
+    data: {
+      requester: { id: string };
+      startDate?: string;
+      endDate?: string;
+      all?: boolean;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -891,6 +917,7 @@ export class OrderServiceController {
         data.requester.id,
         data.startDate,
         data.endDate,
+        data.all,
       ),
     );
   }

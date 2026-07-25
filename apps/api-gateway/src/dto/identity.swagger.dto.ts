@@ -178,6 +178,11 @@ export class CreateMarketRequestDto {
   @IsBoolean()
   add_order?: boolean;
 
+  @ApiPropertyOptional({ example: true, default: true })
+  @IsOptional()
+  @IsBoolean()
+  cancelled_handover_qr_required?: boolean;
+
   @ApiPropertyOptional({
     isArray: true,
     enum: ExpenseProofCondition,
@@ -318,6 +323,11 @@ export class UpdateMarketRequestDto {
   @IsBoolean()
   add_order?: boolean;
 
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  cancelled_handover_qr_required?: boolean;
+
   @ApiPropertyOptional({ example: 11000 })
   @IsOptional()
   @IsNumber()
@@ -340,6 +350,12 @@ export class UpdateMarketAddOrderRequestDto {
   @ApiProperty({ example: true })
   @IsBoolean()
   add_order!: boolean;
+}
+
+export class UpdateMarketCancelledHandoverQrRequestDto {
+  @ApiProperty({ example: true })
+  @IsBoolean()
+  cancelled_handover_qr_required!: boolean;
 }
 
 export class UpdateMarketExpenseProofRequestDto {
