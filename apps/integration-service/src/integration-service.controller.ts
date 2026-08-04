@@ -26,6 +26,17 @@ export class IntegrationServiceController {
     }));
   }
 
+  // --- Partner API (Elchi Partner API) auth ---
+  @MessagePattern({ cmd: 'integration.partner.validate_key' })
+  validatePartnerKey(
+    @Payload() data: { api_key?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.validatePartnerKey(data?.api_key ?? ''),
+    );
+  }
+
   // --- ExternalIntegration ---
   @MessagePattern({ cmd: 'integration.create' })
   create(@Payload() data: any, @Ctx() context: RmqContext) {

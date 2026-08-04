@@ -30,6 +30,7 @@ import {
   ReceivableStatus,
 } from './entities/provider-receivable.entity';
 import { ProviderRemittance } from './entities/provider-remittance.entity';
+import { Partner } from './entities/partner.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -143,6 +144,8 @@ export class IntegrationServiceService {
     private readonly receivableRepo: Repository<ProviderReceivable>,
     @InjectRepository(ProviderRemittance)
     private readonly remittanceRepo: Repository<ProviderRemittance>,
+    @InjectRepository(Partner)
+    private readonly partnerRepo: Repository<Partner>,
     private readonly activityLog: ActivityLogService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
@@ -156,6 +159,25 @@ export class IntegrationServiceService {
 
   private notFound(message: string): never {
     throw new RpcException(errorRes(message, 404));
+  }
+
+  // ===== Partner API (Elchi Partner API) — C1.2 =====
+  // Tashqi hamkorning `X-Api-Key` kalitini tekshiradi. Kalitning o'zi saqlanmaydi:
+  // kiruvchi kalit SHA-256 bilan hash qilinib, partners.api_key_hash (unique
+  // indeks) bilan solishtiriladi. Faqat faol va o'chirilmagan hamkor o'tadi.
+  // Muvaffaqiyatda gateway guardiga {id, name} qaytadi; aks holda null (guard 401 beradi).
+  async validatePartnerKey(
+    apiKey: string,
+  ): Promise<{ id: string; name: string } | null> {
+    if (typeof apiKey !== 'string' || !apiKey.trim()) {
+      return null;
+    }
+    const apiKeyHash = createHash('sha256').update(apiKey).digest('hex');
+    const partner = await this.partnerRepo.findOne({
+      where: { api_key_hash: apiKeyHash, is_active: true, isDeleted: false },
+      select: { id: true, name: true },
+    });
+    return partner ? { id: partner.id, name: partner.name } : null;
   }
 
   private auditActor(

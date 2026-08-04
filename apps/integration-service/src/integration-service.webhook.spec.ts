@@ -52,6 +52,9 @@ jest.mock('./entities/provider-receivable.entity', () => ({
 jest.mock('./entities/provider-remittance.entity', () => ({
   ProviderRemittance: class ProviderRemittance {},
 }));
+jest.mock('./entities/partner.entity', () => ({
+  Partner: class Partner {},
+}));
 
 const SECRET = 'provider-shared-secret';
 const BODY = JSON.stringify({ event: 'package.delivered', order_id: '1001' });
@@ -94,6 +97,9 @@ function makeService(integration: Record<string, unknown> | null) {
     findByEntity: jest.fn().mockResolvedValue([]),
     findByUser: jest.fn().mockResolvedValue([]),
   };
+  const partnerRepo: any = {
+    findOne: jest.fn().mockResolvedValue(null),
+  };
   const noClient: any = {};
 
   const service = new IntegrationServiceService(
@@ -104,6 +110,7 @@ function makeService(integration: Record<string, unknown> | null) {
     shipmentRepo,
     receivableRepo,
     remittanceRepo,
+    partnerRepo,
     activityLog,
     noClient,
     noClient,
