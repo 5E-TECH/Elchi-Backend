@@ -62,6 +62,13 @@ jobs:
         env:
           NODE_ENV: test
 
+      # Elchi Partner API (marketplace integration: auth guard, partner CRUD,
+      # key rotation, market provisioning, geo passthrough) — must always pass.
+      - name: Partner API tests (must pass)
+        run: npx jest partner --runInBand
+        env:
+          NODE_ENV: test
+
       - name: Full unit test suite (legacy specs may fail; non-blocking)
         run: npm run test:ci
         env:
@@ -69,10 +76,12 @@ jobs:
         continue-on-error: true
 
       # Build each service to catch import / decorator metadata regressions
-      # that bare typecheck misses. Limited to a quick smoke build of one
-      # service to keep CI under 5 min; full build is in deploy.yml.
-      - name: Build smoke (gateway only)
-        run: npx nest build api-gateway
+      # that bare typecheck misses. Gateway + integration-service (Partner API
+      # lives here) are smoke-built to keep CI fast; full build is in deploy.yml.
+      - name: Build smoke (gateway + integration)
+        run: |
+          npx nest build api-gateway
+          npx nest build integration-service
 
   coverage-summary:
     runs-on: ubuntu-latest

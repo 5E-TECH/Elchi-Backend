@@ -41,6 +41,12 @@ jobs:
         env:
           NODE_ENV: test
 
+      # Elchi Partner API (marketplace integration) — must pass before deploy.
+      - name: Partner API tests (must pass)
+        run: npx jest partner --runInBand
+        env:
+          NODE_ENV: test
+
       - name: Full unit test suite (legacy specs may fail; non-blocking)
         run: npm run test:ci
         env:
@@ -52,6 +58,7 @@ jobs:
           npx nest build api-gateway
           npx nest build logistics-service
           npx nest build order-service
+          npx nest build integration-service
 
   deploy:
     runs-on: ubuntu-latest
