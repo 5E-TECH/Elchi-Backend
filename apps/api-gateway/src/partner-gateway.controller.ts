@@ -1,8 +1,21 @@
-import { Controller, Get, Req, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Controller,
+  Get,
+  Inject,
+  NotFoundException,
+  Query,
+  Req,
+  UseGuards,
+} from '@nestjs/common';
+import { ClientProxy } from '@nestjs/microservices';
+import { firstValueFrom } from 'rxjs';
 import {
   ApiHeader,
+  ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
+  ApiQuery,
   ApiTags,
   ApiTooManyRequestsResponse,
   ApiUnauthorizedResponse,
@@ -18,9 +31,10 @@ import { PartnerThrottlerGuard } from './auth/partner-throttler.guard';
  * Elchi Partner API HTTP kirish nuqtasi (`/partner/*`).
  *
  * JWT EMAS — PartnerApiKeyGuard (`X-Api-Key`) bilan himoyalanadi va
- * PartnerThrottlerGuard bilan per-hamkor rate limit qo'llanadi. Haqiqiy
- * endpointlar (geo, markets, shipments) keyingi tasklarda qo'shiladi (C1.4+, C2);
- * bu yerda C1.2 doirasida auth+limit+Swagger poydevori. Kontrakt: docs/PARTNER_API.md.
+ * PartnerThrottlerGuard bilan per-hamkor rate limit qo'llanadi.
+ * C1.2: auth+limit+ping. C1.4: geo passthrough (regions/districts/tariff) —
+ * ichkarida mavjud `logistics.*` / `identity.market.*` patternlari.
+ * markets/shipments keyingi tasklarda (C1.5+, C2). Kontrakt: docs/PARTNER_API.md.
  */
 
 // Per-hamkor rate limit (ENV bilan sozlanadi). Global IP-limitdan ustun.
@@ -44,6 +58,11 @@ const PARTNER_THROTTLE = {
 @UseGuards(PartnerApiKeyGuard, PartnerThrottlerGuard)
 @Controller('partner')
 export class PartnerGatewayController {
+  constructor(
+    @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
+    @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+  ) {}
+
   /**
    * Kalit tekshiruvi (auth sanity-check). Yaroqli kalitda hamkor ma'lumotini
    * qaytaradi — integratsiya klienti ulanishni shu bilan tekshiradi.
@@ -55,5 +74,96 @@ export class PartnerGatewayController {
   @ApiTooManyRequestsResponse({ description: 'Rate limitdan oshdi' })
   ping(@Req() request: { partner: PartnerPrincipal }) {
     return { authenticated: true, partner: request.partner };
+  }
+
+  /** Elchi viloyatlari — manzilni Elchi region_id'ga moslash uchun. */
+  @Get('regions')
+  @ApiOperation({ summary: 'Elchi viloyatlari ro‘yxati' })
+  @ApiOkResponse({ description: '[{ id, name }]' })
+  async getRegions(): Promise<Array<{ id: string; name: string }>> {
+    const res = await firstValueFrom(
+      this.logisticsClient.send<{
+        data?: Array<{ id: string | number; name: string }>;
+      }>({ cmd: 'logistics.region.find_all' }, {}),
+    );
+    return (res?.data ?? []).map((r) => ({ id: String(r.id), name: r.name }));
+  }
+
+  /** Elchi tumanlari — `region_id` bo‘yicha filtrlab. */
+  @Get('districts')
+  @ApiOperation({ summary: 'Elchi tumanlari (region_id bo‘yicha)' })
+  @ApiQuery({ name: 'region_id', required: false, type: String })
+  @ApiOkResponse({ description: '[{ id, name, region_id }]' })
+  async getDistricts(
+    @Query('region_id') regionId?: string,
+  ): Promise<Array<{ id: string; name: string; region_id: string }>> {
+    const res = await firstValueFrom(
+      this.logisticsClient.send<{
+        data?: Array<{
+          id: string | number;
+          name: string;
+          region_id: string | number;
+        }>;
+      }>({ cmd: 'logistics.district.find_all' }, { region_id: regionId }),
+    );
+    return (res?.data ?? []).map((d) => ({
+      id: String(d.id),
+      name: d.name,
+      region_id: String(d.region_id),
+    }));
+  }
+
+  /**
+   * Yetkazish tarifi (narx preview). Elchi tarifni SOTUVCHI-MARKET bo‘yicha
+   * belgilaydi (region/district faqat yo‘nalish uchun) — shu bois tarif
+   * `elchi_market_id` bilan olinadi. `where_deliver`: center → markazga tarif,
+   * address → uyga tarif.
+   */
+  @Get('tariff')
+  @ApiOperation({ summary: 'Yetkazish tarifi (market bo‘yicha, narx preview)' })
+  @ApiQuery({ name: 'elchi_market_id', required: true, type: String })
+  @ApiQuery({
+    name: 'where_deliver',
+    required: false,
+    enum: ['center', 'address'],
+  })
+  @ApiOkResponse({
+    description: '{ elchi_market_id, where_deliver, market_tariff }',
+  })
+  @ApiNotFoundResponse({ description: 'Market topilmadi' })
+  async getTariff(
+    @Query('elchi_market_id') elchiMarketId?: string,
+    @Query('where_deliver') whereDeliver?: string,
+  ): Promise<{
+    elchi_market_id: string;
+    where_deliver: string;
+    market_tariff: number;
+  }> {
+    if (!elchiMarketId?.trim()) {
+      throw new BadRequestException('elchi_market_id majburiy');
+    }
+    const mode = whereDeliver === 'center' ? 'center' : 'address';
+    const res = await firstValueFrom(
+      this.identityClient.send<{
+        data?: Array<{
+          id: string | number;
+          tariff_home?: number;
+          tariff_center?: number;
+        }>;
+      }>({ cmd: 'identity.market.find_by_ids' }, { ids: [elchiMarketId] }),
+    );
+    const market = (res?.data ?? [])[0];
+    if (!market) {
+      throw new NotFoundException('Market topilmadi');
+    }
+    const tariff =
+      mode === 'center'
+        ? (market.tariff_center ?? 0)
+        : (market.tariff_home ?? 0);
+    return {
+      elchi_market_id: String(elchiMarketId),
+      where_deliver: mode,
+      market_tariff: Number(tariff),
+    };
   }
 }
