@@ -26,6 +26,93 @@ export class IntegrationServiceController {
     }));
   }
 
+  // --- Partner API (Elchi Partner API) auth + boshqaruv ---
+  @MessagePattern({ cmd: 'integration.partner.validate_key' })
+  validatePartnerKey(
+    @Payload() data: { api_key?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.validatePartnerKey(data?.api_key ?? ''),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.partner.create' })
+  createPartner(
+    @Payload()
+    data: {
+      name?: string;
+      webhook_url?: string | null;
+      webhook_secret?: string | null;
+      ip_allowlist?: string[] | null;
+      requester?: { id?: string; roles?: string[] } | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.createPartner(data ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.partner.rotate_key' })
+  rotatePartnerKey(
+    @Payload()
+    data: { id?: string; requester?: { id?: string; roles?: string[] } | null },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.rotatePartnerKey(
+        String(data?.id),
+        data?.requester,
+      ),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.partner.set_active' })
+  setPartnerActive(
+    @Payload()
+    data: {
+      id?: string;
+      is_active?: boolean;
+      requester?: { id?: string; roles?: string[] } | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.setPartnerActive(
+        String(data?.id),
+        Boolean(data?.is_active),
+        data?.requester,
+      ),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.partner.list' })
+  listPartners(@Payload() _data: unknown, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listPartners(),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.partner.provision_market' })
+  provisionPartnerMarket(
+    @Payload()
+    data: {
+      partner_id?: string;
+      external_seller_id?: string;
+      name?: string;
+      phone?: string;
+      tariff_home?: number;
+      tariff_center?: number;
+      requester?: { id?: string; roles?: string[] } | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.provisionPartnerMarket(data ?? {}),
+    );
+  }
+
   // --- ExternalIntegration ---
   @MessagePattern({ cmd: 'integration.create' })
   create(@Payload() data: any, @Ctx() context: RmqContext) {

@@ -51,6 +51,7 @@ describe('AnalyticsGatewayController', () => {
           startDate: '2026-06-08',
           endDate: '2026-06-11',
           period: undefined,
+          all: false,
         },
       },
     );
@@ -72,6 +73,7 @@ describe('AnalyticsGatewayController', () => {
       startDate: '2026-06-01',
       endDate: '2026-06-02',
       period: undefined,
+      all: false,
     });
   });
 });

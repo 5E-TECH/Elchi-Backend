@@ -18,6 +18,13 @@ services:
   postgres:
     image: postgres:15
     container_name: elchi-postgres
+    # Scale NOW-2: raise max_connections from the image default (100) to 200.
+    # 11 DB-backed services x DB_POOL_MAX (default 10) = ~110 demanded, which
+    # oversubscribed the old ~97 usable ceiling and made 'too many clients'
+    # latent. 200 ends the oversubscription with headroom for migrations/admin
+    # and the higher per-service pools below. (A PgBouncer transaction pooler is
+    # the next step before pushing this much higher on one untuned box.)
+    command: ['-c', 'max_connections=200']
     environment:
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
@@ -112,6 +119,11 @@ services:
       context: .
       dockerfile: apps/order-service/Dockerfile
     env_file: .env.production
+    # Scale NOW-2: hot path — larger pool than the default 10 so the concurrent
+    # outbox publisher (NOW-4) and order.sell traffic have connection headroom.
+    # Budgeted with finance(20) + others(~10) to stay well under max_connections=200.
+    environment:
+      DB_POOL_MAX: '20'
     depends_on:
       rabbitmq:
         condition: service_healthy
@@ -154,6 +166,10 @@ services:
       context: .
       dockerfile: apps/finance-service/Dockerfile
     env_file: .env.production
+    # Scale NOW-2: hot money path — larger pool (default 10) for the cashbox
+    # update_balance consumers + finance's own settlement-advance outbox publisher.
+    environment:
+      DB_POOL_MAX: '20'
     depends_on:
       rabbitmq:
         condition: service_healthy

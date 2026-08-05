@@ -16,6 +16,8 @@ import {
   ActivityLogQuery,
   HmacAlgorithm,
   Order_status,
+  Roles,
+  Where_deliver,
   verifyHmacSignature,
   assertPublicUrl,
   SsrfBlockedError,
@@ -30,6 +32,8 @@ import {
   ReceivableStatus,
 } from './entities/provider-receivable.entity';
 import { ProviderRemittance } from './entities/provider-remittance.entity';
+import { Partner } from './entities/partner.entity';
+import { PartnerMarketRef } from './entities/partner-market-ref.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -143,6 +147,10 @@ export class IntegrationServiceService {
     private readonly receivableRepo: Repository<ProviderReceivable>,
     @InjectRepository(ProviderRemittance)
     private readonly remittanceRepo: Repository<ProviderRemittance>,
+    @InjectRepository(Partner)
+    private readonly partnerRepo: Repository<Partner>,
+    @InjectRepository(PartnerMarketRef)
+    private readonly partnerMarketRefRepo: Repository<PartnerMarketRef>,
     private readonly activityLog: ActivityLogService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
@@ -156,6 +164,286 @@ export class IntegrationServiceService {
 
   private notFound(message: string): never {
     throw new RpcException(errorRes(message, 404));
+  }
+
+  // ===== Partner API (Elchi Partner API) — C1.2 + C1.3 =====
+
+  /** API kalitni SHA-256 hash'ga aylantiradi (parol kabi — ochiq saqlanmaydi). */
+  private hashApiKey(apiKey: string): string {
+    return createHash('sha256').update(apiKey).digest('hex');
+  }
+
+  /** Tasodifiy (crypto) API kalit yaratadi. Faqat bir marta ko'rsatiladi. */
+  private generatePartnerApiKey(): string {
+    return `elp_${randomBytes(32).toString('hex')}`;
+  }
+
+  /**
+   * Tashqi hamkorning `X-Api-Key` kalitini tekshiradi (gateway guardidan
+   * chaqiriladi). Kalit hash bo'yicha topiladi. `is_active` ham qaytadi —
+   * guard qaror qiladi: topilmasa 401, faol emas 403, aks holda o'tadi.
+   */
+  async validatePartnerKey(
+    apiKey: string,
+  ): Promise<{ id: string; name: string; is_active: boolean } | null> {
+    if (typeof apiKey !== 'string' || !apiKey.trim()) {
+      return null;
+    }
+    const partner = await this.partnerRepo.findOne({
+      where: { api_key_hash: this.hashApiKey(apiKey), isDeleted: false },
+      select: { id: true, name: true, is_active: true },
+    });
+    return partner
+      ? { id: partner.id, name: partner.name, is_active: partner.is_active }
+      : null;
+  }
+
+  /**
+   * Yangi hamkor yaratadi. API kalit shu javobda BIR MARTA qaytadi; bazada
+   * faqat uning hash'i saqlanadi. webhook_secret AES bilan shifrlanadi.
+   */
+  async createPartner(dto: {
+    name?: string;
+    webhook_url?: string | null;
+    webhook_secret?: string | null;
+    ip_allowlist?: string[] | null;
+    requester?: { id?: string; roles?: string[] } | null;
+  }) {
+    if (!dto?.name?.trim()) {
+      this.badRequest('name majburiy');
+    }
+    const apiKey = this.generatePartnerApiKey();
+    const saved = await this.partnerRepo.save(
+      this.partnerRepo.create({
+        name: dto.name.trim(),
+        api_key_hash: this.hashApiKey(apiKey),
+        webhook_url: dto.webhook_url ?? null,
+        webhook_secret: this.encryptCredential(dto.webhook_secret ?? null),
+        ip_allowlist: dto.ip_allowlist ?? null,
+        is_active: true,
+      }),
+    );
+
+    // Sir (kalit/secret) HECH QACHON log qilinmaydi — faqat identifikatsiya.
+    await this.activityLog.log({
+      entity_type: 'Partner',
+      entity_id: String(saved.id),
+      action: ActivityAction.CREATED,
+      new_value: { name: saved.name, is_active: saved.is_active },
+      ...this.auditActor(dto?.requester),
+    });
+
+    // api_key faqat SHU javobda — keyin qayta ko'rsatilmaydi.
+    return successRes(
+      {
+        id: saved.id,
+        name: saved.name,
+        api_key: apiKey,
+        is_active: saved.is_active,
+      },
+      201,
+      'partner created',
+    );
+  }
+
+  /**
+   * API kalitni yangilaydi (rotate). Eski kalit darhol ishlamay qoladi (hash
+   * o'zgaradi → validate topa olmaydi → 401), yangisi shu javobda bir marta.
+   */
+  async rotatePartnerKey(
+    id: string,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
+    const partner = await this.partnerRepo.findOne({
+      where: { id, isDeleted: false },
+    });
+    if (!partner) {
+      this.notFound('Partner topilmadi');
+    }
+    const apiKey = this.generatePartnerApiKey();
+    partner.api_key_hash = this.hashApiKey(apiKey);
+    await this.partnerRepo.save(partner);
+
+    await this.activityLog.log({
+      entity_type: 'Partner',
+      entity_id: String(id),
+      action: ActivityAction.UPDATED,
+      new_value: { key_rotated: true },
+      ...this.auditActor(requester),
+    });
+
+    return successRes(
+      { id: partner.id, api_key: apiKey },
+      200,
+      'partner key rotated',
+    );
+  }
+
+  /** Hamkorni faollashtiradi/o'chiradi. Faol bo'lmaganда /partner/* → 403. */
+  async setPartnerActive(
+    id: string,
+    isActive: boolean,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
+    const partner = await this.partnerRepo.findOne({
+      where: { id, isDeleted: false },
+    });
+    if (!partner) {
+      this.notFound('Partner topilmadi');
+    }
+    partner.is_active = Boolean(isActive);
+    await this.partnerRepo.save(partner);
+
+    await this.activityLog.log({
+      entity_type: 'Partner',
+      entity_id: String(id),
+      action: ActivityAction.UPDATED,
+      new_value: { is_active: partner.is_active },
+      ...this.auditActor(requester),
+    });
+
+    return successRes(
+      { id: partner.id, is_active: partner.is_active },
+      200,
+      'partner status updated',
+    );
+  }
+
+  /** Hamkorlar ro'yxati (sirlarsiz — hash/secret hech qachon qaytmaydi). */
+  async listPartners() {
+    const partners = await this.partnerRepo.find({
+      where: { isDeleted: false },
+      select: {
+        id: true,
+        name: true,
+        webhook_url: true,
+        is_active: true,
+        createdAt: true,
+      },
+      order: { createdAt: 'DESC' },
+    });
+    return successRes(partners, 200, 'partners');
+  }
+
+  /**
+   * Per-seller market provisioning (C1.5). Hamkorning tashqi sotuvchisi uchun
+   * Elchi'da market akkaunt (+ avtomat cashbox) ochadi. Idempotent:
+   * (partner_id, external_seller_id) bo'yicha ikkinchi marta yangi market
+   * ochilmaydi — mavjud elchi_market_id qaytadi. Kontrakt: docs/PARTNER_API.md §3.2.
+   */
+  async provisionPartnerMarket(dto: {
+    partner_id?: string;
+    external_seller_id?: string;
+    name?: string;
+    phone?: string;
+    tariff_home?: number;
+    tariff_center?: number;
+    requester?: { id?: string; roles?: string[] } | null;
+  }) {
+    const partnerId = String(dto?.partner_id ?? '').trim();
+    const externalSellerId = String(dto?.external_seller_id ?? '').trim();
+    if (!partnerId) this.badRequest('partner_id majburiy');
+    if (!externalSellerId) this.badRequest('external_seller_id majburiy');
+    if (!dto?.name?.trim()) this.badRequest('name majburiy');
+    if (!dto?.phone?.trim()) this.badRequest('phone majburiy');
+
+    // Idempotentlik: shu (partner, sotuvchi) uchun market allaqachon bormi?
+    const existing = await this.partnerMarketRefRepo.findOne({
+      where: {
+        partner_id: partnerId,
+        external_seller_id: externalSellerId,
+        isDeleted: false,
+      },
+    });
+    if (existing) {
+      return successRes(
+        { elchi_market_id: existing.elchi_market_id, idempotent: true },
+        200,
+        'market already provisioned',
+      );
+    }
+
+    // Elchi'da market yaratamiz (createMarket ichida cashbox AVTOMAT ochiladi).
+    // Username deterministik — poyga holatida ikkinchi market yaratilmaydi.
+    const username = this.buildMarketUsername(partnerId, externalSellerId);
+    const marketRes = await this.rmqRequest<{ data?: { id?: string | number } }>(
+      this.identityClient,
+      { cmd: 'identity.market.create' },
+      {
+        dto: {
+          name: dto.name.trim(),
+          phone_number: dto.phone.trim(),
+          username,
+          password: randomBytes(16).toString('hex'),
+          tariff_home: Number(dto.tariff_home ?? 0),
+          tariff_center: Number(dto.tariff_center ?? 0),
+          default_tariff: Where_deliver.CENTER,
+        },
+        requester: { id: `partner:${partnerId}`, roles: [Roles.SUPERADMIN] },
+      },
+      8000,
+    );
+    const elchiMarketId = marketRes?.data?.id;
+    if (!elchiMarketId) {
+      throw new RpcException(
+        errorRes('Market yaratib bo‘lmadi (identity javob bermadi)', 502),
+      );
+    }
+
+    // Bog'lanishni saqlaymiz (idempotency + egalik). Poyga bo'lsa — unique
+    // indeks ushlaydi, mavjudni qaytaramiz.
+    try {
+      await this.partnerMarketRefRepo.save(
+        this.partnerMarketRefRepo.create({
+          partner_id: partnerId,
+          external_seller_id: externalSellerId,
+          elchi_market_id: String(elchiMarketId),
+        }),
+      );
+    } catch {
+      const raced = await this.partnerMarketRefRepo.findOne({
+        where: { partner_id: partnerId, external_seller_id: externalSellerId },
+      });
+      if (raced) {
+        return successRes(
+          { elchi_market_id: raced.elchi_market_id, idempotent: true },
+          200,
+          'market already provisioned',
+        );
+      }
+      throw new RpcException(
+        errorRes('Market bog‘lanishini saqlab bo‘lmadi', 500),
+      );
+    }
+
+    await this.activityLog.log({
+      entity_type: 'PartnerMarketRef',
+      entity_id: String(elchiMarketId),
+      action: ActivityAction.CREATED,
+      new_value: {
+        partner_id: partnerId,
+        external_seller_id: externalSellerId,
+        elchi_market_id: String(elchiMarketId),
+      },
+      ...this.auditActor(dto?.requester),
+    });
+
+    return successRes(
+      { elchi_market_id: String(elchiMarketId) },
+      201,
+      'market provisioned',
+    );
+  }
+
+  /** Deterministik, unique market username (idempotency uchun ham foydali). */
+  private buildMarketUsername(
+    partnerId: string,
+    externalSellerId: string,
+  ): string {
+    const raw = `mp${partnerId}_${externalSellerId}`
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, '');
+    return (raw || `mp${partnerId}`).slice(0, 60);
   }
 
   private auditActor(
