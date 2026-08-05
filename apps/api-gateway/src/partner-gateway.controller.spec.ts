@@ -28,6 +28,7 @@ describe('PartnerGatewayController (HTTP) — auth + rate limit', () => {
         // Konstruktor deplari (bu test /ping ni sinaydi — ishlatilmaydi).
         { provide: 'LOGISTICS', useValue: { send: jest.fn() } },
         { provide: 'IDENTITY', useValue: { send: jest.fn() } },
+        { provide: 'INTEGRATION', useValue: { send: jest.fn() } },
       ],
     })
       // PartnerApiKeyGuard'ni stub bilan almashtiramiz: RMQ kalit tekshiruvini

@@ -16,6 +16,8 @@ import {
   ActivityLogQuery,
   HmacAlgorithm,
   Order_status,
+  Roles,
+  Where_deliver,
   verifyHmacSignature,
   assertPublicUrl,
   SsrfBlockedError,
@@ -31,6 +33,7 @@ import {
 } from './entities/provider-receivable.entity';
 import { ProviderRemittance } from './entities/provider-remittance.entity';
 import { Partner } from './entities/partner.entity';
+import { PartnerMarketRef } from './entities/partner-market-ref.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -146,6 +149,8 @@ export class IntegrationServiceService {
     private readonly remittanceRepo: Repository<ProviderRemittance>,
     @InjectRepository(Partner)
     private readonly partnerRepo: Repository<Partner>,
+    @InjectRepository(PartnerMarketRef)
+    private readonly partnerMarketRefRepo: Repository<PartnerMarketRef>,
     private readonly activityLog: ActivityLogService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
@@ -318,6 +323,127 @@ export class IntegrationServiceService {
       order: { createdAt: 'DESC' },
     });
     return successRes(partners, 200, 'partners');
+  }
+
+  /**
+   * Per-seller market provisioning (C1.5). Hamkorning tashqi sotuvchisi uchun
+   * Elchi'da market akkaunt (+ avtomat cashbox) ochadi. Idempotent:
+   * (partner_id, external_seller_id) bo'yicha ikkinchi marta yangi market
+   * ochilmaydi — mavjud elchi_market_id qaytadi. Kontrakt: docs/PARTNER_API.md §3.2.
+   */
+  async provisionPartnerMarket(dto: {
+    partner_id?: string;
+    external_seller_id?: string;
+    name?: string;
+    phone?: string;
+    tariff_home?: number;
+    tariff_center?: number;
+    requester?: { id?: string; roles?: string[] } | null;
+  }) {
+    const partnerId = String(dto?.partner_id ?? '').trim();
+    const externalSellerId = String(dto?.external_seller_id ?? '').trim();
+    if (!partnerId) this.badRequest('partner_id majburiy');
+    if (!externalSellerId) this.badRequest('external_seller_id majburiy');
+    if (!dto?.name?.trim()) this.badRequest('name majburiy');
+    if (!dto?.phone?.trim()) this.badRequest('phone majburiy');
+
+    // Idempotentlik: shu (partner, sotuvchi) uchun market allaqachon bormi?
+    const existing = await this.partnerMarketRefRepo.findOne({
+      where: {
+        partner_id: partnerId,
+        external_seller_id: externalSellerId,
+        isDeleted: false,
+      },
+    });
+    if (existing) {
+      return successRes(
+        { elchi_market_id: existing.elchi_market_id, idempotent: true },
+        200,
+        'market already provisioned',
+      );
+    }
+
+    // Elchi'da market yaratamiz (createMarket ichida cashbox AVTOMAT ochiladi).
+    // Username deterministik — poyga holatida ikkinchi market yaratilmaydi.
+    const username = this.buildMarketUsername(partnerId, externalSellerId);
+    const marketRes = await this.rmqRequest<{ data?: { id?: string | number } }>(
+      this.identityClient,
+      { cmd: 'identity.market.create' },
+      {
+        dto: {
+          name: dto.name.trim(),
+          phone_number: dto.phone.trim(),
+          username,
+          password: randomBytes(16).toString('hex'),
+          tariff_home: Number(dto.tariff_home ?? 0),
+          tariff_center: Number(dto.tariff_center ?? 0),
+          default_tariff: Where_deliver.CENTER,
+        },
+        requester: { id: `partner:${partnerId}`, roles: [Roles.SUPERADMIN] },
+      },
+      8000,
+    );
+    const elchiMarketId = marketRes?.data?.id;
+    if (!elchiMarketId) {
+      throw new RpcException(
+        errorRes('Market yaratib bo‘lmadi (identity javob bermadi)', 502),
+      );
+    }
+
+    // Bog'lanishni saqlaymiz (idempotency + egalik). Poyga bo'lsa — unique
+    // indeks ushlaydi, mavjudni qaytaramiz.
+    try {
+      await this.partnerMarketRefRepo.save(
+        this.partnerMarketRefRepo.create({
+          partner_id: partnerId,
+          external_seller_id: externalSellerId,
+          elchi_market_id: String(elchiMarketId),
+        }),
+      );
+    } catch {
+      const raced = await this.partnerMarketRefRepo.findOne({
+        where: { partner_id: partnerId, external_seller_id: externalSellerId },
+      });
+      if (raced) {
+        return successRes(
+          { elchi_market_id: raced.elchi_market_id, idempotent: true },
+          200,
+          'market already provisioned',
+        );
+      }
+      throw new RpcException(
+        errorRes('Market bog‘lanishini saqlab bo‘lmadi', 500),
+      );
+    }
+
+    await this.activityLog.log({
+      entity_type: 'PartnerMarketRef',
+      entity_id: String(elchiMarketId),
+      action: ActivityAction.CREATED,
+      new_value: {
+        partner_id: partnerId,
+        external_seller_id: externalSellerId,
+        elchi_market_id: String(elchiMarketId),
+      },
+      ...this.auditActor(dto?.requester),
+    });
+
+    return successRes(
+      { elchi_market_id: String(elchiMarketId) },
+      201,
+      'market provisioned',
+    );
+  }
+
+  /** Deterministik, unique market username (idempotency uchun ham foydali). */
+  private buildMarketUsername(
+    partnerId: string,
+    externalSellerId: string,
+  ): string {
+    const raw = `mp${partnerId}_${externalSellerId}`
+      .toLowerCase()
+      .replace(/[^a-z0-9_]/g, '');
+    return (raw || `mp${partnerId}`).slice(0, 60);
   }
 
   private auditActor(

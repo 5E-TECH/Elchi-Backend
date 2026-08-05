@@ -94,6 +94,25 @@ export class IntegrationServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'integration.partner.provision_market' })
+  provisionPartnerMarket(
+    @Payload()
+    data: {
+      partner_id?: string;
+      external_seller_id?: string;
+      name?: string;
+      phone?: string;
+      tariff_home?: number;
+      tariff_center?: number;
+      requester?: { id?: string; roles?: string[] } | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.provisionPartnerMarket(data ?? {}),
+    );
+  }
+
   // --- ExternalIntegration ---
   @MessagePattern({ cmd: 'integration.create' })
   create(@Payload() data: any, @Ctx() context: RmqContext) {

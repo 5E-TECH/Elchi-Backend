@@ -3,10 +3,15 @@ import { ClientProxy } from '@nestjs/microservices';
 import { of } from 'rxjs';
 import { PartnerGatewayController } from './partner-gateway.controller';
 
-function makeController(logisticsSend: jest.Mock, identitySend: jest.Mock) {
+function makeController(
+  logisticsSend: jest.Mock,
+  identitySend: jest.Mock,
+  integrationSend: jest.Mock = jest.fn(),
+) {
   return new PartnerGatewayController(
     { send: logisticsSend } as unknown as ClientProxy,
     { send: identitySend } as unknown as ClientProxy,
+    { send: integrationSend } as unknown as ClientProxy,
   );
 }
 
@@ -90,5 +95,31 @@ describe('PartnerGatewayController — geo passthrough (C1.4)', () => {
     await expect(ctrl.getTariff('999', 'center')).rejects.toBeInstanceOf(
       NotFoundException,
     );
+  });
+});
+
+describe('PartnerGatewayController — POST /partner/markets (C1.5)', () => {
+  it("req.partner.id va body integration-service'ga uzatiladi", async () => {
+    const integration = jest.fn(() =>
+      of({ statusCode: 201, data: { elchi_market_id: '500' } }),
+    );
+    const ctrl = makeController(jest.fn(), jest.fn(), integration);
+
+    const res: any = await ctrl.provisionMarket(
+      { partner: { id: '7', name: 'Acme' } },
+      { external_seller_id: 'shop-9', name: 'Zamon', phone: '+998901234567' },
+    );
+
+    expect(integration).toHaveBeenCalledWith(
+      { cmd: 'integration.partner.provision_market' },
+      {
+        external_seller_id: 'shop-9',
+        name: 'Zamon',
+        phone: '+998901234567',
+        partner_id: '7', // guarddagi req.partner.id — hamkor o'zgartira olmaydi
+        requester: { id: 'partner:7' },
+      },
+    );
+    expect(res.data.elchi_market_id).toBe('500');
   });
 });

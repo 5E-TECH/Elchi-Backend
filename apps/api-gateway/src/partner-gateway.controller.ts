@@ -1,9 +1,11 @@
 import {
   BadRequestException,
+  Body,
   Controller,
   Get,
   Inject,
   NotFoundException,
+  Post,
   Query,
   Req,
   UseGuards,
@@ -11,6 +13,8 @@ import {
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom } from 'rxjs';
 import {
+  ApiBody,
+  ApiCreatedResponse,
   ApiHeader,
   ApiNotFoundResponse,
   ApiOkResponse,
@@ -26,6 +30,7 @@ import {
   PartnerPrincipal,
 } from './auth/partner-api-key.guard';
 import { PartnerThrottlerGuard } from './auth/partner-throttler.guard';
+import { CreatePartnerMarketRequestDto } from './dto/partner-market.swagger.dto';
 
 /**
  * Elchi Partner API HTTP kirish nuqtasi (`/partner/*`).
@@ -61,6 +66,7 @@ export class PartnerGatewayController {
   constructor(
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+    @Inject('INTEGRATION') private readonly integrationClient: ClientProxy,
   ) {}
 
   /**
@@ -165,5 +171,30 @@ export class PartnerGatewayController {
       where_deliver: mode,
       market_tariff: Number(tariff),
     };
+  }
+
+  /**
+   * Sotuvchi uchun Elchi market provisioning (idempotent). Integration-service
+   * market + cashbox ochadi va hamkorга bog'laydi; javobda `elchi_market_id`.
+   * Bir xil `external_seller_id` bilan qayta chaqirilsa yangi market ochilmaydi.
+   */
+  @Post('markets')
+  @ApiOperation({ summary: 'Sotuvchi uchun Elchi market ochish (idempotent)' })
+  @ApiBody({ type: CreatePartnerMarketRequestDto })
+  @ApiCreatedResponse({ description: '{ elchi_market_id }' })
+  provisionMarket(
+    @Req() request: { partner: PartnerPrincipal },
+    @Body() dto: CreatePartnerMarketRequestDto,
+  ) {
+    return firstValueFrom(
+      this.integrationClient.send(
+        { cmd: 'integration.partner.provision_market' },
+        {
+          ...dto,
+          partner_id: request.partner.id,
+          requester: { id: `partner:${request.partner.id}` },
+        },
+      ),
+    );
   }
 }
