@@ -1,4 +1,8 @@
-import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
+import {
+  ExecutionContext,
+  ForbiddenException,
+  UnauthorizedException,
+} from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { of, throwError } from 'rxjs';
 import { PartnerApiKeyGuard } from './partner-api-key.guard';
@@ -19,8 +23,10 @@ describe('PartnerApiKeyGuard', () => {
     return new PartnerApiKeyGuard(client);
   };
 
-  it('TC1: to‘g‘ri key -> o‘tadi va request.partner to‘ldiriladi', async () => {
-    const send = jest.fn(() => of({ id: '7', name: 'Acme Market' }));
+  it('TC1: to‘g‘ri key (faol) -> o‘tadi va request.partner to‘ldiriladi', async () => {
+    const send = jest.fn(() =>
+      of({ id: '7', name: 'Acme Market', is_active: true }),
+    );
     const guard = makeGuard(send);
     const { context, request } = makeContext({ 'x-api-key': 'valid-key-123' });
 
@@ -29,7 +35,21 @@ describe('PartnerApiKeyGuard', () => {
       { cmd: 'integration.partner.validate_key' },
       { api_key: 'valid-key-123' },
     );
+    // req.partner faqat {id,name} — is_active guardда qoladi
     expect(request.partner).toEqual({ id: '7', name: 'Acme Market' });
+  });
+
+  it('TC3 (C1.3): kalit to‘g‘ri lekin hamkor faol emas -> 403', async () => {
+    const send = jest.fn(() => of({ id: '7', name: 'Off', is_active: false }));
+    const guard = makeGuard(send);
+    const { context, request } = makeContext({
+      'x-api-key': 'valid-but-inactive',
+    });
+
+    await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+    expect(request.partner).toBeUndefined();
   });
 
   it('TC2: noto‘g‘ri key (null qaytadi) -> 401', async () => {

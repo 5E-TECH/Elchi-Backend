@@ -1,6 +1,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Inject,
   Injectable,
   UnauthorizedException,
@@ -14,7 +15,8 @@ import { firstValueFrom, timeout } from 'rxjs';
  * Tashqi hamkor (marketplace) har so'rovda `X-Api-Key: <key>` header yuboradi.
  * Guard kalitni integration-service'ga RMQ orqali (`integration.partner.validate_key`)
  * tekshirtiradi — u yerda kalit SHA-256 hash bo'yicha `partners` jadvalidan
- * qidiriladi. Topilsa `request.partner = { id, name }` to'ldiriladi, aks holda 401.
+ * qidiriladi. Natija: topilmasa 401, hamkor faol emas 403, aks holda
+ * `request.partner = { id, name }` to'ldiriladi va o'tadi.
  *
  * Faqat `/partner/*` route'larida ishlaydi; JWT guard bu route'larga qo'yilmaydi.
  * Kontrakt: docs/PARTNER_API.md §2.
@@ -22,6 +24,11 @@ import { firstValueFrom, timeout } from 'rxjs';
 export interface PartnerPrincipal {
   id: string;
   name: string;
+}
+
+/** integration.partner.validate_key javobi (guard qaror qabul qiladi). */
+interface PartnerValidation extends PartnerPrincipal {
+  is_active: boolean;
 }
 
 @Injectable()
@@ -40,11 +47,11 @@ export class PartnerApiKeyGuard implements CanActivate {
       throw new UnauthorizedException('X-Api-Key header majburiy');
     }
 
-    let partner: PartnerPrincipal | null;
+    let partner: PartnerValidation | null;
     try {
       partner = await firstValueFrom(
         this.integrationClient
-          .send<PartnerPrincipal | null>(
+          .send<PartnerValidation | null>(
             { cmd: 'integration.partner.validate_key' },
             { api_key: apiKey },
           )
@@ -58,8 +65,12 @@ export class PartnerApiKeyGuard implements CanActivate {
     if (!partner) {
       throw new UnauthorizedException('API kalit yaroqsiz');
     }
+    if (!partner.is_active) {
+      // Kalit to'g'ri, lekin hamkor o'chirilgan — autentifikatsiya bor, ruxsat yo'q.
+      throw new ForbiddenException('Hamkor faol emas');
+    }
 
-    request.partner = partner;
+    request.partner = { id: partner.id, name: partner.name };
     return true;
   }
 

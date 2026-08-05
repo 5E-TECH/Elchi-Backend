@@ -161,23 +161,163 @@ export class IntegrationServiceService {
     throw new RpcException(errorRes(message, 404));
   }
 
-  // ===== Partner API (Elchi Partner API) — C1.2 =====
-  // Tashqi hamkorning `X-Api-Key` kalitini tekshiradi. Kalitning o'zi saqlanmaydi:
-  // kiruvchi kalit SHA-256 bilan hash qilinib, partners.api_key_hash (unique
-  // indeks) bilan solishtiriladi. Faqat faol va o'chirilmagan hamkor o'tadi.
-  // Muvaffaqiyatda gateway guardiga {id, name} qaytadi; aks holda null (guard 401 beradi).
+  // ===== Partner API (Elchi Partner API) — C1.2 + C1.3 =====
+
+  /** API kalitni SHA-256 hash'ga aylantiradi (parol kabi — ochiq saqlanmaydi). */
+  private hashApiKey(apiKey: string): string {
+    return createHash('sha256').update(apiKey).digest('hex');
+  }
+
+  /** Tasodifiy (crypto) API kalit yaratadi. Faqat bir marta ko'rsatiladi. */
+  private generatePartnerApiKey(): string {
+    return `elp_${randomBytes(32).toString('hex')}`;
+  }
+
+  /**
+   * Tashqi hamkorning `X-Api-Key` kalitini tekshiradi (gateway guardidan
+   * chaqiriladi). Kalit hash bo'yicha topiladi. `is_active` ham qaytadi —
+   * guard qaror qiladi: topilmasa 401, faol emas 403, aks holda o'tadi.
+   */
   async validatePartnerKey(
     apiKey: string,
-  ): Promise<{ id: string; name: string } | null> {
+  ): Promise<{ id: string; name: string; is_active: boolean } | null> {
     if (typeof apiKey !== 'string' || !apiKey.trim()) {
       return null;
     }
-    const apiKeyHash = createHash('sha256').update(apiKey).digest('hex');
     const partner = await this.partnerRepo.findOne({
-      where: { api_key_hash: apiKeyHash, is_active: true, isDeleted: false },
-      select: { id: true, name: true },
+      where: { api_key_hash: this.hashApiKey(apiKey), isDeleted: false },
+      select: { id: true, name: true, is_active: true },
     });
-    return partner ? { id: partner.id, name: partner.name } : null;
+    return partner
+      ? { id: partner.id, name: partner.name, is_active: partner.is_active }
+      : null;
+  }
+
+  /**
+   * Yangi hamkor yaratadi. API kalit shu javobda BIR MARTA qaytadi; bazada
+   * faqat uning hash'i saqlanadi. webhook_secret AES bilan shifrlanadi.
+   */
+  async createPartner(dto: {
+    name?: string;
+    webhook_url?: string | null;
+    webhook_secret?: string | null;
+    ip_allowlist?: string[] | null;
+    requester?: { id?: string; roles?: string[] } | null;
+  }) {
+    if (!dto?.name?.trim()) {
+      this.badRequest('name majburiy');
+    }
+    const apiKey = this.generatePartnerApiKey();
+    const saved = await this.partnerRepo.save(
+      this.partnerRepo.create({
+        name: dto.name.trim(),
+        api_key_hash: this.hashApiKey(apiKey),
+        webhook_url: dto.webhook_url ?? null,
+        webhook_secret: this.encryptCredential(dto.webhook_secret ?? null),
+        ip_allowlist: dto.ip_allowlist ?? null,
+        is_active: true,
+      }),
+    );
+
+    // Sir (kalit/secret) HECH QACHON log qilinmaydi — faqat identifikatsiya.
+    await this.activityLog.log({
+      entity_type: 'Partner',
+      entity_id: String(saved.id),
+      action: ActivityAction.CREATED,
+      new_value: { name: saved.name, is_active: saved.is_active },
+      ...this.auditActor(dto?.requester),
+    });
+
+    // api_key faqat SHU javobda — keyin qayta ko'rsatilmaydi.
+    return successRes(
+      {
+        id: saved.id,
+        name: saved.name,
+        api_key: apiKey,
+        is_active: saved.is_active,
+      },
+      201,
+      'partner created',
+    );
+  }
+
+  /**
+   * API kalitni yangilaydi (rotate). Eski kalit darhol ishlamay qoladi (hash
+   * o'zgaradi → validate topa olmaydi → 401), yangisi shu javobda bir marta.
+   */
+  async rotatePartnerKey(
+    id: string,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
+    const partner = await this.partnerRepo.findOne({
+      where: { id, isDeleted: false },
+    });
+    if (!partner) {
+      this.notFound('Partner topilmadi');
+    }
+    const apiKey = this.generatePartnerApiKey();
+    partner.api_key_hash = this.hashApiKey(apiKey);
+    await this.partnerRepo.save(partner);
+
+    await this.activityLog.log({
+      entity_type: 'Partner',
+      entity_id: String(id),
+      action: ActivityAction.UPDATED,
+      new_value: { key_rotated: true },
+      ...this.auditActor(requester),
+    });
+
+    return successRes(
+      { id: partner.id, api_key: apiKey },
+      200,
+      'partner key rotated',
+    );
+  }
+
+  /** Hamkorni faollashtiradi/o'chiradi. Faol bo'lmaganда /partner/* → 403. */
+  async setPartnerActive(
+    id: string,
+    isActive: boolean,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
+    const partner = await this.partnerRepo.findOne({
+      where: { id, isDeleted: false },
+    });
+    if (!partner) {
+      this.notFound('Partner topilmadi');
+    }
+    partner.is_active = Boolean(isActive);
+    await this.partnerRepo.save(partner);
+
+    await this.activityLog.log({
+      entity_type: 'Partner',
+      entity_id: String(id),
+      action: ActivityAction.UPDATED,
+      new_value: { is_active: partner.is_active },
+      ...this.auditActor(requester),
+    });
+
+    return successRes(
+      { id: partner.id, is_active: partner.is_active },
+      200,
+      'partner status updated',
+    );
+  }
+
+  /** Hamkorlar ro'yxati (sirlarsiz — hash/secret hech qachon qaytmaydi). */
+  async listPartners() {
+    const partners = await this.partnerRepo.find({
+      where: { isDeleted: false },
+      select: {
+        id: true,
+        name: true,
+        webhook_url: true,
+        is_active: true,
+        createdAt: true,
+      },
+      order: { createdAt: 'DESC' },
+    });
+    return successRes(partners, 200, 'partners');
   }
 
   private auditActor(

@@ -18,6 +18,7 @@ import { SelfGuard } from './auth/self.guard';
 import { PartnerApiKeyGuard } from './auth/partner-api-key.guard';
 import { PartnerThrottlerGuard } from './auth/partner-throttler.guard';
 import { PartnerGatewayController } from './partner-gateway.controller';
+import { PartnerAdminGatewayController } from './partner-admin-gateway.controller';
 import { AuthGatewayController } from './auth-gateway.controller';
 import { CatalogGatewayController } from './catalog-gateway.controller';
 import { HealthController } from './health.controller';
@@ -113,6 +114,7 @@ import type { StringValue } from 'ms';
     RealtimeController,
     AuditGatewayController,
     PartnerGatewayController,
+    PartnerAdminGatewayController,
     HealthController,
     // TODO: Qolgan gateway controllerlarni qo'shish
     // FinanceGatewayController,
