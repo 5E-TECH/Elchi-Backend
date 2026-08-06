@@ -113,6 +113,29 @@ export class IntegrationServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'integration.partner.create_shipment' })
+  createPartnerShipment(
+    @Payload()
+    data: {
+      partner_id?: string;
+      external_order_id?: string;
+      elchi_market_id?: string;
+      customer?: { name?: string; phone?: string };
+      address?: string | null;
+      region_id?: string | null;
+      district_id?: string | null;
+      where_deliver?: string;
+      items?: Array<{ name?: string; quantity?: number }>;
+      cod_amount?: number;
+      subtotal?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.createPartnerShipment(data ?? {}),
+    );
+  }
+
   // --- ExternalIntegration ---
   @MessagePattern({ cmd: 'integration.create' })
   create(@Payload() data: any, @Ctx() context: RmqContext) {
