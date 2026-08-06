@@ -34,6 +34,7 @@ import {
 import { ProviderRemittance } from './entities/provider-remittance.entity';
 import { Partner } from './entities/partner.entity';
 import { PartnerMarketRef } from './entities/partner-market-ref.entity';
+import { PartnerShipmentRef } from './entities/partner-shipment-ref.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -151,6 +152,8 @@ export class IntegrationServiceService {
     private readonly partnerRepo: Repository<Partner>,
     @InjectRepository(PartnerMarketRef)
     private readonly partnerMarketRefRepo: Repository<PartnerMarketRef>,
+    @InjectRepository(PartnerShipmentRef)
+    private readonly partnerShipmentRefRepo: Repository<PartnerShipmentRef>,
     private readonly activityLog: ActivityLogService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
@@ -444,6 +447,166 @@ export class IntegrationServiceService {
       .toLowerCase()
       .replace(/[^a-z0-9_]/g, '');
     return (raw || `mp${partnerId}`).slice(0, 60);
+  }
+
+  /**
+   * C2.1 — Partner shipment → Elchi `order.create`. Marketplace buyurtmasini
+   * Elchi'ga posilka sifatida uzatadi. Idempotent (partner_shipment_ref bo'yicha
+   * (partner_id, external_order_id)). `to_be_paid = cod_amount` (0 = prepaid/online,
+   * kuryer pul yig'maydi; >0 = COD). Customer avval `identity.customer.create`
+   * bilan yaratiladi/topiladi (phone bo'yicha idempotent). Item nomlari hozircha
+   * comment'ga (OrderItem.product_id majburiyligini yumshatish — C2.5).
+   * Kontrakt: docs/PARTNER_API.md §3.3.
+   */
+  async createPartnerShipment(dto: {
+    partner_id?: string;
+    external_order_id?: string;
+    elchi_market_id?: string;
+    customer?: { name?: string; phone?: string };
+    address?: string | null;
+    region_id?: string | null;
+    district_id?: string | null;
+    where_deliver?: string;
+    items?: Array<{ name?: string; quantity?: number }>;
+    cod_amount?: number;
+    subtotal?: number;
+  }) {
+    const partnerId = String(dto?.partner_id ?? '').trim();
+    const externalOrderId = String(dto?.external_order_id ?? '').trim();
+    if (!partnerId) this.badRequest('partner_id majburiy');
+    if (!externalOrderId) this.badRequest('external_order_id majburiy');
+    if (!dto?.elchi_market_id) this.badRequest('elchi_market_id majburiy');
+    if (!dto?.customer?.name?.trim() || !dto?.customer?.phone?.trim()) {
+      this.badRequest('customer.name va customer.phone majburiy');
+    }
+    if (!dto?.district_id) {
+      this.badRequest('district_id majburiy (customer uchun)');
+    }
+    const cod = Number(dto.cod_amount ?? 0);
+    if (!Number.isFinite(cod) || cod < 0) {
+      this.badRequest('cod_amount manfiy bo‘lmasligi kerak');
+    }
+
+    // Idempotentlik: shu (partner, external_order_id) uchun shipment bormi?
+    const existing = await this.partnerShipmentRefRepo.findOne({
+      where: {
+        partner_id: partnerId,
+        external_order_id: externalOrderId,
+        isDeleted: false,
+      },
+    });
+    if (existing) {
+      return successRes(
+        { shipment_id: existing.order_id, idempotent: true },
+        200,
+        'shipment already exists',
+      );
+    }
+
+    // 1) Customer (lightweight, phone bo'yicha idempotent)
+    const customerRes = await this.rmqRequest<Record<string, any>>(
+      this.identityClient,
+      { cmd: 'identity.customer.create' },
+      {
+        dto: {
+          name: dto.customer!.name!.trim(),
+          phone_number: dto.customer!.phone!.trim(),
+          district_id: String(dto.district_id),
+        },
+      },
+      8000,
+    );
+    const customerId = this.pluckId(customerRes);
+    if (!customerId) {
+      throw new RpcException(errorRes('Customer yaratib bo‘lmadi', 502));
+    }
+
+    // 2) order.create (to_be_paid = cod_amount; source=external; external_id)
+    const totalPrice = Number(dto.subtotal ?? cod);
+    const orderRes = await this.rmqRequest<Record<string, any>>(
+      this.orderClient,
+      { cmd: 'order.create' },
+      {
+        dto: {
+          market_id: String(dto.elchi_market_id),
+          customer_id: String(customerId),
+          where_deliver:
+            dto.where_deliver === 'address' ? Where_deliver.ADDRESS : Where_deliver.CENTER,
+          region_id: dto.region_id ?? null,
+          district_id: dto.district_id ?? null,
+          address: dto.address ?? null,
+          total_price: totalPrice,
+          to_be_paid: cod,
+          source: 'external',
+          external_id: externalOrderId,
+          comment: this.shipmentItemsComment(dto.items),
+        },
+        requester: { id: `partner:${partnerId}`, roles: [Roles.SUPERADMIN] },
+        request_id: externalOrderId,
+      },
+      10000,
+    );
+    const orderId = this.pluckId(orderRes);
+    if (!orderId) {
+      throw new RpcException(errorRes('Buyurtma yaratib bo‘lmadi', 502));
+    }
+
+    // 3) Bog'lanishni saqlash (idempotency + teskari qidiruv; poyga → mavjudni qaytar)
+    try {
+      await this.partnerShipmentRefRepo.save(
+        this.partnerShipmentRefRepo.create({
+          partner_id: partnerId,
+          external_order_id: externalOrderId,
+          order_id: String(orderId),
+        }),
+      );
+    } catch {
+      const raced = await this.partnerShipmentRefRepo.findOne({
+        where: { partner_id: partnerId, external_order_id: externalOrderId },
+      });
+      if (raced) {
+        return successRes(
+          { shipment_id: raced.order_id, idempotent: true },
+          200,
+          'shipment already exists',
+        );
+      }
+      throw new RpcException(
+        errorRes('Shipment bog‘lanishini saqlab bo‘lmadi', 500),
+      );
+    }
+
+    return successRes(
+      {
+        shipment_id: String(orderId),
+        order_status: this.pluck(orderRes, 'status'),
+        qr_code_token: this.pluck(orderRes, 'qr_code_token'),
+        to_be_paid: cod,
+      },
+      201,
+      'shipment created',
+    );
+  }
+
+  /** Item nomlarini order comment'iga jamlaydi (product_id C2.5 gача). */
+  private shipmentItemsComment(
+    items?: Array<{ name?: string; quantity?: number }>,
+  ): string | null {
+    if (!Array.isArray(items) || items.length === 0) return null;
+    const parts = items
+      .map((i) => `${i?.quantity ?? 1}x ${String(i?.name ?? '').trim()}`.trim())
+      .filter((s) => s && !s.startsWith('0x'));
+    return parts.length ? `Marketplace: ${parts.join(', ')}`.slice(0, 500) : null;
+  }
+
+  /** RMQ javobidan (wrap/unwrap) qiymatni oladi. */
+  private pluck(res: unknown, key: string): unknown {
+    const r = res as Record<string, any> | null;
+    return r?.[key] ?? r?.data?.[key] ?? r?.data?.data?.[key];
+  }
+  private pluckId(res: unknown): string | undefined {
+    const id = this.pluck(res, 'id');
+    return id === undefined || id === null ? undefined : String(id);
   }
 
   private auditActor(

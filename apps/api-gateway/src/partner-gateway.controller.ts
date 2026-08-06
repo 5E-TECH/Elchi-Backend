@@ -31,6 +31,7 @@ import {
 } from './auth/partner-api-key.guard';
 import { PartnerThrottlerGuard } from './auth/partner-throttler.guard';
 import { CreatePartnerMarketRequestDto } from './dto/partner-market.swagger.dto';
+import { CreatePartnerShipmentRequestDto } from './dto/partner-shipment.swagger.dto';
 
 /**
  * Elchi Partner API HTTP kirish nuqtasi (`/partner/*`).
@@ -194,6 +195,28 @@ export class PartnerGatewayController {
           partner_id: request.partner.id,
           requester: { id: `partner:${request.partner.id}` },
         },
+      ),
+    );
+  }
+
+  /**
+   * Buyurtmani Elchi'ga posilka (shipment) sifatida uzatish → Elchi order.create.
+   * Idempotent (external_order_id). cod_amount=0 → prepaid; >0 → COD.
+   */
+  @Post('shipments')
+  @ApiOperation({ summary: 'Shipment yaratish (order.create), idempotent' })
+  @ApiBody({ type: CreatePartnerShipmentRequestDto })
+  @ApiCreatedResponse({
+    description: '{ shipment_id, order_status, qr_code_token, to_be_paid }',
+  })
+  provisionShipment(
+    @Req() request: { partner: PartnerPrincipal },
+    @Body() dto: CreatePartnerShipmentRequestDto,
+  ) {
+    return firstValueFrom(
+      this.integrationClient.send(
+        { cmd: 'integration.partner.create_shipment' },
+        { ...dto, partner_id: request.partner.id },
       ),
     );
   }
