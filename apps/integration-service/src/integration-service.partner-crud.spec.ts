@@ -1,4 +1,5 @@
 import { createHash } from 'crypto';
+import { RpcException } from '@nestjs/microservices';
 import { IntegrationServiceService } from './integration-service.service';
 
 /**
@@ -58,6 +59,22 @@ describe('IntegrationServiceService — Partner CRUD (C1.3)', () => {
     const logged = JSON.stringify(log.mock.calls[0][0]);
     expect(logged).not.toContain(res.data.api_key);
     expect(logged).not.toContain('top-secret');
+  });
+
+  it('TC1b: ichki/metadata webhook_url -> SSRF blok (partner saqlanmaydi)', async () => {
+    const repo = { create: jest.fn(), save: jest.fn() };
+    const log = jest.fn(() => Promise.resolve(undefined));
+    const svc = makeService(repo, log);
+
+    await expect(
+      svc.createPartner({
+        name: 'Evil',
+        webhook_url: 'http://169.254.169.254/latest/meta-data/',
+      }),
+    ).rejects.toBeInstanceOf(RpcException);
+
+    // bloklangan: kalit yaratilmaydi, partner bazaga yozilmaydi
+    expect(repo.save).not.toHaveBeenCalled();
   });
 
   it('TC2: rotate -> saqlangan hash yangilanadi (eski kalit endi mos kelmaydi)', async () => {
