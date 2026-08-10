@@ -215,6 +215,11 @@ export class IntegrationServiceService {
     if (!dto?.name?.trim()) {
       this.badRequest('name majburiy');
     }
+    // SSRF himoyasi: webhook_url ichki/loopback/metadata host'ga yo'naltirmasin —
+    // C2.3 outbound webhook dispatcher aynan shu URL'ga POST qiladi.
+    if (dto.webhook_url) {
+      await this.assertOutboundUrlSafe(dto.webhook_url);
+    }
     const apiKey = this.generatePartnerApiKey();
     const saved = await this.partnerRepo.save(
       this.partnerRepo.create({
