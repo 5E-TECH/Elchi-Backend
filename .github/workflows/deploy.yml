@@ -117,6 +117,25 @@ jobs:
               RUN_MIGRATIONS=true
             fi
 
+            # --- Rollback safety net -------------------------------------------
+            # On ANY failure after this point (bad migration, failed build,
+            # crashing container), revert the code to the previously-deployed
+            # commit and rebuild the running services from it, so production is
+            # never left half-deployed on new code. A failed migration may have
+            # partially applied schema changes — the pre-migration dump written
+            # to ./backups/pre-migration/ below is the DB restore point.
+            rollback() {
+              set +e
+              echo "!!! DEPLOY FAILED — rolling back code to ${OLD_SHA:-unknown}"
+              if [ -n "$OLD_SHA" ]; then
+                git reset --hard "$OLD_SHA"
+                docker compose -f docker-compose.prod.yml up -d --no-deps --build $APP_SERVICES
+                echo "!!! Rolled back to $OLD_SHA. If migrations ran, restore the DB from the newest ./backups/pre-migration/*.sql.gz"
+              fi
+              docker compose -f docker-compose.prod.yml ps || true
+            }
+            trap 'rollback' ERR
+
             git checkout -f main
             git reset --hard origin/main
             test -f .env.production || cp -f /tmp/elchi-env-backup .env.production
@@ -124,7 +143,28 @@ jobs:
             docker compose -f docker-compose.prod.yml pull rabbitmq postgres minio cloudflared || true
             docker compose -f docker-compose.prod.yml up -d --remove-orphans rabbitmq postgres minio
 
-            test "$RUN_MIGRATIONS" != true && echo "No migration changes detected." || { docker compose -f docker-compose.prod.yml up --build --force-recreate --abort-on-container-exit migration-runner; docker compose -f docker-compose.prod.yml rm -f migration-runner || true; }
+            if [ "$RUN_MIGRATIONS" != true ]; then
+              echo "No migration changes detected."
+            else
+              # Pre-migration safety dump — a buggy/destructive migration must
+              # always be recoverable to the exact pre-migration state. The
+              # migration is GATED on a successful, non-empty backup.
+              echo "Taking pre-migration DB backup (gates the migration)..."
+              mkdir -p ./backups/pre-migration
+              BK="./backups/pre-migration/pre-migration-$(date -u +%Y%m%d-%H%M%S).sql.gz"
+              docker compose -f docker-compose.prod.yml exec -T postgres \
+                sh -c 'pg_dump --no-owner --no-privileges --clean --if-exists -U "$POSTGRES_USER" "$POSTGRES_DB"' \
+                | gzip -9 > "$BK"
+              BK_SIZE="$(stat -c%s "$BK" 2>/dev/null || echo 0)"
+              if [ "$BK_SIZE" -lt 1024 ]; then
+                echo "Pre-migration backup is only ${BK_SIZE} bytes — treating as FAILED, aborting before migrating." >&2
+                exit 1
+              fi
+              echo "Pre-migration backup ok (${BK_SIZE} bytes): $BK"
+
+              docker compose -f docker-compose.prod.yml up --build --force-recreate --abort-on-container-exit migration-runner
+              docker compose -f docker-compose.prod.yml rm -f migration-runner || true
+            fi
 
             test -z "$DEPLOY_SERVICES" && echo "No application service changes detected; keeping running containers as-is." || { echo "Deploying services:$DEPLOY_SERVICES"; docker compose -f docker-compose.prod.yml up -d --no-deps --build --remove-orphans $DEPLOY_SERVICES; }
 

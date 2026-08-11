@@ -62,4 +62,8 @@ docs/*.pdf
 # ...but BACKEND_MAP.md is intentional, versioned project documentation
 !docs/BACKEND_MAP.md
 .env.production
-.env.production
+
+# Database backups (pg_dump output — NEVER commit; may contain PII/money data)
+/backups
+backups/
+*.sql.gz

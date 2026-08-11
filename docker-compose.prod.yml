@@ -74,6 +74,29 @@ services:
         condition: service_healthy
     restart: 'no'
 
+  # Automated, rotated, off-box-capable PostgreSQL backups (Audit P0: single
+  # Postgres SPOF with no scheduled backup). Uses the same postgres:15 image so
+  # pg_dump version-matches the server; connection comes from .env.production
+  # (POSTGRES_URI or POSTGRES_HOST/USER/PASSWORD/DB). Dumps land in the host
+  # bind-mount ./backups; set BACKUP_S3_TARGET in .env.production to also push
+  # each dump off the box (the part that actually survives disk/volume loss).
+  db-backup:
+    image: postgres:15
+    container_name: elchi-db-backup
+    env_file: .env.production
+    environment:
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION: ${BACKUP_RETENTION:-28}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-21600}
+    volumes:
+      - ./scripts:/scripts:ro
+      - ./backups:/backups
+    entrypoint: ['bash', '/scripts/backup-cron.sh']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   api-gateway:
     build:
       context: .

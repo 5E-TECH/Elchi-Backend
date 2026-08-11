@@ -30,7 +30,13 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
-import { GeneratePdfRequestDto, GenerateQrRequestDto } from './dto/file.swagger.dto';
+import { RolesGuard } from './auth/roles.guard';
+import { Roles } from './auth/roles.decorator';
+import { Roles as RoleEnum } from '@app/common';
+import {
+  GeneratePdfRequestDto,
+  GenerateQrRequestDto,
+} from './dto/file.swagger.dto';
 import type { Response } from 'express';
 
 @ApiTags('File')
@@ -73,11 +79,14 @@ export class FileGatewayController {
     }),
   )
   async uploadFile(
-    @UploadedFile() file: {
-      originalname: string;
-      mimetype: string;
-      buffer: Buffer;
-    } | undefined,
+    @UploadedFile()
+    file:
+      | {
+          originalname: string;
+          mimetype: string;
+          buffer: Buffer;
+        }
+      | undefined,
     @Req() req: { body?: Record<string, unknown> },
   ) {
     if (!file) {
@@ -95,21 +104,85 @@ export class FileGatewayController {
           file_name: file.originalname,
           mime_type: file.mimetype,
           file_base64: file.buffer.toString('base64'),
-          folder: typeof req?.body?.folder === 'string' ? req.body.folder : undefined,
+          folder:
+            typeof req?.body?.folder === 'string' ? req.body.folder : undefined,
         },
       ),
     );
+  }
+
+  // Sensitive object-key prefixes: COD-evidence, expense/return proof, receipts.
+  // A signed URL for one of these is a bearer capability over *financial
+  // evidence*, so minting it requires a staff/business role — not merely any
+  // logged-in account. This narrows the previous "any authenticated user → any
+  // file" object-level IDOR on GET/DELETE (Audit P1). The lowest-trust read-only
+  // roles (customer, investor) are denied outright. NOTE: full per-object
+  // ownership ("only the uploader/assignee") still needs a file-ownership
+  // registry in file-service — tracked as a follow-up; this closes the
+  // cross-role leak and the destructive delete, which are the exploitable parts.
+  private static readonly PRIVATE_KEY_PREFIXES = [
+    'proof-',
+    'expense-',
+    'return-',
+    'cod-',
+    'receipt-',
+  ];
+
+  private static readonly PRIVATE_FILE_ROLES = new Set<string>([
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.OPERATOR,
+    RoleEnum.MARKET_OPERATOR,
+    RoleEnum.BRANCH,
+    RoleEnum.MARKET,
+    RoleEnum.COURIER,
+  ]);
+
+  private rolesOf(req: { user?: { roles?: string[] } }): string[] {
+    return (req?.user?.roles ?? []).map((role) =>
+      String(role ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+  }
+
+  private assertCanAccessPrivateKey(key: string, roles: string[]): void {
+    const safeKey = String(key ?? '');
+    const isPrivate = FileGatewayController.PRIVATE_KEY_PREFIXES.some(
+      (prefix) => safeKey.startsWith(prefix),
+    );
+    if (!isPrivate) {
+      return;
+    }
+    const allowed = roles.some((role) =>
+      FileGatewayController.PRIVATE_FILE_ROLES.has(role),
+    );
+    if (!allowed) {
+      throw new ForbiddenException(
+        'Bu maxfiy faylga (moliyaviy dalil) kirish uchun ruxsatingiz yetarli emas',
+      );
+    }
   }
 
   @Get('files/:key')
   @UseGuards(JwtAuthGuard)
   @ApiOperation({ summary: 'Get signed URL for file key' })
   @ApiParam({ name: 'key', description: 'Object key in MinIO' })
-  @ApiQuery({ name: 'expires_in', required: false, type: Number, example: 3600 })
+  @ApiQuery({
+    name: 'expires_in',
+    required: false,
+    type: Number,
+    example: 3600,
+  })
   getFileUrl(
     @Param('key') key: string,
-    @Query('expires_in', new ParseIntPipe({ optional: true })) expires_in?: number,
+    @Req() req: { user?: { roles?: string[] } },
+    @Query('expires_in', new ParseIntPipe({ optional: true }))
+    expires_in?: number,
   ) {
+    this.assertCanAccessPrivateKey(key, this.rolesOf(req));
     return this.fileClient.send({ cmd: 'file.get_url' }, { key, expires_in });
   }
 
@@ -123,12 +196,11 @@ export class FileGatewayController {
   ];
 
   @Get('files/view/:key')
-  @ApiOperation({ summary: 'Public view for whitelisted (catalog/batch) images' })
+  @ApiOperation({
+    summary: 'Public view for whitelisted (catalog/batch) images',
+  })
   @ApiParam({ name: 'key', description: 'Object key in MinIO' })
-  async viewFile(
-    @Param('key') key: string,
-    @Res() res: Response,
-  ) {
+  async viewFile(@Param('key') key: string, @Res() res: Response) {
     const safeKey = String(key ?? '');
     const isPublic = FileGatewayController.PUBLIC_VIEW_PREFIXES.some((prefix) =>
       safeKey.startsWith(prefix),
@@ -139,10 +211,9 @@ export class FileGatewayController {
       );
     }
     const response = await firstValueFrom(
-      this.fileClient.send<{ data?: { body_base64?: string; mime_type?: string } }>(
-        { cmd: 'file.read' },
-        { key },
-      ),
+      this.fileClient.send<{
+        data?: { body_base64?: string; mime_type?: string };
+      }>({ cmd: 'file.read' }, { key }),
     );
 
     const bodyBase64 = response?.data?.body_base64;
@@ -157,9 +228,15 @@ export class FileGatewayController {
     return res.send(buffer);
   }
 
+  // Deleting a stored object is a destructive, irreversible operation over
+  // shared storage (product images, COD-evidence, expense proof). It is an
+  // administrative action, so it is restricted to SUPERADMIN/ADMIN rather than
+  // any authenticated user (Audit P1: previously any logged-in account could
+  // delete ANY file by key).
   @Delete('files/:key')
-  @UseGuards(JwtAuthGuard)
-  @ApiOperation({ summary: 'Delete file by key' })
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'Delete file by key (admin only)' })
   @ApiParam({ name: 'key', description: 'Object key in MinIO' })
   deleteFile(@Param('key') key: string) {
     return this.fileClient.send({ cmd: 'file.delete' }, { key });
