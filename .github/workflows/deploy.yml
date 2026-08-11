@@ -47,11 +47,12 @@ jobs:
         env:
           NODE_ENV: test
 
-      - name: Full unit test suite (legacy specs may fail; non-blocking)
+      # BLOCKING before deploy: the full suite is green, so a money/RBAC/legacy
+      # regression can no longer ship. (Audit testing P1.)
+      - name: Full unit test suite (must pass)
         run: npm run test:ci
         env:
           NODE_ENV: test
-        continue-on-error: true
 
       - name: Build check
         run: |

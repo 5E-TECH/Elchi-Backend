@@ -69,11 +69,14 @@ jobs:
         env:
           NODE_ENV: test
 
-      - name: Full unit test suite (legacy specs may fail; non-blocking)
+      # BLOCKING: the full suite is green (the 3 legacy red specs were repaired),
+      # so it now gates merges — this is what puts the settlement / dedup-epoch /
+      # return-flow money-invariant specs (previously only in the non-blocking
+      # run) behind the merge gate. (Audit testing P1.)
+      - name: Full unit test suite (must pass)
         run: npm run test:ci
         env:
           NODE_ENV: test
-        continue-on-error: true
 
       # Build each service to catch import / decorator metadata regressions
       # that bare typecheck misses. Gateway + integration-service (Partner API
