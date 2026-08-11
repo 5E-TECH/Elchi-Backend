@@ -137,6 +137,10 @@ import type { StringValue } from 'ms';
     RealtimeGateway,
     AuditEnrichmentService,
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Default-deny authentication: every HTTP route requires a valid JWT unless
+    // explicitly marked @Public() (health, login/refresh, HMAC webhooks, public
+    // file view, Partner API which uses its own key guard). (Audit authz P1.)
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],
 })
 export class ApiGatewayModule {}

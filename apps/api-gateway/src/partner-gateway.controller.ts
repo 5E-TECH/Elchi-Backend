@@ -30,6 +30,7 @@ import {
   PartnerPrincipal,
 } from './auth/partner-api-key.guard';
 import { PartnerThrottlerGuard } from './auth/partner-throttler.guard';
+import { Public } from './auth/public.decorator';
 import { CreatePartnerMarketRequestDto } from './dto/partner-market.swagger.dto';
 import { CreatePartnerShipmentRequestDto } from './dto/partner-shipment.swagger.dto';
 
@@ -62,6 +63,7 @@ const PARTNER_THROTTLE = {
 })
 @Throttle(PARTNER_THROTTLE)
 @UseGuards(PartnerApiKeyGuard, PartnerThrottlerGuard)
+@Public()
 @Controller('partner')
 export class PartnerGatewayController {
   constructor(

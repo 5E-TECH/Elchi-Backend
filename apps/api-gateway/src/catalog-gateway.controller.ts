@@ -32,6 +32,7 @@ import {
 } from '@nestjs/swagger';
 import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { Public } from './auth/public.decorator';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
@@ -68,20 +69,28 @@ export class CatalogGatewayController {
 
   private buildPublicFileUrl(req: HttpRequestLike, key: string): string {
     const forwardedProto = req?.headers?.['x-forwarded-proto'];
-    const protoHeader = Array.isArray(forwardedProto) ? forwardedProto[0] : forwardedProto;
-    const protocol = String(protoHeader || req?.protocol || 'https').trim() || 'https';
+    const protoHeader = Array.isArray(forwardedProto)
+      ? forwardedProto[0]
+      : forwardedProto;
+    const protocol =
+      String(protoHeader || req?.protocol || 'https').trim() || 'https';
     const host = req?.get?.('host') || String(req?.headers?.host || '').trim();
     if (!host) {
-      throw new BadRequestException('Unable to resolve public host for uploaded file');
+      throw new BadRequestException(
+        'Unable to resolve public host for uploaded file',
+      );
     }
     return `${protocol}://${host}/files/view/${encodeURIComponent(key)}`;
   }
 
-  private async uploadImageAndResolveUrl(file: {
-    originalname: string;
-    mimetype: string;
-    buffer: Buffer;
-  }, req: HttpRequestLike): Promise<string> {
+  private async uploadImageAndResolveUrl(
+    file: {
+      originalname: string;
+      mimetype: string;
+      buffer: Buffer;
+    },
+    req: HttpRequestLike,
+  ): Promise<string> {
     if (!this.allowedMime.has(file.mimetype)) {
       throw new BadRequestException('Unsupported file type');
     }
@@ -109,6 +118,7 @@ export class CatalogGatewayController {
     return this.buildPublicFileUrl(req, key);
   }
 
+  @Public()
   @Get('health')
   @ApiOperation({ summary: 'Catalog service health check' })
   health() {
@@ -130,11 +140,14 @@ export class CatalogGatewayController {
     }),
   )
   async create(
-    @UploadedFile() file: {
-      originalname: string;
-      mimetype: string;
-      buffer: Buffer;
-    } | undefined,
+    @UploadedFile()
+    file:
+      | {
+          originalname: string;
+          mimetype: string;
+          buffer: Buffer;
+        }
+      | undefined,
     @Body() dto: { name?: string; image_url?: string; market_id?: string },
     @Req() req: { user: JwtUser },
   ) {
@@ -147,9 +160,14 @@ export class CatalogGatewayController {
 
     if (roles.includes(RoleEnum.MARKET)) {
       marketId = req.user.sub;
-    } else if (roles.includes(RoleEnum.ADMIN) || roles.includes(RoleEnum.SUPERADMIN)) {
+    } else if (
+      roles.includes(RoleEnum.ADMIN) ||
+      roles.includes(RoleEnum.SUPERADMIN)
+    ) {
       if (!marketId) {
-        throw new BadRequestException('market_id is required for admin/superadmin');
+        throw new BadRequestException(
+          'market_id is required for admin/superadmin',
+        );
       }
     } else {
       throw new ForbiddenException('You are not allowed to create product');
@@ -157,7 +175,10 @@ export class CatalogGatewayController {
 
     let imageUrl = dto.image_url;
     if (file) {
-      imageUrl = await this.uploadImageAndResolveUrl(file, req as unknown as HttpRequestLike);
+      imageUrl = await this.uploadImageAndResolveUrl(
+        file,
+        req as unknown as HttpRequestLike,
+      );
     }
 
     return firstValueFrom(
@@ -243,7 +264,10 @@ export class CatalogGatewayController {
   @ApiOperation({ summary: 'Get product by ID' })
   @ApiParam({ name: 'id', description: 'Product ID (id)' })
   findById(@Param('id') id: string) {
-    return this.catalogClient.send({ cmd: 'catalog.product.find_by_id' }, { id });
+    return this.catalogClient.send(
+      { cmd: 'catalog.product.find_by_id' },
+      { id },
+    );
   }
 
   @Patch(':id')
@@ -262,17 +286,23 @@ export class CatalogGatewayController {
   )
   async update(
     @Param('id') id: string,
-    @UploadedFile() file: {
-      originalname: string;
-      mimetype: string;
-      buffer: Buffer;
-    } | undefined,
+    @UploadedFile()
+    file:
+      | {
+          originalname: string;
+          mimetype: string;
+          buffer: Buffer;
+        }
+      | undefined,
     @Body() dto: UpdateProductRequestDto,
     @Req() req: { user: JwtUser },
   ) {
     let imageUrl = dto.image_url;
     if (file) {
-      imageUrl = await this.uploadImageAndResolveUrl(file, req as unknown as HttpRequestLike);
+      imageUrl = await this.uploadImageAndResolveUrl(
+        file,
+        req as unknown as HttpRequestLike,
+      );
     }
     const { image: _ignoredImage, ...safeDto } = dto;
 
@@ -284,7 +314,12 @@ export class CatalogGatewayController {
 
   @Delete(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.MARKET, RoleEnum.ADMIN, RoleEnum.SUPERADMIN, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.MARKET,
+    RoleEnum.ADMIN,
+    RoleEnum.SUPERADMIN,
+    RoleEnum.REGISTRATOR,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete product (soft delete)' })
   @ApiParam({ name: 'id', description: 'Product ID (id)' })
@@ -311,17 +346,23 @@ export class CatalogGatewayController {
   )
   async updateMyProduct(
     @Param('id') id: string,
-    @UploadedFile() file: {
-      originalname: string;
-      mimetype: string;
-      buffer: Buffer;
-    } | undefined,
+    @UploadedFile()
+    file:
+      | {
+          originalname: string;
+          mimetype: string;
+          buffer: Buffer;
+        }
+      | undefined,
     @Body() dto: UpdateProductRequestDto,
     @Req() req: { user: JwtUser },
   ) {
     let imageUrl = dto.image_url;
     if (file) {
-      imageUrl = await this.uploadImageAndResolveUrl(file, req as unknown as HttpRequestLike);
+      imageUrl = await this.uploadImageAndResolveUrl(
+        file,
+        req as unknown as HttpRequestLike,
+      );
     }
     const { image: _ignoredImage, ...safeDto } = dto;
 

@@ -30,6 +30,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { Public } from './auth/public.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import { Roles } from './auth/roles.decorator';
 import { Roles as RoleEnum } from '@app/common';
@@ -195,6 +196,7 @@ export class FileGatewayController {
     'branch-transfer-batches-',
   ];
 
+  @Public()
   @Get('files/view/:key')
   @ApiOperation({
     summary: 'Public view for whitelisted (catalog/batch) images',

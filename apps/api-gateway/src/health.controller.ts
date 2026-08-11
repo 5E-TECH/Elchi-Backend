@@ -1,5 +1,6 @@
 import { Controller, Get, HttpStatus, Inject, Res } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
+import { Public } from './auth/public.decorator';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
@@ -68,6 +69,7 @@ export class HealthController {
     ]);
   }
 
+  @Public()
   @Get()
   @ApiOperation({ summary: 'Liveness check — fast, gateway-only' })
   check() {
@@ -83,11 +85,14 @@ export class HealthController {
    * Returns 200 only when all are reachable; 503 if any are down so that K8s
    * (or a load balancer) takes the gateway out of rotation.
    */
+  @Public()
   @Get('readiness')
   @ApiOperation({ summary: 'Readiness check — pings every downstream service' })
   async readiness(@Res({ passthrough: true }) res: Response) {
     const probes = await Promise.all(
-      SERVICE_HEALTH_PROBES.map((probe) => this.probeOne(probe.token, probe.cmd)),
+      SERVICE_HEALTH_PROBES.map((probe) =>
+        this.probeOne(probe.token, probe.cmd),
+      ),
     );
 
     const allOk = probes.every((p) => p.status === 'ok');
@@ -103,7 +108,11 @@ export class HealthController {
   private async probeOne(token: string, cmd: string): Promise<ServiceHealth> {
     const client = this.clients.get(token);
     if (!client) {
-      return { service: token, status: 'unknown', error: 'client not registered' };
+      return {
+        service: token,
+        status: 'unknown',
+        error: 'client not registered',
+      };
     }
 
     const startedAt = Date.now();

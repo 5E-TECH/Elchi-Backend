@@ -29,6 +29,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { Public } from './auth/public.decorator';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
@@ -115,6 +116,7 @@ export class ApiGatewayController {
     }
   }
 
+  @Public()
   @Get()
   @ApiOperation({ summary: 'Gateway health check via identity service' })
   getHello() {
@@ -1107,8 +1109,7 @@ export class ApiGatewayController {
           tariff_center: dto.tariff_center,
           default_tariff: dto.default_tariff,
           add_order: dto.add_order,
-          cancelled_handover_qr_required:
-            dto.cancelled_handover_qr_required,
+          cancelled_handover_qr_required: dto.cancelled_handover_qr_required,
           expense_proof_conditions: dto.expense_proof_conditions,
         },
         requester: this.toRequester(req),
@@ -1224,7 +1225,10 @@ export class ApiGatewayController {
     const requesterRoles = (req.user.roles ?? []).map((role) =>
       String(role).toLowerCase(),
     );
-    if (requesterRoles.includes(RoleEnum.MARKET) && String(req.user.sub) !== id) {
+    if (
+      requesterRoles.includes(RoleEnum.MARKET) &&
+      String(req.user.sub) !== id
+    ) {
       throw new ForbiddenException(
         'Market faqat o‘z QR topshirish sozlamasini o‘zgartira oladi',
       );
@@ -1235,8 +1239,7 @@ export class ApiGatewayController {
       {
         id,
         dto: {
-          cancelled_handover_qr_required:
-            dto.cancelled_handover_qr_required,
+          cancelled_handover_qr_required: dto.cancelled_handover_qr_required,
         },
       },
     );
@@ -1262,7 +1265,10 @@ export class ApiGatewayController {
     const requesterRoles = (req.user.roles ?? []).map((role) =>
       String(role).toLowerCase(),
     );
-    if (requesterRoles.includes(RoleEnum.MARKET) && String(req.user.sub) !== id) {
+    if (
+      requesterRoles.includes(RoleEnum.MARKET) &&
+      String(req.user.sub) !== id
+    ) {
       throw new ForbiddenException(
         'Market faqat o‘z rasm/video isbot sozlamasini o‘zgartira oladi',
       );

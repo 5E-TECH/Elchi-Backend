@@ -26,6 +26,7 @@ import { createHash } from 'node:crypto';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { Roles } from './auth/roles.decorator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { Public } from './auth/public.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
   Cashbox_type,
@@ -727,6 +728,7 @@ export class FinanceGatewayController {
     };
   }
 
+  @Public()
   @Get('health')
   @ApiOperation({ summary: 'Finance service health check' })
   health() {
