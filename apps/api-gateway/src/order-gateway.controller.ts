@@ -47,6 +47,9 @@ import {
   RollbackOrderRequestDto,
   ScanAssignOrderRequestDto,
   SellOrderRequestDto,
+  SettlementBranchToHqDto,
+  SettlementCourierToBranchDto,
+  SettlementHqToMarketDto,
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
 import { Order_status, Roles as RoleEnum, Where_deliver } from '@app/common';
@@ -2180,7 +2183,7 @@ export class OrderGatewayController {
     summary: 'Settle a courier lump-sum payment to the branch (FIFO per order)',
   })
   settlementCourierToBranch(
-    @Body() dto: { courier_id: string; amount: number },
+    @Body() dto: SettlementCourierToBranchDto,
     @Req() req: { user: JwtUser },
   ) {
     return firstValueFrom(
@@ -2214,7 +2217,7 @@ export class OrderGatewayController {
     summary: 'Settle a branch lump-sum remittance to HQ (FIFO per order)',
   })
   settlementBranchToHq(
-    @Body() dto: { branch_id: string; amount: number },
+    @Body() dto: SettlementBranchToHqDto,
     @Req() req: { user: JwtUser },
   ) {
     return firstValueFrom(
@@ -2248,7 +2251,7 @@ export class OrderGatewayController {
     summary: 'Settle an HQ lump-sum payment to a market (FIFO per order)',
   })
   settlementHqToMarket(
-    @Body() dto: { market_id: string; amount: number },
+    @Body() dto: SettlementHqToMarketDto,
     @Req() req: { user: JwtUser },
   ) {
     return firstValueFrom(

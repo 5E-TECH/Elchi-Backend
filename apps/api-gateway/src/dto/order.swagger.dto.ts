@@ -10,6 +10,7 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Min,
   ValidateNested,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
@@ -698,4 +699,38 @@ export class CreateOrderByTelegramBotRequestDto {
   @IsOptional()
   @IsString()
   operator?: string | null;
+}
+
+/**
+ * Settlement amount validation (Audit money/API-design P1: the settlement routes
+ * accepted an inline-typed { *_id, amount } body, so a negative or NaN amount
+ * reached order.settlement.* unvalidated). A shared amount field enforces a
+ * non-negative, 2-dp money value.
+ */
+class SettlementAmountDto {
+  @ApiProperty({ description: 'Amount to settle in som (>= 0, 2 dp)' })
+  @IsNumber({ maxDecimalPlaces: 2 })
+  @Min(0)
+  amount!: number;
+}
+
+export class SettlementCourierToBranchDto extends SettlementAmountDto {
+  @ApiProperty({ description: 'Courier user id' })
+  @IsNotEmpty()
+  @IsString()
+  courier_id!: string;
+}
+
+export class SettlementBranchToHqDto extends SettlementAmountDto {
+  @ApiProperty({ description: 'Branch id' })
+  @IsNotEmpty()
+  @IsString()
+  branch_id!: string;
+}
+
+export class SettlementHqToMarketDto extends SettlementAmountDto {
+  @ApiProperty({ description: 'Market id' })
+  @IsNotEmpty()
+  @IsString()
+  market_id!: string;
 }
