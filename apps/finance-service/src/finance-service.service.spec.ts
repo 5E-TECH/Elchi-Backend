@@ -1146,3 +1146,53 @@ describe('FinanceServiceService.paymentsFromCourier settlement advance via outbo
     expect(queryRunner.commitTransaction).toHaveBeenCalled();
   });
 });
+
+describe('FinanceServiceService.allCashboxesTotal', () => {
+  it('sums courier/market balances in SQL instead of loading every row', async () => {
+    const manager = makeManager();
+    const { service, cashboxRepo, historyRepo } = makeService(manager);
+
+    // main cashbox
+    cashboxRepo.findOne.mockResolvedValue({ balance: 5000 });
+
+    // history query builder (paged list + count)
+    historyRepo.createQueryBuilder.mockReturnValue({
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+    });
+
+    // cashbox SUM query builder — returns a total keyed off the cashbox_type filter
+    const sumByType: Record<string, string> = {
+      for_courier: '1200',
+      for_market: '800',
+    };
+    cashboxRepo.createQueryBuilder = jest.fn().mockImplementation(() => {
+      let capturedType = '';
+      const qb: any = {
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn((_sql: string, params: { cashboxType: string }) => {
+          capturedType = params.cashboxType;
+          return qb;
+        }),
+        andWhere: jest.fn().mockReturnThis(),
+        getRawOne: jest
+          .fn()
+          .mockImplementation(async () => ({ total: sumByType[capturedType] })),
+      };
+      return qb;
+    });
+
+    const response = await service.allCashboxesTotal({ page: 1, limit: 20 });
+
+    // Never materialised the cashbox rows just to add them up.
+    expect(cashboxRepo.find).toBeUndefined();
+    expect(response.data.mainCashboxTotal).toBe(5000);
+    expect(response.data.courierCashboxTotal).toBe(1200);
+    expect(response.data.marketCashboxTotal).toBe(800);
+  });
+});

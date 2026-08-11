@@ -202,6 +202,27 @@ export class FinanceServiceService implements OnModuleInit {
     return main;
   }
 
+  /**
+   * Sum the balances of all active cashboxes of a given type, in SQL.
+   *
+   * Perf (audit P2): callers used to `cashboxRepo.find({ where: { cashbox_type } })`
+   * and `.reduce()` in JS purely to obtain a total — materialising every row
+   * (courier/market cashboxes grow unbounded) just to add up one column. This
+   * pushes the aggregation down to `SUM(balance)` so only the scalar crosses the
+   * wire. `balance` is a numeric column, so pg returns the SUM as a string.
+   */
+  private async sumCashboxBalanceByType(
+    cashboxType: Cashbox_type,
+  ): Promise<number> {
+    const row = await this.cashboxRepo
+      .createQueryBuilder('c')
+      .select('COALESCE(SUM(c.balance), 0)', 'total')
+      .where('c.cashbox_type = :cashboxType', { cashboxType })
+      .andWhere('c.isDeleted = :active', { active: false })
+      .getRawOne<{ total: string }>();
+    return Number(row?.total ?? 0);
+  }
+
   private calcIncomeOutcome(histories: CashboxHistory[]) {
     let income = 0;
     let outcome = 0;
@@ -2405,18 +2426,6 @@ export class FinanceServiceService implements OnModuleInit {
   }) {
     try {
       const mainCashbox = await this.ensureMainCashbox();
-      const courierCashboxes = await this.cashboxRepo.find({
-        where: {
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          isDeleted: false,
-        },
-      });
-      const marketCashboxes = await this.cashboxRepo.find({
-        where: {
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          isDeleted: false,
-        },
-      });
 
       const noPagination = filters?.page === 0 || filters?.limit === 0;
       const page = noPagination
@@ -2475,14 +2484,10 @@ export class FinanceServiceService implements OnModuleInit {
         });
 
       const [allCashboxHistories, total] = await qb.getManyAndCount();
-      const courierCashboxTotal = courierCashboxes.reduce(
-        (s, c) => s + Number(c.balance),
-        0,
-      );
-      const marketCashboxTotal = marketCashboxes.reduce(
-        (s, c) => s + Number(c.balance),
-        0,
-      );
+      const [courierCashboxTotal, marketCashboxTotal] = await Promise.all([
+        this.sumCashboxBalanceByType(Cashbox_type.FOR_COURIER),
+        this.sumCashboxBalanceByType(Cashbox_type.FOR_MARKET),
+      ]);
 
       return this.successRes(
         {
