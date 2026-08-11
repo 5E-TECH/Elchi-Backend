@@ -1,3 +1,4 @@
+import { In } from 'typeorm';
 import { OrderServiceService } from './order-service.service';
 import { Order_status } from '@app/common';
 
@@ -118,9 +119,11 @@ describe('Order tracking lifecycle', () => {
 
     const result = await service.getTrackingByOrderId('100', 2, 10);
 
+    // getTrackingByOrderId now includes the parent order's events too, so it
+    // queries with In([...ids]) rather than a single order_id.
     expect(trackingRepo.find).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { order_id: '100' },
+        where: { order_id: In(['100']) },
         order: { created_at: 'DESC' },
       }),
     );

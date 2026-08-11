@@ -27,6 +27,9 @@ describe('OrderServiceService transfer batch cancel', () => {
       execute: jest.fn().mockResolvedValue({ affected: 3 }),
     };
     const orderRepo = {
+      // cancelBranchTransferBatch reads the batch's orders (to decide whether a
+      // FORWARD batch should re-queue them) before the bulk unassign update.
+      find: jest.fn().mockResolvedValue([]),
       createQueryBuilder: jest.fn().mockReturnValue(orderUpdateQb),
     };
 
@@ -40,7 +43,8 @@ describe('OrderServiceService transfer batch cancel', () => {
         getRepository: jest.fn((entity: { name: string }) => {
           if (entity.name === BranchTransferBatch.name) return batchRepo;
           if (entity.name === Order.name) return orderRepo;
-          if (entity.name === BranchTransferBatchHistory.name) return historyRepo;
+          if (entity.name === BranchTransferBatchHistory.name)
+            return historyRepo;
           return {};
         }),
       },
@@ -104,7 +108,9 @@ describe('OrderServiceService transfer batch cancel', () => {
   });
 
   it('rejects cancel when batch is RECEIVED', async () => {
-    const { service, queryRunner } = createSetup(BranchTransferBatchStatus.RECEIVED);
+    const { service, queryRunner } = createSetup(
+      BranchTransferBatchStatus.RECEIVED,
+    );
 
     await expect(
       service.cancelBranchTransferBatch({

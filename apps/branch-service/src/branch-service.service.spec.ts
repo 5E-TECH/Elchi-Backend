@@ -96,12 +96,10 @@ describe('BranchServiceService', () => {
     const activityLog: any = {
       log: jest.fn().mockResolvedValue(undefined),
       logChange: jest.fn().mockResolvedValue(undefined),
-      query: jest
-        .fn()
-        .mockResolvedValue({
-          items: [],
-          meta: { page: 1, limit: 50, total: 0, totalPages: 1 },
-        }),
+      query: jest.fn().mockResolvedValue({
+        items: [],
+        meta: { page: 1, limit: 50, total: 0, totalPages: 1 },
+      }),
       findByEntity: jest.fn().mockResolvedValue([]),
       findByUser: jest.fn().mockResolvedValue([]),
     };
@@ -123,14 +121,12 @@ describe('BranchServiceService', () => {
   it('createBranch creates new branch', async () => {
     // ensureBranchNameUnique now uses createQueryBuilder (QB mock returns null by default).
     // Sequential findOne calls: ensureBranchCodeUnique → getParentBranchOrThrow.
-    branchRepo.findOne
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({
-        id: 'hq',
-        level: 0,
-        type: 'HQ',
-        isDeleted: false,
-      });
+    branchRepo.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      id: 'hq',
+      level: 0,
+      type: 'HQ',
+      isDeleted: false,
+    });
     branchRepo.save.mockResolvedValue({ id: 'b1', name: 'Main' });
 
     const res = await service.createBranch({
@@ -262,13 +258,11 @@ describe('BranchServiceService', () => {
 
   it('createBranch blocks second HQ creation', async () => {
     // findOne calls: code unique (null) → existing HQ lookup
-    branchRepo.findOne
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({
-        id: 'existing-hq',
-        type: 'HQ',
-        isDeleted: false,
-      });
+    branchRepo.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      id: 'existing-hq',
+      type: 'HQ',
+      isDeleted: false,
+    });
 
     await expect(
       service.createBranch({
@@ -356,14 +350,12 @@ describe('BranchServiceService', () => {
   });
 
   it('createBranch computes level automatically from parent', async () => {
-    branchRepo.findOne
-      .mockResolvedValueOnce(null)
-      .mockResolvedValueOnce({
-        id: 'hq',
-        level: 0,
-        type: 'HQ',
-        isDeleted: false,
-      });
+    branchRepo.findOne.mockResolvedValueOnce(null).mockResolvedValueOnce({
+      id: 'hq',
+      level: 0,
+      type: 'HQ',
+      isDeleted: false,
+    });
     branchRepo.save.mockImplementation(async (payload: any) => payload);
 
     const res = await service.createBranch({
@@ -840,8 +832,10 @@ describe('BranchServiceService', () => {
 
     expect(res.statusCode).toBe(201);
     expect(res.data.batches[0].qr_file).toBeNull();
+    // The raw downstream error ("file down") is intentionally sanitised to a
+    // generic message so internal failure detail is not surfaced to clients.
     expect(res.data.qr_generation_errors).toEqual([
-      { batch_id: '601', message: 'file down' },
+      { batch_id: '601', message: 'File service unavailable' },
     ]);
     expect(orderClient.send).not.toHaveBeenCalledWith(
       { cmd: 'order.transfer_batch.cancel_many' },
@@ -1024,13 +1018,10 @@ describe('BranchServiceService', () => {
     branchUserRepo.findOne.mockResolvedValueOnce(null);
 
     await expect(
-      service.dispatchPostToBranch(
-        '10',
-        '900',
-        '20',
-        ['1001'],
-        { id: '1', roles: ['admin'] },
-      ),
+      service.dispatchPostToBranch('10', '900', '20', ['1001'], {
+        id: '1',
+        roles: ['admin'],
+      }),
     ).rejects.toBeInstanceOf(RpcException);
 
     expect(logisticsClient.send).not.toHaveBeenCalled();

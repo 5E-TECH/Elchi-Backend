@@ -32,7 +32,6 @@ import {
   BranchTransferBatchStatus,
   BranchTransferDirection,
   Cashbox_type,
-  CourierCompensationMode,
   ExpenseProofCondition,
   Operation_type,
   Order_status,
@@ -48,6 +47,16 @@ import {
 } from '@app/common';
 import type { EntityManager } from 'typeorm';
 import { successRes } from '../../../libs/common/helpers/response';
+import {
+  isValidStatusTransition as isValidOrderStatusTransition,
+  mapInitialStatusForTracking as mapInitialOrderStatusForTracking,
+} from './domain/order-status.machine';
+import {
+  computeSellProfit,
+  resolveCourierShare as resolveCourierShareShare,
+  resolveSaleActorShare as resolveSaleActorShareAmount,
+  resolveBranchCashboxSaleAmount as resolveBranchCashboxSaleAmountValue,
+} from './domain/order-money';
 
 const CANCELLED_HANDOVER_MANUAL_REASONS = new Set([
   'QR yirtilgan',
@@ -418,73 +427,17 @@ export class OrderServiceService implements OnModuleInit {
     }
   }
 
+  // Status-transition rules live in ./domain/order-status.machine (pure &
+  // unit-tested). These thin wrappers keep the existing call sites unchanged.
   private mapInitialStatusForTracking(status: Order_status): Order_status {
-    return status === Order_status.NEW ? Order_status.CREATED : status;
+    return mapInitialOrderStatusForTracking(status);
   }
 
   private isValidStatusTransition(
     fromStatus: Order_status,
     toStatus: Order_status,
   ): boolean {
-    if (fromStatus === toStatus) return true;
-
-    const transitions: Record<Order_status, Order_status[]> = {
-      [Order_status.CREATED]: [
-        Order_status.NEW,
-        Order_status.RECEIVED,
-        Order_status.CANCELLED,
-      ],
-      [Order_status.NEW]: [Order_status.RECEIVED, Order_status.CANCELLED],
-      [Order_status.RECEIVED]: [
-        Order_status.ON_THE_ROAD,
-        Order_status.WAITING,
-        Order_status.CANCELLED,
-      ],
-      [Order_status.ON_THE_ROAD]: [
-        Order_status.WAITING,
-        Order_status.WAITING_CUSTOMER,
-        Order_status.CANCELLED,
-      ],
-      [Order_status.WAITING_CUSTOMER]: [
-        Order_status.ON_THE_ROAD,
-        Order_status.WAITING,
-        Order_status.RETURNED_TO_MARKET,
-        Order_status.CANCELLED,
-      ],
-      [Order_status.WAITING]: [
-        Order_status.ON_THE_ROAD,
-        Order_status.SOLD,
-        Order_status.PARTLY_PAID,
-        Order_status.PAID,
-        Order_status.CANCELLED,
-        Order_status.RETURNED_TO_MARKET,
-        Order_status.CLOSED,
-      ],
-      [Order_status.SOLD]: [
-        Order_status.PAID,
-        Order_status.WAITING,
-        Order_status.CLOSED,
-      ],
-      [Order_status.PARTLY_PAID]: [
-        Order_status.PAID,
-        Order_status.WAITING,
-        Order_status.CLOSED,
-      ],
-      [Order_status.PAID]: [Order_status.WAITING, Order_status.CLOSED],
-      [Order_status.CANCELLED]: [
-        Order_status.WAITING,
-        Order_status.CANCELLED_SENT,
-        Order_status.CLOSED,
-      ],
-      [Order_status.RETURNED_TO_MARKET]: [],
-      [Order_status.CANCELLED_SENT]: [
-        Order_status.CANCELLED,
-        Order_status.CLOSED,
-      ],
-      [Order_status.CLOSED]: [Order_status.WAITING],
-    };
-
-    return transitions[fromStatus]?.includes(toStatus) ?? false;
+    return isValidOrderStatusTransition(fromStatus, toStatus);
   }
 
   private haveOrderItemsChanged(
@@ -1736,20 +1689,13 @@ export class OrderServiceService implements OnModuleInit {
     return Number.isFinite(share) && share > 0 ? share : 0;
   }
 
-  /**
-   * The per-order amount a courier KEEPS, per their compensation mode:
-   * SALARY_ONLY keeps nothing (0); PER_ORDER / SALARY_PLUS_PER_ORDER keep the
-   * configured tariff. Defaults to keeping the tariff when the mode is unknown
-   * (back-compatible with couriers created before the mode existed).
-   */
+  // COD share/profit math lives in ./domain/order-money (pure & unit-tested).
+  // These thin wrappers keep the existing call sites unchanged.
   private resolveCourierShare(
     courier: { compensation_mode?: string | null } | null | undefined,
     courierTariff: number,
   ): number {
-    if (courier?.compensation_mode === CourierCompensationMode.SALARY_ONLY) {
-      return 0;
-    }
-    return courierTariff;
+    return resolveCourierShareShare(courier, courierTariff);
   }
 
   private resolveSaleActorShare(
@@ -1757,9 +1703,7 @@ export class OrderServiceService implements OnModuleInit {
     financialActor: { compensation_mode?: string | null } | null | undefined,
     tariff: number,
   ): number {
-    return isManagerSale
-      ? tariff
-      : this.resolveCourierShare(financialActor, tariff);
+    return resolveSaleActorShareAmount(isManagerSale, financialActor, tariff);
   }
 
   private resolveBranchCashboxSaleAmount(
@@ -1767,7 +1711,11 @@ export class OrderServiceService implements OnModuleInit {
     branchPayable: number,
     isManagerSale: boolean,
   ): number {
-    return isManagerSale ? totalPrice : branchPayable;
+    return resolveBranchCashboxSaleAmountValue(
+      totalPrice,
+      branchPayable,
+      isManagerSale,
+    );
   }
 
   /**
@@ -2139,8 +2087,11 @@ export class OrderServiceService implements OnModuleInit {
         order.courier_share ?? order.courier_tariff ?? 0,
       );
       const branchShareSnap = Number(order.branch_share ?? 0);
-      const sellProfit =
-        Number(order.market_tariff ?? 0) - courierShareSnap - branchShareSnap;
+      const sellProfit = computeSellProfit(
+        Number(order.market_tariff ?? 0),
+        courierShareSnap,
+        branchShareSnap,
+      );
       if (sellProfit !== 0) {
         await this.outbox.enqueue(
           'FINANCE',
