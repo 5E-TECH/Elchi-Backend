@@ -1,9 +1,9 @@
 import { RpcException } from '@nestjs/microservices';
-import { OrderServiceService } from './order-service.service';
+import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
 import { Order } from './entities/order.entity';
 import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.entity';
 
-describe('OrderServiceService bulk batch handlers', () => {
+describe('BranchTransferBatchService bulk batch handlers', () => {
   function createSetup(options?: { affected?: number; duplicateMessage?: boolean }) {
     const affected = options?.affected ?? 2;
     const duplicateMessage = options?.duplicateMessage ?? false;
@@ -42,25 +42,19 @@ describe('OrderServiceService bulk batch handlers', () => {
       },
     };
 
-    const service = new OrderServiceService(
+    // BranchTransferBatchService(dataSource, transferBatchRepo,
+    // transferBatchItemRepo, transferBatchHistoryRepo, orderRepo,
+    // orderTrackingRepo, orderCustodyEventRepo, activityLog). bulkAssignBatch
+    // reaches its repos via queryRunner.manager.getRepository, so only the
+    // dataSource and activityLog need real mocks.
+    const service = new BranchTransferBatchService(
       { createQueryRunner: jest.fn(() => queryRunner) } as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any, // integrationClient
-      {} as any, // branchClient
-      {} as any, // fileClient
-      {} as any, // outbox
+      {} as any, // transferBatchRepo
+      {} as any, // transferBatchItemRepo
+      {} as any, // transferBatchHistoryRepo
+      {} as any, // orderRepo
+      {} as any, // orderTrackingRepo
+      {} as any, // orderCustodyEventRepo
       {
         log: jest.fn().mockResolvedValue(undefined),
         logChange: jest.fn().mockResolvedValue(undefined),

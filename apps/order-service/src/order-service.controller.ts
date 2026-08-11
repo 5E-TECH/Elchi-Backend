@@ -15,6 +15,7 @@ import {
 import { Order_status, Where_deliver } from '@app/common';
 import { OrderServiceService } from './order-service.service';
 import { OrderAnalyticsService } from './analytics/order-analytics.service';
+import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
 import { OrderHolderType, Order_source } from './entities/order.entity';
 
 @Controller()
@@ -23,6 +24,7 @@ export class OrderServiceController {
     private readonly rmqService: RmqService,
     private readonly orderService: OrderServiceService,
     private readonly orderAnalyticsService: OrderAnalyticsService,
+    private readonly transferBatchService: BranchTransferBatchService,
     private readonly idempotencyService: IdempotencyService,
   ) {}
 
@@ -967,7 +969,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.createBranchTransferBatches(data),
+      this.transferBatchService.createBranchTransferBatches(data),
     );
   }
 
@@ -984,7 +986,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.createBranchReturnBatches(data),
+      this.transferBatchService.createBranchReturnBatches(data),
     );
   }
 
@@ -1000,7 +1002,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.cancelBranchTransferBatches(data),
+      this.transferBatchService.cancelBranchTransferBatches(data),
     );
   }
 
@@ -1016,7 +1018,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.addBranchTransferBatchHistory(data),
+      this.transferBatchService.addBranchTransferBatchHistory(data),
     );
   }
 
@@ -1026,7 +1028,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.findBranchTransferBatchById(
+      this.transferBatchService.findBranchTransferBatchById(
         data?.id ?? data?.batch_id ?? '',
       ),
     );
@@ -1048,7 +1050,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.findBranchTransferBatches(data ?? {}),
+      this.transferBatchService.findBranchTransferBatches(data ?? {}),
     );
   }
 
@@ -1062,7 +1064,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.findBranchesWithSentTransferBatches(data ?? {}),
+      this.transferBatchService.findBranchesWithSentTransferBatches(data ?? {}),
     );
   }
 
@@ -1083,7 +1085,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.sendBranchTransferBatch(data),
+      this.transferBatchService.sendBranchTransferBatch(data),
     );
   }
 
@@ -1093,7 +1095,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.findRemainingBranchTransferBatchItems(
+      this.transferBatchService.findRemainingBranchTransferBatchItems(
         data?.id ?? data?.batch_id ?? '',
       ),
     );
@@ -1111,7 +1113,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.receiveBranchTransferBatch(data),
+      this.transferBatchService.receiveBranchTransferBatch(data),
     );
   }
 
@@ -1128,7 +1130,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.receiveBranchTransferBatchOrders(data),
+      this.transferBatchService.receiveBranchTransferBatchOrders(data),
     );
   }
 
@@ -1145,7 +1147,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.cancelBranchTransferBatch(data),
+      this.transferBatchService.cancelBranchTransferBatch(data),
     );
   }
 
@@ -1155,7 +1157,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.findBranchTransferBatchByQrToken(
+      this.transferBatchService.findBranchTransferBatchByQrToken(
         String(data?.token ?? '').trim(),
       ),
     );
@@ -1172,7 +1174,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.bulkAssignBatch(data),
+      this.transferBatchService.bulkAssignBatch(data),
     );
   }
 
@@ -1186,7 +1188,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.bulkRemoveFromBatch(data),
+      this.transferBatchService.bulkRemoveFromBatch(data),
     );
   }
 

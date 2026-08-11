@@ -3,6 +3,7 @@ import { RmqService, IdempotencyService } from '@app/common';
 import { OrderServiceController } from './order-service.controller';
 import { OrderServiceService } from './order-service.service';
 import { OrderAnalyticsService } from './analytics/order-analytics.service';
+import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
 
 describe('OrderServiceController', () => {
   let orderServiceController: OrderServiceController;
@@ -24,6 +25,10 @@ describe('OrderServiceController', () => {
         },
         {
           provide: OrderAnalyticsService,
+          useValue: {},
+        },
+        {
+          provide: BranchTransferBatchService,
           useValue: {},
         },
         {

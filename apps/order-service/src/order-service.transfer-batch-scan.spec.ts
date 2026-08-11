@@ -1,7 +1,7 @@
 import { RpcException } from '@nestjs/microservices';
-import { OrderServiceService } from './order-service.service';
+import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
 
-describe('OrderServiceService transfer batch scan', () => {
+describe('BranchTransferBatchService transfer batch scan', () => {
   function setup() {
     const transferBatchRepo = {
       findOne: jest.fn(),
@@ -10,26 +10,17 @@ describe('OrderServiceService transfer batch scan', () => {
       find: jest.fn(),
     };
 
-    // OrderServiceService konstruktori — 16 ta pozitsion bog'liqlik.
-    const service = new OrderServiceService(
+    // BranchTransferBatchService(dataSource, transferBatchRepo,
+    // transferBatchItemRepo, transferBatchHistoryRepo, orderRepo,
+    // orderTrackingRepo, orderCustodyEventRepo, activityLog).
+    const service = new BranchTransferBatchService(
       { createQueryRunner: jest.fn() } as any, // dataSource
-      {} as any, // orderRepo
-      {} as any, // orderItemRepo
-      {} as any, // orderTrackingRepo
-      {} as any, // orderCustodyEventRepo
-      {} as any, // orderSettlementRepo
       transferBatchRepo as any, // transferBatchRepo
       transferBatchItemRepo as any, // transferBatchItemRepo
       {} as any, // transferBatchHistoryRepo
-      {} as any, // searchClient
-      {} as any, // identityClient
-      {} as any, // logisticsClient
-      {} as any, // catalogClient
-      {} as any, // financeClient
-      {} as any, // integrationClient
-      {} as any, // branchClient
-      {} as any, // fileClient
-      {} as any, // outbox
+      {} as any, // orderRepo
+      {} as any, // orderTrackingRepo
+      {} as any, // orderCustodyEventRepo
       {
         log: jest.fn().mockResolvedValue(undefined),
         logChange: jest.fn().mockResolvedValue(undefined),

@@ -1,11 +1,11 @@
 import { RpcException } from '@nestjs/microservices';
 import { BranchTransferBatchStatus } from '@app/common';
-import { OrderServiceService } from './order-service.service';
+import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
 import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
 import { Order } from './entities/order.entity';
 import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
 
-describe('OrderServiceService transfer batch cancel', () => {
+describe('BranchTransferBatchService transfer batch cancel', () => {
   function createSetup(status: BranchTransferBatchStatus) {
     const batchRepo = {
       findOne: jest.fn().mockResolvedValue({
@@ -50,25 +50,17 @@ describe('OrderServiceService transfer batch cancel', () => {
       },
     };
 
-    const service = new OrderServiceService(
+    // cancelBranchTransferBatch reaches its repos via
+    // queryRunner.manager.getRepository, so only dataSource + activityLog need
+    // real mocks in the 8-arg BranchTransferBatchService constructor.
+    const service = new BranchTransferBatchService(
       { createQueryRunner: jest.fn(() => queryRunner) } as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any, // integrationClient
-      {} as any, // branchClient
-      {} as any, // fileClient
-      {} as any, // outbox
+      {} as any, // transferBatchRepo
+      {} as any, // transferBatchItemRepo
+      {} as any, // transferBatchHistoryRepo
+      {} as any, // orderRepo
+      {} as any, // orderTrackingRepo
+      {} as any, // orderCustodyEventRepo
       {
         log: jest.fn().mockResolvedValue(undefined),
         logChange: jest.fn().mockResolvedValue(undefined),
