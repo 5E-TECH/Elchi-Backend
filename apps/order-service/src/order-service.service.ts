@@ -1039,21 +1039,6 @@ export class OrderServiceService implements OnModuleInit {
     return dateValue;
   }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
   private generateSaleComment(
     orderComment?: string | null,
     dtoComment?: string | null,
@@ -1076,8 +1061,6 @@ export class OrderServiceService implements OnModuleInit {
 
     return parts.join('\n');
   }
-
-
 
   private async getMarketsByIds(ids: string[]) {
     if (!ids.length) return [];
@@ -1116,7 +1099,6 @@ export class OrderServiceService implements OnModuleInit {
     return response?.data ?? [];
   }
 
-
   private async getUserById(id: string) {
     const response = await rmqSend<{
       data?: {
@@ -1134,7 +1116,6 @@ export class OrderServiceService implements OnModuleInit {
 
     return response?.data;
   }
-
 
   private async getCashboxByUser(userId: string, cashboxType: Cashbox_type) {
     const response = await rmqSend<{ data?: { id: string; balance?: number } }>(
@@ -2099,6 +2080,18 @@ export class OrderServiceService implements OnModuleInit {
       this.badRequest('Rollback uchun ruxsat yo‘q');
     }
 
+    // Reversing a PARTLY_PAID sale's cashbox legs is only implemented for
+    // superadmin (see `doSaleReversal` below). Letting a courier/manager roll a
+    // PARTLY_PAID order back to WAITING would flip the status WITHOUT reversing
+    // the already-credited market/courier/branch cash — a double-credit that is
+    // realised when the order is re-sold (Audit money P1). Enforce the same
+    // superadmin-only boundary at the permission layer.
+    if (originalStatus === Order_status.PARTLY_PAID && !isSuperAdmin) {
+      this.badRequest(
+        "Qisman to'langan buyurtmani faqat superadmin WAITING holatiga qaytara oladi",
+      );
+    }
+
     // Merge note (dev↔shodiyor): post is optional (a manager can roll back an
     // order that isn't on a courier post yet), but a courier may only roll back
     // a post assigned to them. Both actor checks are kept.
@@ -3018,9 +3011,7 @@ export class OrderServiceService implements OnModuleInit {
         !CANCELLED_HANDOVER_MANUAL_REASONS.has(item.reason),
     );
     if (invalidManualOverrideReasons.length) {
-      this.badRequest(
-        'manual_overrides.reason noto‘g‘ri yoki juda uzun',
-      );
+      this.badRequest('manual_overrides.reason noto‘g‘ri yoki juda uzun');
     }
     const invalidManualOverrideIds = [...manualOverrideByOrderId.keys()].filter(
       (orderId) => !orderIds.includes(orderId),
@@ -6831,16 +6822,6 @@ export class OrderServiceService implements OnModuleInit {
       total: result.total,
     };
   }
-
-
-
-
-
-
-
-
-
-
 
   private transferTokenPrefix(
     direction: BranchTransferDirection,
