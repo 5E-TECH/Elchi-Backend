@@ -97,6 +97,25 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # Scheduled cashbox reconciliation (Audit money P1: the invariant check existed
+  # but was never scheduled). Runs db:reconcile (--reconcile-strict) on a loop;
+  # any cashbox I1/I2 drift or settlement mismatch is reported to Sentry. Reuses
+  # the migration-runner pattern (repo mount + dev deps for ts-node).
+  db-reconcile:
+    image: node:20-alpine
+    container_name: elchi-db-reconcile
+    working_dir: /app
+    env_file: .env.production
+    environment:
+      RECONCILE_INTERVAL_SECONDS: ${RECONCILE_INTERVAL_SECONDS:-3600}
+    volumes:
+      - ./:/app
+    command: sh -c "npm ci --include=dev && sh scripts/reconcile-cron.sh"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
   api-gateway:
     build:
       context: .

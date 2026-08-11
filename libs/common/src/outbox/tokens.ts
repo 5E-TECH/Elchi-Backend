@@ -8,4 +8,11 @@ export interface OutboxOptions {
   batchSize?: number;
   /** Per-event publish timeout (ms). Default 5000. */
   publishTimeoutMs?: number;
+  /**
+   * How often to check for FAILED (poison) events and raise an alert (ms).
+   * Default 60000. A 'failed' event is terminal — never retried and invisible
+   * to getDuePending — so without this check a stuck money/state event would
+   * sit silently forever.
+   */
+  failedAlertIntervalMs?: number;
 }
