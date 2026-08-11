@@ -3,6 +3,7 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { OrderServiceController } from './order-service.controller';
 import { OrderServiceService } from './order-service.service';
+import { OrderAnalyticsService } from './analytics/order-analytics.service';
 import {
   AppLoggerModule,
   RmqModule,
@@ -70,6 +71,6 @@ import { MarketCancelledHandoverSession } from './entities/market-cancelled-hand
     ]),
   ],
   controllers: [OrderServiceController],
-  providers: [OrderServiceService],
+  providers: [OrderServiceService, OrderAnalyticsService],
 })
 export class OrderServiceModule {}

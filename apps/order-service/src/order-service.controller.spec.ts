@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { RmqService, IdempotencyService } from '@app/common';
 import { OrderServiceController } from './order-service.controller';
 import { OrderServiceService } from './order-service.service';
+import { OrderAnalyticsService } from './analytics/order-analytics.service';
 
 describe('OrderServiceController', () => {
   let orderServiceController: OrderServiceController;
@@ -22,13 +23,19 @@ describe('OrderServiceController', () => {
           useValue: {},
         },
         {
+          provide: OrderAnalyticsService,
+          useValue: {},
+        },
+        {
           provide: IdempotencyService,
           useValue: {},
         },
       ],
     }).compile();
 
-    orderServiceController = app.get<OrderServiceController>(OrderServiceController);
+    orderServiceController = app.get<OrderServiceController>(
+      OrderServiceController,
+    );
   });
 
   describe('health', () => {

@@ -1,4 +1,5 @@
 import { OrderServiceService } from './order-service.service';
+import { OrderAnalyticsService } from './analytics/order-analytics.service';
 
 describe('OrderServiceService filters', () => {
   function setup() {
@@ -76,7 +77,19 @@ describe('OrderServiceService filters', () => {
       } as any, // activityLog
     );
 
-    return { service, qb, trackingQb, custodyQb };
+    // Read-only analytics methods now live in OrderAnalyticsService; it shares
+    // the same order/tracking/custody repo mocks so the scope/count assertions
+    // still exercise the real query-building logic.
+    const analytics = new OrderAnalyticsService(
+      orderRepo as any,
+      orderTrackingRepo as any,
+      orderCustodyEventRepo as any,
+      {} as any, // identityClient
+      {} as any, // branchClient
+      {} as any, // logisticsClient
+    );
+
+    return { service, analytics, qb, trackingQb, custodyQb };
   }
 
   it('filters by source=BRANCH and branch/home branch scope', async () => {
@@ -188,9 +201,7 @@ describe('OrderServiceService filters', () => {
       { courier_ids: ['77'] },
     );
     expect(nested.orWhere).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'WHERE courier_history.order_id = "order"."id"',
-      ),
+      expect.stringContaining('WHERE courier_history.order_id = "order"."id"'),
       { courier_ids: ['77'] },
     );
   });
@@ -292,18 +303,16 @@ describe('OrderServiceService filters', () => {
   });
 
   it('scopes analytics to branch and includes courier-held branch orders', () => {
-    const { service, qb } = setup();
+    const { analytics, qb } = setup();
 
-    const result = (service as any).applyAnalyticsBranchScope(qb, '16');
+    const result = (analytics as any).applyAnalyticsBranchScope(qb, '16');
 
     expect(result).toBe(qb);
     const analyticsScope = qb.andWhere.mock.calls.find(
       ([value]) =>
         typeof value === 'string' && value.includes('analyticsBranchId'),
     );
-    expect(analyticsScope?.[0]).toContain(
-      'o.branch_id = :analyticsBranchId',
-    );
+    expect(analyticsScope?.[0]).toContain('o.branch_id = :analyticsBranchId');
     expect(analyticsScope?.[0]).toContain(
       'o.holder_branch_id = :analyticsBranchId',
     );
@@ -312,14 +321,14 @@ describe('OrderServiceService filters', () => {
   });
 
   it('counts dashboard accepted orders only from branch batch receive events', async () => {
-    const { service, trackingQb } = setup();
+    const { analytics, trackingQb } = setup();
     const range = {
       start: new Date('2026-07-22T19:00:00.000Z'),
       end: new Date('2026-07-23T18:59:59.999Z'),
     };
     trackingQb.getRawOne.mockResolvedValue({ count: '3' });
 
-    const count = await (service as any).countBranchBatchAcceptedOrders(
+    const count = await (analytics as any).countBranchBatchAcceptedOrders(
       range,
       '16',
     );
@@ -338,9 +347,9 @@ describe('OrderServiceService filters', () => {
   });
 
   it('excludes courier cancellations from branch dashboard cancelled totals', async () => {
-    const { service, trackingQb } = setup();
+    const { analytics, trackingQb } = setup();
 
-    await (service as any).countHistoricallyCancelledOrders(
+    await (analytics as any).countHistoricallyCancelledOrders(
       {
         start: new Date('2026-07-22T19:00:00.000Z'),
         end: new Date('2026-07-23T18:59:59.999Z'),
@@ -359,14 +368,14 @@ describe('OrderServiceService filters', () => {
   });
 
   it('scopes courier dashboard totals by assignment date instead of update date', async () => {
-    const { service, qb } = setup();
+    const { analytics, qb } = setup();
 
     jest
-      .spyOn(service as any, 'getAllPostsForAnalytics')
+      .spyOn(analytics as any, 'getAllPostsForAnalytics')
       .mockResolvedValue([{ id: 'post-1', courier_id: '77' }]);
-    jest.spyOn(service as any, 'getCouriersByIds').mockResolvedValue([]);
+    jest.spyOn(analytics as any, 'getCouriersByIds').mockResolvedValue([]);
 
-    await service.getCourierStat(
+    await analytics.getCourierStat(
       '77',
       '2026-07-01T00:00:00.000Z',
       '2026-07-31T23:59:59.999Z',

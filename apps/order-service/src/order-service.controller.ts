@@ -14,6 +14,7 @@ import {
 } from '@app/common';
 import { Order_status, Where_deliver } from '@app/common';
 import { OrderServiceService } from './order-service.service';
+import { OrderAnalyticsService } from './analytics/order-analytics.service';
 import { OrderHolderType, Order_source } from './entities/order.entity';
 
 @Controller()
@@ -21,6 +22,7 @@ export class OrderServiceController {
   constructor(
     private readonly rmqService: RmqService,
     private readonly orderService: OrderServiceService,
+    private readonly orderAnalyticsService: OrderAnalyticsService,
     private readonly idempotencyService: IdempotencyService,
   ) {}
 
@@ -812,7 +814,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getOverviewStats(
+      this.orderAnalyticsService.getOverviewStats(
         data.startDate,
         data.endDate,
         data.branch_id,
@@ -828,7 +830,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getMarketStats(
+      this.orderAnalyticsService.getMarketStats(
         data.startDate,
         data.endDate,
         data.branch_id,
@@ -843,7 +845,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getCourierStats(
+      this.orderAnalyticsService.getCourierStats(
         data.startDate,
         data.endDate,
         data.branch_id,
@@ -857,7 +859,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getTopMarkets(
+      this.orderAnalyticsService.getTopMarkets(
         data.limit,
         data.branch_id,
         data.startDate,
@@ -872,7 +874,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getTopCouriers(data.limit, data.branch_id),
+      this.orderAnalyticsService.getTopCouriers(data.limit, data.branch_id),
     );
   }
 
@@ -882,7 +884,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getTopBranches(
+      this.orderAnalyticsService.getTopBranches(
         data.limit,
         data.branch_id,
         data.startDate,
@@ -897,7 +899,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getTopOperatorsByMarket(data.requester.id, data.limit),
+      this.orderAnalyticsService.getTopOperatorsByMarket(data.requester.id, data.limit),
     );
   }
 
@@ -913,7 +915,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getCourierStat(
+      this.orderAnalyticsService.getCourierStat(
         data.requester.id,
         data.startDate,
         data.endDate,
@@ -929,7 +931,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getMarketStat(
+      this.orderAnalyticsService.getMarketStat(
         data.requester.id,
         data.startDate,
         data.endDate,
@@ -943,7 +945,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getRevenueStats(
+      this.orderAnalyticsService.getRevenueStats(
         data.startDate,
         data.endDate,
         data.period,
