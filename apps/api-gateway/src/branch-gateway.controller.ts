@@ -39,6 +39,16 @@ import {
   UpdateBranchRequestDto,
 } from './dto/branch.swagger.dto';
 
+// Batch RPC ceiling: transfer-batch / return-batch / post-dispatch operations
+// fan out to a SEQUENTIAL, unbounded per-order loop downstream (branch-service
+// awaits order.update once per order, each with its own 15s budget). An 8s
+// gateway cap sits below even one iteration, so it would premature-fail a large
+// batch mid-flight — the handler keeps running (partial commit) while the client
+// retries a non-idempotent op → duplicate order reassignments. This generous
+// ceiling still bounds a true infinite hang. (Proper fix: parallelise + make the
+// downstream loop atomic — tracked separately.)
+const BATCH_RPC_TIMEOUT_MS = 120_000;
+
 @ApiTags('Branch')
 @ApiBearerAuth()
 @Controller()
@@ -148,7 +158,7 @@ export class BranchGatewayController {
         requester: this.toRequester(req),
         query: { direction, side },
       },
-    ).pipe(timeout(8000));
+    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Get('branches/:id')
@@ -207,7 +217,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.create' },
       { dto, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Post('branches/:id/return-batches')
@@ -223,7 +233,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.return_batches.create' },
       { id, dto, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Patch('transfer-batches/:id/send')
@@ -239,7 +249,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.send' },
       { id, dto, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Get('transfer-batches')
@@ -279,7 +289,7 @@ export class BranchGatewayController {
           limit: limit ? Number(limit) : undefined,
         },
       },
-    ).pipe(timeout(8000));
+    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Get('transfer-batches/:id')
@@ -293,7 +303,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.find_by_id' },
       { id, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Get('transfer-batches/:id/remaining')
@@ -307,7 +317,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.find_remaining' },
       { id, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Post('transfer-batches/:id/receive')
@@ -321,7 +331,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.receive' },
       { id, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Post('transfer-batches/:id/receive-orders')
@@ -337,7 +347,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.receive_orders' },
       { id, dto, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Post('transfer-batches/:id/cancel')
@@ -353,7 +363,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.cancel' },
       { id, dto, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Post('branches/posts/:postId/dispatch')
@@ -402,7 +412,7 @@ export class BranchGatewayController {
         order_ids: normalizedOrderIds,
         requester: this.toRequester(req),
       },
-    ).pipe(timeout(8000));
+    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Patch('branches/:id')

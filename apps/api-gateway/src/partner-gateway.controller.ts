@@ -55,6 +55,14 @@ const PARTNER_THROTTLE = {
   default: { limit: PARTNER_THROTTLE_LIMIT, ttl: PARTNER_THROTTLE_TTL_MS },
 };
 
+// A partner shipment create orchestrates customer.create + order.create (which
+// itself runs the COD/settlement setup) sequentially, so it can exceed the 8s
+// standard tier. An 8s cap here risks returning a timeout to the partner while
+// the order is still being created → a retry would create a DUPLICATE shipment
+// for the same external_order_id before the idempotency ref is persisted. Give
+// it the provider-tier ceiling instead.
+const PARTNER_SHIPMENT_TIMEOUT_MS = 65_000;
+
 @ApiTags('Partner')
 @ApiHeader({
   name: 'X-Api-Key',
@@ -219,7 +227,7 @@ export class PartnerGatewayController {
       this.integrationClient.send(
         { cmd: 'integration.partner.create_shipment' },
         { ...dto, partner_id: request.partner.id },
-      ).pipe(timeout(8000)),
+      ).pipe(timeout(PARTNER_SHIPMENT_TIMEOUT_MS)),
     );
   }
 }
