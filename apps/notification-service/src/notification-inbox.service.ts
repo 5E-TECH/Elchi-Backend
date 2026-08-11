@@ -8,7 +8,7 @@ import {
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { FindOptionsWhere, Repository } from 'typeorm';
-import { lastValueFrom } from 'rxjs';
+import { lastValueFrom, timeout } from 'rxjs';
 import {
   ActivityLogService,
   NotificationCategory,
@@ -273,14 +273,19 @@ export class NotificationInboxService {
     for (const row of rows) {
       try {
         await lastValueFrom(
-          this.gatewayClient.emit(
-            { cmd: 'realtime.notify' },
-            {
-              event: 'notification:new',
-              user_id: row.recipient_id,
-              payload: this.toPublic(row),
-            },
-          ),
+          this.gatewayClient
+            .emit(
+              { cmd: 'realtime.notify' },
+              {
+                event: 'notification:new',
+                user_id: row.recipient_id,
+                payload: this.toPublic(row),
+              },
+            )
+            // Best-effort realtime push, fanned out per recipient (up to
+            // MAX_FANOUT). Bound each emit so a slow/unresponsive broker can't
+            // stall the whole dispatch loop — on timeout we just warn and move on.
+            .pipe(timeout(2_000)),
           { defaultValue: null },
         );
       } catch (err) {
