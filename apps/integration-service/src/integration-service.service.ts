@@ -1,15 +1,14 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import {
-  Between,
-  In,
-  IsNull,
-  LessThanOrEqual,
-  Repository,
-} from 'typeorm';
+import { Between, In, IsNull, LessThanOrEqual, Repository } from 'typeorm';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
-import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'crypto';
+import {
+  createCipheriv,
+  createDecipheriv,
+  createHash,
+  randomBytes,
+} from 'crypto';
 import {
   ActivityAction,
   ActivityLogService,
@@ -121,7 +120,10 @@ type SyncHistoryQuery = {
 @Injectable()
 export class IntegrationServiceService {
   private readonly logger = new Logger(IntegrationServiceService.name);
-  private readonly tokenCache = new Map<string, { token: string; expiresAt: number }>();
+  private readonly tokenCache = new Map<
+    string,
+    { token: string; expiresAt: number }
+  >();
   // No default fallback by design: an environment without INTEGRATION_CREDENTIAL_SECRET
   // must not boot, otherwise stored credentials would silently encrypt with a
   // publicly-known key. Joi validation guarantees presence at startup.
@@ -130,16 +132,20 @@ export class IntegrationServiceService {
   private readonly primaryKey = createHash('sha256')
     .update(process.env.INTEGRATION_CREDENTIAL_SECRET!)
     .digest();
-  private readonly previousKey = process.env.INTEGRATION_CREDENTIAL_SECRET_PREVIOUS
+  private readonly previousKey = process.env
+    .INTEGRATION_CREDENTIAL_SECRET_PREVIOUS
     ? createHash('sha256')
         .update(process.env.INTEGRATION_CREDENTIAL_SECRET_PREVIOUS)
         .digest()
     : null;
 
   constructor(
-    @InjectRepository(ExternalIntegration) private readonly integrationRepo: Repository<ExternalIntegration>,
-    @InjectRepository(SyncQueue) private readonly syncQueueRepo: Repository<SyncQueue>,
-    @InjectRepository(SyncHistory) private readonly syncHistoryRepo: Repository<SyncHistory>,
+    @InjectRepository(ExternalIntegration)
+    private readonly integrationRepo: Repository<ExternalIntegration>,
+    @InjectRepository(SyncQueue)
+    private readonly syncQueueRepo: Repository<SyncQueue>,
+    @InjectRepository(SyncHistory)
+    private readonly syncHistoryRepo: Repository<SyncHistory>,
     @InjectRepository(ProviderWebhookLog)
     private readonly webhookLogRepo: Repository<ProviderWebhookLog>,
     @InjectRepository(ProviderShipment)
@@ -374,7 +380,9 @@ export class IntegrationServiceService {
     // Elchi'da market yaratamiz (createMarket ichida cashbox AVTOMAT ochiladi).
     // Username deterministik — poyga holatida ikkinchi market yaratilmaydi.
     const username = this.buildMarketUsername(partnerId, externalSellerId);
-    const marketRes = await this.rmqRequest<{ data?: { id?: string | number } }>(
+    const marketRes = await this.rmqRequest<{
+      data?: { id?: string | number };
+    }>(
       this.identityClient,
       { cmd: 'identity.market.create' },
       {
@@ -536,7 +544,9 @@ export class IntegrationServiceService {
           market_id: String(dto.elchi_market_id),
           customer_id: String(customerId),
           where_deliver:
-            dto.where_deliver === 'address' ? Where_deliver.ADDRESS : Where_deliver.CENTER,
+            dto.where_deliver === 'address'
+              ? Where_deliver.ADDRESS
+              : Where_deliver.CENTER,
           region_id: dto.region_id ?? null,
           district_id: dto.district_id ?? null,
           address: dto.address ?? null,
@@ -547,7 +557,12 @@ export class IntegrationServiceService {
           comment: this.shipmentItemsComment(dto.items),
         },
         requester: { id: `partner:${partnerId}`, roles: [Roles.SUPERADMIN] },
-        request_id: externalOrderId,
+        // Partner-scope the idempotency key so two different partners reusing
+        // the same external_order_id do NOT collide on order.create (the
+        // idempotency helper keys on `order.create:${request_id}`). Without the
+        // partner prefix, partner B's shipment with external_order_id "1001"
+        // would be deduped against partner A's order "1001".
+        request_id: `partner:${partnerId}:${externalOrderId}`,
       },
       10000,
     );
@@ -601,7 +616,9 @@ export class IntegrationServiceService {
     const parts = items
       .map((i) => `${i?.quantity ?? 1}x ${String(i?.name ?? '').trim()}`.trim())
       .filter((s) => s && !s.startsWith('0x'));
-    return parts.length ? `Marketplace: ${parts.join(', ')}`.slice(0, 500) : null;
+    return parts.length
+      ? `Marketplace: ${parts.join(', ')}`.slice(0, 500)
+      : null;
   }
 
   /** RMQ javobidan (wrap/unwrap) qiymatni oladi. */
@@ -614,9 +631,10 @@ export class IntegrationServiceService {
     return id === undefined || id === null ? undefined : String(id);
   }
 
-  private auditActor(
-    requester?: { id?: string; roles?: string[] } | null,
-  ): { user_id: string | null; user_role: string | null } {
+  private auditActor(requester?: { id?: string; roles?: string[] } | null): {
+    user_id: string | null;
+    user_role: string | null;
+  } {
     const roles = requester?.roles ?? [];
     return {
       user_id: requester?.id ? String(requester.id) : null,
@@ -739,7 +757,10 @@ export class IntegrationServiceService {
 
   private interpolate(template: unknown, ctx: Record<string, string>): unknown {
     if (typeof template === 'string') {
-      return template.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, key: string) => ctx[key] ?? '');
+      return template.replace(
+        /\{\{\s*(\w+)\s*\}\}/g,
+        (_, key: string) => ctx[key] ?? '',
+      );
     }
 
     if (Array.isArray(template)) {
@@ -775,7 +796,10 @@ export class IntegrationServiceService {
     return integration;
   }
 
-  private resolveTokenFromResponse(response: unknown, tokenPath?: string): string | null {
+  private resolveTokenFromResponse(
+    response: unknown,
+    tokenPath?: string,
+  ): string | null {
     if (tokenPath) {
       const byConfiguredPath = this.extractPath(response, tokenPath);
       if (typeof byConfiguredPath === 'string' && byConfiguredPath.length > 0) {
@@ -801,7 +825,9 @@ export class IntegrationServiceService {
     return null;
   }
 
-  private async loginAndGetToken(integration: ExternalIntegration): Promise<string> {
+  private async loginAndGetToken(
+    integration: ExternalIntegration,
+  ): Promise<string> {
     const decryptedPassword = this.decryptCredential(integration.password);
     if (!integration.auth_url || !integration.username || !decryptedPassword) {
       this.badRequest('Integration login config is incomplete');
@@ -809,13 +835,16 @@ export class IntegrationServiceService {
 
     const syncConfig = this.toSyncConfig(integration);
     const authConfig = syncConfig.auth ?? {};
-    const method = (authConfig.login_method ?? 'POST').toUpperCase() as HttpMethod;
+    const method = (
+      authConfig.login_method ?? 'POST'
+    ).toUpperCase() as HttpMethod;
     const context = {
       username: integration.username,
       password: decryptedPassword,
     };
     const payload =
-      authConfig.login_payload_template && Object.keys(authConfig.login_payload_template).length
+      authConfig.login_payload_template &&
+      Object.keys(authConfig.login_payload_template).length
         ? this.interpolate(authConfig.login_payload_template, context)
         : { username: integration.username, password: decryptedPassword };
 
@@ -832,11 +861,16 @@ export class IntegrationServiceService {
 
       if (!response.ok) {
         const text = await response.text();
-        this.badRequest(`Integration login failed: ${text || response.statusText}`);
+        this.badRequest(
+          `Integration login failed: ${text || response.statusText}`,
+        );
       }
 
       const responseData = (await response.json()) as unknown;
-      const token = this.resolveTokenFromResponse(responseData, authConfig.token_path);
+      const token = this.resolveTokenFromResponse(
+        responseData,
+        authConfig.token_path,
+      );
       if (!token) {
         this.badRequest('Token could not be extracted from auth response');
       }
@@ -853,7 +887,9 @@ export class IntegrationServiceService {
     }
   }
 
-  private async getValidToken(integration: ExternalIntegration): Promise<string | null> {
+  private async getValidToken(
+    integration: ExternalIntegration,
+  ): Promise<string | null> {
     if (integration.auth_type === 'api_key') {
       return this.decryptCredential(integration.api_key) ?? null;
     }
@@ -877,7 +913,9 @@ export class IntegrationServiceService {
     ttlMs = 5000,
   ): Promise<T | null> {
     try {
-      return await firstValueFrom(client.send(pattern, payload).pipe(timeout(ttlMs)));
+      return await firstValueFrom(
+        client.send(pattern, payload).pipe(timeout(ttlMs)),
+      );
     } catch (error) {
       if (error instanceof TimeoutError) {
         return null;
@@ -966,22 +1004,40 @@ export class IntegrationServiceService {
     }
 
     const masked = { ...(value as Record<string, unknown>) };
-    const sensitiveKeys = ['api_key', 'api_secret', 'password', 'token', 'access_token'];
+    const sensitiveKeys = [
+      'api_key',
+      'api_secret',
+      'password',
+      'token',
+      'access_token',
+    ];
     for (const key of sensitiveKeys) {
-      if (typeof masked[key] !== 'undefined' && masked[key] !== null && String(masked[key]).length > 0) {
+      if (
+        typeof masked[key] !== 'undefined' &&
+        masked[key] !== null &&
+        String(masked[key]).length > 0
+      ) {
         masked[key] = '***';
       }
     }
     return masked;
   }
 
-  private normalizeCredentialsForStorage(value: unknown): Record<string, unknown> | null {
+  private normalizeCredentialsForStorage(
+    value: unknown,
+  ): Record<string, unknown> | null {
     if (!value || typeof value !== 'object') {
       return null;
     }
 
     const raw = { ...(value as Record<string, unknown>) };
-    const encryptKeys = ['api_key', 'api_secret', 'password', 'token', 'access_token'];
+    const encryptKeys = [
+      'api_key',
+      'api_secret',
+      'password',
+      'token',
+      'access_token',
+    ];
     for (const key of encryptKeys) {
       const val = raw[key];
       if (typeof val === 'string' && val.length > 0) {
@@ -1002,7 +1058,10 @@ export class IntegrationServiceService {
 
     const iv = randomBytes(16);
     const cipher = createCipheriv('aes-256-cbc', this.primaryKey, iv);
-    const encrypted = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+    const encrypted = Buffer.concat([
+      cipher.update(value, 'utf8'),
+      cipher.final(),
+    ]);
     return `enc:${iv.toString('hex')}:${encrypted.toString('hex')}`;
   }
 
@@ -1031,7 +1090,10 @@ export class IntegrationServiceService {
     const tryKey = (key: Buffer): string | null => {
       try {
         const decipher = createDecipheriv('aes-256-cbc', key, iv);
-        const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+        const decrypted = Buffer.concat([
+          decipher.update(encrypted),
+          decipher.final(),
+        ]);
         return decrypted.toString('utf8');
       } catch {
         return null;
@@ -1067,8 +1129,15 @@ export class IntegrationServiceService {
     return this.toSafeInt(response?.total);
   }
 
-  private async getOrderCountByMarket(marketId: string, status?: Order_status): Promise<number> {
-    const query: Record<string, any> = { market_id: marketId, page: 1, limit: 1 };
+  private async getOrderCountByMarket(
+    marketId: string,
+    status?: Order_status,
+  ): Promise<number> {
+    const query: Record<string, any> = {
+      market_id: marketId,
+      page: 1,
+      limit: 1,
+    };
     if (status) {
       query.status = status;
     }
@@ -1083,7 +1152,11 @@ export class IntegrationServiceService {
 
   private async getOrderStatsByMarket(
     marketId: string,
-  ): Promise<{ total_orders: number; successful_orders: number; cancelled_orders: number }> {
+  ): Promise<{
+    total_orders: number;
+    successful_orders: number;
+    cancelled_orders: number;
+  }> {
     const [total, cancelled, sold, paid, partlyPaid] = await Promise.all([
       this.getOrderCountByMarket(marketId),
       this.getOrderCountByMarket(marketId, Order_status.CANCELLED),
@@ -1099,7 +1172,9 @@ export class IntegrationServiceService {
     };
   }
 
-  private async fetchMarketsByIds(marketIds: string[]): Promise<Record<string, any>> {
+  private async fetchMarketsByIds(
+    marketIds: string[],
+  ): Promise<Record<string, any>> {
     if (!marketIds.length) {
       return {};
     }
@@ -1109,7 +1184,9 @@ export class IntegrationServiceService {
       { cmd: 'identity.market.find_by_ids' },
       { ids: marketIds },
     );
-    const markets = Array.isArray(identityResponse?.data) ? identityResponse.data : [];
+    const markets = Array.isArray(identityResponse?.data)
+      ? identityResponse.data
+      : [];
     if (!markets.length) {
       return {};
     }
@@ -1142,7 +1219,9 @@ export class IntegrationServiceService {
     }, {});
   }
 
-  private async attachMarkets<T extends { market_id?: string | null }>(rows: T[]): Promise<Array<T & { market: any | null }>> {
+  private async attachMarkets<T extends { market_id?: string | null }>(
+    rows: T[],
+  ): Promise<Array<T & { market: any | null }>> {
     const marketIds = Array.from(
       new Set(
         rows
@@ -1154,7 +1233,9 @@ export class IntegrationServiceService {
 
     return rows.map((row) => ({
       ...row,
-      market: row.market_id ? marketsById[String(row.market_id)] ?? null : null,
+      market: row.market_id
+        ? (marketsById[String(row.market_id)] ?? null)
+        : null,
     }));
   }
 
@@ -1199,7 +1280,11 @@ export class IntegrationServiceService {
     return rows.map((row) => this.sanitizeIntegrationRow(row));
   }
 
-  private extractMarketsFromItems(items: any[]): { items: any[]; market: any | null; markets: any[] } {
+  private extractMarketsFromItems(items: any[]): {
+    items: any[];
+    market: any | null;
+    markets: any[];
+  } {
     if (!Array.isArray(items) || items.length === 0) {
       return { items: [], market: null, markets: [] };
     }
@@ -1258,13 +1343,16 @@ export class IntegrationServiceService {
       const query =
         input.params && Object.keys(input.params).length > 0
           ? `?${new URLSearchParams(
-              Object.entries(input.params).reduce<Record<string, string>>((acc, [k, v]) => {
-                if (typeof v === 'undefined' || v === null) {
+              Object.entries(input.params).reduce<Record<string, string>>(
+                (acc, [k, v]) => {
+                  if (typeof v === 'undefined' || v === null) {
+                    return acc;
+                  }
+                  acc[k] = String(v);
                   return acc;
-                }
-                acc[k] = String(v);
-                return acc;
-              }, {}),
+                },
+                {},
+              ),
             ).toString()}`
           : '';
       const finalUrl = `${url}${query}`;
@@ -1279,7 +1367,10 @@ export class IntegrationServiceService {
       const response = await fetch(finalUrl, {
         method,
         headers,
-        body: typeof input.body === 'undefined' || method === 'GET' ? undefined : JSON.stringify(input.body),
+        body:
+          typeof input.body === 'undefined' || method === 'GET'
+            ? undefined
+            : JSON.stringify(input.body),
         signal: AbortSignal.timeout(timeoutMs),
       });
 
@@ -1301,7 +1392,9 @@ export class IntegrationServiceService {
         }
         throw new RpcException(
           errorRes(
-            typeof responseData === 'object' && responseData && 'message' in responseData
+            typeof responseData === 'object' &&
+              responseData &&
+              'message' in responseData
               ? String((responseData as Record<string, unknown>).message)
               : `External request failed with status ${response.status}`,
             response.status,
@@ -1352,27 +1445,39 @@ export class IntegrationServiceService {
       this.badRequest('base_url is required');
     }
 
-    const status = this.normalizeStatus((dto as any).status ?? (dto.is_active === false ? 'inactive' : 'active'));
+    const status = this.normalizeStatus(
+      (dto as any).status ?? (dto.is_active === false ? 'inactive' : 'active'),
+    );
     const integrationType = this.normalizeType((dto as any).type);
 
     const credentialsInput =
       ((dto as any).credentials && typeof (dto as any).credentials === 'object'
         ? ((dto as any).credentials as Record<string, unknown>)
         : null) ?? {};
-    const authType = (String(
-      dto.auth_type ??
-        (credentialsInput.auth_type as string | undefined) ??
-        (credentialsInput.api_key ? 'api_key' : 'login'),
-    ).toLowerCase() === 'login'
-      ? 'login'
-      : 'api_key') as 'api_key' | 'login';
-    const apiKey = (dto.api_key ?? (credentialsInput.api_key as string | undefined) ?? null) as string | null;
-    const apiSecret = (dto.api_secret ?? (credentialsInput.api_secret as string | undefined) ?? null) as
-      | string
-      | null;
-    const username = (dto.username ?? (credentialsInput.username as string | undefined) ?? null) as string | null;
-    const password = (dto.password ?? (credentialsInput.password as string | undefined) ?? null) as string | null;
-    const authUrl = (dto.auth_url ?? (credentialsInput.auth_url as string | undefined) ?? null) as string | null;
+    const authType = (
+      String(
+        dto.auth_type ??
+          (credentialsInput.auth_type as string | undefined) ??
+          (credentialsInput.api_key ? 'api_key' : 'login'),
+      ).toLowerCase() === 'login'
+        ? 'login'
+        : 'api_key'
+    ) as 'api_key' | 'login';
+    const apiKey = (dto.api_key ??
+      (credentialsInput.api_key as string | undefined) ??
+      null) as string | null;
+    const apiSecret = (dto.api_secret ??
+      (credentialsInput.api_secret as string | undefined) ??
+      null) as string | null;
+    const username = (dto.username ??
+      (credentialsInput.username as string | undefined) ??
+      null) as string | null;
+    const password = (dto.password ??
+      (credentialsInput.password as string | undefined) ??
+      null) as string | null;
+    const authUrl = (dto.auth_url ??
+      (credentialsInput.auth_url as string | undefined) ??
+      null) as string | null;
     const mergedCredentials = {
       ...credentialsInput,
       ...(apiKey ? { api_key: apiKey } : {}),
@@ -1433,7 +1538,11 @@ export class IntegrationServiceService {
       ...this.auditActor((dto as any)?.requester),
     });
 
-    return successRes(this.sanitizeIntegrationRow(enriched), 201, 'integration created');
+    return successRes(
+      this.sanitizeIntegrationRow(enriched),
+      201,
+      'integration created',
+    );
   }
 
   async findAllIntegrations(query?: FindAllIntegrationsQuery) {
@@ -1448,7 +1557,9 @@ export class IntegrationServiceService {
       if (typeof query.is_active === 'boolean') {
         where.is_active = query.is_active;
       } else {
-        where.is_active = ['true', '1', 'yes'].includes(String(query.is_active).toLowerCase());
+        where.is_active = ['true', '1', 'yes'].includes(
+          String(query.is_active).toLowerCase(),
+        );
       }
     }
 
@@ -1475,7 +1586,8 @@ export class IntegrationServiceService {
       where.createdAt = Between(new Date(0), toDate);
     }
 
-    const hasPagination = typeof query?.page !== 'undefined' || typeof query?.limit !== 'undefined';
+    const hasPagination =
+      typeof query?.page !== 'undefined' || typeof query?.limit !== 'undefined';
     const page = Math.max(1, Number(query?.page ?? 1));
     const limit = Math.min(200, Math.max(1, Number(query?.limit ?? 10)));
     if (!Number.isFinite(page) || !Number.isFinite(limit)) {
@@ -1499,7 +1611,11 @@ export class IntegrationServiceService {
     });
     const enriched = await this.attachMarkets(items as any);
     const sanitizedItems = this.sanitizeIntegrationRows(enriched as any[]);
-    const { items: itemsWithoutMarket, market, markets } = this.extractMarketsFromItems(sanitizedItems);
+    const {
+      items: itemsWithoutMarket,
+      market,
+      markets,
+    } = this.extractMarketsFromItems(sanitizedItems);
 
     const totalPages = Math.max(1, Math.ceil(total / limit));
     const rows = {
@@ -1518,7 +1634,9 @@ export class IntegrationServiceService {
   }
 
   async findIntegrationById(id: string) {
-    const row = await this.integrationRepo.findOne({ where: { id, isDeleted: false } });
+    const row = await this.integrationRepo.findOne({
+      where: { id, isDeleted: false },
+    });
     if (!row) {
       this.notFound('integration not found');
     }
@@ -1527,7 +1645,9 @@ export class IntegrationServiceService {
   }
 
   async updateIntegration(id: string, dto: Partial<ExternalIntegration>) {
-    const row = await this.integrationRepo.findOne({ where: { id, isDeleted: false } });
+    const row = await this.integrationRepo.findOne({
+      where: { id, isDeleted: false },
+    });
     if (!row) {
       this.notFound('integration not found');
     }
@@ -1585,11 +1705,15 @@ export class IntegrationServiceService {
       row.is_active = Boolean(dto.is_active);
     }
     if (typeof (dto as any).credentials !== 'undefined') {
-      const credentialsInput = ((dto as any).credentials ?? null) as Record<string, unknown> | null;
+      const credentialsInput = ((dto as any).credentials ?? null) as Record<
+        string,
+        unknown
+      > | null;
       row.credentials = this.normalizeCredentialsForStorage(credentialsInput);
       if (credentialsInput && typeof credentialsInput === 'object') {
         if (typeof credentialsInput.auth_type === 'string') {
-          row.auth_type = credentialsInput.auth_type === 'login' ? 'login' : 'api_key';
+          row.auth_type =
+            credentialsInput.auth_type === 'login' ? 'login' : 'api_key';
         }
         if (typeof credentialsInput.api_key === 'string') {
           row.api_key = this.encryptCredential(credentialsInput.api_key);
@@ -1642,14 +1766,20 @@ export class IntegrationServiceService {
       ...this.auditActor((dto as any)?.requester),
     });
 
-    return successRes(this.sanitizeIntegrationRow(enriched), 200, 'integration updated');
+    return successRes(
+      this.sanitizeIntegrationRow(enriched),
+      200,
+      'integration updated',
+    );
   }
 
   async deleteIntegration(
     id: string,
     requester?: { id?: string; roles?: string[] } | null,
   ) {
-    const row = await this.integrationRepo.findOne({ where: { id, isDeleted: false } });
+    const row = await this.integrationRepo.findOne({
+      where: { id, isDeleted: false },
+    });
     if (!row) {
       this.notFound('integration not found');
     }
@@ -1689,9 +1819,13 @@ export class IntegrationServiceService {
 
     let integration: ExternalIntegration | null = null;
     if (id) {
-      integration = await this.integrationRepo.findOne({ where: { id, isDeleted: false } });
+      integration = await this.integrationRepo.findOne({
+        where: { id, isDeleted: false },
+      });
     } else if (slug) {
-      integration = await this.integrationRepo.findOne({ where: { slug, isDeleted: false } });
+      integration = await this.integrationRepo.findOne({
+        where: { slug, isDeleted: false },
+      });
     }
 
     if (!integration) {
@@ -1742,7 +1876,9 @@ export class IntegrationServiceService {
       );
     } catch (error: any) {
       return errorRes(
-        error?.message ? String(error.message) : 'integration healthcheck failed',
+        error?.message
+          ? String(error.message)
+          : 'integration healthcheck failed',
         502,
         {
           ok: false,
@@ -1772,19 +1908,35 @@ export class IntegrationServiceService {
     const integration = await this.findActiveBySlug(input.slug);
     const syncConfig = this.toSyncConfig(integration);
     const searchConfig = syncConfig.external_search ?? {};
-    const method = (input.method ?? searchConfig.method ?? 'POST').toUpperCase() as HttpMethod;
+    const method = (
+      input.method ??
+      searchConfig.method ??
+      'POST'
+    ).toUpperCase() as HttpMethod;
     const qrField = input.qr_field ?? searchConfig.qr_field ?? 'qr_code';
     const endpoint = input.endpoint ?? searchConfig.endpoint;
     const responsePath = input.response_path ?? searchConfig.response_path;
 
     const context = { qr_code: input.qr_code };
     const paramsFromTemplate =
-      (this.interpolate(searchConfig.query_template ?? {}, context) as Record<string, unknown>) ?? {};
+      (this.interpolate(searchConfig.query_template ?? {}, context) as Record<
+        string,
+        unknown
+      >) ?? {};
     const bodyFromTemplate =
-      (this.interpolate(searchConfig.body_template ?? {}, context) as Record<string, unknown>) ?? {};
+      (this.interpolate(searchConfig.body_template ?? {}, context) as Record<
+        string,
+        unknown
+      >) ?? {};
 
-    const params = method === 'GET' ? { ...paramsFromTemplate, [qrField]: input.qr_code } : paramsFromTemplate;
-    const body = method === 'GET' ? undefined : { ...bodyFromTemplate, [qrField]: input.qr_code };
+    const params =
+      method === 'GET'
+        ? { ...paramsFromTemplate, [qrField]: input.qr_code }
+        : paramsFromTemplate;
+    const body =
+      method === 'GET'
+        ? undefined
+        : { ...bodyFromTemplate, [qrField]: input.qr_code };
 
     return this.executeExternalRequest({
       slug: input.slug,
@@ -1800,12 +1952,21 @@ export class IntegrationServiceService {
   }
 
   async getQueueStatus() {
-    const [pending, processing, completed, failed, permanentlyFailed, legacySuccess] = await Promise.all([
+    const [
+      pending,
+      processing,
+      completed,
+      failed,
+      permanentlyFailed,
+      legacySuccess,
+    ] = await Promise.all([
       this.syncQueueRepo.count({ where: { status: 'pending' } }),
       this.syncQueueRepo.count({ where: { status: 'processing' } }),
       this.syncQueueRepo.count({ where: { status: 'completed' as any } }),
       this.syncQueueRepo.count({ where: { status: 'failed' } }),
-      this.syncQueueRepo.count({ where: { status: 'permanently_failed' as any } }),
+      this.syncQueueRepo.count({
+        where: { status: 'permanently_failed' as any },
+      }),
       this.syncQueueRepo.count({ where: { status: 'success' as any } }),
     ]);
 
@@ -1869,7 +2030,10 @@ export class IntegrationServiceService {
       where: { ...where, status: 'failed' as any },
     });
     const totalAttempts = successCount + failedCount;
-    const success_rate = totalAttempts > 0 ? Number(((successCount * 100) / totalAttempts).toFixed(2)) : 0;
+    const success_rate =
+      totalAttempts > 0
+        ? Number(((successCount * 100) / totalAttempts).toFixed(2))
+        : 0;
 
     return successRes({
       items,
@@ -1908,8 +2072,15 @@ export class IntegrationServiceService {
     );
   }
 
-  private resolveExternalStatus(integration: ExternalIntegration, action: string, newStatus?: string): string {
-    const mapping = (integration.status_mapping ?? {}) as Record<string, string>;
+  private resolveExternalStatus(
+    integration: ExternalIntegration,
+    action: string,
+    newStatus?: string,
+  ): string {
+    const mapping = (integration.status_mapping ?? {}) as Record<
+      string,
+      string
+    >;
     const candidates = [newStatus, action].filter(Boolean) as string[];
 
     for (const candidate of candidates) {
@@ -1934,7 +2105,15 @@ export class IntegrationServiceService {
     external_order_id?: string;
     operator?: string;
     integration_id?: string;
-    action: 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting' | 'create' | 'update' | 'delete';
+    action:
+      | 'sold'
+      | 'canceled'
+      | 'paid'
+      | 'rollback'
+      | 'waiting'
+      | 'create'
+      | 'update'
+      | 'delete';
     entity_type?: string;
     entity_id?: string;
     payload?: Record<string, unknown>;
@@ -2009,7 +2188,9 @@ export class IntegrationServiceService {
       // initial attempt + max 3 retries
       max_attempts: 4,
       external_order_id:
-        !isGenericAction && input.external_order_id ? String(input.external_order_id) : null,
+        !isGenericAction && input.external_order_id
+          ? String(input.external_order_id)
+          : null,
       last_error: null,
       last_response: null,
       synced_at: null,
@@ -2030,7 +2211,9 @@ export class IntegrationServiceService {
     });
 
     await this.processPendingSyncQueue(1);
-    const updated = await this.syncQueueRepo.findOne({ where: { id: savedQueue.id } });
+    const updated = await this.syncQueueRepo.findOne({
+      where: { id: savedQueue.id },
+    });
     return successRes(updated ?? savedQueue, 201, 'sync enqueued');
   }
 
@@ -2068,7 +2251,8 @@ export class IntegrationServiceService {
 
     if (!endpoint) {
       queue.status = 'failed';
-      queue.last_error = 'status_sync_config.external_update.endpoint is required';
+      queue.last_error =
+        'status_sync_config.external_update.endpoint is required';
       queue.next_retry_at = null;
       await this.syncQueueRepo.save(queue);
       await this.writeSyncHistoryAttempt({
@@ -2083,15 +2267,25 @@ export class IntegrationServiceService {
     const method = (updateConfig.method ?? 'POST').toUpperCase() as HttpMethod;
     const orderIdField = updateConfig.order_id_field ?? 'id';
     const statusField = updateConfig.status_field ?? 'status';
-    const isGenericAction = ['create', 'update', 'delete'].includes(String(queue.action));
+    const isGenericAction = ['create', 'update', 'delete'].includes(
+      String(queue.action),
+    );
     const payload = (queue.payload ?? {}) as Record<string, string>;
     const queryFromTemplate =
-      (this.interpolate(updateConfig.query_template ?? {}, payload) as Record<string, unknown>) ?? {};
+      (this.interpolate(updateConfig.query_template ?? {}, payload) as Record<
+        string,
+        unknown
+      >) ?? {};
     const bodyFromTemplate =
-      (this.interpolate(updateConfig.body_template ?? {}, payload) as Record<string, unknown>) ?? {};
+      (this.interpolate(updateConfig.body_template ?? {}, payload) as Record<
+        string,
+        unknown
+      >) ?? {};
 
-    const externalOrderId = queue.external_order_id ?? queue.order_id ?? queue.entity_id;
-    const externalStatus = queue.external_status ?? queue.new_status ?? queue.action;
+    const externalOrderId =
+      queue.external_order_id ?? queue.order_id ?? queue.entity_id;
+    const externalStatus =
+      queue.external_status ?? queue.new_status ?? queue.action;
 
     const params =
       method === 'GET'
@@ -2146,7 +2340,8 @@ export class IntegrationServiceService {
       await this.syncQueueRepo.save(queue);
 
       integration.last_sync_at = new Date();
-      integration.total_synced_orders = Number(integration.total_synced_orders ?? 0) + 1;
+      integration.total_synced_orders =
+        Number(integration.total_synced_orders ?? 0) + 1;
       await this.integrationRepo.save(integration);
 
       await this.writeSyncHistoryAttempt({
@@ -2172,12 +2367,18 @@ export class IntegrationServiceService {
           Math.max(0, Number(queue.max_attempts ?? 4) - 1),
           Math.max(0, Number(queue.attempts ?? 0)),
         );
-        queue.next_retry_at = new Date(Date.now() + this.getRetryDelayMs(Number(queue.attempts)));
+        queue.next_retry_at = new Date(
+          Date.now() + this.getRetryDelayMs(Number(queue.attempts)),
+        );
       } else {
         queue.status = 'permanently_failed' as any;
         queue.retry_count = Math.max(0, Number(queue.max_attempts ?? 4) - 1);
         queue.next_retry_at = null;
-        await this.notifyAdminsAboutPermanentFailure(queue, integration, message);
+        await this.notifyAdminsAboutPermanentFailure(
+          queue,
+          integration,
+          message,
+        );
       }
       await this.syncQueueRepo.save(queue);
       await this.writeSyncHistoryAttempt({
@@ -2202,12 +2403,16 @@ export class IntegrationServiceService {
     // Advisory locks are session-scoped — acquire/release MUST run on the
     // same connection. A dedicated QueryRunner pins one connection for the
     // entire critical section (pooled queries elsewhere don't interfere).
-    const queryRunner = this.syncQueueRepo.manager.connection.createQueryRunner();
+    const queryRunner =
+      this.syncQueueRepo.manager.connection.createQueryRunner();
     await queryRunner.connect();
 
     let acquired = false;
-    let auditSummary: { processed: number; completed: number; failed: number } | null =
-      null;
+    let auditSummary: {
+      processed: number;
+      completed: number;
+      failed: number;
+    } | null = null;
     try {
       const lockRows = await queryRunner.query(
         'SELECT pg_try_advisory_lock($1::bigint) AS acquired',
@@ -2227,7 +2432,11 @@ export class IntegrationServiceService {
         const pendingWhere = integration_id
           ? [
               { status: 'pending', next_retry_at: IsNull(), integration_id },
-              { status: 'pending', next_retry_at: LessThanOrEqual(now), integration_id },
+              {
+                status: 'pending',
+                next_retry_at: LessThanOrEqual(now),
+                integration_id,
+              },
             ]
           : [
               { status: 'pending', next_retry_at: IsNull() },
@@ -2245,9 +2454,15 @@ export class IntegrationServiceService {
 
         const result = await this.processQueueItem(queue);
         processed += 1;
-        if (result.status === ('completed' as any) || result.status === ('success' as any)) {
+        if (
+          result.status === ('completed' as any) ||
+          result.status === ('success' as any)
+        ) {
           completed += 1;
-        } else if (result.status === 'failed' || result.status === ('permanently_failed' as any)) {
+        } else if (
+          result.status === 'failed' ||
+          result.status === ('permanently_failed' as any)
+        ) {
           failed += 1;
         }
       }
@@ -2299,7 +2514,11 @@ export class IntegrationServiceService {
         where: integration_id
           ? [
               { id: String(queue_id), integration_id, status: 'failed' as any },
-              { id: String(queue_id), integration_id, status: 'permanently_failed' as any },
+              {
+                id: String(queue_id),
+                integration_id,
+                status: 'permanently_failed' as any,
+              },
             ]
           : [
               { id: String(queue_id), status: 'failed' as any },
@@ -2362,7 +2581,10 @@ export class IntegrationServiceService {
       });
     }
 
-    return this.processPendingSyncQueue(Math.max(1, rows.length), integration_id);
+    return this.processPendingSyncQueue(
+      Math.max(1, rows.length),
+      integration_id,
+    );
   }
 
   // ===========================================================================
@@ -2669,12 +2891,16 @@ export class IntegrationServiceService {
       try {
         markResult = await this.rmqRequest<{
           data?: { total_price?: number };
-        }>(this.orderClient, { cmd: 'order.provider.mark' }, {
-          order_id: shipment.order_id,
-          action: mapped.action,
-          provider_slug: integration.slug,
-          external_ref: shipment.external_ref,
-        });
+        }>(
+          this.orderClient,
+          { cmd: 'order.provider.mark' },
+          {
+            order_id: shipment.order_id,
+            action: mapped.action,
+            provider_slug: integration.slug,
+            external_ref: shipment.external_ref,
+          },
+        );
       } catch (err) {
         this.logger.warn(
           `order.provider.mark failed for order ${shipment.order_id}: ${(err as Error).message}`,
@@ -3300,82 +3526,84 @@ export class IntegrationServiceService {
     }
 
     const settledOrderIds: string[] = [];
-    const result = await this.receivableRepo.manager.transaction(async (manager) => {
-      const receivableRepo = manager.getRepository(ProviderReceivable);
-      const remittanceRepo = manager.getRepository(ProviderRemittance);
+    const result = await this.receivableRepo.manager.transaction(
+      async (manager) => {
+        const receivableRepo = manager.getRepository(ProviderReceivable);
+        const remittanceRepo = manager.getRepository(ProviderRemittance);
 
-      const orderIds = (input.order_ids ?? [])
-        .map((x) => String(x))
-        .filter(Boolean);
+        const orderIds = (input.order_ids ?? [])
+          .map((x) => String(x))
+          .filter(Boolean);
 
-      const where: Record<string, unknown> = {
-        integration_id: integrationId,
-        status: ReceivableStatus.PENDING,
-        isDeleted: false,
-      };
-      if (orderIds.length) {
-        where.order_id = In(orderIds);
-      }
-
-      const pending = await receivableRepo.find({
-        where,
-        order: { createdAt: 'ASC' },
-      });
-
-      const remittance = await remittanceRepo.save(
-        remittanceRepo.create({
+        const where: Record<string, unknown> = {
           integration_id: integrationId,
-          amount: amount.toFixed(2),
-          reference: input.reference ?? null,
-          note: input.note ?? null,
-          created_by: input.created_by ?? null,
-          settled_count: 0,
-        }),
-      );
-
-      let remaining = amount;
-      let settledCount = 0;
-      let settledAmount = 0;
-      const now = new Date();
-
-      for (const row of pending) {
-        const rowAmount = Number(row.amount);
-        // When settling by explicit ids, settle each in full. Otherwise stop
-        // once the remitted amount is exhausted (FIFO, full rows only).
-        if (!orderIds.length && rowAmount > remaining) {
-          break;
+          status: ReceivableStatus.PENDING,
+          isDeleted: false,
+        };
+        if (orderIds.length) {
+          where.order_id = In(orderIds);
         }
-        row.status = ReceivableStatus.SETTLED;
-        row.remittance_id = remittance.id;
-        row.settled_at = now;
-        await receivableRepo.save(row);
-        settledOrderIds.push(String(row.order_id));
-        remaining -= rowAmount;
-        settledAmount += rowAmount;
-        settledCount += 1;
-      }
 
-      remittance.settled_count = settledCount;
-      await remittanceRepo.save(remittance);
+        const pending = await receivableRepo.find({
+          where,
+          order: { createdAt: 'ASC' },
+        });
 
-      return {
-        response: successRes(
-          {
-            remittance_id: remittance.id,
+        const remittance = await remittanceRepo.save(
+          remittanceRepo.create({
             integration_id: integrationId,
-            remitted_amount: amount,
-            settled_amount: settledAmount,
-            settled_count: settledCount,
-            unapplied_amount: Number((amount - settledAmount).toFixed(2)),
-          },
-          201,
-          'Remittance recorded',
-        ),
-        remittance_id: remittance.id,
-        settled_count: settledCount,
-        settled_amount: settledAmount,
-      };
-    });
+            amount: amount.toFixed(2),
+            reference: input.reference ?? null,
+            note: input.note ?? null,
+            created_by: input.created_by ?? null,
+            settled_count: 0,
+          }),
+        );
+
+        let remaining = amount;
+        let settledCount = 0;
+        let settledAmount = 0;
+        const now = new Date();
+
+        for (const row of pending) {
+          const rowAmount = Number(row.amount);
+          // When settling by explicit ids, settle each in full. Otherwise stop
+          // once the remitted amount is exhausted (FIFO, full rows only).
+          if (!orderIds.length && rowAmount > remaining) {
+            break;
+          }
+          row.status = ReceivableStatus.SETTLED;
+          row.remittance_id = remittance.id;
+          row.settled_at = now;
+          await receivableRepo.save(row);
+          settledOrderIds.push(String(row.order_id));
+          remaining -= rowAmount;
+          settledAmount += rowAmount;
+          settledCount += 1;
+        }
+
+        remittance.settled_count = settledCount;
+        await remittanceRepo.save(remittance);
+
+        return {
+          response: successRes(
+            {
+              remittance_id: remittance.id,
+              integration_id: integrationId,
+              remitted_amount: amount,
+              settled_amount: settledAmount,
+              settled_count: settledCount,
+              unapplied_amount: Number((amount - settledAmount).toFixed(2)),
+            },
+            201,
+            'Remittance recorded',
+          ),
+          remittance_id: remittance.id,
+          settled_count: settledCount,
+          settled_amount: settledAmount,
+        };
+      },
+    );
 
     // Audit AFTER the transaction commits — one row per remittance (batch over
     // many receivables), collection summarised in metadata.

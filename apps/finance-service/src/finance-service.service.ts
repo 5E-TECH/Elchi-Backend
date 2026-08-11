@@ -380,7 +380,10 @@ export class FinanceServiceService implements OnModuleInit {
       if (history?.created_by) {
         ids.push(String(history.created_by));
       }
-      if (history?.source_user_id && userBackedSources.has(history.source_type)) {
+      if (
+        history?.source_user_id &&
+        userBackedSources.has(history.source_type)
+      ) {
         ids.push(String(history.source_user_id));
       }
       if (history?.cashbox?.user_id) {
@@ -396,7 +399,8 @@ export class FinanceServiceService implements OnModuleInit {
           ? (usersMap.get(String(history.created_by)) ?? null)
           : null;
       const sourceUser =
-        history.source_user_id != null && userBackedSources.has(history.source_type)
+        history.source_user_id != null &&
+        userBackedSources.has(history.source_type)
           ? (usersMap.get(String(history.source_user_id)) ?? null)
           : null;
 
@@ -1566,6 +1570,7 @@ export class FinanceServiceService implements OnModuleInit {
     comment?: string;
     cashbox_type?: Cashbox_type;
     created_by?: string;
+    dedup_epoch?: string;
   }) {
     try {
       const targetCashboxType = data.cashbox_type ?? Cashbox_type.MAIN;
@@ -1582,6 +1587,12 @@ export class FinanceServiceService implements OnModuleInit {
         comment: data.comment,
         created_by: data.created_by ?? data.user_id,
         cashbox_type: targetCashboxType,
+        // Server-derived idempotency token (from the gateway). Carrying it as
+        // both source_id and dedup_epoch engages the partial-unique history
+        // index so an accidental double-submit of the same manual expense moves
+        // cash at most once. Absent token → NULL source_id → prior behaviour.
+        source_id: data.dedup_epoch || undefined,
+        dedup_epoch: data.dedup_epoch,
       });
       await this.activityLog.log({
         entity_type: 'Cashbox',
@@ -1608,6 +1619,7 @@ export class FinanceServiceService implements OnModuleInit {
     comment?: string;
     cashbox_type?: Cashbox_type;
     created_by?: string;
+    dedup_epoch?: string;
   }) {
     try {
       const targetCashboxType = data.cashbox_type ?? Cashbox_type.MAIN;
@@ -1624,6 +1636,10 @@ export class FinanceServiceService implements OnModuleInit {
         comment: data.comment,
         created_by: data.created_by ?? data.user_id,
         cashbox_type: targetCashboxType,
+        // Server-derived idempotency token (see spendMoney) — dedupes an
+        // accidental double-submit of the same manual income/fill.
+        source_id: data.dedup_epoch || undefined,
+        dedup_epoch: data.dedup_epoch,
       });
       await this.activityLog.log({
         entity_type: 'Cashbox',

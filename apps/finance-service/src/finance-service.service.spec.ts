@@ -812,6 +812,32 @@ describe('FinanceServiceService manual branch cashbox operations', () => {
       }),
     );
   });
+
+  it('carries a supplied dedup token as source_id + dedup_epoch so a double-submit is idempotent', async () => {
+    const manager = makeManager();
+    const { service } = makeService(manager);
+    const updateBalance = jest
+      .spyOn(service, 'updateBalance')
+      .mockResolvedValue({ data: { id: 'history-3' } } as any);
+
+    await service.spendMoney({
+      user_id: '13',
+      created_by: '54',
+      amount: 50000,
+      dedup_epoch: 'tok-abc',
+    });
+
+    // The token is carried as BOTH source_id and dedup_epoch so the partial
+    // unique history index (source_id IS NOT NULL) dedupes an accidental
+    // double-submit of the same manual expense (Audit money P1).
+    expect(updateBalance).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source_id: 'tok-abc',
+        dedup_epoch: 'tok-abc',
+        source_type: 'manual_expense',
+      }),
+    );
+  });
 });
 
 describe('FinanceServiceService.paymentsToMarket', () => {

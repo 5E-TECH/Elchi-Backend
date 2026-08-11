@@ -236,6 +236,7 @@ export class FinanceServiceController {
       comment?: string;
       cashbox_type?: Cashbox_type;
       created_by?: string;
+      dedup_epoch?: string;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -254,6 +255,7 @@ export class FinanceServiceController {
       comment?: string;
       cashbox_type?: Cashbox_type;
       created_by?: string;
+      dedup_epoch?: string;
     },
     @Ctx() context: RmqContext,
   ) {
