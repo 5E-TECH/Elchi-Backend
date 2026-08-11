@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { Repository } from 'typeorm';
@@ -29,7 +29,21 @@ import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
  */
 @Injectable()
 export class OrderAnalyticsService {
+  private readonly logger = new Logger(OrderAnalyticsService.name);
   private hqBranchIdCache: string | null = null;
+
+  /**
+   * Upper bound on an analytics date span. These reports load individual order
+   * rows for the range into memory and aggregate in JS (see getRevenueStats /
+   * getMarketStat), so an uncapped user range (e.g. 2000..2030) would pull the
+   * whole orders table — the platform's largest, ever-growing table — into the
+   * process (latency cliff + memory pressure, amplified by rmqSend retries).
+   * ~25 months comfortably covers year-over-year dashboards; wider requests are
+   * clamped to the most recent window (and logged). Proper fix for arbitrarily
+   * wide ranges is a SQL GROUP BY aggregation endpoint — tracked separately.
+   */
+  private static readonly MAX_ANALYTICS_SPAN_MS =
+    768 * 24 * 60 * 60 * 1000;
 
   constructor(
     @InjectRepository(Order) private readonly orderRepo: Repository<Order>,
@@ -158,6 +172,23 @@ export class OrderAnalyticsService {
         statusCode: 400,
         message: 'Sana formati noto‘g‘ri',
       });
+    }
+
+    // Bound the span so a pathologically-wide range can't load the entire
+    // orders table into memory (Audit: unbounded analytics query). Clamp the
+    // start to the most-recent window rather than rejecting, so dashboards keep
+    // working; log so the truncation is observable.
+    const span = end.getTime() - start.getTime();
+    if (span > OrderAnalyticsService.MAX_ANALYTICS_SPAN_MS) {
+      const clampedStart = new Date(
+        end.getTime() - OrderAnalyticsService.MAX_ANALYTICS_SPAN_MS,
+      );
+      this.logger.warn(
+        `Analytics date span ${Math.round(span / 86_400_000)}d exceeds cap ` +
+          `${Math.round(OrderAnalyticsService.MAX_ANALYTICS_SPAN_MS / 86_400_000)}d; ` +
+          `clamping start ${start.toISOString()} -> ${clampedStart.toISOString()}`,
+      );
+      start = clampedStart;
     }
 
     return { start, end };

@@ -393,4 +393,40 @@ describe('OrderServiceService filters', () => {
       expect.anything(),
     );
   });
+
+  // Audit (unbounded query): getRevenueStats/getMarketStat load individual
+  // order rows for the range and aggregate in JS. analyticsDateRange must cap
+  // the span so a pathologically-wide range can't pull the whole orders table.
+  describe('analytics date-span cap', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const MAX_SPAN = 768 * DAY;
+
+    const revenueSpanMs = (qb: any): number => {
+      const call = qb.andWhere.mock.calls.find(
+        (c: any[]) =>
+          typeof c[0] === 'string' && c[0].includes('o.sold_at BETWEEN'),
+      );
+      expect(call).toBeDefined();
+      const { startMs, endMs } = call[1];
+      return Number(endMs) - Number(startMs);
+    };
+
+    it('clamps a 30-year revenue range to the max span', async () => {
+      const { analytics, qb } = setup();
+      await analytics.getRevenueStats('2000-01-01', '2030-01-01', 'monthly');
+      const span = revenueSpanMs(qb);
+      expect(span).toBeLessThanOrEqual(MAX_SPAN);
+      // clamped to (approximately) the cap, not something tiny
+      expect(span).toBeGreaterThan(MAX_SPAN - 2 * DAY);
+    });
+
+    it('leaves a normal 30-day range untouched', async () => {
+      const { analytics, qb } = setup();
+      await analytics.getRevenueStats('2026-01-01', '2026-01-31', 'daily');
+      const span = revenueSpanMs(qb);
+      // ~30 days (end is end-of-day, so a touch over 30*DAY) — well under cap
+      expect(span).toBeGreaterThan(29 * DAY);
+      expect(span).toBeLessThan(32 * DAY);
+    });
+  });
 });
