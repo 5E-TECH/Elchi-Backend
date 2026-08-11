@@ -6,6 +6,26 @@ x-json-logging: &json-logging
     max-size: '10m'
     max-file: '5'
 
+# Resource ceilings (Audit devops P2: no limits → one leaking/forking service
+# could starve the host and take every other service down with it). These are
+# deliberately GENEROUS safety ceilings — sized well above steady-state so they
+# never bite healthy operation; they only bound a runaway memory leak or fork
+# storm. `pids_limit` is a cheap fork-bomb guard with no downside. CPU is left
+# unthrottled so latency-sensitive money paths are never CPU-starved. Tune
+# mem_limit DOWN only with real production memory profiling — too tight causes
+# OOM-kill restart loops.
+x-svc-limits: &svc-limits
+  mem_limit: 1g
+  mem_reservation: 256m
+  pids_limit: 512
+
+# Hot paths (gateway + order + finance): more headroom for larger DB pools and
+# bigger in-flight result sets.
+x-hot-svc-limits: &hot-svc-limits
+  mem_limit: 1536m
+  mem_reservation: 512m
+  pids_limit: 512
+
 services:
   rabbitmq:
     image: rabbitmq:3-management
@@ -127,6 +147,7 @@ services:
     restart: unless-stopped
 
   api-gateway:
+    <<: *hot-svc-limits
     build:
       context: .
       dockerfile: apps/api-gateway/Dockerfile
@@ -140,8 +161,24 @@ services:
         condition: service_completed_successfully
     logging: *json-logging
     restart: unless-stopped
+    # Real liveness: hit the gateway's own @Public /health (port 3004 — the
+    # internal contract cloudflared routes to). Uses the bundled node binary so
+    # no curl/wget is required in the image. start_period covers Nest bootstrap.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3004/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   cloudflared:
+    <<: *svc-limits
     image: cloudflare/cloudflared:latest
     container_name: elchi-cloudflared
     # TUNNEL_TOKEN .env.production'dan o'qiladi. Public Hostname sozlamasi
@@ -155,6 +192,7 @@ services:
     restart: unless-stopped
 
   identity-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/identity-service/Dockerfile
@@ -170,6 +208,7 @@ services:
     restart: unless-stopped
 
   order-service:
+    <<: *hot-svc-limits
     build:
       context: .
       dockerfile: apps/order-service/Dockerfile
@@ -190,6 +229,7 @@ services:
     restart: unless-stopped
 
   catalog-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/catalog-service/Dockerfile
@@ -205,6 +245,7 @@ services:
     restart: unless-stopped
 
   logistics-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/logistics-service/Dockerfile
@@ -220,6 +261,7 @@ services:
     restart: unless-stopped
 
   finance-service:
+    <<: *hot-svc-limits
     build:
       context: .
       dockerfile: apps/finance-service/Dockerfile
@@ -239,6 +281,7 @@ services:
     restart: unless-stopped
 
   notification-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/notification-service/Dockerfile
@@ -254,6 +297,7 @@ services:
     restart: unless-stopped
 
   integration-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/integration-service/Dockerfile
@@ -269,6 +313,7 @@ services:
     restart: unless-stopped
 
   analytics-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/analytics-service/Dockerfile
@@ -282,6 +327,7 @@ services:
     restart: unless-stopped
 
   branch-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/branch-service/Dockerfile
@@ -297,6 +343,7 @@ services:
     restart: unless-stopped
 
   investor-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/investor-service/Dockerfile
@@ -312,6 +359,7 @@ services:
     restart: unless-stopped
 
   file-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/file-service/Dockerfile
@@ -327,6 +375,7 @@ services:
     restart: unless-stopped
 
   c2c-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/c2c-service/Dockerfile
@@ -342,6 +391,7 @@ services:
     restart: unless-stopped
 
   search-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/search-service/Dockerfile
