@@ -4,12 +4,16 @@ import {
   ArgumentsHost,
   HttpException,
   HttpStatus,
+  Logger,
 } from '@nestjs/common';
 import { Response } from 'express';
 import { captureException } from '../sentry/sentry.helper';
+import { requestContext } from '../context/request-context';
 
 @Catch()
 export class AllExceptionsFilter implements ExceptionFilter {
+  private readonly logger = new Logger(AllExceptionsFilter.name);
+
   catch(exception: unknown, host: ArgumentsHost) {
     // Forward unexpected (5xx) exceptions to Sentry. captureException itself
     // ignores 4xx-shaped business errors so this is safe to call unguarded.
@@ -27,7 +31,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
       const exceptionResponse = exception.getResponse();
       if (typeof exceptionResponse === 'string') {
         message = exceptionResponse;
-      } else if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
+      } else if (
+        typeof exceptionResponse === 'object' &&
+        exceptionResponse !== null
+      ) {
         const msg = (exceptionResponse as Record<string, unknown>).message;
         if (Array.isArray(msg)) {
           message = msg.join('. ');
@@ -45,11 +52,15 @@ export class AllExceptionsFilter implements ExceptionFilter {
       status =
         (typeof obj.statusCode === 'number' && obj.statusCode) ||
         (typeof obj.status === 'number' && obj.status) ||
-        (typeof nestedResponse?.statusCode === 'number' && nestedResponse.statusCode) ||
+        (typeof nestedResponse?.statusCode === 'number' &&
+          nestedResponse.statusCode) ||
         status;
 
       const objMessage =
-        obj.message ?? nestedResponse?.message ?? obj.error ?? nestedResponse?.error;
+        obj.message ??
+        nestedResponse?.message ??
+        obj.error ??
+        nestedResponse?.error;
 
       if (Array.isArray(objMessage)) {
         message = objMessage.join('. ');
@@ -69,9 +80,23 @@ export class AllExceptionsFilter implements ExceptionFilter {
       }
     }
 
+    const traceId = requestContext.get()?.traceId;
+
+    // Structured 5xx log (Audit observability P1: the filter only sent to Sentry
+    // and wrote nothing to the local structured log, so a prod 5xx was invisible
+    // without a Sentry lookup). 4xx are client errors — not logged at error level
+    // to keep the signal clean.
+    if (status >= 500) {
+      this.logger.error(
+        `${status} ${message} (trace_id=${traceId ?? '-'})`,
+        exception instanceof Error ? exception.stack : undefined,
+      );
+    }
+
     response.status(status).json({
       statusCode: status,
       message,
+      ...(traceId ? { trace_id: traceId } : {}),
     });
   }
 }

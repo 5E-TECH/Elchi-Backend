@@ -1,3 +1,11 @@
+# Bounded json-file logging so container logs can't fill the host disk (Audit
+# observability/devops P2: Docker's default json-file driver is unbounded).
+x-json-logging: &json-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '5'
+
 services:
   rabbitmq:
     image: rabbitmq:3-management
@@ -95,6 +103,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    logging: *json-logging
     restart: unless-stopped
 
   # Scheduled cashbox reconciliation (Audit money P1: the invariant check existed
@@ -114,6 +123,7 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    logging: *json-logging
     restart: unless-stopped
 
   api-gateway:
@@ -128,6 +138,7 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
 
   cloudflared:
@@ -140,6 +151,7 @@ services:
     env_file: .env.production
     depends_on:
       - api-gateway
+    logging: *json-logging
     restart: unless-stopped
 
   identity-service:
@@ -154,6 +166,7 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
 
   order-service:
@@ -173,6 +186,7 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
 
   catalog-service:
@@ -187,6 +201,7 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
 
   logistics-service:
@@ -201,6 +216,7 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
 
   finance-service:
@@ -219,6 +235,7 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
 
   notification-service:
@@ -233,6 +250,7 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
 
   integration-service:
@@ -247,6 +265,7 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
 
   analytics-service:
@@ -259,6 +278,7 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
 
   branch-service:
@@ -273,6 +293,7 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
 
   investor-service:
@@ -287,6 +308,7 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
 
   file-service:
@@ -301,6 +323,7 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
 
   c2c-service:
@@ -315,6 +338,7 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
 
   search-service:
@@ -329,6 +353,7 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
 
 volumes:
