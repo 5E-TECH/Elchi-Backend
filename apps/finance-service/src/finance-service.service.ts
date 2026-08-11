@@ -2517,12 +2517,14 @@ export class FinanceServiceService implements OnModuleInit {
   async financialBalance() {
     try {
       const mainCashbox = await this.ensureMainCashbox();
-      const allMarketCashboxes = await this.cashboxRepo.find({
-        where: {
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          isDeleted: false,
-        },
-      });
+      // Perf/unbounded (audit): this used to `find()` EVERY market cashbox row
+      // and return the whole array (+ a per-row `items` map) purely to derive
+      // one total — an unbounded load and payload as markets grow. The total is
+      // all this summary needs, so push it down to SQL SUM. The full list is not
+      // consumed by any client, so it is no longer returned.
+      const marketCashboxTotal = await this.sumCashboxBalanceByType(
+        Cashbox_type.FOR_MARKET,
+      );
       const settlementResponse = await rmqSend<{
         data?: {
           branch_receivable?: number;
@@ -2540,10 +2542,6 @@ export class FinanceServiceService implements OnModuleInit {
         Number(settlement.branch_receivable ?? 0),
         0,
       );
-      const marketCashboxTotal = allMarketCashboxes.reduce(
-        (sum, cashbox) => sum + Number(cashbox.balance ?? 0),
-        0,
-      );
       const marketPayable = Math.max(marketCashboxTotal, 0);
       const difference = branchReceivable - marketPayable;
       const currentSituation = Number(mainCashbox.balance) + difference;
@@ -2557,13 +2555,8 @@ export class FinanceServiceService implements OnModuleInit {
             items: settlement.branches ?? [],
           },
           markets: {
-            allMarketCashboxes,
             marketPayable,
             marketsTotalBalans: -marketPayable,
-            items: allMarketCashboxes.map((cashbox) => ({
-              market_id: String(cashbox.user_id),
-              amount: Math.max(Number(cashbox.balance ?? 0), 0),
-            })),
           },
           couriers: {
             allCourierCashboxes: [],

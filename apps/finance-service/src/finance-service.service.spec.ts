@@ -338,11 +338,14 @@ describe('FinanceServiceService.financialBalance', () => {
       cashbox_type: 'main',
       balance: 500000,
     });
-    cashboxRepo.find = jest
-      .fn()
-      .mockResolvedValue([
-        { id: 'market-cashbox', user_id: '20', balance: 999999 },
-      ]);
+    // Market total now comes from a SQL SUM (sumCashboxBalanceByType), not a
+    // full-table find(); the full market-cashbox list is no longer returned.
+    cashboxRepo.createQueryBuilder = jest.fn().mockReturnValue({
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({ total: '999999' }),
+    });
     rmqSendMock.mockResolvedValue({
       data: {
         branch_receivable: 200000,
@@ -358,9 +361,9 @@ describe('FinanceServiceService.financialBalance', () => {
     expect(response.data.branches.branchReceivable).toBe(200000);
     expect(response.data.markets.marketPayable).toBe(999999);
     expect(response.data.markets.marketsTotalBalans).toBe(-999999);
-    expect(response.data.markets.items).toEqual([
-      { market_id: '20', amount: 999999 },
-    ]);
+    // The unbounded full list + per-row items array are intentionally gone.
+    expect(response.data.markets.allMarketCashboxes).toBeUndefined();
+    expect(response.data.markets.items).toBeUndefined();
     expect(response.data.couriers.couriersTotalBalanse).toBe(0);
     expect(response.data.formula).toBe(
       'main_cashbox + branch_receivable - market_cashbox_payable',
