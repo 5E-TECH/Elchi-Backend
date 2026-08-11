@@ -11,7 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, timeout } from 'rxjs';
 import {
   ApiBody,
   ApiCreatedResponse,
@@ -93,7 +93,7 @@ export class PartnerGatewayController {
     const res = await firstValueFrom(
       this.logisticsClient.send<{
         data?: Array<{ id: string | number; name: string }>;
-      }>({ cmd: 'logistics.region.find_all' }, {}),
+      }>({ cmd: 'logistics.region.find_all' }, {}).pipe(timeout(8000)),
     );
     return (res?.data ?? []).map((r) => ({ id: String(r.id), name: r.name }));
   }
@@ -113,7 +113,7 @@ export class PartnerGatewayController {
           name: string;
           region_id: string | number;
         }>;
-      }>({ cmd: 'logistics.district.find_all' }, { region_id: regionId }),
+      }>({ cmd: 'logistics.district.find_all' }, { region_id: regionId }).pipe(timeout(8000)),
     );
     return (res?.data ?? []).map((d) => ({
       id: String(d.id),
@@ -159,7 +159,7 @@ export class PartnerGatewayController {
           tariff_home?: number;
           tariff_center?: number;
         }>;
-      }>({ cmd: 'identity.market.find_by_ids' }, { ids: [elchiMarketId] }),
+      }>({ cmd: 'identity.market.find_by_ids' }, { ids: [elchiMarketId] }).pipe(timeout(8000)),
     );
     const market = (res?.data ?? [])[0];
     if (!market) {
@@ -197,7 +197,7 @@ export class PartnerGatewayController {
           partner_id: request.partner.id,
           requester: { id: `partner:${request.partner.id}` },
         },
-      ),
+      ).pipe(timeout(8000)),
     );
   }
 
@@ -219,7 +219,7 @@ export class PartnerGatewayController {
       this.integrationClient.send(
         { cmd: 'integration.partner.create_shipment' },
         { ...dto, partner_id: request.partner.id },
-      ),
+      ).pipe(timeout(8000)),
     );
   }
 }

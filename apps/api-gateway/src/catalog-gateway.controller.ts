@@ -122,7 +122,7 @@ export class CatalogGatewayController {
   @Get('health')
   @ApiOperation({ summary: 'Catalog service health check' })
   health() {
-    return this.catalogClient.send({ cmd: 'catalog.health' }, {});
+    return this.catalogClient.send({ cmd: 'catalog.health' }, {}).pipe(timeout(8000));
   }
 
   @Post()
@@ -224,7 +224,7 @@ export class CatalogGatewayController {
           limit: limit ? Number(limit) : undefined,
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('market/:marketId')
@@ -243,7 +243,7 @@ export class CatalogGatewayController {
     return this.catalogClient.send(
       { cmd: 'catalog.product.find_all' },
       { query: { user_id: marketId } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('my-products')
@@ -255,7 +255,7 @@ export class CatalogGatewayController {
     return this.catalogClient.send(
       { cmd: 'catalog.product.find_all' },
       { query: { user_id: req.user.sub } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get(':id')
@@ -267,7 +267,7 @@ export class CatalogGatewayController {
     return this.catalogClient.send(
       { cmd: 'catalog.product.find_by_id' },
       { id },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch(':id')
@@ -309,7 +309,7 @@ export class CatalogGatewayController {
     return this.catalogClient.send(
       { cmd: 'catalog.product.update' },
       { id, dto: { ...safeDto, image_url: imageUrl } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Delete(':id')
@@ -327,7 +327,7 @@ export class CatalogGatewayController {
     return this.catalogClient.send(
       { cmd: 'catalog.product.delete' },
       { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch('my/:id')
@@ -369,6 +369,6 @@ export class CatalogGatewayController {
     return this.catalogClient.send(
       { cmd: 'catalog.product.update_own' },
       { id, user_id: req.user.sub, dto: { ...safeDto, image_url: imageUrl } },
-    );
+    ).pipe(timeout(8000));
   }
 }

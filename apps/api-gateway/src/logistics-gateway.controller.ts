@@ -184,7 +184,7 @@ export class LogisticsGatewayController {
   @Get('health')
   @ApiOperation({ summary: 'Logistics service health check' })
   health() {
-    return this.logisticsClient.send({ cmd: 'logistics.health' }, {});
+    return this.logisticsClient.send({ cmd: 'logistics.health' }, {}).pipe(timeout(8000));
   }
 
   // ---------- Post ----------
@@ -224,7 +224,7 @@ export class LogisticsGatewayController {
         },
         requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('post/new')
@@ -256,7 +256,7 @@ export class LogisticsGatewayController {
           search,
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('post/rejected')
@@ -280,7 +280,7 @@ export class LogisticsGatewayController {
           branch_id: req?.user?.branch_id ?? null,
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('post/on-the-road')
@@ -292,7 +292,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.on_the_road' },
       { requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('post/courier/old-posts')
@@ -312,7 +312,7 @@ export class LogisticsGatewayController {
         limit: Number(limit),
         requester: { id: req.user.sub, roles: req.user.roles ?? [] },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('post/courier/rejected')
@@ -324,7 +324,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.rejected_for_courier' },
       { requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('post/:id')
@@ -344,7 +344,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.find_by_id' },
       { id, requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Delete('post/:id')
@@ -354,7 +354,7 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Delete post by id (superadmin only)' })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   deletePost(@Param('id') id: string) {
-    return this.logisticsClient.send({ cmd: 'logistics.post.delete' }, { id });
+    return this.logisticsClient.send({ cmd: 'logistics.post.delete' }, { id }).pipe(timeout(8000));
   }
 
   @Patch('post/:id')
@@ -372,7 +372,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.update' },
       { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch('post/reassign/:id')
@@ -386,7 +386,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.reassign' },
       { id, dto },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('post/scan/:id')
@@ -406,7 +406,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.find_by_scan' },
       { id },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('post/courier/:id')
@@ -419,7 +419,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.couriers_by_post' },
       { id },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('post/orders/:id')
@@ -498,7 +498,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.check' },
       { id, dto },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('post/check/cancel/:id')
@@ -512,7 +512,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.check_cancel' },
       { id, dto },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch('post/receive/:id')
@@ -545,7 +545,7 @@ export class LogisticsGatewayController {
           branch_id: req.user.branch_id ?? null,
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch('post/receive/scan/:id')
@@ -558,7 +558,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.receive_scan' },
       { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch('post/receive/order/:id')
@@ -571,7 +571,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.receive_order' },
       { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('post/cancel')
@@ -596,7 +596,7 @@ export class LogisticsGatewayController {
           branch_id: req.user.branch_id ?? null,
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('post/cancel/receive/:id')
@@ -639,7 +639,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.return_requests' },
       {},
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('post/return-requests/approve')
@@ -655,7 +655,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.return_requests.approve' },
       { dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('post/return-requests/reject')
@@ -671,7 +671,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.post.return_requests.reject' },
       { dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    );
+    ).pipe(timeout(8000));
   }
 
   // ---------- Region ----------
@@ -726,7 +726,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.region.stats_all' },
       { startDate, endDate },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('region/stats/:id')
@@ -762,7 +762,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.region.stats_by_id' },
       { id, startDate, endDate },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('region')
@@ -776,7 +776,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.region.create' },
       { dto },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('region/:id')
@@ -810,7 +810,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.region.update' },
       { id, dto },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Delete('region/:id')
@@ -823,7 +823,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.region.delete' },
       { id },
-    );
+    ).pipe(timeout(8000));
   }
 
   // ---------- District ----------
@@ -858,7 +858,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.district.create' },
       { dto },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('district/sato/:satoCode')
@@ -878,7 +878,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.district.find_by_sato' },
       { sato_code: satoCode },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('district/:id')
@@ -898,7 +898,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.district.find_by_id' },
       { id },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch('district/:id')
@@ -912,7 +912,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.district.update' },
       { id, dto },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch('district/name/:id')
@@ -929,7 +929,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.district.update_name' },
       { id, dto },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch('district/sato/:id')
@@ -946,7 +946,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.district.update_sato' },
       { id, dto },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('district/sato-match/preview')
@@ -958,7 +958,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.district.sato_match_preview' },
       {},
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('district/sato-match/apply')
@@ -970,7 +970,7 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.district.sato_match_apply' },
       {},
-    );
+    ).pipe(timeout(8000));
   }
 
   @Delete('district/:id')
@@ -983,6 +983,6 @@ export class LogisticsGatewayController {
     return this.logisticsClient.send(
       { cmd: 'logistics.district.delete' },
       { id },
-    );
+    ).pipe(timeout(8000));
   }
 }

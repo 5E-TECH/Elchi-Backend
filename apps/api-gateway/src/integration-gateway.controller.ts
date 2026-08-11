@@ -12,6 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
+import { timeout } from 'rxjs';
 import { Roles as RoleEnum } from '@app/common';
 import {
   ApiBearerAuth,
@@ -37,6 +38,12 @@ import {
   StartSyncRequestDto,
   UpdateIntegrationRequestDto,
 } from './dto/integration.swagger.dto';
+
+
+// RPC ceiling: this downstream can legitimately run long (base64/provider
+// fetch up to ~60s); an 8s ceiling would premature-fail a working call. See
+// integration-service AbortSignal.timeout / file base64 transfer.
+const PROVIDER_RPC_TIMEOUT_MS = 65_000;
 
 @ApiTags('Integrations')
 @ApiBearerAuth()
@@ -106,7 +113,7 @@ export class IntegrationGatewayController {
           limit: limit ? Number(limit) : undefined,
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('sync/history')
@@ -118,7 +125,7 @@ export class IntegrationGatewayController {
     return this.integrationClient.send(
       { cmd: 'integration.sync.history' },
       { query },
-    );
+    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Post()
@@ -132,7 +139,7 @@ export class IntegrationGatewayController {
     return this.integrationClient.send(
       { cmd: 'integration.create' },
       { dto: { ...dto, requester: this.auditActor(req) } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get(':id')
@@ -142,7 +149,7 @@ export class IntegrationGatewayController {
     return this.integrationClient.send(
       { cmd: 'integration.find_by_id' },
       { id },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch(':id')
@@ -157,7 +164,7 @@ export class IntegrationGatewayController {
     return this.integrationClient.send(
       { cmd: 'integration.update' },
       { id, dto: { ...dto, requester: this.auditActor(req) } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Delete(':id')
@@ -170,7 +177,7 @@ export class IntegrationGatewayController {
     return this.integrationClient.send(
       { cmd: 'integration.delete' },
       { id, requester: this.auditActor(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post(':id/healthcheck')
@@ -187,7 +194,7 @@ export class IntegrationGatewayController {
         id,
         ...dto,
       },
-    );
+    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Post(':id/test')
@@ -204,7 +211,7 @@ export class IntegrationGatewayController {
         id,
         ...dto,
       },
-    );
+    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Get(':id/sync-history')
@@ -217,7 +224,7 @@ export class IntegrationGatewayController {
     return this.integrationClient.send(
       { cmd: 'integration.sync.history' },
       { query: { ...query, integration_id: id } },
-    );
+    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Post(':id/sync')
@@ -228,7 +235,7 @@ export class IntegrationGatewayController {
     return this.integrationClient.send(
       { cmd: 'integration.sync.process' },
       { integration_id: id, limit: dto.limit ?? 20 },
-    );
+    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Post(':id/sync/queue')
@@ -242,7 +249,7 @@ export class IntegrationGatewayController {
     return this.integrationClient.send(
       { cmd: 'integration.sync.queue' },
       { ...dto, integration_id: id },
-    );
+    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Post(':id/retry')
@@ -253,7 +260,7 @@ export class IntegrationGatewayController {
     return this.integrationClient.send(
       { cmd: 'integration.sync.retry' },
       { integration_id: id, queue_id: dto.queue_id },
-    );
+    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Post(':slug/search-by-qr')
@@ -267,7 +274,7 @@ export class IntegrationGatewayController {
         slug,
         ...dto,
       },
-    );
+    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Post(':slug/request')
@@ -284,7 +291,7 @@ export class IntegrationGatewayController {
         slug,
         ...dto,
       },
-    );
+    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Post(':slug/dispatch')
@@ -300,7 +307,7 @@ export class IntegrationGatewayController {
     return this.integrationClient.send(
       { cmd: 'integration.shipment.dispatch' },
       { slug, order_id: dto.order_id, context: dto.context },
-    );
+    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Get('shipments/:order_id')
@@ -310,7 +317,7 @@ export class IntegrationGatewayController {
     return this.integrationClient.send(
       { cmd: 'integration.shipment.get' },
       { order_id: orderId },
-    );
+    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   // ===== Provider COD reconciliation =====
@@ -340,7 +347,7 @@ export class IntegrationGatewayController {
         page: page ? Number(page) : undefined,
         limit: limit ? Number(limit) : undefined,
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get(':id/receivable-balance')
@@ -351,7 +358,7 @@ export class IntegrationGatewayController {
     return this.integrationClient.send(
       { cmd: 'integration.receivable.balance' },
       { integration_id: id },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post(':id/remittances')
@@ -376,6 +383,6 @@ export class IntegrationGatewayController {
         order_ids: dto.order_ids ?? undefined,
         created_by: req.user?.sub ?? null,
       },
-    );
+    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 }

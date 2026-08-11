@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { Roles as RoleEnum } from '@app/common';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, timeout } from 'rxjs';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -63,7 +63,7 @@ export class BranchGatewayController {
 
     if (isSystemPrivileged) {
       const hqResponse = await firstValueFrom(
-        this.branchClient.send({ cmd: 'branch.find_by_code' }, { code: 'HQ-TSHKNT' }),
+        this.branchClient.send({ cmd: 'branch.find_by_code' }, { code: 'HQ-TSHKNT' }).pipe(timeout(8000)),
       );
       const hqBranchId = String(hqResponse?.data?.id ?? '').trim();
       if (!hqBranchId) {
@@ -76,7 +76,7 @@ export class BranchGatewayController {
       this.branchClient.send(
         { cmd: 'branch.user.find_by_user' },
         { user_id: requester.id, requester },
-      ),
+      ).pipe(timeout(8000)),
     );
     const assignedBranchId = String(assignmentResponse?.data?.branch_id ?? '').trim();
     if (!assignedBranchId) {
@@ -94,7 +94,7 @@ export class BranchGatewayController {
     @Body() dto: CreateBranchRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send({ cmd: 'branch.create' }, { dto, requester: this.toRequester(req) });
+    return this.branchClient.send({ cmd: 'branch.create' }, { dto, requester: this.toRequester(req) }).pipe(timeout(8000));
   }
 
   @Get('branches')
@@ -122,14 +122,14 @@ export class BranchGatewayController {
           limit: limit ? Number(limit) : undefined,
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('branches/tree')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Get full branch tree (nested)' })
   findBranchTree() {
-    return this.branchClient.send({ cmd: 'branch.tree' }, {});
+    return this.branchClient.send({ cmd: 'branch.tree' }, {}).pipe(timeout(8000));
   }
 
   @Get('branches/with-sent-batches')
@@ -148,7 +148,7 @@ export class BranchGatewayController {
         requester: this.toRequester(req),
         query: { direction, side },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('branches/:id')
@@ -159,7 +159,7 @@ export class BranchGatewayController {
     @Param('id') id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send({ cmd: 'branch.find_by_id' }, { id, requester: this.toRequester(req) });
+    return this.branchClient.send({ cmd: 'branch.find_by_id' }, { id, requester: this.toRequester(req) }).pipe(timeout(8000));
   }
 
   @Get('branches/:id/descendants')
@@ -167,7 +167,7 @@ export class BranchGatewayController {
   @ApiOperation({ summary: 'Get all descendants of a branch (flat list)' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   findBranchDescendants(@Param('id') id: string) {
-    return this.branchClient.send({ cmd: 'branch.descendants' }, { id });
+    return this.branchClient.send({ cmd: 'branch.descendants' }, { id }).pipe(timeout(8000));
   }
 
   @Get('branches/:id/analytics/markets')
@@ -181,7 +181,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.analytics.markets' },
       { id, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('branches/new-orders')
@@ -193,7 +193,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.new_orders.branches' },
       { requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('branches/transfer-batches')
@@ -207,7 +207,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.create' },
       { dto, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('branches/:id/return-batches')
@@ -223,7 +223,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.return_batches.create' },
       { id, dto, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch('transfer-batches/:id/send')
@@ -239,7 +239,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.send' },
       { id, dto, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('transfer-batches')
@@ -279,7 +279,7 @@ export class BranchGatewayController {
           limit: limit ? Number(limit) : undefined,
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('transfer-batches/:id')
@@ -293,7 +293,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.find_by_id' },
       { id, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('transfer-batches/:id/remaining')
@@ -307,7 +307,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.find_remaining' },
       { id, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('transfer-batches/:id/receive')
@@ -321,7 +321,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.receive' },
       { id, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('transfer-batches/:id/receive-orders')
@@ -337,7 +337,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.receive_orders' },
       { id, dto, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('transfer-batches/:id/cancel')
@@ -353,7 +353,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.transfer_batches.cancel' },
       { id, dto, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('branches/posts/:postId/dispatch')
@@ -402,7 +402,7 @@ export class BranchGatewayController {
         order_ids: normalizedOrderIds,
         requester: this.toRequester(req),
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch('branches/:id')
@@ -415,7 +415,7 @@ export class BranchGatewayController {
     @Body() dto: UpdateBranchRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send({ cmd: 'branch.update' }, { id, dto, requester: this.toRequester(req) });
+    return this.branchClient.send({ cmd: 'branch.update' }, { id, dto, requester: this.toRequester(req) }).pipe(timeout(8000));
   }
 
   @Delete('branches/:id')
@@ -426,7 +426,7 @@ export class BranchGatewayController {
     @Param('id') id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send({ cmd: 'branch.delete' }, { id, requester: this.toRequester(req) });
+    return this.branchClient.send({ cmd: 'branch.delete' }, { id, requester: this.toRequester(req) }).pipe(timeout(8000));
   }
 
   @Post('branches/:id/users')
@@ -442,7 +442,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.user.assign' },
       { requester: this.toRequester(req), dto: { branch_id: id, ...dto } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Delete('branches/:id/users/:userId')
@@ -458,7 +458,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.user.remove' },
       { branch_id: id, user_id: userId, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('branches/:id/users')
@@ -472,7 +472,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.user.find_by_branch' },
       { branch_id: id, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('branches/:id/config')
@@ -483,7 +483,7 @@ export class BranchGatewayController {
     @Param('id') id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send({ cmd: 'branch.config.get' }, { branch_id: id, requester: this.toRequester(req) });
+    return this.branchClient.send({ cmd: 'branch.config.get' }, { branch_id: id, requester: this.toRequester(req) }).pipe(timeout(8000));
   }
 
   @Post('branches/:id/config')
@@ -499,7 +499,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.config.set' },
       { requester: this.toRequester(req), dto: { branch_id: id, ...dto } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('branches/:id/config/:key')
@@ -515,7 +515,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.config.find_one' },
       { branch_id: id, config_key: key, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch('branches/:id/config/:key')
@@ -533,7 +533,7 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.config.update' },
       { requester: this.toRequester(req), dto: { branch_id: id, config_key: key, ...dto } },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Delete('branches/:id/config/:key')
@@ -549,6 +549,6 @@ export class BranchGatewayController {
     return this.branchClient.send(
       { cmd: 'branch.config.delete' },
       { branch_id: id, config_key: key, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 }

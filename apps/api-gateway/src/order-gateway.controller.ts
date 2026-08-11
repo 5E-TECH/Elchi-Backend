@@ -2574,6 +2574,6 @@ export class OrderGatewayController {
           roles: this.normalizeRoles(req.user.roles),
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 }

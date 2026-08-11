@@ -15,7 +15,7 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { Cashbox_type, Roles as RoleEnum } from '@app/common';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, timeout } from 'rxjs';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -87,7 +87,7 @@ export class ApiGatewayController {
           user_id: reqUser.sub,
           requester: { id: reqUser.sub, roles: reqUser.roles ?? [] },
         },
-      ),
+      ).pipe(timeout(8000)),
     );
 
     return (response?.data ?? null) as BranchAssignment | null;
@@ -99,7 +99,7 @@ export class ApiGatewayController {
         this.financeClient.send(
           { cmd: 'finance.cashbox.find_by_user' },
           { user_id: String(userId), cashbox_type: cashboxType },
-        ),
+        ).pipe(timeout(8000)),
       );
 
       if (Array.isArray(response?.data)) {
@@ -120,7 +120,7 @@ export class ApiGatewayController {
   @Get()
   @ApiOperation({ summary: 'Gateway health check via identity service' })
   getHello() {
-    return this.identityClient.send({ cmd: 'identity.health' }, {});
+    return this.identityClient.send({ cmd: 'identity.health' }, {}).pipe(timeout(8000));
   }
 
   @Post('admins')
@@ -138,7 +138,7 @@ export class ApiGatewayController {
     return this.identityClient.send(
       { cmd: 'identity.user.create' },
       { dto, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('registrators')
@@ -197,7 +197,7 @@ export class ApiGatewayController {
           dto: { ...dto, branch_id: resolvedBranchId },
           requester: this.toRequester(req),
         },
-      ),
+      ).pipe(timeout(8000)),
     );
   }
 
@@ -233,7 +233,7 @@ export class ApiGatewayController {
           limit: limit ? Number(limit) : undefined,
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('admins')
@@ -268,7 +268,7 @@ export class ApiGatewayController {
           limit: limit ? Number(limit) : undefined,
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('couriers')
@@ -298,7 +298,7 @@ export class ApiGatewayController {
     let branchId = '';
     if (isSystemPrivileged) {
       const hqBranch = await firstValueFrom(
-        this.branchClient.send({ cmd: 'branch.find_hq' }, {}),
+        this.branchClient.send({ cmd: 'branch.find_hq' }, {}).pipe(timeout(8000)),
       );
       branchId = String(hqBranch?.data?.id ?? '').trim();
       if (!branchId) {
@@ -318,7 +318,7 @@ export class ApiGatewayController {
       this.branchClient.send(
         { cmd: 'branch.find_by_id' },
         { id: branchId, requester: this.toRequester(req) },
-      ),
+      ).pipe(timeout(8000)),
     );
     const branchType = String(branchResponse?.data?.type ?? '')
       .trim()
@@ -353,7 +353,7 @@ export class ApiGatewayController {
           },
           requester: this.toRequester(req),
         },
-      ),
+      ).pipe(timeout(8000)),
     );
   }
 
@@ -375,7 +375,7 @@ export class ApiGatewayController {
       this.identityClient.send(
         { cmd: 'identity.manager.create' },
         { dto, requester: this.toRequester(req) },
-      ),
+      ).pipe(timeout(8000)),
     );
   }
 
@@ -446,7 +446,7 @@ export class ApiGatewayController {
             limit: limit ? Number(limit) : undefined,
           },
         },
-      ),
+      ).pipe(timeout(8000)),
     );
 
     let items = Array.isArray(response?.data?.items) ? response.data.items : [];
@@ -459,7 +459,7 @@ export class ApiGatewayController {
             branch_id: resolvedBranchId,
             requester: this.toRequester(req),
           },
-        ),
+        ).pipe(timeout(8000)),
       );
 
       const branchUsers = Array.isArray(branchUsersResponse?.data)
@@ -534,7 +534,7 @@ export class ApiGatewayController {
             limit: limit ? Number(limit) : undefined,
           },
         },
-      ),
+      ).pipe(timeout(8000)),
     );
 
     const items = Array.isArray(response?.data?.items)
@@ -556,7 +556,7 @@ export class ApiGatewayController {
             limit: 10000,
           },
         },
-      ),
+      ).pipe(timeout(8000)),
     ).catch(() => null);
     const branches = Array.isArray(branchRows?.data?.items)
       ? branchRows.data.items
@@ -588,7 +588,7 @@ export class ApiGatewayController {
             this.branchClient.send(
               { cmd: 'branch.user.find_by_user' },
               { user_id: managerId, requester },
-            ),
+            ).pipe(timeout(8000)),
           ).catch(() => null);
           branch = assignment?.data?.branch ?? null;
         }
@@ -629,7 +629,7 @@ export class ApiGatewayController {
           region_id: id,
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('users')
@@ -696,7 +696,7 @@ export class ApiGatewayController {
         this.branchClient.send(
           { cmd: 'branch.user.find_by_branch' },
           { branch_id: branchId, requester: this.toRequester(req) },
-        ),
+        ).pipe(timeout(8000)),
       );
       const branchUsers = Array.isArray(branchUsersResponse?.data)
         ? branchUsersResponse.data
@@ -724,7 +724,7 @@ export class ApiGatewayController {
 
       if (!branchId && isSystemPrivileged) {
         const hqBranch = await firstValueFrom(
-          this.branchClient.send({ cmd: 'branch.find_hq' }, {}),
+          this.branchClient.send({ cmd: 'branch.find_hq' }, {}).pipe(timeout(8000)),
         );
         branchId = String(hqBranch?.data?.id ?? '').trim();
       }
@@ -739,7 +739,7 @@ export class ApiGatewayController {
         this.branchClient.send(
           { cmd: 'branch.user.find_by_branch' },
           { branch_id: branchId, requester: this.toRequester(req) },
-        ),
+        ).pipe(timeout(8000)),
       );
       const branchUsers = Array.isArray(branchUsersResponse?.data)
         ? branchUsersResponse.data
@@ -792,7 +792,7 @@ export class ApiGatewayController {
             limit: limit ? Number(limit) : undefined,
           },
         },
-      ),
+      ).pipe(timeout(8000)),
     );
 
     const items = Array.isArray(response?.data?.items)
@@ -913,7 +913,7 @@ export class ApiGatewayController {
             branch_id: branchId,
             requester: this.toRequester(req as { user: JwtUser }),
           },
-        ),
+        ).pipe(timeout(8000)),
       );
       const branchUsers = Array.isArray(branchUsersResponse?.data)
         ? branchUsersResponse.data
@@ -930,7 +930,7 @@ export class ApiGatewayController {
     }
 
     return firstValueFrom(
-      this.identityClient.send({ cmd: 'identity.user.find_by_id' }, { id }),
+      this.identityClient.send({ cmd: 'identity.user.find_by_id' }, { id }).pipe(timeout(8000)),
     );
   }
 
@@ -990,7 +990,7 @@ export class ApiGatewayController {
             branch_id: branchId,
             requester: this.toRequester(req as { user: JwtUser }),
           },
-        ),
+        ).pipe(timeout(8000)),
       );
 
       allowedUserIds = Array.from(
@@ -1021,7 +1021,7 @@ export class ApiGatewayController {
           allowed_user_ids: allowedUserIds,
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Delete('users/:id')
@@ -1036,7 +1036,7 @@ export class ApiGatewayController {
     return this.identityClient.send(
       { cmd: 'identity.user.delete' },
       { id, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch('users/:id/status')
@@ -1056,7 +1056,7 @@ export class ApiGatewayController {
     return this.identityClient.send(
       { cmd: 'identity.user.status' },
       { id, status: dto.status, requester: this.toRequester(req) },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Post('markets')
@@ -1114,7 +1114,7 @@ export class ApiGatewayController {
         },
         requester: this.toRequester(req),
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Get('markets')
@@ -1156,7 +1156,7 @@ export class ApiGatewayController {
             limit: limit ? Number(limit) : undefined,
           },
         },
-      ),
+      ).pipe(timeout(8000)),
     );
 
     const items = Array.isArray(response?.data?.items)
@@ -1200,7 +1200,7 @@ export class ApiGatewayController {
           add_order: dto.add_order,
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch('markets/:id/cancelled-handover-qr')
@@ -1242,7 +1242,7 @@ export class ApiGatewayController {
           cancelled_handover_qr_required: dto.cancelled_handover_qr_required,
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 
   @Patch('markets/:id/expense-proof')
@@ -1282,6 +1282,6 @@ export class ApiGatewayController {
           expense_proof_conditions: dto.expense_proof_conditions,
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 }

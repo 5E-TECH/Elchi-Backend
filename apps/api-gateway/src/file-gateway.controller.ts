@@ -17,7 +17,7 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, timeout } from 'rxjs';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -39,6 +39,12 @@ import {
   GenerateQrRequestDto,
 } from './dto/file.swagger.dto';
 import type { Response } from 'express';
+
+
+// RPC ceiling: this downstream can legitimately run long (base64/provider
+// fetch up to ~60s); an 8s ceiling would premature-fail a working call. See
+// integration-service AbortSignal.timeout / file base64 transfer.
+const FILE_RPC_TIMEOUT_MS = 60_000;
 
 @ApiTags('File')
 @ApiBearerAuth()
@@ -108,7 +114,7 @@ export class FileGatewayController {
           folder:
             typeof req?.body?.folder === 'string' ? req.body.folder : undefined,
         },
-      ),
+      ).pipe(timeout(FILE_RPC_TIMEOUT_MS)),
     );
   }
 
@@ -184,7 +190,7 @@ export class FileGatewayController {
     expires_in?: number,
   ) {
     this.assertCanAccessPrivateKey(key, this.rolesOf(req));
-    return this.fileClient.send({ cmd: 'file.get_url' }, { key, expires_in });
+    return this.fileClient.send({ cmd: 'file.get_url' }, { key, expires_in }).pipe(timeout(FILE_RPC_TIMEOUT_MS));
   }
 
   // Object-key prefixes that may be served UNAUTHENTICATED (so plain <img src>
@@ -215,7 +221,7 @@ export class FileGatewayController {
     const response = await firstValueFrom(
       this.fileClient.send<{
         data?: { body_base64?: string; mime_type?: string };
-      }>({ cmd: 'file.read' }, { key }),
+      }>({ cmd: 'file.read' }, { key }).pipe(timeout(FILE_RPC_TIMEOUT_MS)),
     );
 
     const bodyBase64 = response?.data?.body_base64;
@@ -241,7 +247,7 @@ export class FileGatewayController {
   @ApiOperation({ summary: 'Delete file by key (admin only)' })
   @ApiParam({ name: 'key', description: 'Object key in MinIO' })
   deleteFile(@Param('key') key: string) {
-    return this.fileClient.send({ cmd: 'file.delete' }, { key });
+    return this.fileClient.send({ cmd: 'file.delete' }, { key }).pipe(timeout(FILE_RPC_TIMEOUT_MS));
   }
 
   @Post('files/qr')
@@ -249,7 +255,7 @@ export class FileGatewayController {
   @ApiOperation({ summary: 'Generate QR and upload to MinIO' })
   @ApiBody({ type: GenerateQrRequestDto })
   generateQr(@Body() dto: GenerateQrRequestDto) {
-    return this.fileClient.send({ cmd: 'file.generate_qr' }, dto);
+    return this.fileClient.send({ cmd: 'file.generate_qr' }, dto).pipe(timeout(FILE_RPC_TIMEOUT_MS));
   }
 
   @Post('files/pdf')
@@ -257,6 +263,6 @@ export class FileGatewayController {
   @ApiOperation({ summary: 'Generate PDF and upload to MinIO' })
   @ApiBody({ type: GeneratePdfRequestDto })
   generatePdf(@Body() dto: GeneratePdfRequestDto) {
-    return this.fileClient.send({ cmd: 'file.generate_pdf' }, dto);
+    return this.fileClient.send({ cmd: 'file.generate_pdf' }, dto).pipe(timeout(FILE_RPC_TIMEOUT_MS));
   }
 }
