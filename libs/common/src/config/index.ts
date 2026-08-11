@@ -52,7 +52,22 @@ const strongKey = (description: string) =>
       'string.min': 'must be at least 32 characters of random entropy',
     });
 
+/**
+ * Observability env keys shared by every service (all call initSentry + use the
+ * Pino logger). Optional — absence is tolerated (Sentry no-ops) — but validated
+ * so a typo'd DSN or an invalid LOG_LEVEL fails fast at boot.
+ * (Audit observability P1: SENTRY_DSN / LOG_LEVEL were unvalidated.)
+ */
+const observabilityKeys = {
+  SENTRY_DSN: Joi.string().uri().allow('').optional(),
+  SENTRY_ENVIRONMENT: Joi.string().optional(),
+  LOG_LEVEL: Joi.string()
+    .valid('fatal', 'error', 'warn', 'info', 'debug', 'trace', 'silent')
+    .optional(),
+};
+
 export const gatewayValidationSchema = Joi.object({
+  ...observabilityKeys,
   PORT: Joi.number().default(2004),
   ACCESS_TOKEN_KEY: strongKey(
     'JWT access-token signing key. MUST match identity-service. A weak key allows forging a JWT for any role (full account takeover).',
@@ -91,6 +106,7 @@ export const gatewayValidationSchema = Joi.object({
 });
 
 export const identityValidationSchema = Joi.object({
+  ...observabilityKeys,
   POSTGRES_URI: Joi.string().required(),
   DB_SCHEMA: Joi.string().default('identity_schema'),
   ACCESS_TOKEN_KEY: strongKey(
@@ -118,6 +134,7 @@ export const identityValidationSchema = Joi.object({
 });
 
 export const orderValidationSchema = Joi.object({
+  ...observabilityKeys,
   POSTGRES_URI: Joi.string().required(),
   DB_SCHEMA: Joi.string().default('order_schema'),
   RABBITMQ_URI: Joi.string().required(),
@@ -130,6 +147,7 @@ export const orderValidationSchema = Joi.object({
 });
 
 export const catalogValidationSchema = Joi.object({
+  ...observabilityKeys,
   POSTGRES_URI: Joi.string().required(),
   DB_SCHEMA: Joi.string().default('catalog_schema'),
   RABBITMQ_URI: Joi.string().required(),
@@ -138,6 +156,7 @@ export const catalogValidationSchema = Joi.object({
 });
 
 export const logisticsValidationSchema = Joi.object({
+  ...observabilityKeys,
   POSTGRES_URI: Joi.string().required(),
   DB_SCHEMA: Joi.string().default('logistics_schema'),
   RABBITMQ_URI: Joi.string().required(),
@@ -148,6 +167,7 @@ export const logisticsValidationSchema = Joi.object({
 });
 
 export const financeValidationSchema = Joi.object({
+  ...observabilityKeys,
   POSTGRES_URI: Joi.string().required(),
   DB_SCHEMA: Joi.string().default('finance_schema'),
   RABBITMQ_URI: Joi.string().required(),
@@ -156,6 +176,7 @@ export const financeValidationSchema = Joi.object({
 });
 
 export const notificationValidationSchema = Joi.object({
+  ...observabilityKeys,
   POSTGRES_URI: Joi.string().required(),
   DB_SCHEMA: Joi.string().default('notification_schema'),
   RABBITMQ_URI: Joi.string().required(),
@@ -173,6 +194,7 @@ export const notificationValidationSchema = Joi.object({
 });
 
 export const integrationValidationSchema = Joi.object({
+  ...observabilityKeys,
   POSTGRES_URI: Joi.string().required(),
   DB_SCHEMA: Joi.string().default('integration_schema'),
   RABBITMQ_URI: Joi.string().required(),
@@ -239,11 +261,13 @@ export const integrationValidationSchema = Joi.object({
 });
 
 export const analyticsValidationSchema = Joi.object({
+  ...observabilityKeys,
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_ANALYTICS_QUEUE: Joi.string().required(),
 });
 
 export const branchValidationSchema = Joi.object({
+  ...observabilityKeys,
   POSTGRES_URI: Joi.string().required(),
   DB_SCHEMA: Joi.string().default('branch_schema'),
   RABBITMQ_URI: Joi.string().required(),
@@ -254,6 +278,7 @@ export const branchValidationSchema = Joi.object({
 });
 
 export const investorValidationSchema = Joi.object({
+  ...observabilityKeys,
   POSTGRES_URI: Joi.string().required(),
   DB_SCHEMA: Joi.string().default('investor_schema'),
   RABBITMQ_URI: Joi.string().required(),
@@ -261,6 +286,7 @@ export const investorValidationSchema = Joi.object({
 });
 
 export const fileValidationSchema = Joi.object({
+  ...observabilityKeys,
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_FILE_QUEUE: Joi.string().required(),
   MINIO_ENDPOINT: Joi.string().required(),
@@ -284,6 +310,7 @@ export const fileValidationSchema = Joi.object({
 });
 
 export const c2cValidationSchema = Joi.object({
+  ...observabilityKeys,
   POSTGRES_URI: Joi.string().required(),
   DB_SCHEMA: Joi.string().default('c2c_schema'),
   RABBITMQ_URI: Joi.string().required(),
@@ -291,6 +318,7 @@ export const c2cValidationSchema = Joi.object({
 });
 
 export const searchValidationSchema = Joi.object({
+  ...observabilityKeys,
   POSTGRES_URI: Joi.string().required(),
   DB_SCHEMA: Joi.string().default('search_schema'),
   RABBITMQ_URI: Joi.string().required(),

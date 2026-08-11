@@ -76,6 +76,17 @@ export function initSentry(options: InitSentryOptions): void {
   }
   const dsn = options.dsn ?? process.env.SENTRY_DSN;
   if (!dsn) {
+    // Silent error reporting in production is a real operability gap (Audit
+    // observability P1) — warn loudly so a missing/typo'd DSN is noticed.
+    const env =
+      options.environment ??
+      process.env.SENTRY_ENVIRONMENT ??
+      process.env.NODE_ENV;
+    if (env === 'production') {
+      new Logger(`${options.serviceName}:sentry`).warn(
+        'SENTRY_DSN is not set in production — error reporting is DISABLED. Set SENTRY_DSN so 5xx/uncaught errors are captured.',
+      );
+    }
     // Mark initialized so we don't keep re-checking. Captures will no-op.
     initialized = true;
     return;
