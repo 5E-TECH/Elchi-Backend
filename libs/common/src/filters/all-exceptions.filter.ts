@@ -20,10 +20,19 @@ export class AllExceptionsFilter implements ExceptionFilter {
     captureException(exception);
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
+    // An rxjs `timeout()` firing on a downstream RPC surfaces here as a
+    // TimeoutError. The api-gateway is literally a gateway to the
+    // microservices, so a stalled upstream is a 504 Gateway Timeout — not an
+    // opaque 500. (Matches the per-RPC timeouts added to the gateway sends.)
+    const isUpstreamTimeout =
+      exception instanceof Error && exception.name === 'TimeoutError';
+
     let status =
       exception instanceof HttpException
         ? exception.getStatus()
-        : HttpStatus.INTERNAL_SERVER_ERROR;
+        : isUpstreamTimeout
+          ? HttpStatus.GATEWAY_TIMEOUT
+          : HttpStatus.INTERNAL_SERVER_ERROR;
 
     let message = 'Internal server error';
 
@@ -78,6 +87,10 @@ export class AllExceptionsFilter implements ExceptionFilter {
       } else {
         message = msg || "Noma'lum xatolik yuz berdi";
       }
+    }
+
+    if (isUpstreamTimeout) {
+      message = "Yuqori oqim xizmati vaqtida javob bermadi (timeout)";
     }
 
     const traceId = requestContext.get()?.traceId;
