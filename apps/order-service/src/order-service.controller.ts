@@ -16,6 +16,7 @@ import { Order_status, Where_deliver } from '@app/common';
 import { OrderServiceService } from './order-service.service';
 import { OrderAnalyticsService } from './analytics/order-analytics.service';
 import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
+import { OrderSettlementService } from './settlement/order-settlement.service';
 import { OrderHolderType, Order_source } from './entities/order.entity';
 
 @Controller()
@@ -25,6 +26,7 @@ export class OrderServiceController {
     private readonly orderService: OrderServiceService,
     private readonly orderAnalyticsService: OrderAnalyticsService,
     private readonly transferBatchService: BranchTransferBatchService,
+    private readonly settlementService: OrderSettlementService,
     private readonly idempotencyService: IdempotencyService,
   ) {}
 
@@ -382,7 +384,7 @@ export class OrderServiceController {
       context,
       'order.settlement.courier_to_branch',
       data.request_id,
-      () => this.orderService.settleCourierToBranch(data.requester, data.dto),
+      () => this.settlementService.settleCourierToBranch(data.requester, data.dto),
     );
   }
 
@@ -400,7 +402,7 @@ export class OrderServiceController {
       context,
       'order.settlement.branch_to_hq',
       data.request_id,
-      () => this.orderService.settleBranchToHq(data.requester, data.dto),
+      () => this.settlementService.settleBranchToHq(data.requester, data.dto),
     );
   }
 
@@ -418,7 +420,7 @@ export class OrderServiceController {
       context,
       'order.settlement.hq_to_market',
       data.request_id,
-      () => this.orderService.settleHqToMarket(data.requester, data.dto),
+      () => this.settlementService.settleHqToMarket(data.requester, data.dto),
     );
   }
 
@@ -441,7 +443,7 @@ export class OrderServiceController {
       context,
       'order.settlement.advance',
       data.request_id,
-      () => this.orderService.advanceSettlement(data),
+      () => this.settlementService.advanceSettlement(data),
     );
   }
 
@@ -451,14 +453,14 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.getSettlementByOrderId(data.id),
+      this.settlementService.getSettlementByOrderId(data.id),
     );
   }
 
   @MessagePattern({ cmd: 'order.settlement.financial_balance_summary' })
   settlementFinancialBalanceSummary(@Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.orderService.getFinancialBalanceSettlementSummary(),
+      this.settlementService.getFinancialBalanceSettlementSummary(),
     );
   }
 

@@ -4,6 +4,7 @@ import { OrderServiceController } from './order-service.controller';
 import { OrderServiceService } from './order-service.service';
 import { OrderAnalyticsService } from './analytics/order-analytics.service';
 import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
+import { OrderSettlementService } from './settlement/order-settlement.service';
 
 describe('OrderServiceController', () => {
   let orderServiceController: OrderServiceController;
@@ -29,6 +30,10 @@ describe('OrderServiceController', () => {
         },
         {
           provide: BranchTransferBatchService,
+          useValue: {},
+        },
+        {
+          provide: OrderSettlementService,
           useValue: {},
         },
         {

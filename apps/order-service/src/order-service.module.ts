@@ -5,6 +5,7 @@ import { OrderServiceController } from './order-service.controller';
 import { OrderServiceService } from './order-service.service';
 import { OrderAnalyticsService } from './analytics/order-analytics.service';
 import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
+import { OrderSettlementService } from './settlement/order-settlement.service';
 import {
   AppLoggerModule,
   RmqModule,
@@ -76,6 +77,7 @@ import { MarketCancelledHandoverSession } from './entities/market-cancelled-hand
     OrderServiceService,
     OrderAnalyticsService,
     BranchTransferBatchService,
+    OrderSettlementService,
   ],
 })
 export class OrderServiceModule {}
