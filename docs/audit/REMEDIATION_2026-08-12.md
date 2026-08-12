@@ -1,6 +1,6 @@
 # Audit Remediation — branch `fix/sprint0-audit-remediation`
 
-**Date:** 2026-08-12 · **Base:** `dev` · **Commits:** 29
+**Date:** 2026-08-12 · **Base:** `dev` · **Commits:** 33
 
 This branch remediates the findings from the production-readiness audit
 (`PRODUCTION_READINESS_AUDIT_2026-06-11.md`, verdict NO-GO 48/100) and a
@@ -102,6 +102,7 @@ verified by tsc + `nest build` (DI resolves) + the full suite.
 | `4a65434` | `OrderLookupService` | shared side-effect-free resolvers + one warmed HQ cache |
 | `0ba4f1e` | `OrderLifecycleService` | the mutation core (sell/cancel/rollback/return/update/...) + its settlement writers; boundary derived by transitive-closure analysis |
 | `1b4542c` | consolidation | analytics resolvers routed onto `OrderLookupService` (dedup) |
+| `ba83428` | `OrderCustodyService` | tracking/custody writers + renderers deduped out of query/lifecycle/transfer-batch (~550 lines) |
 
 ## Deferred (deliberate — reasons)
 
@@ -114,7 +115,5 @@ verified by tsc + `nest build` (DI resolves) + the full suite.
   bounds the memory risk in the meantime.
 - **Finance sweep #4 (cashbox-IDs subquery)** — a money-history read restructure;
   IDs-only load, low urgency.
-- **`OrderCustodyService` consolidation** — the tracking/custody leaf helpers are
-  currently duplicated but byte-identical (low divergence risk); a future tidy-up.
 - **Prometheus metrics / worker liveness endpoints** — additive; the gateway
   readiness probe already covers per-service RMQ reachability.
