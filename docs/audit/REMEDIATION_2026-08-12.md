@@ -12,7 +12,7 @@ the order-service god object.
 | Gate | Status |
 |---|---|
 | TypeScript check — all 14 services | ✅ pass |
-| Full unit suite (`npm run test:ci`) | ✅ 439/439 |
+| Full unit suite (`npm run test:ci`) | ✅ 437/437 |
 | Partner API tests | ✅ 33/33 |
 | Build smoke (gateway / integration / order) | ✅ pass |
 | Lint (`eslint --max-warnings 0`) | soft-fail in CI (`continue-on-error`); pre-existing `no-unsafe-enum-comparison` style warnings only — no new hard errors |
