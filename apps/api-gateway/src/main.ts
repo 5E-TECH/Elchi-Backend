@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, VersioningType, VERSION_NEUTRAL } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -34,6 +34,18 @@ async function bootstrap() {
   // Replace the built-in Nest logger with Pino so every line (incl. ones
   // emitted by Nest internals) goes through the structured pipeline.
   app.useLogger(app.get(Logger));
+
+  // API versioning (audit api-design) — NON-BREAKING. URI versioning with both
+  // the neutral (un-prefixed) and v1 default versions, so EVERY existing route
+  // keeps working at its current path (`/orders`) for the current frontend AND
+  // is simultaneously reachable at `/v1/orders`. New/changed endpoints can now
+  // opt into `@Version('2')` without touching v1 clients. Raw adapter routes
+  // (/health, /metrics) are unaffected — versioning applies to Nest controllers
+  // only.
+  app.enableVersioning({
+    type: VersioningType.URI,
+    defaultVersion: [VERSION_NEUTRAL, '1'],
+  });
 
   // Gateway Cloudflare Tunnel ortida ishlaydi. "trust proxy" yoqilganda
   // Express req.ip va rate-limiter X-Forwarded-For / CF-Connecting-IP'dan
