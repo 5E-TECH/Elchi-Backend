@@ -1,7 +1,7 @@
 import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
 import { Order_status } from '@app/common';
-import { OrderServiceService } from './order-service.service';
+import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { MarketCancelledHandoverSession } from './entities/market-cancelled-handover-session.entity';
 import { Order, OrderHolderType } from './entities/order.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
@@ -122,7 +122,7 @@ describe('OrderServiceService market cancelled handover', () => {
       ),
     };
 
-    const service = new OrderServiceService(
+    const service = new OrderLifecycleService(
       dataSource as any,
       orderRepo as any,
       {} as any,
@@ -130,11 +130,7 @@ describe('OrderServiceService market cancelled handover', () => {
       custodyRepo as any,
       {} as any,
       {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
       identityClient as any,
-      {} as any,
       {} as any,
       {} as any,
       {} as any,

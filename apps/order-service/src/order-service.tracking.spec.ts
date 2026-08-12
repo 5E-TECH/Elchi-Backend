@@ -1,5 +1,6 @@
 import { In } from 'typeorm';
 import { OrderServiceService } from './order-service.service';
+import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { Order_status } from '@app/common';
 
 function createService() {
@@ -93,12 +94,63 @@ function createService() {
       } as any, // lookup (OrderLookupService)
   );
 
+    const lifecycle = new OrderLifecycleService(
+      dataSource as any,
+      // dataSource
+    orderRepo as any,
+      // orderRepo
+    orderItemRepo as any,
+      // orderItemRepo
+    trackingRepo as any,
+      // orderTrackingRepo
+    orderCustodyEventRepo as any,
+      // orderCustodyEventRepo
+    {} as any,
+      // transferBatchRepo
+    transferBatchItemRepo as any,
+      // searchClient
+    nullClient as any,
+      // identityClient
+    nullClient as any,
+      // catalogClient
+    nullClient as any,
+      // financeClient
+    nullClient as any,
+      // integrationClient
+    nullClient as any,
+      // branchClient
+    nullClient as any,
+      // fileClient
+    outbox as any,
+      // outbox
+    {
+      log: jest.fn().mockResolvedValue(undefined),
+      logChange: jest.fn().mockResolvedValue(undefined),
+    } as any,
+      // activityLog
+      {
+        getHqBranchId: jest.fn().mockResolvedValue('1'),
+        getMarketsByIds: jest.fn().mockResolvedValue([]),
+        getCouriersByIds: jest.fn().mockResolvedValue([]),
+        getUserById: jest.fn().mockResolvedValue(null),
+        getCashboxByUser: jest.fn().mockResolvedValue(null),
+        resolveBranchShare: jest.fn().mockResolvedValue(0),
+        ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
+        resolveSettlementBranchId: jest.fn().mockResolvedValue(null),
+        getIntegrationById: jest.fn().mockResolvedValue(null),
+        getDefaultDistrictId: jest.fn().mockResolvedValue(null),
+        resolveDistrictId: jest.fn().mockResolvedValue(null),
+      } as any,
+      // lookup (OrderLookupService),
+    );
+
   jest
-    .spyOn<any, any>(service as any, 'syncOrderToSearch')
+    .spyOn<any, any>(lifecycle as any, 'syncOrderToSearch')
     .mockResolvedValue(undefined);
 
   return {
     service,
+    lifecycle,
     orderRepo,
     trackingRepo,
     orderCustodyEventRepo,
@@ -149,10 +201,10 @@ describe('Order tracking lifecycle', () => {
   });
 
   it('allows canceled orders to be sent in a canceled post', () => {
-    const { service } = createService();
+    const { lifecycle } = createService();
 
     expect(
-      (service as any).isValidStatusTransition(
+      (lifecycle as any).isValidStatusTransition(
         Order_status.CANCELLED,
         Order_status.CANCELLED_SENT,
       ),
@@ -160,7 +212,7 @@ describe('Order tracking lifecycle', () => {
   });
 
   it('create -> tracking created event', async () => {
-    const { service, orderRepo, trackingRepo, queryRunner } = createService();
+    const { lifecycle, orderRepo, trackingRepo, queryRunner } = createService();
 
     const savedOrder = {
       id: '101',
@@ -171,10 +223,10 @@ describe('Order tracking lifecycle', () => {
     orderRepo.save.mockResolvedValue(savedOrder);
     orderRepo.update.mockResolvedValue(undefined);
     jest
-      .spyOn(service, 'findById')
+      .spyOn(lifecycle, 'findById')
       .mockResolvedValue({ ...savedOrder, items: [] } as any);
 
-    await service.create(
+    await lifecycle.create(
       {
         market_id: '1',
         customer_id: '2',
@@ -195,7 +247,7 @@ describe('Order tracking lifecycle', () => {
   });
 
   it('update status -> tracking row added', async () => {
-    const { service, orderRepo, trackingRepo } = createService();
+    const { lifecycle, orderRepo, trackingRepo } = createService();
 
     const baseOrder = {
       id: '202',
@@ -222,7 +274,7 @@ describe('Order tracking lifecycle', () => {
     };
 
     jest
-      .spyOn(service, 'findById')
+      .spyOn(lifecycle, 'findById')
       .mockResolvedValueOnce({ ...baseOrder, items: [] } as any)
       .mockResolvedValueOnce({
         ...baseOrder,
@@ -232,7 +284,7 @@ describe('Order tracking lifecycle', () => {
 
     orderRepo.save.mockResolvedValue(undefined);
 
-    await service.updateFull(
+    await lifecycle.updateFull(
       '202',
       { status: Order_status.SOLD },
       { id: '55', roles: ['courier'], note: 'sold by courier' },
@@ -250,8 +302,8 @@ describe('Order tracking lifecycle', () => {
   });
 
   it('received order total_price cannot be edited', async () => {
-    const { service } = createService();
-    jest.spyOn(service, 'findById').mockResolvedValue({
+    const { lifecycle } = createService();
+    jest.spyOn(lifecycle, 'findById').mockResolvedValue({
       id: 'received-price',
       status: Order_status.RECEIVED,
       total_price: 1_000_000,
@@ -259,15 +311,15 @@ describe('Order tracking lifecycle', () => {
     } as any);
 
     await expect(
-      service.updateFull('received-price', { total_price: 1_100_000 }),
+      lifecycle.updateFull('received-price', { total_price: 1_100_000 }),
     ).rejects.toThrow(
       "HQ qabul qilgan buyurtmaning summasi va mahsulot sonini o'zgartirib bo'lmaydi",
     );
   });
 
   it('received order item quantity cannot be edited', async () => {
-    const { service } = createService();
-    jest.spyOn(service, 'findById').mockResolvedValue({
+    const { lifecycle } = createService();
+    jest.spyOn(lifecycle, 'findById').mockResolvedValue({
       id: 'received-items',
       status: Order_status.RECEIVED,
       total_price: 1_000_000,
@@ -275,7 +327,7 @@ describe('Order tracking lifecycle', () => {
     } as any);
 
     await expect(
-      service.updateFull('received-items', {
+      lifecycle.updateFull('received-items', {
         items: [{ product_id: '1', quantity: 2 }],
       }),
     ).rejects.toThrow(
@@ -284,7 +336,7 @@ describe('Order tracking lifecycle', () => {
   });
 
   it('order sent from HQ to branch cannot change address', async () => {
-    const { service, transferBatchItemRepo } = createService();
+    const { lifecycle, transferBatchItemRepo } = createService();
     transferBatchItemRepo.find.mockResolvedValue([
       {
         sent_at: new Date(),
@@ -296,7 +348,7 @@ describe('Order tracking lifecycle', () => {
         },
       },
     ]);
-    jest.spyOn(service, 'findById').mockResolvedValue({
+    jest.spyOn(lifecycle, 'findById').mockResolvedValue({
       id: 'sent-address',
       status: Order_status.RECEIVED,
       customer_id: '44',
@@ -309,14 +361,14 @@ describe('Order tracking lifecycle', () => {
     } as any);
 
     await expect(
-      service.updateFull('sent-address', { address: 'New address' }),
+      lifecycle.updateFull('sent-address', { address: 'New address' }),
     ).rejects.toThrow(
       "Branchga jo'natilgan buyurtmaning manzili va mijozini o'zgartirib bo'lmaydi",
     );
   });
 
   it('order sent from HQ to branch cannot change customer', async () => {
-    const { service, transferBatchItemRepo } = createService();
+    const { lifecycle, transferBatchItemRepo } = createService();
     transferBatchItemRepo.find.mockResolvedValue([
       {
         sent_at: new Date(),
@@ -328,7 +380,7 @@ describe('Order tracking lifecycle', () => {
         },
       },
     ]);
-    jest.spyOn(service, 'findById').mockResolvedValue({
+    jest.spyOn(lifecycle, 'findById').mockResolvedValue({
       id: 'sent-customer',
       status: Order_status.RECEIVED,
       customer_id: '44',
@@ -341,14 +393,14 @@ describe('Order tracking lifecycle', () => {
     } as any);
 
     await expect(
-      service.updateFull('sent-customer', { customer_id: '45' }),
+      lifecycle.updateFull('sent-customer', { customer_id: '45' }),
     ).rejects.toThrow(
       "Branchga jo'natilgan buyurtmaning manzili va mijozini o'zgartirib bo'lmaydi",
     );
   });
 
   it('closed -> final tracking exists', async () => {
-    const { service, orderRepo, trackingRepo } = createService();
+    const { lifecycle, orderRepo, trackingRepo } = createService();
 
     const baseOrder = {
       id: '303',
@@ -375,7 +427,7 @@ describe('Order tracking lifecycle', () => {
     };
 
     jest
-      .spyOn(service, 'findById')
+      .spyOn(lifecycle, 'findById')
       .mockResolvedValueOnce({ ...baseOrder, items: [] } as any)
       .mockResolvedValueOnce({
         ...baseOrder,
@@ -385,7 +437,7 @@ describe('Order tracking lifecycle', () => {
 
     orderRepo.save.mockResolvedValue(undefined);
 
-    await service.updateFull(
+    await lifecycle.updateFull(
       '303',
       { status: Order_status.CLOSED },
       { id: '1', roles: ['admin'], note: 'closed manually' },
@@ -401,7 +453,7 @@ describe('Order tracking lifecycle', () => {
   });
 
   it('create supports BRANCH source with branch/courier fields', async () => {
-    const { service, orderRepo } = createService();
+    const { lifecycle, orderRepo } = createService();
 
     orderRepo.create.mockImplementation((payload: any) => payload);
     orderRepo.save.mockImplementation(async (payload: any) => ({
@@ -410,10 +462,10 @@ describe('Order tracking lifecycle', () => {
     }));
     orderRepo.update.mockResolvedValue(undefined);
     jest
-      .spyOn(service, 'findById')
+      .spyOn(lifecycle, 'findById')
       .mockResolvedValue({ id: '404', items: [] } as any);
 
-    await service.create(
+    await lifecycle.create(
       {
         market_id: '1',
         customer_id: '2',
@@ -455,15 +507,15 @@ describe('Order tracking lifecycle', () => {
 
 describe('markByProvider (status-only provider transition)', () => {
   it('sell → SOLD with a tracking event, no finance emit', async () => {
-    const { service, orderRepo, trackingRepo, queryRunner } = createService();
+    const { lifecycle, orderRepo, trackingRepo, queryRunner } = createService();
     const order = { id: '500', status: Order_status.WAITING, sold_at: null };
     jest
-      .spyOn(service, 'findById')
+      .spyOn(lifecycle, 'findById')
       .mockResolvedValueOnce(order as any)
       .mockResolvedValueOnce({ ...order, status: Order_status.SOLD } as any);
     orderRepo.save.mockResolvedValue(order);
 
-    const res = await service.markByProvider({
+    const res = await lifecycle.markByProvider({
       order_id: '500',
       action: 'sell',
       provider_slug: 'acme-cargo',
@@ -484,14 +536,14 @@ describe('markByProvider (status-only provider transition)', () => {
   });
 
   it('cancel → CANCELLED', async () => {
-    const { service, orderRepo } = createService();
+    const { lifecycle, orderRepo } = createService();
     const order = {
       id: '501',
       status: Order_status.ON_THE_ROAD,
       sold_at: null,
     };
     jest
-      .spyOn(service, 'findById')
+      .spyOn(lifecycle, 'findById')
       .mockResolvedValueOnce(order as any)
       .mockResolvedValueOnce({
         ...order,
@@ -499,7 +551,7 @@ describe('markByProvider (status-only provider transition)', () => {
       } as any);
     orderRepo.save.mockResolvedValue(order);
 
-    const res = await service.markByProvider({
+    const res = await lifecycle.markByProvider({
       order_id: '501',
       action: 'cancel',
     });
@@ -510,15 +562,15 @@ describe('markByProvider (status-only provider transition)', () => {
   });
 
   it('return → CLOSED', async () => {
-    const { service, orderRepo } = createService();
+    const { lifecycle, orderRepo } = createService();
     const order = { id: '502', status: Order_status.WAITING, sold_at: null };
     jest
-      .spyOn(service, 'findById')
+      .spyOn(lifecycle, 'findById')
       .mockResolvedValueOnce(order as any)
       .mockResolvedValueOnce({ ...order, status: Order_status.CLOSED } as any);
     orderRepo.save.mockResolvedValue(order);
 
-    const res = await service.markByProvider({
+    const res = await lifecycle.markByProvider({
       order_id: '502',
       action: 'return',
     });
@@ -529,11 +581,11 @@ describe('markByProvider (status-only provider transition)', () => {
   });
 
   it('is idempotent — selling an already-sold order is a no-op', async () => {
-    const { service, orderRepo, queryRunner } = createService();
+    const { lifecycle, orderRepo, queryRunner } = createService();
     const order = { id: '503', status: Order_status.SOLD, sold_at: '123' };
-    jest.spyOn(service, 'findById').mockResolvedValueOnce(order as any);
+    jest.spyOn(lifecycle, 'findById').mockResolvedValueOnce(order as any);
 
-    const res = await service.markByProvider({
+    const res = await lifecycle.markByProvider({
       order_id: '503',
       action: 'sell',
     });

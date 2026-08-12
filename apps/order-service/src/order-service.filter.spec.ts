@@ -1,4 +1,5 @@
 import { OrderServiceService } from './order-service.service';
+import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { OrderAnalyticsService } from './analytics/order-analytics.service';
 
 describe('OrderServiceService filters', () => {
@@ -90,6 +91,62 @@ describe('OrderServiceService filters', () => {
       } as any, // lookup (OrderLookupService)
     );
 
+    const lifecycle = new OrderLifecycleService(
+      {} as any,
+      // dataSource
+      orderRepo as any,
+      // orderRepo
+      {} as any,
+      // orderItemRepo
+      orderTrackingRepo as any,
+      // orderTrackingRepo
+      orderCustodyEventRepo as any,
+      // orderCustodyEventRepo
+      {} as any,
+      // transferBatchRepo
+      {} as any,
+      // searchClient
+      {} as any,
+      // identityClient
+      {} as any,
+      // catalogClient
+      {} as any,
+      // financeClient
+      {} as any,
+      // integrationClient
+      {} as any,
+      // branchClient
+      {} as any,
+      // fileClient
+      {} as any,
+      // outbox
+      {
+        log: jest.fn().mockResolvedValue(undefined),
+        logChange: jest.fn().mockResolvedValue(undefined),
+        query: jest.fn().mockResolvedValue({
+          items: [],
+          meta: { page: 1, limit: 50, total: 0, totalPages: 1 },
+        }),
+        findByEntity: jest.fn().mockResolvedValue([]),
+        findByUser: jest.fn().mockResolvedValue([]),
+      } as any,
+      // activityLog
+      {
+        getHqBranchId: jest.fn().mockResolvedValue('1'),
+        getMarketsByIds: jest.fn().mockResolvedValue([]),
+        getCouriersByIds: jest.fn().mockResolvedValue([]),
+        getUserById: jest.fn().mockResolvedValue(null),
+        getCashboxByUser: jest.fn().mockResolvedValue(null),
+        resolveBranchShare: jest.fn().mockResolvedValue(0),
+        ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
+        resolveSettlementBranchId: jest.fn().mockResolvedValue(null),
+        getIntegrationById: jest.fn().mockResolvedValue(null),
+        getDefaultDistrictId: jest.fn().mockResolvedValue(null),
+        resolveDistrictId: jest.fn().mockResolvedValue(null),
+      } as any,
+      // lookup (OrderLookupService),
+    );
+
     // Read-only analytics methods now live in OrderAnalyticsService; it shares
     // the same order/tracking/custody repo mocks so the scope/count assertions
     // still exercise the real query-building logic.
@@ -102,7 +159,7 @@ describe('OrderServiceService filters', () => {
       {} as any, // logisticsClient
     );
 
-    return { service, analytics, qb, trackingQb, custodyQb };
+    return { service, lifecycle, analytics, qb, trackingQb, custodyQb };
   }
 
   it('filters by source=BRANCH and branch/home branch scope', async () => {
@@ -280,9 +337,9 @@ describe('OrderServiceService filters', () => {
   });
 
   it('credits the full order amount to branch cashbox for manager-direct sales', () => {
-    const { service } = setup();
+    const { lifecycle } = setup();
 
-    const amount = (service as any).resolveBranchCashboxSaleAmount(
+    const amount = (lifecycle as any).resolveBranchCashboxSaleAmount(
       1_000_000,
       950_000,
       true,
@@ -292,9 +349,9 @@ describe('OrderServiceService filters', () => {
   });
 
   it('keeps the existing tariff-adjusted branch amount for courier sales', () => {
-    const { service } = setup();
+    const { lifecycle } = setup();
 
-    const amount = (service as any).resolveBranchCashboxSaleAmount(
+    const amount = (lifecycle as any).resolveBranchCashboxSaleAmount(
       1_000_000,
       940_000,
       false,
@@ -304,9 +361,9 @@ describe('OrderServiceService filters', () => {
   });
 
   it('always deducts manager tariff from the amount payable to HQ', () => {
-    const { service } = setup();
+    const { lifecycle } = setup();
 
-    const managerShare = (service as any).resolveSaleActorShare(
+    const managerShare = (lifecycle as any).resolveSaleActorShare(
       true,
       { compensation_mode: 'salary_only' },
       50_000,

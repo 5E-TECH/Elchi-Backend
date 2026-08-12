@@ -1,4 +1,4 @@
-import { OrderServiceService } from './order-service.service';
+import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { Roles } from '@app/common';
 
 /**
@@ -18,19 +18,15 @@ describe('OrderServiceService dedup epoch (Faza 1a)', () => {
   function makeService(): OrderServiceService {
     // Pure helper under test — no dependency is touched, so every constructor
     // arg can be a stub. Mirrors the construction in the settlement spec.
-    return new OrderServiceService(
+    return new OrderLifecycleService(
       {} as any, // dataSource
       {} as any, // orderRepo
       {} as any, // orderItemRepo
       {} as any, // orderTrackingRepo
       {} as any, // orderCustodyEventRepo
-      {} as any, // orderSettlementRepo
       {} as any, // transferBatchRepo
-      {} as any, // transferBatchItemRepo
-      {} as any, // transferBatchHistoryRepo
       {} as any, // searchClient
       {} as any, // identityClient
-      {} as any, // logisticsClient
       {} as any, // catalogClient
       {} as any, // financeClient
       {} as any, // integrationClient

@@ -17,6 +17,7 @@ import { OrderServiceService } from './order-service.service';
 import { OrderAnalyticsService } from './analytics/order-analytics.service';
 import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
 import { OrderSettlementService } from './settlement/order-settlement.service';
+import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { OrderHolderType, Order_source } from './entities/order.entity';
 
 @Controller()
@@ -27,6 +28,7 @@ export class OrderServiceController {
     private readonly orderAnalyticsService: OrderAnalyticsService,
     private readonly transferBatchService: BranchTransferBatchService,
     private readonly settlementService: OrderSettlementService,
+    private readonly lifecycleService: OrderLifecycleService,
     private readonly idempotencyService: IdempotencyService,
   ) {}
 
@@ -101,7 +103,7 @@ export class OrderServiceController {
       this.idempotencyService,
       context,
       { requestId: data.request_id, pattern: 'order.create' },
-      () => this.orderService.create(data.dto, data.requester),
+      () => this.lifecycleService.create(data.dto, data.requester),
     );
   }
 
@@ -232,7 +234,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.receiveNewOrders(data.order_ids, data.search),
+      this.lifecycleService.receiveNewOrders(data.order_ids, data.search),
     );
   }
 
@@ -254,7 +256,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.runIdempotent(context, 'order.sell', data.request_id, () =>
-      this.orderService.sellOrder(
+      this.lifecycleService.sellOrder(
         data.requester,
         data.id,
         data.dto ?? {},
@@ -280,7 +282,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.runIdempotent(context, 'order.cancel', data.request_id, () =>
-      this.orderService.cancelOrder(
+      this.lifecycleService.cancelOrder(
         data.requester,
         data.id,
         data.dto ?? {},
@@ -305,7 +307,7 @@ export class OrderServiceController {
       'order.could_not_deliver',
       data.request_id,
       () =>
-        this.orderService.couldNotDeliverOrder(
+        this.lifecycleService.couldNotDeliverOrder(
           data.requester,
           data.id,
           data.dto ?? {},
@@ -336,7 +338,7 @@ export class OrderServiceController {
       'order.partly_sell',
       data.request_id,
       () =>
-        this.orderService.partlySellOrder(
+        this.lifecycleService.partlySellOrder(
           data.requester,
           data.id,
           data.dto,
@@ -361,7 +363,7 @@ export class OrderServiceController {
       'order.rollback_waiting',
       data.request_id,
       () =>
-        this.orderService.rollbackOrderToWaiting(
+        this.lifecycleService.rollbackOrderToWaiting(
           data.requester,
           data.id,
           data.dto,
@@ -475,7 +477,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.initiateReturn(data.requester, data.id, data.dto ?? {}),
+      this.lifecycleService.initiateReturn(data.requester, data.id, data.dto ?? {}),
     );
   }
 
@@ -489,7 +491,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.markReturnedToMarket(data.requester, data.id),
+      this.lifecycleService.markReturnedToMarket(data.requester, data.id),
     );
   }
 
@@ -530,7 +532,7 @@ export class OrderServiceController {
   ) {
     // Backward compatibility: old pattern now supports full update payload too.
     return this.executeAndAck(context, () =>
-      this.orderService.updateFull(data.id, data.dto, data.requester),
+      this.lifecycleService.updateFull(data.id, data.dto, data.requester),
     );
   }
 
@@ -570,7 +572,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.updateFull(data.id, data.dto, data.requester),
+      this.lifecycleService.updateFull(data.id, data.dto, data.requester),
     );
   }
 
@@ -580,7 +582,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.receiveExternalOrders(data),
+      this.lifecycleService.receiveExternalOrders(data),
     );
   }
 
@@ -630,7 +632,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.createExternalOrder(data.dto),
+      this.lifecycleService.createExternalOrder(data.dto),
     );
   }
 
@@ -641,7 +643,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.remove(data.id, data.requester),
+      this.lifecycleService.remove(data.id, data.requester),
     );
   }
 
@@ -751,7 +753,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.createMarketCancelledHandoverQr(data),
+      this.lifecycleService.createMarketCancelledHandoverQr(data),
     );
   }
 
@@ -765,7 +767,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.scanMarketCancelledHandoverQr(data),
+      this.lifecycleService.scanMarketCancelledHandoverQr(data),
     );
   }
 
@@ -782,7 +784,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.completeMarketCancelledHandover(data),
+      this.lifecycleService.completeMarketCancelledHandover(data),
     );
   }
 
@@ -798,7 +800,7 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () => {
       const normalized = this.orderService.normalizeUpdatePayload(data.dto);
-      return this.orderService.updateFull(
+      return this.lifecycleService.updateFull(
         data.id,
         normalized as any,
         data.requester,
@@ -1208,7 +1210,7 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderService.markByProvider(data),
+      this.lifecycleService.markByProvider(data),
     );
   }
 

@@ -1,5 +1,5 @@
 import { RpcException } from '@nestjs/microservices';
-import { OrderServiceService } from './order-service.service';
+import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { Order_status } from '@app/common';
 
 // Audit money P1: a courier/manager rolling a PARTLY_PAID order back to WAITING
@@ -9,19 +9,15 @@ import { Order_status } from '@app/common';
 // layer.
 describe('rollbackOrderToWaiting PARTLY_PAID guard', () => {
   function makeService() {
-    return new OrderServiceService(
+    return new OrderLifecycleService(
       {} as any, // dataSource
       {} as any, // orderRepo
       {} as any, // orderItemRepo
       {} as any, // orderTrackingRepo
       {} as any, // orderCustodyEventRepo
-      {} as any, // orderSettlementRepo
       {} as any, // transferBatchRepo
-      {} as any, // transferBatchItemRepo
-      {} as any, // transferBatchHistoryRepo
       {} as any, // searchClient
       {} as any, // identityClient
-      {} as any, // logisticsClient
       {} as any, // catalogClient
       {} as any, // financeClient
       {} as any, // integrationClient
