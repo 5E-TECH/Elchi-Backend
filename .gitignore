@@ -41,6 +41,10 @@ lerna-debug.log*
 .env.test.local
 .env.production
 .env.local
+# Secret-rotation temp files (never commit): .env.production.new, .env.production.bak.*
+.env.production.*
+.env.*.bak
+.env.*.bak.*
 
 # temp directory
 .temp
