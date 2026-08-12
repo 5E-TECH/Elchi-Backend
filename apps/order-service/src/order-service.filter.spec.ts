@@ -157,6 +157,10 @@ describe('OrderServiceService filters', () => {
       {} as any, // identityClient
       {} as any, // branchClient
       {} as any, // logisticsClient
+      {
+        getMarketsByIds: jest.fn().mockResolvedValue([]),
+        getCouriersByIds: jest.fn().mockResolvedValue([]),
+      } as any, // lookup (OrderLookupService)
     );
 
     return { service, lifecycle, analytics, qb, trackingQb, custodyQb };
@@ -443,7 +447,8 @@ describe('OrderServiceService filters', () => {
     jest
       .spyOn(analytics as any, 'getAllPostsForAnalytics')
       .mockResolvedValue([{ id: 'post-1', courier_id: '77' }]);
-    jest.spyOn(analytics as any, 'getCouriersByIds').mockResolvedValue([]);
+    // getCouriersByIds now lives in the injected OrderLookupService mock
+    // (returns [] by default), so no local spy is needed.
 
     await analytics.getCourierStat(
       '77',

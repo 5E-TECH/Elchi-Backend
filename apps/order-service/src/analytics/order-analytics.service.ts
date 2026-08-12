@@ -4,7 +4,6 @@ import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { Repository } from 'typeorm';
 import {
   BranchType,
-  ExpenseProofCondition,
   Order_status,
   Roles,
   Where_deliver,
@@ -13,6 +12,7 @@ import {
 import { Order } from '../entities/order.entity';
 import { OrderTracking } from '../entities/order-tracking.entity';
 import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
+import { OrderLookupService } from '../lookup/order-lookup.service';
 
 /**
  * Read-only order analytics / reporting service.
@@ -22,15 +22,13 @@ import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
  * top-N and revenue rollups — all read paths, no money mutation, so it can be
  * scaled/optimised independently of the money-critical lifecycle service.
  *
- * NOTE: getHqBranchId / getMarketsByIds / getCouriersByIds are small RMQ
- * lookups intentionally duplicated from OrderServiceService (which keeps its
- * own copies for the write paths). Consolidating them into a shared
- * OrderLookupService is a sensible follow-up.
+ * Shared cross-service resolvers (market/courier lookups) come from the injected
+ * OrderLookupService — no longer duplicated here. getPostsByIds stays local as
+ * it is an analytics-only logistics rollup.
  */
 @Injectable()
 export class OrderAnalyticsService {
   private readonly logger = new Logger(OrderAnalyticsService.name);
-  private hqBranchIdCache: string | null = null;
 
   /**
    * Upper bound on an analytics date span. These reports load individual order
@@ -54,67 +52,8 @@ export class OrderAnalyticsService {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
+    private readonly lookup: OrderLookupService,
   ) {}
-
-  private async getHqBranchId(): Promise<string | null> {
-    if (this.hqBranchIdCache) {
-      return this.hqBranchIdCache;
-    }
-
-    try {
-      const response = await rmqSend<{ data?: { id?: string } }>(
-        this.branchClient,
-        { cmd: 'branch.find_hq' },
-        {},
-        { attachRequestId: false, retries: 1 },
-      );
-      const hqId = response?.data?.id;
-      if (hqId) {
-        this.hqBranchIdCache = String(hqId);
-      }
-    } catch {
-      return null;
-    }
-
-    return this.hqBranchIdCache;
-  }
-
-  private async getMarketsByIds(ids: string[]) {
-    if (!ids.length) return [];
-    const response = await rmqSend<{
-      data?: Array<{
-        id: string;
-        name?: string;
-        tariff_home?: number;
-        tariff_center?: number;
-        expense_proof_conditions?: ExpenseProofCondition[] | null;
-        cancelled_handover_qr_required?: boolean | null;
-      }>;
-    }>(
-      this.identityClient,
-      { cmd: 'identity.market.find_by_ids' },
-      { ids },
-    ).catch(() => ({ data: [] }));
-    return response?.data ?? [];
-  }
-
-  private async getCouriersByIds(ids: string[]) {
-    if (!ids.length) return [];
-    const response = await rmqSend<{
-      data?: Array<{
-        id: string;
-        name?: string;
-        tariff_home?: number;
-        tariff_center?: number;
-        compensation_mode?: string | null;
-      }>;
-    }>(
-      this.identityClient,
-      { cmd: 'identity.courier.find_by_ids' },
-      { ids },
-    ).catch(() => ({ data: [] }));
-    return response?.data ?? [];
-  }
 
   private analyticsDateRange(startDate?: string, endDate?: string) {
     const UZB_OFFSET_MS = 5 * 60 * 60 * 1000;
@@ -684,13 +623,13 @@ export class OrderAnalyticsService {
       ...new Set(soldOrders.map((o) => o.post_id).filter(Boolean) as string[]),
     ];
     const [markets, posts] = await Promise.all([
-      this.getMarketsByIds(marketIds),
+      this.lookup.getMarketsByIds(marketIds),
       this.getPostsByIds(postIds),
     ]);
     const courierIds = [
       ...new Set(posts.map((p) => p.courier_id).filter(Boolean) as string[]),
     ];
-    const couriers = await this.getCouriersByIds(courierIds);
+    const couriers = await this.lookup.getCouriersByIds(courierIds);
 
     const marketMap = new Map(markets.map((m) => [String(m.id), m]));
     const postMap = new Map(posts.map((p) => [String(p.id), p]));
@@ -775,7 +714,7 @@ export class OrderAnalyticsService {
     const marketIds = Array.from(
       new Set([...totalsMap.keys(), ...soldsMap.keys()]),
     );
-    const markets = await this.getMarketsByIds(marketIds);
+    const markets = await this.lookup.getMarketsByIds(marketIds);
 
     const result = markets.map((market) => {
       const totalOrders = totalsMap.get(String(market.id)) ?? 0;
@@ -852,7 +791,7 @@ export class OrderAnalyticsService {
         posts.map((post) => post.courier_id).filter(Boolean) as string[],
       ),
     ];
-    const couriers = await this.getCouriersByIds(courierIds);
+    const couriers = await this.lookup.getCouriersByIds(courierIds);
 
     const statsByCourier = new Map<string, { total: number; sold: number }>();
     for (const order of orders) {
@@ -932,7 +871,7 @@ export class OrderAnalyticsService {
         successful_orders: string;
       }>();
 
-    const markets = await this.getMarketsByIds(
+    const markets = await this.lookup.getMarketsByIds(
       totalsRaw.map((r) => String(r.market_id)),
     );
     const marketMap = new Map(markets.map((m) => [String(m.id), m]));
@@ -983,7 +922,7 @@ export class OrderAnalyticsService {
     const courierIds = [
       ...new Set(posts.map((p) => p.courier_id).filter(Boolean) as string[]),
     ];
-    const couriers = await this.getCouriersByIds(courierIds);
+    const couriers = await this.lookup.getCouriersByIds(courierIds);
     const courierMap = new Map(couriers.map((c) => [String(c.id), c]));
 
     const stats = new Map<string, { total: number; successful: number }>();
@@ -1215,7 +1154,7 @@ export class OrderAnalyticsService {
     ]);
     const soldOrders = soldOrderEntities.length;
 
-    const couriers = await this.getCouriersByIds([courierId]);
+    const couriers = await this.lookup.getCouriersByIds([courierId]);
     const courier = couriers[0];
 
     let profit = 0;
