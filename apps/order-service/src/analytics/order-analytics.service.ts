@@ -1120,9 +1120,11 @@ export class OrderAnalyticsService {
       courierId,
       postIds,
     );
+    // Only id (count) + where_deliver (profit split) are read from the result.
     const soldOrdersQuery = this.applyAnalyticsCourierScope(
       this.orderRepo
         .createQueryBuilder('o')
+        .select(['o.id', 'o.where_deliver'])
         .where('o.isDeleted = :isDeleted', { isDeleted: false })
         .andWhere('o.status IN (:...statuses)', { statuses: soldStatuses }),
       courierId,
@@ -1185,8 +1187,11 @@ export class OrderAnalyticsService {
     const startMs = String(start.getTime());
     const endMs = String(end.getTime());
 
+    // Only the ids + count are used below, so load id alone (not full order
+    // entities) — same result, far less memory per row on a busy market.
     const allOrders = await this.orderRepo
       .createQueryBuilder('o')
+      .select(['o.id'])
       .where('o.isDeleted = :isDeleted', { isDeleted: false })
       .andWhere('o.createdAt BETWEEN :start AND :end', { start, end })
       .andWhere('o.market_id = :marketId', { marketId })
@@ -1233,6 +1238,7 @@ export class OrderAnalyticsService {
           .getCount(),
         this.orderRepo
           .createQueryBuilder('o')
+          .select(['o.id', 'o.to_be_paid'])
           .where('o.isDeleted = :isDeleted', { isDeleted: false })
           .andWhere('o.id IN (:...orderIds)', { orderIds })
           .andWhere('o.sold_at BETWEEN :startMs AND :endMs', { startMs, endMs })
@@ -1240,6 +1246,7 @@ export class OrderAnalyticsService {
           .getMany(),
       ]);
 
+    // Only to_be_paid is summed, so the query above loads just id + to_be_paid.
     const profit = soldOrderEntities.reduce(
       (sum, order) => sum + Number(order.to_be_paid ?? 0),
       0,
