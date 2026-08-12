@@ -32,7 +32,17 @@ openssl rand -hex 24   # MINIO_SECRET_KEY
 openssl rand -hex 16   # RABBITMQ password (replace guest:guest)
 
 # Superadmin seed password: strong, unique, >= 12 chars (NOT "0990")
+
+# Swagger basic-auth (SWAGGER_USER / SWAGGER_PASSWORD)
+openssl rand -hex 16   # SWAGGER_PASSWORD
 ```
+
+> **Telegram bot tokens are NOT openssl-generated — revoke + reissue them:**
+> `TELEGRAM_BOT_TOKEN` and `ORDER_BOT_TOKEN` were leaked in history. A leaked bot
+> token grants full control of the bot, so message @BotFather → `/revoke` for
+> each bot (this immediately invalidates the old token) and paste the new token
+> into `.env.production`. There is no way to "rotate" a bot token other than
+> revoking it.
 
 Then, on the server, edit `.env.production` with the new values and apply them to
 the running datastores:
@@ -48,6 +58,17 @@ the running datastores:
 - **JWT keys**: rotating `ACCESS_TOKEN_KEY` / `REFRESH_TOKEN_KEY` invalidates all
   existing sessions — expect every user to re-login. Do it in a maintenance window.
 - **Superadmin**: reset the seeded admin's password to the new strong value.
+- **Telegram bots**: `/revoke` both `TELEGRAM_BOT_TOKEN` and `ORDER_BOT_TOKEN`
+  via @BotFather, then update `.env.production`. (Revoking is immediate — the old
+  token stops working the moment you revoke.)
+- **Swagger**: set new `SWAGGER_USER` / `SWAGGER_PASSWORD` (the Swagger UI basic-auth).
+
+> **Complete leaked-secret checklist** (every key that ever lived in
+> `.env.production` and must be treated as compromised): `ACCESS_TOKEN_KEY`,
+> `REFRESH_TOKEN_KEY`, `INTEGRATION_CREDENTIAL_SECRET`, `POSTGRES_PASSWORD`
+> (+ `POSTGRES_URI`), `MINIO_ACCESS_KEY`, `MINIO_SECRET_KEY`, RabbitMQ creds
+> (+ `RABBITMQ_URI`), `SUPERADMIN_PASSWORD`, `TUNNEL_TOKEN`, `TELEGRAM_BOT_TOKEN`,
+> `ORDER_BOT_TOKEN`, `SWAGGER_USER`, `SWAGGER_PASSWORD`.
 
 Restart the stack so every service picks up the new `.env.production`:
 
@@ -57,9 +78,20 @@ docker compose -f docker-compose.prod.yml up -d --force-recreate
 
 ## 2. Purge `.env.production` from git history
 
-`.env.production` is now git-ignored, but its historical blobs still leak. Rewrite
-history with `git filter-repo` (preferred) or BFG. **This is destructive and
-force-pushes — coordinate with everyone who has a clone.**
+`.env.production` is now git-ignored, but its historical blobs still leak (audit
+found it in **9 commits**). Rewrite history with `git filter-repo` (preferred) or
+BFG. **This is destructive and force-pushes — coordinate with everyone who has a
+clone.**
+
+> ⏱️ **Timing — do the purge with NO open PRs.** A history rewrite + force-push
+> changes every commit SHA, which breaks any open pull request and every
+> outstanding branch. Merge or close open PRs first (e.g. the audit-remediation
+> branch), then rewrite from the resulting `dev`/`main`. Rotation (§1) is
+> independent — do it immediately; the purge can follow once branches are settled.
+>
+> Note: the purge is the *belt-and-suspenders* step. **Rotation (§1) is what
+> actually closes the exposure** — once every leaked value is changed, the old
+> blobs in history are worthless. Prioritise §1.
 
 ```bash
 # From a fresh mirror clone:
