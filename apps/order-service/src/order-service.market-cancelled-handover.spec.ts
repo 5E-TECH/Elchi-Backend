@@ -142,6 +142,28 @@ describe('OrderServiceService market cancelled handover', () => {
       {} as any,
       outbox as any,
       activityLog as any,
+      {
+        getHqBranchId: jest.fn().mockResolvedValue('1'),
+        // getMarketsByIds now lives in OrderLookupService; return the same
+        // market the identityClient mock used to feed (drives the QR-required
+        // branch in completeMarketCancelledHandover).
+        getMarketsByIds: jest.fn().mockResolvedValue([
+          {
+            id: '16',
+            name: 'Yandex',
+            cancelled_handover_qr_required: options?.marketQrRequired ?? true,
+          },
+        ]),
+        getCouriersByIds: jest.fn().mockResolvedValue([]),
+        getUserById: jest.fn().mockResolvedValue(null),
+        getCashboxByUser: jest.fn().mockResolvedValue(null),
+        resolveBranchShare: jest.fn().mockResolvedValue(0),
+        ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
+        resolveSettlementBranchId: jest.fn().mockResolvedValue(null),
+        getIntegrationById: jest.fn().mockResolvedValue(null),
+        getDefaultDistrictId: jest.fn().mockResolvedValue(null),
+        resolveDistrictId: jest.fn().mockResolvedValue(null),
+      } as any, // lookup (OrderLookupService)
     );
 
     return {

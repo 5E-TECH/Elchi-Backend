@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import {
@@ -56,6 +56,7 @@ import {
   resolveSaleActorShare as resolveSaleActorShareAmount,
   resolveBranchCashboxSaleAmount as resolveBranchCashboxSaleAmountValue,
 } from './domain/order-money';
+import { OrderLookupService } from './lookup/order-lookup.service';
 
 const CANCELLED_HANDOVER_MANUAL_REASONS = new Set([
   'QR yirtilgan',
@@ -66,7 +67,7 @@ const CANCELLED_HANDOVER_MANUAL_REASONS = new Set([
 const CANCELLED_HANDOVER_MANUAL_REASON_MAX_LENGTH = 80;
 
 @Injectable()
-export class OrderServiceService implements OnModuleInit {
+export class OrderServiceService {
   private readonly logger = new Logger(OrderServiceService.name);
 
   constructor(
@@ -97,9 +98,8 @@ export class OrderServiceService implements OnModuleInit {
     @Inject('FILE') private readonly fileClient: ClientProxy,
     private readonly outbox: OutboxService,
     private readonly activityLog: ActivityLogService,
+    private readonly lookup: OrderLookupService,
   ) {}
-
-  private hqBranchIdCache: string | null = null;
 
   /**
    * Normalise the RMQ `requester` payload into the actor fields the
@@ -128,19 +128,6 @@ export class OrderServiceService implements OnModuleInit {
     limit?: number,
   ) {
     return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
-  }
-
-  async onModuleInit(): Promise<void> {
-    // Warm the HQ branch cache up-front. branch-service seeds HQ on its own
-    // init, so this should succeed on a healthy stack. If RMQ isn't ready yet
-    // (cold-start race) we just log; the first order create will retry.
-    try {
-      await this.getHqBranchId();
-    } catch (err) {
-      this.logger.warn(
-        `HQ branch warm-up failed: ${(err as Error)?.message ?? err}`,
-      );
-    }
   }
 
   /**
@@ -181,7 +168,7 @@ export class OrderServiceService implements OnModuleInit {
       }
     }
 
-    const hqId = await this.getHqBranchId();
+    const hqId = await this.lookup.getHqBranchId();
     if (hqId) {
       return hqId;
     }
@@ -492,7 +479,7 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   private async wasSentFromHqToBranch(orderId: string): Promise<boolean> {
-    const hqBranchId = await this.getHqBranchId();
+    const hqBranchId = await this.lookup.getHqBranchId();
     if (!hqBranchId) return false;
 
     const batchItems = await this.transferBatchItemRepo.find({
@@ -852,29 +839,6 @@ export class OrderServiceService implements OnModuleInit {
     return String(holderType);
   }
 
-  private async getHqBranchId(): Promise<string | null> {
-    if (this.hqBranchIdCache) {
-      return this.hqBranchIdCache;
-    }
-
-    try {
-      const response = await rmqSend<{ data?: { id?: string } }>(
-        this.branchClient,
-        { cmd: 'branch.find_hq' },
-        {},
-        { attachRequestId: false, retries: 1 },
-      );
-      const hqId = response?.data?.id;
-      if (hqId) {
-        this.hqBranchIdCache = String(hqId);
-      }
-    } catch {
-      return null;
-    }
-
-    return this.hqBranchIdCache;
-  }
-
   private async resolveHolderFromState(
     branchId: string | null | undefined,
     courierId: string | null | undefined,
@@ -894,7 +858,7 @@ export class OrderServiceService implements OnModuleInit {
       };
     }
 
-    const hqBranchId = await this.getHqBranchId();
+    const hqBranchId = await this.lookup.getHqBranchId();
     if (normalizedBranchId && normalizedBranchId !== hqBranchId) {
       return {
         holder_type: OrderHolderType.BRANCH,
@@ -1060,129 +1024,6 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     return parts.join('\n');
-  }
-
-  private async getMarketsByIds(ids: string[]) {
-    if (!ids.length) return [];
-    const response = await rmqSend<{
-      data?: Array<{
-        id: string;
-        name?: string;
-        tariff_home?: number;
-        tariff_center?: number;
-        expense_proof_conditions?: ExpenseProofCondition[] | null;
-        cancelled_handover_qr_required?: boolean | null;
-      }>;
-    }>(
-      this.identityClient,
-      { cmd: 'identity.market.find_by_ids' },
-      { ids },
-    ).catch(() => ({ data: [] }));
-    return response?.data ?? [];
-  }
-
-  private async getCouriersByIds(ids: string[]) {
-    if (!ids.length) return [];
-    const response = await rmqSend<{
-      data?: Array<{
-        id: string;
-        name?: string;
-        tariff_home?: number;
-        tariff_center?: number;
-        compensation_mode?: string | null;
-      }>;
-    }>(
-      this.identityClient,
-      { cmd: 'identity.courier.find_by_ids' },
-      { ids },
-    ).catch(() => ({ data: [] }));
-    return response?.data ?? [];
-  }
-
-  private async getUserById(id: string) {
-    const response = await rmqSend<{
-      data?: {
-        id: string;
-        name?: string;
-        tariff_home?: number;
-        tariff_center?: number;
-        compensation_mode?: string | null;
-      };
-    }>(
-      this.identityClient,
-      { cmd: 'identity.user.find_by_id' },
-      { id: String(id) },
-    ).catch(() => ({ data: undefined }));
-
-    return response?.data;
-  }
-
-  private async getCashboxByUser(userId: string, cashboxType: Cashbox_type) {
-    const response = await rmqSend<{ data?: { id: string; balance?: number } }>(
-      this.financeClient,
-      { cmd: 'finance.cashbox.find_by_user' },
-      { user_id: userId, cashbox_type: cashboxType },
-    ).catch(() => ({ data: undefined }));
-
-    return response?.data;
-  }
-
-  /**
-   * Resolve the non-HQ branch a sale should settle through, or null for HQ /
-   * unknown. Branches are separate cash owners: COD collected by a branch's
-   * courier rolls courier → branch → HQ. The branch a sale belongs to is where
-   * custody currently sits (holder branch, falling back to the order branch).
-   */
-  private async resolveSettlementBranchId(order: {
-    holder_branch_id?: string | null;
-    branch_id?: string | null;
-  }): Promise<string | null> {
-    const branchId = String(
-      order.holder_branch_id ?? order.branch_id ?? '',
-    ).trim();
-    if (!branchId) {
-      return null;
-    }
-    const hqId = String((await this.getHqBranchId()) ?? '').trim();
-    return branchId === hqId ? null : branchId;
-  }
-
-  /**
-   * Ensure a branch's BRANCH-type cashbox exists before we post to it (the
-   * finance balance update throws if the cashbox is missing). Idempotent — a
-   * pre-existing cashbox returns an "already exists" error we deliberately
-   * swallow.
-   */
-  private async ensureBranchCashbox(branchId: string): Promise<void> {
-    await rmqSend(
-      this.financeClient,
-      { cmd: 'finance.cashbox.create' },
-      { user_id: String(branchId), cashbox_type: Cashbox_type.BRANCH },
-    ).catch(() => undefined);
-  }
-
-  /**
-   * The per-order amount a branch KEEPS for a sold order: its configured
-   * per_order_share when the branch is PARTNER-owned, otherwise 0 (OWNED
-   * branches remit everything to HQ). Returns 0 for HQ / unknown branch.
-   */
-  private async resolveBranchShare(branchId: string | null): Promise<number> {
-    if (!branchId) {
-      return 0;
-    }
-    const res = await rmqSend<{
-      data?: { ownership?: string; per_order_share?: number | string };
-    }>(
-      this.branchClient,
-      { cmd: 'branch.find_by_id' },
-      { id: String(branchId) },
-    ).catch(() => ({ data: undefined }));
-    const branch = res?.data;
-    if (!branch || branch.ownership !== BranchOwnership.PARTNER) {
-      return 0;
-    }
-    const share = Number(branch.per_order_share ?? 0);
-    return Number.isFinite(share) && share > 0 ? share : 0;
   }
 
   // COD share/profit math lives in ./domain/order-money (pure & unit-tested).
@@ -1709,7 +1550,6 @@ export class OrderServiceService implements OnModuleInit {
     return Math.abs(leftTime - rightTime) <= maxDiffMs;
   }
 
-
   async rollbackOrderToWaiting(
     requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,
@@ -1819,10 +1659,12 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     const [market, financialActor] = await Promise.all([
-      this.getMarketsByIds([String(order.market_id)]).then((rows) => rows[0]),
+      this.lookup
+        .getMarketsByIds([String(order.market_id)])
+        .then((rows) => rows[0]),
       isManagerRequester
-        ? this.getUserById(String(requester.id))
-        : this.getCouriersByIds([courierId]).then((rows) => rows[0]),
+        ? this.lookup.getUserById(String(requester.id))
+        : this.lookup.getCouriersByIds([courierId]).then((rows) => rows[0]),
     ]);
     if (!market) {
       this.notFound('Market not found');
@@ -1834,12 +1676,15 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     const [marketCashbox, courierCashbox] = await Promise.all([
-      this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
+      this.lookup.getCashboxByUser(
+        String(order.market_id),
+        Cashbox_type.FOR_MARKET,
+      ),
       isManagerRequester
         ? Promise.resolve(null)
-        : this.getCashboxByUser(courierId, Cashbox_type.FOR_COURIER).catch(
-            () => null,
-          ),
+        : this.lookup
+            .getCashboxByUser(courierId, Cashbox_type.FOR_COURIER)
+            .catch(() => null),
     ]);
     if (!marketCashbox) {
       this.notFound('Market cashbox not found');
@@ -1876,13 +1721,12 @@ export class OrderServiceService implements OnModuleInit {
       this.badRequest('Manager branch not found');
     }
     if (isManagerRequester) {
-      await this.ensureBranchCashbox(actorExpenseUserId);
+      await this.lookup.ensureBranchCashbox(actorExpenseUserId);
     }
     const actorExpenseCashbox = isManagerRequester
-      ? await this.getCashboxByUser(
-          actorExpenseUserId,
-          Cashbox_type.BRANCH,
-        ).catch(() => null)
+      ? await this.lookup
+          .getCashboxByUser(actorExpenseUserId, Cashbox_type.BRANCH)
+          .catch(() => null)
       : courierCashbox;
     const [marketExtraCost, courierExtraCost] = await Promise.all([
       this.findLatestHistoryBySource({
@@ -2055,14 +1899,14 @@ export class OrderServiceService implements OnModuleInit {
             ? Number(order.branch_cashbox_amount)
             : saleBranchNet;
 
-        const rbBranchId = await this.resolveSettlementBranchId(order);
+        const rbBranchId = await this.lookup.resolveSettlementBranchId(order);
         if (rbBranchId) {
-          await this.ensureBranchCashbox(rbBranchId);
+          await this.lookup.ensureBranchCashbox(rbBranchId);
         }
         const rbBranchCashbox = rbBranchId
-          ? await this.getCashboxByUser(rbBranchId, Cashbox_type.BRANCH).catch(
-              () => null,
-            )
+          ? await this.lookup
+              .getCashboxByUser(rbBranchId, Cashbox_type.BRANCH)
+              .catch(() => null)
           : null;
 
         // market leg (reverse)
@@ -2392,7 +2236,7 @@ export class OrderServiceService implements OnModuleInit {
     // Both converge on "custody is held by HQ or the home branch", which the
     // holder model now tracks. We keep the explicit return-batch check too, for
     // legacy orders whose holder fields predate custody tracking.
-    const hqBranchId = await this.getHqBranchId();
+    const hqBranchId = await this.lookup.getHqBranchId();
     const homeBranchId = String(order.home_branch_id ?? '').trim();
     const holderBranchId = String(order.holder_branch_id ?? '').trim();
 
@@ -2708,7 +2552,7 @@ export class OrderServiceService implements OnModuleInit {
 
     await this.assertMarketHandoverHqRequester(input.requester);
 
-    const [market] = await this.getMarketsByIds([marketId]);
+    const [market] = await this.lookup.getMarketsByIds([marketId]);
     if (!market) {
       this.badRequest('Market topilmadi');
     }
@@ -3568,71 +3412,6 @@ export class OrderServiceService implements OnModuleInit {
     return fieldPath.split('.').reduce((acc, key) => acc?.[key], obj);
   }
 
-  private async getIntegrationById(
-    integrationId: string,
-  ): Promise<Record<string, any>> {
-    const response = await rmqSend<{ data?: Record<string, any> }>(
-      this.integrationClient,
-      { cmd: 'integration.find_by_id' },
-      { id: integrationId },
-    ).catch(() => ({ data: undefined }));
-
-    const integration = response?.data;
-    if (!integration) {
-      this.notFound('Integration not found');
-    }
-    return integration;
-  }
-
-  private async getDefaultDistrictId(): Promise<string> {
-    const response = await rmqSend<{
-      data?: { items?: Array<{ id: string }> } | Array<{ id: string }>;
-    }>(
-      this.logisticsClient,
-      { cmd: 'logistics.district.find_all' },
-      { query: { page: 1, limit: 1 } },
-    ).catch(() => ({ data: [] }));
-
-    const rows = Array.isArray(response?.data)
-      ? response.data
-      : ((response?.data as any)?.items ?? []);
-
-    const districtId = rows?.[0]?.id ? String(rows[0].id) : '';
-    if (!districtId) {
-      this.notFound('No district found for external order import');
-    }
-    return districtId;
-  }
-
-  private async resolveDistrictId(
-    externalDistrictValue: unknown,
-    fallbackDistrictId: string,
-  ): Promise<string> {
-    const raw =
-      externalDistrictValue == null ? '' : String(externalDistrictValue).trim();
-    if (!raw) return fallbackDistrictId;
-
-    const bySato = await rmqSend<{ data?: { id?: string } }>(
-      this.logisticsClient,
-      { cmd: 'logistics.district.find_by_sato' },
-      { satoCode: raw },
-    ).catch(() => ({ data: undefined }));
-    if (bySato?.data?.id) {
-      return String(bySato.data.id);
-    }
-
-    const byId = await rmqSend<{ data?: { id?: string } }>(
-      this.logisticsClient,
-      { cmd: 'logistics.district.find_by_id' },
-      { id: raw },
-    ).catch(() => ({ data: undefined }));
-    if (byId?.data?.id) {
-      return String(byId.data.id);
-    }
-
-    return fallbackDistrictId;
-  }
-
   private async queueExternalStatusSync(
     order: Order,
     action: 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting',
@@ -3889,7 +3668,7 @@ export class OrderServiceService implements OnModuleInit {
   }
 
   async receiveExternalOrders(dto: { integration_id: string; orders: any[] }) {
-    const integration = await this.getIntegrationById(
+    const integration = await this.lookup.getIntegrationById(
       String(dto.integration_id),
     );
     if (integration?.is_active === false) {
@@ -3912,7 +3691,7 @@ export class OrderServiceService implements OnModuleInit {
       this.badRequest('orders is required');
     }
 
-    const fallbackDistrictId = await this.getDefaultDistrictId();
+    const fallbackDistrictId = await this.lookup.getDefaultDistrictId();
     const created: Array<{
       id: string;
       external_id: string | null;
@@ -3967,7 +3746,7 @@ export class OrderServiceService implements OnModuleInit {
         ext,
         fieldMapping.district_code_field ?? 'district',
       );
-      const districtId = await this.resolveDistrictId(
+      const districtId = await this.lookup.resolveDistrictId(
         districtExternal,
         fallbackDistrictId,
       );
@@ -4105,10 +3884,14 @@ export class OrderServiceService implements OnModuleInit {
       !this.hasRole(requester, Roles.COURIER);
 
     const [market, financialActor] = await Promise.all([
-      this.getMarketsByIds([String(order.market_id)]).then((rows) => rows[0]),
+      this.lookup
+        .getMarketsByIds([String(order.market_id)])
+        .then((rows) => rows[0]),
       isManagerRequester
-        ? this.getUserById(String(requester.id))
-        : this.getCouriersByIds([actorCourierId]).then((rows) => rows[0]),
+        ? this.lookup.getUserById(String(requester.id))
+        : this.lookup
+            .getCouriersByIds([actorCourierId])
+            .then((rows) => rows[0]),
     ]);
     if (!market) {
       this.notFound('Market not found');
@@ -4120,12 +3903,15 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     const [marketCashbox, courierCashbox] = await Promise.all([
-      this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
+      this.lookup.getCashboxByUser(
+        String(order.market_id),
+        Cashbox_type.FOR_MARKET,
+      ),
       isManagerRequester
         ? Promise.resolve(null)
-        : this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER).catch(
-            () => null,
-          ),
+        : this.lookup
+            .getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER)
+            .catch(() => null),
     ]);
     if (!marketCashbox) {
       this.notFound('Market cashbox not found');
@@ -4138,19 +3924,19 @@ export class OrderServiceService implements OnModuleInit {
     // courier-side COD entry onto the branch's cashbox (courier → branch → HQ)
     // so HQ can see what the branch owes and settle it later
     // (paymentFromBranchToMain). Ensure the cashbox exists before posting.
-    const settlementBranchId = await this.resolveSettlementBranchId(order);
+    const settlementBranchId =
+      await this.lookup.resolveSettlementBranchId(order);
     if (settlementBranchId) {
-      await this.ensureBranchCashbox(settlementBranchId);
+      await this.lookup.ensureBranchCashbox(settlementBranchId);
     }
     const branchCashbox = settlementBranchId
-      ? await this.getCashboxByUser(
-          settlementBranchId,
-          Cashbox_type.BRANCH,
-        ).catch(() => null)
+      ? await this.lookup
+          .getCashboxByUser(settlementBranchId, Cashbox_type.BRANCH)
+          .catch(() => null)
       : null;
     // branchShare = what a PARTNER branch keeps per order (0 for OWNED / HQ).
     const branchShare = settlementBranchId
-      ? await this.resolveBranchShare(settlementBranchId)
+      ? await this.lookup.resolveBranchShare(settlementBranchId)
       : 0;
 
     const marketBalanceBefore = Number(marketCashbox.balance ?? 0);
@@ -4519,9 +4305,9 @@ export class OrderServiceService implements OnModuleInit {
 
     // The market is needed for the proof policy regardless of extra cost, since
     // some conditions (e.g. cancelling a zero-total order) apply with no expense.
-    const market = await this.getMarketsByIds([String(order.market_id)]).then(
-      (rows) => rows[0],
-    );
+    const market = await this.lookup
+      .getMarketsByIds([String(order.market_id)])
+      .then((rows) => rows[0]);
 
     // Reject the cancel up front if this market's proof policy is triggered and
     // the courier didn't attach valid file proof.
@@ -4550,14 +4336,16 @@ export class OrderServiceService implements OnModuleInit {
     }
     if (extraCost > 0) {
       if (isManagerRequester) {
-        await this.ensureBranchCashbox(actorExpenseUserId);
+        await this.lookup.ensureBranchCashbox(actorExpenseUserId);
       }
       const [marketCashbox, fetchedActorExpenseCashbox] = await Promise.all([
-        this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
-        this.getCashboxByUser(
-          actorExpenseUserId,
-          actorExpenseCashboxType,
-        ).catch(() => null),
+        this.lookup.getCashboxByUser(
+          String(order.market_id),
+          Cashbox_type.FOR_MARKET,
+        ),
+        this.lookup
+          .getCashboxByUser(actorExpenseUserId, actorExpenseCashboxType)
+          .catch(() => null),
       ]);
       if (!marketCashbox) {
         this.notFound('Market cashbox not found');
@@ -4917,10 +4705,14 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     const [market, financialActor] = await Promise.all([
-      this.getMarketsByIds([String(order.market_id)]).then((rows) => rows[0]),
+      this.lookup
+        .getMarketsByIds([String(order.market_id)])
+        .then((rows) => rows[0]),
       isManagerRequester
-        ? this.getUserById(String(requester.id))
-        : this.getCouriersByIds([actorCourierId]).then((rows) => rows[0]),
+        ? this.lookup.getUserById(String(requester.id))
+        : this.lookup
+            .getCouriersByIds([actorCourierId])
+            .then((rows) => rows[0]),
     ]);
     if (!market) {
       this.notFound('Market not found');
@@ -4932,12 +4724,15 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     const [marketCashbox, courierCashbox] = await Promise.all([
-      this.getCashboxByUser(String(order.market_id), Cashbox_type.FOR_MARKET),
+      this.lookup.getCashboxByUser(
+        String(order.market_id),
+        Cashbox_type.FOR_MARKET,
+      ),
       isManagerRequester
         ? Promise.resolve(null)
-        : this.getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER).catch(
-            () => null,
-          ),
+        : this.lookup
+            .getCashboxByUser(actorCourierId, Cashbox_type.FOR_COURIER)
+            .catch(() => null),
     ]);
     if (!marketCashbox) {
       this.notFound('Market cashbox not found');
@@ -4947,18 +4742,18 @@ export class OrderServiceService implements OnModuleInit {
     }
 
     // Branch settlement mirror (courier → branch → HQ) for non-HQ branch sales.
-    const settlementBranchId = await this.resolveSettlementBranchId(order);
+    const settlementBranchId =
+      await this.lookup.resolveSettlementBranchId(order);
     if (settlementBranchId) {
-      await this.ensureBranchCashbox(settlementBranchId);
+      await this.lookup.ensureBranchCashbox(settlementBranchId);
     }
     const branchCashbox = settlementBranchId
-      ? await this.getCashboxByUser(
-          settlementBranchId,
-          Cashbox_type.BRANCH,
-        ).catch(() => null)
+      ? await this.lookup
+          .getCashboxByUser(settlementBranchId, Cashbox_type.BRANCH)
+          .catch(() => null)
       : null;
     const branchShare = settlementBranchId
-      ? await this.resolveBranchShare(settlementBranchId)
+      ? await this.lookup.resolveBranchShare(settlementBranchId)
       : 0;
 
     const marketBalanceBefore = Number(marketCashbox.balance ?? 0);

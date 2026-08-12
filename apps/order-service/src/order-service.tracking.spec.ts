@@ -78,6 +78,19 @@ function createService() {
       log: jest.fn().mockResolvedValue(undefined),
       logChange: jest.fn().mockResolvedValue(undefined),
     } as any, // activityLog
+      {
+        getHqBranchId: jest.fn().mockResolvedValue('1'),
+        getMarketsByIds: jest.fn().mockResolvedValue([]),
+        getCouriersByIds: jest.fn().mockResolvedValue([]),
+        getUserById: jest.fn().mockResolvedValue(null),
+        getCashboxByUser: jest.fn().mockResolvedValue(null),
+        resolveBranchShare: jest.fn().mockResolvedValue(0),
+        ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
+        resolveSettlementBranchId: jest.fn().mockResolvedValue(null),
+        getIntegrationById: jest.fn().mockResolvedValue(null),
+        getDefaultDistrictId: jest.fn().mockResolvedValue(null),
+        resolveDistrictId: jest.fn().mockResolvedValue(null),
+      } as any, // lookup (OrderLookupService)
   );
 
   jest
@@ -272,7 +285,6 @@ describe('Order tracking lifecycle', () => {
 
   it('order sent from HQ to branch cannot change address', async () => {
     const { service, transferBatchItemRepo } = createService();
-    jest.spyOn(service as any, 'getHqBranchId').mockResolvedValue('1');
     transferBatchItemRepo.find.mockResolvedValue([
       {
         sent_at: new Date(),
@@ -305,7 +317,6 @@ describe('Order tracking lifecycle', () => {
 
   it('order sent from HQ to branch cannot change customer', async () => {
     const { service, transferBatchItemRepo } = createService();
-    jest.spyOn(service as any, 'getHqBranchId').mockResolvedValue('1');
     transferBatchItemRepo.find.mockResolvedValue([
       {
         sent_at: new Date(),
