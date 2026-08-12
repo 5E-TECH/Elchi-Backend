@@ -146,6 +146,27 @@ services:
     logging: *json-logging
     restart: unless-stopped
 
+  # Scheduled activity-log retention prune (audit devops: activity_logs grew
+  # without bound). Runs db:prune-activity-logs on a daily loop, deleting rows
+  # older than ACTIVITY_LOG_RETENTION_DAYS from every schema in bounded batches.
+  activity-log-prune:
+    <<: *svc-limits
+    image: node:20-alpine
+    container_name: elchi-activity-log-prune
+    working_dir: /app
+    env_file: .env.production
+    environment:
+      ACTIVITY_LOG_PRUNE_INTERVAL_SECONDS: ${ACTIVITY_LOG_PRUNE_INTERVAL_SECONDS:-86400}
+      ACTIVITY_LOG_RETENTION_DAYS: ${ACTIVITY_LOG_RETENTION_DAYS:-365}
+    volumes:
+      - ./:/app
+    command: sh -c "npm ci --include=dev && sh scripts/prune-activity-logs-cron.sh"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *json-logging
+    restart: unless-stopped
+
   api-gateway:
     <<: *hot-svc-limits
     build:
