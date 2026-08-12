@@ -2,7 +2,6 @@ import { Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { DataSource, In, IsNull, QueryFailedError, Repository } from 'typeorm';
-import {} from 'rxjs';
 import { createHash, randomBytes } from 'node:crypto';
 import { Order } from '../entities/order.entity';
 import { OrderItem } from '../entities/order-item.entity';
@@ -12,8 +11,6 @@ import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
 import { OrderSettlement } from '../entities/order-settlement.entity';
 import { BranchTransferBatch } from '../entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from '../entities/branch-transfer-batch-item.entity';
-import {} from '../entities/branch-transfer-batch-history.entity';
-import {} from '../entities/order-batch-inbox-message.entity';
 import { MarketCancelledHandoverSession } from '../entities/market-cancelled-handover-session.entity';
 import {
   ActivityAction,
