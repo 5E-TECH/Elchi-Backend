@@ -1,6 +1,6 @@
 # Audit Remediation — branch `fix/sprint0-audit-remediation`
 
-**Date:** 2026-08-12 · **Base:** `dev` · **Commits:** 41
+**Date:** 2026-08-12 · **Base:** `dev` · **Commits:** 46
 
 This branch remediates the findings from the production-readiness audit
 (`PRODUCTION_READINESS_AUDIT_2026-06-11.md`, verdict NO-GO 48/100) and a
@@ -92,6 +92,12 @@ the order-service god object.
 - **`0e66550`** — worker liveness `/health` route (shared `registerLiveness`) +
   per-worker docker healthchecks, so Docker restarts a wedged worker (the
   gateway got its healthcheck earlier).
+- **`7af90e6`** — unblock OpenAPI generation (the env stub failed the gateway's
+  ≥32-char key check) + a CI drift-gate that regenerates `openapi.json` and fails
+  on drift, so a backend route change can't silently desync the frontend contract.
+- **`1c6d30d` / `336eaab`** — `scripts/rotate-secrets.sh` (non-destructive local
+  secret generator, no values printed) + `PENDING_ACTIONS.md` (owner-tagged
+  checklist of the deferred/USER work).
 - **`a14b7a0`** — real project README (replacing NestJS boilerplate).
 
 ## API design
