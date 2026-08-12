@@ -1,6 +1,6 @@
 # Audit Remediation — branch `fix/sprint0-audit-remediation`
 
-**Date:** 2026-08-12 · **Base:** `dev` · **Commits:** 33
+**Date:** 2026-08-12 · **Base:** `dev` · **Commits:** 36
 
 This branch remediates the findings from the production-readiness audit
 (`PRODUCTION_READINESS_AUDIT_2026-06-11.md`, verdict NO-GO 48/100) and a
@@ -12,7 +12,7 @@ the order-service god object.
 | Gate | Status |
 |---|---|
 | TypeScript check — all 14 services | ✅ pass |
-| Full unit suite (`npm run test:ci`) | ✅ 433/433 |
+| Full unit suite (`npm run test:ci`) | ✅ 435/435 |
 | Partner API tests | ✅ 33/33 |
 | Build smoke (gateway / integration / order) | ✅ pass |
 | Lint (`eslint --max-warnings 0`) | soft-fail in CI (`continue-on-error`); pre-existing `no-unsafe-enum-comparison` style warnings only — no new hard errors |
@@ -74,6 +74,8 @@ the order-service god object.
 - **`20952e6`** — validate `SENTRY_DSN`/`LOG_LEVEL`; warn when Sentry is off in prod.
 - **`35ddc20`** — map a downstream RPC `TimeoutError` to **504 Gateway Timeout**
   (observably distinct from a 500).
+- **`28d67ea`** — Prometheus `/metrics` on the gateway (prom-client): process/GC
+  defaults + request-duration histogram + in-flight gauge (route-pattern labels).
 
 ## DevOps
 
@@ -85,6 +87,9 @@ the order-service god object.
   benign, grandfathered).
 - **`41aa488`** — scheduled activity-log retention prune (`db:prune-activity-logs`
   + `activity-log-prune` sidecar) for the previously-unbounded `activity_logs`.
+- **`0e66550`** — worker liveness `/health` route (shared `registerLiveness`) +
+  per-worker docker healthchecks, so Docker restarts a wedged worker (the
+  gateway got its healthcheck earlier).
 - **`a14b7a0`** — real project README (replacing NestJS boilerplate).
 
 ## Architecture — god-object decomposition
@@ -113,7 +118,7 @@ verified by tsc + `nest build` (DI resolves) + the full suite.
 - **Analytics JS→SQL push-down (revenue/market/courier)** — money-report
   correctness change; needs a DB-backed equivalence test. The date-span cap
   bounds the memory risk in the meantime.
-- **Finance sweep #4 (cashbox-IDs subquery)** — a money-history read restructure;
-  IDs-only load, low urgency.
-- **Prometheus metrics / worker liveness endpoints** — additive; the gateway
-  readiness probe already covers per-service RMQ reachability.
+- **Finance sweep #4 (cashbox-IDs subquery)** — the money-history query is built
+  from a `FindOptionsWhere`; a subquery/JOIN fix means rewriting it to a
+  QueryBuilder — a real restructure risk for an IDs-only (light) load. Low
+  urgency; left as-is.
