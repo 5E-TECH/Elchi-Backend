@@ -227,6 +227,20 @@ services:
         condition: service_completed_successfully
     logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3011/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   order-service:
     <<: *hot-svc-limits
@@ -248,6 +262,20 @@ services:
         condition: service_completed_successfully
     logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3012/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   catalog-service:
     <<: *svc-limits
@@ -264,6 +292,20 @@ services:
         condition: service_completed_successfully
     logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3013/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   logistics-service:
     <<: *svc-limits
@@ -280,6 +322,20 @@ services:
         condition: service_completed_successfully
     logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3014/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   finance-service:
     <<: *hot-svc-limits
@@ -300,6 +356,20 @@ services:
         condition: service_completed_successfully
     logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3015/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   notification-service:
     <<: *svc-limits
@@ -316,6 +386,20 @@ services:
         condition: service_completed_successfully
     logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3016/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   integration-service:
     <<: *svc-limits
@@ -332,6 +416,20 @@ services:
         condition: service_completed_successfully
     logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3017/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   analytics-service:
     <<: *svc-limits
@@ -346,6 +444,20 @@ services:
         condition: service_completed_successfully
     logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3018/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   branch-service:
     <<: *svc-limits
@@ -362,6 +474,20 @@ services:
         condition: service_completed_successfully
     logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3019/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   investor-service:
     <<: *svc-limits
@@ -378,6 +504,20 @@ services:
         condition: service_completed_successfully
     logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3020/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   file-service:
     <<: *svc-limits
@@ -394,6 +534,20 @@ services:
         condition: service_completed_successfully
     logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3021/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   c2c-service:
     <<: *svc-limits
@@ -410,6 +564,20 @@ services:
         condition: service_completed_successfully
     logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3022/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   search-service:
     <<: *svc-limits
@@ -426,6 +594,20 @@ services:
         condition: service_completed_successfully
     logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3023/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
 volumes:
   rabbitmq_data:
