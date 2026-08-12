@@ -1,6 +1,6 @@
 # Audit Remediation — branch `fix/sprint0-audit-remediation`
 
-**Date:** 2026-08-12 · **Base:** `dev` · **Commits:** 36
+**Date:** 2026-08-12 · **Base:** `dev` · **Commits:** 41
 
 This branch remediates the findings from the production-readiness audit
 (`PRODUCTION_READINESS_AUDIT_2026-06-11.md`, verdict NO-GO 48/100) and a
@@ -12,7 +12,7 @@ the order-service god object.
 | Gate | Status |
 |---|---|
 | TypeScript check — all 14 services | ✅ pass |
-| Full unit suite (`npm run test:ci`) | ✅ 435/435 |
+| Full unit suite (`npm run test:ci`) | ✅ 439/439 |
 | Partner API tests | ✅ 33/33 |
 | Build smoke (gateway / integration / order) | ✅ pass |
 | Lint (`eslint --max-warnings 0`) | soft-fail in CI (`continue-on-error`); pre-existing `no-unsafe-enum-comparison` style warnings only — no new hard errors |
@@ -66,6 +66,8 @@ the order-service god object.
   returning the full (unbounded) list the frontend never used.
 - **`e73f06f`** — cap the analytics date span so a pathological range can't load
   the whole orders table into memory.
+- **`a13436d`** — narrow the columns loaded in getMarketStat/getCourierStat
+  (full entities → only the fields actually read) — same numbers, less memory.
 
 ## Observability
 
@@ -92,6 +94,19 @@ the order-service god object.
   gateway got its healthcheck earlier).
 - **`a14b7a0`** — real project README (replacing NestJS boilerplate).
 
+## API design
+
+- **`74534fa`** — **non-breaking** API versioning: NestJS URI versioning with
+  `defaultVersion [VERSION_NEUTRAL, '1']`, so every route stays reachable at its
+  current path (frontend unaffected) AND at `/v1/...`; future changes can opt into
+  `@Version('2')`. e2e-tested. Response-envelope consolidation intentionally left
+  out (would change existing payload shapes → frontend break).
+- **`0a3271f`** — completed the secret-rotation runbook: it had omitted the leaked
+  `TELEGRAM_BOT_TOKEN` / `ORDER_BOT_TOKEN` / Swagger creds; added them + a full
+  checklist + a timing safeguard (purge only with no open PRs). Exposure audited:
+  `.env.production` across 9 history commits (that file only). The destructive
+  execution (rotate secrets, force-push the purge) remains an infra/USER action.
+
 ## Architecture — god-object decomposition
 
 `apps/order-service/src/order-service.service.ts`: **9394 → 1704 lines**. The
@@ -111,14 +126,19 @@ verified by tsc + `nest build` (DI resolves) + the full suite.
 
 ## Deferred (deliberate — reasons)
 
-- **Secret rotation + git-history purge** — a destructive, outward-facing USER
-  action; commands are ready in `SECRET_ROTATION_RUNBOOK.md`.
-- **API versioning / response-envelope consistency** — breaks frontend contracts;
-  needs coordination.
-- **Analytics JS→SQL push-down (revenue/market/courier)** — money-report
-  correctness change; needs a DB-backed equivalence test. The date-span cap
-  bounds the memory risk in the meantime.
-- **Finance sweep #4 (cashbox-IDs subquery)** — the money-history query is built
-  from a `FindOptionsWhere`; a subquery/JOIN fix means rewriting it to a
-  QueryBuilder — a real restructure risk for an IDs-only (light) load. Low
-  urgency; left as-is.
+- **Secret rotation execution + git-history purge** — the runbook is now complete
+  and the exposure audited, but rotating real secrets (infra access) and the
+  force-push history rewrite are outward-facing USER actions. See
+  `SECRET_ROTATION_RUNBOOK.md`.
+- **Response-envelope consistency** — would change existing payload shapes and
+  break the frontend; needs coordination. (API *versioning* is now done,
+  non-breaking — see above.)
+- **Analytics JS→SQL GROUP BY push-down (revenue/market/courier)** — changes how
+  money figures are computed; needs a DB-backed equivalence test to prove
+  identical output, which this environment can't run. The date-span cap + column
+  narrowing bound the memory risk in the meantime.
+- **Finance sweep #4 (cashbox-IDs subquery)** — evaluated closely and left as-is:
+  the `Raw()`/subquery fix needs exact schema-qualified DB identifiers that can't
+  be verified here (unit tests mock the repo, so a wrong identifier would silently
+  break a money-history read), and the load is in practice BOUNDED by the cashbox
+  count (a few thousand small ids) — low value, unfavourable risk/reward.
