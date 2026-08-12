@@ -68,16 +68,13 @@ export class BranchTransferBatchService {
     };
   }
 
-
   private notFound(message: string): never {
     throw new RpcException({ statusCode: 404, message });
   }
 
-
   private badRequest(message: string): never {
     throw new RpcException({ statusCode: 400, message });
   }
-
 
   private toTrackingRole(roles?: string[]): string {
     const normalized = (roles ?? [])
@@ -108,7 +105,6 @@ export class BranchTransferBatchService {
       'system'
     );
   }
-
 
   private async createTrackingEvent(
     data: {
@@ -150,7 +146,6 @@ export class BranchTransferBatchService {
     });
     await repo.save(entity);
   }
-
 
   private inferTrackingAction(
     fromStatus: Order_status | null,
@@ -194,7 +189,6 @@ export class BranchTransferBatchService {
     return byTarget[toStatus] ?? 'status_change';
   }
 
-
   private describeTrackingAction(
     action: string,
     fromStatus: Order_status | null,
@@ -223,7 +217,6 @@ export class BranchTransferBatchService {
       `${fromStatus ?? 'empty'} holatidan ${toStatus} holatiga o'zgartirildi`
     );
   }
-
 
   private describeTrackingNote(note?: string | null): string | null {
     const normalized = String(note ?? '')
@@ -257,7 +250,6 @@ export class BranchTransferBatchService {
     return descriptions[normalized] ?? note ?? null;
   }
 
-
   private async createCustodyEvent(
     data: {
       order_id: string;
@@ -288,7 +280,6 @@ export class BranchTransferBatchService {
     });
     await repo.save(entity);
   }
-
 
   // ===== transfer-batch cluster (moved verbatim from the god object) =====
   private transferTokenPrefix(
