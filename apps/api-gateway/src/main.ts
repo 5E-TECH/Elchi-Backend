@@ -15,6 +15,7 @@ import {
   requestContext,
   initSentry,
   flushSentry,
+  registerMetrics,
 } from '@app/common';
 
 async function bootstrap() {
@@ -207,6 +208,11 @@ async function bootstrap() {
     });
     await app.startAllMicroservices();
   }
+
+  // Prometheus metrics: /metrics (internal port only) + request histogram +
+  // process/GC defaults. Registered before listen so the middleware wraps all
+  // routes.
+  registerMetrics(app, 'api-gateway');
 
   // AWS va Docker interfeyslari uchun 0.0.0.0 majburiy
   const port = Number(process.env.PORT || 3004);
