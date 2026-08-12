@@ -48,6 +48,16 @@ jobs:
             fi
           done
 
+      # OpenAPI drift gate: the committed docs/frontend/openapi.json is the
+      # frontend's contract. Regenerate it from the live gateway routes and fail
+      # if it differs from what's committed — so a backend route change can't
+      # silently drift the spec the frontend generates its client from.
+      - name: OpenAPI spec is in sync
+        run: |
+          npm run openapi:generate
+          git diff --exit-code -- docs/frontend/openapi.json \
+            || { echo "::error::openapi.json is stale — run 'npm run openapi:generate' and commit the result."; exit 1; }
+
       # New specs added in the observability/idempotency hardening sprint
       # MUST always pass. Legacy specs (predate the sprint) still have
       # drift — track them under the "legacy spec repair" backlog rather
