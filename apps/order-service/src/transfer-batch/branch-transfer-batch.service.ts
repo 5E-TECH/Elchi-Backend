@@ -17,9 +17,9 @@ import {
   BranchTransferBatchStatus,
   BranchTransferDirection,
   Order_status,
-  Roles,
 } from '@app/common';
 import { successRes } from '../../../../libs/common/helpers/response';
+import { OrderCustodyService } from '../custody/order-custody.service';
 
 /**
  * Branch transfer-batch orchestration, extracted from the OrderServiceService
@@ -53,20 +53,10 @@ export class BranchTransferBatchService {
     @InjectRepository(OrderCustodyEvent)
     private readonly orderCustodyEventRepo: Repository<OrderCustodyEvent>,
     private readonly activityLog: ActivityLogService,
+    private readonly custody: OrderCustodyService,
   ) {}
 
   // ===== leaf helpers duplicated from OrderServiceService (see class doc) =====
-
-  private auditActor(requester?: { id?: string; roles?: string[] } | null): {
-    user_id: string | null;
-    user_role: string | null;
-  } {
-    const roles = requester?.roles ?? [];
-    return {
-      user_id: requester?.id ? String(requester.id) : null,
-      user_role: roles.length ? roles.join(',') : null,
-    };
-  }
 
   private notFound(message: string): never {
     throw new RpcException({ statusCode: 404, message });
@@ -76,212 +66,6 @@ export class BranchTransferBatchService {
     throw new RpcException({ statusCode: 400, message });
   }
 
-  private toTrackingRole(roles?: string[]): string {
-    const normalized = (roles ?? [])
-      .map((role) =>
-        String(role ?? '')
-          .trim()
-          .toLowerCase(),
-      )
-      .filter(Boolean);
-
-    const priority = [
-      Roles.SUPERADMIN,
-      Roles.ADMIN,
-      Roles.MANAGER,
-      Roles.REGISTRATOR,
-      Roles.OPERATOR,
-      Roles.COURIER,
-      Roles.MARKET,
-      Roles.MARKET_OPERATOR,
-      Roles.BRANCH,
-      Roles.INVESTOR,
-      Roles.CUSTOMER,
-    ].map((role) => String(role).toLowerCase());
-
-    return (
-      priority.find((role) => normalized.includes(role)) ??
-      normalized[0] ??
-      'system'
-    );
-  }
-
-  private async createTrackingEvent(
-    data: {
-      order_id: string;
-      from_status: Order_status | null;
-      to_status: Order_status;
-      changed_by: string;
-      changed_by_role: string;
-      action?: string | null;
-      old_value?: Record<string, unknown> | null;
-      new_value?: Record<string, unknown> | null;
-      description?: string | null;
-      metadata?: Record<string, unknown> | null;
-      note?: string | null;
-    },
-    repository?: Repository<OrderTracking>,
-  ) {
-    const repo = repository ?? this.orderTrackingRepo;
-    const action =
-      data.action ??
-      this.inferTrackingAction(data.from_status, data.to_status, data.note);
-    const entity = repo.create({
-      order_id: data.order_id,
-      from_status: data.from_status,
-      to_status: data.to_status,
-      action,
-      old_value:
-        data.old_value ??
-        (data.from_status ? { status: data.from_status } : null),
-      new_value: data.new_value ?? { status: data.to_status },
-      description:
-        data.description ??
-        this.describeTrackingNote(data.note) ??
-        this.describeTrackingAction(action, data.from_status, data.to_status),
-      changed_by: data.changed_by,
-      changed_by_role: data.changed_by_role,
-      metadata: data.metadata ?? null,
-      note: data.note ?? null,
-    });
-    await repo.save(entity);
-  }
-
-  private inferTrackingAction(
-    fromStatus: Order_status | null,
-    toStatus: Order_status,
-    note?: string | null,
-  ): string {
-    const normalizedNote = String(note ?? '').toLowerCase();
-    if (normalizedNote.includes('partly')) {
-      return 'partly_sold';
-    }
-    if (normalizedNote.includes('rollback')) {
-      return 'rollback';
-    }
-
-    if (!fromStatus) {
-      return toStatus === Order_status.CREATED || toStatus === Order_status.NEW
-        ? 'created'
-        : 'status_change';
-    }
-
-    if (fromStatus === toStatus) {
-      return 'note';
-    }
-
-    const byTarget: Partial<Record<Order_status, string>> = {
-      [Order_status.CREATED]: 'created',
-      [Order_status.NEW]: 'created',
-      [Order_status.RECEIVED]: 'received',
-      [Order_status.ON_THE_ROAD]: 'sent',
-      [Order_status.WAITING]: 'waiting',
-      [Order_status.WAITING_CUSTOMER]: 'waiting_customer',
-      [Order_status.SOLD]: 'sold',
-      [Order_status.PAID]: 'paid',
-      [Order_status.PARTLY_PAID]: 'partly_paid',
-      [Order_status.CANCELLED]: 'cancelled',
-      [Order_status.CANCELLED_SENT]: 'cancelled_sent',
-      [Order_status.RETURNED_TO_MARKET]: 'returned_to_market',
-      [Order_status.CLOSED]: 'closed',
-    };
-
-    return byTarget[toStatus] ?? 'status_change';
-  }
-
-  private describeTrackingAction(
-    action: string,
-    fromStatus: Order_status | null,
-    toStatus: Order_status,
-  ): string {
-    const descriptions: Record<string, string> = {
-      created: 'Buyurtma yaratildi',
-      received: 'Buyurtma qabul qilindi',
-      sent: "Buyurtma yo'lga chiqdi",
-      waiting: 'Buyurtma kutilmoqda holatiga qaytarildi',
-      waiting_customer: "Mijoz kutilmoqda holatiga o'tkazildi",
-      sold: 'Buyurtma sotildi',
-      paid: "Buyurtma to'landi",
-      partly_sold: 'Buyurtma qisman sotildi',
-      partly_paid: 'Buyurtma qisman sotildi',
-      cancelled: 'Buyurtma bekor qilindi',
-      cancelled_sent: "Bekor qilingan buyurtma jo'natildi",
-      returned_to_market: 'Buyurtma marketga qaytarildi',
-      closed: 'Buyurtma yopildi',
-      rollback: 'Buyurtma oldingi holatga qaytarildi',
-      note: 'Buyurtma trackingiga izoh yozildi',
-    };
-
-    return (
-      descriptions[action] ??
-      `${fromStatus ?? 'empty'} holatidan ${toStatus} holatiga o'zgartirildi`
-    );
-  }
-
-  private describeTrackingNote(note?: string | null): string | null {
-    const normalized = String(note ?? '')
-      .trim()
-      .toLowerCase();
-    if (!normalized) return null;
-
-    const descriptions: Record<string, string> = {
-      'order created': 'Buyurtma yaratildi',
-      'order sold': 'Buyurtma sotildi',
-      'order partly sold': 'Buyurtma qisman sotildi',
-      'order canceled': 'Buyurtma bekor qilindi',
-      'rollback to waiting': 'Buyurtma kutilmoqda holatiga qaytarildi',
-      'rollback to cancelled': 'Buyurtma bekor qilingan holatiga qaytarildi',
-      'rollback to cancelled_sent': "Buyurtma bekor qilinib pochtaga qo'shildi",
-      'order assigned to post': 'Buyurtma pochtaga biriktirildi',
-      'branch canceled post sent to hq':
-        "Branch bekor qilingan pochtani HQga jo'natdi",
-      'canceled order received by hq and held for market handover':
-        'HQ bekor qilingan pochtani qabul qildi',
-      'canceled order received by branch manager':
-        'Branch manager bekor qilingan pochtani qabul qildi',
-      'canceled post created':
-        "Courier bekor qilingan pochtani branchga jo'natdi",
-      'partly-sell unsold items canceled':
-        'Qisman sotishdan qolgan mahsulotlar bekor qilindi',
-      'partly-sell canceled items custody assigned':
-        'Qisman sotishdan bekor qilingan buyurtma egasi belgilandi',
-    };
-
-    return descriptions[normalized] ?? note ?? null;
-  }
-
-  private async createCustodyEvent(
-    data: {
-      order_id: string;
-      from_holder_type: OrderHolderType | null;
-      to_holder_type: OrderHolderType;
-      from_branch_id: string | null;
-      to_branch_id: string | null;
-      from_courier_id: string | null;
-      to_courier_id: string | null;
-      changed_by: string;
-      changed_by_role: string;
-      note?: string | null;
-    },
-    repository?: Repository<OrderCustodyEvent>,
-  ) {
-    const repo = repository ?? this.orderCustodyEventRepo;
-    const entity = repo.create({
-      order_id: data.order_id,
-      from_holder_type: data.from_holder_type,
-      to_holder_type: data.to_holder_type,
-      from_branch_id: data.from_branch_id,
-      to_branch_id: data.to_branch_id,
-      from_courier_id: data.from_courier_id,
-      to_courier_id: data.to_courier_id,
-      changed_by: data.changed_by,
-      changed_by_role: data.changed_by_role,
-      note: data.note ?? null,
-    });
-    await repo.save(entity);
-  }
-
-  // ===== transfer-batch cluster (moved verbatim from the god object) =====
   private transferTokenPrefix(
     direction: BranchTransferDirection,
   ): 'BTB' | 'BTR' {
@@ -654,7 +438,7 @@ export class BranchTransferBatchService {
         entity_type: 'BranchTransferBatch',
         entity_id: touchedBatchIdList[0] ?? sourceBranchId,
         action: ActivityAction.CREATED,
-        ...this.auditActor({ id: requesterId }),
+        ...this.custody.auditActor({ id: requesterId }),
         metadata: {
           source_branch_id: sourceBranchId,
           destination_branch_id: destinationBranchId,
@@ -970,7 +754,7 @@ export class BranchTransferBatchService {
         entity_type: 'BranchTransferBatch',
         entity_id: affectedBatchIds[0] ?? sourceBranchId,
         action: ActivityAction.CREATED,
-        ...this.auditActor({ id: requesterId }),
+        ...this.custody.auditActor({ id: requesterId }),
         metadata: {
           source_branch_id: sourceBranchId,
           direction,
@@ -1062,7 +846,7 @@ export class BranchTransferBatchService {
         entity_id: batchIds[0],
         action: ActivityAction.STATUS_CHANGE,
         new_value: { status: BranchTransferBatchStatus.CANCELLED },
-        ...this.auditActor({ id: requesterId }),
+        ...this.custody.auditActor({ id: requesterId }),
         metadata: {
           batch_ids: batchIds,
           order_count: unboundOrderCount,
@@ -1305,7 +1089,7 @@ export class BranchTransferBatchService {
       entity_type: 'BranchTransferBatchHistory',
       entity_id: batchId,
       action: ActivityAction.CREATED,
-      ...this.auditActor({ id: userId }),
+      ...this.custody.auditActor({ id: userId }),
       metadata: { batch_id: batchId, action_in_history: actionRaw },
     });
     return successRes(entity, 201, 'Transfer batch history added');
@@ -1773,7 +1557,7 @@ export class BranchTransferBatchService {
       this.badRequest("Avtomobil ma'lumotlari majburiy");
     }
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
-    const requesterRole = this.toTrackingRole(input?.requester_roles);
+    const requesterRole = this.custody.toTrackingRole(input?.requester_roles);
 
     const batch = await this.transferBatchRepo.findOne({
       where: { id: batchId, isDeleted: false },
@@ -1927,7 +1711,7 @@ export class BranchTransferBatchService {
         if (!fromStatus || fromStatus === Order_status.ON_THE_ROAD) {
           continue;
         }
-        await this.createTrackingEvent({
+        await this.custody.createTrackingEvent({
           order_id: orderId,
           from_status: fromStatus,
           to_status: Order_status.ON_THE_ROAD,
@@ -1958,7 +1742,7 @@ export class BranchTransferBatchService {
       entity_id: sentBatchId,
       action: ActivityAction.STATUS_CHANGE,
       new_value: { status: sentBatch.status },
-      ...this.auditActor({ id: String(input?.requester_id ?? '').trim() }),
+      ...this.custody.auditActor({ id: String(input?.requester_id ?? '').trim() }),
       metadata: {
         batch_id: sentBatchId,
         source_batch_id: batchId,
@@ -1984,7 +1768,7 @@ export class BranchTransferBatchService {
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
     const requesterName =
       String(input?.requester_name ?? '').trim() || requesterId || 'unknown';
-    const requesterRole = this.toTrackingRole(input?.requester_roles);
+    const requesterRole = this.custody.toTrackingRole(input?.requester_roles);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -2113,7 +1897,7 @@ export class BranchTransferBatchService {
           const fromStatus = order?.status;
           if (!fromStatus) continue;
           if (fromStatus !== Order_status.RECEIVED) {
-            await this.createTrackingEvent(
+            await this.custody.createTrackingEvent(
               {
                 order_id: String(localOrderId),
                 from_status: fromStatus,
@@ -2134,7 +1918,7 @@ export class BranchTransferBatchService {
           const fromStatus = order?.status;
           if (!fromStatus) continue;
           if (fromStatus !== Order_status.NEW) {
-            await this.createTrackingEvent(
+            await this.custody.createTrackingEvent(
               {
                 order_id: String(transitOrderId),
                 from_status: fromStatus,
@@ -2161,7 +1945,7 @@ export class BranchTransferBatchService {
             String(fromBranchId ?? '') !== destinationBranchId ||
             Boolean(fromCourierId);
           if (custodyChanged) {
-            await this.createCustodyEvent(
+            await this.custody.createCustodyEvent(
               {
                 order_id: String(order.id),
                 from_holder_type: fromHolderType,
@@ -2195,7 +1979,7 @@ export class BranchTransferBatchService {
         entity_id: batchId,
         action: ActivityAction.STATUS_CHANGE,
         new_value: { status: BranchTransferBatchStatus.RECEIVED },
-        ...this.auditActor({ id: requesterId }),
+        ...this.custody.auditActor({ id: requesterId }),
         metadata: {
           batch_id: batchId,
           order_count: orderIds.length,
@@ -2236,7 +2020,7 @@ export class BranchTransferBatchService {
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
     const requesterName =
       String(input?.requester_name ?? '').trim() || requesterId || 'unknown';
-    const requesterRole = this.toTrackingRole(input?.requester_roles);
+    const requesterRole = this.custody.toTrackingRole(input?.requester_roles);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -2352,7 +2136,7 @@ export class BranchTransferBatchService {
         const prior = priorById.get(String(selectedOrderId));
         const fromStatus = prior?.status;
         if (fromStatus && fromStatus !== Order_status.RECEIVED) {
-          await this.createTrackingEvent(
+          await this.custody.createTrackingEvent(
             {
               order_id: String(selectedOrderId),
               from_status: fromStatus,
@@ -2376,7 +2160,7 @@ export class BranchTransferBatchService {
           String(fromBranchId ?? '') !== destinationBranchId ||
           Boolean(fromCourierId);
         if (custodyChanged) {
-          await this.createCustodyEvent(
+          await this.custody.createCustodyEvent(
             {
               order_id: String(selectedOrderId),
               from_holder_type: fromHolderType,
@@ -2441,7 +2225,7 @@ export class BranchTransferBatchService {
 
         for (const remainingOrder of remainingPriorOrders) {
           if (remainingOrder.status === Order_status.NEW) continue;
-          await this.createTrackingEvent(
+          await this.custody.createTrackingEvent(
             {
               order_id: String(remainingOrder.id),
               from_status: remainingOrder.status,
@@ -2522,7 +2306,7 @@ export class BranchTransferBatchService {
         entity_id: batchId,
         action: ActivityAction.STATUS_CHANGE,
         new_value: { status: BranchTransferBatchStatus.RECEIVED },
-        ...this.auditActor({ id: requesterId }),
+        ...this.custody.auditActor({ id: requesterId }),
         metadata: {
           batch_id: batchId,
           order_count: selectedOrderIds.length,
@@ -2566,7 +2350,7 @@ export class BranchTransferBatchService {
     const requesterId = String(input?.requester_id ?? '').trim() || '0';
     const requesterName =
       String(input?.requester_name ?? '').trim() || requesterId || 'unknown';
-    const requesterRole = this.toTrackingRole(input?.requester_roles);
+    const requesterRole = this.custody.toTrackingRole(input?.requester_roles);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -2631,7 +2415,7 @@ export class BranchTransferBatchService {
           if (order.status === Order_status.NEW) {
             continue;
           }
-          await this.createTrackingEvent(
+          await this.custody.createTrackingEvent(
             {
               order_id: String(order.id),
               from_status: order.status,
@@ -2662,7 +2446,7 @@ export class BranchTransferBatchService {
         entity_id: batchId,
         action: ActivityAction.STATUS_CHANGE,
         new_value: { status: BranchTransferBatchStatus.CANCELLED },
-        ...this.auditActor({ id: requesterId }),
+        ...this.custody.auditActor({ id: requesterId }),
         metadata: { batch_id: batchId, reason },
       });
       return successRes(savedBatch, 200, 'Transfer batch cancelled');

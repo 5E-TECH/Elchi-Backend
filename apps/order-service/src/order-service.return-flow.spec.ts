@@ -1,5 +1,6 @@
 import { RpcException } from '@nestjs/microservices';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+import { OrderCustodyService } from './custody/order-custody.service';
 import { Order_status, BranchTransferBatchStatus, BranchTransferDirection } from '@app/common';
 import { Order, OrderHolderType } from './entities/order.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
@@ -76,6 +77,7 @@ describe('OrderServiceService return flow', () => {
 
     // OrderServiceService konstruktori — 16 ta pozitsion bog'liqlik.
     // Faqat shu test ishlatadigan repolar haqiqiy mock, qolgani {}.
+    const custody = new OrderCustodyService(trackingRepo as any, custodyRepo as any);
     const service = new OrderLifecycleService(
       { createQueryRunner: jest.fn(() => queryRunner) } as any, // dataSource
       orderRepo as any, // orderRepo
@@ -108,6 +110,7 @@ describe('OrderServiceService return flow', () => {
         getDefaultDistrictId: jest.fn().mockResolvedValue(null),
         resolveDistrictId: jest.fn().mockResolvedValue(null),
       } as any, // lookup (OrderLookupService)
+      custody as any, // OrderCustodyService
     );
 
     return { service, orderRepo, transferBatchItemQb, trackingRepo, queryRunner, outbox };

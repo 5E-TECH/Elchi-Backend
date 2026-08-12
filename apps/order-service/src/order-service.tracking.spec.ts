@@ -1,5 +1,6 @@
 import { In } from 'typeorm';
 import { OrderServiceService } from './order-service.service';
+import { OrderCustodyService } from './custody/order-custody.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { Order_status } from '@app/common';
 
@@ -56,7 +57,8 @@ function createService() {
   const nullClient = { send: jest.fn() };
   const outbox = { enqueue: jest.fn() };
   // OrderServiceService konstruktori — 16 ta pozitsion bog'liqlik.
-  const service = new OrderServiceService(
+  const custody = new OrderCustodyService(trackingRepo as any, orderCustodyEventRepo as any);
+    const service = new OrderServiceService(
     dataSource as any, // dataSource
     orderRepo as any, // orderRepo
     orderItemRepo as any, // orderItemRepo
@@ -92,6 +94,7 @@ function createService() {
         getDefaultDistrictId: jest.fn().mockResolvedValue(null),
         resolveDistrictId: jest.fn().mockResolvedValue(null),
       } as any, // lookup (OrderLookupService)
+      custody as any, // OrderCustodyService
   );
 
     const lifecycle = new OrderLifecycleService(
@@ -142,6 +145,7 @@ function createService() {
         resolveDistrictId: jest.fn().mockResolvedValue(null),
       } as any,
       // lookup (OrderLookupService),
+      custody as any, // OrderCustodyService
     );
 
   jest

@@ -1,6 +1,7 @@
 import { RpcException } from '@nestjs/microservices';
 import { BranchTransferBatchStatus } from '@app/common';
 import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
+import { OrderCustodyService } from './custody/order-custody.service';
 import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
 import { Order } from './entities/order.entity';
 import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
@@ -53,6 +54,7 @@ describe('BranchTransferBatchService transfer batch cancel', () => {
     // cancelBranchTransferBatch reaches its repos via
     // queryRunner.manager.getRepository, so only dataSource + activityLog need
     // real mocks in the 8-arg BranchTransferBatchService constructor.
+    const custody = new OrderCustodyService({} as any, {} as any);
     const service = new BranchTransferBatchService(
       { createQueryRunner: jest.fn(() => queryRunner) } as any,
       {} as any, // transferBatchRepo
@@ -71,6 +73,7 @@ describe('BranchTransferBatchService transfer batch cancel', () => {
         findByEntity: jest.fn().mockResolvedValue([]),
         findByUser: jest.fn().mockResolvedValue([]),
       } as any, // activityLog
+      custody as any, // OrderCustodyService
     );
 
     return { service, batchRepo, historyRepo, orderUpdateQb, queryRunner };

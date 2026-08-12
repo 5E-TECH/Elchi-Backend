@@ -2,6 +2,7 @@ import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
 import { Order_status } from '@app/common';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+import { OrderCustodyService } from './custody/order-custody.service';
 import { MarketCancelledHandoverSession } from './entities/market-cancelled-handover-session.entity';
 import { Order, OrderHolderType } from './entities/order.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
@@ -122,6 +123,7 @@ describe('OrderServiceService market cancelled handover', () => {
       ),
     };
 
+    const custody = new OrderCustodyService(trackingRepo as any, custodyRepo as any);
     const service = new OrderLifecycleService(
       dataSource as any,
       orderRepo as any,
@@ -160,6 +162,7 @@ describe('OrderServiceService market cancelled handover', () => {
         getDefaultDistrictId: jest.fn().mockResolvedValue(null),
         resolveDistrictId: jest.fn().mockResolvedValue(null),
       } as any, // lookup (OrderLookupService)
+      custody as any, // OrderCustodyService
     );
 
     return {

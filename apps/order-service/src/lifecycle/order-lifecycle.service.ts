@@ -46,6 +46,7 @@ import {
   resolveBranchCashboxSaleAmount as resolveBranchCashboxSaleAmountValue,
 } from '../domain/order-money';
 import { OrderLookupService } from '../lookup/order-lookup.service';
+import { OrderCustodyService } from '../custody/order-custody.service';
 
 const CANCELLED_HANDOVER_MANUAL_REASONS = new Set([
   'QR yirtilgan',
@@ -91,6 +92,7 @@ export class OrderLifecycleService {
     private readonly outbox: OutboxService,
     private readonly activityLog: ActivityLogService,
     private readonly lookup: OrderLookupService,
+    private readonly custody: OrderCustodyService,
   ) {}
 
   // ===== leaf helpers duplicated from OrderServiceService =====
@@ -155,109 +157,6 @@ export class OrderLifecycleService {
     throw error;
   }
 
-  private inferTrackingAction(
-    fromStatus: Order_status | null,
-    toStatus: Order_status,
-    note?: string | null,
-  ): string {
-    const normalizedNote = String(note ?? '').toLowerCase();
-    if (normalizedNote.includes('partly')) {
-      return 'partly_sold';
-    }
-    if (normalizedNote.includes('rollback')) {
-      return 'rollback';
-    }
-
-    if (!fromStatus) {
-      return toStatus === Order_status.CREATED || toStatus === Order_status.NEW
-        ? 'created'
-        : 'status_change';
-    }
-
-    if (fromStatus === toStatus) {
-      return 'note';
-    }
-
-    const byTarget: Partial<Record<Order_status, string>> = {
-      [Order_status.CREATED]: 'created',
-      [Order_status.NEW]: 'created',
-      [Order_status.RECEIVED]: 'received',
-      [Order_status.ON_THE_ROAD]: 'sent',
-      [Order_status.WAITING]: 'waiting',
-      [Order_status.WAITING_CUSTOMER]: 'waiting_customer',
-      [Order_status.SOLD]: 'sold',
-      [Order_status.PAID]: 'paid',
-      [Order_status.PARTLY_PAID]: 'partly_paid',
-      [Order_status.CANCELLED]: 'cancelled',
-      [Order_status.CANCELLED_SENT]: 'cancelled_sent',
-      [Order_status.RETURNED_TO_MARKET]: 'returned_to_market',
-      [Order_status.CLOSED]: 'closed',
-    };
-
-    return byTarget[toStatus] ?? 'status_change';
-  }
-
-  private describeTrackingAction(
-    action: string,
-    fromStatus: Order_status | null,
-    toStatus: Order_status,
-  ): string {
-    const descriptions: Record<string, string> = {
-      created: 'Buyurtma yaratildi',
-      received: 'Buyurtma qabul qilindi',
-      sent: "Buyurtma yo'lga chiqdi",
-      waiting: 'Buyurtma kutilmoqda holatiga qaytarildi',
-      waiting_customer: "Mijoz kutilmoqda holatiga o'tkazildi",
-      sold: 'Buyurtma sotildi',
-      paid: "Buyurtma to'landi",
-      partly_sold: 'Buyurtma qisman sotildi',
-      partly_paid: 'Buyurtma qisman sotildi',
-      cancelled: 'Buyurtma bekor qilindi',
-      cancelled_sent: "Bekor qilingan buyurtma jo'natildi",
-      returned_to_market: 'Buyurtma marketga qaytarildi',
-      closed: 'Buyurtma yopildi',
-      rollback: 'Buyurtma oldingi holatga qaytarildi',
-      note: 'Buyurtma trackingiga izoh yozildi',
-    };
-
-    return (
-      descriptions[action] ??
-      `${fromStatus ?? 'empty'} holatidan ${toStatus} holatiga o'zgartirildi`
-    );
-  }
-
-  private describeTrackingNote(note?: string | null): string | null {
-    const normalized = String(note ?? '')
-      .trim()
-      .toLowerCase();
-    if (!normalized) return null;
-
-    const descriptions: Record<string, string> = {
-      'order created': 'Buyurtma yaratildi',
-      'order sold': 'Buyurtma sotildi',
-      'order partly sold': 'Buyurtma qisman sotildi',
-      'order canceled': 'Buyurtma bekor qilindi',
-      'rollback to waiting': 'Buyurtma kutilmoqda holatiga qaytarildi',
-      'rollback to cancelled': 'Buyurtma bekor qilingan holatiga qaytarildi',
-      'rollback to cancelled_sent': "Buyurtma bekor qilinib pochtaga qo'shildi",
-      'order assigned to post': 'Buyurtma pochtaga biriktirildi',
-      'branch canceled post sent to hq':
-        "Branch bekor qilingan pochtani HQga jo'natdi",
-      'canceled order received by hq and held for market handover':
-        'HQ bekor qilingan pochtani qabul qildi',
-      'canceled order received by branch manager':
-        'Branch manager bekor qilingan pochtani qabul qildi',
-      'canceled post created':
-        "Courier bekor qilingan pochtani branchga jo'natdi",
-      'partly-sell unsold items canceled':
-        'Qisman sotishdan qolgan mahsulotlar bekor qilindi',
-      'partly-sell canceled items custody assigned':
-        'Qisman sotishdan bekor qilingan buyurtma egasi belgilandi',
-    };
-
-    return descriptions[normalized] ?? note ?? null;
-  }
-
   private async resolveBranchTrackingLabel(
     branchId?: string | null,
     requester?: { id?: string; roles?: string[] } | null,
@@ -317,30 +216,6 @@ export class OrderLifecycleService {
     return order;
   }
 
-  // ===== lifecycle mutation surface (moved verbatim) =====
-  /**
-   * Normalise the RMQ `requester` payload into the actor fields the
-   * activity-log expects. `user_name` is not carried in `requester`, so it is
-   * left null (the audit table denormalises it but tolerates absence); the
-   * user_id + role pair is enough to attribute every action.
-   */
-  private auditActor(requester?: { id?: string; roles?: string[] } | null): {
-    user_id: string | null;
-    user_role: string | null;
-  } {
-    const roles = requester?.roles ?? [];
-    return {
-      user_id: requester?.id ? String(requester.id) : null,
-      user_role: roles.length ? roles.join(',') : null,
-    };
-  }
-
-  /**
-   * Resolve the branch_id to attach to a new order.
-   * Priority: explicit dto.branch_id → requester's assigned branch → HQ fallback.
-   * Throws RpcException 500 if all paths fail — refuse to persist an order
-   * with NULL branch_id (the audit identified this as a long-term data risk).
-   */
   private async resolveBranchIdForOrder(
     explicitBranchId: string | null | undefined,
     requester?: { id: string; roles?: string[]; branch_id?: string | null },
@@ -473,36 +348,6 @@ export class OrderLifecycleService {
 
   private forbidden(message: string): never {
     throw new RpcException({ statusCode: 403, message });
-  }
-
-  private toTrackingRole(roles?: string[]): string {
-    const normalized = (roles ?? [])
-      .map((role) =>
-        String(role ?? '')
-          .trim()
-          .toLowerCase(),
-      )
-      .filter(Boolean);
-
-    const priority = [
-      Roles.SUPERADMIN,
-      Roles.ADMIN,
-      Roles.MANAGER,
-      Roles.REGISTRATOR,
-      Roles.OPERATOR,
-      Roles.COURIER,
-      Roles.MARKET,
-      Roles.MARKET_OPERATOR,
-      Roles.BRANCH,
-      Roles.INVESTOR,
-      Roles.CUSTOMER,
-    ].map((role) => String(role).toLowerCase());
-
-    return (
-      priority.find((role) => normalized.includes(role)) ??
-      normalized[0] ??
-      'system'
-    );
   }
 
   private hashHandoverToken(token: string): string {
@@ -671,47 +516,6 @@ export class OrderLifecycleService {
     }
   }
 
-  private async createTrackingEvent(
-    data: {
-      order_id: string;
-      from_status: Order_status | null;
-      to_status: Order_status;
-      changed_by: string;
-      changed_by_role: string;
-      action?: string | null;
-      old_value?: Record<string, unknown> | null;
-      new_value?: Record<string, unknown> | null;
-      description?: string | null;
-      metadata?: Record<string, unknown> | null;
-      note?: string | null;
-    },
-    repository?: Repository<OrderTracking>,
-  ) {
-    const repo = repository ?? this.orderTrackingRepo;
-    const action =
-      data.action ??
-      this.inferTrackingAction(data.from_status, data.to_status, data.note);
-    const entity = repo.create({
-      order_id: data.order_id,
-      from_status: data.from_status,
-      to_status: data.to_status,
-      action,
-      old_value:
-        data.old_value ??
-        (data.from_status ? { status: data.from_status } : null),
-      new_value: data.new_value ?? { status: data.to_status },
-      description:
-        data.description ??
-        this.describeTrackingNote(data.note) ??
-        this.describeTrackingAction(action, data.from_status, data.to_status),
-      changed_by: data.changed_by,
-      changed_by_role: data.changed_by_role,
-      metadata: data.metadata ?? null,
-      note: data.note ?? null,
-    });
-    await repo.save(entity);
-  }
-
   private async resolveHolderFromState(
     branchId: string | null | undefined,
     courierId: string | null | undefined,
@@ -745,37 +549,6 @@ export class OrderLifecycleService {
       holder_branch_id: null,
       holder_courier_id: null,
     };
-  }
-
-  private async createCustodyEvent(
-    data: {
-      order_id: string;
-      from_holder_type: OrderHolderType | null;
-      to_holder_type: OrderHolderType;
-      from_branch_id: string | null;
-      to_branch_id: string | null;
-      from_courier_id: string | null;
-      to_courier_id: string | null;
-      changed_by: string;
-      changed_by_role: string;
-      note?: string | null;
-    },
-    repository?: Repository<OrderCustodyEvent>,
-  ) {
-    const repo = repository ?? this.orderCustodyEventRepo;
-    const entity = repo.create({
-      order_id: data.order_id,
-      from_holder_type: data.from_holder_type,
-      to_holder_type: data.to_holder_type,
-      from_branch_id: data.from_branch_id,
-      to_branch_id: data.to_branch_id,
-      from_courier_id: data.from_courier_id,
-      to_courier_id: data.to_courier_id,
-      changed_by: data.changed_by,
-      changed_by_role: data.changed_by_role,
-      note: data.note ?? null,
-    });
-    await repo.save(entity);
   }
 
   private normalizeDateTimeInput(value?: string | Date | null): Date | null {
@@ -1900,7 +1673,7 @@ export class OrderLifecycleService {
       action: 'order.rollback',
       old_value: { status: originalStatus },
       new_value: { status: finalStatus },
-      ...this.auditActor(requester),
+      ...this.custody.auditActor(requester),
       metadata: { rollback_target: rollbackTarget },
     });
 
@@ -1946,14 +1719,14 @@ export class OrderLifecycleService {
       order.return_requested = true;
       await orderRepo.save(order);
 
-      await this.createTrackingEvent(
+      await this.custody.createTrackingEvent(
         {
           order_id: order.id,
           from_status: order.status,
           to_status: order.status,
           changed_by: String(requester?.id ?? 'system'),
           changed_by_role: requester?.id
-            ? this.toTrackingRole(requester.roles)
+            ? this.custody.toTrackingRole(requester.roles)
             : 'system',
           note: `Return initiated: ${reason}`,
         },
@@ -1975,7 +1748,7 @@ export class OrderLifecycleService {
       action: 'order.initiate_return',
       old_value: { return_requested: false },
       new_value: { return_requested: true, return_reason: reason },
-      ...this.auditActor(requester),
+      ...this.custody.auditActor(requester),
       metadata: { status: order.status },
     });
 
@@ -2089,14 +1862,14 @@ export class OrderLifecycleService {
       order.holder_courier_id = null;
       await orderRepo.save(order);
 
-      await this.createTrackingEvent(
+      await this.custody.createTrackingEvent(
         {
           order_id: order.id,
           from_status: oldStatus,
           to_status: Order_status.RETURNED_TO_MARKET,
           changed_by: String(requester?.id ?? 'system'),
           changed_by_role: requester?.id
-            ? this.toTrackingRole(requester.roles)
+            ? this.custody.toTrackingRole(requester.roles)
             : 'system',
           note: `Xodim ${String(requester?.id ?? 'unknown')} market egasiga topshirdi`,
         },
@@ -2104,7 +1877,7 @@ export class OrderLifecycleService {
       );
 
       // Closing custody event: parcel handed back to the market.
-      await this.createCustodyEvent(
+      await this.custody.createCustodyEvent(
         {
           order_id: String(order.id),
           from_holder_type: priorHolderType,
@@ -2115,7 +1888,7 @@ export class OrderLifecycleService {
           to_courier_id: null,
           changed_by: String(requester?.id ?? 'system'),
           changed_by_role: requester?.id
-            ? this.toTrackingRole(requester.roles)
+            ? this.custody.toTrackingRole(requester.roles)
             : 'system',
           note: 'Market egasiga qaytarib topshirildi',
         },
@@ -2137,7 +1910,7 @@ export class OrderLifecycleService {
       action: ActivityAction.STATUS_CHANGE,
       old_value: { status: oldStatus },
       new_value: { status: Order_status.RETURNED_TO_MARKET },
-      ...this.auditActor(requester),
+      ...this.custody.auditActor(requester),
       metadata: { market_id: order.market_id },
     });
 
@@ -2421,13 +2194,13 @@ export class OrderLifecycleService {
         order.last_handover_by = requesterId;
         await orderRepo.save(order);
 
-        await this.createTrackingEvent(
+        await this.custody.createTrackingEvent(
           {
             order_id: String(order.id),
             from_status: previousStatus,
             to_status: Order_status.CLOSED,
             changed_by: requesterId,
-            changed_by_role: this.toTrackingRole(input.requester.roles),
+            changed_by_role: this.custody.toTrackingRole(input.requester.roles),
             note: manualOverrideReason
               ? `Bekor qilingan order market ${marketId}ga QR buzilgani sabab qo'lda tasdiqlanib topshirildi: ${manualOverrideReason}`
               : isQrRequired
@@ -2447,7 +2220,7 @@ export class OrderLifecycleService {
           trackingRepo,
         );
 
-        await this.createCustodyEvent(
+        await this.custody.createCustodyEvent(
           {
             order_id: String(order.id),
             from_holder_type: previousHolderType,
@@ -2457,7 +2230,7 @@ export class OrderLifecycleService {
             from_courier_id: previousHolderCourierId,
             to_courier_id: null,
             changed_by: requesterId,
-            changed_by_role: this.toTrackingRole(input.requester.roles),
+            changed_by_role: this.custody.toTrackingRole(input.requester.roles),
             note: manualOverrideReason
               ? `Bekor qilingan order market ${marketId}ga qo'lda tasdiqlanib topshirildi: ${manualOverrideReason}`
               : `Bekor qilingan order market ${marketId}ga topshirildi`,
@@ -2486,7 +2259,7 @@ export class OrderLifecycleService {
       action: ActivityAction.STATUS_CHANGE,
       old_value: { status: Order_status.CANCELLED },
       new_value: { status: Order_status.CLOSED },
-      ...this.auditActor(input.requester),
+      ...this.custody.auditActor(input.requester),
       metadata: {
         handover_type: isQrRequired
           ? 'market_cancelled_qr'
@@ -2673,21 +2446,21 @@ export class OrderLifecycleService {
         );
       }
 
-      await this.createTrackingEvent(
+      await this.custody.createTrackingEvent(
         {
           order_id: saved.id,
           from_status: null,
           to_status: this.mapInitialStatusForTracking(saved.status),
           changed_by: String(requester?.id ?? 'system'),
           changed_by_role: requester?.id
-            ? this.toTrackingRole(requester.roles)
+            ? this.custody.toTrackingRole(requester.roles)
             : 'system',
           note: 'Order created',
         },
         trackingRepo,
       );
 
-      await this.createCustodyEvent(
+      await this.custody.createCustodyEvent(
         {
           order_id: saved.id,
           from_holder_type: null,
@@ -2698,7 +2471,7 @@ export class OrderLifecycleService {
           to_courier_id: resolvedHolder.holder_courier_id,
           changed_by: String(requester?.id ?? 'system'),
           changed_by_role: requester?.id
-            ? this.toTrackingRole(requester.roles)
+            ? this.custody.toTrackingRole(requester.roles)
             : 'system',
           note: 'Initial custody assigned',
         },
@@ -2727,7 +2500,7 @@ export class OrderLifecycleService {
           branch_id: resolvedBranchId,
           source: dto.source ?? Order_source.INTERNAL,
         },
-        ...this.auditActor(requester),
+        ...this.custody.auditActor(requester),
         metadata: { operator_id: operatorId },
       });
     }
@@ -2980,7 +2753,7 @@ export class OrderLifecycleService {
           .execute();
 
         if (previousStatus !== nextStatus) {
-          await this.createTrackingEvent(
+          await this.custody.createTrackingEvent(
             {
               order_id: order.id,
               from_status: previousStatus,
@@ -3615,7 +3388,7 @@ export class OrderLifecycleService {
         paid_amount: paidAfter,
         extra_cost: extraCost,
       },
-      ...this.auditActor(requester),
+      ...this.custody.auditActor(requester),
       metadata: {
         market_id: order.market_id,
         courier_id: courierCashbox ? actorCourierId : null,
@@ -3837,7 +3610,7 @@ export class OrderLifecycleService {
       action: 'order.cancel',
       old_value: { status: Order_status.WAITING },
       new_value: { status: Order_status.CANCELLED, extra_cost: extraCost },
-      ...this.auditActor(requester),
+      ...this.custody.auditActor(requester),
       metadata: { market_id: order.market_id, courier_id: actorCourierId },
     });
 
@@ -3892,7 +3665,7 @@ export class OrderLifecycleService {
       action: ActivityAction.STATUS_CHANGE,
       old_value: { status: Order_status.ON_THE_ROAD },
       new_value: { status: Order_status.WAITING_CUSTOMER },
-      ...this.auditActor(requester),
+      ...this.custody.auditActor(requester),
       metadata: { reason },
     });
 
@@ -3976,7 +3749,7 @@ export class OrderLifecycleService {
       }
       await orderRepo.save(order);
 
-      await this.createTrackingEvent(
+      await this.custody.createTrackingEvent(
         {
           order_id: order.id,
           from_status: oldStatus,
@@ -4539,18 +4312,18 @@ export class OrderLifecycleService {
           })),
         )
         .execute();
-      await this.createTrackingEvent(
+      await this.custody.createTrackingEvent(
         {
           order_id: cancelledOrder.id,
           from_status: null,
           to_status: Order_status.CANCELLED,
           changed_by: String(requester.id),
-          changed_by_role: this.toTrackingRole(requester.roles),
+          changed_by_role: this.custody.toTrackingRole(requester.roles),
           note: 'Partly-sell unsold items canceled',
         },
         cancelledTrackingRepo,
       );
-      await this.createCustodyEvent(
+      await this.custody.createCustodyEvent(
         {
           order_id: cancelledOrder.id,
           from_holder_type: null,
@@ -4560,7 +4333,7 @@ export class OrderLifecycleService {
           from_courier_id: null,
           to_courier_id: cancelledHolder.holder_courier_id,
           changed_by: String(requester.id),
-          changed_by_role: this.toTrackingRole(requester.roles),
+          changed_by_role: this.custody.toTrackingRole(requester.roles),
           note: 'Partly-sell canceled items custody assigned',
         },
         cancelledCustodyRepo,
@@ -4606,7 +4379,7 @@ export class OrderLifecycleService {
       action: 'order.partly_sell',
       old_value: { status: Order_status.WAITING, total_price: oldTotalPrice },
       new_value: { status: nextStatus, total_price: price },
-      ...this.auditActor(requester),
+      ...this.custody.auditActor(requester),
       metadata: {
         market_id: order.market_id,
         courier_id: courierCashbox ? actorCourierId : null,
@@ -4866,14 +4639,14 @@ export class OrderLifecycleService {
         : undefined;
 
       if (oldStatus !== order.status || canceledPostAccepted) {
-        await this.createTrackingEvent(
+        await this.custody.createTrackingEvent(
           {
             order_id: order.id,
             from_status: oldStatus,
             to_status: order.status,
             changed_by: String(requester?.id ?? 'system'),
             changed_by_role: requester?.id
-              ? this.toTrackingRole(requester.roles)
+              ? this.custody.toTrackingRole(requester.roles)
               : 'system',
             action: canceledPostAccepted
               ? 'cancelled_post_received'
@@ -4914,7 +4687,7 @@ export class OrderLifecycleService {
       }
 
       if (custodyChanged) {
-        await this.createCustodyEvent(
+        await this.custody.createCustodyEvent(
           {
             order_id: order.id,
             from_holder_type: previousHolderType ?? null,
@@ -4925,7 +4698,7 @@ export class OrderLifecycleService {
             to_courier_id: order.holder_courier_id ?? null,
             changed_by: String(requester?.id ?? 'system'),
             changed_by_role: requester?.id
-              ? this.toTrackingRole(requester.roles)
+              ? this.custody.toTrackingRole(requester.roles)
               : 'system',
             note: requester?.note ?? 'Order custody changed',
           },
@@ -5004,7 +4777,7 @@ export class OrderLifecycleService {
             : ActivityAction.UPDATED,
         old_value: oldStatus !== newStatus ? { status: oldStatus } : null,
         new_value: changeSet,
-        ...this.auditActor(requester),
+        ...this.custody.auditActor(requester),
         metadata: requester?.note ? { note: requester.note } : null,
       });
     }
@@ -5058,7 +4831,7 @@ export class OrderLifecycleService {
       entity_id: String(id),
       action: ActivityAction.DELETED,
       old_value: { status: order.status, market_id: order.market_id },
-      ...this.auditActor(requester),
+      ...this.custody.auditActor(requester),
     });
 
     return successRes({}, 200, `Order #${id} o'chirildi`);

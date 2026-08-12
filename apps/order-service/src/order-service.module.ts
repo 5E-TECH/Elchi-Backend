@@ -8,6 +8,7 @@ import { BranchTransferBatchService } from './transfer-batch/branch-transfer-bat
 import { OrderSettlementService } from './settlement/order-settlement.service';
 import { OrderLookupService } from './lookup/order-lookup.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+import { OrderCustodyService } from './custody/order-custody.service';
 import {
   AppLoggerModule,
   RmqModule,
@@ -82,6 +83,7 @@ import { MarketCancelledHandoverSession } from './entities/market-cancelled-hand
     OrderSettlementService,
     OrderLookupService,
     OrderLifecycleService,
+    OrderCustodyService,
   ],
 })
 export class OrderServiceModule {}

@@ -9,7 +9,6 @@ import {
   Repository,
 } from 'typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
-import {} from 'node:crypto';
 import { Order } from './entities/order.entity';
 import { OrderItem } from './entities/order-item.entity';
 import { OrderHolderType, Order_source } from './entities/order.entity';
@@ -19,8 +18,6 @@ import { OrderSettlement } from './entities/order-settlement.entity';
 import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.entity';
 import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
-import {} from './entities/order-batch-inbox-message.entity';
-import {} from './entities/market-cancelled-handover-session.entity';
 import {
   ActivityLogService,
   ActivityLogQuery,
@@ -32,10 +29,10 @@ import {
   rmqSend,
   RMQ_SERVICE_TIMEOUT,
 } from '@app/common';
-import type {} from 'typeorm';
 import { successRes } from '../../../libs/common/helpers/response';
 import { resolveCourierShare as resolveCourierShareShare } from './domain/order-money';
 import { OrderLookupService } from './lookup/order-lookup.service';
+import { OrderCustodyService } from './custody/order-custody.service';
 
 @Injectable()
 export class OrderServiceService {
@@ -70,6 +67,7 @@ export class OrderServiceService {
     private readonly outbox: OutboxService,
     private readonly activityLog: ActivityLogService,
     private readonly lookup: OrderLookupService,
+    private readonly custody: OrderCustodyService,
   ) {}
 
   async auditLogQuery(q: ActivityLogQuery) {
@@ -142,109 +140,6 @@ export class OrderServiceService {
       }
     }
     throw error;
-  }
-
-  private inferTrackingAction(
-    fromStatus: Order_status | null,
-    toStatus: Order_status,
-    note?: string | null,
-  ): string {
-    const normalizedNote = String(note ?? '').toLowerCase();
-    if (normalizedNote.includes('partly')) {
-      return 'partly_sold';
-    }
-    if (normalizedNote.includes('rollback')) {
-      return 'rollback';
-    }
-
-    if (!fromStatus) {
-      return toStatus === Order_status.CREATED || toStatus === Order_status.NEW
-        ? 'created'
-        : 'status_change';
-    }
-
-    if (fromStatus === toStatus) {
-      return 'note';
-    }
-
-    const byTarget: Partial<Record<Order_status, string>> = {
-      [Order_status.CREATED]: 'created',
-      [Order_status.NEW]: 'created',
-      [Order_status.RECEIVED]: 'received',
-      [Order_status.ON_THE_ROAD]: 'sent',
-      [Order_status.WAITING]: 'waiting',
-      [Order_status.WAITING_CUSTOMER]: 'waiting_customer',
-      [Order_status.SOLD]: 'sold',
-      [Order_status.PAID]: 'paid',
-      [Order_status.PARTLY_PAID]: 'partly_paid',
-      [Order_status.CANCELLED]: 'cancelled',
-      [Order_status.CANCELLED_SENT]: 'cancelled_sent',
-      [Order_status.RETURNED_TO_MARKET]: 'returned_to_market',
-      [Order_status.CLOSED]: 'closed',
-    };
-
-    return byTarget[toStatus] ?? 'status_change';
-  }
-
-  private describeTrackingAction(
-    action: string,
-    fromStatus: Order_status | null,
-    toStatus: Order_status,
-  ): string {
-    const descriptions: Record<string, string> = {
-      created: 'Buyurtma yaratildi',
-      received: 'Buyurtma qabul qilindi',
-      sent: "Buyurtma yo'lga chiqdi",
-      waiting: 'Buyurtma kutilmoqda holatiga qaytarildi',
-      waiting_customer: "Mijoz kutilmoqda holatiga o'tkazildi",
-      sold: 'Buyurtma sotildi',
-      paid: "Buyurtma to'landi",
-      partly_sold: 'Buyurtma qisman sotildi',
-      partly_paid: 'Buyurtma qisman sotildi',
-      cancelled: 'Buyurtma bekor qilindi',
-      cancelled_sent: "Bekor qilingan buyurtma jo'natildi",
-      returned_to_market: 'Buyurtma marketga qaytarildi',
-      closed: 'Buyurtma yopildi',
-      rollback: 'Buyurtma oldingi holatga qaytarildi',
-      note: 'Buyurtma trackingiga izoh yozildi',
-    };
-
-    return (
-      descriptions[action] ??
-      `${fromStatus ?? 'empty'} holatidan ${toStatus} holatiga o'zgartirildi`
-    );
-  }
-
-  private describeTrackingNote(note?: string | null): string | null {
-    const normalized = String(note ?? '')
-      .trim()
-      .toLowerCase();
-    if (!normalized) return null;
-
-    const descriptions: Record<string, string> = {
-      'order created': 'Buyurtma yaratildi',
-      'order sold': 'Buyurtma sotildi',
-      'order partly sold': 'Buyurtma qisman sotildi',
-      'order canceled': 'Buyurtma bekor qilindi',
-      'rollback to waiting': 'Buyurtma kutilmoqda holatiga qaytarildi',
-      'rollback to cancelled': 'Buyurtma bekor qilingan holatiga qaytarildi',
-      'rollback to cancelled_sent': "Buyurtma bekor qilinib pochtaga qo'shildi",
-      'order assigned to post': 'Buyurtma pochtaga biriktirildi',
-      'branch canceled post sent to hq':
-        "Branch bekor qilingan pochtani HQga jo'natdi",
-      'canceled order received by hq and held for market handover':
-        'HQ bekor qilingan pochtani qabul qildi',
-      'canceled order received by branch manager':
-        'Branch manager bekor qilingan pochtani qabul qildi',
-      'canceled post created':
-        "Courier bekor qilingan pochtani branchga jo'natdi",
-      'partly-sell unsold items canceled':
-        'Qisman sotishdan qolgan mahsulotlar bekor qilindi',
-      'partly-sell canceled items custody assigned':
-        'Qisman sotishdan bekor qilingan buyurtma egasi belgilandi',
-    };
-
-    return descriptions[normalized] ?? note ?? null;
   }
 
   private extractUserPayload(
@@ -1076,7 +971,7 @@ export class OrderServiceService {
     );
 
     const trackingEvents = rows.map((row) => {
-      const inferredAction = this.inferTrackingAction(
+      const inferredAction = this.custody.inferTrackingAction(
         row.from_status,
         row.to_status,
         row.note,
@@ -1100,7 +995,7 @@ export class OrderServiceService {
         actor?.role && row.changed_by !== 'system'
           ? String(actor.role)
           : row.changed_by_role;
-      const noteDescription = this.describeTrackingNote(row.note);
+      const noteDescription = this.custody.describeTrackingNote(row.note);
 
       return {
         id: row.id,
@@ -1116,7 +1011,7 @@ export class OrderServiceService {
         description:
           row.description ??
           noteDescription ??
-          this.describeTrackingAction(action, row.from_status, row.to_status),
+          this.custody.describeTrackingAction(action, row.from_status, row.to_status),
         changed_by: row.changed_by,
         changed_by_role: changedByRole,
         actor,
@@ -1143,7 +1038,7 @@ export class OrderServiceService {
         actor?.role && row.changed_by !== 'system'
           ? String(actor.role)
           : row.changed_by_role;
-      const noteDescription = this.describeTrackingNote(row.note);
+      const noteDescription = this.custody.describeTrackingNote(row.note);
       const fromLabel = this.custodyHolderLabel(
         row.from_holder_type,
         row.from_branch_id,
