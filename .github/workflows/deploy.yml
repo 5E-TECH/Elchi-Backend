@@ -78,7 +78,14 @@ jobs:
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           command_timeout: 50m
-          script_stop: true
+          # NOT script_stop: drone-ssh's script_stop instruments the script
+          # line-by-line and treats ANY `[ test ]` in an `if` that evaluates
+          # false as a fatal error — so `if [ "$RUN_MIGRATIONS" != true ]` aborted
+          # the whole deploy whenever a migration/libs change set RUN_MIGRATIONS=true
+          # (every migration-bearing deploy died here). The script's own `set -e`
+          # + `trap rollback ERR` give fail-fast + rollback with correct shell
+          # control flow, so error handling is not lost.
+          script_stop: false
           script: |
             set -ex
             cd ${{ secrets.SERVER_APP_PATH }}
