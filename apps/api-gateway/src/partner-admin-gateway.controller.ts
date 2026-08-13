@@ -9,7 +9,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, timeout } from 'rxjs';
 import { Roles as RoleEnum } from '@app/common';
 import {
   ApiBearerAuth,
@@ -59,7 +59,7 @@ export class PartnerAdminGatewayController {
       this.integrationClient.send(
         { cmd: 'integration.partner.create' },
         { ...dto, requester: this.auditActor(req) },
-      ),
+      ).pipe(timeout(8000)),
     );
   }
 
@@ -68,7 +68,7 @@ export class PartnerAdminGatewayController {
   @ApiOperation({ summary: 'Hamkorlar ro‘yxati (sirlarsiz)' })
   list() {
     return firstValueFrom(
-      this.integrationClient.send({ cmd: 'integration.partner.list' }, {}),
+      this.integrationClient.send({ cmd: 'integration.partner.list' }, {}).pipe(timeout(8000)),
     );
   }
 
@@ -84,7 +84,7 @@ export class PartnerAdminGatewayController {
       this.integrationClient.send(
         { cmd: 'integration.partner.rotate_key' },
         { id, requester: this.auditActor(req) },
-      ),
+      ).pipe(timeout(8000)),
     );
   }
 
@@ -102,7 +102,7 @@ export class PartnerAdminGatewayController {
       this.integrationClient.send(
         { cmd: 'integration.partner.set_active' },
         { id, is_active: dto.is_active, requester: this.auditActor(req) },
-      ),
+      ).pipe(timeout(8000)),
     );
   }
 }

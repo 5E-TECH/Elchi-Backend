@@ -1,3 +1,31 @@
+# Bounded json-file logging so container logs can't fill the host disk (Audit
+# observability/devops P2: Docker's default json-file driver is unbounded).
+x-json-logging: &json-logging
+  driver: json-file
+  options:
+    max-size: '10m'
+    max-file: '5'
+
+# Resource ceilings (Audit devops P2: no limits → one leaking/forking service
+# could starve the host and take every other service down with it). These are
+# deliberately GENEROUS safety ceilings — sized well above steady-state so they
+# never bite healthy operation; they only bound a runaway memory leak or fork
+# storm. `pids_limit` is a cheap fork-bomb guard with no downside. CPU is left
+# unthrottled so latency-sensitive money paths are never CPU-starved. Tune
+# mem_limit DOWN only with real production memory profiling — too tight causes
+# OOM-kill restart loops.
+x-svc-limits: &svc-limits
+  mem_limit: 1g
+  mem_reservation: 256m
+  pids_limit: 512
+
+# Hot paths (gateway + order + finance): more headroom for larger DB pools and
+# bigger in-flight result sets.
+x-hot-svc-limits: &hot-svc-limits
+  mem_limit: 1536m
+  mem_reservation: 512m
+  pids_limit: 512
+
 services:
   rabbitmq:
     image: rabbitmq:3-management
@@ -74,7 +102,73 @@ services:
         condition: service_healthy
     restart: 'no'
 
+  # Automated, rotated, off-box-capable PostgreSQL backups (Audit P0: single
+  # Postgres SPOF with no scheduled backup). Uses the same postgres:15 image so
+  # pg_dump version-matches the server; connection comes from .env.production
+  # (POSTGRES_URI or POSTGRES_HOST/USER/PASSWORD/DB). Dumps land in the host
+  # bind-mount ./backups; set BACKUP_S3_TARGET in .env.production to also push
+  # each dump off the box (the part that actually survives disk/volume loss).
+  db-backup:
+    image: postgres:15
+    container_name: elchi-db-backup
+    env_file: .env.production
+    environment:
+      BACKUP_DIR: /backups
+      BACKUP_RETENTION: ${BACKUP_RETENTION:-28}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-21600}
+    volumes:
+      - ./scripts:/scripts:ro
+      - ./backups:/backups
+    entrypoint: ['bash', '/scripts/backup-cron.sh']
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *json-logging
+    restart: unless-stopped
+
+  # Scheduled cashbox reconciliation (Audit money P1: the invariant check existed
+  # but was never scheduled). Runs db:reconcile (--reconcile-strict) on a loop;
+  # any cashbox I1/I2 drift or settlement mismatch is reported to Sentry. Reuses
+  # the migration-runner pattern (repo mount + dev deps for ts-node).
+  db-reconcile:
+    image: node:20-alpine
+    container_name: elchi-db-reconcile
+    working_dir: /app
+    env_file: .env.production
+    environment:
+      RECONCILE_INTERVAL_SECONDS: ${RECONCILE_INTERVAL_SECONDS:-3600}
+    volumes:
+      - ./:/app
+    command: sh -c "npm ci --include=dev && sh scripts/reconcile-cron.sh"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *json-logging
+    restart: unless-stopped
+
+  # Scheduled activity-log retention prune (audit devops: activity_logs grew
+  # without bound). Runs db:prune-activity-logs on a daily loop, deleting rows
+  # older than ACTIVITY_LOG_RETENTION_DAYS from every schema in bounded batches.
+  activity-log-prune:
+    <<: *svc-limits
+    image: node:20-alpine
+    container_name: elchi-activity-log-prune
+    working_dir: /app
+    env_file: .env.production
+    environment:
+      ACTIVITY_LOG_PRUNE_INTERVAL_SECONDS: ${ACTIVITY_LOG_PRUNE_INTERVAL_SECONDS:-86400}
+      ACTIVITY_LOG_RETENTION_DAYS: ${ACTIVITY_LOG_RETENTION_DAYS:-365}
+    volumes:
+      - ./:/app
+    command: sh -c "npm ci --include=dev && sh scripts/prune-activity-logs-cron.sh"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    logging: *json-logging
+    restart: unless-stopped
+
   api-gateway:
+    <<: *hot-svc-limits
     build:
       context: .
       dockerfile: apps/api-gateway/Dockerfile
@@ -86,9 +180,26 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
+    # Real liveness: hit the gateway's own @Public /health (port 3004 — the
+    # internal contract cloudflared routes to). Uses the bundled node binary so
+    # no curl/wget is required in the image. start_period covers Nest bootstrap.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3004/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   cloudflared:
+    <<: *svc-limits
     image: cloudflare/cloudflared:latest
     container_name: elchi-cloudflared
     # TUNNEL_TOKEN .env.production'dan o'qiladi. Public Hostname sozlamasi
@@ -98,9 +209,11 @@ services:
     env_file: .env.production
     depends_on:
       - api-gateway
+    logging: *json-logging
     restart: unless-stopped
 
   identity-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/identity-service/Dockerfile
@@ -112,9 +225,25 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3011/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   order-service:
+    <<: *hot-svc-limits
     build:
       context: .
       dockerfile: apps/order-service/Dockerfile
@@ -131,9 +260,25 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3012/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   catalog-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/catalog-service/Dockerfile
@@ -145,9 +290,25 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3013/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   logistics-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/logistics-service/Dockerfile
@@ -159,9 +320,25 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3014/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   finance-service:
+    <<: *hot-svc-limits
     build:
       context: .
       dockerfile: apps/finance-service/Dockerfile
@@ -177,9 +354,25 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3015/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   notification-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/notification-service/Dockerfile
@@ -191,9 +384,25 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3016/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   integration-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/integration-service/Dockerfile
@@ -205,9 +414,25 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3017/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   analytics-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/analytics-service/Dockerfile
@@ -217,9 +442,25 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3018/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   branch-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/branch-service/Dockerfile
@@ -231,9 +472,25 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3019/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   investor-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/investor-service/Dockerfile
@@ -245,9 +502,25 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3020/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   file-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/file-service/Dockerfile
@@ -259,9 +532,25 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3021/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   c2c-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/c2c-service/Dockerfile
@@ -273,9 +562,25 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3022/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
   search-service:
+    <<: *svc-limits
     build:
       context: .
       dockerfile: apps/search-service/Dockerfile
@@ -287,7 +592,22 @@ services:
         condition: service_healthy
       migration-runner:
         condition: service_completed_successfully
+    logging: *json-logging
     restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3023/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
 
 volumes:
   rabbitmq_data:

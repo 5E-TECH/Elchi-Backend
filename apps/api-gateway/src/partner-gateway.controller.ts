@@ -11,7 +11,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { firstValueFrom } from 'rxjs';
+import { firstValueFrom, timeout } from 'rxjs';
 import {
   ApiBody,
   ApiCreatedResponse,
@@ -30,6 +30,7 @@ import {
   PartnerPrincipal,
 } from './auth/partner-api-key.guard';
 import { PartnerThrottlerGuard } from './auth/partner-throttler.guard';
+import { Public } from './auth/public.decorator';
 import { CreatePartnerMarketRequestDto } from './dto/partner-market.swagger.dto';
 import { CreatePartnerShipmentRequestDto } from './dto/partner-shipment.swagger.dto';
 
@@ -54,6 +55,14 @@ const PARTNER_THROTTLE = {
   default: { limit: PARTNER_THROTTLE_LIMIT, ttl: PARTNER_THROTTLE_TTL_MS },
 };
 
+// A partner shipment create orchestrates customer.create + order.create (which
+// itself runs the COD/settlement setup) sequentially, so it can exceed the 8s
+// standard tier. An 8s cap here risks returning a timeout to the partner while
+// the order is still being created → a retry would create a DUPLICATE shipment
+// for the same external_order_id before the idempotency ref is persisted. Give
+// it the provider-tier ceiling instead.
+const PARTNER_SHIPMENT_TIMEOUT_MS = 65_000;
+
 @ApiTags('Partner')
 @ApiHeader({
   name: 'X-Api-Key',
@@ -62,6 +71,7 @@ const PARTNER_THROTTLE = {
 })
 @Throttle(PARTNER_THROTTLE)
 @UseGuards(PartnerApiKeyGuard, PartnerThrottlerGuard)
+@Public()
 @Controller('partner')
 export class PartnerGatewayController {
   constructor(
@@ -91,7 +101,7 @@ export class PartnerGatewayController {
     const res = await firstValueFrom(
       this.logisticsClient.send<{
         data?: Array<{ id: string | number; name: string }>;
-      }>({ cmd: 'logistics.region.find_all' }, {}),
+      }>({ cmd: 'logistics.region.find_all' }, {}).pipe(timeout(8000)),
     );
     return (res?.data ?? []).map((r) => ({ id: String(r.id), name: r.name }));
   }
@@ -111,7 +121,7 @@ export class PartnerGatewayController {
           name: string;
           region_id: string | number;
         }>;
-      }>({ cmd: 'logistics.district.find_all' }, { region_id: regionId }),
+      }>({ cmd: 'logistics.district.find_all' }, { region_id: regionId }).pipe(timeout(8000)),
     );
     return (res?.data ?? []).map((d) => ({
       id: String(d.id),
@@ -157,7 +167,7 @@ export class PartnerGatewayController {
           tariff_home?: number;
           tariff_center?: number;
         }>;
-      }>({ cmd: 'identity.market.find_by_ids' }, { ids: [elchiMarketId] }),
+      }>({ cmd: 'identity.market.find_by_ids' }, { ids: [elchiMarketId] }).pipe(timeout(8000)),
     );
     const market = (res?.data ?? [])[0];
     if (!market) {
@@ -195,7 +205,7 @@ export class PartnerGatewayController {
           partner_id: request.partner.id,
           requester: { id: `partner:${request.partner.id}` },
         },
-      ),
+      ).pipe(timeout(8000)),
     );
   }
 
@@ -217,7 +227,7 @@ export class PartnerGatewayController {
       this.integrationClient.send(
         { cmd: 'integration.partner.create_shipment' },
         { ...dto, partner_id: request.partner.id },
-      ),
+      ).pipe(timeout(PARTNER_SHIPMENT_TIMEOUT_MS)),
     );
   }
 }

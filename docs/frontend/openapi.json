@@ -781,6 +781,49 @@
         ]
       }
     },
+    "/markets/{id}/cancelled-handover-qr": {
+      "patch": {
+        "operationId": "ApiGatewayController_updateMarketCancelledHandoverQr",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Market user ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMarketCancelledHandoverQrRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Market cancelled handover QR policy updated"
+          },
+          "404": {
+            "description": "Market not found"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update whether market cancelled-order handover requires market QR scan",
+        "tags": [
+          "Identity"
+        ]
+      }
+    },
     "/markets/{id}/expense-proof": {
       "patch": {
         "operationId": "ApiGatewayController_updateMarketExpenseProof",
@@ -1418,6 +1461,14 @@
             }
           },
           {
+            "name": "fetch_all",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "source",
             "required": false,
             "in": "query",
@@ -1785,6 +1836,25 @@
               ],
               "type": "number"
             }
+          },
+          {
+            "name": "fetch_all",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "courier_ids",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
           }
         ],
         "responses": {
@@ -1920,6 +1990,82 @@
         ]
       }
     },
+    "/orders/markets/cancelled": {
+      "get": {
+        "operationId": "OrderGatewayController_findCancelledMarkets",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Markets with CANCELLED orders",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
+    "/orders/branch/orders": {
+      "get": {
+        "operationId": "OrderGatewayController_findBranchCancelledOrders",
+        "parameters": [
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 1,
+              "minimum": 1
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "default": 10,
+              "enum": [
+                10,
+                25,
+                50,
+                100
+              ],
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "cancelled"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Branch tomonidan qabul qilingan va hali HQga yuborilmagan canceled orderlar",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
     "/orders/markets/{marketId}/new": {
       "get": {
         "operationId": "OrderGatewayController_findNewOrdersByMarket",
@@ -1945,6 +2091,106 @@
           }
         ],
         "summary": "NEW orders by market id",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
+    "/orders/markets/{marketId}/cancelled": {
+      "get": {
+        "operationId": "OrderGatewayController_findCancelledOrdersByMarket",
+        "parameters": [
+          {
+            "name": "marketId",
+            "required": true,
+            "in": "path",
+            "description": "Market ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "CANCELLED orders by market id",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
+    "/orders/markets/{marketId}/cancelled/qr": {
+      "post": {
+        "operationId": "OrderGatewayController_createCancelledMarketHandoverQr",
+        "parameters": [
+          {
+            "name": "marketId",
+            "required": true,
+            "in": "path",
+            "description": "Market ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market canceled order handover uchun 2 daqiqalik QR olish",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
+    "/orders/markets/{marketId}/cancelled/handover": {
+      "post": {
+        "operationId": "OrderGatewayController_handoverCancelledOrdersToMarket",
+        "parameters": [
+          {
+            "name": "marketId",
+            "required": true,
+            "in": "path",
+            "description": "Market ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HandoverCancelledOrdersToMarketRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Selected CANCELLED orderlarni QR ruxsati bilan marketga topshirish",
         "tags": [
           "Orders"
         ]
@@ -2148,6 +2394,24 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
           }
         ],
         "responses": {
@@ -2183,6 +2447,11 @@
         "requestBody": {
           "required": true,
           "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/SellOrderRequestDto"
+              }
+            },
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/SellOrderRequestDto"
@@ -2223,6 +2492,11 @@
         "requestBody": {
           "required": true,
           "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/SellOrderRequestDto"
+              }
+            },
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/SellOrderRequestDto"
@@ -2250,6 +2524,16 @@
       "post": {
         "operationId": "OrderGatewayController_settlementCourierToBranch",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettlementCourierToBranchDto"
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "description": ""
@@ -2270,6 +2554,16 @@
       "post": {
         "operationId": "OrderGatewayController_settlementBranchToHq",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettlementBranchToHqDto"
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "description": ""
@@ -2290,6 +2584,16 @@
       "post": {
         "operationId": "OrderGatewayController_settlementHqToMarket",
         "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettlementHqToMarketDto"
+              }
+            }
+          }
+        },
         "responses": {
           "201": {
             "description": ""
@@ -2393,6 +2697,11 @@
         "requestBody": {
           "required": true,
           "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/PartlySellOrderRequestDto"
+              }
+            },
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/PartlySellOrderRequestDto"
@@ -2613,6 +2922,14 @@
                 "canceled",
                 "canceled_received"
               ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "branch_id",
+            "required": false,
+            "in": "query",
+            "schema": {
               "type": "string"
             }
           }
@@ -3203,7 +3520,7 @@
             "bearer": []
           }
         ],
-        "summary": "Create canceled post (courier)",
+        "summary": "Create canceled post (courier → branch, manager → HQ)",
         "tags": [
           "Logistics"
         ]
@@ -3243,7 +3560,7 @@
             "bearer": []
           }
         ],
-        "summary": "Receive canceled post (admin)",
+        "summary": "Receive canceled post (branch manager or HQ)",
         "tags": [
           "Logistics"
         ]
@@ -3563,7 +3880,16 @@
     "/district": {
       "get": {
         "operationId": "LogisticsGatewayController_getAll",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "region_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "District list"
@@ -4209,7 +4535,16 @@
     "/finance/cashbox/payment/courier": {
       "post": {
         "operationId": "FinanceGatewayController_paymentFromCourier",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -4239,7 +4574,16 @@
     "/finance/cashbox/payment/market": {
       "post": {
         "operationId": "FinanceGatewayController_paymentToMarket",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -4269,7 +4613,16 @@
     "/finance/cashbox/payment/branch-to-main": {
       "post": {
         "operationId": "FinanceGatewayController_paymentBranchToMain",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -4601,7 +4954,16 @@
     "/finance/cashbox/spend": {
       "patch": {
         "operationId": "FinanceGatewayController_spendMoney",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -4631,7 +4993,16 @@
     "/finance/cashbox/fill": {
       "patch": {
         "operationId": "FinanceGatewayController_fillCashbox",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -4741,6 +5112,24 @@
                 "extra_cost",
                 "bills"
               ]
+            }
+          },
+          {
+            "name": "source_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "777",
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_user_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "555",
+              "type": "string"
             }
           },
           {
@@ -8414,7 +8803,7 @@
             "bearer": []
           }
         ],
-        "summary": "Delete file by key",
+        "summary": "Delete file by key (admin only)",
         "tags": [
           "File"
         ]
@@ -8444,7 +8833,7 @@
             "bearer": []
           }
         ],
-        "summary": "Public redirect to file URL for image/file viewing",
+        "summary": "Public view for whitelisted (catalog/batch) images",
         "tags": [
           "File"
         ]
@@ -8556,6 +8945,36 @@
         ]
       }
     },
+    "/scan/market-cancelled": {
+      "post": {
+        "operationId": "ScanGatewayController_scanMarketCancelledHandover",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScanMarketCancelledHandoverQrDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market canceled handover QRni scan qilib 5 daqiqalik ruxsat olish",
+        "tags": [
+          "Scan"
+        ]
+      }
+    },
     "/analytics/dashboard": {
       "get": {
         "operationId": "AnalyticsGatewayController_getDashboard",
@@ -8574,6 +8993,43 @@
             "in": "query",
             "schema": {
               "type": "string"
+            }
+          },
+          {
+            "name": "period",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "today",
+                "week",
+                "month"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "start_day",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_day",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "all",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -8607,6 +9063,22 @@
           },
           {
             "name": "endDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start_day",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_day",
             "required": false,
             "in": "query",
             "schema": {
@@ -8658,6 +9130,22 @@
           },
           {
             "name": "endDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "start_day",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "end_day",
             "required": false,
             "in": "query",
             "schema": {
@@ -8802,7 +9290,7 @@
             "bearer": []
           }
         ],
-        "summary": "Courier report",
+        "summary": "Courier report (operational staff only)",
         "tags": [
           "Analytics"
         ]
@@ -9394,6 +9882,329 @@
         ]
       }
     },
+    "/partner/ping": {
+      "get": {
+        "operationId": "PartnerGatewayController_ping",
+        "parameters": [
+          {
+            "name": "X-Api-Key",
+            "in": "header",
+            "description": "Hamkor API kaliti (JWT emas)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Kalit yaroqli — hamkor ma‘lumoti qaytadi"
+          },
+          "401": {
+            "description": "X-Api-Key yo‘q yoki yaroqsiz"
+          },
+          "429": {
+            "description": "Rate limitdan oshdi"
+          }
+        },
+        "summary": "Partner API kalitini tekshirish (ping)",
+        "tags": [
+          "Partner"
+        ]
+      }
+    },
+    "/partner/regions": {
+      "get": {
+        "operationId": "PartnerGatewayController_getRegions",
+        "parameters": [
+          {
+            "name": "X-Api-Key",
+            "in": "header",
+            "description": "Hamkor API kaliti (JWT emas)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "[{ id, name }]"
+          }
+        },
+        "summary": "Elchi viloyatlari ro‘yxati",
+        "tags": [
+          "Partner"
+        ]
+      }
+    },
+    "/partner/districts": {
+      "get": {
+        "operationId": "PartnerGatewayController_getDistricts",
+        "parameters": [
+          {
+            "name": "X-Api-Key",
+            "in": "header",
+            "description": "Hamkor API kaliti (JWT emas)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "region_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "[{ id, name, region_id }]"
+          }
+        },
+        "summary": "Elchi tumanlari (region_id bo‘yicha)",
+        "tags": [
+          "Partner"
+        ]
+      }
+    },
+    "/partner/tariff": {
+      "get": {
+        "operationId": "PartnerGatewayController_getTariff",
+        "parameters": [
+          {
+            "name": "X-Api-Key",
+            "in": "header",
+            "description": "Hamkor API kaliti (JWT emas)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "elchi_market_id",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "where_deliver",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "center",
+                "address"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ elchi_market_id, where_deliver, market_tariff }"
+          },
+          "404": {
+            "description": "Market topilmadi"
+          }
+        },
+        "summary": "Yetkazish tarifi (market bo‘yicha, narx preview)",
+        "tags": [
+          "Partner"
+        ]
+      }
+    },
+    "/partner/markets": {
+      "post": {
+        "operationId": "PartnerGatewayController_provisionMarket",
+        "parameters": [
+          {
+            "name": "X-Api-Key",
+            "in": "header",
+            "description": "Hamkor API kaliti (JWT emas)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePartnerMarketRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "{ elchi_market_id }"
+          }
+        },
+        "summary": "Sotuvchi uchun Elchi market ochish (idempotent)",
+        "tags": [
+          "Partner"
+        ]
+      }
+    },
+    "/partner/shipments": {
+      "post": {
+        "operationId": "PartnerGatewayController_provisionShipment",
+        "parameters": [
+          {
+            "name": "X-Api-Key",
+            "in": "header",
+            "description": "Hamkor API kaliti (JWT emas)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePartnerShipmentRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "{ shipment_id, order_status, qr_code_token, to_be_paid }"
+          }
+        },
+        "summary": "Shipment yaratish (order.create), idempotent",
+        "tags": [
+          "Partner"
+        ]
+      }
+    },
+    "/admin/partners": {
+      "post": {
+        "operationId": "PartnerAdminGatewayController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreatePartnerRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Hamkor yaratish (API kalit BIR MARTA qaytadi)",
+        "tags": [
+          "Partners (admin)"
+        ]
+      },
+      "get": {
+        "operationId": "PartnerAdminGatewayController_list",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Hamkorlar ro‘yxati (sirlarsiz)",
+        "tags": [
+          "Partners (admin)"
+        ]
+      }
+    },
+    "/admin/partners/{id}/rotate-key": {
+      "post": {
+        "operationId": "PartnerAdminGatewayController_rotateKey",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "API kalitni yangilash (eski darhol ishlamaydi)",
+        "tags": [
+          "Partners (admin)"
+        ]
+      }
+    },
+    "/admin/partners/{id}/status": {
+      "post": {
+        "operationId": "PartnerAdminGatewayController_setActive",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetPartnerActiveRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Hamkorni faollashtirish/o‘chirish",
+        "tags": [
+          "Partners (admin)"
+        ]
+      }
+    },
     "/health/readiness": {
       "get": {
         "operationId": "HealthController_readiness",
@@ -9709,6 +10520,11 @@
             "example": false,
             "default": false
           },
+          "cancelled_handover_qr_required": {
+            "type": "boolean",
+            "example": true,
+            "default": true
+          },
           "expense_proof_conditions": {
             "type": "array",
             "description": "Isbot (rasm/video) majburiy bo‘ladigan vaziyatlar to‘plami. Bo‘sh = isbot talab qilinmaydi.",
@@ -9747,6 +10563,18 @@
         },
         "required": [
           "add_order"
+        ]
+      },
+      "UpdateMarketCancelledHandoverQrRequestDto": {
+        "type": "object",
+        "properties": {
+          "cancelled_handover_qr_required": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "cancelled_handover_qr_required"
         ]
       },
       "UpdateMarketExpenseProofRequestDto": {
@@ -9800,6 +10628,36 @@
           "accessToken": {
             "type": "string",
             "example": "eyJhbGciOiJIUzI1NiIs..."
+          },
+          "accessTokenExpiresAt": {
+            "type": "object",
+            "example": 1792497600000,
+            "nullable": true
+          },
+          "refreshTokenExpiresAt": {
+            "type": "object",
+            "example": 1793102400000,
+            "nullable": true
+          },
+          "refreshTokenWarnAt": {
+            "type": "object",
+            "example": 1793101500000,
+            "nullable": true
+          },
+          "access_token_expires_at": {
+            "type": "object",
+            "example": 1792497600000,
+            "nullable": true
+          },
+          "refresh_token_expires_at": {
+            "type": "object",
+            "example": 1793102400000,
+            "nullable": true
+          },
+          "refresh_token_warn_at": {
+            "type": "object",
+            "example": 1793101500000,
+            "nullable": true
           }
         },
         "required": [
@@ -10219,6 +11077,65 @@
           }
         }
       },
+      "CancelledManualOverrideDto": {
+        "type": "object",
+        "properties": {
+          "order_id": {
+            "type": "string",
+            "example": "101"
+          },
+          "reason": {
+            "type": "string",
+            "example": "QR yirtilgan",
+            "enum": [
+              "QR yirtilgan",
+              "QR o'qilmayapti",
+              "Label yo'qolgan",
+              "QR namlangan yoki xiralashgan"
+            ]
+          }
+        },
+        "required": [
+          "order_id",
+          "reason"
+        ]
+      },
+      "HandoverCancelledOrdersToMarketRequestDto": {
+        "type": "object",
+        "properties": {
+          "order_ids": {
+            "example": [
+              "6b1f3f2a-8c1d-4e2b-9f4a-1234567890ab",
+              "7c2e4d3b-9d2e-5f3c-0a5b-abcdefabcdef"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "authorization_token": {
+            "type": "string",
+            "example": "MHA-secure-one-time-token",
+            "description": "QR scan orqali olingan 5 daqiqalik authorization token. Marketda QR talab o‘chirilgan bo‘lsa yuborilmasligi mumkin."
+          },
+          "manual_overrides": {
+            "description": "QR buzilgani sabab qo‘lda tasdiqlangan orderlar ro‘yxati. Faqat HQ xodimlari uchun audit metadata.",
+            "example": [
+              {
+                "order_id": "101",
+                "reason": "QR yirtilgan"
+              }
+            ],
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CancelledManualOverrideDto"
+            }
+          }
+        },
+        "required": [
+          "order_ids"
+        ]
+      },
       "ScanAssignOrderRequestDto": {
         "type": "object",
         "properties": {
@@ -10285,6 +11202,57 @@
             }
           }
         }
+      },
+      "SettlementCourierToBranchDto": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number",
+            "description": "Amount to settle in som (>= 0, 2 dp)"
+          },
+          "courier_id": {
+            "type": "string",
+            "description": "Courier user id"
+          }
+        },
+        "required": [
+          "amount",
+          "courier_id"
+        ]
+      },
+      "SettlementBranchToHqDto": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number",
+            "description": "Amount to settle in som (>= 0, 2 dp)"
+          },
+          "branch_id": {
+            "type": "string",
+            "description": "Branch id"
+          }
+        },
+        "required": [
+          "amount",
+          "branch_id"
+        ]
+      },
+      "SettlementHqToMarketDto": {
+        "type": "object",
+        "properties": {
+          "amount": {
+            "type": "number",
+            "description": "Amount to settle in som (>= 0, 2 dp)"
+          },
+          "market_id": {
+            "type": "string",
+            "description": "Market id"
+          }
+        },
+        "required": [
+          "amount",
+          "market_id"
+        ]
       },
       "CouldNotDeliverOrderRequestDto": {
         "type": "object",
@@ -10894,6 +11862,8 @@
             "type": "string",
             "enum": [
               "sell_profit",
+              "sell_extra_cost",
+              "cancel_extra_cost",
               "manual_income",
               "manual_expense",
               "salary",
@@ -11946,11 +12916,20 @@
             "items": {
               "type": "string"
             }
+          },
+          "order_ids": {
+            "example": [
+              "46",
+              "47",
+              "48"
+            ],
+            "description": "Batchga o'tkaziladigan NEW order ID'lari (snake_case)",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
-        },
-        "required": [
-          "orderIds"
-        ]
+        }
       },
       "CreateReturnBatchesRequestDto": {
         "type": "object",
@@ -11995,11 +12974,32 @@
             "items": {
               "type": "string"
             }
+          },
+          "order_ids": {
+            "example": [
+              "46",
+              "47",
+              "48"
+            ],
+            "description": "Yuborilayotgan batch ichidagi order ID'lar (snake_case)",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "vehicle_plate": {
+            "type": "string",
+            "example": "01A123AA"
+          },
+          "driver_name": {
+            "type": "string",
+            "example": "Ali Valiyev"
+          },
+          "driver_phone": {
+            "type": "string",
+            "example": "+998901234567"
           }
-        },
-        "required": [
-          "orderIds"
-        ]
+        }
       },
       "ReceiveTransferBatchOrdersRequestDto": {
         "type": "object",
@@ -12014,11 +13014,19 @@
             "items": {
               "type": "string"
             }
+          },
+          "order_ids": {
+            "example": [
+              "46",
+              "47"
+            ],
+            "description": "Qabul qilinadigan batch ichidagi order ID'lar (snake_case)",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
-        },
-        "required": [
-          "orderIds"
-        ]
+        }
       },
       "CancelTransferBatchRequestDto": {
         "type": "object",
@@ -12203,9 +13211,184 @@
           "content"
         ]
       },
+      "ScanMarketCancelledHandoverQrDto": {
+        "type": "object",
+        "properties": {}
+      },
       "PrintOrdersDto": {
         "type": "object",
         "properties": {}
+      },
+      "CreatePartnerMarketRequestDto": {
+        "type": "object",
+        "properties": {
+          "external_seller_id": {
+            "type": "string",
+            "description": "Hamkor tomonidagi sotuvchi id (idempotency kaliti)"
+          },
+          "name": {
+            "type": "string",
+            "example": "Zamon Store"
+          },
+          "phone": {
+            "type": "string",
+            "example": "+998901234567"
+          },
+          "region_id": {
+            "type": "string",
+            "description": "Elchi region_id (yo‘nalish uchun)"
+          },
+          "district_id": {
+            "type": "string",
+            "description": "Elchi district_id (yo‘nalish uchun)"
+          },
+          "tariff_home": {
+            "type": "number",
+            "example": 10000,
+            "minimum": 0
+          },
+          "tariff_center": {
+            "type": "number",
+            "example": 8000,
+            "minimum": 0
+          }
+        },
+        "required": [
+          "external_seller_id",
+          "name",
+          "phone"
+        ]
+      },
+      "ShipmentCustomerDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Ali Valiyev"
+          },
+          "phone": {
+            "type": "string",
+            "example": "+998901234567"
+          }
+        },
+        "required": [
+          "name",
+          "phone"
+        ]
+      },
+      "ShipmentItemDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Kitob"
+          },
+          "quantity": {
+            "type": "number",
+            "example": 2,
+            "default": 1
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "CreatePartnerShipmentRequestDto": {
+        "type": "object",
+        "properties": {
+          "external_order_id": {
+            "type": "string",
+            "description": "Marketplace buyurtma id (idempotency kaliti)"
+          },
+          "elchi_market_id": {
+            "type": "string",
+            "description": "Sotuvchining Elchi market id (§3.2)"
+          },
+          "customer": {
+            "$ref": "#/components/schemas/ShipmentCustomerDto"
+          },
+          "address": {
+            "type": "string"
+          },
+          "region_id": {
+            "type": "string"
+          },
+          "district_id": {
+            "type": "string",
+            "description": "Tuman id (customer uchun majburiy)"
+          },
+          "where_deliver": {
+            "type": "string",
+            "enum": [
+              "center",
+              "address"
+            ],
+            "default": "center"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShipmentItemDto"
+            }
+          },
+          "cod_amount": {
+            "type": "number",
+            "example": 0,
+            "description": "0 = prepaid (online), >0 = COD (kuryer yig‘adi)"
+          },
+          "subtotal": {
+            "type": "number",
+            "description": "Buyurtma qiymati (total_price uchun)"
+          }
+        },
+        "required": [
+          "external_order_id",
+          "elchi_market_id",
+          "customer",
+          "district_id",
+          "cod_amount"
+        ]
+      },
+      "CreatePartnerRequestDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Elchi Marketplace"
+          },
+          "webhook_url": {
+            "type": "string",
+            "example": "https://marketplace.example.uz/webhooks/elchi"
+          },
+          "webhook_secret": {
+            "type": "string",
+            "description": "Chiquvchi webhook HMAC sekret (AES bilan shifrlab saqlanadi)"
+          },
+          "ip_allowlist": {
+            "example": [
+              "203.0.113.10"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "name"
+        ]
+      },
+      "SetPartnerActiveRequestDto": {
+        "type": "object",
+        "properties": {
+          "is_active": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "is_active"
+        ]
       }
     }
   }

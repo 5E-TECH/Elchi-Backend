@@ -48,6 +48,16 @@ jobs:
             fi
           done
 
+      # OpenAPI drift gate: the committed docs/frontend/openapi.json is the
+      # frontend's contract. Regenerate it from the live gateway routes and fail
+      # if it differs from what's committed — so a backend route change can't
+      # silently drift the spec the frontend generates its client from.
+      - name: OpenAPI spec is in sync
+        run: |
+          npm run openapi:generate
+          git diff --exit-code -- docs/frontend/openapi.json \
+            || { echo "::error::openapi.json is stale — run 'npm run openapi:generate' and commit the result."; exit 1; }
+
       # New specs added in the observability/idempotency hardening sprint
       # MUST always pass. Legacy specs (predate the sprint) still have
       # drift — track them under the "legacy spec repair" backlog rather
@@ -69,11 +79,14 @@ jobs:
         env:
           NODE_ENV: test
 
-      - name: Full unit test suite (legacy specs may fail; non-blocking)
+      # BLOCKING: the full suite is green (the 3 legacy red specs were repaired),
+      # so it now gates merges — this is what puts the settlement / dedup-epoch /
+      # return-flow money-invariant specs (previously only in the non-blocking
+      # run) behind the merge gate. (Audit testing P1.)
+      - name: Full unit test suite (must pass)
         run: npm run test:ci
         env:
           NODE_ENV: test
-        continue-on-error: true
 
       # Build each service to catch import / decorator metadata regressions
       # that bare typecheck misses. Gateway + integration-service (Partner API
@@ -82,6 +95,29 @@ jobs:
         run: |
           npx nest build api-gateway
           npx nest build integration-service
+
+  # Secret-scanning gate (Audit P0/P1: live secrets were committed to history).
+  # Scans the working tree so a PR that adds a real credential to a tracked file
+  # fails CI. History remediation (git filter-repo + rotation) is a separate,
+  # one-time task documented in docs/audit/SECRET_ROTATION_RUNBOOK.md.
+  secret-scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install gitleaks
+        run: |
+          set -e
+          GITLEAKS_VERSION=8.18.4
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" -o /tmp/gitleaks.tar.gz
+          tar -xzf /tmp/gitleaks.tar.gz -C /tmp gitleaks
+          sudo mv /tmp/gitleaks /usr/local/bin/gitleaks
+          gitleaks version
+
+      - name: Scan working tree for committed secrets
+        run: gitleaks detect --no-git --config .gitleaks.toml --redact --verbose --exit-code 1
 
   coverage-summary:
     runs-on: ubuntu-latest

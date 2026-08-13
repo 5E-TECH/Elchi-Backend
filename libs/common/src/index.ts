@@ -46,3 +46,5 @@ export * from './context/request-context';
 export * from './context/rmq-trace.interceptor';
 
 export * from './sentry/sentry.helper';
+export * from './health/liveness';
+export * from './metrics/metrics';

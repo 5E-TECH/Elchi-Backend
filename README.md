@@ -1,98 +1,122 @@
-<p align="center">
-  <a href="http://nestjs.com/" target="blank"><img src="https://nestjs.com/img/logo-small.svg" width="120" alt="Nest Logo" /></a>
-</p>
+# Elchi-Backend
 
-[circleci-image]: https://img.shields.io/circleci/build/github/nestjs/nest/master?token=abc123def456
-[circleci-url]: https://circleci.com/gh/nestjs/nest
+Backend for **Elchi Pochta** — a courier / logistics + cash-on-delivery (COD)
+money-handling platform (Uzbekistan). It runs deliveries end-to-end: order
+intake (internal, branch, and marketplace-partner), courier dispatch, branch
+transfer batches, COD settlement up the chain (courier → branch → HQ → market),
+cashboxes, operator/investor earnings, analytics, notifications and search.
 
-  <p align="center">A progressive <a href="http://nodejs.org" target="_blank">Node.js</a> framework for building efficient and scalable server-side applications.</p>
-    <p align="center">
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/v/@nestjs/core.svg" alt="NPM Version" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/l/@nestjs/core.svg" alt="Package License" /></a>
-<a href="https://www.npmjs.com/~nestjscore" target="_blank"><img src="https://img.shields.io/npm/dm/@nestjs/common.svg" alt="NPM Downloads" /></a>
-<a href="https://circleci.com/gh/nestjs/nest" target="_blank"><img src="https://img.shields.io/circleci/build/github/nestjs/nest/master" alt="CircleCI" /></a>
-<a href="https://discord.gg/G7Qnnhy" target="_blank"><img src="https://img.shields.io/badge/discord-online-brightgreen.svg" alt="Discord"/></a>
-<a href="https://opencollective.com/nest#backer" target="_blank"><img src="https://opencollective.com/nest/backers/badge.svg" alt="Backers on Open Collective" /></a>
-<a href="https://opencollective.com/nest#sponsor" target="_blank"><img src="https://opencollective.com/nest/sponsors/badge.svg" alt="Sponsors on Open Collective" /></a>
-  <a href="https://paypal.me/kamilmysliwiec" target="_blank"><img src="https://img.shields.io/badge/Donate-PayPal-ff3f59.svg" alt="Donate us"/></a>
-    <a href="https://opencollective.com/nest#sponsor"  target="_blank"><img src="https://img.shields.io/badge/Support%20us-Open%20Collective-41B883.svg" alt="Support us"></a>
-  <a href="https://twitter.com/nestframework" target="_blank"><img src="https://img.shields.io/twitter/follow/nestframework.svg?style=social&label=Follow" alt="Follow us on Twitter"></a>
-</p>
-  <!--[![Backers on Open Collective](https://opencollective.com/nest/backers/badge.svg)](https://opencollective.com/nest#backer)
-  [![Sponsors on Open Collective](https://opencollective.com/nest/sponsors/badge.svg)](https://opencollective.com/nest#sponsor)-->
+## Architecture
 
-## Description
+A **NestJS monorepo**: one HTTP **api-gateway** in front of **14 microservices**
+that communicate over **RabbitMQ** (`@nestjs/microservices`, mostly synchronous
+request/reply plus a transactional outbox for state-change events). Persistence
+is **PostgreSQL with a schema per service** (TypeORM, single DB instance).
 
-[Nest](https://github.com/nestjs/nest) framework TypeScript starter repository.
-
-## Project setup
-
-```bash
-$ npm install
+```
+client ──HTTP──> api-gateway ──RabbitMQ──> { identity, order, catalog, logistics,
+                                             finance, notification, integration,
+                                             analytics, branch, investor, file,
+                                             c2c, search } ──> PostgreSQL (schema/service)
 ```
 
-## Compile and run the project
+| Service | Responsibility |
+|---|---|
+| **api-gateway** | HTTP surface, auth (JWT default-deny + `@Public`), RBAC, Swagger, rate limiting, realtime (WS) |
+| **identity** | users, auth (JWT access/refresh), customers, RBAC roles |
+| **order** | order lifecycle + state machine, COD money split, per-order FIFO settlement, transfer batches, analytics reads |
+| **finance** | cashboxes, ledger, settlement legs, operator/investor payments, shifts |
+| **logistics** | couriers, posts, assignment |
+| **branch** | branches, branch users, config, transfer-batch orchestration |
+| **catalog** | products / pricing |
+| **integration** | marketplace **Partner API**, provider integrations, webhooks (HMAC) |
+| **notification** | in-app inbox, realtime + Telegram dispatch |
+| **analytics** | dashboards / KPI aggregation |
+| **investor** | investor profit shares |
+| **file** | MinIO/S3 uploads, signed URLs, QR/PDF generation |
+| **search** | pg_trgm full-text search |
+| **c2c** | customer-to-customer marketplace (stubbed) |
+
+Shared code (config/Joi, RMQ helpers, outbox, idempotency, logging, Sentry,
+filters, entities base) lives in `libs/common`.
+
+### Key mechanisms
+
+- **`executeAndAck`** — uniform RMQ ack/nack with a smart DLQ (RpcException →
+  DLQ, transient → requeue-once → DLQ).
+- **Transactional outbox** (`libs/common/src/outbox`) — state-change events are
+  written in the same DB transaction as the change and published at-least-once,
+  with poison-event alerting.
+- **Idempotency** (`libs/common/src/idempotency`) — money mutations dedupe on a
+  server-derived token / partial-unique cashbox-history index.
+- **Joi config validation** (`libs/common/src/config`) — fail-fast on weak/missing
+  secrets at boot.
+- **Trace correlation** — `trace_id` flows gateway → RMQ → Pino logs → Sentry.
+
+## Local development
+
+Native (no Docker) is the common dev setup; infra (Postgres + RabbitMQ + MinIO)
+can run via Docker.
 
 ```bash
-# development
-$ npm run start
+npm install
+cp .env.example .env          # fill in real values (see .env.example comments)
 
-# watch mode
-$ npm run start:dev
-
-# production mode
-$ npm run start:prod
+npm run infra:up              # start rabbitmq + postgres (docker)
+npm run migration:run         # apply DB migrations
+npm run start:all             # start gateway + all services (watch mode)
+# or a single service: npm run start:gateway | start:order | start:finance | ...
 ```
 
-## Run tests
+Swagger UI (when enabled): `http://localhost:<gateway-port>/api`.
+
+## Testing
 
 ```bash
-# unit tests
-$ npm run test
-
-# e2e tests
-$ npm run test:e2e
-
-# test coverage
-$ npm run test:cov
+npm test                 # full unit suite (jest)
+npm run test:ci          # CI mode (runInBand)
+npm run test:cov         # with coverage
 ```
+
+CI (`.github/workflows/ci.yml`) runs lint, per-service typecheck, a
+secret-scan (gitleaks), and the **full test suite as a blocking gate**, plus a
+build smoke. Deploy (`.github/workflows/deploy.yml`) re-runs the suite, takes a
+**pre-migration DB backup**, runs migrations, deploys changed services, and
+**rolls back** on failure.
+
+## Database & migrations
+
+```bash
+npm run migration:generate    # generate from entity changes
+npm run migration:run         # apply
+npm run migration:run:safe    # backup THEN run (pre-migration safety dump)
+npm run db:reconcile          # cashbox money-conservation invariant check
+```
+
+Migrations live in `migrations/` and run against `order_schema`'s datasource
+(cross-schema DDL is fully qualified). Backups: `scripts/backup-db.sh` (+ the
+`db-backup` compose sidecar).
 
 ## Deployment
 
-When you're ready to deploy your NestJS application to production, there are some key steps you can take to ensure it runs as efficiently as possible. Check out the [deployment documentation](https://docs.nestjs.com/deployment) for more information.
+`docker-compose.prod.yml` runs the full stack (services + Postgres + RabbitMQ +
+MinIO + Cloudflare Tunnel + `db-backup`/`db-reconcile` sidecars) behind a
+Cloudflare Tunnel. Deploy is driven by `.github/workflows/deploy.yml`.
 
-If you are looking for a cloud-based platform to deploy your NestJS application, check out [Mau](https://mau.nestjs.com), our official platform for deploying NestJS applications on AWS. Mau makes deployment straightforward and fast, requiring just a few simple steps:
+> ⚠️ **Secrets:** never commit real secrets. `.env`/`.env.production` are
+> git-ignored and CI runs a gitleaks scan. See
+> `docs/audit/SECRET_ROTATION_RUNBOOK.md`.
 
-```bash
-$ npm install -g @nestjs/mau
-$ mau deploy
-```
+## Documentation
 
-With Mau, you can deploy your application in just a few clicks, allowing you to focus on building features rather than managing infrastructure.
-
-## Resources
-
-Check out a few resources that may come in handy when working with NestJS:
-
-- Visit the [NestJS Documentation](https://docs.nestjs.com) to learn more about the framework.
-- For questions and support, please visit our [Discord channel](https://discord.gg/G7Qnnhy).
-- To dive deeper and get more hands-on experience, check out our official video [courses](https://courses.nestjs.com/).
-- Deploy your application to AWS with the help of [NestJS Mau](https://mau.nestjs.com) in just a few clicks.
-- Visualize your application graph and interact with the NestJS application in real-time using [NestJS Devtools](https://devtools.nestjs.com).
-- Need help with your project (part-time to full-time)? Check out our official [enterprise support](https://enterprise.nestjs.com).
-- To stay in the loop and get updates, follow us on [X](https://x.com/nestframework) and [LinkedIn](https://linkedin.com/company/nestjs).
-- Looking for a job, or have a job to offer? Check out our official [Jobs board](https://jobs.nestjs.com).
-
-## Support
-
-Nest is an MIT-licensed open source project. It can grow thanks to the sponsors and support by the amazing backers. If you'd like to join them, please [read more here](https://docs.nestjs.com/support).
-
-## Stay in touch
-
-- Author - [Kamil Myśliwiec](https://twitter.com/kammysliwiec)
-- Website - [https://nestjs.com](https://nestjs.com/)
-- Twitter - [@nestframework](https://twitter.com/nestframework)
+- `docs/BACKEND_MAP.md` — authoritative service/endpoint/entity map (read this
+  first for whole-project work).
+- `docs/PARTNER_API.md` — external marketplace Partner API.
+- `docs/frontend/` — OpenAPI spec + frontend integration guide + coverage report.
+- `docs/audit/` — production-readiness / lifecycle / money audits + runbooks.
+- `docs/BRANCH_SYSTEM_PLAN.md`, `docs/comparison/` — branch-system TZ & PCS↔Elchi
+  functional comparison.
 
 ## License
 
-Nest is [MIT licensed](https://github.com/nestjs/nest/blob/master/LICENSE).
+UNLICENSED — private.

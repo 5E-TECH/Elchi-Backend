@@ -41,6 +41,10 @@ lerna-debug.log*
 .env.test.local
 .env.production
 .env.local
+# Secret-rotation temp files (never commit): .env.production.new, .env.production.bak.*
+.env.production.*
+.env.*.bak
+.env.*.bak.*
 
 # temp directory
 .temp
@@ -62,4 +66,8 @@ docs/*.pdf
 # ...but BACKEND_MAP.md is intentional, versioned project documentation
 !docs/BACKEND_MAP.md
 .env.production
-.env.production
+
+# Database backups (pg_dump output — NEVER commit; may contain PII/money data)
+/backups
+backups/
+*.sql.gz

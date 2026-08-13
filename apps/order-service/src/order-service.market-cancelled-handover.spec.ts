@@ -1,7 +1,8 @@
 import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
 import { Order_status } from '@app/common';
-import { OrderServiceService } from './order-service.service';
+import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+import { OrderCustodyService } from './custody/order-custody.service';
 import { MarketCancelledHandoverSession } from './entities/market-cancelled-handover-session.entity';
 import { Order, OrderHolderType } from './entities/order.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
@@ -122,15 +123,13 @@ describe('OrderServiceService market cancelled handover', () => {
       ),
     };
 
-    const service = new OrderServiceService(
+    const custody = new OrderCustodyService(trackingRepo as any, custodyRepo as any);
+    const service = new OrderLifecycleService(
       dataSource as any,
       orderRepo as any,
       {} as any,
       trackingRepo as any,
       custodyRepo as any,
-      {} as any,
-      {} as any,
-      {} as any,
       {} as any,
       {} as any,
       identityClient as any,
@@ -139,9 +138,31 @@ describe('OrderServiceService market cancelled handover', () => {
       {} as any,
       {} as any,
       {} as any,
-      {} as any,
       outbox as any,
       activityLog as any,
+      {
+        getHqBranchId: jest.fn().mockResolvedValue('1'),
+        // getMarketsByIds now lives in OrderLookupService; return the same
+        // market the identityClient mock used to feed (drives the QR-required
+        // branch in completeMarketCancelledHandover).
+        getMarketsByIds: jest.fn().mockResolvedValue([
+          {
+            id: '16',
+            name: 'Yandex',
+            cancelled_handover_qr_required: options?.marketQrRequired ?? true,
+          },
+        ]),
+        getCouriersByIds: jest.fn().mockResolvedValue([]),
+        getUserById: jest.fn().mockResolvedValue(null),
+        getCashboxByUser: jest.fn().mockResolvedValue(null),
+        resolveBranchShare: jest.fn().mockResolvedValue(0),
+        ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
+        resolveSettlementBranchId: jest.fn().mockResolvedValue(null),
+        getIntegrationById: jest.fn().mockResolvedValue(null),
+        getDefaultDistrictId: jest.fn().mockResolvedValue(null),
+        resolveDistrictId: jest.fn().mockResolvedValue(null),
+      } as any, // lookup (OrderLookupService)
+      custody as any, // OrderCustodyService
     );
 
     return {

@@ -17,7 +17,10 @@
 const ENV_DEFAULTS: Record<string, string> = {
   NODE_ENV: 'development',
   PORT: '3004',
-  ACCESS_TOKEN_KEY: 'openapi_dummy_access_key',
+  // Must satisfy strongKey (>=32 chars, >=10 distinct, not placeholder-shaped) —
+  // this value never signs anything; it only lets ConfigModule validate at boot.
+  ACCESS_TOKEN_KEY:
+    'f1e2d3c4b5a6978869504132a1b2c3d4e5f60718293a4b5c6d7e8f90a1b2c3d4',
   ACCESS_TOKEN_TIME: '15m',
   RABBITMQ_URI: 'amqp://guest:guest@localhost:5672',
   RABBITMQ_IDENTITY_QUEUE: 'identity_queue',

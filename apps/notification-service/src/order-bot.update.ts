@@ -125,6 +125,9 @@ export class OrderBotUpdateService implements OnModuleInit, OnModuleDestroy {
     try {
       const response = await fetch(
         `https://api.telegram.org/bot${this.token}/getUpdates?offset=${this.offset}&timeout=25&allowed_updates=["message","callback_query"]`,
+        // Long-poll: Telegram holds up to 25s; bound the client a bit above that
+        // so a stalled socket can't freeze the poll loop (bot goes silent).
+        { signal: AbortSignal.timeout(30_000) },
       );
       if (!response.ok) {
         this.logger.error(`getUpdates failed: HTTP ${response.status}`);
@@ -309,6 +312,7 @@ export class OrderBotUpdateService implements OnModuleInit, OnModuleDestroy {
           parse_mode: 'HTML',
           reply_markup: replyMarkup,
         }),
+        signal: AbortSignal.timeout(10_000),
       });
     } catch (error) {
       this.logger.error(
@@ -325,6 +329,7 @@ export class OrderBotUpdateService implements OnModuleInit, OnModuleDestroy {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ callback_query_id: callbackQueryId }),
+          signal: AbortSignal.timeout(10_000),
         },
       );
     } catch {

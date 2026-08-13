@@ -8,6 +8,7 @@ import {
   Res,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
+import { Public } from './auth/public.decorator';
 import { ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
 import type { Request, Response } from 'express';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
@@ -37,6 +38,7 @@ export class WebhookGatewayController {
     @Inject('INTEGRATION') private readonly integrationClient: ClientProxy,
   ) {}
 
+  @Public()
   @Post(':slug')
   @ApiOperation({
     summary: 'Inbound provider webhook (HMAC-verified downstream, no JWT)',

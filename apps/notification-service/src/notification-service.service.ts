@@ -526,6 +526,10 @@ export class NotificationServiceService {
           parse_mode: data.parse_mode,
           disable_web_page_preview: data.disable_web_page_preview,
         }),
+        // Bound the outbound call: this runs inside an RMQ handler, and Node's
+        // fetch has no default timeout — a stalled Telegram API would leave the
+        // message unacked and, with prefetch, wedge the consumer.
+        signal: AbortSignal.timeout(10_000),
       });
     } catch (error) {
       this.logger.error(

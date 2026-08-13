@@ -78,7 +78,9 @@ describe('IntegrationServiceService.createPartnerShipment (C2.1)', () => {
           external_id: 'ord-9',
           total_price: 30000,
         }),
-        request_id: 'ord-9',
+        // Idempotency key is partner-scoped so two partners can reuse the same
+        // external_order_id without colliding on order.create.
+        request_id: 'partner:7:ord-9',
       }),
     );
     // ref (partner_id, external_order_id, order_id)

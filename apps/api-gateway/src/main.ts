@@ -1,5 +1,5 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe } from '@nestjs/common';
+import { ValidationPipe, VersioningType, VERSION_NEUTRAL } from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -15,6 +15,7 @@ import {
   requestContext,
   initSentry,
   flushSentry,
+  registerMetrics,
 } from '@app/common';
 
 async function bootstrap() {
@@ -33,6 +34,18 @@ async function bootstrap() {
   // Replace the built-in Nest logger with Pino so every line (incl. ones
   // emitted by Nest internals) goes through the structured pipeline.
   app.useLogger(app.get(Logger));
+
+  // API versioning (audit api-design) — NON-BREAKING. URI versioning with both
+  // the neutral (un-prefixed) and v1 default versions, so EVERY existing route
+  // keeps working at its current path (`/orders`) for the current frontend AND
+  // is simultaneously reachable at `/v1/orders`. New/changed endpoints can now
+  // opt into `@Version('2')` without touching v1 clients. Raw adapter routes
+  // (/health, /metrics) are unaffected — versioning applies to Nest controllers
+  // only.
+  app.enableVersioning({
+    type: VersioningType.URI,
+    defaultVersion: [VERSION_NEUTRAL, '1'],
+  });
 
   // Gateway Cloudflare Tunnel ortida ishlaydi. "trust proxy" yoqilganda
   // Express req.ip va rate-limiter X-Forwarded-For / CF-Connecting-IP'dan
@@ -207,6 +220,11 @@ async function bootstrap() {
     });
     await app.startAllMicroservices();
   }
+
+  // Prometheus metrics: /metrics (internal port only) + request histogram +
+  // process/GC defaults. Registered before listen so the middleware wraps all
+  // routes.
+  registerMetrics(app, 'api-gateway');
 
   // AWS va Docker interfeyslari uchun 0.0.0.0 majburiy
   const port = Number(process.env.PORT || 3004);

@@ -54,6 +54,10 @@ export class NotificationBotUpdateService implements OnModuleInit, OnModuleDestr
     try {
       const response = await fetch(
         `https://api.telegram.org/bot${this.token}/getUpdates?offset=${this.offset}&timeout=25`,
+        // Long-poll: Telegram holds up to 25s, so give the client a bit more
+        // headroom. Without a client-side bound a stalled socket freezes the
+        // whole poll loop and the bot silently stops receiving updates.
+        { signal: AbortSignal.timeout(30_000) },
       );
 
       if (!response.ok) {

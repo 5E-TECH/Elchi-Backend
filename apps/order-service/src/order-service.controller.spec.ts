@@ -2,6 +2,10 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { RmqService, IdempotencyService } from '@app/common';
 import { OrderServiceController } from './order-service.controller';
 import { OrderServiceService } from './order-service.service';
+import { OrderAnalyticsService } from './analytics/order-analytics.service';
+import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
+import { OrderSettlementService } from './settlement/order-settlement.service';
+import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 
 describe('OrderServiceController', () => {
   let orderServiceController: OrderServiceController;
@@ -22,13 +26,31 @@ describe('OrderServiceController', () => {
           useValue: {},
         },
         {
+          provide: OrderAnalyticsService,
+          useValue: {},
+        },
+        {
+          provide: BranchTransferBatchService,
+          useValue: {},
+        },
+        {
+          provide: OrderSettlementService,
+          useValue: {},
+        },
+        {
+          provide: OrderLifecycleService,
+          useValue: {},
+        },
+        {
           provide: IdempotencyService,
           useValue: {},
         },
       ],
     }).compile();
 
-    orderServiceController = app.get<OrderServiceController>(OrderServiceController);
+    orderServiceController = app.get<OrderServiceController>(
+      OrderServiceController,
+    );
   });
 
   describe('health', () => {

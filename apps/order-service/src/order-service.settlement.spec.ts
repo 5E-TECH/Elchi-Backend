@@ -1,4 +1,4 @@
-import { OrderServiceService } from './order-service.service';
+import { OrderSettlementService } from './settlement/order-settlement.service';
 import { SettlementStatus } from '@app/common';
 import { OrderSettlement } from './entities/order-settlement.entity';
 
@@ -8,7 +8,7 @@ import { OrderSettlement } from './entities/order-settlement.entity';
  * (captured here via the outbox mock). Whole-order allocation — an order is only
  * settled when the remaining lump-sum covers its full leg amount.
  */
-describe('OrderServiceService settlement (FIFO)', () => {
+describe('OrderSettlementService settlement (FIFO)', () => {
   function makeService(rows: Partial<OrderSettlement>[]) {
     // Mutable in-memory settlement rows.
     const store = rows.map((r, i) => ({
@@ -51,35 +51,12 @@ describe('OrderServiceService settlement (FIFO)', () => {
 
     const outbox = { enqueue: jest.fn() };
 
-    const service = new OrderServiceService(
+    // OrderSettlementService(dataSource, orderSettlementRepo, financeClient).
+    // The FIFO advance path is state-only, so financeClient is never touched.
+    const service = new OrderSettlementService(
       { createQueryRunner: jest.fn(() => queryRunner) } as any, // dataSource
-      {} as any, // orderRepo
-      {} as any, // orderItemRepo
-      {} as any, // orderTrackingRepo
-      {} as any, // orderCustodyEventRepo
       settlementRepo as any, // orderSettlementRepo
-      {} as any, // transferBatchRepo
-      {} as any, // transferBatchItemRepo
-      {} as any, // transferBatchHistoryRepo
-      {} as any, // searchClient
-      {} as any, // identityClient
-      {} as any, // logisticsClient
-      {} as any, // catalogClient
       {} as any, // financeClient
-      {} as any, // integrationClient
-      {} as any, // branchClient
-      {} as any, // fileClient
-      outbox as any, // outbox
-      {
-        log: jest.fn().mockResolvedValue(undefined),
-        logChange: jest.fn().mockResolvedValue(undefined),
-        query: jest.fn().mockResolvedValue({
-          items: [],
-          meta: { page: 1, limit: 50, total: 0, totalPages: 1 },
-        }),
-        findByEntity: jest.fn().mockResolvedValue([]),
-        findByUser: jest.fn().mockResolvedValue([]),
-      } as any, // activityLog
     );
 
     return { service, store, outbox, settlementRepo };
