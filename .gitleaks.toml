@@ -13,6 +13,13 @@ paths = [
   '''\.env\.example$''',
   '''\.gitleaks\.toml$''',
   '''docs/.*''',
+  # Unit/e2e test fixtures use throwaway fake credentials (e.g. 'valid-key-123'
+  # in partner-api-key.guard.spec.ts) — not live secrets, so they must not fail
+  # the secret-scan gate. Real credentials belong in config, never in tests.
+  '''.*\.spec\.ts$''',
+  '''.*\.spec\.tsx$''',
+  '''.*\.test\.ts$''',
+  '''.*\.test\.tsx$''',
 ]
 # The __REPLACE_WITH...__ template markers and known example tokens are not
 # live credentials — only real values in real config files should fail CI.
