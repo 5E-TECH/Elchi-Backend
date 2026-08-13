@@ -590,9 +590,12 @@ export class FinanceServiceService implements OnModuleInit {
       });
 
       if (exists) {
-        throw new BadRequestException(
-          'Cashbox already exists for this user and type',
-        );
+        // Idempotent: a cashbox for this (user, type) already exists. Return it
+        // instead of throwing — an RMQ redelivery/retry of a create (e.g. the
+        // manager-create flow whose branch cashbox was already provisioned when
+        // the branch was created) must NOT 500. Callers that want create-if-
+        // absent semantics (ensureUserCashbox) rely on this. (Live-E2E fix.)
+        return this.successRes(exists, 200, 'Cashbox already exists');
       }
 
       const balanceCash = Number(dto.balance_cash ?? 0);
