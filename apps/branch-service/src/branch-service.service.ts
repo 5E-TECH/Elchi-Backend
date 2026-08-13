@@ -2628,6 +2628,10 @@ export class BranchServiceService implements OnModuleInit {
           const courierTariffs = courierTariffMap.get(courierId);
           const savedCourierShare = Number(order?.courier_share ?? NaN);
           const savedCourierTariff = Number(order?.courier_tariff ?? NaN);
+          const savedBranchShare = Number(order?.branch_share ?? NaN);
+          const hasSavedShares =
+            Number.isFinite(savedCourierShare) ||
+            Number.isFinite(savedCourierTariff);
           const courierShare = Number.isFinite(savedCourierShare)
             ? Math.max(savedCourierShare, 0)
             : Number.isFinite(savedCourierTariff)
@@ -2635,11 +2639,26 @@ export class BranchServiceService implements OnModuleInit {
               : isCenter
                 ? Number(courierTariffs?.center ?? 0)
                 : Number(courierTariffs?.home ?? 0);
+          const branchShare = Number.isFinite(savedBranchShare)
+            ? Math.max(savedBranchShare, 0)
+            : 0;
+
+          // What the branch owes HQ = total − (kept below HQ). Prefer the order's
+          // SAVED shares (courier_share + branch_share) — the same source
+          // courierReceivable uses and identical to order_settlement.branch_amount
+          // — so the receivable matches the actual branch→HQ settlement. The
+          // manager-tariff estimate is only a fallback for orders with no saved
+          // shares; relying on it made olinishi_kerak overstate the branch→HQ
+          // debt by the courier's share whenever the manager tariff was left
+          // unconfigured (≠ courier share). (Live-E2E fix.)
+          const hqPayable = hasSavedShares
+            ? Math.max(totalPrice - courierShare - branchShare, 0)
+            : Math.max(totalPrice - managerTariff, 0);
 
           return {
             courierId,
             courierReceivable: Math.max(totalPrice - courierShare, 0),
-            hqPayable: Math.max(totalPrice - managerTariff, 0),
+            hqPayable,
           };
         };
 
