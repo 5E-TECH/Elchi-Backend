@@ -14,6 +14,7 @@ import {
   EntityManager,
   FindOptionsWhere,
   In,
+  IsNull,
   LessThanOrEqual,
   MoreThanOrEqual,
   QueryFailedError,
@@ -757,23 +758,32 @@ export class FinanceServiceService implements OnModuleInit {
         );
 
         // Idempotency: if a history row already exists for the same business
-        // event (cashbox + source_type + source_id + operation_type), this is
-        // a duplicate RMQ delivery — skip the balance mutation and return the
-        // already-applied state. The pessimistic lock above guarantees we see
-        // committed history from earlier deliveries.
-        if (dto.source_id) {
+        // event (cashbox + source_type + operation_type + source_id +
+        // dedup_epoch), this is a duplicate delivery — skip the balance mutation
+        // and return the already-applied state. The pessimistic lock above
+        // guarantees we see committed history from earlier deliveries.
+        //
+        // Two shapes:
+        //  - system legs (sale/settlement/transfer): a real NUMERIC source_id
+        //    (+ optional dedup_epoch). The DB unique index backstops this.
+        //  - manual spend/fill: no business id — source_id stays NULL (it's a
+        //    bigint column; the gateway's free-form dedup_epoch token cannot be
+        //    written there) and we dedupe on the token alone. There is no DB
+        //    index backstop for NULL source_id (the index is partial, WHERE
+        //    source_id IS NOT NULL), so the cashbox row lock is what makes this
+        //    pre-check safe against a concurrent same-cashbox double-submit.
+        const dedupToken = String(dto.dedup_epoch ?? '');
+        if (dto.source_id != null || dedupToken.length > 0) {
           const existingHistory = await queryRunner.manager.findOne(
             CashboxHistory,
             {
               where: {
                 cashbox_id: String(cashbox.id),
                 source_type: dto.source_type,
-                source_id: String(dto.source_id),
                 operation_type: dto.operation_type,
-                // Must mirror the IDX_CASHBOX_HISTORY_IDEMPOTENT key exactly,
-                // else a fresh attempt (new epoch) would match a prior row and
-                // be wrongly skipped.
-                dedup_epoch: String(dto.dedup_epoch ?? ''),
+                source_id:
+                  dto.source_id != null ? String(dto.source_id) : IsNull(),
+                dedup_epoch: dedupToken,
               },
             },
           );
@@ -1608,11 +1618,11 @@ export class FinanceServiceService implements OnModuleInit {
         comment: data.comment,
         created_by: data.created_by ?? data.user_id,
         cashbox_type: targetCashboxType,
-        // Server-derived idempotency token (from the gateway). Carrying it as
-        // both source_id and dedup_epoch engages the partial-unique history
-        // index so an accidental double-submit of the same manual expense moves
-        // cash at most once. Absent token → NULL source_id → prior behaviour.
-        source_id: data.dedup_epoch || undefined,
+        // Idempotency for a manual expense is keyed on the gateway's dedup_epoch
+        // token ONLY. source_id stays NULL — it is a bigint column and the token
+        // is a free-form hex/idempotency-key string, so writing it there throws.
+        // updateBalance's pre-check dedupes on the token (serialised by the
+        // cashbox row lock). Absent token → no dedup (prior behaviour).
         dedup_epoch: data.dedup_epoch,
       });
       await this.activityLog.log({
@@ -1657,9 +1667,8 @@ export class FinanceServiceService implements OnModuleInit {
         comment: data.comment,
         created_by: data.created_by ?? data.user_id,
         cashbox_type: targetCashboxType,
-        // Server-derived idempotency token (see spendMoney) — dedupes an
-        // accidental double-submit of the same manual income/fill.
-        source_id: data.dedup_epoch || undefined,
+        // Idempotency keyed on the dedup_epoch token only (see spendMoney) —
+        // source_id stays NULL (bigint column can't hold the free-form token).
         dedup_epoch: data.dedup_epoch,
       });
       await this.activityLog.log({

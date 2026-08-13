@@ -816,7 +816,7 @@ describe('FinanceServiceService manual branch cashbox operations', () => {
     );
   });
 
-  it('carries a supplied dedup token as source_id + dedup_epoch so a double-submit is idempotent', async () => {
+  it('carries the dedup token in dedup_epoch ONLY (not the bigint source_id)', async () => {
     const manager = makeManager();
     const { service } = makeService(manager);
     const updateBalance = jest
@@ -830,16 +830,53 @@ describe('FinanceServiceService manual branch cashbox operations', () => {
       dedup_epoch: 'tok-abc',
     });
 
-    // The token is carried as BOTH source_id and dedup_epoch so the partial
-    // unique history index (source_id IS NOT NULL) dedupes an accidental
-    // double-submit of the same manual expense (Audit money P1).
-    expect(updateBalance).toHaveBeenCalledWith(
-      expect.objectContaining({
-        source_id: 'tok-abc',
-        dedup_epoch: 'tok-abc',
-        source_type: 'manual_expense',
-      }),
-    );
+    // The gateway's free-form idempotency token goes ONLY into dedup_epoch (a
+    // varchar). It must NOT be written to source_id — that is a BIGINT column,
+    // so a hex/idempotency-key token there throws "invalid input syntax for
+    // bigint" and 500s every manual spend/fill. Idempotency is enforced by
+    // updateBalance's token pre-check under the cashbox row lock.
+    const arg = updateBalance.mock.calls[0][0] as any;
+    expect(arg.dedup_epoch).toBe('tok-abc');
+    expect(arg.source_id).toBeUndefined();
+    expect(arg.source_type).toBe('manual_expense');
+  });
+
+  it('updateBalance dedupes a manual op on dedup_epoch alone (source_id NULL)', async () => {
+    const cashbox = {
+      id: '10',
+      balance: 100,
+      balance_cash: 100,
+      balance_card: 0,
+      user_id: '7',
+      cashbox_type: 'main',
+    };
+    const priorHistory = { id: 'h-1', amount: 50000 };
+    // 1st findOne = cashbox lookup, 2nd = the idempotency pre-check (must run
+    // even though source_id is absent, because a dedup_epoch token is present).
+    const manager = makeManager({
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce(cashbox)
+        .mockResolvedValueOnce(priorHistory),
+    });
+    const { service, queryRunner } = makeService(manager);
+
+    const res: any = await service.updateBalance({
+      cashbox_id: '10',
+      amount: 50000,
+      operation_type: 'expense' as any,
+      source_type: 'manual_expense' as any,
+      dedup_epoch: 'tok-abc',
+      // no source_id — manual op
+    } as any);
+
+    // pre-check ran (2 findOne) and found the prior row → idempotent skip
+    expect(manager.findOne).toHaveBeenCalledTimes(2);
+    expect(res.data.idempotent).toBe(true);
+    expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+    // the pre-check matched on source_id IS NULL + the token, not a bigint value
+    const where = (manager.findOne.mock.calls[1][1] as any).where;
+    expect(where.dedup_epoch).toBe('tok-abc');
   });
 });
 
