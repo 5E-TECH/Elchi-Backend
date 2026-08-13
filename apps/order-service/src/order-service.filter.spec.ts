@@ -1,4 +1,6 @@
 import { OrderServiceService } from './order-service.service';
+import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+import { OrderAnalyticsService } from './analytics/order-analytics.service';
 
 describe('OrderServiceService filters', () => {
   function setup() {
@@ -74,9 +76,94 @@ describe('OrderServiceService filters', () => {
         findByEntity: jest.fn().mockResolvedValue([]),
         findByUser: jest.fn().mockResolvedValue([]),
       } as any, // activityLog
+      {
+        getHqBranchId: jest.fn().mockResolvedValue('1'),
+        getMarketsByIds: jest.fn().mockResolvedValue([]),
+        getCouriersByIds: jest.fn().mockResolvedValue([]),
+        getUserById: jest.fn().mockResolvedValue(null),
+        getCashboxByUser: jest.fn().mockResolvedValue(null),
+        resolveBranchShare: jest.fn().mockResolvedValue(0),
+        ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
+        resolveSettlementBranchId: jest.fn().mockResolvedValue(null),
+        getIntegrationById: jest.fn().mockResolvedValue(null),
+        getDefaultDistrictId: jest.fn().mockResolvedValue(null),
+        resolveDistrictId: jest.fn().mockResolvedValue(null),
+      } as any, // lookup (OrderLookupService)
     );
 
-    return { service, qb, trackingQb, custodyQb };
+    const lifecycle = new OrderLifecycleService(
+      {} as any,
+      // dataSource
+      orderRepo as any,
+      // orderRepo
+      {} as any,
+      // orderItemRepo
+      orderTrackingRepo as any,
+      // orderTrackingRepo
+      orderCustodyEventRepo as any,
+      // orderCustodyEventRepo
+      {} as any,
+      // transferBatchRepo
+      {} as any,
+      // searchClient
+      {} as any,
+      // identityClient
+      {} as any,
+      // catalogClient
+      {} as any,
+      // financeClient
+      {} as any,
+      // integrationClient
+      {} as any,
+      // branchClient
+      {} as any,
+      // fileClient
+      {} as any,
+      // outbox
+      {
+        log: jest.fn().mockResolvedValue(undefined),
+        logChange: jest.fn().mockResolvedValue(undefined),
+        query: jest.fn().mockResolvedValue({
+          items: [],
+          meta: { page: 1, limit: 50, total: 0, totalPages: 1 },
+        }),
+        findByEntity: jest.fn().mockResolvedValue([]),
+        findByUser: jest.fn().mockResolvedValue([]),
+      } as any,
+      // activityLog
+      {
+        getHqBranchId: jest.fn().mockResolvedValue('1'),
+        getMarketsByIds: jest.fn().mockResolvedValue([]),
+        getCouriersByIds: jest.fn().mockResolvedValue([]),
+        getUserById: jest.fn().mockResolvedValue(null),
+        getCashboxByUser: jest.fn().mockResolvedValue(null),
+        resolveBranchShare: jest.fn().mockResolvedValue(0),
+        ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
+        resolveSettlementBranchId: jest.fn().mockResolvedValue(null),
+        getIntegrationById: jest.fn().mockResolvedValue(null),
+        getDefaultDistrictId: jest.fn().mockResolvedValue(null),
+        resolveDistrictId: jest.fn().mockResolvedValue(null),
+      } as any,
+      // lookup (OrderLookupService),
+    );
+
+    // Read-only analytics methods now live in OrderAnalyticsService; it shares
+    // the same order/tracking/custody repo mocks so the scope/count assertions
+    // still exercise the real query-building logic.
+    const analytics = new OrderAnalyticsService(
+      orderRepo as any,
+      orderTrackingRepo as any,
+      orderCustodyEventRepo as any,
+      {} as any, // identityClient
+      {} as any, // branchClient
+      {} as any, // logisticsClient
+      {
+        getMarketsByIds: jest.fn().mockResolvedValue([]),
+        getCouriersByIds: jest.fn().mockResolvedValue([]),
+      } as any, // lookup (OrderLookupService)
+    );
+
+    return { service, lifecycle, analytics, qb, trackingQb, custodyQb };
   }
 
   it('filters by source=BRANCH and branch/home branch scope', async () => {
@@ -188,9 +275,7 @@ describe('OrderServiceService filters', () => {
       { courier_ids: ['77'] },
     );
     expect(nested.orWhere).toHaveBeenCalledWith(
-      expect.stringContaining(
-        'WHERE courier_history.order_id = "order"."id"',
-      ),
+      expect.stringContaining('WHERE courier_history.order_id = "order"."id"'),
       { courier_ids: ['77'] },
     );
   });
@@ -256,9 +341,9 @@ describe('OrderServiceService filters', () => {
   });
 
   it('credits the full order amount to branch cashbox for manager-direct sales', () => {
-    const { service } = setup();
+    const { lifecycle } = setup();
 
-    const amount = (service as any).resolveBranchCashboxSaleAmount(
+    const amount = (lifecycle as any).resolveBranchCashboxSaleAmount(
       1_000_000,
       950_000,
       true,
@@ -268,9 +353,9 @@ describe('OrderServiceService filters', () => {
   });
 
   it('keeps the existing tariff-adjusted branch amount for courier sales', () => {
-    const { service } = setup();
+    const { lifecycle } = setup();
 
-    const amount = (service as any).resolveBranchCashboxSaleAmount(
+    const amount = (lifecycle as any).resolveBranchCashboxSaleAmount(
       1_000_000,
       940_000,
       false,
@@ -280,9 +365,9 @@ describe('OrderServiceService filters', () => {
   });
 
   it('always deducts manager tariff from the amount payable to HQ', () => {
-    const { service } = setup();
+    const { lifecycle } = setup();
 
-    const managerShare = (service as any).resolveSaleActorShare(
+    const managerShare = (lifecycle as any).resolveSaleActorShare(
       true,
       { compensation_mode: 'salary_only' },
       50_000,
@@ -292,18 +377,16 @@ describe('OrderServiceService filters', () => {
   });
 
   it('scopes analytics to branch and includes courier-held branch orders', () => {
-    const { service, qb } = setup();
+    const { analytics, qb } = setup();
 
-    const result = (service as any).applyAnalyticsBranchScope(qb, '16');
+    const result = (analytics as any).applyAnalyticsBranchScope(qb, '16');
 
     expect(result).toBe(qb);
     const analyticsScope = qb.andWhere.mock.calls.find(
       ([value]) =>
         typeof value === 'string' && value.includes('analyticsBranchId'),
     );
-    expect(analyticsScope?.[0]).toContain(
-      'o.branch_id = :analyticsBranchId',
-    );
+    expect(analyticsScope?.[0]).toContain('o.branch_id = :analyticsBranchId');
     expect(analyticsScope?.[0]).toContain(
       'o.holder_branch_id = :analyticsBranchId',
     );
@@ -312,14 +395,14 @@ describe('OrderServiceService filters', () => {
   });
 
   it('counts dashboard accepted orders only from branch batch receive events', async () => {
-    const { service, trackingQb } = setup();
+    const { analytics, trackingQb } = setup();
     const range = {
       start: new Date('2026-07-22T19:00:00.000Z'),
       end: new Date('2026-07-23T18:59:59.999Z'),
     };
     trackingQb.getRawOne.mockResolvedValue({ count: '3' });
 
-    const count = await (service as any).countBranchBatchAcceptedOrders(
+    const count = await (analytics as any).countBranchBatchAcceptedOrders(
       range,
       '16',
     );
@@ -338,9 +421,9 @@ describe('OrderServiceService filters', () => {
   });
 
   it('excludes courier cancellations from branch dashboard cancelled totals', async () => {
-    const { service, trackingQb } = setup();
+    const { analytics, trackingQb } = setup();
 
-    await (service as any).countHistoricallyCancelledOrders(
+    await (analytics as any).countHistoricallyCancelledOrders(
       {
         start: new Date('2026-07-22T19:00:00.000Z'),
         end: new Date('2026-07-23T18:59:59.999Z'),
@@ -359,14 +442,15 @@ describe('OrderServiceService filters', () => {
   });
 
   it('scopes courier dashboard totals by assignment date instead of update date', async () => {
-    const { service, qb } = setup();
+    const { analytics, qb } = setup();
 
     jest
-      .spyOn(service as any, 'getAllPostsForAnalytics')
+      .spyOn(analytics as any, 'getAllPostsForAnalytics')
       .mockResolvedValue([{ id: 'post-1', courier_id: '77' }]);
-    jest.spyOn(service as any, 'getCouriersByIds').mockResolvedValue([]);
+    // getCouriersByIds now lives in the injected OrderLookupService mock
+    // (returns [] by default), so no local spy is needed.
 
-    await service.getCourierStat(
+    await analytics.getCourierStat(
       '77',
       '2026-07-01T00:00:00.000Z',
       '2026-07-31T23:59:59.999Z',
@@ -383,5 +467,41 @@ describe('OrderServiceService filters', () => {
       'o.updatedAt BETWEEN :start AND :end',
       expect.anything(),
     );
+  });
+
+  // Audit (unbounded query): getRevenueStats/getMarketStat load individual
+  // order rows for the range and aggregate in JS. analyticsDateRange must cap
+  // the span so a pathologically-wide range can't pull the whole orders table.
+  describe('analytics date-span cap', () => {
+    const DAY = 24 * 60 * 60 * 1000;
+    const MAX_SPAN = 768 * DAY;
+
+    const revenueSpanMs = (qb: any): number => {
+      const call = qb.andWhere.mock.calls.find(
+        (c: any[]) =>
+          typeof c[0] === 'string' && c[0].includes('o.sold_at BETWEEN'),
+      );
+      expect(call).toBeDefined();
+      const { startMs, endMs } = call[1];
+      return Number(endMs) - Number(startMs);
+    };
+
+    it('clamps a 30-year revenue range to the max span', async () => {
+      const { analytics, qb } = setup();
+      await analytics.getRevenueStats('2000-01-01', '2030-01-01', 'monthly');
+      const span = revenueSpanMs(qb);
+      expect(span).toBeLessThanOrEqual(MAX_SPAN);
+      // clamped to (approximately) the cap, not something tiny
+      expect(span).toBeGreaterThan(MAX_SPAN - 2 * DAY);
+    });
+
+    it('leaves a normal 30-day range untouched', async () => {
+      const { analytics, qb } = setup();
+      await analytics.getRevenueStats('2026-01-01', '2026-01-31', 'daily');
+      const span = revenueSpanMs(qb);
+      // ~30 days (end is end-of-day, so a touch over 30*DAY) — well under cap
+      expect(span).toBeGreaterThan(29 * DAY);
+      expect(span).toBeLessThan(32 * DAY);
+    });
   });
 });

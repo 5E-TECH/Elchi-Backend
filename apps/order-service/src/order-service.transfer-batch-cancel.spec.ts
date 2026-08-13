@@ -1,11 +1,12 @@
 import { RpcException } from '@nestjs/microservices';
 import { BranchTransferBatchStatus } from '@app/common';
-import { OrderServiceService } from './order-service.service';
+import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
+import { OrderCustodyService } from './custody/order-custody.service';
 import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
 import { Order } from './entities/order.entity';
 import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
 
-describe('OrderServiceService transfer batch cancel', () => {
+describe('BranchTransferBatchService transfer batch cancel', () => {
   function createSetup(status: BranchTransferBatchStatus) {
     const batchRepo = {
       findOne: jest.fn().mockResolvedValue({
@@ -27,6 +28,9 @@ describe('OrderServiceService transfer batch cancel', () => {
       execute: jest.fn().mockResolvedValue({ affected: 3 }),
     };
     const orderRepo = {
+      // cancelBranchTransferBatch reads the batch's orders (to decide whether a
+      // FORWARD batch should re-queue them) before the bulk unassign update.
+      find: jest.fn().mockResolvedValue([]),
       createQueryBuilder: jest.fn().mockReturnValue(orderUpdateQb),
     };
 
@@ -40,31 +44,25 @@ describe('OrderServiceService transfer batch cancel', () => {
         getRepository: jest.fn((entity: { name: string }) => {
           if (entity.name === BranchTransferBatch.name) return batchRepo;
           if (entity.name === Order.name) return orderRepo;
-          if (entity.name === BranchTransferBatchHistory.name) return historyRepo;
+          if (entity.name === BranchTransferBatchHistory.name)
+            return historyRepo;
           return {};
         }),
       },
     };
 
-    const service = new OrderServiceService(
+    // cancelBranchTransferBatch reaches its repos via
+    // queryRunner.manager.getRepository, so only dataSource + activityLog need
+    // real mocks in the 8-arg BranchTransferBatchService constructor.
+    const custody = new OrderCustodyService({} as any, {} as any);
+    const service = new BranchTransferBatchService(
       { createQueryRunner: jest.fn(() => queryRunner) } as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any,
-      {} as any, // integrationClient
-      {} as any, // branchClient
-      {} as any, // fileClient
-      {} as any, // outbox
+      {} as any, // transferBatchRepo
+      {} as any, // transferBatchItemRepo
+      {} as any, // transferBatchHistoryRepo
+      {} as any, // orderRepo
+      {} as any, // orderTrackingRepo
+      {} as any, // orderCustodyEventRepo
       {
         log: jest.fn().mockResolvedValue(undefined),
         logChange: jest.fn().mockResolvedValue(undefined),
@@ -75,6 +73,7 @@ describe('OrderServiceService transfer batch cancel', () => {
         findByEntity: jest.fn().mockResolvedValue([]),
         findByUser: jest.fn().mockResolvedValue([]),
       } as any, // activityLog
+      custody as any, // OrderCustodyService
     );
 
     return { service, batchRepo, historyRepo, orderUpdateQb, queryRunner };
@@ -104,7 +103,9 @@ describe('OrderServiceService transfer batch cancel', () => {
   });
 
   it('rejects cancel when batch is RECEIVED', async () => {
-    const { service, queryRunner } = createSetup(BranchTransferBatchStatus.RECEIVED);
+    const { service, queryRunner } = createSetup(
+      BranchTransferBatchStatus.RECEIVED,
+    );
 
     await expect(
       service.cancelBranchTransferBatch({

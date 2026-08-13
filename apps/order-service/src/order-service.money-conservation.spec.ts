@@ -17,29 +17,26 @@
  *
  * Conservation identity (the whole COD splits with no remainder):
  *   marketReceivable + courierKept + branchKept + hqProfit === total
+ *
+ * Audit P1 fix: the split legs are now computed by the REAL production formula
+ * (./domain/order-money) via computeSaleLegs, not a re-implementation, so a
+ * regression in the actual money math is caught here instead of passing against
+ * a copy of itself.
  */
+import {
+  computeSaleLegs,
+  computeSellProfit,
+  resolveCourierShare,
+  resolveSaleActorShare,
+} from './domain/order-money';
+import { CourierCompensationMode } from '@app/common';
 
 const round2 = (n: number): number => Math.round(n * 100) / 100;
 
-interface SaleInputs {
-  total: number;
-  marketTariff: number;
-  courierShare: number;
-  branchShare: number;
-}
+type SaleInputs = Parameters<typeof computeSaleLegs>[0];
 
-function legs(i: SaleInputs) {
-  return {
-    marketReceivable: round2(i.total - i.marketTariff),
-    courierKept: round2(i.courierShare),
-    branchKept: round2(i.branchShare),
-    hqProfit: round2(i.marketTariff - i.courierShare - i.branchShare),
-    // order_settlement "owed up-chain" amounts, consumed at each FIFO hop.
-    courierAmount: round2(i.total - i.courierShare),
-    branchAmount: round2(i.total - i.courierShare - i.branchShare),
-    marketAmount: round2(i.total - i.marketTariff),
-  };
-}
+// Now backed by the production formula (was a local re-implementation).
+const legs = (i: SaleInputs) => computeSaleLegs(i);
 
 describe('COD money conservation (Faza 3)', () => {
   // Deterministic pseudo-random inputs (no Math.random — reproducible).
@@ -75,9 +72,13 @@ describe('COD money conservation (Faza 3)', () => {
     for (const i of cases()) {
       const l = legs(i);
       // What the courier keeps = total − what they owe up the chain.
-      expect(Math.abs(i.total - l.courierAmount - l.courierKept)).toBeLessThanOrEqual(0.01);
+      expect(
+        Math.abs(i.total - l.courierAmount - l.courierKept),
+      ).toBeLessThanOrEqual(0.01);
       // Branch keeps the difference between the courier and branch owed legs.
-      expect(Math.abs(l.courierAmount - l.branchAmount - l.branchKept)).toBeLessThanOrEqual(0.01);
+      expect(
+        Math.abs(l.courierAmount - l.branchAmount - l.branchKept),
+      ).toBeLessThanOrEqual(0.01);
     }
   });
 
@@ -90,5 +91,50 @@ describe('COD money conservation (Faza 3)', () => {
       // With shares drawn from within the tariff, HQ never goes negative here.
       expect(l.hqProfit).toBeGreaterThanOrEqual(-0.01);
     }
+  });
+});
+
+describe('order-money share/profit primitives', () => {
+  it('computeSellProfit = marketTariff − courierShare − branchShare', () => {
+    expect(computeSellProfit(1000, 300, 100)).toBe(600);
+    expect(computeSellProfit(500, 500, 0)).toBe(0);
+    // Not rounded — matches the finance ledger write byte-for-byte.
+    expect(computeSellProfit(100.05, 0, 0)).toBe(100.05);
+  });
+
+  it('resolveCourierShare: SALARY_ONLY keeps nothing, others keep the tariff', () => {
+    expect(
+      resolveCourierShare(
+        { compensation_mode: CourierCompensationMode.SALARY_ONLY },
+        5000,
+      ),
+    ).toBe(0);
+    expect(
+      resolveCourierShare(
+        { compensation_mode: CourierCompensationMode.PER_ORDER },
+        5000,
+      ),
+    ).toBe(5000);
+    // Unknown / legacy courier defaults to keeping the tariff.
+    expect(resolveCourierShare(null, 5000)).toBe(5000);
+    expect(resolveCourierShare({}, 5000)).toBe(5000);
+  });
+
+  it('resolveSaleActorShare: a manager sale keeps the full tariff', () => {
+    expect(
+      resolveSaleActorShare(
+        true,
+        { compensation_mode: CourierCompensationMode.SALARY_ONLY },
+        5000,
+      ),
+    ).toBe(5000);
+    // A courier sale falls back to their compensation-mode share.
+    expect(
+      resolveSaleActorShare(
+        false,
+        { compensation_mode: CourierCompensationMode.SALARY_ONLY },
+        5000,
+      ),
+    ).toBe(0);
   });
 });

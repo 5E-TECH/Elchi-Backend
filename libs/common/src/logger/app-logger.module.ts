@@ -32,6 +32,30 @@ export class AppLoggerModule {
     const pinoParams: Params = {
       pinoHttp: {
         level,
+        // Defense-in-depth PII/secret redaction (Audit observability P1: no
+        // redaction was configured). Covers both top-level and one-level-nested
+        // sensitive fields in any logged object. Non-existent paths are no-ops.
+        redact: {
+          paths: [
+            'req.headers.authorization',
+            'req.headers.cookie',
+            'password',
+            '*.password',
+            'token',
+            '*.token',
+            '*.access_token',
+            '*.refresh_token',
+            'secret',
+            '*.secret',
+            '*.api_key',
+            '*.apiKey',
+            '*.webhook_secret',
+            '*.pinfl',
+            '*.card_number',
+            '*.phone_number',
+          ],
+          censor: '[REDACTED]',
+        },
         // x-request-id roundtrips through gateway → RMQ → service; if absent,
         // generate one so every line still has a correlation key.
         genReqId: (req: IncomingMessage) => {
@@ -53,7 +77,11 @@ export class AppLoggerModule {
         },
         customProps: () => ({ service: options.serviceName }),
         // Reduce noise from successful health/metric probes
-        customLogLevel: (_req: IncomingMessage, res: ServerResponse, err?: Error) => {
+        customLogLevel: (
+          _req: IncomingMessage,
+          res: ServerResponse,
+          err?: Error,
+        ) => {
           if (err || res.statusCode >= 500) return 'error';
           if (res.statusCode >= 400) return 'warn';
           return 'info';

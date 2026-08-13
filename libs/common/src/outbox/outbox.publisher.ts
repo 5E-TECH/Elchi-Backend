@@ -12,16 +12,20 @@ import { firstValueFrom, timeout } from 'rxjs';
 import { OutboxService } from './outbox.service';
 import { OUTBOX_OPTIONS, OUTBOX_TARGETS } from './tokens';
 import type { OutboxOptions } from './tokens';
+import { captureException } from '../sentry/sentry.helper';
 
 @Injectable()
 export class OutboxPublisher implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(OutboxPublisher.name);
   private readonly clients = new Map<string, ClientProxy>();
   private intervalHandle?: NodeJS.Timeout;
+  private failedAlertHandle?: NodeJS.Timeout;
   private isProcessing = false;
+  private lastFailedCount = 0;
   private readonly pollIntervalMs: number;
   private readonly batchSize: number;
   private readonly publishTimeoutMs: number;
+  private readonly failedAlertIntervalMs: number;
 
   constructor(
     private readonly moduleRef: ModuleRef,
@@ -32,26 +36,62 @@ export class OutboxPublisher implements OnModuleInit, OnModuleDestroy {
     this.pollIntervalMs = options?.pollIntervalMs ?? 1000;
     this.batchSize = options?.batchSize ?? 50;
     this.publishTimeoutMs = options?.publishTimeoutMs ?? 5000;
+    this.failedAlertIntervalMs = options?.failedAlertIntervalMs ?? 60_000;
   }
 
   async onModuleInit(): Promise<void> {
     for (const target of this.targets) {
       try {
-        const client = this.moduleRef.get<ClientProxy>(target, { strict: false });
+        const client = this.moduleRef.get<ClientProxy>(target, {
+          strict: false,
+        });
         if (client) this.clients.set(target, client);
       } catch {
-        this.logger.warn(`Outbox target '${target}' not registered in this module`);
+        this.logger.warn(
+          `Outbox target '${target}' not registered in this module`,
+        );
       }
     }
 
-    this.intervalHandle = setInterval(() => this.scheduleTick(), this.pollIntervalMs);
+    this.intervalHandle = setInterval(
+      () => this.scheduleTick(),
+      this.pollIntervalMs,
+    );
+    this.failedAlertHandle = setInterval(
+      () => void this.checkFailedEvents(),
+      this.failedAlertIntervalMs,
+    );
     this.logger.log(
-      `Outbox publisher started: targets=[${this.targets.join(',')}], interval=${this.pollIntervalMs}ms`,
+      `Outbox publisher started: targets=[${this.targets.join(',')}], interval=${this.pollIntervalMs}ms, failedAlert=${this.failedAlertIntervalMs}ms`,
     );
   }
 
   onModuleDestroy(): void {
     if (this.intervalHandle) clearInterval(this.intervalHandle);
+    if (this.failedAlertHandle) clearInterval(this.failedAlertHandle);
+  }
+
+  /**
+   * Surface terminal FAILED (poison) outbox events. They are never retried and
+   * are invisible to getDuePending, so without this a stuck money/state event
+   * would sit silently forever. Logs at error level every interval while any
+   * exist, and raises a Sentry alert only when the count CHANGES so Sentry is
+   * not flooded. (Audit resilience/observability P1.)
+   */
+  private async checkFailedEvents(): Promise<void> {
+    try {
+      const failed = await this.outbox.countFailed();
+      if (failed > 0) {
+        const message = `Outbox has ${failed} FAILED (poison) event(s) — money/state delivery is stuck; inspect outbox_events WHERE status='failed'`;
+        this.logger.error(message);
+        if (failed !== this.lastFailedCount) {
+          captureException(new Error(message), { outbox_failed_count: failed });
+        }
+      }
+      this.lastFailedCount = failed;
+    } catch (error) {
+      this.logger.error('Outbox failed-events check failed', error as Error);
+    }
   }
 
   private scheduleTick(): void {

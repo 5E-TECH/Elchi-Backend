@@ -25,11 +25,14 @@ import {
 import { Throttle } from '@nestjs/throttler';
 import type { Request, Response } from 'express';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { Public } from './auth/public.decorator';
 
 // Decorator metadata evaluates at class load — read env directly so the values
 // pick up the same .env defaults that gatewayValidationSchema declares.
 const AUTH_THROTTLE_LIMIT = Number(process.env.AUTH_THROTTLE_LIMIT ?? '10');
-const AUTH_THROTTLE_TTL_MS = Number(process.env.AUTH_THROTTLE_TTL_MS ?? '60000');
+const AUTH_THROTTLE_TTL_MS = Number(
+  process.env.AUTH_THROTTLE_TTL_MS ?? '60000',
+);
 const AUTH_THROTTLE = {
   default: { limit: AUTH_THROTTLE_LIMIT, ttl: AUTH_THROTTLE_TTL_MS },
 };
@@ -49,7 +52,9 @@ interface JwtUser {
 @ApiTags('Auth')
 @Controller('auth')
 export class AuthGatewayController {
-  constructor(@Inject('IDENTITY') private readonly identityClient: ClientProxy) {}
+  constructor(
+    @Inject('IDENTITY') private readonly identityClient: ClientProxy,
+  ) {}
 
   private static readonly REFRESH_COOKIE_NAME = 'refreshToken';
   private static readonly FALLBACK_REFRESH_TTL_MS = 7 * 24 * 60 * 60 * 1000;
@@ -109,7 +114,8 @@ export class AuthGatewayController {
     const now = Date.now();
     const maxAge = Math.max(
       1,
-      (expiresAtMs ?? now + AuthGatewayController.FALLBACK_REFRESH_TTL_MS) - now,
+      (expiresAtMs ?? now + AuthGatewayController.FALLBACK_REFRESH_TTL_MS) -
+        now,
     );
 
     res.cookie(AuthGatewayController.REFRESH_COOKIE_NAME, refreshToken, {
@@ -177,6 +183,7 @@ export class AuthGatewayController {
   }
 
   @Throttle(AUTH_THROTTLE)
+  @Public()
   @Post('login')
   @ApiOperation({ summary: 'Login with phone number and password' })
   @ApiBody({ type: LoginRequestDto })
@@ -195,18 +202,21 @@ export class AuthGatewayController {
     )) as Record<string, unknown>;
 
     const refreshToken =
-      typeof response.refreshToken === 'string'
-        ? response.refreshToken
-        : null;
+      typeof response.refreshToken === 'string' ? response.refreshToken : null;
 
     if (refreshToken) {
-      this.setRefreshCookie(res, refreshToken, this.getRefreshExpiryMs(response));
+      this.setRefreshCookie(
+        res,
+        refreshToken,
+        this.getRefreshExpiryMs(response),
+      );
     }
 
     return this.sanitizeAuthPayload(response);
   }
 
   @Throttle(AUTH_THROTTLE)
+  @Public()
   @Post('refresh')
   @ApiOperation({ summary: 'Refresh access token' })
   @ApiBody({ type: RefreshRequestDto })
@@ -236,12 +246,14 @@ export class AuthGatewayController {
     )) as Record<string, unknown>;
 
     const nextRefreshToken =
-      typeof response.refreshToken === 'string'
-        ? response.refreshToken
-        : null;
+      typeof response.refreshToken === 'string' ? response.refreshToken : null;
 
     if (nextRefreshToken) {
-      this.setRefreshCookie(res, nextRefreshToken, this.getRefreshExpiryMs(response));
+      this.setRefreshCookie(
+        res,
+        nextRefreshToken,
+        this.getRefreshExpiryMs(response),
+      );
     }
 
     return this.sanitizeAuthPayload(response);

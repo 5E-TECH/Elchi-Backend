@@ -15,6 +15,10 @@ import { JwtStrategy } from './auth/jwt.strategy';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { SelfGuard } from './auth/self.guard';
+import { PartnerApiKeyGuard } from './auth/partner-api-key.guard';
+import { PartnerThrottlerGuard } from './auth/partner-throttler.guard';
+import { PartnerGatewayController } from './partner-gateway.controller';
+import { PartnerAdminGatewayController } from './partner-admin-gateway.controller';
 import { AuthGatewayController } from './auth-gateway.controller';
 import { CatalogGatewayController } from './catalog-gateway.controller';
 import { HealthController } from './health.controller';
@@ -109,6 +113,8 @@ import type { StringValue } from 'ms';
     ExcelGatewayController,
     RealtimeController,
     AuditGatewayController,
+    PartnerGatewayController,
+    PartnerAdminGatewayController,
     HealthController,
     // TODO: Qolgan gateway controllerlarni qo'shish
     // FinanceGatewayController,
@@ -126,9 +132,15 @@ import type { StringValue } from 'ms';
     JwtAuthGuard,
     RolesGuard,
     SelfGuard,
+    PartnerApiKeyGuard,
+    PartnerThrottlerGuard,
     RealtimeGateway,
     AuditEnrichmentService,
     { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Default-deny authentication: every HTTP route requires a valid JWT unless
+    // explicitly marked @Public() (health, login/refresh, HMAC webhooks, public
+    // file view, Partner API which uses its own key guard). (Audit authz P1.)
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
   ],
 })
 export class ApiGatewayModule {}

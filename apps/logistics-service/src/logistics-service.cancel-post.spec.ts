@@ -667,7 +667,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       branchClient as any,
       {} as any,
       {} as any,
-      { log: jest.fn(), query: jest.fn() } as any,
+      { log: jest.fn().mockResolvedValue(undefined), query: jest.fn() } as any,
     );
 
     const response = await service.receiveCanceledPost(
@@ -816,7 +816,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       branchClient as any,
       {} as any,
       {} as any,
-      { log: jest.fn(), query: jest.fn() } as any,
+      { log: jest.fn().mockResolvedValue(undefined), query: jest.fn() } as any,
     );
 
     const response = await service.createCanceledPost(
@@ -872,7 +872,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       branchClient as any,
       {} as any,
       {} as any,
-      { log: jest.fn(), query: jest.fn() } as any,
+      { log: jest.fn().mockResolvedValue(undefined), query: jest.fn() } as any,
     );
 
     await service.createCanceledPost(
@@ -998,7 +998,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       branchClient as any,
       {} as any,
       {} as any,
-      { log: jest.fn(), query: jest.fn() } as any,
+      { log: jest.fn().mockResolvedValue(undefined), query: jest.fn() } as any,
     );
 
     await service.receiveCanceledPost({ id: '1', roles: ['admin'] }, '77', {
@@ -1088,7 +1088,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       branchClient as any,
       {} as any,
       {} as any,
-      { log: jest.fn(), query: jest.fn() } as any,
+      { log: jest.fn().mockResolvedValue(undefined), query: jest.fn() } as any,
     );
 
     const response = await service.receiveCanceledPost(

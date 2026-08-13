@@ -1,5 +1,6 @@
 import { RpcException } from '@nestjs/microservices';
-import { OrderServiceService } from './order-service.service';
+import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+import { OrderCustodyService } from './custody/order-custody.service';
 import { Order_status, BranchTransferBatchStatus, BranchTransferDirection } from '@app/common';
 import { Order, OrderHolderType } from './entities/order.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
@@ -76,19 +77,16 @@ describe('OrderServiceService return flow', () => {
 
     // OrderServiceService konstruktori — 16 ta pozitsion bog'liqlik.
     // Faqat shu test ishlatadigan repolar haqiqiy mock, qolgani {}.
-    const service = new OrderServiceService(
+    const custody = new OrderCustodyService(trackingRepo as any, custodyRepo as any);
+    const service = new OrderLifecycleService(
       { createQueryRunner: jest.fn(() => queryRunner) } as any, // dataSource
       orderRepo as any, // orderRepo
       {} as any, // orderItemRepo
       trackingRepo as any, // orderTrackingRepo
       {} as any, // orderCustodyEventRepo
-      {} as any, // orderSettlementRepo
       {} as any, // transferBatchRepo
-      transferBatchItemRepo as any, // transferBatchItemRepo
-      {} as any, // transferBatchHistoryRepo
-      {} as any, // searchClient
+      transferBatchItemRepo as any, // searchClient
       {} as any, // identityClient
-      {} as any, // logisticsClient
       {} as any, // catalogClient
       {} as any, // financeClient
       {} as any, // integrationClient
@@ -99,6 +97,20 @@ describe('OrderServiceService return flow', () => {
         log: jest.fn().mockResolvedValue(undefined),
         logChange: jest.fn().mockResolvedValue(undefined),
       } as any, // activityLog
+      {
+        getHqBranchId: jest.fn().mockResolvedValue('1'),
+        getMarketsByIds: jest.fn().mockResolvedValue([]),
+        getCouriersByIds: jest.fn().mockResolvedValue([]),
+        getUserById: jest.fn().mockResolvedValue(null),
+        getCashboxByUser: jest.fn().mockResolvedValue(null),
+        resolveBranchShare: jest.fn().mockResolvedValue(0),
+        ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
+        resolveSettlementBranchId: jest.fn().mockResolvedValue(null),
+        getIntegrationById: jest.fn().mockResolvedValue(null),
+        getDefaultDistrictId: jest.fn().mockResolvedValue(null),
+        resolveDistrictId: jest.fn().mockResolvedValue(null),
+      } as any, // lookup (OrderLookupService)
+      custody as any, // OrderCustodyService
     );
 
     return { service, orderRepo, transferBatchItemQb, trackingRepo, queryRunner, outbox };

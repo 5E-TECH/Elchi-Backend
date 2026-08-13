@@ -1,4 +1,4 @@
-import { OrderServiceService } from './order-service.service';
+import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { Roles } from '@app/common';
 
 /**
@@ -18,19 +18,15 @@ describe('OrderServiceService dedup epoch (Faza 1a)', () => {
   function makeService(): OrderServiceService {
     // Pure helper under test — no dependency is touched, so every constructor
     // arg can be a stub. Mirrors the construction in the settlement spec.
-    return new OrderServiceService(
+    return new OrderLifecycleService(
       {} as any, // dataSource
       {} as any, // orderRepo
       {} as any, // orderItemRepo
       {} as any, // orderTrackingRepo
       {} as any, // orderCustodyEventRepo
-      {} as any, // orderSettlementRepo
       {} as any, // transferBatchRepo
-      {} as any, // transferBatchItemRepo
-      {} as any, // transferBatchHistoryRepo
       {} as any, // searchClient
       {} as any, // identityClient
-      {} as any, // logisticsClient
       {} as any, // catalogClient
       {} as any, // financeClient
       {} as any, // integrationClient
@@ -38,6 +34,19 @@ describe('OrderServiceService dedup epoch (Faza 1a)', () => {
       {} as any, // fileClient
       {} as any, // outbox
       {} as any, // activityLog
+      {
+        getHqBranchId: jest.fn().mockResolvedValue('1'),
+        getMarketsByIds: jest.fn().mockResolvedValue([]),
+        getCouriersByIds: jest.fn().mockResolvedValue([]),
+        getUserById: jest.fn().mockResolvedValue(null),
+        getCashboxByUser: jest.fn().mockResolvedValue(null),
+        resolveBranchShare: jest.fn().mockResolvedValue(0),
+        ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
+        resolveSettlementBranchId: jest.fn().mockResolvedValue(null),
+        getIntegrationById: jest.fn().mockResolvedValue(null),
+        getDefaultDistrictId: jest.fn().mockResolvedValue(null),
+        resolveDistrictId: jest.fn().mockResolvedValue(null),
+      } as any, // lookup (OrderLookupService)
     );
   }
 

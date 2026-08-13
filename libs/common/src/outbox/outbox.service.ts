@@ -53,6 +53,15 @@ export class OutboxService {
     });
   }
 
+  /**
+   * Count terminal FAILED (poison) events. These are never retried and are
+   * invisible to getDuePending, so a monitor must surface them or a stuck
+   * money/state event sits silently forever.
+   */
+  async countFailed(): Promise<number> {
+    return this.repo.count({ where: { status: 'failed' } });
+  }
+
   async markPublished(id: string): Promise<void> {
     await this.repo.update(
       { id },
@@ -104,7 +113,11 @@ export class OutboxService {
 
   private attachRequestId(payload: unknown, requestId?: string): unknown {
     const id = requestId ?? randomUUID();
-    if (payload === null || typeof payload !== 'object' || Array.isArray(payload)) {
+    if (
+      payload === null ||
+      typeof payload !== 'object' ||
+      Array.isArray(payload)
+    ) {
       return { value: payload, request_id: id };
     }
     const obj = payload as Record<string, unknown>;

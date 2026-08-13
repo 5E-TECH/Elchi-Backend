@@ -1,14 +1,14 @@
-import {
-  Controller,
-  Get,
-  Inject,
-  Query,
-  Req,
-  UseGuards,
-} from '@nestjs/common';
+import { Controller, Get, Inject, Query, Req, UseGuards } from '@nestjs/common';
+import { timeout } from 'rxjs';
 import { ClientProxy } from '@nestjs/microservices';
-import { ApiBearerAuth, ApiOperation, ApiQuery, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiQuery,
+  ApiTags,
+} from '@nestjs/swagger';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { Public } from './auth/public.decorator';
 
 interface JwtUser {
   sub: string;
@@ -22,10 +22,11 @@ interface JwtUser {
 export class SearchGatewayController {
   constructor(@Inject('SEARCH') private readonly searchClient: ClientProxy) {}
 
+  @Public()
   @Get('health')
   @ApiOperation({ summary: 'Search service health check' })
   health() {
-    return this.searchClient.send({ cmd: 'search.health' }, {});
+    return this.searchClient.send({ cmd: 'search.health' }, {}).pipe(timeout(8000));
   }
 
   @Get()
@@ -59,6 +60,6 @@ export class SearchGatewayController {
           roles: req?.user?.roles ?? [],
         },
       },
-    );
+    ).pipe(timeout(8000));
   }
 }

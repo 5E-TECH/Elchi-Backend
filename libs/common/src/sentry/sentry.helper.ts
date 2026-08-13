@@ -1,6 +1,6 @@
 import * as Sentry from '@sentry/node';
 import { RpcException } from '@nestjs/microservices';
-import { HttpException } from '@nestjs/common';
+import { HttpException, Logger } from '@nestjs/common';
 import { requestContext } from '../context/request-context';
 
 export interface InitSentryOptions {
@@ -16,6 +16,49 @@ export interface InitSentryOptions {
 }
 
 let initialized = false;
+let processHandlersInstalled = false;
+
+/**
+ * Install process-level last-resort handlers (Audit resilience P1: no
+ * unhandledRejection / uncaughtException handler existed in any service).
+ *
+ * - unhandledRejection: log + alert but DO NOT exit. Under Node 20 an unhandled
+ *   rejection would otherwise terminate the whole service; a single rejected
+ *   fire-and-forget promise must not take a money service down.
+ * - uncaughtException: the process state may be corrupt, so log + alert, flush
+ *   telemetry, then exit(1) and let the orchestrator restart cleanly.
+ *
+ * Installed unconditionally (even without SENTRY_DSN) so the logging half always
+ * works; captureException/flushSentry no-op when Sentry is disabled.
+ */
+function installGlobalErrorHandlers(serviceName: string): void {
+  if (processHandlersInstalled) {
+    return;
+  }
+  processHandlersInstalled = true;
+  const logger = new Logger(`${serviceName}:process`);
+
+  process.on('unhandledRejection', (reason: unknown) => {
+    logger.error(
+      `Unhandled promise rejection: ${
+        reason instanceof Error
+          ? (reason.stack ?? reason.message)
+          : String(reason)
+      }`,
+    );
+    captureException(
+      reason instanceof Error
+        ? reason
+        : new Error(`unhandledRejection: ${String(reason)}`),
+    );
+  });
+
+  process.on('uncaughtException', (error: Error) => {
+    logger.error(`Uncaught exception: ${error.stack ?? error.message}`);
+    captureException(error);
+    void flushSentry(2000).finally(() => process.exit(1));
+  });
+}
 
 /**
  * Initialise Sentry for the current service. Called once from each main.ts.
@@ -25,11 +68,25 @@ let initialized = false;
  * conditional code at the call sites.
  */
 export function initSentry(options: InitSentryOptions): void {
+  // Process safety net first — it must be armed even when Sentry has no DSN.
+  installGlobalErrorHandlers(options.serviceName);
+
   if (initialized) {
     return;
   }
   const dsn = options.dsn ?? process.env.SENTRY_DSN;
   if (!dsn) {
+    // Silent error reporting in production is a real operability gap (Audit
+    // observability P1) — warn loudly so a missing/typo'd DSN is noticed.
+    const env =
+      options.environment ??
+      process.env.SENTRY_ENVIRONMENT ??
+      process.env.NODE_ENV;
+    if (env === 'production') {
+      new Logger(`${options.serviceName}:sentry`).warn(
+        'SENTRY_DSN is not set in production — error reporting is DISABLED. Set SENTRY_DSN so 5xx/uncaught errors are captured.',
+      );
+    }
     // Mark initialized so we don't keep re-checking. Captures will no-op.
     initialized = true;
     return;
@@ -37,7 +94,11 @@ export function initSentry(options: InitSentryOptions): void {
 
   Sentry.init({
     dsn,
-    environment: options.environment ?? process.env.SENTRY_ENVIRONMENT ?? process.env.NODE_ENV ?? 'development',
+    environment:
+      options.environment ??
+      process.env.SENTRY_ENVIRONMENT ??
+      process.env.NODE_ENV ??
+      'development',
     serverName: options.serviceName,
     sampleRate: options.sampleRate ?? 1.0,
     tracesSampleRate: options.tracesSampleRate ?? 0,

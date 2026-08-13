@@ -25,6 +25,7 @@ import {
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { Roles } from './auth/roles.decorator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { Public } from './auth/public.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import { Roles as RoleEnum } from '@app/common';
 import {
@@ -57,7 +58,9 @@ export class NotificationGatewayController {
       this.notificationClient.send(pattern, payload).pipe(timeout(timeoutMs)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Notification service response timeout');
+        throw new GatewayTimeoutException(
+          'Notification service response timeout',
+        );
       }
       throw error;
     });
@@ -74,6 +77,7 @@ export class NotificationGatewayController {
     return { id: req.user?.sub ?? null, roles: req.user?.roles ?? [] };
   }
 
+  @Public()
   @Get('health')
   @ApiOperation({ summary: 'Notification service health check' })
   health() {

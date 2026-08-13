@@ -22,10 +22,11 @@ import {
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
-import { randomUUID } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { Roles } from './auth/roles.decorator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { Public } from './auth/public.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
   Cashbox_type,
@@ -183,11 +184,12 @@ export class FinanceGatewayController {
   private getUserRoles(user: JwtUser | undefined) {
     return Array.from(
       new Set(
-        [
-          ...(Array.isArray(user?.roles) ? user.roles : []),
-          user?.role,
-        ]
-          .map((item) => String(item ?? '').trim().toLowerCase())
+        [...(Array.isArray(user?.roles) ? user.roles : []), user?.role]
+          .map((item) =>
+            String(item ?? '')
+              .trim()
+              .toLowerCase(),
+          )
           .filter(Boolean),
       ),
     );
@@ -726,6 +728,7 @@ export class FinanceGatewayController {
     };
   }
 
+  @Public()
   @Get('health')
   @ApiOperation({ summary: 'Finance service health check' })
   health() {
@@ -1170,18 +1173,48 @@ export class FinanceGatewayController {
     return this.attachCreatedByUsersToHistory(response);
   }
 
+  // Window in which an identical manual transfer with no client Idempotency-Key
+  // is treated as an accidental resubmit (double-click / retry) and deduped.
+  // A deliberate identical transfer in a later window is still allowed.
+  private static readonly MANUAL_TRANSFER_DEDUP_WINDOW_MS = 30_000;
+
   /**
    * Resolve the idempotency token for a manual cash transfer.
    *
    * Prefers a client-supplied `Idempotency-Key` header so a UI double-click /
    * accidental resubmit of the SAME logical payment reuses the SAME token and
-   * finance dedupes it (the cash is moved at most once). Only when the client
-   * sends no key do we mint a fresh UUID — that still dedupes an RMQ redelivery
-   * of this single request, just not a second independent HTTP submit. (P0-3.)
+   * finance dedupes it (the cash is moved at most once).
+   *
+   * When the client sends NO key we no longer mint a random UUID (which made
+   * every HTTP submit unique and left a real double-submit UNPROTECTED — Audit
+   * money P1). Instead we derive a DETERMINISTIC token from the payment's
+   * identity (actor + kind + payload) plus a coarse time bucket, so two
+   * identical submits within the window collapse to the same token and finance
+   * moves the cash at most once, while an intentional identical transfer in a
+   * later window still goes through.
    */
-  private resolveTransferToken(idempotencyKey?: string): string {
+  private resolveTransferToken(
+    idempotencyKey: string | undefined,
+    fingerprint: { actorId: string; kind: string; payload: unknown },
+  ): string {
     const key = String(idempotencyKey ?? '').trim();
-    return key.length > 0 ? key : randomUUID();
+    if (key.length > 0) {
+      return key;
+    }
+    const bucket = Math.floor(
+      Date.now() / FinanceGatewayController.MANUAL_TRANSFER_DEDUP_WINDOW_MS,
+    );
+    return createHash('sha256')
+      .update(
+        [
+          'manual-transfer',
+          fingerprint.kind,
+          fingerprint.actorId,
+          JSON.stringify(fingerprint.payload ?? null),
+          String(bucket),
+        ].join('|'),
+      )
+      .digest('hex');
   }
 
   // NOTE: the per-order FIFO settlement advance is no longer triggered from the
@@ -1246,7 +1279,11 @@ export class FinanceGatewayController {
     // double-click double-paying); fall back to a fresh UUID. A redelivered RMQ
     // message reuses it so the cash transfer is applied at most once (P0-3), and
     // the settlement advance reuses the same token so it dedupes too (I1/I2).
-    const token = this.resolveTransferToken(idempotencyKey);
+    const token = this.resolveTransferToken(idempotencyKey, {
+      actorId: String(req.user.sub),
+      kind: 'payment_courier',
+      payload: dto,
+    });
     const result = await this.send(
       { cmd: 'finance.cashbox.payment_courier' },
       {
@@ -1277,7 +1314,11 @@ export class FinanceGatewayController {
     @Body() dto: PaymentToMarketRequestDto,
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    const token = this.resolveTransferToken(idempotencyKey);
+    const token = this.resolveTransferToken(idempotencyKey, {
+      actorId: String(req.user.sub),
+      kind: 'payment_market',
+      payload: dto,
+    });
     const result = await this.send(
       { cmd: 'finance.cashbox.payment_market' },
       { ...dto, created_by: req.user.sub, dedup_epoch: token },
@@ -1329,7 +1370,16 @@ export class FinanceGatewayController {
       { id: branchId, requester: this.toRequester(req.user) },
     );
 
-    const token = this.resolveTransferToken(idempotencyKey);
+    const token = this.resolveTransferToken(idempotencyKey, {
+      actorId: String(req.user.sub),
+      kind: 'payment_branch_main',
+      payload: {
+        branch_id: branchId,
+        amount: dto.amount,
+        payment_method: dto.payment_method,
+        payment_date: dto.payment_date,
+      },
+    });
     const result = await this.send(
       { cmd: 'finance.cashbox.payment_branch_main' },
       {
@@ -1646,6 +1696,7 @@ export class FinanceGatewayController {
   async spendMoney(
     @Req() req: { user: JwtUser },
     @Body() dto: MainCashboxManualRequestDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
     const isManager = this.isManager(req?.user);
     const branchId = isManager
@@ -1655,12 +1706,19 @@ export class FinanceGatewayController {
     if (isManager && !branchId) {
       throw new ForbiddenException("Managerning branch'i topilmadi");
     }
+    const targetUserId = isManager ? branchId : req.user.sub;
+    const token = this.resolveTransferToken(idempotencyKey, {
+      actorId: String(req.user.sub),
+      kind: 'cashbox_spend',
+      payload: { target: targetUserId, dto },
+    });
     return this.send(
       { cmd: 'finance.cashbox.spend' },
       {
         ...dto,
-        user_id: isManager ? branchId : req.user.sub,
+        user_id: targetUserId,
         created_by: req.user.sub,
+        dedup_epoch: token,
         ...(isManager ? { cashbox_type: Cashbox_type.BRANCH } : {}),
       },
     );
@@ -1675,6 +1733,7 @@ export class FinanceGatewayController {
   async fillCashbox(
     @Req() req: { user: JwtUser },
     @Body() dto: MainCashboxManualRequestDto,
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
     const isManager = this.isManager(req?.user);
     const branchId = isManager
@@ -1684,12 +1743,19 @@ export class FinanceGatewayController {
     if (isManager && !branchId) {
       throw new ForbiddenException("Managerning branch'i topilmadi");
     }
+    const targetUserId = isManager ? branchId : req.user.sub;
+    const token = this.resolveTransferToken(idempotencyKey, {
+      actorId: String(req.user.sub),
+      kind: 'cashbox_fill',
+      payload: { target: targetUserId, dto },
+    });
     return this.send(
       { cmd: 'finance.cashbox.fill' },
       {
         ...dto,
-        user_id: isManager ? branchId : req.user.sub,
+        user_id: targetUserId,
         created_by: req.user.sub,
+        dedup_epoch: token,
         ...(isManager ? { cashbox_type: Cashbox_type.BRANCH } : {}),
       },
     );
@@ -1791,11 +1857,7 @@ export class FinanceGatewayController {
       );
 
       const items = historyResponse?.data?.items;
-      if (
-        isBranchToMainHistory &&
-        Array.isArray(items) &&
-        items.length === 0
-      ) {
+      if (isBranchToMainHistory && Array.isArray(items) && items.length === 0) {
         const settlement = await this.buildManagerSettlement(req.user, {
           fromDate: query?.from_date,
           toDate: query?.to_date,

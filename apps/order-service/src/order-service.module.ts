@@ -3,6 +3,12 @@ import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { OrderServiceController } from './order-service.controller';
 import { OrderServiceService } from './order-service.service';
+import { OrderAnalyticsService } from './analytics/order-analytics.service';
+import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
+import { OrderSettlementService } from './settlement/order-settlement.service';
+import { OrderLookupService } from './lookup/order-lookup.service';
+import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+import { OrderCustodyService } from './custody/order-custody.service';
 import {
   AppLoggerModule,
   RmqModule,
@@ -70,6 +76,14 @@ import { MarketCancelledHandoverSession } from './entities/market-cancelled-hand
     ]),
   ],
   controllers: [OrderServiceController],
-  providers: [OrderServiceService],
+  providers: [
+    OrderServiceService,
+    OrderAnalyticsService,
+    BranchTransferBatchService,
+    OrderSettlementService,
+    OrderLookupService,
+    OrderLifecycleService,
+    OrderCustodyService,
+  ],
 })
 export class OrderServiceModule {}

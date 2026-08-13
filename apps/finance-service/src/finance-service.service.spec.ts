@@ -338,11 +338,14 @@ describe('FinanceServiceService.financialBalance', () => {
       cashbox_type: 'main',
       balance: 500000,
     });
-    cashboxRepo.find = jest
-      .fn()
-      .mockResolvedValue([
-        { id: 'market-cashbox', user_id: '20', balance: 999999 },
-      ]);
+    // Market total now comes from a SQL SUM (sumCashboxBalanceByType), not a
+    // full-table find(); the full market-cashbox list is no longer returned.
+    cashboxRepo.createQueryBuilder = jest.fn().mockReturnValue({
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({ total: '999999' }),
+    });
     rmqSendMock.mockResolvedValue({
       data: {
         branch_receivable: 200000,
@@ -358,9 +361,9 @@ describe('FinanceServiceService.financialBalance', () => {
     expect(response.data.branches.branchReceivable).toBe(200000);
     expect(response.data.markets.marketPayable).toBe(999999);
     expect(response.data.markets.marketsTotalBalans).toBe(-999999);
-    expect(response.data.markets.items).toEqual([
-      { market_id: '20', amount: 999999 },
-    ]);
+    // The unbounded full list + per-row items array are intentionally gone.
+    expect(response.data.markets.allMarketCashboxes).toBeUndefined();
+    expect(response.data.markets.items).toBeUndefined();
     expect(response.data.couriers.couriersTotalBalanse).toBe(0);
     expect(response.data.formula).toBe(
       'main_cashbox + branch_receivable - market_cashbox_payable',
@@ -812,10 +815,73 @@ describe('FinanceServiceService manual branch cashbox operations', () => {
       }),
     );
   });
+
+  it('carries the dedup token in dedup_epoch ONLY (not the bigint source_id)', async () => {
+    const manager = makeManager();
+    const { service } = makeService(manager);
+    const updateBalance = jest
+      .spyOn(service, 'updateBalance')
+      .mockResolvedValue({ data: { id: 'history-3' } } as any);
+
+    await service.spendMoney({
+      user_id: '13',
+      created_by: '54',
+      amount: 50000,
+      dedup_epoch: 'tok-abc',
+    });
+
+    // The gateway's free-form idempotency token goes ONLY into dedup_epoch (a
+    // varchar). It must NOT be written to source_id — that is a BIGINT column,
+    // so a hex/idempotency-key token there throws "invalid input syntax for
+    // bigint" and 500s every manual spend/fill. Idempotency is enforced by
+    // updateBalance's token pre-check under the cashbox row lock.
+    const arg = updateBalance.mock.calls[0][0] as any;
+    expect(arg.dedup_epoch).toBe('tok-abc');
+    expect(arg.source_id).toBeUndefined();
+    expect(arg.source_type).toBe('manual_expense');
+  });
+
+  it('updateBalance dedupes a manual op on dedup_epoch alone (source_id NULL)', async () => {
+    const cashbox = {
+      id: '10',
+      balance: 100,
+      balance_cash: 100,
+      balance_card: 0,
+      user_id: '7',
+      cashbox_type: 'main',
+    };
+    const priorHistory = { id: 'h-1', amount: 50000 };
+    // 1st findOne = cashbox lookup, 2nd = the idempotency pre-check (must run
+    // even though source_id is absent, because a dedup_epoch token is present).
+    const manager = makeManager({
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce(cashbox)
+        .mockResolvedValueOnce(priorHistory),
+    });
+    const { service, queryRunner } = makeService(manager);
+
+    const res: any = await service.updateBalance({
+      cashbox_id: '10',
+      amount: 50000,
+      operation_type: 'expense' as any,
+      source_type: 'manual_expense' as any,
+      dedup_epoch: 'tok-abc',
+      // no source_id — manual op
+    } as any);
+
+    // pre-check ran (2 findOne) and found the prior row → idempotent skip
+    expect(manager.findOne).toHaveBeenCalledTimes(2);
+    expect(res.data.idempotent).toBe(true);
+    expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+    // the pre-check matched on source_id IS NULL + the token, not a bigint value
+    const where = (manager.findOne.mock.calls[1][1] as any).where;
+    expect(where.dedup_epoch).toBe('tok-abc');
+  });
 });
 
 describe('FinanceServiceService.paymentsToMarket', () => {
-  it('records HQ expense and market income for the same payout', async () => {
+  it('clears the market payable via EXPENSE on the same payout (no double-count)', async () => {
     const mainCashbox = {
       id: 'main-1',
       user_id: '0',
@@ -824,12 +890,15 @@ describe('FinanceServiceService.paymentsToMarket', () => {
       balance_cash: 100000,
       balance_card: 0,
     };
+    // The market cashbox already holds an 80000 sale-time payable accrual (HQ
+    // owes the market). Paying the market must DECREASE this payable, not grow
+    // it — otherwise financial-balanse double-counts (the live-E2E bug).
     const marketCashbox = {
       id: 'market-1',
       user_id: '24',
       cashbox_type: 'markets',
-      balance: 0,
-      balance_cash: 0,
+      balance: 80000,
+      balance_cash: 80000,
       balance_card: 0,
     };
     const manager = makeManager({
@@ -867,18 +936,19 @@ describe('FinanceServiceService.paymentsToMarket', () => {
         amount: 12000,
       }),
     );
+    // Market payable drops 80000 → 68000 (EXPENSE clears the debt), NOT grows.
     expect(manager.save).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'market-1',
-        balance: 12000,
-        balance_cash: 12000,
+        balance: 68000,
+        balance_cash: 68000,
       }),
     );
     expect(manager.save).toHaveBeenCalledWith(
       expect.objectContaining({
         cashbox_id: 'market-1',
         source_type: 'market_payment',
-        operation_type: 'income',
+        operation_type: 'expense',
         amount: 12000,
       }),
     );
@@ -1118,5 +1188,55 @@ describe('FinanceServiceService.paymentsFromCourier settlement advance via outbo
     );
     // The outbox row is written before the transaction commits (atomicity).
     expect(queryRunner.commitTransaction).toHaveBeenCalled();
+  });
+});
+
+describe('FinanceServiceService.allCashboxesTotal', () => {
+  it('sums courier/market balances in SQL instead of loading every row', async () => {
+    const manager = makeManager();
+    const { service, cashboxRepo, historyRepo } = makeService(manager);
+
+    // main cashbox
+    cashboxRepo.findOne.mockResolvedValue({ balance: 5000 });
+
+    // history query builder (paged list + count)
+    historyRepo.createQueryBuilder.mockReturnValue({
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
+    });
+
+    // cashbox SUM query builder — returns a total keyed off the cashbox_type filter
+    const sumByType: Record<string, string> = {
+      for_courier: '1200',
+      for_market: '800',
+    };
+    cashboxRepo.createQueryBuilder = jest.fn().mockImplementation(() => {
+      let capturedType = '';
+      const qb: any = {
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn((_sql: string, params: { cashboxType: string }) => {
+          capturedType = params.cashboxType;
+          return qb;
+        }),
+        andWhere: jest.fn().mockReturnThis(),
+        getRawOne: jest
+          .fn()
+          .mockImplementation(async () => ({ total: sumByType[capturedType] })),
+      };
+      return qb;
+    });
+
+    const response = await service.allCashboxesTotal({ page: 1, limit: 20 });
+
+    // Never materialised the cashbox rows just to add them up.
+    expect(cashboxRepo.find).toBeUndefined();
+    expect(response.data.mainCashboxTotal).toBe(5000);
+    expect(response.data.courierCashboxTotal).toBe(1200);
+    expect(response.data.marketCashboxTotal).toBe(800);
   });
 });

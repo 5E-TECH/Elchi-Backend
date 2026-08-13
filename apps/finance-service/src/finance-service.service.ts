@@ -14,8 +14,10 @@ import {
   EntityManager,
   FindOptionsWhere,
   In,
+  IsNull,
   LessThanOrEqual,
   MoreThanOrEqual,
+  Not,
   QueryFailedError,
   Repository,
 } from 'typeorm';
@@ -202,6 +204,27 @@ export class FinanceServiceService implements OnModuleInit {
     return main;
   }
 
+  /**
+   * Sum the balances of all active cashboxes of a given type, in SQL.
+   *
+   * Perf (audit P2): callers used to `cashboxRepo.find({ where: { cashbox_type } })`
+   * and `.reduce()` in JS purely to obtain a total — materialising every row
+   * (courier/market cashboxes grow unbounded) just to add up one column. This
+   * pushes the aggregation down to `SUM(balance)` so only the scalar crosses the
+   * wire. `balance` is a numeric column, so pg returns the SUM as a string.
+   */
+  private async sumCashboxBalanceByType(
+    cashboxType: Cashbox_type,
+  ): Promise<number> {
+    const row = await this.cashboxRepo
+      .createQueryBuilder('c')
+      .select('COALESCE(SUM(c.balance), 0)', 'total')
+      .where('c.cashbox_type = :cashboxType', { cashboxType })
+      .andWhere('c.isDeleted = :active', { active: false })
+      .getRawOne<{ total: string }>();
+    return Number(row?.total ?? 0);
+  }
+
   private calcIncomeOutcome(histories: CashboxHistory[]) {
     let income = 0;
     let outcome = 0;
@@ -380,7 +403,10 @@ export class FinanceServiceService implements OnModuleInit {
       if (history?.created_by) {
         ids.push(String(history.created_by));
       }
-      if (history?.source_user_id && userBackedSources.has(history.source_type)) {
+      if (
+        history?.source_user_id &&
+        userBackedSources.has(history.source_type)
+      ) {
         ids.push(String(history.source_user_id));
       }
       if (history?.cashbox?.user_id) {
@@ -396,7 +422,8 @@ export class FinanceServiceService implements OnModuleInit {
           ? (usersMap.get(String(history.created_by)) ?? null)
           : null;
       const sourceUser =
-        history.source_user_id != null && userBackedSources.has(history.source_type)
+        history.source_user_id != null &&
+        userBackedSources.has(history.source_type)
           ? (usersMap.get(String(history.source_user_id)) ?? null)
           : null;
 
@@ -564,9 +591,12 @@ export class FinanceServiceService implements OnModuleInit {
       });
 
       if (exists) {
-        throw new BadRequestException(
-          'Cashbox already exists for this user and type',
-        );
+        // Idempotent: a cashbox for this (user, type) already exists. Return it
+        // instead of throwing — an RMQ redelivery/retry of a create (e.g. the
+        // manager-create flow whose branch cashbox was already provisioned when
+        // the branch was created) must NOT 500. Callers that want create-if-
+        // absent semantics (ensureUserCashbox) rely on this. (Live-E2E fix.)
+        return this.successRes(exists, 200, 'Cashbox already exists');
       }
 
       const balanceCash = Number(dto.balance_cash ?? 0);
@@ -732,23 +762,32 @@ export class FinanceServiceService implements OnModuleInit {
         );
 
         // Idempotency: if a history row already exists for the same business
-        // event (cashbox + source_type + source_id + operation_type), this is
-        // a duplicate RMQ delivery — skip the balance mutation and return the
-        // already-applied state. The pessimistic lock above guarantees we see
-        // committed history from earlier deliveries.
-        if (dto.source_id) {
+        // event (cashbox + source_type + operation_type + source_id +
+        // dedup_epoch), this is a duplicate delivery — skip the balance mutation
+        // and return the already-applied state. The pessimistic lock above
+        // guarantees we see committed history from earlier deliveries.
+        //
+        // Two shapes:
+        //  - system legs (sale/settlement/transfer): a real NUMERIC source_id
+        //    (+ optional dedup_epoch). The DB unique index backstops this.
+        //  - manual spend/fill: no business id — source_id stays NULL (it's a
+        //    bigint column; the gateway's free-form dedup_epoch token cannot be
+        //    written there) and we dedupe on the token alone. There is no DB
+        //    index backstop for NULL source_id (the index is partial, WHERE
+        //    source_id IS NOT NULL), so the cashbox row lock is what makes this
+        //    pre-check safe against a concurrent same-cashbox double-submit.
+        const dedupToken = String(dto.dedup_epoch ?? '');
+        if (dto.source_id != null || dedupToken.length > 0) {
           const existingHistory = await queryRunner.manager.findOne(
             CashboxHistory,
             {
               where: {
                 cashbox_id: String(cashbox.id),
                 source_type: dto.source_type,
-                source_id: String(dto.source_id),
                 operation_type: dto.operation_type,
-                // Must mirror the IDX_CASHBOX_HISTORY_IDEMPOTENT key exactly,
-                // else a fresh attempt (new epoch) would match a prior row and
-                // be wrongly skipped.
-                dedup_epoch: String(dto.dedup_epoch ?? ''),
+                source_id:
+                  dto.source_id != null ? String(dto.source_id) : IsNull(),
+                dedup_epoch: dedupToken,
               },
             },
           );
@@ -1455,7 +1494,14 @@ export class FinanceServiceService implements OnModuleInit {
         user_id: data.id,
         isDeleted: false,
       };
+      // This is a USER-scoped lookup (id = user_id). A BRANCH cashbox is keyed
+      // by branch_id, so when a market's user_id numerically collides with a
+      // branch_id, an untyped lookup could return the wrong (branch) cashbox.
+      // A user's "main" cashbox is never a branch cashbox — exclude BRANCH when
+      // no explicit type is requested. (Every branch caller passes BRANCH
+      // explicitly.) (Live-E2E fix.)
       if (data.cashbox_type) where.cashbox_type = data.cashbox_type;
+      else where.cashbox_type = Not(Cashbox_type.BRANCH);
 
       const cashbox = await this.cashboxRepo.findOne({
         where,
@@ -1566,6 +1612,7 @@ export class FinanceServiceService implements OnModuleInit {
     comment?: string;
     cashbox_type?: Cashbox_type;
     created_by?: string;
+    dedup_epoch?: string;
   }) {
     try {
       const targetCashboxType = data.cashbox_type ?? Cashbox_type.MAIN;
@@ -1582,6 +1629,12 @@ export class FinanceServiceService implements OnModuleInit {
         comment: data.comment,
         created_by: data.created_by ?? data.user_id,
         cashbox_type: targetCashboxType,
+        // Idempotency for a manual expense is keyed on the gateway's dedup_epoch
+        // token ONLY. source_id stays NULL — it is a bigint column and the token
+        // is a free-form hex/idempotency-key string, so writing it there throws.
+        // updateBalance's pre-check dedupes on the token (serialised by the
+        // cashbox row lock). Absent token → no dedup (prior behaviour).
+        dedup_epoch: data.dedup_epoch,
       });
       await this.activityLog.log({
         entity_type: 'Cashbox',
@@ -1608,6 +1661,7 @@ export class FinanceServiceService implements OnModuleInit {
     comment?: string;
     cashbox_type?: Cashbox_type;
     created_by?: string;
+    dedup_epoch?: string;
   }) {
     try {
       const targetCashboxType = data.cashbox_type ?? Cashbox_type.MAIN;
@@ -1624,6 +1678,9 @@ export class FinanceServiceService implements OnModuleInit {
         comment: data.comment,
         created_by: data.created_by ?? data.user_id,
         cashbox_type: targetCashboxType,
+        // Idempotency keyed on the dedup_epoch token only (see spendMoney) —
+        // source_id stays NULL (bigint column can't hold the free-form token).
+        dedup_epoch: data.dedup_epoch,
       });
       await this.activityLog.log({
         entity_type: 'Cashbox',
@@ -2303,16 +2360,24 @@ export class FinanceServiceService implements OnModuleInit {
         }),
       );
 
+      // The FOR_MARKET cashbox balance is HQ's PAYABLE to the market (money HQ
+      // owes them): a sale ACCRUES it (+income, order-lifecycle sell) and
+      // financialBalance() reads it as `market_payable` and SUBTRACTS it. Paying
+      // the market must CLEAR that payable (-expense), mirroring the courier
+      // cashbox (sale income → payment expense → nets to 0). Crediting it here
+      // double-counted the payable, so a fully-paid market showed 2× owed and
+      // financial-balanse went negative on every settled order.
+      // (Live-E2E money audit 2026-08-13.)
       this.updateBalancesByMethod(
         marketCashbox,
         Number(data.amount),
-        Operation_type.INCOME,
+        Operation_type.EXPENSE,
         data.payment_method ?? PaymentMethod.CASH,
       );
       await queryRunner.manager.save(marketCashbox);
       await queryRunner.manager.save(
         queryRunner.manager.create(CashboxHistory, {
-          operation_type: Operation_type.INCOME,
+          operation_type: Operation_type.EXPENSE,
           cashbox_id: marketCashbox.id,
           source_type: Source_type.MARKET_PAYMENT,
           amount: Number(data.amount),
@@ -2389,18 +2454,6 @@ export class FinanceServiceService implements OnModuleInit {
   }) {
     try {
       const mainCashbox = await this.ensureMainCashbox();
-      const courierCashboxes = await this.cashboxRepo.find({
-        where: {
-          cashbox_type: Cashbox_type.FOR_COURIER,
-          isDeleted: false,
-        },
-      });
-      const marketCashboxes = await this.cashboxRepo.find({
-        where: {
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          isDeleted: false,
-        },
-      });
 
       const noPagination = filters?.page === 0 || filters?.limit === 0;
       const page = noPagination
@@ -2459,14 +2512,10 @@ export class FinanceServiceService implements OnModuleInit {
         });
 
       const [allCashboxHistories, total] = await qb.getManyAndCount();
-      const courierCashboxTotal = courierCashboxes.reduce(
-        (s, c) => s + Number(c.balance),
-        0,
-      );
-      const marketCashboxTotal = marketCashboxes.reduce(
-        (s, c) => s + Number(c.balance),
-        0,
-      );
+      const [courierCashboxTotal, marketCashboxTotal] = await Promise.all([
+        this.sumCashboxBalanceByType(Cashbox_type.FOR_COURIER),
+        this.sumCashboxBalanceByType(Cashbox_type.FOR_MARKET),
+      ]);
 
       return this.successRes(
         {
@@ -2496,12 +2545,14 @@ export class FinanceServiceService implements OnModuleInit {
   async financialBalance() {
     try {
       const mainCashbox = await this.ensureMainCashbox();
-      const allMarketCashboxes = await this.cashboxRepo.find({
-        where: {
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          isDeleted: false,
-        },
-      });
+      // Perf/unbounded (audit): this used to `find()` EVERY market cashbox row
+      // and return the whole array (+ a per-row `items` map) purely to derive
+      // one total — an unbounded load and payload as markets grow. The total is
+      // all this summary needs, so push it down to SQL SUM. The full list is not
+      // consumed by any client, so it is no longer returned.
+      const marketCashboxTotal = await this.sumCashboxBalanceByType(
+        Cashbox_type.FOR_MARKET,
+      );
       const settlementResponse = await rmqSend<{
         data?: {
           branch_receivable?: number;
@@ -2519,10 +2570,6 @@ export class FinanceServiceService implements OnModuleInit {
         Number(settlement.branch_receivable ?? 0),
         0,
       );
-      const marketCashboxTotal = allMarketCashboxes.reduce(
-        (sum, cashbox) => sum + Number(cashbox.balance ?? 0),
-        0,
-      );
       const marketPayable = Math.max(marketCashboxTotal, 0);
       const difference = branchReceivable - marketPayable;
       const currentSituation = Number(mainCashbox.balance) + difference;
@@ -2536,13 +2583,8 @@ export class FinanceServiceService implements OnModuleInit {
             items: settlement.branches ?? [],
           },
           markets: {
-            allMarketCashboxes,
             marketPayable,
             marketsTotalBalans: -marketPayable,
-            items: allMarketCashboxes.map((cashbox) => ({
-              market_id: String(cashbox.user_id),
-              amount: Math.max(Number(cashbox.balance ?? 0), 0),
-            })),
           },
           couriers: {
             allCourierCashboxes: [],
