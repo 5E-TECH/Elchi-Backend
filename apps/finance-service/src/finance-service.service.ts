@@ -2349,16 +2349,24 @@ export class FinanceServiceService implements OnModuleInit {
         }),
       );
 
+      // The FOR_MARKET cashbox balance is HQ's PAYABLE to the market (money HQ
+      // owes them): a sale ACCRUES it (+income, order-lifecycle sell) and
+      // financialBalance() reads it as `market_payable` and SUBTRACTS it. Paying
+      // the market must CLEAR that payable (-expense), mirroring the courier
+      // cashbox (sale income → payment expense → nets to 0). Crediting it here
+      // double-counted the payable, so a fully-paid market showed 2× owed and
+      // financial-balanse went negative on every settled order.
+      // (Live-E2E money audit 2026-08-13.)
       this.updateBalancesByMethod(
         marketCashbox,
         Number(data.amount),
-        Operation_type.INCOME,
+        Operation_type.EXPENSE,
         data.payment_method ?? PaymentMethod.CASH,
       );
       await queryRunner.manager.save(marketCashbox);
       await queryRunner.manager.save(
         queryRunner.manager.create(CashboxHistory, {
-          operation_type: Operation_type.INCOME,
+          operation_type: Operation_type.EXPENSE,
           cashbox_id: marketCashbox.id,
           source_type: Source_type.MARKET_PAYMENT,
           amount: Number(data.amount),

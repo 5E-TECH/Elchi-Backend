@@ -881,7 +881,7 @@ describe('FinanceServiceService manual branch cashbox operations', () => {
 });
 
 describe('FinanceServiceService.paymentsToMarket', () => {
-  it('records HQ expense and market income for the same payout', async () => {
+  it('clears the market payable via EXPENSE on the same payout (no double-count)', async () => {
     const mainCashbox = {
       id: 'main-1',
       user_id: '0',
@@ -890,12 +890,15 @@ describe('FinanceServiceService.paymentsToMarket', () => {
       balance_cash: 100000,
       balance_card: 0,
     };
+    // The market cashbox already holds an 80000 sale-time payable accrual (HQ
+    // owes the market). Paying the market must DECREASE this payable, not grow
+    // it — otherwise financial-balanse double-counts (the live-E2E bug).
     const marketCashbox = {
       id: 'market-1',
       user_id: '24',
       cashbox_type: 'markets',
-      balance: 0,
-      balance_cash: 0,
+      balance: 80000,
+      balance_cash: 80000,
       balance_card: 0,
     };
     const manager = makeManager({
@@ -933,18 +936,19 @@ describe('FinanceServiceService.paymentsToMarket', () => {
         amount: 12000,
       }),
     );
+    // Market payable drops 80000 → 68000 (EXPENSE clears the debt), NOT grows.
     expect(manager.save).toHaveBeenCalledWith(
       expect.objectContaining({
         id: 'market-1',
-        balance: 12000,
-        balance_cash: 12000,
+        balance: 68000,
+        balance_cash: 68000,
       }),
     );
     expect(manager.save).toHaveBeenCalledWith(
       expect.objectContaining({
         cashbox_id: 'market-1',
         source_type: 'market_payment',
-        operation_type: 'income',
+        operation_type: 'expense',
         amount: 12000,
       }),
     );
