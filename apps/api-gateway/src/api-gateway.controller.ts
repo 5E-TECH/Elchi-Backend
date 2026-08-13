@@ -6,6 +6,7 @@ import {
   ForbiddenException,
   Get,
   Inject,
+  NotFoundException,
   Param,
   Patch,
   Post,
@@ -872,6 +873,12 @@ export class ApiGatewayController {
   @ApiOkResponse({ description: 'User by id' })
   @ApiNotFoundResponse({ description: 'Not found' })
   async getUserById(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
+    // `id` is a bigint PK downstream. A non-numeric segment (e.g. /users/me,
+    // /users/profile) reached the DB and 500'd on "invalid input syntax for
+    // type bigint". Reject it as 404 up front. (Live-E2E fix.)
+    if (!/^\d+$/.test(String(id))) {
+      throw new NotFoundException('User not found');
+    }
     const requesterRoles = (req?.user?.roles ?? []).map((r) =>
       String(r).toLowerCase(),
     );
