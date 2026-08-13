@@ -17,6 +17,7 @@ import {
   IsNull,
   LessThanOrEqual,
   MoreThanOrEqual,
+  Not,
   QueryFailedError,
   Repository,
 } from 'typeorm';
@@ -1493,7 +1494,14 @@ export class FinanceServiceService implements OnModuleInit {
         user_id: data.id,
         isDeleted: false,
       };
+      // This is a USER-scoped lookup (id = user_id). A BRANCH cashbox is keyed
+      // by branch_id, so when a market's user_id numerically collides with a
+      // branch_id, an untyped lookup could return the wrong (branch) cashbox.
+      // A user's "main" cashbox is never a branch cashbox — exclude BRANCH when
+      // no explicit type is requested. (Every branch caller passes BRANCH
+      // explicitly.) (Live-E2E fix.)
       if (data.cashbox_type) where.cashbox_type = data.cashbox_type;
+      else where.cashbox_type = Not(Cashbox_type.BRANCH);
 
       const cashbox = await this.cashboxRepo.findOne({
         where,
