@@ -136,6 +136,26 @@ export class IntegrationServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'integration.partner.get_shipment' })
+  getPartnerShipment(
+    @Payload() data: { partner_id?: string; shipment_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.getPartnerShipment(data ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.partner.cancel_shipment' })
+  cancelPartnerShipment(
+    @Payload() data: { partner_id?: string; shipment_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.cancelPartnerShipment(data ?? {}),
+    );
+  }
+
   // --- ExternalIntegration ---
   @MessagePattern({ cmd: 'integration.create' })
   create(@Payload() data: any, @Ctx() context: RmqContext) {

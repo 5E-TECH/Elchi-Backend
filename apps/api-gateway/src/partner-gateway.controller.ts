@@ -5,6 +5,7 @@ import {
   Get,
   Inject,
   NotFoundException,
+  Param,
   Post,
   Query,
   Req,
@@ -228,6 +229,49 @@ export class PartnerGatewayController {
         { cmd: 'integration.partner.create_shipment' },
         { ...dto, partner_id: request.partner.id },
       ).pipe(timeout(PARTNER_SHIPMENT_TIMEOUT_MS)),
+    );
+  }
+
+  /**
+   * Posilka holatini ko'rish (status / tracking / cod). `:id` = shipment_id
+   * (C2.1 javobidagi qiymat). Faqat hamkorning o'z posilkasi ko'rinadi.
+   */
+  @Get('shipments/:id')
+  @ApiOperation({ summary: 'Shipment holati (status/tracking/cod)' })
+  @ApiOkResponse({
+    description:
+      '{ shipment_id, external_order_id, status, cod_amount, tracking }',
+  })
+  @ApiNotFoundResponse({ description: 'Shipment topilmadi' })
+  getShipment(
+    @Req() request: { partner: PartnerPrincipal },
+    @Param('id') id: string,
+  ) {
+    return firstValueFrom(
+      this.integrationClient.send(
+        { cmd: 'integration.partner.get_shipment' },
+        { shipment_id: id, partner_id: request.partner.id },
+      ).pipe(timeout(8000)),
+    );
+  }
+
+  /**
+   * Posilkani bekor qilish. Yetkazib bo'lingan posilkani bekor qilib bo'lmaydi
+   * (409). Faqat hamkorning o'z posilkasi.
+   */
+  @Post('shipments/:id/cancel')
+  @ApiOperation({ summary: 'Shipment bekor qilish (yetkazilgan → 409)' })
+  @ApiOkResponse({ description: '{ shipment_id, status: "cancelled" }' })
+  @ApiNotFoundResponse({ description: 'Shipment topilmadi' })
+  cancelShipment(
+    @Req() request: { partner: PartnerPrincipal },
+    @Param('id') id: string,
+  ) {
+    return firstValueFrom(
+      this.integrationClient.send(
+        { cmd: 'integration.partner.cancel_shipment' },
+        { shipment_id: id, partner_id: request.partner.id },
+      ).pipe(timeout(10000)),
     );
   }
 }

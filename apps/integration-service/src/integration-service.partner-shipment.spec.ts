@@ -140,3 +140,137 @@ describe('IntegrationServiceService.createPartnerShipment (C2.1)', () => {
     ).rejects.toBeInstanceOf(RpcException);
   });
 });
+
+/** get/cancel PartnerShipment (C2.2) — prototip orqali (og'ir konstruktorsiz). */
+function makeShipmentSvc(
+  opts: { ref?: any; order?: any; cancelResult?: any } = {},
+) {
+  // ref: `null` = boshqa hamkor / mavjud emas; berilmasa — hamkorning o'z posilkasi.
+  const refFindOne = jest.fn(() =>
+    Promise.resolve(
+      'ref' in opts
+        ? opts.ref
+        : { order_id: '900', external_order_id: 'ord-9' },
+    ),
+  );
+  const orderSend = jest.fn((pattern: { cmd: string }) => {
+    if (pattern.cmd === 'order.find_by_id') {
+      return of(
+        opts.order ?? {
+          id: '900',
+          status: 'on the road',
+          to_be_paid: 50000,
+          qr_code_token: 'qr-abc',
+        },
+      );
+    }
+    if (pattern.cmd === 'order.cancel') {
+      return of(opts.cancelResult ?? { id: '900', status: 'cancelled' });
+    }
+    return of(null);
+  });
+  const svc = Object.create(IntegrationServiceService.prototype);
+  svc.partnerShipmentRefRepo = { findOne: refFindOne };
+  svc.orderClient = { send: orderSend };
+  return { svc: svc as IntegrationServiceService, refFindOne, orderSend };
+}
+
+const cancelCalls = (orderSend: jest.Mock) =>
+  orderSend.mock.calls.filter((c: any[]) => c[0]?.cmd === 'order.cancel');
+
+describe('IntegrationServiceService — get/cancel PartnerShipment (C2.2)', () => {
+  it('TC1: GET -> status/tracking/cod qaytadi', async () => {
+    const { svc, orderSend } = makeShipmentSvc({
+      order: {
+        id: '900',
+        status: 'on the road',
+        to_be_paid: 50000,
+        qr_code_token: 'qr-xyz',
+      },
+    });
+
+    const res: any = await svc.getPartnerShipment({
+      partner_id: '7',
+      shipment_id: '900',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data).toEqual({
+      shipment_id: '900',
+      external_order_id: 'ord-9',
+      status: 'on the road',
+      cod_amount: 50000,
+      tracking: 'qr-xyz',
+    });
+    expect(orderSend).toHaveBeenCalledWith(
+      { cmd: 'order.find_by_id' },
+      { id: '900' },
+    );
+  });
+
+  it('GET — boshqa hamkor/mavjud emas -> 404 (order servisiga bormaydi)', async () => {
+    const { svc, orderSend } = makeShipmentSvc({ ref: null });
+    await expect(
+      svc.getPartnerShipment({ partner_id: '7', shipment_id: '900' }),
+    ).rejects.toBeInstanceOf(RpcException);
+    expect(orderSend).not.toHaveBeenCalled();
+  });
+
+  it('TC2: cancel -> order.cancel chaqiriladi, status=cancelled', async () => {
+    const { svc, orderSend } = makeShipmentSvc({
+      order: { id: '900', status: 'on the road' },
+    });
+
+    const res: any = await svc.cancelPartnerShipment({
+      partner_id: '7',
+      shipment_id: '900',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data).toEqual({ shipment_id: '900', status: 'cancelled' });
+    expect(orderSend).toHaveBeenCalledWith(
+      { cmd: 'order.cancel' },
+      expect.objectContaining({
+        id: '900',
+        requester: expect.objectContaining({ id: 'partner:7' }),
+        request_id: 'partner-cancel:7:900',
+      }),
+    );
+  });
+
+  it('TC3: yetkazilgan (sold) posilkani cancel -> 409, order.cancel CHAQIRILMAYDI', async () => {
+    const { svc, orderSend } = makeShipmentSvc({
+      order: { id: '900', status: 'sold' },
+    });
+
+    const err = await svc
+      .cancelPartnerShipment({ partner_id: '7', shipment_id: '900' })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(RpcException);
+    expect((err as RpcException).getError()).toMatchObject({ statusCode: 409 });
+    expect(cancelCalls(orderSend)).toHaveLength(0);
+  });
+
+  it('allaqachon cancelled -> idempotent 200, order.cancel CHAQIRILMAYDI', async () => {
+    const { svc, orderSend } = makeShipmentSvc({
+      order: { id: '900', status: 'cancelled' },
+    });
+
+    const res: any = await svc.cancelPartnerShipment({
+      partner_id: '7',
+      shipment_id: '900',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data).toMatchObject({ status: 'cancelled', idempotent: true });
+    expect(cancelCalls(orderSend)).toHaveLength(0);
+  });
+
+  it('shipment_id yo‘q -> 400', async () => {
+    const { svc } = makeShipmentSvc();
+    await expect(
+      svc.getPartnerShipment({ partner_id: '7', shipment_id: '' }),
+    ).rejects.toBeInstanceOf(RpcException);
+  });
+});

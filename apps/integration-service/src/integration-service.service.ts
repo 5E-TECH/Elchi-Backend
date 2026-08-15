@@ -175,6 +175,10 @@ export class IntegrationServiceService {
     throw new RpcException(errorRes(message, 404));
   }
 
+  private conflict(message: string): never {
+    throw new RpcException(errorRes(message, 409));
+  }
+
   // ===== Partner API (Elchi Partner API) — C1.2 + C1.3 =====
 
   /** API kalitni SHA-256 hash'ga aylantiradi (parol kabi — ochiq saqlanmaydi). */
@@ -605,6 +609,128 @@ export class IntegrationServiceService {
       },
       201,
       'shipment created',
+    );
+  }
+
+  /**
+   * C2.2 — Partner shipment holatini ko'rish. `:id` = Elchi `order_id` (C2.1
+   * javobidagi `shipment_id`). Faqat shu hamkorning o'z posilkasi ko'rinadi:
+   * partner_shipment_ref (partner_id, order_id) bo'yicha scope tekshiriladi —
+   * topilmasa 404 (boshqa hamkor posilkasi ham 404, ma'lumot sizib chiqmaydi).
+   * Kontrakt: docs/PARTNER_API.md §3.4.
+   */
+  async getPartnerShipment(dto: { partner_id?: string; shipment_id?: string }) {
+    const partnerId = String(dto?.partner_id ?? '').trim();
+    const shipmentId = String(dto?.shipment_id ?? '').trim();
+    if (!partnerId) this.badRequest('partner_id majburiy');
+    if (!shipmentId) this.badRequest('shipment_id majburiy');
+
+    const ref = await this.partnerShipmentRefRepo.findOne({
+      where: {
+        partner_id: partnerId,
+        order_id: shipmentId,
+        isDeleted: false,
+      },
+    });
+    if (!ref) this.notFound('Shipment topilmadi');
+
+    const order = await this.rmqRequest<Record<string, any>>(
+      this.orderClient,
+      { cmd: 'order.find_by_id' },
+      { id: shipmentId },
+      8000,
+    );
+    if (!order) {
+      throw new RpcException(errorRes('Elchi buyurtmasi topilmadi', 502));
+    }
+
+    return successRes(
+      {
+        shipment_id: shipmentId,
+        external_order_id: ref.external_order_id,
+        status: this.pluck(order, 'status'),
+        cod_amount: Number(this.pluck(order, 'to_be_paid') ?? 0),
+        tracking: this.pluck(order, 'qr_code_token') ?? null,
+      },
+      200,
+      'shipment',
+    );
+  }
+
+  /**
+   * C2.2 — Partner shipment bekor qilish. Faqat o'z posilkasi (ref scope).
+   * Yetkazib bo'lingan (`SOLD`) posilkani bekor qilib bo'lmaydi → 409. Allaqachon
+   * bekor qilingan bo'lsa — idempotent 200. Aks holda Elchi `order.cancel`
+   * chaqiriladi. Kontrakt: docs/PARTNER_API.md §3.4.
+   */
+  async cancelPartnerShipment(dto: {
+    partner_id?: string;
+    shipment_id?: string;
+  }) {
+    const partnerId = String(dto?.partner_id ?? '').trim();
+    const shipmentId = String(dto?.shipment_id ?? '').trim();
+    if (!partnerId) this.badRequest('partner_id majburiy');
+    if (!shipmentId) this.badRequest('shipment_id majburiy');
+
+    const ref = await this.partnerShipmentRefRepo.findOne({
+      where: {
+        partner_id: partnerId,
+        order_id: shipmentId,
+        isDeleted: false,
+      },
+    });
+    if (!ref) this.notFound('Shipment topilmadi');
+
+    const order = await this.rmqRequest<Record<string, any>>(
+      this.orderClient,
+      { cmd: 'order.find_by_id' },
+      { id: shipmentId },
+      8000,
+    );
+    if (!order) {
+      throw new RpcException(errorRes('Elchi buyurtmasi topilmadi', 502));
+    }
+
+    const status = this.pluck(order, 'status') as Order_status | undefined;
+    // Yetkazib bo'lingan posilkani bekor qilib bo'lmaydi.
+    if (status === Order_status.SOLD) {
+      this.conflict('Yetkazib bo‘lingan posilkani bekor qilib bo‘lmaydi');
+    }
+    // Allaqachon bekor qilingan — idempotent javob (qayta cancel emit qilmaymiz).
+    if (
+      status === Order_status.CANCELLED ||
+      status === Order_status.CANCELLED_SENT
+    ) {
+      return successRes(
+        {
+          shipment_id: shipmentId,
+          status: Order_status.CANCELLED,
+          idempotent: true,
+        },
+        200,
+        'shipment already cancelled',
+      );
+    }
+
+    const cancelled = await this.rmqRequest<Record<string, any>>(
+      this.orderClient,
+      { cmd: 'order.cancel' },
+      {
+        id: shipmentId,
+        dto: { comment: 'Partner tomonidan bekor qilindi' },
+        requester: { id: `partner:${partnerId}`, roles: [Roles.SUPERADMIN] },
+        request_id: `partner-cancel:${partnerId}:${shipmentId}`,
+      },
+      10000,
+    );
+    if (!cancelled) {
+      throw new RpcException(errorRes('Posilkani bekor qilib bo‘lmadi', 502));
+    }
+
+    return successRes(
+      { shipment_id: shipmentId, status: Order_status.CANCELLED },
+      200,
+      'shipment cancelled',
     );
   }
 
