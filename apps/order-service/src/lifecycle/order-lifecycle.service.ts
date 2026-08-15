@@ -2552,6 +2552,27 @@ export class OrderLifecycleService {
     old_status: string,
     new_status: string,
   ) {
+    // C2.3 — Elchi Partner API chiquvchi webhook. Bu YO'L `operator='external_'`
+    // shartiga bog'liq EMAS (partner order'larda operator boshqacha) — barcha
+    // external_id'li order uchun signal yuboriladi; integration-service
+    // partner_shipment_ref bo'yicha filtrlaydi (partner emas → no-op).
+    // `paid_amount` = "sold"da kuryer yig'gan pul (cod_collected).
+    if (order.external_id) {
+      await rmqSend(
+        this.integrationClient,
+        { cmd: 'integration.partner.webhook.enqueue' },
+        {
+          order_id: order.id,
+          external_order_id: order.external_id,
+          action,
+          old_status,
+          new_status,
+          cod_collected: Number(order.paid_amount ?? 0),
+        },
+      ).catch(() => undefined);
+    }
+
+    // Eski ExternalIntegration sync yo'li (o'zgarmagan).
     if (!order.external_id || !order.operator?.startsWith('external_')) {
       return;
     }

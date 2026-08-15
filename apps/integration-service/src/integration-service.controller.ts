@@ -156,6 +156,26 @@ export class IntegrationServiceController {
     );
   }
 
+  // C2.3 — order-service status o'zgarganда chaqiradi (external_id bo'lgan order
+  // uchun). Partner order emas bo'lsa integration-service ичida no-op.
+  @MessagePattern({ cmd: 'integration.partner.webhook.enqueue' })
+  enqueuePartnerWebhook(
+    @Payload()
+    data: {
+      order_id?: string;
+      external_order_id?: string;
+      action?: string;
+      old_status?: string;
+      new_status?: string;
+      cod_collected?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.enqueuePartnerWebhook(data ?? {}),
+    );
+  }
+
   // --- ExternalIntegration ---
   @MessagePattern({ cmd: 'integration.create' })
   create(@Payload() data: any, @Ctx() context: RmqContext) {

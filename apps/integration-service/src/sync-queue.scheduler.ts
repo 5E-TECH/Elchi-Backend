@@ -144,6 +144,28 @@ export class SyncQueueScheduler implements OnModuleInit, OnModuleDestroy {
       const completed = Number(result?.data?.completed ?? 0);
       const failed = Number(result?.data?.failed ?? 0);
 
+      // C2.3 — hamkor chiquvchi webhook outbox'ini ham shu tick'da bo'shatamiz
+      // (alohida jadval; ExternalIntegration sync_queue'dan mustaqil). Xatosi
+      // butun tick'ni yiqitmasin.
+      try {
+        const wh =
+          await this.integrationService.processPendingPartnerWebhooks(batch);
+        if (wh.processed > 0) {
+          this.logger.debug(
+            `partner webhook tick: processed=${wh.processed} delivered=${wh.delivered} failed=${wh.failed}`,
+          );
+        }
+      } catch (whErr) {
+        const e = whErr as Error;
+        this.logger.error(
+          `partner webhook tick crashed: ${e.message}`,
+          e.stack,
+        );
+        captureException(e, {
+          source: 'SyncQueueScheduler.tick.partnerWebhook',
+        });
+      }
+
       // Only audit ticks that did real work — quiet ticks would flood the
       // audit log with thousands of "0 processed" entries per day.
       if (processed > 0) {

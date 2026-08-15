@@ -61,6 +61,9 @@ jest.mock('./entities/partner-market-ref.entity', () => ({
 jest.mock('./entities/partner-shipment-ref.entity', () => ({
   PartnerShipmentRef: class PartnerShipmentRef {},
 }));
+jest.mock('./entities/partner-webhook-outbox.entity', () => ({
+  PartnerWebhookOutbox: class PartnerWebhookOutbox {},
+}));
 
 const SECRET = 'provider-shared-secret';
 const BODY = JSON.stringify({ event: 'package.delivered', order_id: '1001' });
@@ -112,6 +115,13 @@ function makeService(integration: Record<string, unknown> | null) {
   const partnerShipmentRefRepo: any = {
     findOne: jest.fn().mockResolvedValue(null),
   };
+  const partnerWebhookOutboxRepo: any = {
+    findOne: jest.fn().mockResolvedValue(null),
+    find: jest.fn().mockResolvedValue([]),
+    create: jest.fn((dto: any) => ({ ...dto })),
+    save: jest.fn(async (e: any) => ({ id: 'pwo1', ...e })),
+    update: jest.fn().mockResolvedValue({ affected: 1 }),
+  };
   const noClient: any = {};
 
   const service = new IntegrationServiceService(
@@ -125,13 +135,20 @@ function makeService(integration: Record<string, unknown> | null) {
     partnerRepo,
     partnerMarketRefRepo,
     partnerShipmentRefRepo,
+    partnerWebhookOutboxRepo,
     activityLog,
     noClient,
     noClient,
     noClient,
     noClient,
   );
-  return { service, integrationRepo, webhookLogRepo, shipmentRepo, activityLog };
+  return {
+    service,
+    integrationRepo,
+    webhookLogRepo,
+    shipmentRepo,
+    activityLog,
+  };
 }
 
 function baseIntegration(overrides: Record<string, unknown> = {}) {
@@ -411,7 +428,11 @@ describe('IntegrationServiceService provider shipments', () => {
 describe('IntegrationServiceService webhook → shipment status (D3)', () => {
   const PAYLOAD = JSON.stringify({
     event: 'package.delivered',
-    data: { order_id: 'ACME-9', tracking: 'TRK-9', status: { code: 'DELIVERED' } },
+    data: {
+      order_id: 'ACME-9',
+      tracking: 'TRK-9',
+      status: { code: 'DELIVERED' },
+    },
   });
 
   function trackingIntegration(overrides: Record<string, unknown> = {}) {
@@ -457,7 +478,10 @@ describe('IntegrationServiceService webhook → shipment status (D3)', () => {
       order_id: '1001',
     });
     expect(shipmentRepo.save).toHaveBeenCalledWith(
-      expect.objectContaining({ internal_status: 'sold', provider_status: 'DELIVERED' }),
+      expect.objectContaining({
+        internal_status: 'sold',
+        provider_status: 'DELIVERED',
+      }),
     );
   });
 
@@ -513,11 +537,18 @@ describe('IntegrationServiceService webhook → shipment status (D3)', () => {
 
     const body = JSON.stringify({
       event: 'package.weird',
-      data: { order_id: 'ACME-9', tracking: 'TRK-9', status: { code: 'WAREHOUSE_X' } },
+      data: {
+        order_id: 'ACME-9',
+        tracking: 'TRK-9',
+        status: { code: 'WAREHOUSE_X' },
+      },
     });
     const sig = computeHmacSignature(body, SECRET);
     const res = await service.receiveWebhook(
-      bodyToInput('acme-cargo', body, { 'x-signature': sig, 'x-delivery-id': 'd4' }),
+      bodyToInput('acme-cargo', body, {
+        'x-signature': sig,
+        'x-delivery-id': 'd4',
+      }),
     );
 
     expect(res.shipment).toMatchObject({ outcome: 'unmapped' });
@@ -569,7 +600,11 @@ describe('IntegrationServiceService.dispatchShipment (D4)', () => {
     jest.spyOn(service as any, 'executeExternalRequest').mockResolvedValue({
       data: {
         raw: {
-          data: { order_id: 'ACME-77', tracking_number: 'TRK-77', status: 'CREATED' },
+          data: {
+            order_id: 'ACME-77',
+            tracking_number: 'TRK-77',
+            status: 'CREATED',
+          },
         },
       },
     });
@@ -625,7 +660,11 @@ describe('IntegrationServiceService.dispatchShipment (D4)', () => {
 describe('IntegrationServiceService webhook → order terminal action (D3b)', () => {
   const PAYLOAD = JSON.stringify({
     event: 'package.delivered',
-    data: { order_id: 'ACME-9', tracking: 'TRK-9', status: { code: 'DELIVERED' } },
+    data: {
+      order_id: 'ACME-9',
+      tracking: 'TRK-9',
+      status: { code: 'DELIVERED' },
+    },
   });
 
   function trackingIntegration() {
@@ -658,7 +697,10 @@ describe('IntegrationServiceService webhook → order terminal action (D3b)', ()
 
     const sig = computeHmacSignature(PAYLOAD, SECRET);
     const res = await service.receiveWebhook(
-      bodyToInput('acme-cargo', PAYLOAD, { 'x-signature': sig, 'x-delivery-id': 'o1' }),
+      bodyToInput('acme-cargo', PAYLOAD, {
+        'x-signature': sig,
+        'x-delivery-id': 'o1',
+      }),
     );
 
     expect(res.ok).toBe(true);
@@ -689,7 +731,10 @@ describe('IntegrationServiceService webhook → order terminal action (D3b)', ()
 
     const sig = computeHmacSignature(PAYLOAD, SECRET);
     const res = await service.receiveWebhook(
-      bodyToInput('acme-cargo', PAYLOAD, { 'x-signature': sig, 'x-delivery-id': 'o2' }),
+      bodyToInput('acme-cargo', PAYLOAD, {
+        'x-signature': sig,
+        'x-delivery-id': 'o2',
+      }),
     );
 
     expect(res.ok).toBe(true);

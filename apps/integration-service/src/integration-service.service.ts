@@ -18,6 +18,7 @@ import {
   Roles,
   Where_deliver,
   verifyHmacSignature,
+  computeHmacSignature,
   assertPublicUrl,
   SsrfBlockedError,
 } from '@app/common';
@@ -34,6 +35,7 @@ import { ProviderRemittance } from './entities/provider-remittance.entity';
 import { Partner } from './entities/partner.entity';
 import { PartnerMarketRef } from './entities/partner-market-ref.entity';
 import { PartnerShipmentRef } from './entities/partner-shipment-ref.entity';
+import { PartnerWebhookOutbox } from './entities/partner-webhook-outbox.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
@@ -160,6 +162,8 @@ export class IntegrationServiceService {
     private readonly partnerMarketRefRepo: Repository<PartnerMarketRef>,
     @InjectRepository(PartnerShipmentRef)
     private readonly partnerShipmentRefRepo: Repository<PartnerShipmentRef>,
+    @InjectRepository(PartnerWebhookOutbox)
+    private readonly partnerWebhookOutboxRepo: Repository<PartnerWebhookOutbox>,
     private readonly activityLog: ActivityLogService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
@@ -734,6 +738,215 @@ export class IntegrationServiceService {
     );
   }
 
+  // ===== C2.3 — Elchi → hamkor chiquvchi webhook (outbox) =====
+
+  /**
+   * Order statusi o'zgarganda hamkor webhook'ini navbatga qo'yadi. order-service
+   * `queueExternalStatusSync` ichidan (external_id bo'lgan har order uchun)
+   * chaqiriladi; partner order EMAS bo'lsa (partner_shipment_ref yo'q) — no-op.
+   * Dedup: `(partner_id, order_id, new_status)` UNIQUE cheklovi — bir status bir
+   * marta navbatga tushadi. `sold`da yig'ilgan pul (`cod_collected`) uzatiladi.
+   */
+  async enqueuePartnerWebhook(dto: {
+    order_id?: string;
+    external_order_id?: string;
+    action?: string;
+    old_status?: string;
+    new_status?: string;
+    cod_collected?: number;
+  }) {
+    const orderId = String(dto?.order_id ?? '').trim();
+    if (!orderId) return successRes({ skipped: 'no order_id' }, 200, 'skipped');
+
+    // Partner order emasligini arzon tekshirish.
+    const ref = await this.partnerShipmentRefRepo.findOne({
+      where: { order_id: orderId, isDeleted: false },
+    });
+    if (!ref) {
+      return successRes({ skipped: 'not a partner order' }, 200, 'skipped');
+    }
+
+    const newStatus = String(dto?.new_status ?? dto?.action ?? '');
+    const codCollected = Number(dto?.cod_collected ?? 0);
+    const payload = {
+      event: 'shipment.status_changed',
+      external_order_id: ref.external_order_id,
+      shipment_id: orderId,
+      status: newStatus,
+      // COD yig'ilgan summa faqat `sold`da ma'noli (kuryer pulni topshirdi).
+      cod_collected:
+        newStatus === (Order_status.SOLD as string) &&
+        Number.isFinite(codCollected)
+          ? codCollected
+          : 0,
+      occurred_at: new Date().toISOString(),
+    };
+
+    try {
+      const saved = await this.partnerWebhookOutboxRepo.save(
+        this.partnerWebhookOutboxRepo.create({
+          partner_id: String(ref.partner_id),
+          order_id: orderId,
+          external_order_id: ref.external_order_id,
+          event_type: 'shipment.status_changed',
+          new_status: newStatus,
+          payload,
+          status: 'pending',
+          attempts: 0,
+          max_attempts: 4,
+        }),
+      );
+      // Darhol bir marta urinib ko'ramiz (scheduler ham keyingi tick'da oladi).
+      void this.processPendingPartnerWebhooks(1).catch(() => undefined);
+      return successRes(
+        { outbox_id: saved.id },
+        201,
+        'partner webhook enqueued',
+      );
+    } catch (error) {
+      // DEDUP: unique (partner_id, order_id, new_status) buzilsa — shu status
+      // uchun allaqachon navbatda; qayta emit qilmaymiz (idempotent).
+      if (this.isUniqueViolation(error)) {
+        return successRes({ skipped: 'duplicate' }, 200, 'dedup');
+      }
+      throw new RpcException(errorRes('Webhook navbatga qo‘yib bo‘lmadi', 500));
+    }
+  }
+
+  /**
+   * Pending (va muddati kelgan) hamkor webhook qatorlarini yuboradi. Har qatorni
+   * atomik ravishda `processing`ga claim qiladi (ikki worker bir rowni ikki marta
+   * yubormasin), keyin HMAC POST qiladi. Scheduler tick'idan va enqueue'dan
+   * chaqiriladi.
+   */
+  async processPendingPartnerWebhooks(
+    limit = 20,
+  ): Promise<{ processed: number; delivered: number; failed: number }> {
+    const now = new Date();
+    const rows = await this.partnerWebhookOutboxRepo.find({
+      where: [
+        { status: 'pending', next_retry_at: IsNull(), isDeleted: false },
+        {
+          status: 'pending',
+          next_retry_at: LessThanOrEqual(now),
+          isDeleted: false,
+        },
+      ],
+      order: { createdAt: 'ASC' },
+      take: Math.max(1, Math.min(500, limit)),
+    });
+
+    let delivered = 0;
+    let failed = 0;
+    for (const row of rows) {
+      const ok = await this.deliverPartnerWebhookRow(row);
+      if (ok) delivered += 1;
+      else failed += 1;
+    }
+    return { processed: rows.length, delivered, failed };
+  }
+
+  /**
+   * Bitta outbox qatorini yetkazadi. Atomik claim (`pending`→`processing`) →
+   * HMAC POST → muvaffaqiyat: `completed`+`delivered_at`; xato: attempts<max bo'lsa
+   * `pending`+backoff (`getRetryDelayMs`), aks holda `permanently_failed`.
+   */
+  private async deliverPartnerWebhookRow(
+    row: PartnerWebhookOutbox,
+  ): Promise<boolean> {
+    const attempts = Number(row.attempts ?? 0) + 1;
+    // Atomik claim — faqat hali `pending` bo'lsa. affected=0 → boshqa worker oldi.
+    const claim = await this.partnerWebhookOutboxRepo.update(
+      { id: row.id, status: 'pending' },
+      { status: 'processing', attempts },
+    );
+    if (!claim.affected) return false;
+
+    try {
+      const result = await this.dispatchPartnerWebhook(row);
+      await this.partnerWebhookOutboxRepo.update(
+        { id: row.id },
+        {
+          status: 'completed',
+          delivered_at: new Date(),
+          last_error: null,
+          last_response: result,
+          next_retry_at: null,
+        },
+      );
+      return true;
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'partner webhook dispatch failed';
+      if (attempts < Number(row.max_attempts ?? 4)) {
+        await this.partnerWebhookOutboxRepo.update(
+          { id: row.id },
+          {
+            status: 'pending',
+            last_error: message,
+            next_retry_at: new Date(
+              Date.now() + this.getRetryDelayMs(attempts),
+            ),
+          },
+        );
+      } else {
+        await this.partnerWebhookOutboxRepo.update(
+          { id: row.id },
+          {
+            status: 'permanently_failed',
+            last_error: message,
+            next_retry_at: null,
+          },
+        );
+      }
+      return false;
+    }
+  }
+
+  /**
+   * Hamkorning `webhook_url`'iga HMAC-imzoli (`X-Elchi-Signature`) POST. SSRF
+   * guard + imzo `computeHmacSignature(body, decrypt(webhook_secret))`. 2xx emas
+   * bo'lsa xato tashlaydi (chaqiruvchi retry qiladi).
+   */
+  private async dispatchPartnerWebhook(
+    row: PartnerWebhookOutbox,
+  ): Promise<Record<string, any>> {
+    const partner = await this.partnerRepo.findOne({
+      where: { id: String(row.partner_id), isDeleted: false },
+    });
+    if (!partner?.webhook_url) {
+      // Yuboradigan manzil yo'q — retry qilmaymiz, muvaffaqiyat deb yopamiz.
+      return { skipped: 'no webhook_url' };
+    }
+    await this.assertOutboundUrlSafe(partner.webhook_url);
+
+    const rawBody = JSON.stringify(row.payload ?? {});
+    const secret = this.decryptCredential(partner.webhook_secret) ?? '';
+    const signature = computeHmacSignature(rawBody, secret, 'sha256', 'hex');
+
+    const res = await fetch(partner.webhook_url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Elchi-Signature': signature,
+      },
+      body: rawBody,
+      signal: AbortSignal.timeout(15000),
+    });
+    if (!res.ok) {
+      throw new Error(`partner webhook HTTP ${res.status}`);
+    }
+    return { http_status: res.status };
+  }
+
+  /** Postgres unique-violation (23505) — dedup uchun. */
+  private isUniqueViolation(error: unknown): boolean {
+    const e = error as { code?: string; driverError?: { code?: string } };
+    return e?.code === '23505' || e?.driverError?.code === '23505';
+  }
+
   /** Item nomlarini order comment'iga jamlaydi (product_id C2.5 gача). */
   private shipmentItemsComment(
     items?: Array<{ name?: string; quantity?: number }>,
@@ -1276,9 +1489,7 @@ export class IntegrationServiceService {
     return this.toSafeInt(response?.total);
   }
 
-  private async getOrderStatsByMarket(
-    marketId: string,
-  ): Promise<{
+  private async getOrderStatsByMarket(marketId: string): Promise<{
     total_orders: number;
     successful_orders: number;
     cancelled_orders: number;

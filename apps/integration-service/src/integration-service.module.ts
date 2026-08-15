@@ -21,6 +21,7 @@ import { ProviderRemittance } from './entities/provider-remittance.entity';
 import { Partner } from './entities/partner.entity';
 import { PartnerShipmentRef } from './entities/partner-shipment-ref.entity';
 import { PartnerMarketRef } from './entities/partner-market-ref.entity';
+import { PartnerWebhookOutbox } from './entities/partner-webhook-outbox.entity';
 import { SyncQueueScheduler } from './sync-queue.scheduler';
 
 @Module({
@@ -50,6 +51,7 @@ import { SyncQueueScheduler } from './sync-queue.scheduler';
       Partner,
       PartnerShipmentRef,
       PartnerMarketRef,
+      PartnerWebhookOutbox,
     ]),
   ],
   controllers: [IntegrationServiceController],
