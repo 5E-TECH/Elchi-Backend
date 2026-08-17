@@ -550,9 +550,6 @@ export class FinanceGatewayController {
       (sum, item) => sum + Math.max(Number(item.balance ?? 0), 0),
       0,
     );
-    const courierBalanceMap = new Map(
-      courierCashboxes.map((item) => [item.courierId, item.balance]),
-    );
 
     const courierIds = couriers
       .map((courier) => String(courier?.id ?? '').trim())
@@ -641,49 +638,10 @@ export class FinanceGatewayController {
       };
     };
 
-    let berilishiKerak = 0;
-    const courierOrders = new Map<string, any[]>();
-
-    for (const order of soldOrders) {
-      const amounts = calculateOrderAmounts(order);
-      if (!amounts.courierId || !courierTariffMap.has(amounts.courierId)) {
-        berilishiKerak += amounts.hqPayable;
-        continue;
-      }
-      const rows = courierOrders.get(amounts.courierId) ?? [];
-      rows.push(order);
-      courierOrders.set(amounts.courierId, rows);
-    }
-
-    for (const [courierId, orders] of courierOrders) {
-      const sortedOrders = [...orders].sort(
-        (left, right) =>
-          new Date(left?.createdAt ?? 0).getTime() -
-          new Date(right?.createdAt ?? 0).getTime(),
-      );
-      const totalCourierReceivable = sortedOrders.reduce(
-        (sum, order) => sum + calculateOrderAmounts(order).courierReceivable,
-        0,
-      );
-      let acceptedAmount = Math.max(
-        totalCourierReceivable -
-          Math.max(Number(courierBalanceMap.get(courierId) ?? 0), 0),
-        0,
-      );
-
-      for (const order of sortedOrders) {
-        if (acceptedAmount <= 0) break;
-        const amounts = calculateOrderAmounts(order);
-        if (amounts.courierReceivable <= 0) {
-          berilishiKerak += amounts.hqPayable;
-          continue;
-        }
-        const allocated = Math.min(acceptedAmount, amounts.courierReceivable);
-        berilishiKerak +=
-          amounts.hqPayable * (allocated / amounts.courierReceivable);
-        acceptedAmount -= allocated;
-      }
-    }
+    const berilishiKerak = soldOrders.reduce(
+      (sum, order) => sum + calculateOrderAmounts(order).hqPayable,
+      0,
+    );
 
     const branchToMainHistoryResponse = ownCashbox?.id
       ? await this.send<{
