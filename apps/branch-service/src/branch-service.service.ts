@@ -2773,6 +2773,13 @@ export class BranchServiceService implements OnModuleInit {
         }
         return Number(payableToHqByBranchId.get(String(item.id)) ?? 0);
       })(),
+      // Regional branch uchun bu summa branchning HQ'ga berishi kerak bo'lgan
+      // qarzidir. `olinishi_kerak` legacy maydoni saqlanadi, yangi consumerlar
+      // esa semantik jihatdan to'g'ri nomni ishlatadi.
+      berilishi_kerak:
+        item.type === BranchType.HQ
+          ? 0
+          : Number(payableToHqByBranchId.get(String(item.id)) ?? 0),
       payment: (() => {
         const managerId = managerByBranchId.get(String(item.id));
         if (!managerId) return null;

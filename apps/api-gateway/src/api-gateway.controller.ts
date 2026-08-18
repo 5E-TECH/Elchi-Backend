@@ -598,7 +598,10 @@ export class ApiGatewayController {
         const cashbox = branchId
           ? await this.findUserCashbox(branchId, Cashbox_type.BRANCH)
           : null;
-        const payableToHq = Math.max(Number(branch?.olinishi_kerak ?? 0), 0);
+        const payableToHq = Math.max(
+          Number(branch?.berilishi_kerak ?? 0),
+          0,
+        );
 
         return {
           ...manager,
