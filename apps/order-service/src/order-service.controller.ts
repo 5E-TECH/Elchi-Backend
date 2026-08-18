@@ -122,6 +122,7 @@ export class OrderServiceController {
         holder_type?: OrderHolderType;
         qr_code_token?: string;
         status?: Order_status | Order_status[] | string | string[];
+        where_deliver?: Where_deliver;
         return_requested?: boolean;
         start_day?: string;
         end_day?: string;

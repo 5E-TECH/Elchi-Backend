@@ -418,6 +418,7 @@ export class OrderServiceService {
     holder_type?: OrderHolderType;
     qr_code_token?: string;
     status?: Order_status | Order_status[] | string | string[];
+    where_deliver?: Where_deliver;
     return_requested?: boolean;
     start_day?: string;
     end_day?: string;
@@ -449,6 +450,7 @@ export class OrderServiceService {
       holder_type,
       qr_code_token,
       status,
+      where_deliver,
       return_requested,
       start_day,
       end_day,
@@ -524,6 +526,9 @@ export class OrderServiceService {
       qb.andWhere('order.status NOT IN (:...exclude_statuses)', {
         exclude_statuses,
       });
+    }
+    if (where_deliver) {
+      qb.andWhere('order.where_deliver = :where_deliver', { where_deliver });
     }
     if (typeof return_requested === 'boolean') {
       qb.andWhere('order.return_requested = :return_requested', {
@@ -1270,6 +1275,7 @@ export class OrderServiceService {
     holder_type?: OrderHolderType;
     exclude_statuses?: Order_status[];
     status?: Order_status | Order_status[] | string | string[];
+    where_deliver?: Where_deliver;
     search?: string;
     start_day?: string;
     end_day?: string;
@@ -1278,6 +1284,7 @@ export class OrderServiceService {
     holder_courier_ids?: string[];
     include_courier_history?: boolean | string;
     region_id?: string;
+    district_id?: string;
     page?: number;
     limit?: number;
   }) {

@@ -1226,6 +1226,12 @@ export class OrderGatewayController {
   @ApiQuery({ name: 'region_id', required: false, type: String })
   @ApiQuery({ name: 'district_id', required: false, type: String })
   @ApiQuery({ name: 'branch_id', required: false, type: String })
+  @ApiQuery({ name: 'courier_id', required: false, type: String })
+  @ApiQuery({
+    name: 'where_deliver',
+    required: false,
+    enum: Where_deliver,
+  })
   @ApiQuery({
     name: 'source',
     required: false,
@@ -1261,6 +1267,8 @@ export class OrderGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Req() req?: { user: JwtUser },
+    @Query('courier_id') courier_id?: string,
+    @Query('where_deliver') where_deliver?: string,
   ) {
     const roles = req?.user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
@@ -1304,12 +1312,26 @@ export class OrderGatewayController {
           ? [courier_ids]
           : []
     )
+      .concat(courier_id ? [courier_id] : [])
       .flatMap((value) => String(value).split(','))
       .map((value) => value.trim())
       .filter(Boolean);
     const useFetchAll = String(fetch_all ?? '').toLowerCase() === 'true';
 
     const statuses = this.parseStatusQuery(status);
+    const normalizedWhereDeliver = where_deliver
+      ? String(where_deliver).trim().toLowerCase()
+      : undefined;
+    if (
+      normalizedWhereDeliver &&
+      !Object.values(Where_deliver).includes(
+        normalizedWhereDeliver as Where_deliver,
+      )
+    ) {
+      throw new BadRequestException(
+        `Noto'g'ri where_deliver qiymati: ${where_deliver}`,
+      );
+    }
     const isCancelledTab =
       Boolean(statuses?.length) &&
       statuses!.every(
@@ -1364,6 +1386,7 @@ export class OrderGatewayController {
         market_id: resolvedMarketId,
         customer_id,
         status: resolvedStatuses,
+        where_deliver: normalizedWhereDeliver as Where_deliver | undefined,
         search,
         start_day,
         end_day,
