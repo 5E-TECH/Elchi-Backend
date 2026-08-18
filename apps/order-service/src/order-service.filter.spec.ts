@@ -248,6 +248,21 @@ describe('OrderServiceService filters', () => {
     ).toBe(false);
   });
 
+  it('filters orders by delivery type', async () => {
+    const { service, qb } = setup();
+
+    await service.findAll({
+      where_deliver: 'address' as any,
+      page: 1,
+      limit: 10,
+    });
+
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'order.where_deliver = :where_deliver',
+      { where_deliver: 'address' },
+    );
+  });
+
   it('includes courier custody history only when requested', async () => {
     const { service, qb } = setup();
 
