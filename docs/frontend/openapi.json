@@ -1506,6 +1506,26 @@
             }
           },
           {
+            "name": "courier_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "where_deliver",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "center",
+                "address"
+              ],
+              "type": "string"
+            }
+          },
+          {
             "name": "status",
             "required": false,
             "in": "query",
