@@ -2550,23 +2550,6 @@ export class BranchServiceService implements OnModuleInit {
           0,
         );
         const courierIds = courierIdsByBranchId.get(branchId) ?? [];
-        const courierUsersMap = await this.getUsersByIds(courierIds);
-        const courierTariffMap = new Map(
-          courierIds.map((courierId) => {
-            const courier = courierUsersMap.get(courierId) as Record<
-              string,
-              unknown
-            > | null;
-            return [
-              courierId,
-              {
-                home: Math.max(Number(courier?.tariff_home ?? 0), 0),
-                center: Math.max(Number(courier?.tariff_center ?? 0), 0),
-              },
-            ] as const;
-          }),
-        );
-
         const soldOrderQuery = {
           status: [
             Order_status.SOLD,
@@ -2613,7 +2596,6 @@ export class BranchServiceService implements OnModuleInit {
             ].map((order: any) => [String(order?.id ?? ''), order]),
           ).values(),
         );
-        const courierOrders = new Map<string, any[]>();
         let payableToHq = 0;
 
         const calculateAmounts = (order: any) => {
@@ -2624,86 +2606,15 @@ export class BranchServiceService implements OnModuleInit {
           const managerTariff = isCenter
             ? managerTariffCenter
             : managerTariffHome;
-          const courierId = String(order?.courier_id ?? '').trim();
-          const courierTariffs = courierTariffMap.get(courierId);
-          const savedCourierShare = Number(order?.courier_share ?? NaN);
-          const savedCourierTariff = Number(order?.courier_tariff ?? NaN);
-          const savedBranchShare = Number(order?.branch_share ?? NaN);
-          const hasSavedShares =
-            Number.isFinite(savedCourierShare) ||
-            Number.isFinite(savedCourierTariff);
-          const courierShare = Number.isFinite(savedCourierShare)
-            ? Math.max(savedCourierShare, 0)
-            : Number.isFinite(savedCourierTariff)
-              ? Math.max(savedCourierTariff, 0)
-              : isCenter
-                ? Number(courierTariffs?.center ?? 0)
-                : Number(courierTariffs?.home ?? 0);
-          const branchShare = Number.isFinite(savedBranchShare)
-            ? Math.max(savedBranchShare, 0)
-            : 0;
-
-          // What the branch owes HQ = total − (kept below HQ). Prefer the order's
-          // SAVED shares (courier_share + branch_share) — the same source
-          // courierReceivable uses and identical to order_settlement.branch_amount
-          // — so the receivable matches the actual branch→HQ settlement. The
-          // manager-tariff estimate is only a fallback for orders with no saved
-          // shares; relying on it made olinishi_kerak overstate the branch→HQ
-          // debt by the courier's share whenever the manager tariff was left
-          // unconfigured (≠ courier share). (Live-E2E fix.)
-          const hqPayable = hasSavedShares
-            ? Math.max(totalPrice - courierShare - branchShare, 0)
-            : Math.max(totalPrice - managerTariff, 0);
-
           return {
-            courierId,
-            courierReceivable: Math.max(totalPrice - courierShare, 0),
-            hqPayable,
+            // Manager payments sahifasidagi `berilishi_kerak` bilan aynan bir
+            // xil formula: order summasi minus branch manager tarifi.
+            hqPayable: Math.max(totalPrice - managerTariff, 0),
           };
         };
 
         for (const order of orders) {
-          const amounts = calculateAmounts(order);
-          if (!amounts.courierId || !courierTariffMap.has(amounts.courierId)) {
-            payableToHq += amounts.hqPayable;
-            continue;
-          }
-          const rows = courierOrders.get(amounts.courierId) ?? [];
-          rows.push(order);
-          courierOrders.set(amounts.courierId, rows);
-        }
-
-        for (const [courierId, rows] of courierOrders) {
-          const sortedOrders = [...rows].sort(
-            (left, right) =>
-              new Date(left?.createdAt ?? 0).getTime() -
-              new Date(right?.createdAt ?? 0).getTime(),
-          );
-          const totalCourierReceivable = sortedOrders.reduce(
-            (sum, order) => sum + calculateAmounts(order).courierReceivable,
-            0,
-          );
-          let acceptedAmount = Math.max(
-            totalCourierReceivable -
-              Math.max(Number(courierBalanceByUserId.get(courierId) ?? 0), 0),
-            0,
-          );
-
-          for (const order of sortedOrders) {
-            if (acceptedAmount <= 0) break;
-            const amounts = calculateAmounts(order);
-            if (amounts.courierReceivable <= 0) {
-              payableToHq += amounts.hqPayable;
-              continue;
-            }
-            const allocated = Math.min(
-              acceptedAmount,
-              amounts.courierReceivable,
-            );
-            payableToHq +=
-              amounts.hqPayable * (allocated / amounts.courierReceivable);
-            acceptedAmount -= allocated;
-          }
+          payableToHq += calculateAmounts(order).hqPayable;
         }
 
         let paidToHq = 0;
