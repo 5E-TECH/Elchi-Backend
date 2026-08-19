@@ -736,9 +736,11 @@ export class OrderLifecycleService {
   }
 
   /**
-   * When a partly-sold parent order is rolled back, re-attach the cancelled
-   * child rows created for the unsold items. Rolling back a child order itself
-   * remains isolated because child rows do not have children of their own.
+   * When a partly-sold parent order is rolled back, re-attach the child rows
+   * created for the unsold items. This also covers the operator flow where the
+   * cancelled child was rolled back to WAITING first, then the sold parent was
+   * rolled back afterwards. Money-bearing child statuses are intentionally not
+   * merged here.
    */
   private async mergePartialChildrenBack(
     manager: EntityManager,
@@ -749,7 +751,7 @@ export class OrderLifecycleService {
     const children = await orderRepo.find({
       where: {
         parent_order_id: String(order.id),
-        status: Order_status.CANCELLED,
+        status: In([Order_status.CANCELLED, Order_status.WAITING]),
         isDeleted: false,
       },
       order: { createdAt: 'ASC' },

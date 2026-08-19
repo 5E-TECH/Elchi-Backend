@@ -68,13 +68,21 @@ export class FinanceServiceController {
 
   @MessagePattern({ cmd: 'finance.cashbox.main' })
   getMainCashbox(
-    @Payload() data: { fromDate?: string; toDate?: string },
+    @Payload()
+    data: {
+      fromDate?: string;
+      toDate?: string;
+      sourceTypes?: string;
+      source_types?: string;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
       this.financeService.getMainCashbox({
         fromDate: data?.fromDate,
         toDate: data?.toDate,
+        sourceTypes: data?.sourceTypes,
+        source_types: data?.source_types,
       }),
     );
   }
@@ -87,6 +95,10 @@ export class FinanceServiceController {
       fromDate?: string;
       toDate?: string;
       cashbox_type?: any;
+      history_source_type?: any;
+      history_source_types?: string;
+      sourceTypes?: string;
+      source_types?: string;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -104,6 +116,8 @@ export class FinanceServiceController {
       roles?: string[];
       fromDate?: string;
       toDate?: string;
+      sourceTypes?: string;
+      source_types?: string;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -201,6 +215,8 @@ export class FinanceServiceController {
       operation_type?: any;
       sourceType?: any;
       source_type?: any;
+      sourceTypes?: string;
+      source_types?: string;
       createdBy?: string;
       created_by?: string;
       cashboxType?: any;

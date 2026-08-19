@@ -218,7 +218,7 @@ describe('FinanceServiceService.findCashboxByUser', () => {
 });
 
 describe('FinanceServiceService.myCashbox', () => {
-  it('shows only HQ-market payment history for market users', async () => {
+  it('shows all market cashbox history by default', async () => {
     const manager = makeManager();
     const { service, cashboxRepo, historyRepo } = makeService(manager);
     const cashbox = {
@@ -247,14 +247,13 @@ describe('FinanceServiceService.myCashbox', () => {
         where: {
           cashbox_id: '16',
           isDeleted: false,
-          source_type: 'market_payment',
         },
       }),
     );
     expect(response.data.cashboxHistory).toEqual([hqMarketPayment]);
   });
 
-  it('shows only HQ-branch payment history for manager users', async () => {
+  it('shows all branch cashbox history by default for manager users', async () => {
     const manager = makeManager();
     const { service, cashboxRepo, historyRepo } = makeService(manager);
     const cashbox = {
@@ -284,14 +283,13 @@ describe('FinanceServiceService.myCashbox', () => {
         where: {
           cashbox_id: '20',
           isDeleted: false,
-          source_type: 'branch_to_main',
         },
       }),
     );
     expect(response.data.cashboxHistory).toEqual([branchPayment]);
   });
 
-  it('shows only manager-courier payment history for courier users', async () => {
+  it('shows all courier cashbox history by default', async () => {
     const manager = makeManager();
     const { service, cashboxRepo, historyRepo } = makeService(manager);
     const cashbox = {
@@ -320,10 +318,49 @@ describe('FinanceServiceService.myCashbox', () => {
         where: {
           cashbox_id: '21',
           isDeleted: false,
-          source_type: 'courier_payment',
         },
       }),
     );
+    expect(response.data.cashboxHistory).toEqual([courierPayment]);
+  });
+
+  it('filters cashbox history by sourceTypes when requested', async () => {
+    const manager = makeManager();
+    const { service, cashboxRepo, historyRepo } = makeService(manager);
+    const cashbox = {
+      id: '21',
+      user_id: '8',
+      cashbox_type: 'for_courier',
+      balance: 500000,
+    };
+    const courierPayment = {
+      id: '92',
+      cashbox_id: '21',
+      source_type: 'courier_payment',
+      amount: 500000,
+    };
+
+    cashboxRepo.findOne.mockResolvedValue(cashbox);
+    historyRepo.find.mockResolvedValue([courierPayment]);
+
+    const response = await service.myCashbox({
+      user_id: '8',
+      roles: ['courier'],
+      sourceTypes: 'courier_payment,market_payment',
+    });
+
+    expect(historyRepo.find).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          cashbox_id: '21',
+          isDeleted: false,
+        }),
+      }),
+    );
+    expect(
+      (historyRepo.find.mock.calls[0][0].where as Record<string, unknown>)
+        .source_type,
+    ).toBeDefined();
     expect(response.data.cashboxHistory).toEqual([courierPayment]);
   });
 });
