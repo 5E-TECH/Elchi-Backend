@@ -23,6 +23,10 @@ export class FindCashboxByUserDto {
   history_source_type?: Source_type;
 
   @IsOptional()
+  @IsString()
+  history_source_types?: string;
+
+  @IsOptional()
   @IsBoolean()
   with_history?: boolean;
 

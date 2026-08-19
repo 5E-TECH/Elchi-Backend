@@ -414,14 +414,25 @@ export class FinanceGatewayController {
 
   private async loadCashboxHistory(
     cashboxId: string,
-    query: { page?: number; limit?: number },
+    query: {
+      page?: number;
+      limit?: number;
+      sourceTypes?: string;
+      source_types?: string;
+    },
   ): Promise<any[]> {
     if (!cashboxId) {
       return [];
     }
     const historyResponse = await this.send(
       { cmd: 'finance.history.find_all' },
-      { cashbox_id: cashboxId, page: query.page, limit: query.limit },
+      {
+        cashbox_id: cashboxId,
+        page: query.page,
+        limit: query.limit,
+        sourceTypes: query.sourceTypes,
+        source_types: query.source_types,
+      },
     );
     const histories = historyResponse?.data?.items ?? [];
     return this.attachCreatedByUsers(histories);
@@ -831,7 +842,12 @@ export class FinanceGatewayController {
 
     const response = await this.send(
       { cmd: 'finance.cashbox.find_by_user' },
-      { user_id: requestUserId, ...requestQuery },
+      {
+        user_id: requestUserId,
+        ...requestQuery,
+        history_source_types:
+          requestQuery.sourceTypes ?? requestQuery.source_types,
+      },
     );
 
     const withHistory = query.with_history ?? true;

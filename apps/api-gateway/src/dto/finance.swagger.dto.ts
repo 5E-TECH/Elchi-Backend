@@ -53,6 +53,23 @@ export class FindCashboxByUserQueryDto {
   @IsEnum(Cashbox_type)
   cashbox_type?: Cashbox_type;
 
+  @ApiPropertyOptional({
+    example: 'courier_payment,market_payment,branch_to_main',
+    description:
+      'Comma-separated source_type list for cashbox history tabs. Omit for all history.',
+  })
+  @IsOptional()
+  @IsString()
+  sourceTypes?: string;
+
+  @ApiPropertyOptional({
+    example: 'sell,cancel,extra_cost,correction',
+    description: 'Snake_case alias for sourceTypes',
+  })
+  @IsOptional()
+  @IsString()
+  source_types?: string;
+
   @ApiPropertyOptional({ example: true })
   @IsOptional()
   @Type(() => Boolean)
@@ -180,6 +197,23 @@ export class FindHistoryQueryDto {
   @IsOptional()
   @IsEnum(Source_type)
   source_type?: Source_type;
+
+  @ApiPropertyOptional({
+    example: 'courier_payment,market_payment',
+    description:
+      'Comma-separated source_type list for tabs like all/payments/sales',
+  })
+  @IsOptional()
+  @IsString()
+  sourceTypes?: string;
+
+  @ApiPropertyOptional({
+    example: 'sell,cancel,extra_cost,correction',
+    description: 'Snake_case alias for sourceTypes',
+  })
+  @IsOptional()
+  @IsString()
+  source_types?: string;
 
   @ApiPropertyOptional({ example: '777' })
   @IsOptional()
@@ -490,6 +524,23 @@ export class MainCashboxFilterQueryDto {
   @IsOptional()
   @IsString()
   toDate?: string;
+
+  @ApiPropertyOptional({
+    example: 'courier_payment,market_payment',
+    description:
+      'Comma-separated source_type list. Omit for all history; use payment types for Oldi-berdi.',
+  })
+  @IsOptional()
+  @IsString()
+  sourceTypes?: string;
+
+  @ApiPropertyOptional({
+    example: 'sell,cancel,extra_cost,correction',
+    description: 'Snake_case alias for sourceTypes',
+  })
+  @IsOptional()
+  @IsString()
+  source_types?: string;
 }
 
 export class CashboxAllInfoQueryDto {

@@ -178,6 +178,27 @@ export class FinanceServiceService implements OnModuleInit {
     return date;
   }
 
+  private parseSourceTypes(value?: string | null): Source_type[] | undefined {
+    const raw = String(value ?? '').trim();
+    if (!raw) {
+      return undefined;
+    }
+
+    const allowed = new Set(Object.values(Source_type));
+    const sourceTypes = raw
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    for (const sourceType of sourceTypes) {
+      if (!allowed.has(sourceType as Source_type)) {
+        throw new BadRequestException(`Invalid source_type: ${sourceType}`);
+      }
+    }
+
+    return sourceTypes as Source_type[];
+  }
+
   private normalizeBalance(cashbox: Cashbox) {
     cashbox.balance =
       Number(cashbox.balance_cash) + Number(cashbox.balance_card);
@@ -638,6 +659,9 @@ export class FinanceServiceService implements OnModuleInit {
 
       const page = dto.page && dto.page > 0 ? dto.page : 1;
       const limit = dto.limit && dto.limit > 0 ? dto.limit : 20;
+      const historySourceTypes = this.parseSourceTypes(
+        dto.history_source_types,
+      );
 
       if (dto.cashbox_type) {
         const cashbox = await this.cashboxRepo.findOne({
@@ -662,6 +686,9 @@ export class FinanceServiceService implements OnModuleInit {
         };
         if (dto.history_source_type) {
           historyWhere.source_type = dto.history_source_type;
+        }
+        if (historySourceTypes?.length) {
+          historyWhere.source_type = In(historySourceTypes);
         }
 
         const [history, total] = await this.historyRepo.findAndCount({
@@ -714,6 +741,14 @@ export class FinanceServiceService implements OnModuleInit {
         historyQuery.andWhere('history.source_type = :historySourceType', {
           historySourceType: dto.history_source_type,
         });
+      }
+      if (historySourceTypes?.length) {
+        historyQuery.andWhere(
+          'history.source_type IN (:...historySourceTypes)',
+          {
+            historySourceTypes,
+          },
+        );
       }
 
       const [history, total] = await historyQuery.getManyAndCount();
@@ -904,6 +939,12 @@ export class FinanceServiceService implements OnModuleInit {
       }
       if (dto.source_type) {
         where.source_type = dto.source_type;
+      }
+      const sourceTypes = this.parseSourceTypes(
+        dto.sourceTypes ?? dto.source_types,
+      );
+      if (sourceTypes?.length) {
+        where.source_type = In(sourceTypes);
       }
       if (dto.source_id) {
         this.assertBigIntId(dto.source_id, 'source_id');
@@ -1451,7 +1492,12 @@ export class FinanceServiceService implements OnModuleInit {
     }
   }
 
-  async getMainCashbox(filters?: { fromDate?: string; toDate?: string }) {
+  async getMainCashbox(filters?: {
+    fromDate?: string;
+    toDate?: string;
+    sourceTypes?: string;
+    source_types?: string;
+  }) {
     try {
       const mainCashbox = await this.ensureMainCashbox();
       const { start, end } = this.parseDateRange(
@@ -1465,6 +1511,12 @@ export class FinanceServiceService implements OnModuleInit {
       if (start && end) where.createdAt = Between(start, end);
       else if (start) where.createdAt = MoreThanOrEqual(start);
       else if (end) where.createdAt = LessThanOrEqual(end);
+      const sourceTypes = this.parseSourceTypes(
+        filters?.sourceTypes ?? filters?.source_types,
+      );
+      if (sourceTypes?.length) {
+        where.source_type = In(sourceTypes);
+      }
 
       const cashboxHistory = await this.historyRepo.find({
         where,
@@ -1487,6 +1539,9 @@ export class FinanceServiceService implements OnModuleInit {
     toDate?: string;
     cashbox_type?: Cashbox_type;
     history_source_type?: Source_type;
+    history_source_types?: string;
+    sourceTypes?: string;
+    source_types?: string;
   }) {
     try {
       this.assertBigIntId(data.id, 'id');
@@ -1517,6 +1572,12 @@ export class FinanceServiceService implements OnModuleInit {
       if (data.history_source_type) {
         historyWhere.source_type = data.history_source_type;
       }
+      const historySourceTypes = this.parseSourceTypes(
+        data.history_source_types ?? data.sourceTypes ?? data.source_types,
+      );
+      if (historySourceTypes?.length) {
+        historyWhere.source_type = In(historySourceTypes);
+      }
       if (start && end) historyWhere.createdAt = Between(start, end);
       else if (start) historyWhere.createdAt = MoreThanOrEqual(start);
       else if (end) historyWhere.createdAt = LessThanOrEqual(end);
@@ -1544,6 +1605,8 @@ export class FinanceServiceService implements OnModuleInit {
     cashbox_type?: Cashbox_type;
     fromDate?: string;
     toDate?: string;
+    sourceTypes?: string;
+    source_types?: string;
   }) {
     try {
       this.assertBigIntId(data.user_id, 'user_id');
@@ -1563,13 +1626,6 @@ export class FinanceServiceService implements OnModuleInit {
         cashboxType === Cashbox_type.BRANCH
           ? String(data.branch_id ?? '').trim()
           : data.user_id;
-      const historySourceType =
-        cashboxType === Cashbox_type.FOR_MARKET
-          ? Source_type.MARKET_PAYMENT
-          : cashboxType === Cashbox_type.BRANCH
-            ? Source_type.BRANCH_TO_MAIN
-            : Source_type.COURIER_PAYMENT;
-
       if (cashboxType === Cashbox_type.BRANCH && !targetUserId) {
         throw new BadRequestException('Manager uchun branch_id majburiy');
       }
@@ -1596,7 +1652,7 @@ export class FinanceServiceService implements OnModuleInit {
       return this.getCashboxByUserId({
         id: targetUserId,
         cashbox_type: cashboxType,
-        history_source_type: historySourceType,
+        history_source_types: data.sourceTypes ?? data.source_types,
         fromDate: data.fromDate,
         toDate: data.toDate,
       });
@@ -2441,6 +2497,8 @@ export class FinanceServiceService implements OnModuleInit {
     operation_type?: Operation_type;
     sourceType?: Source_type;
     source_type?: Source_type;
+    sourceTypes?: string;
+    source_types?: string;
     createdBy?: string;
     created_by?: string;
     cashboxType?: Cashbox_type;
@@ -2481,6 +2539,9 @@ export class FinanceServiceService implements OnModuleInit {
 
       const operationType = filters?.operationType ?? filters?.operation_type;
       const sourceType = filters?.sourceType ?? filters?.source_type;
+      const sourceTypes = this.parseSourceTypes(
+        filters?.sourceTypes ?? filters?.source_types,
+      );
       const createdBy = filters?.createdBy ?? filters?.created_by;
       const cashboxType = filters?.cashboxType ?? filters?.cashbox_type;
       const fromDate = filters?.fromDate ?? filters?.from_date;
@@ -2493,6 +2554,10 @@ export class FinanceServiceService implements OnModuleInit {
       if (sourceType)
         qb.andWhere('h.source_type = :sourceType', {
           sourceType,
+        });
+      if (sourceTypes?.length)
+        qb.andWhere('h.source_type IN (:...sourceTypes)', {
+          sourceTypes,
         });
       if (createdBy)
         qb.andWhere('h.created_by = :createdBy', {
