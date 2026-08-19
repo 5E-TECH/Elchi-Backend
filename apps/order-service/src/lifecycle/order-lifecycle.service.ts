@@ -736,6 +736,82 @@ export class OrderLifecycleService {
   }
 
   /**
+   * When a partly-sold parent order is rolled back, re-attach the cancelled
+   * child rows created for the unsold items. Rolling back a child order itself
+   * remains isolated because child rows do not have children of their own.
+   */
+  private async mergePartialChildrenBack(
+    manager: EntityManager,
+    order: Order,
+  ): Promise<number> {
+    const orderRepo = manager.getRepository(Order);
+    const itemRepo = manager.getRepository(OrderItem);
+    const children = await orderRepo.find({
+      where: {
+        parent_order_id: String(order.id),
+        status: Order_status.CANCELLED,
+        isDeleted: false,
+      },
+      order: { createdAt: 'ASC' },
+    });
+
+    if (!children.length) {
+      return 0;
+    }
+
+    const parentItems = await itemRepo.find({
+      where: { order_id: String(order.id) },
+    });
+    const parentItemByProduct = new Map<string, OrderItem>();
+    for (const item of parentItems) {
+      parentItemByProduct.set(String(item.product_id), item);
+    }
+
+    let restoredPrice = 0;
+    let restoredQty = 0;
+    for (const child of children) {
+      restoredPrice += Number(child.total_price ?? 0);
+      restoredQty += Number(child.product_quantity ?? 0);
+
+      const childItems = await itemRepo.find({
+        where: { order_id: String(child.id) },
+      });
+      for (const childItem of childItems) {
+        const productId = String(childItem.product_id);
+        const parentItem = parentItemByProduct.get(productId);
+        if (parentItem) {
+          parentItem.quantity =
+            Number(parentItem.quantity ?? 0) +
+            Number(childItem.quantity ?? 0);
+          await itemRepo.save(parentItem);
+          continue;
+        }
+
+        const recreated = await itemRepo.save(
+          itemRepo.create({
+            order_id: String(order.id),
+            product_id: productId,
+            quantity: Number(childItem.quantity ?? 0),
+          }),
+        );
+        parentItemByProduct.set(productId, recreated);
+      }
+
+      child.isDeleted = true;
+      child.deleted_at = new Date();
+      await orderRepo.save(child);
+      await this.removeOrderFromSearch(String(child.id), manager);
+    }
+
+    order.total_price = Number(order.total_price ?? 0) + restoredPrice;
+    order.product_quantity = Number(order.product_quantity ?? 0) + restoredQty;
+    await orderRepo.save(order);
+    await this.syncOrderToSearch(order, manager);
+
+    return children.length;
+  }
+
+  /**
    * Lock an order row FOR UPDATE inside a transaction and assert it is still in
    * WAITING before any money is posted. Serializes concurrent sell/cancel/
    * partly-sell on the same order and makes a redelivered RMQ message a no-op
@@ -1332,6 +1408,7 @@ export class OrderLifecycleService {
     const rollbackEpoch = this.resolveDedupEpoch(requestId);
     let rollbackSeq = 0;
     let finalStatus: Order_status = Order_status.WAITING;
+    let mergedPartialChildren = 0;
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -1540,6 +1617,10 @@ export class OrderLifecycleService {
       // The order is being reverted out of its sold state — clear its settlement
       // row (guaranteed not yet settled-to-HQ by the guard above), in the same tx.
       await this.resetSettlementOnRollback(tx, id);
+      mergedPartialChildren = await this.mergePartialChildrenBack(
+        tx,
+        order,
+      );
 
       if (
         shouldRollbackMarketExtraCost &&
@@ -1671,7 +1752,10 @@ export class OrderLifecycleService {
       old_value: { status: originalStatus },
       new_value: { status: finalStatus },
       ...this.custody.auditActor(requester),
-      metadata: { rollback_target: rollbackTarget },
+      metadata: {
+        rollback_target: rollbackTarget,
+        merged_partial_children: mergedPartialChildren,
+      },
     });
 
     if (rollbackTarget === 'cancelled') {
