@@ -4351,6 +4351,26 @@
             }
           },
           {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated source_type list for cashbox history tabs. Omit for all history.",
+            "schema": {
+              "example": "courier_payment,market_payment,branch_to_main",
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_types",
+            "required": false,
+            "in": "query",
+            "description": "Snake_case alias for sourceTypes",
+            "schema": {
+              "example": "sell,cancel,extra_cost,correction",
+              "type": "string"
+            }
+          },
+          {
             "name": "with_history",
             "required": false,
             "in": "query",
@@ -4447,6 +4467,26 @@
               "example": "2026-03-07T23:59:59Z",
               "type": "string"
             }
+          },
+          {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated source_type list. Omit for all history; use payment types for Oldi-berdi.",
+            "schema": {
+              "example": "courier_payment,market_payment",
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_types",
+            "required": false,
+            "in": "query",
+            "description": "Snake_case alias for sourceTypes",
+            "schema": {
+              "example": "sell,cancel,extra_cost,correction",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4495,6 +4535,26 @@
               "example": "2026-03-07T23:59:59Z",
               "type": "string"
             }
+          },
+          {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated source_type list. Omit for all history; use payment types for Oldi-berdi.",
+            "schema": {
+              "example": "courier_payment,market_payment",
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_types",
+            "required": false,
+            "in": "query",
+            "description": "Snake_case alias for sourceTypes",
+            "schema": {
+              "example": "sell,cancel,extra_cost,correction",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4532,6 +4592,26 @@
             "in": "query",
             "schema": {
               "example": "2026-03-07T23:59:59Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated source_type list. Omit for all history; use payment types for Oldi-berdi.",
+            "schema": {
+              "example": "courier_payment,market_payment",
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_types",
+            "required": false,
+            "in": "query",
+            "description": "Snake_case alias for sourceTypes",
+            "schema": {
+              "example": "sell,cancel,extra_cost,correction",
               "type": "string"
             }
           }
@@ -4803,6 +4883,26 @@
               "example": "2026-03-07T23:59:59Z",
               "type": "string"
             }
+          },
+          {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated source_type list. Omit for all history; use payment types for Oldi-berdi.",
+            "schema": {
+              "example": "courier_payment,market_payment",
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_types",
+            "required": false,
+            "in": "query",
+            "description": "Snake_case alias for sourceTypes",
+            "schema": {
+              "example": "sell,cancel,extra_cost,correction",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4840,6 +4940,26 @@
             "in": "query",
             "schema": {
               "example": "2026-03-07T23:59:59Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated source_type list. Omit for all history; use payment types for Oldi-berdi.",
+            "schema": {
+              "example": "courier_payment,market_payment",
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_types",
+            "required": false,
+            "in": "query",
+            "description": "Snake_case alias for sourceTypes",
+            "schema": {
+              "example": "sell,cancel,extra_cost,correction",
               "type": "string"
             }
           }
@@ -5132,6 +5252,26 @@
                 "extra_cost",
                 "bills"
               ]
+            }
+          },
+          {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated source_type list for tabs like all/payments/sales",
+            "schema": {
+              "example": "courier_payment,market_payment",
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_types",
+            "required": false,
+            "in": "query",
+            "description": "Snake_case alias for sourceTypes",
+            "schema": {
+              "example": "sell,cancel,extra_cost,correction",
+              "type": "string"
             }
           },
           {
