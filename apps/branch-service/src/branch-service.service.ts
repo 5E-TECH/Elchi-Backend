@@ -2991,11 +2991,9 @@ export class BranchServiceService implements OnModuleInit {
       .length;
 
     const deliveredStatuses = new Set<string>([
-      Order_status.WAITING,
       Order_status.SOLD,
       Order_status.PAID,
       Order_status.PARTLY_PAID,
-      Order_status.CLOSED,
     ]);
 
     const returnedStatuses = new Set<string>([Order_status.RETURNED_TO_MARKET]);
@@ -3110,12 +3108,9 @@ export class BranchServiceService implements OnModuleInit {
     const orders = await this.getOrdersByBranchIds(targetBranchIds);
 
     const deliveredStatuses = new Set<string>([
-      Order_status.WAITING,
       Order_status.SOLD,
       Order_status.PAID,
       Order_status.PARTLY_PAID,
-      Order_status.CLOSED,
-      Order_status.RETURNED_TO_MARKET,
     ]);
 
     const marketMap = new Map<
