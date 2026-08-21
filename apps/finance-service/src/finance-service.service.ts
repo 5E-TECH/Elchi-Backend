@@ -3132,9 +3132,24 @@ export class FinanceServiceService implements OnModuleInit {
         order: { id: 'DESC' },
       });
       const currentBalance = Number(latest?.balance_after ?? 0);
+      const page = Math.floor(skip / take) + 1;
 
       return this.successRes(
-        { rows, total, currentBalance, limit: take, offset: skip },
+        {
+          rows,
+          items: rows,
+          history: rows,
+          total,
+          currentBalance,
+          limit: take,
+          offset: skip,
+          pagination: {
+            total,
+            page,
+            limit: take,
+            totalPages: Math.ceil(total / take),
+          },
+        },
         200,
         'financial balance history',
       );
