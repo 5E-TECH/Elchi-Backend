@@ -1644,23 +1644,95 @@ export class FinanceGatewayController {
   @ApiQuery({ name: 'source_type', required: false })
   @ApiQuery({ name: 'from_date', required: false })
   @ApiQuery({ name: 'to_date', required: false })
+  @ApiQuery({ name: 'fromDate', required: false })
+  @ApiQuery({ name: 'toDate', required: false })
+  @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
   @ApiQuery({ name: 'offset', required: false })
   financialBalanceHistory(
     @Query('source_type') source_type?: string,
     @Query('from_date') from_date?: string,
     @Query('to_date') to_date?: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
+    const normalizedLimit = limit ? Number(limit) : undefined;
+    const normalizedPage = page ? Math.max(Number(page), 1) : undefined;
+    const normalizedOffset = offset
+      ? Number(offset)
+      : normalizedPage && normalizedLimit
+        ? (normalizedPage - 1) * normalizedLimit
+        : undefined;
+
     return this.send(
       { cmd: 'finance.financial_balance.history' },
       {
         source_type,
-        from_date,
-        to_date,
+        from_date: from_date ?? fromDate,
+        to_date: to_date ?? toDate,
+        limit: normalizedLimit,
+        offset: normalizedOffset,
+      },
+    );
+  }
+
+  @Get('financial-balance/analytics')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Get financial balance analytics and impact analysis',
+  })
+  @ApiQuery({ name: 'fromDate', required: false })
+  @ApiQuery({ name: 'toDate', required: false })
+  @ApiQuery({ name: 'from_date', required: false })
+  @ApiQuery({ name: 'to_date', required: false })
+  financialBalanceAnalytics(
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('from_date') from_date?: string,
+    @Query('to_date') to_date?: string,
+  ) {
+    return this.send(
+      { cmd: 'finance.financial_balance.analytics' },
+      {
+        from_date: from_date ?? fromDate,
+        to_date: to_date ?? toDate,
+      },
+    );
+  }
+
+  @Get('financial-balance/top-impacts')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Paginated top-impact financial balance transactions',
+  })
+  @ApiQuery({ name: 'fromDate', required: false })
+  @ApiQuery({ name: 'toDate', required: false })
+  @ApiQuery({ name: 'from_date', required: false })
+  @ApiQuery({ name: 'to_date', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
+  financialBalanceTopImpacts(
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('from_date') from_date?: string,
+    @Query('to_date') to_date?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.send(
+      { cmd: 'finance.financial_balance.top_impacts' },
+      {
+        from_date: from_date ?? fromDate,
+        to_date: to_date ?? toDate,
+        page: page ? Number(page) : undefined,
         limit: limit ? Number(limit) : undefined,
-        offset: offset ? Number(offset) : undefined,
       },
     );
   }
