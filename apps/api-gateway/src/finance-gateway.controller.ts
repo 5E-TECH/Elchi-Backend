@@ -470,8 +470,6 @@ export class FinanceGatewayController {
     if (!managerBranchId) {
       managerBranchId = this.extractBranchId(managerProfile);
     }
-    const managerTariffHome = Number(managerProfile?.tariff_home ?? 0);
-    const managerTariffCenter = Number(managerProfile?.tariff_center ?? 0);
 
     const branchCouriers: any[] = [];
     if (managerBranchId) {
@@ -616,10 +614,6 @@ export class FinanceGatewayController {
     const calculateOrderAmounts = (order: any) => {
       const totalPrice = Math.max(Number(order?.total_price ?? 0), 0);
       const whereDeliver = String(order?.where_deliver ?? '').toLowerCase();
-      const managerTariff =
-        whereDeliver === String(Where_deliver.CENTER).toLowerCase()
-          ? managerTariffCenter
-          : managerTariffHome;
       const courierId = String(order?.courier_id ?? '').trim();
       // Prefer the snapshotted courier_share (what the courier actually KEEPS —
       // 0 for SALARY_ONLY couriers) so this display matches the authoritative
@@ -641,11 +635,21 @@ export class FinanceGatewayController {
             : courierTariffByUser,
         0,
       );
+      const branchCashboxAmountFromOrder = Number(
+        order?.branch_cashbox_amount ?? NaN,
+      );
+      const branchShare = Math.max(Number(order?.branch_share ?? 0), 0);
+      const hqPayable = Math.max(
+        Number.isFinite(branchCashboxAmountFromOrder)
+          ? branchCashboxAmountFromOrder
+          : totalPrice - courierShare - branchShare,
+        0,
+      );
 
       return {
         courierId,
         courierReceivable: Math.max(totalPrice - courierShare, 0),
-        hqPayable: Math.max(totalPrice - managerTariff, 0),
+        hqPayable,
       };
     };
 

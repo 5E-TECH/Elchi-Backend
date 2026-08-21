@@ -783,8 +783,7 @@ export class OrderLifecycleService {
         const parentItem = parentItemByProduct.get(productId);
         if (parentItem) {
           parentItem.quantity =
-            Number(parentItem.quantity ?? 0) +
-            Number(childItem.quantity ?? 0);
+            Number(parentItem.quantity ?? 0) + Number(childItem.quantity ?? 0);
           await itemRepo.save(parentItem);
           continue;
         }
@@ -1619,10 +1618,7 @@ export class OrderLifecycleService {
       // The order is being reverted out of its sold state — clear its settlement
       // row (guaranteed not yet settled-to-HQ by the guard above), in the same tx.
       await this.resetSettlementOnRollback(tx, id);
-      mergedPartialChildren = await this.mergePartialChildrenBack(
-        tx,
-        order,
-      );
+      mergedPartialChildren = await this.mergePartialChildrenBack(tx, order);
 
       if (
         shouldRollbackMarketExtraCost &&
@@ -3207,7 +3203,7 @@ export class OrderLifecycleService {
     //   market : HQ owes market (total − marketTariff); reversed if total < marketTariff
     //   courier: courier owes branch (total − courierShare); HQ tops up if total < courierShare
     //   branch payable: branch owes HQ (total − courierShare − branchShare)
-    //   branch cashbox: manager-direct sales receive the full collected amount
+    //   branch cashbox: branch receives its tariff-adjusted payable share
     const marketIncome = Math.max(totalPrice - marketTariff, 0);
     const marketExpense = Math.max(marketTariff - totalPrice, 0);
     const courierIncome = Math.max(totalPrice - courierShare, 0);

@@ -355,7 +355,7 @@ describe('OrderServiceService filters', () => {
     expect(qb.andWhere).toHaveBeenCalledWith('order.canceled_post_id IS NULL');
   });
 
-  it('credits the full order amount to branch cashbox for manager-direct sales', () => {
+  it('credits the tariff-adjusted branch payable for manager-direct sales', () => {
     const { lifecycle } = setup();
 
     const amount = (lifecycle as any).resolveBranchCashboxSaleAmount(
@@ -364,7 +364,7 @@ describe('OrderServiceService filters', () => {
       true,
     );
 
-    expect(amount).toBe(1_000_000);
+    expect(amount).toBe(950_000);
   });
 
   it('keeps the existing tariff-adjusted branch amount for courier sales', () => {
