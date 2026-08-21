@@ -56,15 +56,18 @@ export function resolveSaleActorShare(
 }
 
 /**
- * Amount credited to the branch cashbox at sale time: a manager sale routes the
- * whole price through the branch; otherwise only the branch's payable share.
+ * Amount credited to the branch cashbox at sale time. Branch/HQ balances show
+ * the tariff-adjusted payable share, regardless of whether a courier or manager
+ * performed the sale; the gross product price remains on the order detail.
  */
 export function resolveBranchCashboxSaleAmount(
   totalPrice: number,
   branchPayable: number,
   isManagerSale: boolean,
 ): number {
-  return isManagerSale ? totalPrice : branchPayable;
+  void totalPrice;
+  void isManagerSale;
+  return branchPayable;
 }
 
 export interface SaleShareInputs {
