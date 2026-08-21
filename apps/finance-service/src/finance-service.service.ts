@@ -3142,4 +3142,208 @@ export class FinanceServiceService implements OnModuleInit {
       this.toRpcError(error);
     }
   }
+
+  private applyFinancialBalanceDateRange(
+    qb: ReturnType<Repository<FinancialBalanceHistory>['createQueryBuilder']>,
+    input: { from_date?: string; to_date?: string },
+  ) {
+    const from = this.parseDate(input.from_date);
+    const to = this.parseDate(input.to_date);
+
+    if (from) {
+      qb.andWhere('h.createdAt >= :from', { from });
+    }
+    if (to) {
+      qb.andWhere('h.createdAt <= :to', { to });
+    }
+
+    return qb;
+  }
+
+  private async getCurrentFinancialBalance(): Promise<number> {
+    const latest = await this.financialHistoryRepo.findOne({
+      where: { isDeleted: false },
+      order: { id: 'DESC' },
+    });
+
+    return Number(latest?.balance_after ?? 0);
+  }
+
+  private mapFinancialBalanceHistoryRow(history: FinancialBalanceHistory) {
+    return {
+      id: history.id,
+      created_at: history.createdAt,
+      createdAt: history.createdAt,
+      source_type: history.source_type,
+      amount: Number(history.amount ?? 0),
+      balance_before: Number(history.balance_before ?? 0),
+      balance_after: Number(history.balance_after ?? 0),
+      comment: history.comment,
+      created_by: history.created_by,
+      related_user_id: history.related_user_id,
+      order_id: history.order_id,
+    };
+  }
+
+  async financialBalanceAnalytics(input: {
+    from_date?: string;
+    to_date?: string;
+  }) {
+    try {
+      const currentBalance = await this.getCurrentFinancialBalance();
+
+      const sourceQb = this.financialHistoryRepo
+        .createQueryBuilder('h')
+        .select('h.source_type', 'source_type')
+        .addSelect(
+          'SUM(CASE WHEN h.amount > 0 THEN h.amount ELSE 0 END)',
+          'positive_total',
+        )
+        .addSelect(
+          'SUM(CASE WHEN h.amount < 0 THEN (-1 * h.amount) ELSE 0 END)',
+          'negative_total',
+        )
+        .addSelect('SUM(h.amount)', 'net_total')
+        .addSelect('COUNT(h.id)', 'transaction_count')
+        .where('h.isDeleted = false')
+        .groupBy('h.source_type')
+        .orderBy('net_total', 'DESC');
+      this.applyFinancialBalanceDateRange(sourceQb, input);
+
+      const totalsQb = this.financialHistoryRepo
+        .createQueryBuilder('h')
+        .select(
+          'SUM(CASE WHEN h.amount > 0 THEN h.amount ELSE 0 END)',
+          'total_positive',
+        )
+        .addSelect(
+          'SUM(CASE WHEN h.amount < 0 THEN (-1 * h.amount) ELSE 0 END)',
+          'total_negative',
+        )
+        .addSelect('SUM(h.amount)', 'net_change')
+        .addSelect('COUNT(h.id)', 'total_count')
+        .where('h.isDeleted = false');
+      this.applyFinancialBalanceDateRange(totalsQb, input);
+
+      const topQb = this.financialHistoryRepo
+        .createQueryBuilder('h')
+        .addSelect(
+          'CASE WHEN h.amount >= 0 THEN h.amount ELSE (-1 * h.amount) END',
+          'abs_amount',
+        )
+        .where('h.isDeleted = false')
+        .orderBy('abs_amount', 'DESC')
+        .addOrderBy('h.createdAt', 'DESC')
+        .take(10);
+      this.applyFinancialBalanceDateRange(topQb, input);
+
+      const [sourceBreakdown, totalsRaw, topTransactions] = await Promise.all([
+        sourceQb.getRawMany(),
+        totalsQb.getRawOne(),
+        topQb.getMany(),
+      ]);
+
+      const totalPositive = Number(totalsRaw?.total_positive ?? 0);
+      const totalNegative = Number(totalsRaw?.total_negative ?? 0);
+      const netChange = Number(totalsRaw?.net_change ?? 0);
+      const totalCount = Number(totalsRaw?.total_count ?? 0);
+
+      const positiveImpact = sourceBreakdown
+        .filter((source) => Number(source.positive_total) > 0)
+        .map((source) => ({
+          source_type: source.source_type,
+          total_amount: Number(source.positive_total),
+          transaction_count: Number(source.transaction_count),
+          percentage:
+            totalPositive > 0
+              ? Math.round(
+                  (Number(source.positive_total) / totalPositive) * 10000,
+                ) / 100
+              : 0,
+        }))
+        .sort((a, b) => b.total_amount - a.total_amount);
+
+      const negativeImpact = sourceBreakdown
+        .filter((source) => Number(source.negative_total) > 0)
+        .map((source) => ({
+          source_type: source.source_type,
+          total_amount: Number(source.negative_total),
+          transaction_count: Number(source.transaction_count),
+          percentage:
+            totalNegative > 0
+              ? Math.round(
+                  (Number(source.negative_total) / totalNegative) * 10000,
+                ) / 100
+              : 0,
+        }))
+        .sort((a, b) => b.total_amount - a.total_amount);
+
+      return this.successRes(
+        {
+          currentBalance,
+          summary: {
+            totalPositive,
+            totalNegative,
+            netChange,
+            totalCount,
+          },
+          positiveImpact,
+          negativeImpact,
+          topTransactions: topTransactions.map((history) =>
+            this.mapFinancialBalanceHistoryRow(history),
+          ),
+        },
+        200,
+        'Financial balance analytics',
+      );
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
+  async financialBalanceTopImpacts(input: {
+    from_date?: string;
+    to_date?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    try {
+      const page = Math.max(1, Number(input.page ?? 1));
+      const limit = Math.min(Math.max(Number(input.limit ?? 20), 1), 100);
+
+      const qb = this.financialHistoryRepo
+        .createQueryBuilder('h')
+        .addSelect(
+          'CASE WHEN h.amount >= 0 THEN h.amount ELSE (-1 * h.amount) END',
+          'abs_amount',
+        )
+        .where('h.isDeleted = false')
+        .orderBy('abs_amount', 'DESC')
+        .addOrderBy('h.createdAt', 'DESC');
+      this.applyFinancialBalanceDateRange(qb, input);
+
+      const [items, total] = await qb
+        .skip((page - 1) * limit)
+        .take(limit)
+        .getManyAndCount();
+
+      return this.successRes(
+        {
+          items: items.map((history) =>
+            this.mapFinancialBalanceHistoryRow(history),
+          ),
+          pagination: {
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
+          },
+        },
+        200,
+        'Top impact transactions',
+      );
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
 }

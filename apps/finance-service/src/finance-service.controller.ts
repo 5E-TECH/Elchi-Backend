@@ -422,6 +422,36 @@ export class FinanceServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'finance.financial_balance.analytics' })
+  financialBalanceAnalytics(
+    @Payload()
+    data: {
+      from_date?: string;
+      to_date?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.financialBalanceAnalytics(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'finance.financial_balance.top_impacts' })
+  financialBalanceTopImpacts(
+    @Payload()
+    data: {
+      from_date?: string;
+      to_date?: string;
+      page?: number;
+      limit?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.financeService.financialBalanceTopImpacts(data),
+    );
+  }
+
   // --- Audit log (read-only fan-in for the gateway) ---
 
   @MessagePattern({ cmd: 'finance.activity_log.find_all' })
