@@ -213,6 +213,7 @@ describe('AnalyticsServiceService', () => {
   );
 
   it('uses requester branch_id for manager branch dashboard', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-06-11T10:00:00.000Z'));
     const scopedCommands = new Set([
       'order.analytics.overview',
       'order.analytics.market_stats',
@@ -227,6 +228,13 @@ describe('AnalyticsServiceService', () => {
         }
         if (pattern?.cmd === 'branch.dashboard') {
           expect(payload.id).toBe('16');
+          expect(payload.filter).toEqual(
+            expect.objectContaining({
+              period: 'today',
+              startDate: '2026-06-10T19:00:00.000Z',
+              endDate: '2026-06-11T18:59:59.999Z',
+            }),
+          );
           return Promise.resolve({ data: { branchId: '16' } });
         }
         if (pattern?.cmd === 'branch.user.find_by_user') {
@@ -242,6 +250,28 @@ describe('AnalyticsServiceService', () => {
     );
 
     expect(res.data.branchDashboard).toEqual({ branchId: '16' });
+  });
+
+  it('keeps manager branch dashboard on all-time filter', async () => {
+    rmqSendMock.mockImplementation(
+      (_client: any, pattern: any, payload: any) => {
+        if (pattern?.cmd === 'branch.dashboard') {
+          expect(payload.id).toBe('16');
+          expect(payload.filter).toEqual(
+            expect.objectContaining({ all: true }),
+          );
+          return Promise.resolve({ data: { branchId: '16', all: true } });
+        }
+        return Promise.resolve({ data: [] });
+      },
+    );
+
+    const res = await service.getDashboard(
+      { id: '2', roles: ['manager'], branch_id: '16' },
+      { all: true },
+    );
+
+    expect(res.data.branchDashboard).toEqual({ branchId: '16', all: true });
   });
 
   it('getRevenueStats defaults invalid period to daily', async () => {

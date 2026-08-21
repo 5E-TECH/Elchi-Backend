@@ -416,6 +416,12 @@ export class AnalyticsServiceService {
 
   private async resolveRequesterBranchDashboard(
     requester: RequesterContext | undefined,
+    filter: {
+      startDate?: string;
+      endDate?: string;
+      period?: string;
+      all?: boolean;
+    } = {},
   ) {
     const branchId = await this.resolveRequesterBranchId(requester);
     if (!branchId) {
@@ -425,7 +431,7 @@ export class AnalyticsServiceService {
     const dashboardRes = await rmqSend<any>(
       this.branchClient,
       { cmd: 'branch.dashboard' },
-      { id: branchId, requester },
+      { id: branchId, requester, filter },
     ).catch(() => null);
 
     return this.unwrap<any>(dashboardRes) ?? null;
@@ -567,6 +573,13 @@ export class AnalyticsServiceService {
           branchId ? { ...scopedRange, branch_id: branchId } : scopedRange,
         ).catch(() => null),
       ]);
+      const branchDashboard = isBranchRole
+        ? await this.resolveRequesterBranchDashboard(requester, {
+            ...scopedRange,
+            period: filter.period,
+            all: filter.all,
+          })
+        : null;
 
       return successRes(
         {
@@ -578,7 +591,7 @@ export class AnalyticsServiceService {
           couriers: [],
           topMarkets: this.unwrap(topMarkets),
           topBranches: this.unwrap(topBranches),
-          branchDashboard: null,
+          branchDashboard,
         },
         200,
         'Dashboard infos (all time)',
@@ -614,7 +627,11 @@ export class AnalyticsServiceService {
         ).catch(() => null),
       ]);
     const branchDashboard = isBranchRole
-      ? await this.resolveRequesterBranchDashboard(requester)
+      ? await this.resolveRequesterBranchDashboard(requester, {
+          ...normalized,
+          period: filter.period,
+          all: filter.all,
+        })
       : null;
 
     const ordersOverview = this.unwrap<any>(orders as any);
