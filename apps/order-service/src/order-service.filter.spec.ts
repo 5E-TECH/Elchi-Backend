@@ -18,6 +18,7 @@ describe('OrderServiceService filters', () => {
       getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
       getMany: jest.fn().mockResolvedValue([]),
       getCount: jest.fn().mockResolvedValue(0),
+      getRawOne: jest.fn().mockResolvedValue({ count: '0' }),
     };
 
     const orderRepo = {
@@ -409,29 +410,27 @@ describe('OrderServiceService filters', () => {
     expect(analyticsScope?.[1]).toEqual({ analyticsBranchId: '16' });
   });
 
-  it('counts dashboard accepted orders only from branch batch receive events', async () => {
-    const { analytics, trackingQb } = setup();
+  it('counts dashboard accepted orders from created orders', async () => {
+    const { analytics, qb, trackingQb } = setup();
     const range = {
       start: new Date('2026-07-22T19:00:00.000Z'),
       end: new Date('2026-07-23T18:59:59.999Z'),
     };
-    trackingQb.getRawOne.mockResolvedValue({ count: '3' });
+    qb.getRawOne.mockResolvedValue({ count: '110' });
 
-    const count = await (analytics as any).countBranchBatchAcceptedOrders(
+    const count = await (analytics as any).countDashboardAcceptedOrders(
       range,
       '16',
     );
 
-    expect(count).toBe(3);
-    expect(trackingQb.andWhere).toHaveBeenCalledWith('t.action = :action', {
-      action: 'branch_batch_received',
-    });
-    expect(trackingQb.andWhere).toHaveBeenCalledWith('t.to_status = :status', {
-      status: 'received',
-    });
-    expect(trackingQb.andWhere).toHaveBeenCalledWith(
-      't.created_at BETWEEN :start AND :end',
+    expect(count).toBe(110);
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'o.createdAt BETWEEN :start AND :end',
       range,
+    );
+    expect(trackingQb.andWhere).not.toHaveBeenCalledWith(
+      't.action = :action',
+      expect.anything(),
     );
   });
 
