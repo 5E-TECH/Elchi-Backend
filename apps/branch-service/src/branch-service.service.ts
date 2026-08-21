@@ -15,6 +15,7 @@ import {
   Operation_type,
   Order_status,
   Post_status,
+  Roles,
   Source_type,
   Status,
   Where_deliver,
@@ -752,23 +753,7 @@ export class BranchServiceService implements OnModuleInit {
   private async getOrdersByBranchIds(
     branchIds: string[],
   ): Promise<OrderAnalyticsRow[]> {
-    const courierAssignments = branchIds.length
-      ? ((await this.branchUserRepo.find({
-          where: {
-            branch_id: In(branchIds),
-            role: BranchUserRole.COURIER,
-            isDeleted: false,
-          },
-          select: ['user_id'],
-        })) ?? [])
-      : [];
-    const courierIds = Array.from(
-      new Set(
-        courierAssignments
-          .map((assignment) => String(assignment.user_id ?? '').trim())
-          .filter(Boolean),
-      ),
-    );
+    const courierIds = await this.getCourierIdsByBranchIds(branchIds);
 
     const rows = await Promise.all(
       [
@@ -803,6 +788,57 @@ export class BranchServiceService implements OnModuleInit {
     return Array.from(
       new Map(rows.flat().map((order) => [String(order.id), order])).values(),
     );
+  }
+
+  private async getCourierIdsByBranchIds(
+    branchIds: string[],
+  ): Promise<string[]> {
+    if (!branchIds.length) {
+      return [];
+    }
+
+    const courierAssignments =
+      (await this.branchUserRepo.find({
+        where: {
+          branch_id: In(branchIds),
+          role: BranchUserRole.COURIER,
+          isDeleted: false,
+        },
+        select: ['user_id'],
+      })) ?? [];
+
+    const ids = new Set(
+      courierAssignments
+        .map((assignment) => String(assignment.user_id ?? '').trim())
+        .filter(Boolean),
+    );
+
+    try {
+      const response = await lastValueFrom(
+        this.identityClient
+          .send<{
+            data?: {
+              items?: Array<{ id?: string; branch_id?: string | null }>;
+            };
+          }>(
+            { cmd: 'identity.user.find_all' },
+            { query: { role: Roles.COURIER, page: 1, limit: 1000 } },
+          )
+          .pipe(timeout(8000)),
+      );
+      const branchSet = new Set(branchIds.map((id) => String(id)));
+      for (const courier of response?.data?.items ?? []) {
+        const branchId = String(courier?.branch_id ?? '').trim();
+        const courierId = String(courier?.id ?? '').trim();
+        if (courierId && branchSet.has(branchId)) {
+          ids.add(courierId);
+        }
+      }
+    } catch {
+      // BranchUser is the source of truth; identity.branch_id is a compatibility fallback.
+    }
+
+    return Array.from(ids);
   }
 
   private async resolveAnalyticsBranchIds(
@@ -2951,13 +2987,8 @@ export class BranchServiceService implements OnModuleInit {
         .map((order) => String(order.current_batch_id)),
     ).size;
 
-    const couriersCount = await this.branchUserRepo.count({
-      where: {
-        branch_id: In(targetBranchIds),
-        role: BranchUserRole.COURIER,
-        isDeleted: false,
-      },
-    });
+    const couriersCount = (await this.getCourierIdsByBranchIds(targetBranchIds))
+      .length;
 
     const deliveredStatuses = new Set<string>([
       Order_status.WAITING,
