@@ -1530,6 +1530,11 @@ export class OrderGatewayController {
   ) {
     const pagination = this.parsePaginationQuery(page, limit);
     const statuses = this.parseStatusQuery(status);
+    const normalizedRoles = this.normalizeRoles(req?.user?.roles);
+    const isBranchScopedRequester =
+      normalizedRoles.includes(RoleEnum.BRANCH) ||
+      normalizedRoles.includes(RoleEnum.MANAGER) ||
+      normalizedRoles.includes(RoleEnum.REGISTRATOR);
     const cancelledTabStatuses = [
       Order_status.CANCELLED,
       Order_status.CANCELLED_SENT,
@@ -1564,6 +1569,62 @@ export class OrderGatewayController {
           total,
           page: pagination.page,
           limit: pagination.limit,
+          ...paginationMeta,
+        },
+        200,
+        'All my orders',
+      );
+    }
+
+    if (isBranchScopedRequester && req?.user) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
+        throw new BadRequestException('Branch user branchga biriktirilmagan');
+      }
+
+      const payload = {
+        query: {
+          branch_id: String(assignment.branch_id),
+          status: statuses,
+          exclude_statuses: statuses?.length
+            ? undefined
+            : [
+                Order_status.CREATED,
+                Order_status.NEW,
+                Order_status.RECEIVED,
+                Order_status.ON_THE_ROAD,
+              ],
+          search,
+          start_day: startDate,
+          end_day: endDate,
+          page: pagination.page,
+          limit: pagination.limit,
+        },
+      };
+      const result = await this.sendOrderWithFallback(
+        { cmd: 'order.find_all_enriched' },
+        { cmd: 'order.find_all' },
+        payload,
+      );
+      const rows = this.extractRows(result?.data ?? result);
+      const total = Number(result?.total ?? rows.length);
+      const currentPage = Number(result?.page ?? pagination.page);
+      const currentLimit = Number(result?.limit ?? pagination.limit);
+      const legacyData = this.toLegacyShape(rows).map((row) =>
+        this.normalizeLegacyOrderRow(row),
+      );
+      const paginationMeta = this.buildPaginationMeta(
+        total,
+        currentPage,
+        currentLimit,
+      );
+
+      return successRes(
+        {
+          data: legacyData,
+          total,
+          page: currentPage,
+          limit: currentLimit,
           ...paginationMeta,
         },
         200,
