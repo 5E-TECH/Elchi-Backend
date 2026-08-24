@@ -262,6 +262,9 @@ export class FinanceServiceService implements OnModuleInit {
   private parseDateRange(fromDate?: string, toDate?: string) {
     const start = this.parseDate(fromDate ?? null);
     const end = this.parseDate(toDate ?? null);
+    if (end && toDate && /^\d{4}-\d{2}-\d{2}$/.test(toDate.trim())) {
+      end.setHours(23, 59, 59, 999);
+    }
     return { start, end };
   }
 
@@ -660,7 +663,7 @@ export class FinanceServiceService implements OnModuleInit {
       const page = dto.page && dto.page > 0 ? dto.page : 1;
       const limit = dto.limit && dto.limit > 0 ? dto.limit : 20;
       const historySourceTypes = this.parseSourceTypes(
-        dto.history_source_types,
+        dto.history_source_types ?? dto.sourceTypes ?? dto.source_types,
       );
 
       if (dto.cashbox_type) {
@@ -684,12 +687,16 @@ export class FinanceServiceService implements OnModuleInit {
           cashbox_id: cashbox.id,
           isDeleted: false,
         };
+        const { start, end } = this.parseDateRange(dto.fromDate, dto.toDate);
         if (dto.history_source_type) {
           historyWhere.source_type = dto.history_source_type;
         }
         if (historySourceTypes?.length) {
           historyWhere.source_type = In(historySourceTypes);
         }
+        if (start && end) historyWhere.createdAt = Between(start, end);
+        else if (start) historyWhere.createdAt = MoreThanOrEqual(start);
+        else if (end) historyWhere.createdAt = LessThanOrEqual(end);
 
         const [history, total] = await this.historyRepo.findAndCount({
           where: historyWhere,
