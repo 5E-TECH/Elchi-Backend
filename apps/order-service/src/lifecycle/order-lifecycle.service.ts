@@ -748,6 +748,8 @@ export class OrderLifecycleService {
   ): Promise<number> {
     const orderRepo = manager.getRepository(Order);
     const itemRepo = manager.getRepository(OrderItem);
+    const parentOrder =
+      (await orderRepo.findOne({ where: { id: String(order.id) } })) ?? order;
     const children = await orderRepo.find({
       where: {
         parent_order_id: String(order.id),
@@ -762,7 +764,7 @@ export class OrderLifecycleService {
     }
 
     const parentItems = await itemRepo.find({
-      where: { order_id: String(order.id) },
+      where: { order_id: String(parentOrder.id) },
     });
     const parentItemByProduct = new Map<string, OrderItem>();
     for (const item of parentItems) {
@@ -790,7 +792,7 @@ export class OrderLifecycleService {
 
         const recreated = await itemRepo.save(
           itemRepo.create({
-            order_id: String(order.id),
+            order_id: String(parentOrder.id),
             product_id: productId,
             quantity: Number(childItem.quantity ?? 0),
           }),
@@ -804,10 +806,12 @@ export class OrderLifecycleService {
       await this.removeOrderFromSearch(String(child.id), manager);
     }
 
-    order.total_price = Number(order.total_price ?? 0) + restoredPrice;
-    order.product_quantity = Number(order.product_quantity ?? 0) + restoredQty;
-    await orderRepo.save(order);
-    await this.syncOrderToSearch(order, manager);
+    parentOrder.total_price =
+      Number(parentOrder.total_price ?? 0) + restoredPrice;
+    parentOrder.product_quantity =
+      Number(parentOrder.product_quantity ?? 0) + restoredQty;
+    await orderRepo.save(parentOrder);
+    await this.syncOrderToSearch(parentOrder, manager);
 
     return children.length;
   }
@@ -1618,7 +1622,6 @@ export class OrderLifecycleService {
       // The order is being reverted out of its sold state — clear its settlement
       // row (guaranteed not yet settled-to-HQ by the guard above), in the same tx.
       await this.resetSettlementOnRollback(tx, id);
-      mergedPartialChildren = await this.mergePartialChildrenBack(tx, order);
 
       if (
         shouldRollbackMarketExtraCost &&
@@ -1713,6 +1716,8 @@ export class OrderLifecycleService {
           tx,
         );
       }
+
+      mergedPartialChildren = await this.mergePartialChildrenBack(tx, order);
 
       await queryRunner.commitTransaction();
     } catch (error) {
