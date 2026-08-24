@@ -134,12 +134,18 @@ export class FinanceGatewayController {
   }
 
   private async attachCreatedByUsersToHistory(response: any) {
-    const histories = response?.data?.cashboxHistory;
+    const histories = Array.isArray(response?.data?.cashboxHistory)
+      ? response.data.cashboxHistory
+      : response?.data?.history;
     if (!Array.isArray(histories) || !histories.length) {
       return response;
     }
 
-    response.data.cashboxHistory = await this.attachCreatedByUsers(histories);
+    const enrichedHistories = await this.attachCreatedByUsers(histories);
+    response.data.cashboxHistory = enrichedHistories;
+    if (Array.isArray(response?.data?.history)) {
+      response.data.history = enrichedHistories;
+    }
 
     return response;
   }
@@ -197,6 +203,11 @@ export class FinanceGatewayController {
     if (Array.isArray(data.cashboxHistory)) {
       data.cashboxHistory = await this.attachCreatedByUsers(
         data.cashboxHistory,
+      );
+    }
+    if (Array.isArray(data.allCashboxHistories)) {
+      data.allCashboxHistories = await this.attachCreatedByUsers(
+        data.allCashboxHistories,
       );
     }
 
@@ -948,9 +959,11 @@ export class FinanceGatewayController {
         );
         response.data.counterparty = 'HQ';
       }
-      response.data.cashboxHistory = await this.attachCreatedByUsers(
+      const enrichedHistory = await this.attachCreatedByUsers(
         response.data.history,
       );
+      response.data.history = enrichedHistory;
+      response.data.cashboxHistory = enrichedHistory;
       return response;
     }
 
@@ -958,9 +971,11 @@ export class FinanceGatewayController {
       Array.isArray(response?.data?.cashboxes) &&
       Array.isArray(response?.data?.history)
     ) {
-      response.data.cashboxHistory = await this.attachCreatedByUsers(
+      const enrichedHistory = await this.attachCreatedByUsers(
         response.data.history,
       );
+      response.data.history = enrichedHistory;
+      response.data.cashboxHistory = enrichedHistory;
       return response;
     }
 
