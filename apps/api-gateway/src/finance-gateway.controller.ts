@@ -178,7 +178,29 @@ export class FinanceGatewayController {
     return histories.map((item: any) => ({
       ...item,
       createdByUser: usersMap.get(String(item?.created_by ?? '')) ?? null,
+      created_by_user: usersMap.get(String(item?.created_by ?? '')) ?? null,
     }));
+  }
+
+  private async attachCreatedByUsersToHistoryResponse(response: any) {
+    const data = response?.data;
+    if (!data || typeof data !== 'object') {
+      return response;
+    }
+
+    if (Array.isArray(data.items)) {
+      data.items = await this.attachCreatedByUsers(data.items);
+    }
+    if (Array.isArray(data.history)) {
+      data.history = await this.attachCreatedByUsers(data.history);
+    }
+    if (Array.isArray(data.cashboxHistory)) {
+      data.cashboxHistory = await this.attachCreatedByUsers(
+        data.cashboxHistory,
+      );
+    }
+
+    return response;
   }
 
   private getUserRoles(user: JwtUser | undefined) {
@@ -1852,28 +1874,28 @@ export class FinanceGatewayController {
       this.hasRole(req?.user, RoleEnum.MARKET) &&
       !this.isPrivileged(req?.user)
     ) {
-      return this.send(
+      return this.attachCreatedByUsersToHistoryResponse(await this.send(
         { cmd: 'finance.history.find_all' },
         {
           ...query,
           user_id: String(req.user.sub),
           cashbox_type: Cashbox_type.FOR_MARKET,
         },
-      );
+      ));
     }
 
     if (
       this.hasRole(req?.user, RoleEnum.COURIER) &&
       !this.isPrivileged(req?.user)
     ) {
-      return this.send(
+      return this.attachCreatedByUsersToHistoryResponse(await this.send(
         { cmd: 'finance.history.find_all' },
         {
           ...query,
           user_id: String(req.user.sub),
           cashbox_type: Cashbox_type.FOR_COURIER,
         },
-      );
+      ));
     }
 
     if (
@@ -1945,7 +1967,7 @@ export class FinanceGatewayController {
         }
       }
 
-      return historyResponse;
+      return this.attachCreatedByUsersToHistoryResponse(historyResponse);
     }
 
     const hasCashboxSelector = Boolean(
@@ -1955,12 +1977,12 @@ export class FinanceGatewayController {
       query.cashboxType,
     );
 
-    return this.send(
+    return this.attachCreatedByUsersToHistoryResponse(await this.send(
       { cmd: 'finance.history.find_all' },
       hasCashboxSelector
         ? query
         : { ...query, cashbox_type: Cashbox_type.MAIN },
-    );
+    ));
   }
 
   @Get('history/:id')
