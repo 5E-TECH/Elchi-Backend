@@ -11112,18 +11112,22 @@
         "type": "object",
         "properties": {
           "product_id": {
-            "type": "string",
+            "type": "object",
             "example": "1",
-            "description": "Product ID (as string/bigint)"
+            "nullable": true,
+            "description": "Internal product ID; external item uchun null"
+          },
+          "product_name": {
+            "type": "object",
+            "example": "Marketplace mahsuloti",
+            "nullable": true,
+            "description": "External item nomi"
           },
           "quantity": {
             "type": "number",
             "example": 1
           }
-        },
-        "required": [
-          "product_id"
-        ]
+        }
       },
       "CreateOrderRequestDto": {
         "type": "object",
