@@ -414,17 +414,31 @@ export class OrderLifecycleService {
   }
 
   private haveOrderItemsChanged(
-    existingItems: Array<{ product_id: string; quantity?: number }>,
-    requestedItems: Array<{ product_id: string; quantity?: number }>,
+    existingItems: Array<{
+      product_id?: string | null;
+      product_name?: string | null;
+      quantity?: number;
+    }>,
+    requestedItems: Array<{
+      product_id?: string | null;
+      product_name?: string | null;
+      quantity?: number;
+    }>,
   ): boolean {
     const aggregate = (
-      items: Array<{ product_id: string; quantity?: number }>,
+      items: Array<{
+        product_id?: string | null;
+        product_name?: string | null;
+        quantity?: number;
+      }>,
     ): Map<string, number> => {
       const result = new Map<string, number>();
       for (const item of items) {
-        const productId = String(item.product_id);
+        const itemKey = item.product_id
+          ? `product:${String(item.product_id)}`
+          : `external:${String(item.product_name ?? '').trim()}`;
         const quantity = Number(item.quantity ?? 1);
-        result.set(productId, (result.get(productId) ?? 0) + quantity);
+        result.set(itemKey, (result.get(itemKey) ?? 0) + quantity);
       }
       return result;
     };
@@ -433,8 +447,8 @@ export class OrderLifecycleService {
     const requested = aggregate(requestedItems);
     if (existing.size !== requested.size) return true;
 
-    for (const [productId, quantity] of existing) {
-      if (requested.get(productId) !== quantity) return true;
+    for (const [itemKey, quantity] of existing) {
+      if (requested.get(itemKey) !== quantity) return true;
     }
 
     return false;
@@ -444,7 +458,11 @@ export class OrderLifecycleService {
     order: Order,
     dto: {
       total_price?: number;
-      items?: Array<{ product_id: string; quantity?: number }>;
+      items?: Array<{
+        product_id?: string | null;
+        product_name?: string | null;
+        quantity?: number;
+      }>;
     },
   ): void {
     if ([Order_status.CREATED, Order_status.NEW].includes(order.status)) {
@@ -2433,7 +2451,11 @@ export class OrderLifecycleService {
       parent_order_id?: string | null;
       external_id?: string | null;
       source?: Order_source;
-      items?: Array<{ product_id: string; quantity?: number }>;
+      items?: Array<{
+        product_id?: string | null;
+        product_name?: string | null;
+        quantity?: number;
+      }>;
     },
     requester?: { id: string; roles?: string[] },
   ) {
@@ -2506,11 +2528,21 @@ export class OrderLifecycleService {
       const saved = await orderRepo.save(order);
       savedId = saved.id;
 
-      const normalizedItems = (dto.items ?? []).map((item) => ({
-        product_id: item.product_id,
-        quantity: item.quantity ?? 1,
-        order_id: saved.id,
-      }));
+      const normalizedItems = (dto.items ?? []).map((item) => {
+        const productId = item.product_id
+          ? String(item.product_id).trim()
+          : null;
+        const productName = item.product_name?.trim() || null;
+        if (!productId && !productName) {
+          this.badRequest('Item uchun product_id yoki product_name majburiy');
+        }
+        return {
+          product_id: productId,
+          product_name: productName,
+          quantity: item.quantity ?? 1,
+          order_id: saved.id,
+        };
+      });
       if (normalizedItems.length) {
         await orderItemRepo
           .createQueryBuilder()
@@ -2609,7 +2641,11 @@ export class OrderLifecycleService {
     address?: string | null;
     qr_code_token?: string | null;
     external_id?: string | null;
-    items?: Array<{ product_id: string; quantity?: number }>;
+    items?: Array<{
+      product_id?: string | null;
+      product_name?: string | null;
+      quantity?: number;
+    }>;
   }) {
     return this.create({
       ...dto,

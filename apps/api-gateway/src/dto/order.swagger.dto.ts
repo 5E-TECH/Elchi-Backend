@@ -71,10 +71,23 @@ const parseJsonArray = (value: unknown): unknown => {
 };
 
 export class OrderItemDto {
-  @ApiProperty({ example: '1', description: 'Product ID (as string/bigint)' })
-  @IsNotEmpty()
+  @ApiPropertyOptional({
+    example: '1',
+    nullable: true,
+    description: 'Internal product ID; external item uchun null',
+  })
+  @IsOptional()
   @IsString()
-  product_id!: string;
+  product_id?: string | null;
+
+  @ApiPropertyOptional({
+    example: 'Marketplace mahsuloti',
+    nullable: true,
+    description: 'External item nomi',
+  })
+  @IsOptional()
+  @IsString()
+  product_name?: string | null;
 
   @ApiPropertyOptional({ example: 1 })
   @IsOptional()

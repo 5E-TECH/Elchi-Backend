@@ -91,7 +91,11 @@ export class OrderServiceController {
         parent_order_id?: string | null;
         external_id?: string | null;
         source?: Order_source;
-        items?: Array<{ product_id: string; quantity?: number }>;
+        items?: Array<{
+          product_id?: string | null;
+          product_name?: string | null;
+          quantity?: number;
+        }>;
       };
       requester?: { id: string; roles?: string[] };
       request_id?: string;
