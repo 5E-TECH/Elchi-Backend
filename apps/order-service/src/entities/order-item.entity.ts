@@ -4,8 +4,12 @@ import { Order } from './order.entity';
 
 @Entity({ name: 'order_items' })
 export class OrderItem extends BaseEntity {
-  @Column({ type: 'bigint' })
-  product_id!: string;
+  @Column({ type: 'bigint', nullable: true })
+  product_id!: string | null;
+
+  /** External partner item nomi; internal catalog itemlarida null bo‘lishi mumkin. */
+  @Column({ type: 'varchar', length: 255, nullable: true })
+  product_name!: string | null;
 
   @Column({ type: 'bigint' })
   order_id!: string;
