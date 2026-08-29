@@ -414,17 +414,31 @@ export class OrderLifecycleService {
   }
 
   private haveOrderItemsChanged(
-    existingItems: Array<{ product_id: string; quantity?: number }>,
-    requestedItems: Array<{ product_id: string; quantity?: number }>,
+    existingItems: Array<{
+      product_id?: string | null;
+      product_name?: string | null;
+      quantity?: number;
+    }>,
+    requestedItems: Array<{
+      product_id?: string | null;
+      product_name?: string | null;
+      quantity?: number;
+    }>,
   ): boolean {
     const aggregate = (
-      items: Array<{ product_id: string; quantity?: number }>,
+      items: Array<{
+        product_id?: string | null;
+        product_name?: string | null;
+        quantity?: number;
+      }>,
     ): Map<string, number> => {
       const result = new Map<string, number>();
       for (const item of items) {
-        const productId = String(item.product_id);
+        const itemKey = item.product_id
+          ? `product:${String(item.product_id)}`
+          : `external:${String(item.product_name ?? '').trim()}`;
         const quantity = Number(item.quantity ?? 1);
-        result.set(productId, (result.get(productId) ?? 0) + quantity);
+        result.set(itemKey, (result.get(itemKey) ?? 0) + quantity);
       }
       return result;
     };
@@ -433,8 +447,8 @@ export class OrderLifecycleService {
     const requested = aggregate(requestedItems);
     if (existing.size !== requested.size) return true;
 
-    for (const [productId, quantity] of existing) {
-      if (requested.get(productId) !== quantity) return true;
+    for (const [itemKey, quantity] of existing) {
+      if (requested.get(itemKey) !== quantity) return true;
     }
 
     return false;
@@ -444,7 +458,11 @@ export class OrderLifecycleService {
     order: Order,
     dto: {
       total_price?: number;
-      items?: Array<{ product_id: string; quantity?: number }>;
+      items?: Array<{
+        product_id?: string | null;
+        product_name?: string | null;
+        quantity?: number;
+      }>;
     },
   ): void {
     if ([Order_status.CREATED, Order_status.NEW].includes(order.status)) {
@@ -733,6 +751,87 @@ export class OrderLifecycleService {
       })
       .where('order_id = :orderId', { orderId: String(orderId) })
       .execute();
+  }
+
+  /**
+   * When a partly-sold parent order is rolled back, re-attach the child rows
+   * created for the unsold items. This also covers the operator flow where the
+   * cancelled child was rolled back to WAITING first, then the sold parent was
+   * rolled back afterwards. Money-bearing child statuses are intentionally not
+   * merged here.
+   */
+  private async mergePartialChildrenBack(
+    manager: EntityManager,
+    order: Order,
+  ): Promise<number> {
+    const orderRepo = manager.getRepository(Order);
+    const itemRepo = manager.getRepository(OrderItem);
+    const parentOrder =
+      (await orderRepo.findOne({ where: { id: String(order.id) } })) ?? order;
+    const children = await orderRepo.find({
+      where: {
+        parent_order_id: String(order.id),
+        status: In([Order_status.CANCELLED, Order_status.WAITING]),
+        isDeleted: false,
+      },
+      order: { createdAt: 'ASC' },
+    });
+
+    if (!children.length) {
+      return 0;
+    }
+
+    const parentItems = await itemRepo.find({
+      where: { order_id: String(parentOrder.id) },
+    });
+    const parentItemByProduct = new Map<string, OrderItem>();
+    for (const item of parentItems) {
+      parentItemByProduct.set(String(item.product_id), item);
+    }
+
+    let restoredPrice = 0;
+    let restoredQty = 0;
+    for (const child of children) {
+      restoredPrice += Number(child.total_price ?? 0);
+      restoredQty += Number(child.product_quantity ?? 0);
+
+      const childItems = await itemRepo.find({
+        where: { order_id: String(child.id) },
+      });
+      for (const childItem of childItems) {
+        const productId = String(childItem.product_id);
+        const parentItem = parentItemByProduct.get(productId);
+        if (parentItem) {
+          parentItem.quantity =
+            Number(parentItem.quantity ?? 0) + Number(childItem.quantity ?? 0);
+          await itemRepo.save(parentItem);
+          continue;
+        }
+
+        const recreated = await itemRepo.save(
+          itemRepo.create({
+            order_id: String(parentOrder.id),
+            product_id: productId,
+            quantity: Number(childItem.quantity ?? 0),
+          }),
+        );
+        parentItemByProduct.set(productId, recreated);
+      }
+
+      child.isDeleted = true;
+      child.deleted_at = new Date();
+      await orderRepo.save(child);
+      await this.removeOrderFromSearch(String(child.id), manager);
+    }
+
+    parentOrder.total_price =
+      Number(parentOrder.total_price ?? 0) + restoredPrice;
+    parentOrder.product_quantity =
+      Number(parentOrder.product_quantity ?? 0) + restoredQty;
+    await orderRepo.save(parentOrder);
+    await this.syncOrderToSearch(parentOrder, manager);
+
+    return children.length;
   }
 
   /**
@@ -1332,6 +1431,7 @@ export class OrderLifecycleService {
     const rollbackEpoch = this.resolveDedupEpoch(requestId);
     let rollbackSeq = 0;
     let finalStatus: Order_status = Order_status.WAITING;
+    let mergedPartialChildren = 0;
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -1635,6 +1735,8 @@ export class OrderLifecycleService {
         );
       }
 
+      mergedPartialChildren = await this.mergePartialChildrenBack(tx, order);
+
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -1671,7 +1773,10 @@ export class OrderLifecycleService {
       old_value: { status: originalStatus },
       new_value: { status: finalStatus },
       ...this.custody.auditActor(requester),
-      metadata: { rollback_target: rollbackTarget },
+      metadata: {
+        rollback_target: rollbackTarget,
+        merged_partial_children: mergedPartialChildren,
+      },
     });
 
     if (rollbackTarget === 'cancelled') {
@@ -2346,7 +2451,11 @@ export class OrderLifecycleService {
       parent_order_id?: string | null;
       external_id?: string | null;
       source?: Order_source;
-      items?: Array<{ product_id: string; quantity?: number }>;
+      items?: Array<{
+        product_id?: string | null;
+        product_name?: string | null;
+        quantity?: number;
+      }>;
     },
     requester?: { id: string; roles?: string[] },
   ) {
@@ -2419,11 +2528,21 @@ export class OrderLifecycleService {
       const saved = await orderRepo.save(order);
       savedId = saved.id;
 
-      const normalizedItems = (dto.items ?? []).map((item) => ({
-        product_id: item.product_id,
-        quantity: item.quantity ?? 1,
-        order_id: saved.id,
-      }));
+      const normalizedItems = (dto.items ?? []).map((item) => {
+        const productId = item.product_id
+          ? String(item.product_id).trim()
+          : null;
+        const productName = item.product_name?.trim() || null;
+        if (!productId && !productName) {
+          this.badRequest('Item uchun product_id yoki product_name majburiy');
+        }
+        return {
+          product_id: productId,
+          product_name: productName,
+          quantity: item.quantity ?? 1,
+          order_id: saved.id,
+        };
+      });
       if (normalizedItems.length) {
         await orderItemRepo
           .createQueryBuilder()
@@ -2522,7 +2641,11 @@ export class OrderLifecycleService {
     address?: string | null;
     qr_code_token?: string | null;
     external_id?: string | null;
-    items?: Array<{ product_id: string; quantity?: number }>;
+    items?: Array<{
+      product_id?: string | null;
+      product_name?: string | null;
+      quantity?: number;
+    }>;
   }) {
     return this.create({
       ...dto,
@@ -3142,7 +3265,7 @@ export class OrderLifecycleService {
     //   market : HQ owes market (total − marketTariff); reversed if total < marketTariff
     //   courier: courier owes branch (total − courierShare); HQ tops up if total < courierShare
     //   branch payable: branch owes HQ (total − courierShare − branchShare)
-    //   branch cashbox: manager-direct sales receive the full collected amount
+    //   branch cashbox: branch receives its tariff-adjusted payable share
     const marketIncome = Math.max(totalPrice - marketTariff, 0);
     const marketExpense = Math.max(marketTariff - totalPrice, 0);
     const courierIncome = Math.max(totalPrice - courierShare, 0);

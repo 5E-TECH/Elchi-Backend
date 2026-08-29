@@ -15,6 +15,7 @@ import {
   Operation_type,
   Order_status,
   Post_status,
+  Roles,
   Source_type,
   Status,
   Where_deliver,
@@ -49,6 +50,13 @@ type OrderAnalyticsRow = {
   current_batch_id: string | null;
   courier_id: string | null;
   createdAt: Date | null;
+};
+
+type BranchDashboardFilter = {
+  startDate?: string;
+  endDate?: string;
+  period?: string;
+  all?: boolean;
 };
 
 @Injectable()
@@ -666,34 +674,50 @@ export class BranchServiceService implements OnModuleInit {
     return new Date(dayStart.getTime() - diffToMonday * 24 * 60 * 60 * 1000);
   }
 
-  private async getAcceptedOrdersCountByBranchIds(
-    branchIds: string[],
-    startDate: Date,
-    endDate: Date,
-  ): Promise<number> {
-    const counts = await Promise.all(
-      branchIds.map(async (branchId) => {
-        try {
-          const response = await lastValueFrom(
-            this.orderClient
-              .send(
-                { cmd: 'order.analytics.overview' },
-                {
-                  branch_id: branchId,
-                  startDate: startDate.toISOString(),
-                  endDate: endDate.toISOString(),
-                },
-              )
-              .pipe(timeout(10000)),
-          );
-          return Number(response?.data?.acceptedCount ?? 0) || 0;
-        } catch {
-          return 0;
-        }
-      }),
+  private toTashkentStartOfMonth(date: Date): Date {
+    const tzOffsetMs = 5 * 60 * 60 * 1000;
+    const shifted = new Date(date.getTime() + tzOffsetMs);
+    return new Date(
+      Date.UTC(shifted.getUTCFullYear(), shifted.getUTCMonth(), 1) - tzOffsetMs,
     );
+  }
 
-    return counts.reduce((sum, count) => sum + count, 0);
+  private toTashkentStartOfYear(date: Date): Date {
+    const tzOffsetMs = 5 * 60 * 60 * 1000;
+    const shifted = new Date(date.getTime() + tzOffsetMs);
+    return new Date(Date.UTC(shifted.getUTCFullYear(), 0, 1) - tzOffsetMs);
+  }
+
+  private resolveBranchDashboardRange(filter: BranchDashboardFilter = {}): {
+    start: Date | null;
+    end: Date;
+  } {
+    const now = new Date();
+    if (filter.all === true) {
+      return { start: null, end: now };
+    }
+
+    const start = filter.startDate ? new Date(filter.startDate) : null;
+    const end = filter.endDate ? new Date(filter.endDate) : now;
+    if (
+      start &&
+      !Number.isNaN(start.getTime()) &&
+      !Number.isNaN(end.getTime())
+    ) {
+      return { start, end };
+    }
+
+    const period = String(filter.period ?? 'today').toLowerCase();
+    if (period === 'week') {
+      return { start: this.toTashkentStartOfWeek(now), end: now };
+    }
+    if (period === 'month') {
+      return { start: this.toTashkentStartOfMonth(now), end: now };
+    }
+    if (period === 'year') {
+      return { start: this.toTashkentStartOfYear(now), end: now };
+    }
+    return { start: this.toTashkentStartOfDay(now), end: now };
   }
 
   private extractOrderRows(payload: unknown): OrderAnalyticsRow[] {
@@ -729,21 +753,29 @@ export class BranchServiceService implements OnModuleInit {
   private async getOrdersByBranchIds(
     branchIds: string[],
   ): Promise<OrderAnalyticsRow[]> {
+    const courierIds = await this.getCourierIdsByBranchIds(branchIds);
+
     const rows = await Promise.all(
-      branchIds.map(async (branchId) => {
+      [
+        ...branchIds.map((branchId) => ({
+          branch_id: branchId,
+          fetch_all: true,
+          limit: 5000,
+        })),
+        ...(courierIds.length
+          ? [
+              {
+                courier_ids: courierIds,
+                fetch_all: true,
+                limit: 5000,
+              },
+            ]
+          : []),
+      ].map(async (query) => {
         try {
           const response = await lastValueFrom(
             this.orderClient
-              .send(
-                { cmd: 'order.find_all' },
-                {
-                  query: {
-                    branch_id: branchId,
-                    fetch_all: true,
-                    limit: 5000,
-                  },
-                },
-              )
+              .send({ cmd: 'order.find_all' }, { query })
               .pipe(timeout(10000)),
           );
           return this.extractOrderRows(response);
@@ -753,7 +785,60 @@ export class BranchServiceService implements OnModuleInit {
       }),
     );
 
-    return rows.flat();
+    return Array.from(
+      new Map(rows.flat().map((order) => [String(order.id), order])).values(),
+    );
+  }
+
+  private async getCourierIdsByBranchIds(
+    branchIds: string[],
+  ): Promise<string[]> {
+    if (!branchIds.length) {
+      return [];
+    }
+
+    const courierAssignments =
+      (await this.branchUserRepo.find({
+        where: {
+          branch_id: In(branchIds),
+          role: BranchUserRole.COURIER,
+          isDeleted: false,
+        },
+        select: ['user_id'],
+      })) ?? [];
+
+    const ids = new Set(
+      courierAssignments
+        .map((assignment) => String(assignment.user_id ?? '').trim())
+        .filter(Boolean),
+    );
+
+    try {
+      const response = await lastValueFrom(
+        this.identityClient
+          .send<{
+            data?: {
+              items?: Array<{ id?: string; branch_id?: string | null }>;
+            };
+          }>(
+            { cmd: 'identity.user.find_all' },
+            { query: { role: Roles.COURIER, page: 1, limit: 1000 } },
+          )
+          .pipe(timeout(8000)),
+      );
+      const branchSet = new Set(branchIds.map((id) => String(id)));
+      for (const courier of response?.data?.items ?? []) {
+        const branchId = String(courier?.branch_id ?? '').trim();
+        const courierId = String(courier?.id ?? '').trim();
+        if (courierId && branchSet.has(branchId)) {
+          ids.add(courierId);
+        }
+      }
+    } catch {
+      // BranchUser is the source of truth; identity.branch_id is a compatibility fallback.
+    }
+
+    return Array.from(ids);
   }
 
   private async resolveAnalyticsBranchIds(
@@ -2550,23 +2635,6 @@ export class BranchServiceService implements OnModuleInit {
           0,
         );
         const courierIds = courierIdsByBranchId.get(branchId) ?? [];
-        const courierUsersMap = await this.getUsersByIds(courierIds);
-        const courierTariffMap = new Map(
-          courierIds.map((courierId) => {
-            const courier = courierUsersMap.get(courierId) as Record<
-              string,
-              unknown
-            > | null;
-            return [
-              courierId,
-              {
-                home: Math.max(Number(courier?.tariff_home ?? 0), 0),
-                center: Math.max(Number(courier?.tariff_center ?? 0), 0),
-              },
-            ] as const;
-          }),
-        );
-
         const soldOrderQuery = {
           status: [
             Order_status.SOLD,
@@ -2613,7 +2681,6 @@ export class BranchServiceService implements OnModuleInit {
             ].map((order: any) => [String(order?.id ?? ''), order]),
           ).values(),
         );
-        const courierOrders = new Map<string, any[]>();
         let payableToHq = 0;
 
         const calculateAmounts = (order: any) => {
@@ -2624,86 +2691,15 @@ export class BranchServiceService implements OnModuleInit {
           const managerTariff = isCenter
             ? managerTariffCenter
             : managerTariffHome;
-          const courierId = String(order?.courier_id ?? '').trim();
-          const courierTariffs = courierTariffMap.get(courierId);
-          const savedCourierShare = Number(order?.courier_share ?? NaN);
-          const savedCourierTariff = Number(order?.courier_tariff ?? NaN);
-          const savedBranchShare = Number(order?.branch_share ?? NaN);
-          const hasSavedShares =
-            Number.isFinite(savedCourierShare) ||
-            Number.isFinite(savedCourierTariff);
-          const courierShare = Number.isFinite(savedCourierShare)
-            ? Math.max(savedCourierShare, 0)
-            : Number.isFinite(savedCourierTariff)
-              ? Math.max(savedCourierTariff, 0)
-              : isCenter
-                ? Number(courierTariffs?.center ?? 0)
-                : Number(courierTariffs?.home ?? 0);
-          const branchShare = Number.isFinite(savedBranchShare)
-            ? Math.max(savedBranchShare, 0)
-            : 0;
-
-          // What the branch owes HQ = total − (kept below HQ). Prefer the order's
-          // SAVED shares (courier_share + branch_share) — the same source
-          // courierReceivable uses and identical to order_settlement.branch_amount
-          // — so the receivable matches the actual branch→HQ settlement. The
-          // manager-tariff estimate is only a fallback for orders with no saved
-          // shares; relying on it made olinishi_kerak overstate the branch→HQ
-          // debt by the courier's share whenever the manager tariff was left
-          // unconfigured (≠ courier share). (Live-E2E fix.)
-          const hqPayable = hasSavedShares
-            ? Math.max(totalPrice - courierShare - branchShare, 0)
-            : Math.max(totalPrice - managerTariff, 0);
-
           return {
-            courierId,
-            courierReceivable: Math.max(totalPrice - courierShare, 0),
-            hqPayable,
+            // Manager payments sahifasidagi `berilishi_kerak` bilan aynan bir
+            // xil formula: order summasi minus branch manager tarifi.
+            hqPayable: Math.max(totalPrice - managerTariff, 0),
           };
         };
 
         for (const order of orders) {
-          const amounts = calculateAmounts(order);
-          if (!amounts.courierId || !courierTariffMap.has(amounts.courierId)) {
-            payableToHq += amounts.hqPayable;
-            continue;
-          }
-          const rows = courierOrders.get(amounts.courierId) ?? [];
-          rows.push(order);
-          courierOrders.set(amounts.courierId, rows);
-        }
-
-        for (const [courierId, rows] of courierOrders) {
-          const sortedOrders = [...rows].sort(
-            (left, right) =>
-              new Date(left?.createdAt ?? 0).getTime() -
-              new Date(right?.createdAt ?? 0).getTime(),
-          );
-          const totalCourierReceivable = sortedOrders.reduce(
-            (sum, order) => sum + calculateAmounts(order).courierReceivable,
-            0,
-          );
-          let acceptedAmount = Math.max(
-            totalCourierReceivable -
-              Math.max(Number(courierBalanceByUserId.get(courierId) ?? 0), 0),
-            0,
-          );
-
-          for (const order of sortedOrders) {
-            if (acceptedAmount <= 0) break;
-            const amounts = calculateAmounts(order);
-            if (amounts.courierReceivable <= 0) {
-              payableToHq += amounts.hqPayable;
-              continue;
-            }
-            const allocated = Math.min(
-              acceptedAmount,
-              amounts.courierReceivable,
-            );
-            payableToHq +=
-              amounts.hqPayable * (allocated / amounts.courierReceivable);
-            acceptedAmount -= allocated;
-          }
+          payableToHq += calculateAmounts(order).hqPayable;
         }
 
         let paidToHq = 0;
@@ -2773,6 +2769,13 @@ export class BranchServiceService implements OnModuleInit {
         }
         return Number(payableToHqByBranchId.get(String(item.id)) ?? 0);
       })(),
+      // Regional branch uchun bu summa branchning HQ'ga berishi kerak bo'lgan
+      // qarzidir. `olinishi_kerak` legacy maydoni saqlanadi, yangi consumerlar
+      // esa semantik jihatdan to'g'ri nomni ishlatadi.
+      berilishi_kerak:
+        item.type === BranchType.HQ
+          ? 0
+          : Number(payableToHqByBranchId.get(String(item.id)) ?? 0),
       payment: (() => {
         const managerId = managerByBranchId.get(String(item.id));
         if (!managerId) return null;
@@ -2925,7 +2928,11 @@ export class BranchServiceService implements OnModuleInit {
     return successRes(descendants, 200, 'Branch descendants');
   }
 
-  async getBranchStats(id: string, requester?: RequesterContext) {
+  async getBranchStats(
+    id: string,
+    requester?: RequesterContext,
+    filter: BranchDashboardFilter = {},
+  ) {
     const targetBranchIds = await this.resolveAnalyticsBranchIds(id, requester);
     const orders = await this.getOrdersByBranchIds(targetBranchIds);
     const requesterBranchRole = await this.resolveRequesterBranchRole(
@@ -2934,24 +2941,30 @@ export class BranchServiceService implements OnModuleInit {
     );
 
     const now = new Date();
+    const selectedRange = this.resolveBranchDashboardRange(filter);
     const todayStart = this.toTashkentStartOfDay(now);
     const weekStart = this.toTashkentStartOfWeek(now);
-    const todayAcceptedOrdersCount =
-      await this.getAcceptedOrdersCountByBranchIds(
-        targetBranchIds,
-        todayStart,
-        now,
-      );
-    const weekAcceptedOrdersCount =
-      await this.getAcceptedOrdersCountByBranchIds(
-        targetBranchIds,
-        weekStart,
-        now,
-      );
-
-    const todayOrders = orders.filter(
-      (order) => order.createdAt && order.createdAt >= todayStart,
-    );
+    const selectedOrders = selectedRange.start
+      ? orders.filter(
+          (order) =>
+            order.createdAt &&
+            order.createdAt >= selectedRange.start! &&
+            order.createdAt <= selectedRange.end,
+        )
+      : orders;
+    const todayAcceptedOrdersCount = orders.filter(
+      (order) =>
+        order.createdAt &&
+        order.createdAt >= todayStart &&
+        order.createdAt <= now,
+    ).length;
+    const weekAcceptedOrdersCount = orders.filter(
+      (order) =>
+        order.createdAt &&
+        order.createdAt >= weekStart &&
+        order.createdAt <= now,
+    ).length;
+    const selectedAcceptedOrdersCount = selectedOrders.length;
 
     const activeBatchStatuses = new Set<string>([
       Order_status.CREATED,
@@ -2974,35 +2987,28 @@ export class BranchServiceService implements OnModuleInit {
         .map((order) => String(order.current_batch_id)),
     ).size;
 
-    const couriersCount = await this.branchUserRepo.count({
-      where: {
-        branch_id: In(targetBranchIds),
-        role: BranchUserRole.COURIER,
-        isDeleted: false,
-      },
-    });
+    const couriersCount = (await this.getCourierIdsByBranchIds(targetBranchIds))
+      .length;
 
     const deliveredStatuses = new Set<string>([
-      Order_status.WAITING,
       Order_status.SOLD,
       Order_status.PAID,
       Order_status.PARTLY_PAID,
-      Order_status.CLOSED,
     ]);
 
     const returnedStatuses = new Set<string>([Order_status.RETURNED_TO_MARKET]);
 
     const ordersCard = {
-      total: todayAcceptedOrdersCount,
-      new: todayOrders.filter((order) => order.status === Order_status.NEW)
+      total: selectedAcceptedOrdersCount,
+      new: selectedOrders.filter((order) => order.status === Order_status.NEW)
         .length,
-      on_the_road: todayOrders.filter(
+      on_the_road: selectedOrders.filter(
         (order) => order.status === Order_status.ON_THE_ROAD,
       ).length,
-      delivered: todayOrders.filter(
+      delivered: selectedOrders.filter(
         (order) => order.status && deliveredStatuses.has(order.status),
       ).length,
-      returned: todayOrders.filter(
+      returned: selectedOrders.filter(
         (order) => order.status && returnedStatuses.has(order.status),
       ).length,
     };
@@ -3011,7 +3017,7 @@ export class BranchServiceService implements OnModuleInit {
       string,
       { market_id: string; orders_count: number; total_price: number }
     >();
-    for (const order of todayOrders) {
+    for (const order of selectedOrders) {
       const marketId = String(order.market_id ?? '').trim();
       if (!marketId) continue;
       const current = marketMap.get(marketId) ?? {
@@ -3029,7 +3035,7 @@ export class BranchServiceService implements OnModuleInit {
     );
 
     const packagesOnTheWay = new Set(
-      orders
+      selectedOrders
         .filter(
           (order) =>
             order.current_batch_id && order.status === Order_status.ON_THE_ROAD,
@@ -3038,7 +3044,7 @@ export class BranchServiceService implements OnModuleInit {
     ).size;
 
     const waitingForAcceptance = new Set(
-      orders
+      selectedOrders
         .filter(
           (order) =>
             order.current_batch_id && order.status === Order_status.RECEIVED,
@@ -3052,7 +3058,7 @@ export class BranchServiceService implements OnModuleInit {
     };
 
     const activeTodayCouriersCount = new Set(
-      todayOrders
+      selectedOrders
         .map((order) => String(order.courier_id ?? '').trim())
         .filter((courierId) => Boolean(courierId)),
     ).size;
@@ -3071,6 +3077,11 @@ export class BranchServiceService implements OnModuleInit {
       {
         today_orders_count: todayAcceptedOrdersCount,
         week_orders_count: weekAcceptedOrdersCount,
+        selected_orders_count: selectedAcceptedOrdersCount,
+        selected_range: {
+          startDate: selectedRange.start?.toISOString() ?? null,
+          endDate: selectedRange.end.toISOString(),
+        },
         active_batches_count: activeBatchesCount,
         couriers_count: couriersCount,
         role: requesterBranchRole,
@@ -3097,12 +3108,9 @@ export class BranchServiceService implements OnModuleInit {
     const orders = await this.getOrdersByBranchIds(targetBranchIds);
 
     const deliveredStatuses = new Set<string>([
-      Order_status.WAITING,
       Order_status.SOLD,
       Order_status.PAID,
       Order_status.PARTLY_PAID,
-      Order_status.CLOSED,
-      Order_status.RETURNED_TO_MARKET,
     ]);
 
     const marketMap = new Map<

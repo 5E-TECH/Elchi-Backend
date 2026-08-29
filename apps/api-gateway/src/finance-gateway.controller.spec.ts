@@ -44,7 +44,13 @@ describe('FinanceGatewayController', () => {
       orderClient as any,
     );
 
-    return { controller, financeClient, branchClient };
+    return {
+      controller,
+      financeClient,
+      identityClient,
+      branchClient,
+      orderClient,
+    };
   }
 
   it('allows managers to create branch-to-main payments (scoped to own branch)', () => {
@@ -180,6 +186,217 @@ describe('FinanceGatewayController', () => {
     expect(response.data.pagination).toEqual(
       expect.objectContaining({ total: 1, totalPages: 1 }),
     );
+  });
+
+  it('counts courier-sold branch orders as branch payable before courier cash is accepted', async () => {
+    const {
+      controller,
+      financeClient,
+      identityClient,
+      branchClient,
+      orderClient,
+    } = setup();
+
+    financeClient.send.mockImplementation(
+      (pattern: { cmd: string }, payload: any) => {
+        if (pattern.cmd === 'finance.cashbox.my') {
+          return of({
+            data: {
+              cashbox: {
+                id: 'branch-cashbox-16',
+                user_id: '16',
+                cashbox_type: 'branch',
+                balance: 0,
+              },
+            },
+          });
+        }
+        if (pattern.cmd === 'finance.cashbox.find_by_user') {
+          expect(payload).toEqual(
+            expect.objectContaining({
+              user_id: 'courier-1',
+              cashbox_type: 'for_courier',
+            }),
+          );
+          return of({
+            data: {
+              cashbox: {
+                id: 'courier-cashbox-1',
+                user_id: 'courier-1',
+                cashbox_type: 'for_courier',
+                balance: 90_000,
+              },
+            },
+          });
+        }
+        if (pattern.cmd === 'finance.history.find_all') {
+          return of({ data: { items: [] } });
+        }
+        return of({ data: {} });
+      },
+    );
+
+    identityClient.send.mockImplementation(
+      (pattern: { cmd: string }, payload: any) => {
+        if (
+          pattern.cmd === 'identity.user.find_by_id' &&
+          payload.id === 'manager-1'
+        ) {
+          return of({
+            data: { id: 'manager-1', tariff_home: 10_000, tariff_center: 0 },
+          });
+        }
+        if (
+          pattern.cmd === 'identity.user.find_by_id' &&
+          payload.id === 'courier-1'
+        ) {
+          return of({
+            data: { id: 'courier-1', tariff_home: 10_000, tariff_center: 0 },
+          });
+        }
+        return of({ data: {} });
+      },
+    );
+
+    branchClient.send.mockReturnValue(
+      of({
+        data: [{ user_id: 'courier-1', role: 'COURIER' }],
+      }),
+    );
+
+    orderClient.send.mockImplementation(
+      (pattern: { cmd: string }, payload: any) => {
+        if (pattern.cmd !== 'order.find_all') return of({ data: [] });
+        if (payload.query?.branch_id === '16') {
+          return of({ data: [] });
+        }
+        if (payload.query?.courier_ids?.includes('courier-1')) {
+          return of({
+            data: [
+              {
+                id: 'order-1',
+                total_price: 100_000,
+                courier_id: 'courier-1',
+                courier_share: 10_000,
+                where_deliver: 'home',
+                createdAt: '2026-08-17T00:00:00.000Z',
+              },
+            ],
+          });
+        }
+        return of({ data: [] });
+      },
+    );
+
+    const response = await (controller as any).buildManagerSettlement({
+      sub: 'manager-1',
+      roles: ['manager'],
+      branch_id: '16',
+    });
+
+    expect(response.olinishi_kerak).toBe(90_000);
+    expect(response.berilishi_kerak).toBe(90_000);
+  });
+
+  it('uses snapshotted branch net amount for manager-to-HQ payable', async () => {
+    const {
+      controller,
+      financeClient,
+      identityClient,
+      branchClient,
+      orderClient,
+    } = setup();
+
+    financeClient.send.mockImplementation(
+      (pattern: { cmd: string }, payload: any) => {
+        if (pattern.cmd === 'finance.cashbox.my') {
+          return of({
+            data: {
+              cashbox: {
+                id: 'branch-cashbox-16',
+                user_id: '16',
+                cashbox_type: 'branch',
+                balance: 0,
+              },
+            },
+          });
+        }
+        if (pattern.cmd === 'finance.cashbox.find_by_user') {
+          return of({
+            data: {
+              cashbox: {
+                id: 'courier-cashbox-1',
+                user_id: payload.user_id,
+                cashbox_type: 'for_courier',
+                balance: 290_000,
+              },
+            },
+          });
+        }
+        if (pattern.cmd === 'finance.history.find_all') {
+          return of({ data: { items: [] } });
+        }
+        return of({ data: {} });
+      },
+    );
+
+    identityClient.send.mockImplementation(
+      (pattern: { cmd: string }, payload: any) => {
+        if (
+          pattern.cmd === 'identity.user.find_by_id' &&
+          payload.id === 'manager-1'
+        ) {
+          return of({
+            data: { id: 'manager-1', tariff_home: 50_000, branch_id: '16' },
+          });
+        }
+        if (
+          pattern.cmd === 'identity.user.find_by_id' &&
+          payload.id === 'courier-1'
+        ) {
+          return of({ data: { id: 'courier-1', tariff_home: 10_000 } });
+        }
+        return of({ data: {} });
+      },
+    );
+
+    branchClient.send.mockReturnValue(
+      of({
+        data: [{ user_id: 'courier-1', role: 'COURIER' }],
+      }),
+    );
+
+    orderClient.send.mockImplementation(
+      (pattern: { cmd: string }, payload: any) => {
+        if (pattern.cmd !== 'order.find_all') return of({ data: [] });
+        if (payload.query?.branch_id === '16') {
+          return of({
+            data: [
+              {
+                id: 'order-1',
+                total_price: 300_000,
+                courier_id: 'courier-1',
+                courier_share: 10_000,
+                branch_share: 20_000,
+                branch_cashbox_amount: 270_000,
+                where_deliver: 'home',
+                createdAt: '2026-08-17T00:00:00.000Z',
+              },
+            ],
+          });
+        }
+        return of({ data: [] });
+      },
+    );
+
+    const response = await (controller as any).buildManagerSettlement({
+      sub: 'manager-1',
+      roles: ['manager'],
+      branch_id: '16',
+    });
+
+    expect(response.olinishi_kerak).toBe(290_000);
+    expect(response.berilishi_kerak).toBe(270_000);
   });
 
   it('scopes market payment history to the current market cashbox', async () => {

@@ -91,6 +91,31 @@ describe('IntegrationServiceService.createPartnerShipment (C2.1)', () => {
     });
   });
 
+  it('C2.5 TC1: external item name+qty bilan product_id=null saqlashga uzatiladi', async () => {
+    const { svc, orderSend } = makeService();
+
+    await svc.createPartnerShipment({
+      ...baseDto,
+      cod_amount: 0,
+      items: [{ name: 'Telefon g‘ilofi', quantity: 2 }],
+    });
+
+    expect(orderSend).toHaveBeenCalledWith(
+      { cmd: 'order.create' },
+      expect.objectContaining({
+        dto: expect.objectContaining({
+          items: [
+            {
+              product_id: null,
+              product_name: 'Telefon g‘ilofi',
+              quantity: 2,
+            },
+          ],
+        }),
+      }),
+    );
+  });
+
   it('TC2: cod_amount=0 -> to_be_paid=0 (prepaid)', async () => {
     const { svc, orderSend } = makeService();
     await svc.createPartnerShipment({ ...baseDto, cod_amount: 0 });

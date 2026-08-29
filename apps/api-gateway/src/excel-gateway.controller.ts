@@ -178,11 +178,23 @@ export class ExcelGatewayController {
   @ApiQuery({ name: 'cashbox_id', required: false, type: String })
   @ApiQuery({ name: 'operation_type', required: false, type: String })
   @ApiQuery({ name: 'source_type', required: false, type: String })
+  @ApiQuery({ name: 'sourceTypes', required: false, type: String })
+  @ApiQuery({ name: 'source_user_id', required: false, type: String })
+  @ApiQuery({ name: 'user_id', required: false, type: String })
+  @ApiQuery({ name: 'cashbox_type', required: false, type: String })
+  @ApiQuery({ name: 'from_date', required: false, type: String })
+  @ApiQuery({ name: 'to_date', required: false, type: String })
   async exportCashboxHistory(
     @Res() res: Response,
     @Query('cashbox_id') cashbox_id?: string,
     @Query('operation_type') operation_type?: string,
     @Query('source_type') source_type?: string,
+    @Query('sourceTypes') sourceTypes?: string,
+    @Query('source_user_id') source_user_id?: string,
+    @Query('user_id') user_id?: string,
+    @Query('cashbox_type') cashbox_type?: string,
+    @Query('from_date') from_date?: string,
+    @Query('to_date') to_date?: string,
   ): Promise<void> {
     // page=0/limit=0 → service returns the full (unpaginated) history.
     const result = await this.send<{
@@ -191,6 +203,12 @@ export class ExcelGatewayController {
       cashbox_id,
       operation_type,
       source_type,
+      sourceTypes,
+      source_user_id,
+      user_id,
+      cashbox_type,
+      from_date,
+      to_date,
       page: 0,
       limit: 0,
     });

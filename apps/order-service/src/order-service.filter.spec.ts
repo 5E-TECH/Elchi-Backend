@@ -18,6 +18,7 @@ describe('OrderServiceService filters', () => {
       getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
       getMany: jest.fn().mockResolvedValue([]),
       getCount: jest.fn().mockResolvedValue(0),
+      getRawOne: jest.fn().mockResolvedValue({ count: '0' }),
     };
 
     const orderRepo = {
@@ -248,6 +249,21 @@ describe('OrderServiceService filters', () => {
     ).toBe(false);
   });
 
+  it('filters orders by delivery type', async () => {
+    const { service, qb } = setup();
+
+    await service.findAll({
+      where_deliver: 'address' as any,
+      page: 1,
+      limit: 10,
+    });
+
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'order.where_deliver = :where_deliver',
+      { where_deliver: 'address' },
+    );
+  });
+
   it('includes courier custody history only when requested', async () => {
     const { service, qb } = setup();
 
@@ -340,7 +356,7 @@ describe('OrderServiceService filters', () => {
     expect(qb.andWhere).toHaveBeenCalledWith('order.canceled_post_id IS NULL');
   });
 
-  it('credits the full order amount to branch cashbox for manager-direct sales', () => {
+  it('credits the tariff-adjusted branch payable for manager-direct sales', () => {
     const { lifecycle } = setup();
 
     const amount = (lifecycle as any).resolveBranchCashboxSaleAmount(
@@ -349,7 +365,7 @@ describe('OrderServiceService filters', () => {
       true,
     );
 
-    expect(amount).toBe(1_000_000);
+    expect(amount).toBe(950_000);
   });
 
   it('keeps the existing tariff-adjusted branch amount for courier sales', () => {
@@ -394,29 +410,27 @@ describe('OrderServiceService filters', () => {
     expect(analyticsScope?.[1]).toEqual({ analyticsBranchId: '16' });
   });
 
-  it('counts dashboard accepted orders only from branch batch receive events', async () => {
-    const { analytics, trackingQb } = setup();
+  it('counts dashboard accepted orders from created orders', async () => {
+    const { analytics, qb, trackingQb } = setup();
     const range = {
       start: new Date('2026-07-22T19:00:00.000Z'),
       end: new Date('2026-07-23T18:59:59.999Z'),
     };
-    trackingQb.getRawOne.mockResolvedValue({ count: '3' });
+    qb.getRawOne.mockResolvedValue({ count: '110' });
 
-    const count = await (analytics as any).countBranchBatchAcceptedOrders(
+    const count = await (analytics as any).countDashboardAcceptedOrders(
       range,
       '16',
     );
 
-    expect(count).toBe(3);
-    expect(trackingQb.andWhere).toHaveBeenCalledWith('t.action = :action', {
-      action: 'branch_batch_received',
-    });
-    expect(trackingQb.andWhere).toHaveBeenCalledWith('t.to_status = :status', {
-      status: 'received',
-    });
-    expect(trackingQb.andWhere).toHaveBeenCalledWith(
-      't.created_at BETWEEN :start AND :end',
+    expect(count).toBe(110);
+    expect(qb.andWhere).toHaveBeenCalledWith(
+      'o.createdAt BETWEEN :start AND :end',
       range,
+    );
+    expect(trackingQb.andWhere).not.toHaveBeenCalledWith(
+      't.action = :action',
+      expect.anything(),
     );
   });
 

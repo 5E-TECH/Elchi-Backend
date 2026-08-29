@@ -476,7 +476,8 @@ export class IntegrationServiceService {
    * (partner_id, external_order_id)). `to_be_paid = cod_amount` (0 = prepaid/online,
    * kuryer pul yig'maydi; >0 = COD). Customer avval `identity.customer.create`
    * bilan yaratiladi/topiladi (phone bo'yicha idempotent). Item nomlari hozircha
-   * comment'ga (OrderItem.product_id majburiyligini yumshatish — C2.5).
+   * `product_id=null`, `product_name` va quantity bilan order item sifatida
+   * saqlanadi (C2.5).
    * Kontrakt: docs/PARTNER_API.md §3.3.
    */
   async createPartnerShipment(dto: {
@@ -562,6 +563,7 @@ export class IntegrationServiceService {
           to_be_paid: cod,
           source: 'external',
           external_id: externalOrderId,
+          items: this.shipmentOrderItems(dto.items),
           comment: this.shipmentItemsComment(dto.items),
         },
         requester: { id: `partner:${partnerId}`, roles: [Roles.SUPERADMIN] },
@@ -947,7 +949,24 @@ export class IntegrationServiceService {
     return e?.code === '23505' || e?.driverError?.code === '23505';
   }
 
-  /** Item nomlarini order comment'iga jamlaydi (product_id C2.5 gача). */
+  /** External shipment itemlarini nullable product_id kontraktiga o‘giradi. */
+  private shipmentOrderItems(
+    items?: Array<{ name?: string; quantity?: number }>,
+  ): Array<{
+    product_id: null;
+    product_name: string;
+    quantity: number;
+  }> {
+    return (items ?? [])
+      .map((item) => ({
+        product_id: null,
+        product_name: String(item?.name ?? '').trim(),
+        quantity: item?.quantity ?? 1,
+      }))
+      .filter((item) => item.product_name.length > 0 && item.quantity > 0);
+  }
+
+  /** Item nomlarini operatorlar uchun order comment'ida ham ko‘rsatadi. */
   private shipmentItemsComment(
     items?: Array<{ name?: string; quantity?: number }>,
   ): string | null {

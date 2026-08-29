@@ -1,5 +1,10 @@
 import { Controller } from '@nestjs/common';
-import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
+import {
+  Ctx,
+  MessagePattern,
+  Payload,
+  RmqContext,
+} from '@nestjs/microservices';
 import { RmqService, executeAndAck } from '@app/common';
 import { BranchServiceService } from './branch-service.service';
 
@@ -34,14 +39,20 @@ export class BranchServiceController {
   @MessagePattern({ cmd: 'branch.create' })
   create(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.branchService.createBranch(data?.dto ?? data, this.getRequester(data)),
+      this.branchService.createBranch(
+        data?.dto ?? data,
+        this.getRequester(data),
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'branch.find_all' })
   findAll(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.branchService.findAllBranches(data?.query ?? data, this.getRequester(data)),
+      this.branchService.findAllBranches(
+        data?.query ?? data,
+        this.getRequester(data),
+      ),
     );
   }
 
@@ -66,39 +77,63 @@ export class BranchServiceController {
 
   @MessagePattern({ cmd: 'branch.tree' })
   findTree(@Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.branchService.findBranchTree());
+    return this.executeAndAck(context, () =>
+      this.branchService.findBranchTree(),
+    );
   }
 
   @MessagePattern({ cmd: 'branch.descendants' })
-  findDescendants(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  findDescendants(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.branchService.findBranchDescendants(data?.id),
     );
   }
 
   @MessagePattern({ cmd: 'branch.dashboard' })
-  getDashboard(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  getDashboard(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.branchService.getBranchStats(data?.id, this.getRequester(data)),
+      this.branchService.getBranchStats(
+        data?.id,
+        this.getRequester(data),
+        data?.filter ?? {},
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'branch.analytics.markets' })
-  getMarketsAnalytics(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  getMarketsAnalytics(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.branchService.getBranchMarketsAnalytics(data?.id, this.getRequester(data)),
+      this.branchService.getBranchMarketsAnalytics(
+        data?.id,
+        this.getRequester(data),
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'branch.new_orders.branches' })
-  getBranchesWithNewOrders(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  getBranchesWithNewOrders(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.branchService.getBranchesWithNewOrders(this.getRequester(data)),
     );
   }
 
   @MessagePattern({ cmd: 'branch.transfer_batches.create' })
-  createTransferBatches(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  createTransferBatches(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.branchService.createTransferBatches(
         data?.id,
@@ -109,7 +144,10 @@ export class BranchServiceController {
   }
 
   @MessagePattern({ cmd: 'branch.return_batches.create' })
-  createReturnBatches(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  createReturnBatches(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.branchService.createReturnBatches(
         data?.id,
@@ -120,7 +158,10 @@ export class BranchServiceController {
   }
 
   @MessagePattern({ cmd: 'branch.transfer_batches.send' })
-  sendTransferBatch(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  sendTransferBatch(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.branchService.sendTransferBatch(
         data?.id,
@@ -131,35 +172,62 @@ export class BranchServiceController {
   }
 
   @MessagePattern({ cmd: 'branch.transfer_batches.find_all' })
-  findTransferBatches(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  findTransferBatches(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.branchService.findTransferBatches(data?.query ?? data, this.getRequester(data)),
+      this.branchService.findTransferBatches(
+        data?.query ?? data,
+        this.getRequester(data),
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'branch.transfer_batches.sent_branches' })
-  findBranchesWithSentBatches(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  findBranchesWithSentBatches(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.branchService.findBranchesWithSentBatches(data?.query ?? data, this.getRequester(data)),
+      this.branchService.findBranchesWithSentBatches(
+        data?.query ?? data,
+        this.getRequester(data),
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'branch.transfer_batches.find_by_id' })
-  findTransferBatchById(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  findTransferBatchById(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.branchService.findTransferBatchById(data?.id, this.getRequester(data)),
+      this.branchService.findTransferBatchById(
+        data?.id,
+        this.getRequester(data),
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'branch.transfer_batches.find_remaining' })
-  findRemainingTransferBatchById(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  findRemainingTransferBatchById(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.branchService.findRemainingTransferBatchById(data?.id, this.getRequester(data)),
+      this.branchService.findRemainingTransferBatchById(
+        data?.id,
+        this.getRequester(data),
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'branch.transfer_batch.find_by_token' })
-  findTransferBatchByToken(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  findTransferBatchByToken(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.branchService.findTransferBatchByToken(
         data?.token,
@@ -169,7 +237,10 @@ export class BranchServiceController {
   }
 
   @MessagePattern({ cmd: 'branch.transfer_batches.receive' })
-  receiveTransferBatch(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  receiveTransferBatch(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.branchService.receiveTransferBatch(
         data?.id,
@@ -179,7 +250,10 @@ export class BranchServiceController {
   }
 
   @MessagePattern({ cmd: 'branch.transfer_batches.receive_orders' })
-  receiveTransferBatchOrders(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  receiveTransferBatchOrders(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.branchService.receiveTransferBatchOrders(
         data?.id,
@@ -190,7 +264,10 @@ export class BranchServiceController {
   }
 
   @MessagePattern({ cmd: 'branch.transfer_batches.cancel' })
-  cancelTransferBatch(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  cancelTransferBatch(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.branchService.cancelTransferBatch(
         data?.id,
@@ -201,7 +278,10 @@ export class BranchServiceController {
   }
 
   @MessagePattern({ cmd: 'branch.post.dispatch' })
-  dispatchPostToBranch(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  dispatchPostToBranch(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.branchService.dispatchPostToBranch(
         data?.source_branch_id,
@@ -216,7 +296,11 @@ export class BranchServiceController {
   @MessagePattern({ cmd: 'branch.update' })
   update(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.branchService.updateBranch(data?.id, data?.dto ?? data, this.getRequester(data)),
+      this.branchService.updateBranch(
+        data?.id,
+        data?.dto ?? data,
+        this.getRequester(data),
+      ),
     );
   }
 
@@ -231,34 +315,46 @@ export class BranchServiceController {
   @MessagePattern({ cmd: 'branch.user.assign' })
   assignUser(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.branchService.assignUserToBranch(data?.dto ?? data, this.getRequester(data)),
+      this.branchService.assignUserToBranch(
+        data?.dto ?? data,
+        this.getRequester(data),
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'branch.user.remove' })
   removeUser(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.branchService.removeUserFromBranch({
-        branch_id: data?.branch_id ?? data?.id,
-        user_id: data?.user_id,
-      }, this.getRequester(data)),
+      this.branchService.removeUserFromBranch(
+        {
+          branch_id: data?.branch_id ?? data?.id,
+          user_id: data?.user_id,
+        },
+        this.getRequester(data),
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'branch.user.find_by_branch' })
-  findUsersByBranch(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  findUsersByBranch(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.branchService.findUsersByBranch(data?.branch_id ?? data?.id, this.getRequester(data)),
+      this.branchService.findUsersByBranch(
+        data?.branch_id ?? data?.id,
+        this.getRequester(data),
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'branch.user.find_by_user' })
-  findUserBranch(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  findUserBranch(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.branchService.findUserBranch(
-        data?.user_id,
-        this.getRequester(data),
-      ),
+      this.branchService.findUserBranch(data?.user_id, this.getRequester(data)),
     );
   }
 
@@ -279,30 +375,42 @@ export class BranchServiceController {
   @MessagePattern({ cmd: 'branch.config.set' })
   setConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.branchService.setBranchConfig({
-        branch_id: data?.branch_id ?? data?.id,
-        config_key: data?.dto?.config_key ?? data?.config_key,
-        config_value: data?.dto?.config_value ?? data?.config_value,
-      }, this.getRequester(data)),
+      this.branchService.setBranchConfig(
+        {
+          branch_id: data?.branch_id ?? data?.id,
+          config_key: data?.dto?.config_key ?? data?.config_key,
+          config_value: data?.dto?.config_value ?? data?.config_value,
+        },
+        this.getRequester(data),
+      ),
     );
   }
 
   // Alias for compatibility with older/newer callers
   @MessagePattern({ cmd: 'branch.config.create' })
-  createConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  createConfig(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.branchService.setBranchConfig({
-        branch_id: data?.branch_id ?? data?.id,
-        config_key: data?.dto?.config_key ?? data?.config_key,
-        config_value: data?.dto?.config_value ?? data?.config_value,
-      }, this.getRequester(data)),
+      this.branchService.setBranchConfig(
+        {
+          branch_id: data?.branch_id ?? data?.id,
+          config_key: data?.dto?.config_key ?? data?.config_key,
+          config_value: data?.dto?.config_value ?? data?.config_value,
+        },
+        this.getRequester(data),
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'branch.config.get' })
   getConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.branchService.getBranchConfig(data?.branch_id ?? data?.id, this.getRequester(data)),
+      this.branchService.getBranchConfig(
+        data?.branch_id ?? data?.id,
+        this.getRequester(data),
+      ),
     );
   }
 
@@ -313,53 +421,84 @@ export class BranchServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.branchService.getBranchConfig(data?.branch_id ?? data?.id, this.getRequester(data)),
+      this.branchService.getBranchConfig(
+        data?.branch_id ?? data?.id,
+        this.getRequester(data),
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'branch.config.find_one' })
-  getConfigByKey(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  getConfigByKey(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.branchService.getBranchConfigByKey({
-        branch_id: data?.branch_id ?? data?.id,
-        config_key: data?.config_key ?? data?.key,
-      }, this.getRequester(data)),
+      this.branchService.getBranchConfigByKey(
+        {
+          branch_id: data?.branch_id ?? data?.id,
+          config_key: data?.config_key ?? data?.key,
+        },
+        this.getRequester(data),
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'branch.config.update' })
-  updateConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  updateConfig(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.branchService.updateBranchConfig({
-        branch_id: data?.branch_id ?? data?.id,
-        config_key: data?.config_key ?? data?.key,
-        config_value: data?.dto?.config_value ?? data?.config_value,
-      }, this.getRequester(data)),
+      this.branchService.updateBranchConfig(
+        {
+          branch_id: data?.branch_id ?? data?.id,
+          config_key: data?.config_key ?? data?.key,
+          config_value: data?.dto?.config_value ?? data?.config_value,
+        },
+        this.getRequester(data),
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'branch.config.delete' })
-  deleteConfig(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  deleteConfig(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.branchService.deleteBranchConfig({
-        branch_id: data?.branch_id ?? data?.id,
-        config_key: data?.config_key ?? data?.key,
-      }, this.getRequester(data)),
+      this.branchService.deleteBranchConfig(
+        {
+          branch_id: data?.branch_id ?? data?.id,
+          config_key: data?.config_key ?? data?.key,
+        },
+        this.getRequester(data),
+      ),
     );
   }
 
   // --- Activity log (audit) ---
   @MessagePattern({ cmd: 'branch.activity_log.find_all' })
-  activityLogFindAll(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  activityLogFindAll(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.branchService.auditLogQuery(data?.query ?? {}),
     );
   }
 
   @MessagePattern({ cmd: 'branch.activity_log.find_by_entity' })
-  activityLogFindByEntity(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+  activityLogFindByEntity(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.branchService.auditLogByEntity(data?.entity_type, data?.entity_id, data?.limit),
+      this.branchService.auditLogByEntity(
+        data?.entity_type,
+        data?.entity_id,
+        data?.limit,
+      ),
     );
   }
 }

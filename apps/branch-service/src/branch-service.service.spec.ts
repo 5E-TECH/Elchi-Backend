@@ -516,7 +516,11 @@ describe('BranchServiceService', () => {
       .mockResolvedValueOnce([]);
     // Analitika doirasi raw SQL orqali: branch '1' + avlodi '2'.
     branchRepo.manager.query.mockResolvedValue([{ id: '1' }, { id: '2' }]);
-    branchUserRepo.count.mockResolvedValue(3);
+    branchUserRepo.find.mockResolvedValue([
+      { user_id: 'c1' },
+      { user_id: 'c2' },
+      { user_id: 'c3' },
+    ]);
     orderClient.send
       .mockReturnValueOnce(
         of({
@@ -548,7 +552,7 @@ describe('BranchServiceService', () => {
           ],
         }),
       )
-      .mockReturnValue(of({ data: { acceptedCount: 1 } }));
+      .mockReturnValueOnce(of({ data: [] }));
 
     const res = await service.getBranchStats('1', {
       id: '1',
@@ -573,7 +577,7 @@ describe('BranchServiceService', () => {
             id: 'o1',
             branch_id: '1',
             market_id: '10',
-            status: 'waiting',
+            status: 'sold',
             total_price: 100000,
             createdAt: new Date().toISOString(),
           },

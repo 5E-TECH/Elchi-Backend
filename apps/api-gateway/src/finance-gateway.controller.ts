@@ -134,12 +134,18 @@ export class FinanceGatewayController {
   }
 
   private async attachCreatedByUsersToHistory(response: any) {
-    const histories = response?.data?.cashboxHistory;
+    const histories = Array.isArray(response?.data?.cashboxHistory)
+      ? response.data.cashboxHistory
+      : response?.data?.history;
     if (!Array.isArray(histories) || !histories.length) {
       return response;
     }
 
-    response.data.cashboxHistory = await this.attachCreatedByUsers(histories);
+    const enrichedHistories = await this.attachCreatedByUsers(histories);
+    response.data.cashboxHistory = enrichedHistories;
+    if (Array.isArray(response?.data?.history)) {
+      response.data.history = enrichedHistories;
+    }
 
     return response;
   }
@@ -178,7 +184,34 @@ export class FinanceGatewayController {
     return histories.map((item: any) => ({
       ...item,
       createdByUser: usersMap.get(String(item?.created_by ?? '')) ?? null,
+      created_by_user: usersMap.get(String(item?.created_by ?? '')) ?? null,
     }));
+  }
+
+  private async attachCreatedByUsersToHistoryResponse(response: any) {
+    const data = response?.data;
+    if (!data || typeof data !== 'object') {
+      return response;
+    }
+
+    if (Array.isArray(data.items)) {
+      data.items = await this.attachCreatedByUsers(data.items);
+    }
+    if (Array.isArray(data.history)) {
+      data.history = await this.attachCreatedByUsers(data.history);
+    }
+    if (Array.isArray(data.cashboxHistory)) {
+      data.cashboxHistory = await this.attachCreatedByUsers(
+        data.cashboxHistory,
+      );
+    }
+    if (Array.isArray(data.allCashboxHistories)) {
+      data.allCashboxHistories = await this.attachCreatedByUsers(
+        data.allCashboxHistories,
+      );
+    }
+
+    return response;
   }
 
   private getUserRoles(user: JwtUser | undefined) {
@@ -414,14 +447,25 @@ export class FinanceGatewayController {
 
   private async loadCashboxHistory(
     cashboxId: string,
-    query: { page?: number; limit?: number },
+    query: {
+      page?: number;
+      limit?: number;
+      sourceTypes?: string;
+      source_types?: string;
+    },
   ): Promise<any[]> {
     if (!cashboxId) {
       return [];
     }
     const historyResponse = await this.send(
       { cmd: 'finance.history.find_all' },
-      { cashbox_id: cashboxId, page: query.page, limit: query.limit },
+      {
+        cashbox_id: cashboxId,
+        page: query.page,
+        limit: query.limit,
+        sourceTypes: query.sourceTypes,
+        source_types: query.source_types,
+      },
     );
     const histories = historyResponse?.data?.items ?? [];
     return this.attachCreatedByUsers(histories);
@@ -459,8 +503,6 @@ export class FinanceGatewayController {
     if (!managerBranchId) {
       managerBranchId = this.extractBranchId(managerProfile);
     }
-    const managerTariffHome = Number(managerProfile?.tariff_home ?? 0);
-    const managerTariffCenter = Number(managerProfile?.tariff_center ?? 0);
 
     const branchCouriers: any[] = [];
     if (managerBranchId) {
@@ -550,9 +592,6 @@ export class FinanceGatewayController {
       (sum, item) => sum + Math.max(Number(item.balance ?? 0), 0),
       0,
     );
-    const courierBalanceMap = new Map(
-      courierCashboxes.map((item) => [item.courierId, item.balance]),
-    );
 
     const courierIds = couriers
       .map((courier) => String(courier?.id ?? '').trim())
@@ -608,10 +647,6 @@ export class FinanceGatewayController {
     const calculateOrderAmounts = (order: any) => {
       const totalPrice = Math.max(Number(order?.total_price ?? 0), 0);
       const whereDeliver = String(order?.where_deliver ?? '').toLowerCase();
-      const managerTariff =
-        whereDeliver === String(Where_deliver.CENTER).toLowerCase()
-          ? managerTariffCenter
-          : managerTariffHome;
       const courierId = String(order?.courier_id ?? '').trim();
       // Prefer the snapshotted courier_share (what the courier actually KEEPS —
       // 0 for SALARY_ONLY couriers) so this display matches the authoritative
@@ -633,57 +668,28 @@ export class FinanceGatewayController {
             : courierTariffByUser,
         0,
       );
+      const branchCashboxAmountFromOrder = Number(
+        order?.branch_cashbox_amount ?? NaN,
+      );
+      const branchShare = Math.max(Number(order?.branch_share ?? 0), 0);
+      const hqPayable = Math.max(
+        Number.isFinite(branchCashboxAmountFromOrder)
+          ? branchCashboxAmountFromOrder
+          : totalPrice - courierShare - branchShare,
+        0,
+      );
 
       return {
         courierId,
         courierReceivable: Math.max(totalPrice - courierShare, 0),
-        hqPayable: Math.max(totalPrice - managerTariff, 0),
+        hqPayable,
       };
     };
 
-    let berilishiKerak = 0;
-    const courierOrders = new Map<string, any[]>();
-
-    for (const order of soldOrders) {
-      const amounts = calculateOrderAmounts(order);
-      if (!amounts.courierId || !courierTariffMap.has(amounts.courierId)) {
-        berilishiKerak += amounts.hqPayable;
-        continue;
-      }
-      const rows = courierOrders.get(amounts.courierId) ?? [];
-      rows.push(order);
-      courierOrders.set(amounts.courierId, rows);
-    }
-
-    for (const [courierId, orders] of courierOrders) {
-      const sortedOrders = [...orders].sort(
-        (left, right) =>
-          new Date(left?.createdAt ?? 0).getTime() -
-          new Date(right?.createdAt ?? 0).getTime(),
-      );
-      const totalCourierReceivable = sortedOrders.reduce(
-        (sum, order) => sum + calculateOrderAmounts(order).courierReceivable,
-        0,
-      );
-      let acceptedAmount = Math.max(
-        totalCourierReceivable -
-          Math.max(Number(courierBalanceMap.get(courierId) ?? 0), 0),
-        0,
-      );
-
-      for (const order of sortedOrders) {
-        if (acceptedAmount <= 0) break;
-        const amounts = calculateOrderAmounts(order);
-        if (amounts.courierReceivable <= 0) {
-          berilishiKerak += amounts.hqPayable;
-          continue;
-        }
-        const allocated = Math.min(acceptedAmount, amounts.courierReceivable);
-        berilishiKerak +=
-          amounts.hqPayable * (allocated / amounts.courierReceivable);
-        acceptedAmount -= allocated;
-      }
-    }
+    const berilishiKerak = soldOrders.reduce(
+      (sum, order) => sum + calculateOrderAmounts(order).hqPayable,
+      0,
+    );
 
     const branchToMainHistoryResponse = ownCashbox?.id
       ? await this.send<{
@@ -873,7 +879,12 @@ export class FinanceGatewayController {
 
     const response = await this.send(
       { cmd: 'finance.cashbox.find_by_user' },
-      { user_id: requestUserId, ...requestQuery },
+      {
+        user_id: requestUserId,
+        ...requestQuery,
+        history_source_types:
+          requestQuery.sourceTypes ?? requestQuery.source_types,
+      },
     );
 
     const withHistory = query.with_history ?? true;
@@ -948,9 +959,11 @@ export class FinanceGatewayController {
         );
         response.data.counterparty = 'HQ';
       }
-      response.data.cashboxHistory = await this.attachCreatedByUsers(
+      const enrichedHistory = await this.attachCreatedByUsers(
         response.data.history,
       );
+      response.data.history = enrichedHistory;
+      response.data.cashboxHistory = enrichedHistory;
       return response;
     }
 
@@ -958,9 +971,11 @@ export class FinanceGatewayController {
       Array.isArray(response?.data?.cashboxes) &&
       Array.isArray(response?.data?.history)
     ) {
-      response.data.cashboxHistory = await this.attachCreatedByUsers(
+      const enrichedHistory = await this.attachCreatedByUsers(
         response.data.history,
       );
+      response.data.history = enrichedHistory;
+      response.data.cashboxHistory = enrichedHistory;
       return response;
     }
 
@@ -1666,23 +1681,95 @@ export class FinanceGatewayController {
   @ApiQuery({ name: 'source_type', required: false })
   @ApiQuery({ name: 'from_date', required: false })
   @ApiQuery({ name: 'to_date', required: false })
+  @ApiQuery({ name: 'fromDate', required: false })
+  @ApiQuery({ name: 'toDate', required: false })
+  @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
   @ApiQuery({ name: 'offset', required: false })
   financialBalanceHistory(
     @Query('source_type') source_type?: string,
     @Query('from_date') from_date?: string,
     @Query('to_date') to_date?: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Query('offset') offset?: string,
   ) {
+    const normalizedLimit = limit ? Number(limit) : undefined;
+    const normalizedPage = page ? Math.max(Number(page), 1) : undefined;
+    const normalizedOffset = offset
+      ? Number(offset)
+      : normalizedPage && normalizedLimit
+        ? (normalizedPage - 1) * normalizedLimit
+        : undefined;
+
     return this.send(
       { cmd: 'finance.financial_balance.history' },
       {
         source_type,
-        from_date,
-        to_date,
+        from_date: from_date ?? fromDate,
+        to_date: to_date ?? toDate,
+        limit: normalizedLimit,
+        offset: normalizedOffset,
+      },
+    );
+  }
+
+  @Get('financial-balance/analytics')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Get financial balance analytics and impact analysis',
+  })
+  @ApiQuery({ name: 'fromDate', required: false })
+  @ApiQuery({ name: 'toDate', required: false })
+  @ApiQuery({ name: 'from_date', required: false })
+  @ApiQuery({ name: 'to_date', required: false })
+  financialBalanceAnalytics(
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('from_date') from_date?: string,
+    @Query('to_date') to_date?: string,
+  ) {
+    return this.send(
+      { cmd: 'finance.financial_balance.analytics' },
+      {
+        from_date: from_date ?? fromDate,
+        to_date: to_date ?? toDate,
+      },
+    );
+  }
+
+  @Get('financial-balance/top-impacts')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Paginated top-impact financial balance transactions',
+  })
+  @ApiQuery({ name: 'fromDate', required: false })
+  @ApiQuery({ name: 'toDate', required: false })
+  @ApiQuery({ name: 'from_date', required: false })
+  @ApiQuery({ name: 'to_date', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
+  financialBalanceTopImpacts(
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+    @Query('from_date') from_date?: string,
+    @Query('to_date') to_date?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.send(
+      { cmd: 'finance.financial_balance.top_impacts' },
+      {
+        from_date: from_date ?? fromDate,
+        to_date: to_date ?? toDate,
+        page: page ? Number(page) : undefined,
         limit: limit ? Number(limit) : undefined,
-        offset: offset ? Number(offset) : undefined,
       },
     );
   }
@@ -1802,28 +1889,28 @@ export class FinanceGatewayController {
       this.hasRole(req?.user, RoleEnum.MARKET) &&
       !this.isPrivileged(req?.user)
     ) {
-      return this.send(
+      return this.attachCreatedByUsersToHistoryResponse(await this.send(
         { cmd: 'finance.history.find_all' },
         {
           ...query,
           user_id: String(req.user.sub),
           cashbox_type: Cashbox_type.FOR_MARKET,
         },
-      );
+      ));
     }
 
     if (
       this.hasRole(req?.user, RoleEnum.COURIER) &&
       !this.isPrivileged(req?.user)
     ) {
-      return this.send(
+      return this.attachCreatedByUsersToHistoryResponse(await this.send(
         { cmd: 'finance.history.find_all' },
         {
           ...query,
           user_id: String(req.user.sub),
           cashbox_type: Cashbox_type.FOR_COURIER,
         },
-      );
+      ));
     }
 
     if (
@@ -1895,7 +1982,7 @@ export class FinanceGatewayController {
         }
       }
 
-      return historyResponse;
+      return this.attachCreatedByUsersToHistoryResponse(historyResponse);
     }
 
     const hasCashboxSelector = Boolean(
@@ -1905,12 +1992,12 @@ export class FinanceGatewayController {
       query.cashboxType,
     );
 
-    return this.send(
+    return this.attachCreatedByUsersToHistoryResponse(await this.send(
       { cmd: 'finance.history.find_all' },
       hasCashboxSelector
         ? query
         : { ...query, cashbox_type: Cashbox_type.MAIN },
-    );
+    ));
   }
 
   @Get('history/:id')

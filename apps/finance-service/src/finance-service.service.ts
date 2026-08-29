@@ -178,6 +178,27 @@ export class FinanceServiceService implements OnModuleInit {
     return date;
   }
 
+  private parseSourceTypes(value?: string | null): Source_type[] | undefined {
+    const raw = String(value ?? '').trim();
+    if (!raw) {
+      return undefined;
+    }
+
+    const allowed = new Set(Object.values(Source_type));
+    const sourceTypes = raw
+      .split(',')
+      .map((item) => item.trim())
+      .filter(Boolean);
+
+    for (const sourceType of sourceTypes) {
+      if (!allowed.has(sourceType as Source_type)) {
+        throw new BadRequestException(`Invalid source_type: ${sourceType}`);
+      }
+    }
+
+    return sourceTypes as Source_type[];
+  }
+
   private normalizeBalance(cashbox: Cashbox) {
     cashbox.balance =
       Number(cashbox.balance_cash) + Number(cashbox.balance_card);
@@ -241,6 +262,9 @@ export class FinanceServiceService implements OnModuleInit {
   private parseDateRange(fromDate?: string, toDate?: string) {
     const start = this.parseDate(fromDate ?? null);
     const end = this.parseDate(toDate ?? null);
+    if (end && toDate && /^\d{4}-\d{2}-\d{2}$/.test(toDate.trim())) {
+      end.setHours(23, 59, 59, 999);
+    }
     return { start, end };
   }
 
@@ -638,6 +662,9 @@ export class FinanceServiceService implements OnModuleInit {
 
       const page = dto.page && dto.page > 0 ? dto.page : 1;
       const limit = dto.limit && dto.limit > 0 ? dto.limit : 20;
+      const historySourceTypes = this.parseSourceTypes(
+        dto.history_source_types ?? dto.sourceTypes ?? dto.source_types,
+      );
 
       if (dto.cashbox_type) {
         const cashbox = await this.cashboxRepo.findOne({
@@ -660,9 +687,16 @@ export class FinanceServiceService implements OnModuleInit {
           cashbox_id: cashbox.id,
           isDeleted: false,
         };
+        const { start, end } = this.parseDateRange(dto.fromDate, dto.toDate);
         if (dto.history_source_type) {
           historyWhere.source_type = dto.history_source_type;
         }
+        if (historySourceTypes?.length) {
+          historyWhere.source_type = In(historySourceTypes);
+        }
+        if (start && end) historyWhere.createdAt = Between(start, end);
+        else if (start) historyWhere.createdAt = MoreThanOrEqual(start);
+        else if (end) historyWhere.createdAt = LessThanOrEqual(end);
 
         const [history, total] = await this.historyRepo.findAndCount({
           where: historyWhere,
@@ -714,6 +748,14 @@ export class FinanceServiceService implements OnModuleInit {
         historyQuery.andWhere('history.source_type = :historySourceType', {
           historySourceType: dto.history_source_type,
         });
+      }
+      if (historySourceTypes?.length) {
+        historyQuery.andWhere(
+          'history.source_type IN (:...historySourceTypes)',
+          {
+            historySourceTypes,
+          },
+        );
       }
 
       const [history, total] = await historyQuery.getManyAndCount();
@@ -904,6 +946,12 @@ export class FinanceServiceService implements OnModuleInit {
       }
       if (dto.source_type) {
         where.source_type = dto.source_type;
+      }
+      const sourceTypes = this.parseSourceTypes(
+        dto.sourceTypes ?? dto.source_types,
+      );
+      if (sourceTypes?.length) {
+        where.source_type = In(sourceTypes);
       }
       if (dto.source_id) {
         this.assertBigIntId(dto.source_id, 'source_id');
@@ -1451,7 +1499,12 @@ export class FinanceServiceService implements OnModuleInit {
     }
   }
 
-  async getMainCashbox(filters?: { fromDate?: string; toDate?: string }) {
+  async getMainCashbox(filters?: {
+    fromDate?: string;
+    toDate?: string;
+    sourceTypes?: string;
+    source_types?: string;
+  }) {
     try {
       const mainCashbox = await this.ensureMainCashbox();
       const { start, end } = this.parseDateRange(
@@ -1465,6 +1518,12 @@ export class FinanceServiceService implements OnModuleInit {
       if (start && end) where.createdAt = Between(start, end);
       else if (start) where.createdAt = MoreThanOrEqual(start);
       else if (end) where.createdAt = LessThanOrEqual(end);
+      const sourceTypes = this.parseSourceTypes(
+        filters?.sourceTypes ?? filters?.source_types,
+      );
+      if (sourceTypes?.length) {
+        where.source_type = In(sourceTypes);
+      }
 
       const cashboxHistory = await this.historyRepo.find({
         where,
@@ -1487,6 +1546,9 @@ export class FinanceServiceService implements OnModuleInit {
     toDate?: string;
     cashbox_type?: Cashbox_type;
     history_source_type?: Source_type;
+    history_source_types?: string;
+    sourceTypes?: string;
+    source_types?: string;
   }) {
     try {
       this.assertBigIntId(data.id, 'id');
@@ -1517,6 +1579,12 @@ export class FinanceServiceService implements OnModuleInit {
       if (data.history_source_type) {
         historyWhere.source_type = data.history_source_type;
       }
+      const historySourceTypes = this.parseSourceTypes(
+        data.history_source_types ?? data.sourceTypes ?? data.source_types,
+      );
+      if (historySourceTypes?.length) {
+        historyWhere.source_type = In(historySourceTypes);
+      }
       if (start && end) historyWhere.createdAt = Between(start, end);
       else if (start) historyWhere.createdAt = MoreThanOrEqual(start);
       else if (end) historyWhere.createdAt = LessThanOrEqual(end);
@@ -1544,6 +1612,8 @@ export class FinanceServiceService implements OnModuleInit {
     cashbox_type?: Cashbox_type;
     fromDate?: string;
     toDate?: string;
+    sourceTypes?: string;
+    source_types?: string;
   }) {
     try {
       this.assertBigIntId(data.user_id, 'user_id');
@@ -1563,13 +1633,6 @@ export class FinanceServiceService implements OnModuleInit {
         cashboxType === Cashbox_type.BRANCH
           ? String(data.branch_id ?? '').trim()
           : data.user_id;
-      const historySourceType =
-        cashboxType === Cashbox_type.FOR_MARKET
-          ? Source_type.MARKET_PAYMENT
-          : cashboxType === Cashbox_type.BRANCH
-            ? Source_type.BRANCH_TO_MAIN
-            : Source_type.COURIER_PAYMENT;
-
       if (cashboxType === Cashbox_type.BRANCH && !targetUserId) {
         throw new BadRequestException('Manager uchun branch_id majburiy');
       }
@@ -1596,7 +1659,7 @@ export class FinanceServiceService implements OnModuleInit {
       return this.getCashboxByUserId({
         id: targetUserId,
         cashbox_type: cashboxType,
-        history_source_type: historySourceType,
+        history_source_types: data.sourceTypes ?? data.source_types,
         fromDate: data.fromDate,
         toDate: data.toDate,
       });
@@ -2441,6 +2504,8 @@ export class FinanceServiceService implements OnModuleInit {
     operation_type?: Operation_type;
     sourceType?: Source_type;
     source_type?: Source_type;
+    sourceTypes?: string;
+    source_types?: string;
     createdBy?: string;
     created_by?: string;
     cashboxType?: Cashbox_type;
@@ -2481,6 +2546,9 @@ export class FinanceServiceService implements OnModuleInit {
 
       const operationType = filters?.operationType ?? filters?.operation_type;
       const sourceType = filters?.sourceType ?? filters?.source_type;
+      const sourceTypes = this.parseSourceTypes(
+        filters?.sourceTypes ?? filters?.source_types,
+      );
       const createdBy = filters?.createdBy ?? filters?.created_by;
       const cashboxType = filters?.cashboxType ?? filters?.cashbox_type;
       const fromDate = filters?.fromDate ?? filters?.from_date;
@@ -2493,6 +2561,10 @@ export class FinanceServiceService implements OnModuleInit {
       if (sourceType)
         qb.andWhere('h.source_type = :sourceType', {
           sourceType,
+        });
+      if (sourceTypes?.length)
+        qb.andWhere('h.source_type IN (:...sourceTypes)', {
+          sourceTypes,
         });
       if (createdBy)
         qb.andWhere('h.created_by = :createdBy', {
@@ -3067,11 +3139,230 @@ export class FinanceServiceService implements OnModuleInit {
         order: { id: 'DESC' },
       });
       const currentBalance = Number(latest?.balance_after ?? 0);
+      const page = Math.floor(skip / take) + 1;
 
       return this.successRes(
-        { rows, total, currentBalance, limit: take, offset: skip },
+        {
+          rows,
+          items: rows,
+          history: rows,
+          total,
+          currentBalance,
+          limit: take,
+          offset: skip,
+          pagination: {
+            total,
+            page,
+            limit: take,
+            totalPages: Math.ceil(total / take),
+          },
+        },
         200,
         'financial balance history',
+      );
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
+  private applyFinancialBalanceDateRange(
+    qb: ReturnType<Repository<FinancialBalanceHistory>['createQueryBuilder']>,
+    input: { from_date?: string; to_date?: string },
+  ) {
+    const from = this.parseDate(input.from_date);
+    const to = this.parseDate(input.to_date);
+
+    if (from) {
+      qb.andWhere('h.createdAt >= :from', { from });
+    }
+    if (to) {
+      qb.andWhere('h.createdAt <= :to', { to });
+    }
+
+    return qb;
+  }
+
+  private async getCurrentFinancialBalance(): Promise<number> {
+    const latest = await this.financialHistoryRepo.findOne({
+      where: { isDeleted: false },
+      order: { id: 'DESC' },
+    });
+
+    return Number(latest?.balance_after ?? 0);
+  }
+
+  private mapFinancialBalanceHistoryRow(history: FinancialBalanceHistory) {
+    return {
+      id: history.id,
+      created_at: history.createdAt,
+      createdAt: history.createdAt,
+      source_type: history.source_type,
+      amount: Number(history.amount ?? 0),
+      balance_before: Number(history.balance_before ?? 0),
+      balance_after: Number(history.balance_after ?? 0),
+      comment: history.comment,
+      created_by: history.created_by,
+      related_user_id: history.related_user_id,
+      order_id: history.order_id,
+    };
+  }
+
+  async financialBalanceAnalytics(input: {
+    from_date?: string;
+    to_date?: string;
+  }) {
+    try {
+      const currentBalance = await this.getCurrentFinancialBalance();
+
+      const sourceQb = this.financialHistoryRepo
+        .createQueryBuilder('h')
+        .select('h.source_type', 'source_type')
+        .addSelect(
+          'SUM(CASE WHEN h.amount > 0 THEN h.amount ELSE 0 END)',
+          'positive_total',
+        )
+        .addSelect(
+          'SUM(CASE WHEN h.amount < 0 THEN (-1 * h.amount) ELSE 0 END)',
+          'negative_total',
+        )
+        .addSelect('SUM(h.amount)', 'net_total')
+        .addSelect('COUNT(h.id)', 'transaction_count')
+        .where('h.isDeleted = false')
+        .groupBy('h.source_type')
+        .orderBy('net_total', 'DESC');
+      this.applyFinancialBalanceDateRange(sourceQb, input);
+
+      const totalsQb = this.financialHistoryRepo
+        .createQueryBuilder('h')
+        .select(
+          'SUM(CASE WHEN h.amount > 0 THEN h.amount ELSE 0 END)',
+          'total_positive',
+        )
+        .addSelect(
+          'SUM(CASE WHEN h.amount < 0 THEN (-1 * h.amount) ELSE 0 END)',
+          'total_negative',
+        )
+        .addSelect('SUM(h.amount)', 'net_change')
+        .addSelect('COUNT(h.id)', 'total_count')
+        .where('h.isDeleted = false');
+      this.applyFinancialBalanceDateRange(totalsQb, input);
+
+      const topQb = this.financialHistoryRepo
+        .createQueryBuilder('h')
+        .addSelect(
+          'CASE WHEN h.amount >= 0 THEN h.amount ELSE (-1 * h.amount) END',
+          'abs_amount',
+        )
+        .where('h.isDeleted = false')
+        .orderBy('abs_amount', 'DESC')
+        .addOrderBy('h.createdAt', 'DESC')
+        .take(10);
+      this.applyFinancialBalanceDateRange(topQb, input);
+
+      const [sourceBreakdown, totalsRaw, topTransactions] = await Promise.all([
+        sourceQb.getRawMany(),
+        totalsQb.getRawOne(),
+        topQb.getMany(),
+      ]);
+
+      const totalPositive = Number(totalsRaw?.total_positive ?? 0);
+      const totalNegative = Number(totalsRaw?.total_negative ?? 0);
+      const netChange = Number(totalsRaw?.net_change ?? 0);
+      const totalCount = Number(totalsRaw?.total_count ?? 0);
+
+      const positiveImpact = sourceBreakdown
+        .filter((source) => Number(source.positive_total) > 0)
+        .map((source) => ({
+          source_type: source.source_type,
+          total_amount: Number(source.positive_total),
+          transaction_count: Number(source.transaction_count),
+          percentage:
+            totalPositive > 0
+              ? Math.round(
+                  (Number(source.positive_total) / totalPositive) * 10000,
+                ) / 100
+              : 0,
+        }))
+        .sort((a, b) => b.total_amount - a.total_amount);
+
+      const negativeImpact = sourceBreakdown
+        .filter((source) => Number(source.negative_total) > 0)
+        .map((source) => ({
+          source_type: source.source_type,
+          total_amount: Number(source.negative_total),
+          transaction_count: Number(source.transaction_count),
+          percentage:
+            totalNegative > 0
+              ? Math.round(
+                  (Number(source.negative_total) / totalNegative) * 10000,
+                ) / 100
+              : 0,
+        }))
+        .sort((a, b) => b.total_amount - a.total_amount);
+
+      return this.successRes(
+        {
+          currentBalance,
+          summary: {
+            totalPositive,
+            totalNegative,
+            netChange,
+            totalCount,
+          },
+          positiveImpact,
+          negativeImpact,
+          topTransactions: topTransactions.map((history) =>
+            this.mapFinancialBalanceHistoryRow(history),
+          ),
+        },
+        200,
+        'Financial balance analytics',
+      );
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
+  async financialBalanceTopImpacts(input: {
+    from_date?: string;
+    to_date?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    try {
+      const page = Math.max(1, Number(input.page ?? 1));
+      const limit = Math.min(Math.max(Number(input.limit ?? 20), 1), 100);
+
+      const qb = this.financialHistoryRepo
+        .createQueryBuilder('h')
+        .addSelect(
+          'CASE WHEN h.amount >= 0 THEN h.amount ELSE (-1 * h.amount) END',
+          'abs_amount',
+        )
+        .where('h.isDeleted = false')
+        .orderBy('abs_amount', 'DESC')
+        .addOrderBy('h.createdAt', 'DESC');
+      this.applyFinancialBalanceDateRange(qb, input);
+
+      const [items, total] = await qb
+        .skip((page - 1) * limit)
+        .take(limit)
+        .getManyAndCount();
+
+      return this.successRes(
+        {
+          items: items.map((history) =>
+            this.mapFinancialBalanceHistoryRow(history),
+          ),
+          pagination: {
+            total,
+            page,
+            limit,
+            totalPages: Math.ceil(total / limit),
+          },
+        },
+        200,
+        'Top impact transactions',
       );
     } catch (error) {
       this.toRpcError(error);

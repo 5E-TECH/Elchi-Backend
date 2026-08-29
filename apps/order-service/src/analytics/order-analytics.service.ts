@@ -250,40 +250,20 @@ export class OrderAnalyticsService {
     return Number(row?.count ?? 0);
   }
 
-  private async countBranchBatchAcceptedOrders(
+  private async countDashboardAcceptedOrders(
     range: { start: Date; end: Date } | null,
     branchId?: string,
   ) {
-    const custodySubQuery = this.orderCustodyEventRepo
-      .createQueryBuilder('oce')
-      .select('1')
-      .where('oce.order_id = o.id')
-      .andWhere(
-        '(oce.from_branch_id = :analyticsBranchId OR oce.to_branch_id = :analyticsBranchId)',
-      )
-      .getQuery();
-
-    const query = this.orderTrackingRepo
-      .createQueryBuilder('t')
-      .innerJoin(Order, 'o', 'o.id = t.order_id')
-      .where('o.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere('t.action = :action', { action: 'branch_batch_received' })
-      .andWhere('t.to_status = :status', { status: Order_status.RECEIVED })
+    const query = this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false }),
+      branchId,
+    )
       .select('COUNT(DISTINCT COALESCE(o.parent_order_id, o.id))', 'count');
 
-    if (branchId) {
-      query.andWhere(
-        `(
-          o.branch_id = :analyticsBranchId
-          OR o.holder_branch_id = :analyticsBranchId
-          OR EXISTS (${custodySubQuery})
-        )`,
-        { analyticsBranchId: branchId },
-      );
-    }
-
     if (range) {
-      query.andWhere('t.created_at BETWEEN :start AND :end', range);
+      query.andWhere('o.createdAt BETWEEN :start AND :end', range);
     }
 
     const row = await query.getRawOne<{ count?: string | number }>();
@@ -610,7 +590,7 @@ export class OrderAnalyticsService {
     }
 
     const [acceptedCount, cancelled, soldOrders] = await Promise.all([
-      this.countBranchBatchAcceptedOrders(range, branchId),
+      this.countDashboardAcceptedOrders(range, branchId),
       this.countHistoricallyCancelledOrders(range, branchId),
       soldOrdersQuery.getMany(),
     ]);

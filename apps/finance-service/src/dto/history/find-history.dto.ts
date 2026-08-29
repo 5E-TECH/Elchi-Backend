@@ -1,5 +1,12 @@
 import { Cashbox_type, Operation_type, Source_type } from '@app/common';
-import { IsEnum, IsNumber, IsOptional, IsString, Matches, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Matches,
+  Min,
+} from 'class-validator';
 
 export class FindHistoryDto {
   @IsOptional()
@@ -27,6 +34,14 @@ export class FindHistoryDto {
   @IsOptional()
   @IsEnum(Source_type)
   source_type?: Source_type;
+
+  @IsOptional()
+  @IsString()
+  sourceTypes?: string;
+
+  @IsOptional()
+  @IsString()
+  source_types?: string;
 
   @IsOptional()
   @IsString()

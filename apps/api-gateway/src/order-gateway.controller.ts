@@ -1226,6 +1226,12 @@ export class OrderGatewayController {
   @ApiQuery({ name: 'region_id', required: false, type: String })
   @ApiQuery({ name: 'district_id', required: false, type: String })
   @ApiQuery({ name: 'branch_id', required: false, type: String })
+  @ApiQuery({ name: 'courier_id', required: false, type: String })
+  @ApiQuery({
+    name: 'where_deliver',
+    required: false,
+    enum: Where_deliver,
+  })
   @ApiQuery({
     name: 'source',
     required: false,
@@ -1261,6 +1267,8 @@ export class OrderGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
     @Req() req?: { user: JwtUser },
+    @Query('courier_id') courier_id?: string,
+    @Query('where_deliver') where_deliver?: string,
   ) {
     const roles = req?.user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
@@ -1304,12 +1312,26 @@ export class OrderGatewayController {
           ? [courier_ids]
           : []
     )
+      .concat(courier_id ? [courier_id] : [])
       .flatMap((value) => String(value).split(','))
       .map((value) => value.trim())
       .filter(Boolean);
     const useFetchAll = String(fetch_all ?? '').toLowerCase() === 'true';
 
     const statuses = this.parseStatusQuery(status);
+    const normalizedWhereDeliver = where_deliver
+      ? String(where_deliver).trim().toLowerCase()
+      : undefined;
+    if (
+      normalizedWhereDeliver &&
+      !Object.values(Where_deliver).includes(
+        normalizedWhereDeliver as Where_deliver,
+      )
+    ) {
+      throw new BadRequestException(
+        `Noto'g'ri where_deliver qiymati: ${where_deliver}`,
+      );
+    }
     const isCancelledTab =
       Boolean(statuses?.length) &&
       statuses!.every(
@@ -1364,6 +1386,7 @@ export class OrderGatewayController {
         market_id: resolvedMarketId,
         customer_id,
         status: resolvedStatuses,
+        where_deliver: normalizedWhereDeliver as Where_deliver | undefined,
         search,
         start_day,
         end_day,
@@ -1507,6 +1530,11 @@ export class OrderGatewayController {
   ) {
     const pagination = this.parsePaginationQuery(page, limit);
     const statuses = this.parseStatusQuery(status);
+    const normalizedRoles = this.normalizeRoles(req?.user?.roles);
+    const isBranchScopedRequester =
+      normalizedRoles.includes(RoleEnum.BRANCH) ||
+      normalizedRoles.includes(RoleEnum.MANAGER) ||
+      normalizedRoles.includes(RoleEnum.REGISTRATOR);
     const cancelledTabStatuses = [
       Order_status.CANCELLED,
       Order_status.CANCELLED_SENT,
@@ -1541,6 +1569,62 @@ export class OrderGatewayController {
           total,
           page: pagination.page,
           limit: pagination.limit,
+          ...paginationMeta,
+        },
+        200,
+        'All my orders',
+      );
+    }
+
+    if (isBranchScopedRequester && req?.user) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
+        throw new BadRequestException('Branch user branchga biriktirilmagan');
+      }
+
+      const payload = {
+        query: {
+          branch_id: String(assignment.branch_id),
+          status: statuses,
+          exclude_statuses: statuses?.length
+            ? undefined
+            : [
+                Order_status.CREATED,
+                Order_status.NEW,
+                Order_status.RECEIVED,
+                Order_status.ON_THE_ROAD,
+              ],
+          search,
+          start_day: startDate,
+          end_day: endDate,
+          page: pagination.page,
+          limit: pagination.limit,
+        },
+      };
+      const result = await this.sendOrderWithFallback(
+        { cmd: 'order.find_all_enriched' },
+        { cmd: 'order.find_all' },
+        payload,
+      );
+      const rows = this.extractRows(result?.data ?? result);
+      const total = Number(result?.total ?? rows.length);
+      const currentPage = Number(result?.page ?? pagination.page);
+      const currentLimit = Number(result?.limit ?? pagination.limit);
+      const legacyData = this.toLegacyShape(rows).map((row) =>
+        this.normalizeLegacyOrderRow(row),
+      );
+      const paginationMeta = this.buildPaginationMeta(
+        total,
+        currentPage,
+        currentLimit,
+      );
+
+      return successRes(
+        {
+          data: legacyData,
+          total,
+          page: currentPage,
+          limit: currentLimit,
           ...paginationMeta,
         },
         200,

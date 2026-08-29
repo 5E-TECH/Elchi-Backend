@@ -1506,6 +1506,26 @@
             }
           },
           {
+            "name": "courier_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "where_deliver",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "center",
+                "address"
+              ],
+              "type": "string"
+            }
+          },
+          {
             "name": "status",
             "required": false,
             "in": "query",
@@ -4331,6 +4351,26 @@
             }
           },
           {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated source_type list for cashbox history tabs. Omit for all history.",
+            "schema": {
+              "example": "courier_payment,market_payment,branch_to_main",
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_types",
+            "required": false,
+            "in": "query",
+            "description": "Snake_case alias for sourceTypes",
+            "schema": {
+              "example": "sell,cancel,extra_cost,correction",
+              "type": "string"
+            }
+          },
+          {
             "name": "with_history",
             "required": false,
             "in": "query",
@@ -4427,6 +4467,26 @@
               "example": "2026-03-07T23:59:59Z",
               "type": "string"
             }
+          },
+          {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated source_type list. Omit for all history; use payment types for Oldi-berdi.",
+            "schema": {
+              "example": "courier_payment,market_payment",
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_types",
+            "required": false,
+            "in": "query",
+            "description": "Snake_case alias for sourceTypes",
+            "schema": {
+              "example": "sell,cancel,extra_cost,correction",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4475,6 +4535,26 @@
               "example": "2026-03-07T23:59:59Z",
               "type": "string"
             }
+          },
+          {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated source_type list. Omit for all history; use payment types for Oldi-berdi.",
+            "schema": {
+              "example": "courier_payment,market_payment",
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_types",
+            "required": false,
+            "in": "query",
+            "description": "Snake_case alias for sourceTypes",
+            "schema": {
+              "example": "sell,cancel,extra_cost,correction",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4512,6 +4592,26 @@
             "in": "query",
             "schema": {
               "example": "2026-03-07T23:59:59Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated source_type list. Omit for all history; use payment types for Oldi-berdi.",
+            "schema": {
+              "example": "courier_payment,market_payment",
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_types",
+            "required": false,
+            "in": "query",
+            "description": "Snake_case alias for sourceTypes",
+            "schema": {
+              "example": "sell,cancel,extra_cost,correction",
               "type": "string"
             }
           }
@@ -4783,6 +4883,26 @@
               "example": "2026-03-07T23:59:59Z",
               "type": "string"
             }
+          },
+          {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated source_type list. Omit for all history; use payment types for Oldi-berdi.",
+            "schema": {
+              "example": "courier_payment,market_payment",
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_types",
+            "required": false,
+            "in": "query",
+            "description": "Snake_case alias for sourceTypes",
+            "schema": {
+              "example": "sell,cancel,extra_cost,correction",
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4820,6 +4940,26 @@
             "in": "query",
             "schema": {
               "example": "2026-03-07T23:59:59Z",
+              "type": "string"
+            }
+          },
+          {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated source_type list. Omit for all history; use payment types for Oldi-berdi.",
+            "schema": {
+              "example": "courier_payment,market_payment",
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_types",
+            "required": false,
+            "in": "query",
+            "description": "Snake_case alias for sourceTypes",
+            "schema": {
+              "example": "sell,cancel,extra_cost,correction",
               "type": "string"
             }
           }
@@ -4919,6 +5059,30 @@
             }
           },
           {
+            "name": "fromDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "toDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
             "name": "limit",
             "required": false,
             "in": "query",
@@ -4946,6 +5110,128 @@
           }
         ],
         "summary": "List financial balance ledger entries + current balance",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/finance/financial-balance/analytics": {
+      "get": {
+        "operationId": "FinanceGatewayController_financialBalanceAnalytics",
+        "parameters": [
+          {
+            "name": "fromDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "toDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get financial balance analytics and impact analysis",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/finance/financial-balance/top-impacts": {
+      "get": {
+        "operationId": "FinanceGatewayController_financialBalanceTopImpacts",
+        "parameters": [
+          {
+            "name": "fromDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "toDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Paginated top-impact financial balance transactions",
         "tags": [
           "Finance"
         ]
@@ -5112,6 +5398,26 @@
                 "extra_cost",
                 "bills"
               ]
+            }
+          },
+          {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "description": "Comma-separated source_type list for tabs like all/payments/sales",
+            "schema": {
+              "example": "courier_payment,market_payment",
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_types",
+            "required": false,
+            "in": "query",
+            "description": "Snake_case alias for sourceTypes",
+            "schema": {
+              "example": "sell,cancel,extra_cost,correction",
+              "type": "string"
             }
           },
           {
@@ -9460,6 +9766,54 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "sourceTypes",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "source_user_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "user_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cashbox_type",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -10758,18 +11112,22 @@
         "type": "object",
         "properties": {
           "product_id": {
-            "type": "string",
+            "type": "object",
             "example": "1",
-            "description": "Product ID (as string/bigint)"
+            "nullable": true,
+            "description": "Internal product ID; external item uchun null"
+          },
+          "product_name": {
+            "type": "object",
+            "example": "Marketplace mahsuloti",
+            "nullable": true,
+            "description": "External item nomi"
           },
           "quantity": {
             "type": "number",
             "example": 1
           }
-        },
-        "required": [
-          "product_id"
-        ]
+        }
       },
       "CreateOrderRequestDto": {
         "type": "object",
