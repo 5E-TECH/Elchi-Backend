@@ -43,6 +43,6 @@ async function bootstrap() {
 
   await app.startAllMicroservices();
   registerLiveness(app, 'identity-service');
-  await app.listen(Number(process.env.IDENTITY_PORT || 3011));
+  await app.listen(3011);
 }
 bootstrap();

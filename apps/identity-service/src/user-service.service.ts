@@ -307,6 +307,42 @@ export class UserServiceService implements OnModuleInit {
     this.forbidden('Bu amal uchun ruxsat yoq');
   }
 
+  /**
+   * Legacy role alias the admin panel still sends: market accounts are
+   * labelled "marketing" in the UI, and the user list fires one request per
+   * alias and merges them. The DB column is an enum that only knows `market`.
+   */
+  private static readonly ROLE_ALIASES: Record<string, Roles> = {
+    marketing: Roles.MARKET,
+  };
+
+  /**
+   * `role` and `status` land in the query builder as enum literals, so an
+   * unknown value reaches Postgres as an invalid enum input (22P02) and turns
+   * a bad filter into a 500. Resolve the aliases and reject the rest here.
+   */
+  private normalizeEnumFilter<T extends string>(
+    value: string | undefined,
+    allowed: readonly T[],
+    label: string,
+    aliases: Record<string, T> = {},
+  ): T | undefined {
+    if (!value) {
+      return undefined;
+    }
+
+    const alias = aliases[value];
+    if (alias) {
+      return alias;
+    }
+
+    if (!allowed.includes(value as T)) {
+      this.badRequest(`Noto'g'ri ${label}: ${value}`);
+    }
+
+    return value as T;
+  }
+
   private normalizeQuery(query: UserFilterQuery = {}) {
     const page = Number(query.page) > 0 ? Number(query.page) : 1;
     const limit =
@@ -314,8 +350,17 @@ export class UserServiceService implements OnModuleInit {
 
     return {
       search: query.search?.trim(),
-      role: query.role?.trim(),
-      status: query.status?.trim(),
+      role: this.normalizeEnumFilter(
+        query.role?.trim(),
+        Object.values(Roles),
+        'role',
+        UserServiceService.ROLE_ALIASES,
+      ),
+      status: this.normalizeEnumFilter(
+        query.status?.trim(),
+        Object.values(Status),
+        'status',
+      ),
       region_id: query.region_id?.trim(),
       user_ids: Array.isArray(query.user_ids)
         ? query.user_ids.map((id) => String(id ?? '').trim()).filter(Boolean)
