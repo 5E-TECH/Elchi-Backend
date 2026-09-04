@@ -10443,6 +10443,78 @@
         ]
       }
     },
+    "/partner/shipments/{id}": {
+      "get": {
+        "operationId": "PartnerGatewayController_getShipment",
+        "parameters": [
+          {
+            "name": "X-Api-Key",
+            "in": "header",
+            "description": "Hamkor API kaliti (JWT emas)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ shipment_id, external_order_id, status, cod_amount, tracking }"
+          },
+          "404": {
+            "description": "Shipment topilmadi"
+          }
+        },
+        "summary": "Shipment holati (status/tracking/cod)",
+        "tags": [
+          "Partner"
+        ]
+      }
+    },
+    "/partner/shipments/{id}/cancel": {
+      "post": {
+        "operationId": "PartnerGatewayController_cancelShipment",
+        "parameters": [
+          {
+            "name": "X-Api-Key",
+            "in": "header",
+            "description": "Hamkor API kaliti (JWT emas)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ shipment_id, status: \"cancelled\" }"
+          },
+          "404": {
+            "description": "Shipment topilmadi"
+          }
+        },
+        "summary": "Shipment bekor qilish (yetkazilgan → 409)",
+        "tags": [
+          "Partner"
+        ]
+      }
+    },
     "/admin/partners": {
       "post": {
         "operationId": "PartnerAdminGatewayController_create",
