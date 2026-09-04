@@ -9,8 +9,8 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * ataylab ajratilgan (u `integration_id` FK'ga bog'langan). Kontrakt:
  * docs/PARTNER_API.md §4.
  */
-export class CreatePartnerWebhookOutbox1716000000021 implements MigrationInterface {
-  name = 'CreatePartnerWebhookOutbox1716000000021';
+export class CreatePartnerWebhookOutbox1716000000023 implements MigrationInterface {
+  name = 'CreatePartnerWebhookOutbox1716000000023';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
