@@ -178,3 +178,11 @@ jobs:
 
             docker compose -f docker-compose.prod.yml up -d --no-deps cloudflared || true
             docker compose -f docker-compose.prod.yml ps
+
+            # Reclaim what this deploy just superseded: the previous service
+            # images (now unreferenced) and stale build cache. Without it the
+            # box filled to 156G/81% over five months. Rollback does not need
+            # the old images — it rebuilds from OLD_SHA — so this is safe to run
+            # here. Never fatal: a cleanup problem must not fail, or roll back,
+            # a deploy that already succeeded.
+            bash scripts/docker-gc.sh || true
