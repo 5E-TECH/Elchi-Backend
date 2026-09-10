@@ -1,7 +1,7 @@
 import { MigrationInterface, QueryRunner } from 'typeorm';
 
-export class AddExtraCostPermission1716000000024 implements MigrationInterface {
-  name = 'AddExtraCostPermission1716000000024';
+export class AddExtraCostPermission1716000000025 implements MigrationInterface {
+  name = 'AddExtraCostPermission1716000000025';
 
   public async up(queryRunner: QueryRunner): Promise<void> {
     await queryRunner.query(`
