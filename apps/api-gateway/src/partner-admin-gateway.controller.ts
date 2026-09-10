@@ -4,6 +4,7 @@ import {
   Get,
   Inject,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -26,6 +27,7 @@ import { RolesGuard } from './auth/roles.guard';
 import {
   CreatePartnerRequestDto,
   SetPartnerActiveRequestDto,
+  UpdatePartnerRequestDto,
 } from './dto/partner.swagger.dto';
 
 /**
@@ -128,6 +130,30 @@ export class PartnerAdminGatewayController {
           { id: webhookId, requester: this.auditActor(req) },
         )
         .pipe(timeout(20000)),
+    );
+  }
+
+  @Patch(':id')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      "Hamkor sozlamalari: webhook manzili/sekreti, IP ro'yxati, nom. " +
+      'API kalit BU YERDA o‘zgarmaydi — buning uchun rotate-key bor.',
+  })
+  @ApiParam({ name: 'id' })
+  @ApiBody({ type: UpdatePartnerRequestDto })
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdatePartnerRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return firstValueFrom(
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.update' },
+          { id, ...dto, requester: this.auditActor(req) },
+        )
+        .pipe(timeout(8000)),
     );
   }
 
