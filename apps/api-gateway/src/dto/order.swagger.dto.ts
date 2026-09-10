@@ -543,6 +543,13 @@ export class SellOrderRequestDto {
   proofFileKeys?: string[];
 }
 
+export class ExtraCostApprovalDecisionDto {
+  @ApiPropertyOptional({ example: 'Tasdiqlandi' })
+  @IsOptional()
+  @IsString()
+  comment?: string;
+}
+
 export class CouldNotDeliverOrderRequestDto {
   @ApiProperty({
     example: "Mijoz uyda yo'q edi, ertaga qayta urinish so'radi",

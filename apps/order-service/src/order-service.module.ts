@@ -29,6 +29,7 @@ import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.e
 import { BranchTransferBatchHistory } from './entities/branch-transfer-batch-history.entity';
 import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.entity';
 import { MarketCancelledHandoverSession } from './entities/market-cancelled-handover-session.entity';
+import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
 
 @Module({
   imports: [
@@ -73,6 +74,7 @@ import { MarketCancelledHandoverSession } from './entities/market-cancelled-hand
       BranchTransferBatchHistory,
       OrderBatchInboxMessage,
       MarketCancelledHandoverSession,
+      OrderExtraCostApproval,
     ]),
   ],
   controllers: [OrderServiceController],

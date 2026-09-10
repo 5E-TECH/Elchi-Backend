@@ -39,6 +39,7 @@ import {
   CouldNotDeliverOrderRequestDto,
   CreateOrderByTelegramBotRequestDto,
   CreateExternalOrderRequestDto,
+  ExtraCostApprovalDecisionDto,
   InitiateOrderReturnRequestDto,
   CreateOrderRequestDto,
   HandoverCancelledOrdersToMarketRequestDto,
@@ -2121,6 +2122,83 @@ export class OrderGatewayController {
     );
   }
 
+  @Get('extra-cost-approvals')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.MARKET, RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List extra cost approval requests' })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    example: 'pending',
+    enum: ['pending', 'approved', 'rejected'],
+  })
+  listExtraCostApprovals(
+    @Query('status') status: string | undefined,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.sendOrderWithTimeout(
+      { cmd: 'order.extra_cost_approval.list' },
+      {
+        status,
+        requester: {
+          id: req.user.sub,
+          roles: this.normalizeRoles(req.user.roles),
+        },
+      },
+    );
+  }
+
+  @Post('extra-cost-approvals/:id/approve')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.MARKET, RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Approve extra cost request' })
+  @ApiParam({ name: 'id', description: 'Extra cost approval ID' })
+  @ApiBody({ type: ExtraCostApprovalDecisionDto, required: false })
+  approveExtraCostApproval(
+    @Param('id') id: string,
+    @Body() dto: ExtraCostApprovalDecisionDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.sendOrderWithTimeout(
+      { cmd: 'order.extra_cost_approval.approve' },
+      {
+        id,
+        dto,
+        requester: {
+          id: req.user.sub,
+          roles: this.normalizeRoles(req.user.roles),
+        },
+      },
+    );
+  }
+
+  @Post('extra-cost-approvals/:id/reject')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.MARKET, RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Reject extra cost request' })
+  @ApiParam({ name: 'id', description: 'Extra cost approval ID' })
+  @ApiBody({ type: ExtraCostApprovalDecisionDto, required: false })
+  rejectExtraCostApproval(
+    @Param('id') id: string,
+    @Body() dto: ExtraCostApprovalDecisionDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.sendOrderWithTimeout(
+      { cmd: 'order.extra_cost_approval.reject' },
+      {
+        id,
+        dto,
+        requester: {
+          id: req.user.sub,
+          roles: this.normalizeRoles(req.user.roles),
+        },
+      },
+    );
+  }
+
   @Get(':id/tracking')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -2649,15 +2727,17 @@ export class OrderGatewayController {
   @ApiOperation({ summary: 'Delete order (status-based role rules)' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
   remove(@Param('id') id: string, @Req() req: { user: JwtUser }) {
-    return this.orderClient.send(
-      { cmd: 'order.delete' },
-      {
-        id,
-        requester: {
-          id: req.user.sub,
-          roles: this.normalizeRoles(req.user.roles),
+    return this.orderClient
+      .send(
+        { cmd: 'order.delete' },
+        {
+          id,
+          requester: {
+            id: req.user.sub,
+            roles: this.normalizeRoles(req.user.roles),
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 }
