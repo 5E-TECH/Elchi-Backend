@@ -235,11 +235,21 @@ export class OrderServiceController {
 
   @MessagePattern({ cmd: 'order.receive' })
   receive(
-    @Payload() data: { order_ids: string[]; search?: string },
+    @Payload()
+    data: {
+      order_ids: string[];
+      search?: string;
+      /** Filial doirasini aniqlash uchun — menejer/registrator cheklanadi. */
+      requester?: { id?: string; roles?: string[] };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.lifecycleService.receiveNewOrders(data.order_ids, data.search),
+      this.lifecycleService.receiveNewOrders(
+        data.order_ids,
+        data.search,
+        data.requester,
+      ),
     );
   }
 

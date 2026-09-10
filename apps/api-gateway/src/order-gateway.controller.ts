@@ -959,15 +959,32 @@ export class OrderGatewayController {
     return this.create(mappedDto, req);
   }
 
+  /**
+   * Buyurtmalarni qabul qilish.
+   *
+   * MANAGER 2026-09-10 da qo'shildi: hamkordan (BeePost) kelgan posilkalar
+   * HQ da qabul qilinadi va buni HQ menejeri bajaradi.
+   *
+   * ⚠️ Rol o'zi yetarli EMAS — menejer va registrator faqat O'Z filialidagi
+   * buyurtmani qabul qila oladi. Chegara order-service ichida qo'yiladi
+   * (`resolveReceiveBranchScope`), shu bois bu yerda `requester` uzatiladi.
+   * Filialsiz foydalanuvchi hech nima qabul qila olmaydi (fail-closed).
+   */
   @Post('receive')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Receive new orders' })
+  @ApiOperation({ summary: 'Receive new orders (branch-scoped for staff)' })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiBody({ type: OrdersArrayDto })
   receiveNewOrders(
     @Body() dto: OrdersArrayDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
     @Query('search') search?: string,
   ) {
     return firstValueFrom(
@@ -977,6 +994,10 @@ export class OrderGatewayController {
           {
             order_ids: dto.order_ids,
             search,
+            requester: {
+              id: req.user?.sub,
+              roles: req.user?.roles ?? [],
+            },
           },
         )
         .pipe(timeout(8000)),
