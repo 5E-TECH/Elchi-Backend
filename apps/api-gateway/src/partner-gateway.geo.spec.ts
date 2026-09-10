@@ -16,7 +16,12 @@ function makeController(
 }
 
 describe('PartnerGatewayController — geo passthrough (C1.4)', () => {
-  it('TC1: regions -> bo‘sh emas, [{id,name}] shaklida (logistics passthrough)', async () => {
+  // QAROR O'ZGARDI (G1): avval `sato_code` ATAYLAB qirqilardi ("ortiqcha maydon
+  // sizmasin"). Amalda bu teskari natija berdi — hamkor Elchi hududlarini o'z
+  // hududlariga moslashtira olmay, 200+ tumanni QO'LDA moslashga majbur bo'ladi.
+  // SOATO — davlat klassifikatori (maxfiy emas) va aynan shu maydon ikki tomon
+  // orasidagi tabiiy kalit. Shu bois endi qaytariladi.
+  it('TC1: regions -> [{id,name,sato_code}] (SOATO moslash uchun)', async () => {
     const logistics = jest.fn(() =>
       of({
         data: [
@@ -34,9 +39,18 @@ describe('PartnerGatewayController — geo passthrough (C1.4)', () => {
       {},
     );
     expect(regions.length).toBeGreaterThan(0);
-    expect(regions[0]).toEqual({ id: '1', name: 'Toshkent' });
-    // sato_code kabi ortiqcha maydonlar sizmaydi
-    expect(Object.keys(regions[0])).toEqual(['id', 'name']);
+    expect(regions[0]).toEqual({ id: '1', name: 'Toshkent', sato_code: '17' });
+    // Kontrakt qat'iy: aynan shu uch maydon — boshqa hech narsa sizmaydi
+    expect(Object.keys(regions[0])).toEqual(['id', 'name', 'sato_code']);
+  });
+
+  it('TC1b: regions -> sato_code yo‘q bo‘lsa null (undefined sizmaydi)', async () => {
+    const logistics = jest.fn(() => of({ data: [{ id: 9, name: 'Yangi' }] }));
+    const ctrl = makeController(logistics, jest.fn());
+
+    const regions = await ctrl.getRegions();
+
+    expect(regions[0]).toEqual({ id: '9', name: 'Yangi', sato_code: null });
   });
 
   it('TC2: districts?region_id -> region_id filtri bilan uzatiladi', async () => {
@@ -55,7 +69,35 @@ describe('PartnerGatewayController — geo passthrough (C1.4)', () => {
       id: '10',
       name: 'Chilonzor',
       region_id: '5',
+      // G1: SOATO kodi yo'q edi -> null (hamkor qo'lda moslashi kerakligi signali)
+      sato_code: null,
     });
+  });
+
+  it('TC2b: districts -> sato_code qaytariladi (hamkor avtomatik moslashi uchun)', async () => {
+    const logistics = jest.fn(() =>
+      of({
+        data: [
+          { id: 10, name: 'Chilonzor', region_id: 5, sato_code: '1726269' },
+        ],
+      }),
+    );
+    const ctrl = makeController(logistics, jest.fn());
+
+    const districts = await ctrl.getDistricts('5');
+
+    expect(districts[0]).toEqual({
+      id: '10',
+      name: 'Chilonzor',
+      region_id: '5',
+      sato_code: '1726269',
+    });
+    expect(Object.keys(districts[0])).toEqual([
+      'id',
+      'name',
+      'region_id',
+      'sato_code',
+    ]);
   });
 
   it('TC3: tariff -> where_deliver bo‘yicha market summasi qaytadi', async () => {

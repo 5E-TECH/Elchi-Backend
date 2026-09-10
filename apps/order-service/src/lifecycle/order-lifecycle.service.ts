@@ -1779,6 +1779,28 @@ export class OrderLifecycleService {
       },
     });
 
+    // G3 — TASHQI SINXRON. Avval rollback HECH QANDAY signal yubormasdi: Elchi
+    // sotilgan buyurtmani orqaga qaytarsa, hamkor tomonda u SOTILGAN bo'lib
+    // qolardi va pul desinxron bo'lardi. Endi har rollback yo'nalishi uchun
+    // signal chiqadi (waiting / cancelled / cancelled_sent).
+    //
+    // `order` — rollbackdan OLDINGI snapshot; bu yerda faqat `external_id` kerak
+    // (u o'zgarmaydi). `cod_collected` esa terminal bo'lmagan statusда baribir
+    // 0'ga majburlanadi, shuning uchun eski `paid_amount` zarar qilmaydi.
+    try {
+      const syncAction = this.resolveSyncAction(originalStatus, finalStatus);
+      if (syncAction) {
+        void this.queueExternalStatusSync(
+          order,
+          syncAction,
+          originalStatus,
+          finalStatus,
+        );
+      }
+    } catch {
+      // Tashqi sinxron best-effort — rollbackning o'zi allaqachon durable.
+    }
+
     if (rollbackTarget === 'cancelled') {
       return successRes({}, 200, 'Order CANCELLED holatiga qaytarildi');
     }
@@ -2017,6 +2039,27 @@ export class OrderLifecycleService {
     });
 
     const updated = await this.findById(id);
+
+    // G4 — TASHQI SINXRON. Bu funksiya `updateFull`dan o'tmaydi (statusni
+    // to'g'ridan-to'g'ri tranzaksiya ichida yozadi), shuning uchun signal
+    // ALOHIDA chiqariladi — aks holda hamkor posilkaning qaytganini bilmaydi.
+    try {
+      const syncAction = this.resolveSyncAction(
+        oldStatus,
+        Order_status.RETURNED_TO_MARKET,
+      );
+      if (syncAction) {
+        void this.queueExternalStatusSync(
+          updated,
+          syncAction,
+          oldStatus,
+          Order_status.RETURNED_TO_MARKET,
+        );
+      }
+    } catch {
+      // Best-effort: qaytarishning o'zi allaqachon durable.
+    }
+
     return successRes(updated, 200, 'Order marked as returned to market');
   }
 
@@ -2718,7 +2761,13 @@ export class OrderLifecycleService {
     oldStatus: string,
     newStatus: string,
   ): 'sold' | 'canceled' | 'paid' | 'rollback' | 'waiting' | null {
-    if (newStatus === Order_status.CANCELLED) {
+    // CANCELLED_SENT ("bekor qilinib pochtaga qo'shildi") tashqi tizim uchun ham
+    // BEKOR QILISH: posilka mijozga bormaydi. Avval bu holat null qaytarardi va
+    // hech qanday signal chiqmasdi — hamkor buyurtmani kutilmoqdada deb o'ylardi.
+    if (
+      newStatus === Order_status.CANCELLED ||
+      newStatus === Order_status.CANCELLED_SENT
+    ) {
       return 'canceled';
     }
 
@@ -2731,6 +2780,21 @@ export class OrderLifecycleService {
 
     if (newStatus === Order_status.SOLD) {
       return 'sold';
+    }
+
+    // G4 — posilka MARKETGA qaytarildi. Tashqi tizim uchun bu bekor qilish:
+    // mijozga yetkazilmadi va posilka egasiga qaytdi. Avval bu holat null
+    // qaytarardi va hamkor buyurtmani hamon yo'lda deb hisoblardi.
+    if (newStatus === Order_status.RETURNED_TO_MARKET) {
+      return 'canceled';
+    }
+
+    // G4 — kuryer yetkaza olmadi (mijoz javob bermadi/keyinga qoldirdi).
+    // Bu TERMINAL EMAS: buyurtma hamon kutmoqda, shu bois 'waiting'. Avval
+    // signal chiqmasdi va hamkor tomonda buyurtma "yo'lda" holatida QOTIB
+    // qolardi — hech qachon yangilanmaydigan holat.
+    if (newStatus === Order_status.WAITING_CUSTOMER) {
+      return 'waiting';
     }
 
     if (newStatus === Order_status.WAITING) {

@@ -10,6 +10,9 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     openPost?: Record<string, unknown> | null;
     linkedPost?: Record<string, unknown> | null;
     orderLookupError?: unknown;
+    // P1b — skan bilan avtomatik filial qabuli
+    receiveByScan?: { received?: boolean; reason?: string } | 'throw';
+    orderAfterReceive?: Record<string, unknown>;
   }) {
     const order = {
       id: '101',
@@ -22,13 +25,37 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       ...options?.order,
     };
 
+    // P1b: qabuldan KEYIN buyurtma yangi holatda o'qilishi kerak (filial+status
+    // o'zgaradi). Shuning uchun `order.find_by_qr` qabuldan keyin boshqa obyekt
+    // qaytaradi — real oqimni aynan shu simulyatsiya qiladi.
+    let scanReceiveDone = false;
+
     const orderClient = {
       send: jest.fn((pattern: { cmd: string }) => {
         if (pattern.cmd === 'order.find_by_qr') {
           if (options?.orderLookupError) {
             return throwError(() => options.orderLookupError);
           }
+          if (scanReceiveDone && options?.orderAfterReceive) {
+            return of({ data: { ...order, ...options.orderAfterReceive } });
+          }
           return of({ data: order });
+        }
+        if (pattern.cmd === 'order.transfer_batch.receive_one_by_scan') {
+          if (options?.receiveByScan === 'throw') {
+            return throwError(
+              () =>
+                new RpcException({
+                  statusCode: 400,
+                  message: "Paket hali jo'natilmagan — posilka filialga yetib kelmagan",
+                }),
+            );
+          }
+          const payload = options?.receiveByScan ?? { received: false };
+          if (payload.received) {
+            scanReceiveDone = true;
+          }
+          return of({ data: payload });
         }
         if (pattern.cmd === 'order.update') {
           return of({ ok: true });
@@ -237,5 +264,109 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       ([pattern]: [{ cmd: string }]) => pattern.cmd === 'order.update',
     );
     expect(updateCalls).toHaveLength(0);
+  });
+
+  // ===== P1b — skan bilan avtomatik filial qabuli =====
+
+  const scanReceiveCalls = (orderClient: { send: jest.Mock }) =>
+    orderClient.send.mock.calls.filter(
+      ([pattern]: [{ cmd: string }]) =>
+        pattern.cmd === 'order.transfer_batch.receive_one_by_scan',
+    );
+
+  it('P1b: boshqa filialdagi buyurtma — paket kuryer filialiga atalgan bo‘lsa, skan qabul qiladi va biriktiradi', async () => {
+    const { service, orderClient } = setup({
+      // Buyurtma HQ'da (filial 99), kuryer esa filial 10'da. Paket 10'ga
+      // jo'natilgan, shuning uchun status hamon ON_THE_ROAD.
+      order: {
+        branch_id: '99',
+        status: Order_status.ON_THE_ROAD,
+        courier_id: null,
+      },
+      branchId: '10',
+      receiveByScan: { received: true },
+      // Qabuldan keyingi haqiqiy holat: filial kuryerning filiali, status RECEIVED.
+      orderAfterReceive: { branch_id: '10', status: Order_status.RECEIVED },
+    });
+
+    const result: any = await service.scanAssignOrder(
+      { id: 'c1', roles: ['courier'] },
+      { qr_token: 'ORD-abc123' },
+    );
+
+    // Filial qabuli chaqirildi — kuryer filiali bilan
+    expect(scanReceiveCalls(orderClient)).toHaveLength(1);
+    expect(scanReceiveCalls(orderClient)[0][1]).toEqual(
+      expect.objectContaining({ order_id: '101', courier_branch_id: '10' }),
+    );
+    // Va shundan keyin kuryerga biriktirildi — ya'ni BITTA skan, ikki bo'g'in
+    expect(result.data.order_id).toBe('101');
+    const updateCalls = orderClient.send.mock.calls.filter(
+      ([pattern]: [{ cmd: string }]) => pattern.cmd === 'order.update',
+    );
+    expect(updateCalls.length).toBeGreaterThan(0);
+    const assignCall = updateCalls[updateCalls.length - 1][1] as {
+      dto: Record<string, unknown>;
+    };
+    expect(assignCall.dto).toEqual(
+      expect.objectContaining({
+        courier_id: 'c1',
+        status: Order_status.ON_THE_ROAD,
+      }),
+    );
+  });
+
+  it('P1b: paket bu filialga atalmagan (received=false) -> 403, biriktirilmaydi', async () => {
+    const { service, orderClient } = setup({
+      order: { branch_id: '99', status: Order_status.ON_THE_ROAD },
+      branchId: '10',
+      receiveByScan: { received: false, reason: 'other_branch' },
+    });
+
+    await expectRpcStatus(
+      service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      ),
+      403,
+      'Boshqa filial orderi',
+    );
+
+    const updateCalls = orderClient.send.mock.calls.filter(
+      ([pattern]: [{ cmd: string }]) => pattern.cmd === 'order.update',
+    );
+    expect(updateCalls).toHaveLength(0);
+  });
+
+  it('P1b: guard xatosi (paket hali jo‘natilmagan) UMUMIY xabar bilan yashirilmaydi', async () => {
+    const { service } = setup({
+      order: { branch_id: '99', status: Order_status.ON_THE_ROAD },
+      branchId: '10',
+      receiveByScan: 'throw',
+    });
+
+    // Kuryer aynan SABABINI ko'rishi kerak — "boshqa filial orderi" chalg'ituvchi.
+    await expectRpcStatus(
+      service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      ),
+      400,
+      "Paket hali jo'natilmagan",
+    );
+  });
+
+  it('P1b: filial allaqachon mos — ortiqcha RPC chaqirilmaydi', async () => {
+    const { service, orderClient } = setup({
+      order: { branch_id: '10', status: Order_status.RECEIVED },
+      branchId: '10',
+    });
+
+    await service.scanAssignOrder(
+      { id: 'c1', roles: ['courier'] },
+      { qr_token: 'ORD-abc123' },
+    );
+
+    expect(scanReceiveCalls(orderClient)).toHaveLength(0);
   });
 });
