@@ -406,6 +406,67 @@ export class OrderLifecycleService {
     }
   }
 
+  /**
+   * QABUL QILISH uchun FILIAL DOIRASI.
+   *
+   * Qoida (foydalanuvchi qarori 2026-09-10): menejer va registrator faqat
+   * O'Z filialidagi buyurtmalar ustida amal bajaradi. superadmin/admin —
+   * cheklovsiz.
+   *
+   * Qaytaradi: cheklov uchun `branch_id`, yoki cheklovsiz bo'lsa `null`.
+   *
+   * ⚠️ FAIL-CLOSED. Filiali aniqlanmagan menejer/registrator hech nima qabul
+   * qila olmaydi. Aks holda "filiali yo'q" foydalanuvchi CHEKLOVSIZ bo'lib
+   * qolardi — ya'ni tekshiruvni chetlab o'tishning eng oson yo'li filialni
+   * o'chirib qo'yish bo'lardi.
+   */
+  private async resolveReceiveBranchScope(requester?: {
+    id?: string;
+    roles?: string[];
+  } | null): Promise<string | null> {
+    const roles = new Set(
+      (requester?.roles ?? []).map((role) =>
+        String(role ?? '')
+          .trim()
+          .toLowerCase(),
+      ),
+    );
+
+    if (roles.has(Roles.SUPERADMIN) || roles.has(Roles.ADMIN)) {
+      return null;
+    }
+
+    if (!roles.has(Roles.MANAGER) && !roles.has(Roles.REGISTRATOR)) {
+      this.forbidden('Buyurtmani qabul qilishga ruxsat yo‘q');
+    }
+
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId) {
+      this.forbidden('Foydalanuvchi aniqlanmadi');
+    }
+
+    const response = await rmqSend<{
+      data?: { branch_id?: string | null } | null;
+    }>(
+      this.branchClient,
+      { cmd: 'branch.user.find_by_user' },
+      {
+        user_id: requesterId,
+        requester: { id: requesterId, roles: requester?.roles ?? [] },
+      },
+      { attachRequestId: false, retries: 1 },
+    );
+
+    const branchId = String(response?.data?.branch_id ?? '').trim();
+    if (!branchId) {
+      this.forbidden(
+        'Sizga filial biriktirilmagan — buyurtma qabul qilib bo‘lmaydi',
+      );
+    }
+
+    return branchId;
+  }
+
   // Status-transition rules live in ./domain/order-status.machine (pure &
   // unit-tested). These thin wrappers keep the existing call sites unchanged.
   private mapInitialStatusForTracking(status: Order_status): Order_status {
@@ -3131,13 +3192,20 @@ export class OrderLifecycleService {
     return null;
   }
 
-  async receiveNewOrders(orderIds: string[], search?: string) {
+  async receiveNewOrders(
+    orderIds: string[],
+    search?: string,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
     const uniqueOrderIds = Array.from(
       new Set((orderIds ?? []).filter(Boolean)),
     );
     if (!uniqueOrderIds.length) {
       this.badRequest('order_ids is required');
     }
+
+    // 0. Filial doirasi — menejer/registrator faqat o'z filialida ishlaydi.
+    const scopeBranchId = await this.resolveReceiveBranchScope(requester);
 
     // 1. Fetch orders from own schema only (no cross-schema queries)
     let orders = await this.orderRepo.find({
@@ -3150,6 +3218,24 @@ export class OrderLifecycleService {
 
     if (!orders.length) {
       this.notFound('No orders found!');
+    }
+
+    /**
+     * Begona filial buyurtmasi bo'lsa BUTUN so'rov rad etiladi — jimgina
+     * filtrlab qolganini qabul qilmaymiz. Sabab: operator tanlaganini qabul
+     * qildim deb o'ylaydi, aslida bir qismi tushib qolgan bo'lardi va
+     * farqni hech kim sezmasdi.
+     */
+    if (scopeBranchId) {
+      const foreign = orders.filter(
+        (order) => String(order.branch_id ?? '') !== scopeBranchId,
+      );
+      if (foreign.length) {
+        this.forbidden(
+          `${foreign.length} ta buyurtma boshqa filialga tegishli — ` +
+            'faqat o‘z filialingiz buyurtmalarini qabul qila olasiz',
+        );
+      }
     }
 
     // 2. Validate customers via RMQ (batch)
