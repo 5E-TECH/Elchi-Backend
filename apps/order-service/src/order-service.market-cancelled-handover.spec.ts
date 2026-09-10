@@ -115,21 +115,24 @@ describe('OrderServiceService market cancelled handover', () => {
             {
               id: '16',
               name: 'Yandex',
-              cancelled_handover_qr_required:
-                options?.marketQrRequired ?? true,
+              cancelled_handover_qr_required: options?.marketQrRequired ?? true,
             },
           ],
         }),
       ),
     };
 
-    const custody = new OrderCustodyService(trackingRepo as any, custodyRepo as any);
+    const custody = new OrderCustodyService(
+      trackingRepo as any,
+      custodyRepo as any,
+    );
     const service = new OrderLifecycleService(
       dataSource as any,
       orderRepo as any,
       {} as any,
       trackingRepo as any,
       custodyRepo as any,
+      {} as any,
       {} as any,
       {} as any,
       identityClient as any,

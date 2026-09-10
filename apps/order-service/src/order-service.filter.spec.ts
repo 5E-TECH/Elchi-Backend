@@ -104,13 +104,15 @@ describe('OrderServiceService filters', () => {
       orderCustodyEventRepo as any,
       // orderCustodyEventRepo
       {} as any,
-      // transferBatchRepo
+      // orderSettlementRepo
       {} as any,
-      // searchClient
+      // extraCostApprovalRepo
+      {} as any,
+      // transferBatchItemRepo
       {} as any,
       // identityClient
       {} as any,
-      // catalogClient
+      // logisticsClient
       {} as any,
       // financeClient
       {} as any,
@@ -146,6 +148,8 @@ describe('OrderServiceService filters', () => {
         resolveDistrictId: jest.fn().mockResolvedValue(null),
       } as any,
       // lookup (OrderLookupService),
+      {} as any,
+      // custody
     );
 
     // Read-only analytics methods now live in OrderAnalyticsService; it shares

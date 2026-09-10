@@ -57,8 +57,11 @@ function createService() {
   const nullClient = { send: jest.fn() };
   const outbox = { enqueue: jest.fn() };
   // OrderServiceService konstruktori — 16 ta pozitsion bog'liqlik.
-  const custody = new OrderCustodyService(trackingRepo as any, orderCustodyEventRepo as any);
-    const service = new OrderServiceService(
+  const custody = new OrderCustodyService(
+    trackingRepo as any,
+    orderCustodyEventRepo as any,
+  );
+  const service = new OrderServiceService(
     dataSource as any, // dataSource
     orderRepo as any, // orderRepo
     orderItemRepo as any, // orderItemRepo
@@ -81,72 +84,74 @@ function createService() {
       log: jest.fn().mockResolvedValue(undefined),
       logChange: jest.fn().mockResolvedValue(undefined),
     } as any, // activityLog
-      {
-        getHqBranchId: jest.fn().mockResolvedValue('1'),
-        getMarketsByIds: jest.fn().mockResolvedValue([]),
-        getCouriersByIds: jest.fn().mockResolvedValue([]),
-        getUserById: jest.fn().mockResolvedValue(null),
-        getCashboxByUser: jest.fn().mockResolvedValue(null),
-        resolveBranchShare: jest.fn().mockResolvedValue(0),
-        ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
-        resolveSettlementBranchId: jest.fn().mockResolvedValue(null),
-        getIntegrationById: jest.fn().mockResolvedValue(null),
-        getDefaultDistrictId: jest.fn().mockResolvedValue(null),
-        resolveDistrictId: jest.fn().mockResolvedValue(null),
-      } as any, // lookup (OrderLookupService)
-      custody as any, // OrderCustodyService
+    {
+      getHqBranchId: jest.fn().mockResolvedValue('1'),
+      getMarketsByIds: jest.fn().mockResolvedValue([]),
+      getCouriersByIds: jest.fn().mockResolvedValue([]),
+      getUserById: jest.fn().mockResolvedValue(null),
+      getCashboxByUser: jest.fn().mockResolvedValue(null),
+      resolveBranchShare: jest.fn().mockResolvedValue(0),
+      ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
+      resolveSettlementBranchId: jest.fn().mockResolvedValue(null),
+      getIntegrationById: jest.fn().mockResolvedValue(null),
+      getDefaultDistrictId: jest.fn().mockResolvedValue(null),
+      resolveDistrictId: jest.fn().mockResolvedValue(null),
+    } as any, // lookup (OrderLookupService)
+    custody as any, // OrderCustodyService
   );
 
-    const lifecycle = new OrderLifecycleService(
-      dataSource as any,
-      // dataSource
+  const lifecycle = new OrderLifecycleService(
+    dataSource as any,
+    // dataSource
     orderRepo as any,
-      // orderRepo
+    // orderRepo
     orderItemRepo as any,
-      // orderItemRepo
+    // orderItemRepo
     trackingRepo as any,
-      // orderTrackingRepo
+    // orderTrackingRepo
     orderCustodyEventRepo as any,
-      // orderCustodyEventRepo
+    // orderCustodyEventRepo
     {} as any,
-      // transferBatchRepo
+    // orderSettlementRepo
+    {} as any,
+    // extraCostApprovalRepo
     transferBatchItemRepo as any,
-      // searchClient
+    // transferBatchItemRepo
     nullClient as any,
-      // identityClient
+    // identityClient
     nullClient as any,
-      // catalogClient
+    // logisticsClient
     nullClient as any,
-      // financeClient
+    // financeClient
     nullClient as any,
-      // integrationClient
+    // integrationClient
     nullClient as any,
-      // branchClient
+    // branchClient
     nullClient as any,
-      // fileClient
+    // fileClient
     outbox as any,
-      // outbox
+    // outbox
     {
       log: jest.fn().mockResolvedValue(undefined),
       logChange: jest.fn().mockResolvedValue(undefined),
     } as any,
-      // activityLog
-      {
-        getHqBranchId: jest.fn().mockResolvedValue('1'),
-        getMarketsByIds: jest.fn().mockResolvedValue([]),
-        getCouriersByIds: jest.fn().mockResolvedValue([]),
-        getUserById: jest.fn().mockResolvedValue(null),
-        getCashboxByUser: jest.fn().mockResolvedValue(null),
-        resolveBranchShare: jest.fn().mockResolvedValue(0),
-        ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
-        resolveSettlementBranchId: jest.fn().mockResolvedValue(null),
-        getIntegrationById: jest.fn().mockResolvedValue(null),
-        getDefaultDistrictId: jest.fn().mockResolvedValue(null),
-        resolveDistrictId: jest.fn().mockResolvedValue(null),
-      } as any,
-      // lookup (OrderLookupService),
-      custody as any, // OrderCustodyService
-    );
+    // activityLog
+    {
+      getHqBranchId: jest.fn().mockResolvedValue('1'),
+      getMarketsByIds: jest.fn().mockResolvedValue([]),
+      getCouriersByIds: jest.fn().mockResolvedValue([]),
+      getUserById: jest.fn().mockResolvedValue(null),
+      getCashboxByUser: jest.fn().mockResolvedValue(null),
+      resolveBranchShare: jest.fn().mockResolvedValue(0),
+      ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
+      resolveSettlementBranchId: jest.fn().mockResolvedValue(null),
+      getIntegrationById: jest.fn().mockResolvedValue(null),
+      getDefaultDistrictId: jest.fn().mockResolvedValue(null),
+      resolveDistrictId: jest.fn().mockResolvedValue(null),
+    } as any,
+    // lookup (OrderLookupService),
+    custody as any, // OrderCustodyService
+  );
 
   jest
     .spyOn<any, any>(lifecycle as any, 'syncOrderToSearch')

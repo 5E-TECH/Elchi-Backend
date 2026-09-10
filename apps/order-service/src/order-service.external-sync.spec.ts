@@ -64,9 +64,9 @@ describe('resolveSyncAction — qaysi o‘zgarish signal chiqaradi', () => {
 
   // G4: posilka egasiga qaytdi -> tashqi tizim uchun bekor qilish.
   it('RETURNED_TO_MARKET -> "canceled" (avval signal chiqmasdi)', () => {
-    expect(
-      resolve(Order_status.WAITING, Order_status.RETURNED_TO_MARKET),
-    ).toBe('canceled');
+    expect(resolve(Order_status.WAITING, Order_status.RETURNED_TO_MARKET)).toBe(
+      'canceled',
+    );
   });
 
   // G4: kuryer yetkaza olmadi -> TERMINAL EMAS, buyurtma hamon kutmoqda.
@@ -121,7 +121,12 @@ describe('queueExternalStatusSync — hamkor webhooki', () => {
     const svc: any = makeService(send);
 
     await svc.queueExternalStatusSync(
-      { id: '900', external_id: 'ord-9', operator: 'courier_5', paid_amount: 0 },
+      {
+        id: '900',
+        external_id: 'ord-9',
+        operator: 'courier_5',
+        paid_amount: 0,
+      },
       'rollback',
       Order_status.SOLD,
       Order_status.WAITING,
@@ -146,7 +151,12 @@ describe('queueExternalStatusSync — hamkor webhooki', () => {
     const svc: any = makeService(send);
 
     await svc.queueExternalStatusSync(
-      { id: '901', external_id: 'ord-10', operator: 'manager_3', paid_amount: 0 },
+      {
+        id: '901',
+        external_id: 'ord-10',
+        operator: 'manager_3',
+        paid_amount: 0,
+      },
       'canceled',
       Order_status.WAITING,
       Order_status.CANCELLED,
