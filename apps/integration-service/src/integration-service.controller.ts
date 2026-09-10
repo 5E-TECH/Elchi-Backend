@@ -94,6 +94,38 @@ export class IntegrationServiceController {
     );
   }
 
+  /** Admin monitori — chiquvchi webhook outbox jurnali. */
+  @MessagePattern({ cmd: 'integration.partner.webhook.list' })
+  listPartnerWebhooks(
+    @Payload()
+    data: {
+      partner_id?: string;
+      status?: string;
+      page?: number;
+      limit?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listPartnerWebhooks(data ?? {}),
+    );
+  }
+
+  /** Muvaffaqiyatsiz webhookni qayta navbatga qo'yish (qo'lda). */
+  @MessagePattern({ cmd: 'integration.partner.webhook.retry' })
+  retryPartnerWebhook(
+    @Payload()
+    data: { id?: string; requester?: { id?: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.retryPartnerWebhook(
+        String(data?.id ?? ''),
+        data?.requester,
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'integration.partner.provision_market' })
   provisionPartnerMarket(
     @Payload()

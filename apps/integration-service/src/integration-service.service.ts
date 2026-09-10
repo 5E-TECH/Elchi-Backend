@@ -332,7 +332,14 @@ export class IntegrationServiceService {
     );
   }
 
-  /** Hamkorlar ro'yxati (sirlarsiz — hash/secret hech qachon qaytmaydi). */
+  /**
+   * Hamkorlar ro'yxati (sirlarsiz — hash/secret hech qachon qaytmaydi).
+   *
+   * Har hamkorga webhook outbox xulosasi qo'shiladi: kutilayotgan, butunlay
+   * muvaffaqiyatsiz va oxirgi yetkazilgan vaqt. Busiz admin panel hamkor
+   * "tirikmi yoki webhooklari jimgina yiqilyaptimi" degan savolga javob
+   * bera olmasdi.
+   */
   async listPartners() {
     const partners = await this.partnerRepo.find({
       where: { isDeleted: false },
@@ -345,7 +352,208 @@ export class IntegrationServiceService {
       },
       order: { createdAt: 'DESC' },
     });
-    return successRes(partners, 200, 'partners');
+
+    if (!partners.length) return successRes([], 200, 'partners');
+
+    // Bitta guruhlangan so'rov — hamkor sonicha alohida so'rov EMAS.
+    const summaryRows = await this.partnerWebhookOutboxRepo
+      .createQueryBuilder('w')
+      .select('w.partner_id', 'partner_id')
+      .addSelect('w.status', 'status')
+      .addSelect('COUNT(*)', 'cnt')
+      .addSelect('MAX(w.delivered_at)', 'last_delivered_at')
+      .where('w.isDeleted = false')
+      .groupBy('w.partner_id')
+      .addGroupBy('w.status')
+      .getRawMany<{
+        partner_id: string;
+        status: string;
+        cnt: string;
+        last_delivered_at: Date | null;
+      }>();
+
+    const summary = new Map<
+      string,
+      {
+        pending: number;
+        failed: number;
+        completed: number;
+        last_delivered_at: Date | null;
+      }
+    >();
+    for (const row of summaryRows) {
+      const key = String(row.partner_id);
+      const entry = summary.get(key) ?? {
+        pending: 0,
+        failed: 0,
+        completed: 0,
+        last_delivered_at: null,
+      };
+      const cnt = Number(row.cnt ?? 0);
+      if (row.status === 'pending' || row.status === 'processing') {
+        entry.pending += cnt;
+      } else if (row.status === 'permanently_failed') {
+        entry.failed += cnt;
+      } else if (row.status === 'completed') {
+        entry.completed += cnt;
+      }
+      if (
+        row.last_delivered_at &&
+        (!entry.last_delivered_at ||
+          row.last_delivered_at > entry.last_delivered_at)
+      ) {
+        entry.last_delivered_at = row.last_delivered_at;
+      }
+      summary.set(key, entry);
+    }
+
+    return successRes(
+      partners.map((p) => ({
+        ...p,
+        webhooks: summary.get(String(p.id)) ?? {
+          pending: 0,
+          failed: 0,
+          completed: 0,
+          last_delivered_at: null,
+        },
+      })),
+      200,
+      'partners',
+    );
+  }
+
+  /**
+   * Hamkor webhook outbox jurnali (admin monitori).
+   *
+   * NEGA KERAK: jadvalda qatorlar bor edi, lekin UI yo'q edi — ya'ni
+   * `permanently_failed` bo'lgan webhook HECH KIMGA ko'rinmasdi va hamkor
+   * tomondagi buyurtma jimgina eskirgan holatda qolardi.
+   */
+  async listPartnerWebhooks(query: {
+    partner_id?: string;
+    status?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(1, Number(query?.page) || 1);
+    const limit = Math.min(100, Math.max(1, Number(query?.limit) || 20));
+
+    const qb = this.partnerWebhookOutboxRepo
+      .createQueryBuilder('w')
+      .where('w.isDeleted = false')
+      .orderBy('w.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit);
+
+    const partnerId = String(query?.partner_id ?? '').trim();
+    if (partnerId) qb.andWhere('w.partner_id = :pid', { pid: partnerId });
+
+    const status = String(query?.status ?? '').trim();
+    if (status && status !== 'all') {
+      qb.andWhere('w.status = :status', { status });
+    }
+
+    const [rows, total] = await qb.getManyAndCount();
+
+    return successRes(
+      {
+        data: rows.map((r) => ({
+          id: r.id,
+          partner_id: r.partner_id,
+          order_id: r.order_id,
+          external_order_id: r.external_order_id,
+          event_type: r.event_type,
+          new_status: r.new_status,
+          status: r.status,
+          attempts: r.attempts,
+          max_attempts: r.max_attempts,
+          last_error: r.last_error,
+          next_retry_at: r.next_retry_at,
+          delivered_at: r.delivered_at,
+          created_at: r.createdAt,
+          payload: r.payload,
+        })),
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit) || 1,
+      },
+      200,
+      'partner webhooks',
+    );
+  }
+
+  /**
+   * Muvaffaqiyatsiz webhookni QAYTA navbatga qo'yish.
+   *
+   * `max_attempts` ATAYLAB ko'tariladi: yetkazuvchi `attempts < max_attempts`
+   * shartiga qaraydi, ya'ni chegarani oshirmasdan qatorni `pending` qilish
+   * birinchi xatodayoq uni yana `permanently_failed` qilardi — tugma
+   * "ishlayotgandek" ko'rinib, aslida hech nima o'zgarmasdi.
+   */
+  async retryPartnerWebhook(
+    id: string,
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
+    const row = await this.partnerWebhookOutboxRepo.findOne({
+      where: { id: String(id), isDeleted: false },
+    });
+    if (!row) {
+      this.notFound('Webhook yozuvi topilmadi');
+    }
+    if (row.status === 'completed') {
+      return successRes(
+        { id: row.id, status: row.status },
+        200,
+        'already delivered',
+      );
+    }
+
+    const attempts = Number(row.attempts ?? 0);
+    try {
+      await this.partnerWebhookOutboxRepo.update(
+        { id: row.id },
+        {
+          status: 'pending',
+          max_attempts: attempts + 1,
+          next_retry_at: new Date(),
+        },
+      );
+    } catch (error) {
+      /**
+       * Qisman unique indeks: ayni (partner, order, status) uchun allaqachon
+       * uchuvchi qator bo'lsa, bu qatorni `pending` qilib bo'lmaydi. Bu XATO
+       * emas — yangi urinish allaqachon navbatda turibdi.
+       */
+      if (this.isUniqueViolation(error)) {
+        return successRes(
+          { id: row.id, status: row.status, skipped: 'already_queued' },
+          200,
+          'newer attempt already queued',
+        );
+      }
+      throw error;
+    }
+
+    await this.activityLog.log({
+      entity_type: 'PartnerWebhookOutbox',
+      entity_id: String(row.id),
+      action: ActivityAction.UPDATED,
+      new_value: { status: 'pending', retried: true },
+      ...this.auditActor(requester),
+    });
+
+    // Kutmasdan darhol urinib ko'ramiz — scheduler tick'ini kutish shart emas.
+    await this.processPendingPartnerWebhooks(1);
+
+    const fresh = await this.partnerWebhookOutboxRepo.findOne({
+      where: { id: String(row.id) },
+    });
+    return successRes(
+      { id: row.id, status: fresh?.status ?? 'pending' },
+      200,
+      'partner webhook requeued',
+    );
   }
 
   /**

@@ -5,6 +5,7 @@ import {
   Inject,
   Param,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -16,6 +17,7 @@ import {
   ApiBody,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -69,6 +71,63 @@ export class PartnerAdminGatewayController {
   list() {
     return firstValueFrom(
       this.integrationClient.send({ cmd: 'integration.partner.list' }, {}).pipe(timeout(8000)),
+    );
+  }
+
+  /**
+   * Chiquvchi webhook outbox monitori.
+   *
+   * Marshrut `:id`li marshrutlardan OLDIN e'lon qilinadi — aks holda
+   * `/admin/partners/webhooks` "webhooks" nomli hamkor id'si deb o'qilardi.
+   */
+  @Get('webhooks')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary: "Hamkor webhook outbox jurnali (yetkazilgan/kutilayotgan/xato)",
+  })
+  @ApiQuery({ name: 'partner_id', required: false })
+  @ApiQuery({ name: 'status', required: false })
+  @ApiQuery({ name: 'page', required: false })
+  @ApiQuery({ name: 'limit', required: false })
+  listWebhooks(
+    @Query('partner_id') partnerId?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return firstValueFrom(
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.webhook.list' },
+          {
+            partner_id: partnerId,
+            status,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
+        )
+        .pipe(timeout(8000)),
+    );
+  }
+
+  @Post('webhooks/:webhookId/retry')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      "Muvaffaqiyatsiz webhookni qayta navbatga qo'yish va darhol urinib ko'rish",
+  })
+  @ApiParam({ name: 'webhookId' })
+  retryWebhook(
+    @Param('webhookId') webhookId: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return firstValueFrom(
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.webhook.retry' },
+          { id: webhookId, requester: this.auditActor(req) },
+        )
+        .pipe(timeout(20000)),
     );
   }
 
