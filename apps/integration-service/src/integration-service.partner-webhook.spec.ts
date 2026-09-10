@@ -235,6 +235,53 @@ describe('IntegrationServiceService — partner outbound webhook (C2.3)', () => 
     expect(saved[0].payload.cod_collected).toBe(0);
   });
 
+  // ===== G2 — takroriy status yo'qolmasligi =====
+
+  it('G2: payload.event_id — UUID, imzolangan tanada bo‘ladi', async () => {
+    const saved: any[] = [];
+    const svc: any = makeSvc({
+      outboxSave: jest.fn((x: any) => {
+        saved.push(x);
+        return Promise.resolve({ id: '1', ...x });
+      }),
+    });
+    svc.processPendingPartnerWebhooks = jest.fn(() =>
+      Promise.resolve({ processed: 0, delivered: 0, failed: 0 }),
+    );
+
+    await svc.enqueuePartnerWebhook({ order_id: '900', new_status: 'sold' });
+
+    expect(saved[0].payload.event_id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    );
+  });
+
+  it('G2: har enqueue YANGI event_id oladi — qabul qiluvchi takrorni ajratadi', async () => {
+    const saved: any[] = [];
+    const svc: any = makeSvc({
+      outboxSave: jest.fn((x: any) => {
+        saved.push(x);
+        return Promise.resolve({ id: String(saved.length), ...x });
+      }),
+    });
+    svc.processPendingPartnerWebhooks = jest.fn(() =>
+      Promise.resolve({ processed: 0, delivered: 0, failed: 0 }),
+    );
+
+    // sold -> rollback -> yana sold: uchinchi hodisa BIRINCHISI bilan bir xil
+    // statusга ega, lekin bu BOSHQA hodisa. Shu bois event_id'lar farq qilishi
+    // SHART — aks holda qabul qiluvchi ikkinchi sotuvni "takror" deb tashlaydi.
+    await svc.enqueuePartnerWebhook({ order_id: '900', new_status: 'sold' });
+    await svc.enqueuePartnerWebhook({ order_id: '900', new_status: 'waiting' });
+    await svc.enqueuePartnerWebhook({ order_id: '900', new_status: 'sold' });
+
+    const ids = saved.map((r) => r.payload.event_id);
+    expect(new Set(ids).size).toBe(3);
+    // Uchinchisi birinchisi bilan bir xil status, lekin boshqa hodisa.
+    expect(saved[2].new_status).toBe('sold');
+    expect(saved[2].payload.event_id).not.toBe(saved[0].payload.event_id);
+  });
+
   it('partner order emas (ref yo‘q) -> skipped, save chaqirilmaydi', async () => {
     const outboxSave = jest.fn();
     const svc: any = makeSvc({

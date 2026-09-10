@@ -8,6 +8,7 @@ import {
   createDecipheriv,
   createHash,
   randomBytes,
+  randomUUID,
 } from 'crypto';
 import {
   ActivityAction,
@@ -772,6 +773,12 @@ export class IntegrationServiceService {
     const codCollected = Number(dto?.cod_collected ?? 0);
     const payload = {
       event: 'shipment.status_changed',
+      // Hodisaning unikal id'si — qabul qiluvchi TAKRORNI shu bo'yicha ajratadi.
+      // Zarur, chunki (a) muvaffaqiyatsiz yetkazishda outbox qayta yuboradi va
+      // (b) bir status qayta yuz berishi mumkin (sold → rollback → sold), ya'ni
+      // `status`ning o'zi dedup kaliti bo'la olmaydi. Insertdan OLDIN
+      // generatsiya qilinadi — imzo aynan shu tana ustidan hisoblanadi.
+      event_id: randomUUID(),
       external_order_id: ref.external_order_id,
       shipment_id: orderId,
       status: newStatus,
@@ -806,8 +813,10 @@ export class IntegrationServiceService {
         'partner webhook enqueued',
       );
     } catch (error) {
-      // DEDUP: unique (partner_id, order_id, new_status) buzilsa — shu status
-      // uchun allaqachon navbatda; qayta emit qilmaymiz (idempotent).
+      // DEDUP: qisman unique (partner_id, order_id, new_status) buzilsa — shu
+      // status uchun UCHUVCHI qator bor (pending/processing), ya'ni bu takroriy
+      // EMIT; qayta navbatga qo'ymaymiz. Yetkazib bo'lingan status esa indeksdan
+      // chiqadi, shuning uchun status QAYTA yuz bersa o'tadi (G2).
       if (this.isUniqueViolation(error)) {
         return successRes({ skipped: 'duplicate' }, 200, 'dedup');
       }

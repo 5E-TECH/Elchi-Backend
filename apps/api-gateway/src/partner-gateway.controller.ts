@@ -94,33 +94,65 @@ export class PartnerGatewayController {
     return { authenticated: true, partner: request.partner };
   }
 
-  /** Elchi viloyatlari — manzilni Elchi region_id'ga moslash uchun. */
+  /**
+   * Elchi viloyatlari — manzilni Elchi region_id'ga moslash uchun.
+   *
+   * `sato_code` (SOATO klassifikatori) ATAYLAB qaytariladi: hamkor tizimlar ham
+   * SOATO bilan ishlaydi, shuning uchun bu kod ikki tomon orasidagi TABIIY KALIT
+   * bo'lib xizmat qiladi — hamkor o'z hududlarini Elchi id'lariga QO'LDA emas,
+   * avtomatik moslashtiradi. Busiz har hamkor 200+ tumanni qo'lda moslashi kerak.
+   */
   @Get('regions')
   @ApiOperation({ summary: 'Elchi viloyatlari ro‘yxati' })
-  @ApiOkResponse({ description: '[{ id, name }]' })
-  async getRegions(): Promise<Array<{ id: string; name: string }>> {
+  @ApiOkResponse({ description: '[{ id, name, sato_code }]' })
+  async getRegions(): Promise<
+    Array<{ id: string; name: string; sato_code: string | null }>
+  > {
     const res = await firstValueFrom(
       this.logisticsClient.send<{
-        data?: Array<{ id: string | number; name: string }>;
+        data?: Array<{
+          id: string | number;
+          name: string;
+          sato_code?: string | null;
+        }>;
       }>({ cmd: 'logistics.region.find_all' }, {}).pipe(timeout(8000)),
     );
-    return (res?.data ?? []).map((r) => ({ id: String(r.id), name: r.name }));
+    return (res?.data ?? []).map((r) => ({
+      id: String(r.id),
+      name: r.name,
+      sato_code: r.sato_code ?? null,
+    }));
   }
 
-  /** Elchi tumanlari — `region_id` bo‘yicha filtrlab. */
+  /**
+   * Elchi tumanlari — `region_id` bo‘yicha filtrlab.
+   *
+   * `sato_code` qaytariladi (yuqoridagi `getRegions` bilan bir xil sabab):
+   * hamkor o'z tumanini SOATO bo'yicha Elchi `district_id`'siga avtomatik
+   * moslashtiradi. `sato_code` null bo'lishi mumkin (Elchi'da tuman uchun kod
+   * kiritilmagan) — bunda hamkor uni qo'lda moslashi kerak.
+   */
   @Get('districts')
   @ApiOperation({ summary: 'Elchi tumanlari (region_id bo‘yicha)' })
   @ApiQuery({ name: 'region_id', required: false, type: String })
-  @ApiOkResponse({ description: '[{ id, name, region_id }]' })
+  @ApiOkResponse({ description: '[{ id, name, region_id, sato_code }]' })
   async getDistricts(
     @Query('region_id') regionId?: string,
-  ): Promise<Array<{ id: string; name: string; region_id: string }>> {
+  ): Promise<
+    Array<{
+      id: string;
+      name: string;
+      region_id: string;
+      sato_code: string | null;
+    }>
+  > {
     const res = await firstValueFrom(
       this.logisticsClient.send<{
         data?: Array<{
           id: string | number;
           name: string;
           region_id: string | number;
+          sato_code?: string | null;
         }>;
       }>({ cmd: 'logistics.district.find_all' }, { region_id: regionId }).pipe(timeout(8000)),
     );
@@ -128,6 +160,7 @@ export class PartnerGatewayController {
       id: String(d.id),
       name: d.name,
       region_id: String(d.region_id),
+      sato_code: d.sato_code ?? null,
     }));
   }
 

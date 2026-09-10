@@ -9,9 +9,24 @@ import { BaseEntity } from '@app/common';
  * (`X-Elchi-Signature`) POST qiladi. Xatoda backoff (1m/5m/15m) bilan qayta
  * uriniladi; muvaffaqiyatda `completed` bo'lib qayta yuborilmaydi (dedup).
  *
- * Dedup: `(partner_id, order_id, new_status)` UNIQUE — bir status o'zgarishi bir
- * marta navbatga qo'yiladi (bir xil hodisa ikki marta emit qilinsa, ikkinchisi
- * unique cheklovga tushadi va tashlab yuboriladi).
+ * Dedup: `(partner_id, order_id, new_status)` UNIQUE, lekin **QISMAN** —
+ * faqat `status IN ('pending','processing')` qatorlar ustida (G2 tuzatishi).
+ *
+ * NEGA QISMAN. Avval indeks TO'LIQ unique edi va bu jimgina ma'lumot yo'qotishga
+ * olib kelardi: buyurtma `sold` → operator rollback qildi → `waiting` → kuryer
+ * qayta sotdi → `sold`. Ikkinchi `sold` allaqachon yetkazilgan (`completed`)
+ * qatorga urilib, "dublikat" deb TASHLAB YUBORILARDI — hamkor tomonda buyurtma
+ * abadiy sotilmagan holatda qolardi (pul desinxroni).
+ *
+ * Qisman indeks ikki maqsadni ham bajaradi:
+ *   - takroriy EMIT (RMQ redelivery, ikki marta chaqiruv) — hamon to'siladi,
+ *     chunki uchuvchi (`pending`/`processing`) qator bor;
+ *   - takroriy HODISA (status haqiqatan qayta yuz berdi) — endi o'tadi, chunki
+ *     oldingi qator `completed`/`permanently_failed` bo'lib indeksdan chiqadi.
+ *
+ * Qoldiq poyga: status yetkazilish jarayonida (odatda <1s) qayta yuz bersa,
+ * ikkinchisi dedupga tushishi mumkin. Shu bois payloadda `event_id` bor —
+ * qabul qiluvchi takrorni o'zi ham ajrata oladi.
  *
  * Ataylab ExternalIntegration `sync_queue`'dan AJRATILGAN — u ExternalIntegration
  * `integration_id`'ga (NOT NULL + FK) bog'langan; hamkor webhook'lari esa
@@ -27,6 +42,8 @@ export type PartnerWebhookStatus =
 @Index('IDX_PWO_STATUS_RETRY', ['status', 'next_retry_at'])
 @Index('IDX_PWO_DEDUP', ['partner_id', 'order_id', 'new_status'], {
   unique: true,
+  // Faqat uchuvchi qatorlar ustida — sababi yuqorida (G2).
+  where: `status IN ('pending', 'processing')`,
 })
 export class PartnerWebhookOutbox extends BaseEntity {
   /** Qaysi hamkorga yuboriladi (partners.id). */
