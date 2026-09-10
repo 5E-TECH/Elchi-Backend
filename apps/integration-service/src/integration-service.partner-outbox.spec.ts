@@ -64,6 +64,129 @@ function makeService(over: {
   return { svc: svc as IntegrationServiceService, updates, logs, qb };
 }
 
+describe('IntegrationServiceService — hamkorni tahrirlash', () => {
+  function makeEditSvc(partner: Row | null) {
+    const saved: Row[] = [];
+    const logs: Row[] = [];
+    const svc: any = Object.create(IntegrationServiceService.prototype);
+    svc.partnerRepo = {
+      findOne: jest.fn(() => Promise.resolve(partner)),
+      save: jest.fn((x: Row) => {
+        saved.push({ ...x });
+        return Promise.resolve(x);
+      }),
+    };
+    svc.activityLog = {
+      log: jest.fn((p: Row) => {
+        logs.push(p);
+        return Promise.resolve();
+      }),
+    };
+    svc.primaryKey = require('crypto')
+      .createHash('sha256')
+      .update('x'.repeat(40))
+      .digest();
+    svc.previousKey = null;
+    svc.allowPrivateHosts = false;
+    svc.logger = { warn: jest.fn(), error: jest.fn() };
+    return { svc: svc as IntegrationServiceService, saved, logs, partner };
+  }
+
+  const base = (): Row => ({
+    id: '1',
+    name: 'BeePost',
+    webhook_url: 'https://old.example.uz/hook',
+    webhook_secret: 'enc:eski',
+    ip_allowlist: ['1.2.3.4'],
+    is_active: true,
+  });
+
+  it('berilmagan maydonga TEGMAYDI', async () => {
+    const { svc, saved } = makeEditSvc(base());
+    await svc.updatePartner('1', { name: 'BeePost UZ' });
+    expect(saved[0].name).toBe('BeePost UZ');
+    // Qolgani o'z holicha — bo'sh forma maydoni webhookni uzib qo'ymasin.
+    expect(saved[0].webhook_url).toBe('https://old.example.uz/hook');
+    expect(saved[0].webhook_secret).toBe('enc:eski');
+    expect(saved[0].ip_allowlist).toEqual(['1.2.3.4']);
+  });
+
+  it("BO'SH SATR — tozalash (undefined dan farq qiladi)", async () => {
+    const { svc, saved } = makeEditSvc(base());
+    await svc.updatePartner('1', { webhook_url: '', webhook_secret: '' });
+    expect(saved[0].webhook_url).toBeNull();
+    expect(saved[0].webhook_secret).toBeNull();
+  });
+
+  it('yangi webhook manzili SSRF guardidan o\'tadi', async () => {
+    const { svc, saved } = makeEditSvc(base());
+    const spy = jest
+      .spyOn(svc as any, 'assertOutboundUrlSafe')
+      .mockResolvedValue(undefined);
+    await svc.updatePartner('1', {
+      webhook_url: 'https://yangi.example.uz/hook',
+    });
+    expect(spy).toHaveBeenCalledWith('https://yangi.example.uz/hook');
+    expect(saved[0].webhook_url).toBe('https://yangi.example.uz/hook');
+  });
+
+  it('SSRF bloklasa hamkor SAQLANMAYDI', async () => {
+    const { svc, saved } = makeEditSvc(base());
+    jest
+      .spyOn(svc as any, 'assertOutboundUrlSafe')
+      .mockRejectedValue(new RpcException('blocked'));
+    await expect(
+      svc.updatePartner('1', { webhook_url: 'http://169.254.169.254/' }),
+    ).rejects.toBeInstanceOf(RpcException);
+    expect(saved).toHaveLength(0);
+  });
+
+  it('sekret QIYMATI auditga sizmaydi', async () => {
+    const { svc, logs } = makeEditSvc(base());
+    await svc.updatePartner('1', { webhook_secret: 'juda-maxfiy' });
+    const logged = JSON.stringify(logs[0]);
+    expect(logged).not.toContain('juda-maxfiy');
+    expect(logs[0].new_value.webhook_secret_changed).toBe(true);
+  });
+
+  it('sekret AES bilan shifrlanadi (ochiq saqlanmaydi)', async () => {
+    const { svc, saved } = makeEditSvc(base());
+    await svc.updatePartner('1', { webhook_secret: 'juda-maxfiy' });
+    expect(saved[0].webhook_secret).toMatch(/^enc:/);
+    expect(saved[0].webhook_secret).not.toContain('juda-maxfiy');
+  });
+
+  it("bo'sh nom RAD ETILADI", async () => {
+    const { svc } = makeEditSvc(base());
+    await expect(svc.updatePartner('1', { name: '   ' })).rejects.toBeInstanceOf(
+      RpcException,
+    );
+  });
+
+  it('hech qanday maydon berilmasa RAD ETILADI', async () => {
+    const { svc, saved } = makeEditSvc(base());
+    await expect(svc.updatePartner('1', {})).rejects.toBeInstanceOf(
+      RpcException,
+    );
+    expect(saved).toHaveLength(0);
+  });
+
+  it('topilmagan hamkor RAD ETILADI', async () => {
+    const { svc } = makeEditSvc(null);
+    await expect(
+      svc.updatePartner('yo\'q', { name: 'X' }),
+    ).rejects.toBeInstanceOf(RpcException);
+  });
+
+  it('API kalit bu yerda O\'ZGARMAYDI', async () => {
+    const p = base();
+    p.api_key_hash = 'eski-hash';
+    const { svc, saved } = makeEditSvc(p);
+    await svc.updatePartner('1', { name: 'Yangi nom' });
+    expect(saved[0].api_key_hash).toBe('eski-hash');
+  });
+});
+
 describe('IntegrationServiceService — partner webhook outbox (P5d)', () => {
   it("qayta navbat: `max_attempts` KO'TARILADI va status `pending` bo'ladi", async () => {
     const { svc, updates } = makeService({

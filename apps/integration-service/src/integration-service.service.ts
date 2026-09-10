@@ -270,6 +270,105 @@ export class IntegrationServiceService {
   }
 
   /**
+   * Hamkor sozlamalarini yangilaydi: nom, webhook manzili/sekreti, IP ro'yxati.
+   *
+   * NEGA KERAK: avval bu maydonlar FAQAT yaratishda berilardi. Webhook manzili
+   * o'zgarsa (tunnel, domen ko'chishi) yagona yo'l — yangi hamkor yaratish
+   * bo'lardi, ya'ni API kalit ham almashardi va ulangan tomon qayta
+   * sozlanishi kerak bo'lardi.
+   *
+   * MAYDON SEMANTIKASI:
+   *   • `undefined` — TEGILMAYDI (mavjud qiymat saqlanadi);
+   *   • bo'sh satr  — TOZALANADI (webhook o'chiriladi).
+   * Ikkisi ataylab ajratilgan: bo'sh forma maydonini "o'chir" deb tushunish
+   * ishlab turgan webhookni jimgina uzib qo'yardi.
+   *
+   * API kalit bu yerda O'ZGARMAYDI — buning uchun alohida `rotate_key` bor.
+   */
+  async updatePartner(
+    id: string,
+    dto: {
+      name?: string;
+      webhook_url?: string | null;
+      webhook_secret?: string | null;
+      ip_allowlist?: string[] | null;
+    },
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
+    const partner = await this.partnerRepo.findOne({
+      where: { id: String(id), isDeleted: false },
+    });
+    if (!partner) {
+      this.notFound('Partner topilmadi');
+    }
+
+    const changed: Record<string, unknown> = {};
+
+    if (dto.name !== undefined) {
+      const name = String(dto.name).trim();
+      if (!name) {
+        this.badRequest("name bo'sh bo'lishi mumkin emas");
+      }
+      partner.name = name;
+      changed.name = name;
+    }
+
+    if (dto.webhook_url !== undefined) {
+      const url = dto.webhook_url === null ? '' : String(dto.webhook_url).trim();
+      if (url) {
+        // SSRF himoyasi yaratishdagi bilan AYNI — tahrir orqali ichki
+        // manzilga o'tib ketish yo'li ochilib qolmasin.
+        await this.assertOutboundUrlSafe(url);
+        partner.webhook_url = url;
+      } else {
+        partner.webhook_url = null;
+      }
+      changed.webhook_url = partner.webhook_url;
+    }
+
+    if (dto.webhook_secret !== undefined) {
+      const secret =
+        dto.webhook_secret === null ? '' : String(dto.webhook_secret).trim();
+      partner.webhook_secret = secret ? this.encryptCredential(secret) : null;
+      // Sir QIYMATI hech qachon loglanmaydi — faqat o'zgargani.
+      changed.webhook_secret_changed = true;
+    }
+
+    if (dto.ip_allowlist !== undefined) {
+      const list = Array.isArray(dto.ip_allowlist)
+        ? dto.ip_allowlist.map((v) => String(v).trim()).filter(Boolean)
+        : [];
+      partner.ip_allowlist = list.length ? list : null;
+      changed.ip_allowlist = partner.ip_allowlist;
+    }
+
+    if (!Object.keys(changed).length) {
+      this.badRequest("O'zgartirish uchun hech qanday maydon berilmadi");
+    }
+
+    await this.partnerRepo.save(partner);
+
+    await this.activityLog.log({
+      entity_type: 'Partner',
+      entity_id: String(partner.id),
+      action: ActivityAction.UPDATED,
+      new_value: changed,
+      ...this.auditActor(requester),
+    });
+
+    return successRes(
+      {
+        id: partner.id,
+        name: partner.name,
+        webhook_url: partner.webhook_url,
+        is_active: partner.is_active,
+      },
+      200,
+      'partner updated',
+    );
+  }
+
+  /**
    * API kalitni yangilaydi (rotate). Eski kalit darhol ishlamay qoladi (hash
    * o'zgaradi → validate topa olmaydi → 401), yangisi shu javobda bir marta.
    */

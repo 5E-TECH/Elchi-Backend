@@ -54,6 +54,34 @@ export class IntegrationServiceController {
     );
   }
 
+  /** Hamkor sozlamalari (webhook manzili/sekreti, IP ro'yxati, nom). */
+  @MessagePattern({ cmd: 'integration.partner.update' })
+  updatePartner(
+    @Payload()
+    data: {
+      id?: string;
+      name?: string;
+      webhook_url?: string | null;
+      webhook_secret?: string | null;
+      ip_allowlist?: string[] | null;
+      requester?: { id?: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.updatePartner(
+        String(data?.id ?? ''),
+        {
+          name: data?.name,
+          webhook_url: data?.webhook_url,
+          webhook_secret: data?.webhook_secret,
+          ip_allowlist: data?.ip_allowlist,
+        },
+        data?.requester,
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'integration.partner.rotate_key' })
   rotatePartnerKey(
     @Payload()
