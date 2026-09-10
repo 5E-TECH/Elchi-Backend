@@ -15,10 +15,11 @@ describe('rollbackOrderToWaiting PARTLY_PAID guard', () => {
       {} as any, // orderItemRepo
       {} as any, // orderTrackingRepo
       {} as any, // orderCustodyEventRepo
-      {} as any, // transferBatchRepo
-      {} as any, // searchClient
+      {} as any, // orderSettlementRepo
+      {} as any, // extraCostApprovalRepo
+      {} as any, // transferBatchItemRepo
       {} as any, // identityClient
-      {} as any, // catalogClient
+      {} as any, // logisticsClient
       {} as any, // financeClient
       {} as any, // integrationClient
       {} as any, // branchClient
@@ -38,17 +39,16 @@ describe('rollbackOrderToWaiting PARTLY_PAID guard', () => {
         getDefaultDistrictId: jest.fn().mockResolvedValue(null),
         resolveDistrictId: jest.fn().mockResolvedValue(null),
       } as any, // lookup (OrderLookupService)
+      {} as any, // custody
     );
   }
 
   it('rejects a non-superadmin manager rolling back a PARTLY_PAID order', async () => {
     const service = makeService();
-    jest
-      .spyOn(service, 'findById')
-      .mockResolvedValue({
-        id: '900',
-        status: Order_status.PARTLY_PAID,
-      } as any);
+    jest.spyOn(service, 'findById').mockResolvedValue({
+      id: '900',
+      status: Order_status.PARTLY_PAID,
+    } as any);
 
     const err = await service
       .rollbackOrderToWaiting(
@@ -65,12 +65,10 @@ describe('rollbackOrderToWaiting PARTLY_PAID guard', () => {
 
   it('lets superadmin past the PARTLY_PAID guard (rejection, if any, is downstream not the guard)', async () => {
     const service = makeService();
-    jest
-      .spyOn(service, 'findById')
-      .mockResolvedValue({
-        id: '900',
-        status: Order_status.PARTLY_PAID,
-      } as any);
+    jest.spyOn(service, 'findById').mockResolvedValue({
+      id: '900',
+      status: Order_status.PARTLY_PAID,
+    } as any);
 
     const err = await service
       .rollbackOrderToWaiting({ id: '1', roles: ['superadmin'] }, '900')

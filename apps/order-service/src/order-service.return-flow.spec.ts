@@ -1,7 +1,11 @@
 import { RpcException } from '@nestjs/microservices';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { OrderCustodyService } from './custody/order-custody.service';
-import { Order_status, BranchTransferBatchStatus, BranchTransferDirection } from '@app/common';
+import {
+  Order_status,
+  BranchTransferBatchStatus,
+  BranchTransferDirection,
+} from '@app/common';
 import { Order, OrderHolderType } from './entities/order.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
 import { OrderCustodyEvent } from './entities/order-custody-event.entity';
@@ -41,7 +45,9 @@ describe('OrderServiceService return flow', () => {
       select: jest.fn().mockReturnThis(),
       getRawOne: jest
         .fn()
-        .mockResolvedValue(options?.hasReceivedReturnBatch === false ? null : { item_id: '1' }),
+        .mockResolvedValue(
+          options?.hasReceivedReturnBatch === false ? null : { item_id: '1' },
+        ),
     };
     const transferBatchItemRepo = {
       createQueryBuilder: jest.fn().mockReturnValue(transferBatchItemQb),
@@ -77,17 +83,21 @@ describe('OrderServiceService return flow', () => {
 
     // OrderServiceService konstruktori — 16 ta pozitsion bog'liqlik.
     // Faqat shu test ishlatadigan repolar haqiqiy mock, qolgani {}.
-    const custody = new OrderCustodyService(trackingRepo as any, custodyRepo as any);
+    const custody = new OrderCustodyService(
+      trackingRepo as any,
+      custodyRepo as any,
+    );
     const service = new OrderLifecycleService(
       { createQueryRunner: jest.fn(() => queryRunner) } as any, // dataSource
       orderRepo as any, // orderRepo
       {} as any, // orderItemRepo
       trackingRepo as any, // orderTrackingRepo
       {} as any, // orderCustodyEventRepo
-      {} as any, // transferBatchRepo
-      transferBatchItemRepo as any, // searchClient
+      {} as any, // orderSettlementRepo
+      {} as any, // extraCostApprovalRepo
+      transferBatchItemRepo as any, // transferBatchItemRepo
       {} as any, // identityClient
-      {} as any, // catalogClient
+      {} as any, // logisticsClient
       {} as any, // financeClient
       {} as any, // integrationClient
       {} as any, // branchClient
@@ -113,7 +123,14 @@ describe('OrderServiceService return flow', () => {
       custody as any, // OrderCustodyService
     );
 
-    return { service, orderRepo, transferBatchItemQb, trackingRepo, queryRunner, outbox };
+    return {
+      service,
+      orderRepo,
+      transferBatchItemQb,
+      trackingRepo,
+      queryRunner,
+      outbox,
+    };
   }
 
   async function expectRpc(promise: Promise<unknown>, code: number) {
@@ -122,19 +139,28 @@ describe('OrderServiceService return flow', () => {
       throw new Error('expected RpcException');
     } catch (error) {
       expect(error).toBeInstanceOf(RpcException);
-      expect(((error as RpcException).getError() as any)?.statusCode).toBe(code);
+      expect(((error as RpcException).getError() as any)?.statusCode).toBe(
+        code,
+      );
     }
   }
 
   it('initiateReturn requires reason', async () => {
     const { service } = makeService();
-    await expectRpc(service.initiateReturn({ id: '1', roles: ['admin'] }, '101', { reason: '' }), 400);
+    await expectRpc(
+      service.initiateReturn({ id: '1', roles: ['admin'] }, '101', {
+        reason: '',
+      }),
+      400,
+    );
   });
 
   it('initiateReturn rejects disallowed status', async () => {
     const { service } = makeService({ orderStatus: Order_status.SOLD });
     await expectRpc(
-      service.initiateReturn({ id: '1', roles: ['admin'] }, '101', { reason: 'Mijoz rad etdi' }),
+      service.initiateReturn({ id: '1', roles: ['admin'] }, '101', {
+        reason: 'Mijoz rad etdi',
+      }),
       400,
     );
   });
@@ -167,14 +193,18 @@ describe('OrderServiceService return flow', () => {
       hasReceivedReturnBatch: false,
     });
 
-    await expectRpc(service.markReturnedToMarket({ id: '9', roles: ['operator'] }, '101'), 400);
+    await expectRpc(
+      service.markReturnedToMarket({ id: '9', roles: ['operator'] }, '101'),
+      400,
+    );
   });
 
   it('markReturnedToMarket sets final status and history once', async () => {
-    const { service, orderRepo, trackingRepo, transferBatchItemQb } = makeService({
-      orderStatus: Order_status.RECEIVED,
-      hasReceivedReturnBatch: true,
-    });
+    const { service, orderRepo, trackingRepo, transferBatchItemQb } =
+      makeService({
+        orderStatus: Order_status.RECEIVED,
+        hasReceivedReturnBatch: true,
+      });
 
     const res: any = await service.markReturnedToMarket(
       { id: '9', roles: ['operator'] },
@@ -204,7 +234,10 @@ describe('OrderServiceService return flow', () => {
       orderStatus: Order_status.RETURNED_TO_MARKET,
     });
 
-    await expectRpc(service.markReturnedToMarket({ id: '9', roles: ['operator'] }, '101'), 400);
+    await expectRpc(
+      service.markReturnedToMarket({ id: '9', roles: ['operator'] }, '101'),
+      400,
+    );
   });
 
   it('markReturnedToMarket direct path: home-branch courier + return_requested (no batch)', async () => {

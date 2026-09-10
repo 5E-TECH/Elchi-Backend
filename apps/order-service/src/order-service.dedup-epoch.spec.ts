@@ -24,10 +24,11 @@ describe('OrderServiceService dedup epoch (Faza 1a)', () => {
       {} as any, // orderItemRepo
       {} as any, // orderTrackingRepo
       {} as any, // orderCustodyEventRepo
-      {} as any, // transferBatchRepo
-      {} as any, // searchClient
+      {} as any, // orderSettlementRepo
+      {} as any, // extraCostApprovalRepo
+      {} as any, // transferBatchItemRepo
       {} as any, // identityClient
-      {} as any, // catalogClient
+      {} as any, // logisticsClient
       {} as any, // financeClient
       {} as any, // integrationClient
       {} as any, // branchClient
@@ -47,6 +48,7 @@ describe('OrderServiceService dedup epoch (Faza 1a)', () => {
         getDefaultDistrictId: jest.fn().mockResolvedValue(null),
         resolveDistrictId: jest.fn().mockResolvedValue(null),
       } as any, // lookup (OrderLookupService)
+      {} as any, // custody
     );
   }
 

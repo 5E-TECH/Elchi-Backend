@@ -2402,6 +2402,120 @@
         ]
       }
     },
+    "/orders/extra-cost-approvals": {
+      "get": {
+        "operationId": "OrderGatewayController_listExtraCostApprovals",
+        "parameters": [
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "pending",
+                "approved",
+                "rejected"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List extra cost approval requests",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
+    "/orders/extra-cost-approvals/{id}/approve": {
+      "post": {
+        "operationId": "OrderGatewayController_approveExtraCostApproval",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Extra cost approval ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtraCostApprovalDecisionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Approve extra cost request",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
+    "/orders/extra-cost-approvals/{id}/reject": {
+      "post": {
+        "operationId": "OrderGatewayController_rejectExtraCostApproval",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Extra cost approval ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtraCostApprovalDecisionDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reject extra cost request",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
     "/orders/{id}/tracking": {
       "get": {
         "operationId": "OrderGatewayController_getTracking",
@@ -11690,6 +11804,15 @@
           "order_ids",
           "courier_id"
         ]
+      },
+      "ExtraCostApprovalDecisionDto": {
+        "type": "object",
+        "properties": {
+          "comment": {
+            "type": "string",
+            "example": "Tasdiqlandi"
+          }
+        }
       },
       "SellOrderRequestDto": {
         "type": "object",

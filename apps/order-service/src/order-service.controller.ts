@@ -254,8 +254,9 @@ export class OrderServiceController {
         paidAmount?: number;
         proofFileKeys?: string[];
         proofFileKeysVerified?: boolean;
+        extraCostApproved?: boolean;
       };
-      requester: { id: string; roles?: string[] };
+      requester: { id: string; roles?: string[]; branch_id?: string | null };
       request_id?: string;
     },
     @Ctx() context: RmqContext,
@@ -280,8 +281,9 @@ export class OrderServiceController {
         extraCost?: number;
         proofFileKeys?: string[];
         proofFileKeysVerified?: boolean;
+        extraCostApproved?: boolean;
       };
-      requester: { id: string; roles?: string[] };
+      requester: { id: string; roles?: string[]; branch_id?: string | null };
       request_id?: string;
     },
     @Ctx() context: RmqContext,
@@ -332,8 +334,9 @@ export class OrderServiceController {
         comment?: string;
         proofFileKeys?: string[];
         proofFileKeysVerified?: boolean;
+        extraCostApproved?: boolean;
       };
-      requester: { id: string; roles?: string[] };
+      requester: { id: string; roles?: string[]; branch_id?: string | null };
       request_id?: string;
     },
     @Ctx() context: RmqContext,
@@ -349,6 +352,60 @@ export class OrderServiceController {
           data.dto,
           data.request_id,
         ),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.extra_cost_approval.list' })
+  listExtraCostApprovals(
+    @Payload()
+    data: {
+      requester: { id: string; roles?: string[] };
+      status?: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.listExtraCostApprovals(data.requester, {
+        status: data.status,
+      }),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.extra_cost_approval.approve' })
+  approveExtraCostApproval(
+    @Payload()
+    data: {
+      id: string;
+      dto?: { comment?: string };
+      requester: { id: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.approveExtraCostApproval(
+        data.requester,
+        data.id,
+        data.dto,
+      ),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.extra_cost_approval.reject' })
+  rejectExtraCostApproval(
+    @Payload()
+    data: {
+      id: string;
+      dto?: { comment?: string };
+      requester: { id: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.rejectExtraCostApproval(
+        data.requester,
+        data.id,
+        data.dto,
+      ),
     );
   }
 
@@ -391,7 +448,8 @@ export class OrderServiceController {
       context,
       'order.settlement.courier_to_branch',
       data.request_id,
-      () => this.settlementService.settleCourierToBranch(data.requester, data.dto),
+      () =>
+        this.settlementService.settleCourierToBranch(data.requester, data.dto),
     );
   }
 
@@ -482,7 +540,11 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.lifecycleService.initiateReturn(data.requester, data.id, data.dto ?? {}),
+      this.lifecycleService.initiateReturn(
+        data.requester,
+        data.id,
+        data.dto ?? {},
+      ),
     );
   }
 
@@ -866,7 +928,13 @@ export class OrderServiceController {
 
   @MessagePattern({ cmd: 'order.analytics.top_markets' })
   analyticsTopMarkets(
-    @Payload() data: { limit?: number; branch_id?: string; startDate?: string; endDate?: string },
+    @Payload()
+    data: {
+      limit?: number;
+      branch_id?: string;
+      startDate?: string;
+      endDate?: string;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -891,7 +959,13 @@ export class OrderServiceController {
 
   @MessagePattern({ cmd: 'order.analytics.top_branches' })
   analyticsTopBranches(
-    @Payload() data: { limit?: number; branch_id?: string; startDate?: string; endDate?: string },
+    @Payload()
+    data: {
+      limit?: number;
+      branch_id?: string;
+      startDate?: string;
+      endDate?: string;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -910,7 +984,10 @@ export class OrderServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderAnalyticsService.getTopOperatorsByMarket(data.requester.id, data.limit),
+      this.orderAnalyticsService.getTopOperatorsByMarket(
+        data.requester.id,
+        data.limit,
+      ),
     );
   }
 

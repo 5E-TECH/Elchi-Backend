@@ -13,6 +13,10 @@ import { BranchTransferBatch } from '../entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from '../entities/branch-transfer-batch-item.entity';
 import { MarketCancelledHandoverSession } from '../entities/market-cancelled-handover-session.entity';
 import {
+  ExtraCostApprovalAction,
+  OrderExtraCostApproval,
+} from '../entities/order-extra-cost-approval.entity';
+import {
   ActivityAction,
   ActivityLogService,
   BranchType,
@@ -78,6 +82,8 @@ export class OrderLifecycleService {
     private readonly orderCustodyEventRepo: Repository<OrderCustodyEvent>,
     @InjectRepository(OrderSettlement)
     private readonly orderSettlementRepo: Repository<OrderSettlement>,
+    @InjectRepository(OrderExtraCostApproval)
+    private readonly extraCostApprovalRepo: Repository<OrderExtraCostApproval>,
     @InjectRepository(BranchTransferBatchItem)
     private readonly transferBatchItemRepo: Repository<BranchTransferBatchItem>,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
@@ -995,6 +1001,260 @@ export class OrderLifecycleService {
     }
 
     return keys;
+  }
+
+  private isExtraCostApprovalRequired(params: {
+    extraCost: number;
+  }) {
+    return params.extraCost > 0;
+  }
+
+  private serializeExtraCostApproval(approval: OrderExtraCostApproval) {
+    return {
+      id: String(approval.id),
+      order_id: String(approval.order_id),
+      market_id: String(approval.market_id),
+      requested_by_user_id: String(approval.requested_by_user_id),
+      requested_by_role: approval.requested_by_role,
+      requester_branch_id: approval.requester_branch_id
+        ? String(approval.requester_branch_id)
+        : null,
+      action: approval.action,
+      amount: Number(approval.amount ?? 0),
+      proof_file_keys: approval.proof_file_keys ?? [],
+      status: approval.status,
+      decided_by_user_id: approval.decided_by_user_id
+        ? String(approval.decided_by_user_id)
+        : null,
+      decided_at: approval.decided_at,
+      decision_comment: approval.decision_comment,
+      createdAt: approval.createdAt,
+      updatedAt: approval.updatedAt,
+    };
+  }
+
+  private requesterPrimaryRole(requester: { roles?: string[] }) {
+    const roles = requester.roles ?? [];
+    if (roles.some((role) => String(role).toLowerCase() === Roles.MANAGER)) {
+      return Roles.MANAGER;
+    }
+    if (roles.some((role) => String(role).toLowerCase() === Roles.COURIER)) {
+      return Roles.COURIER;
+    }
+    return roles[0] ? String(roles[0]).toLowerCase() : null;
+  }
+
+  private async requestExtraCostApprovalIfNeeded(params: {
+    order: Order;
+    requester: { id: string; roles?: string[]; branch_id?: string | null };
+    action: ExtraCostApprovalAction;
+    extraCost: number;
+    proofFiles: string[];
+    dto: Record<string, unknown>;
+  }) {
+    const {
+      order,
+      requester,
+      action,
+      extraCost,
+      proofFiles,
+      dto,
+    } = params;
+    if (
+      Boolean(dto.extraCostApproved) ||
+      !this.isExtraCostApprovalRequired({ extraCost })
+    ) {
+      return null;
+    }
+
+    const existing = await this.extraCostApprovalRepo.findOne({
+      where: {
+        order_id: String(order.id),
+        status: 'pending',
+        isDeleted: false,
+      },
+      order: { createdAt: 'DESC' },
+    });
+    if (existing) {
+      return successRes(
+        {
+          approval_required: true,
+          approval: this.serializeExtraCostApproval(existing),
+        },
+        202,
+        "Market tasdig'i kutilmoqda",
+      );
+    }
+
+    const approval = this.extraCostApprovalRepo.create({
+      order_id: String(order.id),
+      market_id: String(order.market_id),
+      requested_by_user_id: String(requester.id),
+      requested_by_role: this.requesterPrimaryRole(requester),
+      requester_branch_id: requester.branch_id
+        ? String(requester.branch_id)
+        : null,
+      action,
+      amount: extraCost,
+      proof_file_keys: proofFiles,
+      operation_payload: {
+        ...dto,
+        extraCost,
+        proofFileKeys: proofFiles,
+        proofFileKeysVerified: true,
+      },
+      status: 'pending',
+    });
+    const saved = await this.extraCostApprovalRepo.save(approval);
+    return successRes(
+      {
+        approval_required: true,
+        approval: this.serializeExtraCostApproval(saved),
+      },
+      202,
+      "Market tasdig'i kutilmoqda",
+    );
+  }
+
+  private assertCanDecideExtraCostApproval(
+    requester: { id: string; roles?: string[] },
+    approval: OrderExtraCostApproval,
+  ) {
+    if (
+      this.hasRole(requester, Roles.SUPERADMIN) ||
+      this.hasRole(requester, Roles.ADMIN)
+    ) {
+      return;
+    }
+    if (
+      this.hasRole(requester, Roles.MARKET) &&
+      String(requester.id) === String(approval.market_id)
+    ) {
+      return;
+    }
+    this.forbidden("Bu qo'shimcha xarajat so'rovini tasdiqlash mumkin emas");
+  }
+
+  async listExtraCostApprovals(
+    requester: { id: string; roles?: string[] },
+    filters?: { status?: string },
+  ) {
+    const status = String(filters?.status ?? 'pending').toLowerCase();
+    const where: Record<string, unknown> = {
+      status,
+      isDeleted: false,
+    };
+    if (
+      !this.hasRole(requester, Roles.SUPERADMIN) &&
+      !this.hasRole(requester, Roles.ADMIN)
+    ) {
+      if (!this.hasRole(requester, Roles.MARKET)) {
+        this.forbidden("Qo'shimcha xarajat tasdiqlarini ko'rish mumkin emas");
+      }
+      where.market_id = String(requester.id);
+    }
+    const approvals = await this.extraCostApprovalRepo.find({
+      where,
+      order: { createdAt: 'DESC' },
+      take: 100,
+    });
+    return successRes(
+      approvals.map((approval) => this.serializeExtraCostApproval(approval)),
+      200,
+      'Extra cost approvals',
+    );
+  }
+
+  async approveExtraCostApproval(
+    requester: { id: string; roles?: string[] },
+    approvalId: string,
+    dto?: { comment?: string },
+  ) {
+    const approval = await this.extraCostApprovalRepo.findOne({
+      where: { id: String(approvalId), isDeleted: false },
+    });
+    if (!approval) {
+      this.notFound('Extra cost approval not found');
+    }
+    this.assertCanDecideExtraCostApproval(requester, approval);
+    if (approval.status !== 'pending') {
+      this.badRequest("Bu so'rov allaqachon yakunlangan");
+    }
+
+    const actor = {
+      id: String(approval.requested_by_user_id),
+      roles: approval.requested_by_role ? [approval.requested_by_role] : [],
+      branch_id: approval.requester_branch_id,
+    };
+    const payload = {
+      ...(approval.operation_payload ?? {}),
+      extraCostApproved: true,
+    } as any;
+
+    let result: unknown;
+    if (approval.action === 'cancel') {
+      result = await this.cancelOrder(
+        actor,
+        String(approval.order_id),
+        payload,
+        `extra-cost-approval:${approval.id}`,
+      );
+    } else if (approval.action === 'partly_sell') {
+      result = await this.partlySellOrder(
+        actor,
+        String(approval.order_id),
+        payload,
+        `extra-cost-approval:${approval.id}`,
+      );
+    } else {
+      result = await this.sellOrder(
+        actor,
+        String(approval.order_id),
+        payload,
+        `extra-cost-approval:${approval.id}`,
+      );
+    }
+
+    approval.status = 'approved';
+    approval.decided_by_user_id = String(requester.id);
+    approval.decided_at = new Date();
+    approval.decision_comment = dto?.comment ?? null;
+    await this.extraCostApprovalRepo.save(approval);
+    return successRes(
+      {
+        approval: this.serializeExtraCostApproval(approval),
+        operation: result,
+      },
+      200,
+      "Qo'shimcha xarajat tasdiqlandi",
+    );
+  }
+
+  async rejectExtraCostApproval(
+    requester: { id: string; roles?: string[] },
+    approvalId: string,
+    dto?: { comment?: string },
+  ) {
+    const approval = await this.extraCostApprovalRepo.findOne({
+      where: { id: String(approvalId), isDeleted: false },
+    });
+    if (!approval) {
+      this.notFound('Extra cost approval not found');
+    }
+    this.assertCanDecideExtraCostApproval(requester, approval);
+    if (approval.status !== 'pending') {
+      this.badRequest("Bu so'rov allaqachon yakunlangan");
+    }
+    approval.status = 'rejected';
+    approval.decided_by_user_id = String(requester.id);
+    approval.decided_at = new Date();
+    approval.decision_comment = dto?.comment ?? null;
+    await this.extraCostApprovalRepo.save(approval);
+    return successRes(
+      { approval: this.serializeExtraCostApproval(approval) },
+      200,
+      "Qo'shimcha xarajat rad etildi",
+    );
   }
 
   private async assertCanAddExtraCost(params: {
@@ -3257,6 +3517,7 @@ export class OrderLifecycleService {
       paidAmount?: number;
       proofFileKeys?: string[];
       proofFileKeysVerified?: boolean;
+      extraCostApproved?: boolean;
     },
     requestId?: string,
   ) {
@@ -3382,6 +3643,17 @@ export class OrderLifecycleService {
       proofFileKeys: dto?.proofFileKeys,
       proofFileKeysVerified: dto?.proofFileKeysVerified,
     });
+    const pendingApproval = await this.requestExtraCostApprovalIfNeeded({
+      order,
+      requester,
+      action: 'sell',
+      extraCost,
+      proofFiles,
+      dto: dto ?? {},
+    });
+    if (pendingApproval) {
+      return pendingApproval;
+    }
     const finalComment = this.generateSaleComment(
       order.comment,
       dto?.comment,
@@ -3676,6 +3948,7 @@ export class OrderLifecycleService {
       extraCost?: number;
       proofFileKeys?: string[];
       proofFileKeysVerified?: boolean;
+      extraCostApproved?: boolean;
     },
     requestId?: string,
   ) {
@@ -3746,6 +4019,17 @@ export class OrderLifecycleService {
       proofFileKeys: dto?.proofFileKeys,
       proofFileKeysVerified: dto?.proofFileKeysVerified,
     });
+    const pendingApproval = await this.requestExtraCostApprovalIfNeeded({
+      order,
+      requester,
+      action: 'cancel',
+      extraCost,
+      proofFiles,
+      dto: dto ?? {},
+    });
+    if (pendingApproval) {
+      return pendingApproval;
+    }
 
     // Look up cashboxes (remote reads) before opening the transaction.
     let actorExpenseCashbox:
@@ -4097,6 +4381,7 @@ export class OrderLifecycleService {
       comment?: string;
       proofFileKeys?: string[];
       proofFileKeysVerified?: boolean;
+      extraCostApproved?: boolean;
     },
     requestId?: string,
   ) {
@@ -4229,6 +4514,17 @@ export class OrderLifecycleService {
       proofFileKeys: dto?.proofFileKeys,
       proofFileKeysVerified: dto?.proofFileKeysVerified,
     });
+    const pendingApproval = await this.requestExtraCostApprovalIfNeeded({
+      order,
+      requester,
+      action: 'partly_sell',
+      extraCost,
+      proofFiles,
+      dto: dto ?? {},
+    });
+    if (pendingApproval) {
+      return pendingApproval;
+    }
     const finalComment = this.generateSaleComment(
       order.comment,
       dto?.comment,
