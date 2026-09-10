@@ -587,6 +587,39 @@ export class LogisticsServiceService implements OnModuleInit {
     return { posts, orders: [...ordersById.values()] };
   }
 
+  /**
+   * P1b — kuryer skani orqali buyurtmani o'z filialiga qabul qilish.
+   *
+   * `true` — qabul qilindi (buyurtma endi kuryer filialida, `RECEIVED`).
+   * `false` — bu yo'l qo'llanmaydi: buyurtma paketda yo'lda emas
+   *           (`no_batch`) yoki paket boshqa filialga atalgan (`other_branch`).
+   *           Chaqiruvchi o'zining odatdagi "boshqa filial" xatosini beradi.
+   *
+   * Guard xatolari (paket hali jo'natilmagan, bekor qilingan, qaytarish paketi)
+   * ATAYLAB yuqoriga uzatiladi — kuryer sababini bilishi kerak, umumiy
+   * "boshqa filial orderi" xabari bu yerda chalg'ituvchi bo'lardi.
+   */
+  private async receiveOrderIntoBranchByScan(
+    orderId: string,
+    courierBranchId: string,
+    requester: RequesterContext,
+  ): Promise<boolean> {
+    const res = await lastValueFrom(
+      this.orderClient
+        .send<{ data?: { received?: boolean; reason?: string } }>(
+          { cmd: 'order.transfer_batch.receive_one_by_scan' },
+          {
+            order_id: orderId,
+            courier_branch_id: courierBranchId,
+            requester_id: String(requester.id),
+            requester_roles: requester.roles ?? [],
+          },
+        )
+        .pipe(timeout(8000)),
+    );
+    return Boolean(res?.data?.received);
+  }
+
   private async updateOrder(
     id: string,
     dto: Record<string, unknown>,
@@ -2546,16 +2579,48 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest('qr_token is required');
     }
 
-    const order = await this.findOrderByQrToken(qrToken);
+    let order = await this.findOrderByQrToken(qrToken);
     const courierBranchId = await this.findCourierBranchId(requester);
-    const orderBranchId = String(order.branch_id ?? '').trim();
+    let orderBranchId = String(order.branch_id ?? '').trim();
 
     if (!orderBranchId) {
       this.badRequest('Order filialga biriktirilmagan');
     }
 
     if (orderBranchId !== courierBranchId) {
-      this.forbidden('Boshqa filial orderi — qabul qila olmaysiz');
+      // P1b — SKAN BILAN AVTOMATIK FILIAL QABULI.
+      //
+      // Buyurtma HQ'dan kuryer filialiga paket bilan jo'natilgan bo'lsa, uning
+      // `branch_id`'si HAMON jo'natuvchi filial bo'ladi (u faqat filial paketni
+      // qabul qilganda o'zgaradi). Ilgari kuryer bunday buyurtmani skan qilsa
+      // "boshqa filial orderi" xatosini olardi va filial menejeri paketni qabul
+      // qilmaguncha ishlay olmasdi.
+      //
+      // Endi skanning o'zi filial qabulini ham bajaradi — bitta amal, lekin
+      // daftarda IKKI bo'g'in (HQ → FILIAL → KURYER), ya'ni mas'uliyat zanjiri
+      // uzilmaydi. Guardlar order-service tomonida (paket SENT, manzil = shu
+      // filial, yo'nalish FORWARD) — busiz kuryer yetib kelmagan posilkani
+      // o'ziga yozib olishi mumkin bo'lardi.
+      const received = await this.receiveOrderIntoBranchByScan(
+        String(order.id),
+        courierBranchId,
+        requester,
+      );
+      if (!received) {
+        this.forbidden('Boshqa filial orderi — qabul qila olmaysiz');
+      }
+
+      // Qabuldan keyin status va filial o'zgardi — yangi holatni O'QISH SHART,
+      // aks holda quyidagi status guardi eski `ON_THE_ROAD`ni ko'radi.
+      //
+      // ATAYLAB `findOrderByQrToken` (o'sha token bilan), `findOrderById` EMAS:
+      // faqat birinchisida javob qobig'ini ochish mantiqi bor
+      // (`data.data` / `data` / xom), ikkinchisi xom javobni qaytaradi.
+      order = await this.findOrderByQrToken(qrToken);
+      orderBranchId = String(order.branch_id ?? '').trim();
+      if (orderBranchId !== courierBranchId) {
+        this.forbidden('Boshqa filial orderi — qabul qila olmaysiz');
+      }
     }
 
     const requesterId = String(requester.id);

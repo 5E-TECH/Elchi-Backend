@@ -2328,6 +2328,290 @@ export class BranchTransferBatchService {
     }
   }
 
+  /**
+   * P1b — BITTA buyurtmani skan orqali filialga qabul qilish (inkremental).
+   *
+   * NEGA ALOHIDA METOD. `receiveBranchTransferBatchOrders` (yuqorida) —
+   * "tanlanganlarni qabul qil, QOLGANINI qaytarib yubor, paketni YOP" semantikasi.
+   * Kuryer bitta buyurtmani skan qilganda bu FALOKAT bo'lardi: paketdagi qolgan
+   * hamma buyurtma `NEW`ga qaytib, qayta batchlanib ketardi. Shu bois bu metod
+   * INKREMENTAL: faqat bitta buyurtmani qabul qiladi va paket ochiq qoladi;
+   * paket faqat OXIRGI element qabul qilinganda yopiladi.
+   *
+   * NEGA `current_batch_id`GA TAYANADI, STATUSGA EMAS. `ON_THE_ROAD` Elchi'da
+   * IKKI MA'NOLI: (a) filiallar orasida yo'lda (holder=HQ, courier_id=null) va
+   * (b) kuryer qo'lida. Statusdan kelib chiqib qaror qilish umumiy guardni
+   * bo'shatib yuborardi. `current_batch_id` esa bir ma'noli: buyurtma aynan shu
+   * paket ichida yo'lda.
+   *
+   * SAQLANISHI SHART GUARDLAR — bu metodning butun xavfsizlik hikoyasi:
+   *   - paket `SENT` (PENDING = hali HQ'dan chiqmagan → posilka jismonan yo'q);
+   *   - paket manzili = kuryer filiali (boshqa filial posilkasini tortib olmasin);
+   *   - yo'nalish `FORWARD` (qaytarish paketi bu yo'l bilan qabul qilinmasin);
+   *   - element paketda va `sent_at` bor.
+   * Bo'shatilsa — kuryer yetib kelmagan posilkani o'ziga yozib oladi va
+   * mas'uliyat zanjiri (custody) buziladi.
+   *
+   * Yozuvlar `receiveBranchTransferBatchOrders` bilan AYNAN bir xil (branch_id,
+   * status, holder, tracking, custody) — zanjir HQ → FILIAL → KURYER uzilmaydi.
+   * Chaqiruvchi (logistics `scanAssignOrder`) shundan keyin kuryerga biriktiradi,
+   * ya'ni bitta skan → daftarda ikki bo'g'in.
+   *
+   * `order_count` / `total_price` ATAYLAB o'zgartirilmaydi — ular paket
+   * JO'NATILGANDA nima borligini bildiradi. (Partial-receive yo'li ularni qayta
+   * hisoblaydi, chunki u qolganini tashlab yuboradi; bu yerda tashlanmaydi.)
+   *
+   * Idempotentlik: muvaffaqiyatdan keyin `current_batch_id = null` bo'ladi, ya'ni
+   * takroriy skan `no_batch` qaytaradi va chaqiruvchi o'z mantiqini davom ettiradi
+   * (o'sha paytda buyurtma allaqachon kuryer filialida bo'ladi).
+   */
+  async receiveOneOrderByScan(input: {
+    order_id?: string;
+    courier_branch_id?: string;
+    requester_id?: string;
+    requester_name?: string;
+    requester_roles?: string[];
+  }) {
+    const orderId = String(input?.order_id ?? '').trim();
+    const courierBranchId = String(input?.courier_branch_id ?? '').trim();
+    if (!orderId) {
+      this.badRequest('order_id is required');
+    }
+    if (!courierBranchId) {
+      this.badRequest('courier_branch_id is required');
+    }
+
+    const requesterId = String(input?.requester_id ?? '').trim() || '0';
+    const requesterName =
+      String(input?.requester_name ?? '').trim() || requesterId || 'unknown';
+    const requesterRole = this.custody.toTrackingRole(input?.requester_roles);
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const batchRepo = queryRunner.manager.getRepository(BranchTransferBatch);
+      const batchItemRepo = queryRunner.manager.getRepository(
+        BranchTransferBatchItem,
+      );
+      const orderRepo = queryRunner.manager.getRepository(Order);
+      const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+      const custodyRepo = queryRunner.manager.getRepository(OrderCustodyEvent);
+      const historyRepo = queryRunner.manager.getRepository(
+        BranchTransferBatchHistory,
+      );
+
+      const order = await orderRepo.findOne({
+        where: { id: orderId, isDeleted: false },
+        select: [
+          'id',
+          'status',
+          'current_batch_id',
+          'holder_type',
+          'holder_branch_id',
+          'holder_courier_id',
+        ],
+      });
+      if (!order) {
+        this.notFound('Order not found');
+      }
+
+      const batchId = String(order.current_batch_id ?? '').trim();
+      if (!batchId) {
+        // Buyurtma paketda yo'lda EMAS — bu metodning ishi emas. Chaqiruvchi
+        // o'zining odatdagi filial tekshiruvini qo'llaydi.
+        await queryRunner.commitTransaction();
+        return successRes(
+          { received: false, reason: 'no_batch' },
+          200,
+          'Order is not in transit inside a batch',
+        );
+      }
+
+      const batch = await batchRepo.findOne({
+        where: { id: batchId, isDeleted: false },
+      });
+      if (!batch) {
+        this.notFound('Transfer batch not found');
+      }
+
+      // Manzil mos kelmasa — bu boshqa filialning posilkasi. Chaqiruvchi o'zining
+      // "boshqa filial orderi" xabarini beradi (ma'no bir xil).
+      if (String(batch.destination_branch_id) !== courierBranchId) {
+        await queryRunner.commitTransaction();
+        return successRes(
+          { received: false, reason: 'other_branch' },
+          200,
+          'Batch is addressed to another branch',
+        );
+      }
+
+      // Quyidagilar KURYERGA AYTILADIGAN xatolar — sababini bilishi kerak.
+      if (batch.direction !== BranchTransferDirection.FORWARD) {
+        this.badRequest(
+          "Qaytarish paketini skan orqali qabul qilib bo'lmaydi",
+        );
+      }
+      if (batch.status === BranchTransferBatchStatus.PENDING) {
+        this.badRequest(
+          "Paket hali jo'natilmagan — posilka filialga yetib kelmagan",
+        );
+      }
+      if (batch.status === BranchTransferBatchStatus.CANCELLED) {
+        this.badRequest("Paket bekor qilingan");
+      }
+      if (batch.status !== BranchTransferBatchStatus.SENT) {
+        this.badRequest(
+          `Paketdan qabul qilib bo'lmaydi. Current status: ${batch.status}`,
+        );
+      }
+
+      const item = await batchItemRepo.findOne({
+        where: { batch_id: batchId, order_id: orderId, isDeleted: false },
+      });
+      if (!item) {
+        this.badRequest('Buyurtma bu paket ichida topilmadi');
+      }
+      if (!item.sent_at) {
+        this.badRequest("Buyurtma hali jo'natilmagan");
+      }
+
+      const destinationBranchId = String(batch.destination_branch_id);
+      const handoverAt = new Date();
+      const priorStatus = order.status;
+      const priorHolderType = order.holder_type ?? null;
+      const priorHolderBranchId = order.holder_branch_id ?? null;
+      const priorHolderCourierId = order.holder_courier_id ?? null;
+
+      await orderRepo
+        .createQueryBuilder()
+        .update(Order)
+        .set({
+          current_batch_id: null,
+          branch_id: destinationBranchId,
+          status: Order_status.RECEIVED,
+          holder_type: OrderHolderType.BRANCH,
+          holder_branch_id: destinationBranchId,
+          holder_courier_id: null,
+          last_handover_at: handoverAt,
+          last_handover_by: requesterId,
+        })
+        .where('id = :orderId', { orderId })
+        .andWhere('"is_deleted" = false')
+        // Poyga qulfi: oradan boshqa qabul o'tib ketgan bo'lsa (menejer qo'lda
+        // qabul qildi) `current_batch_id` allaqachon null bo'ladi va bu update
+        // hech nimani o'zgartirmaydi.
+        .andWhere('"current_batch_id" = :batchId', { batchId })
+        .execute();
+
+      if (priorStatus !== Order_status.RECEIVED) {
+        await this.custody.createTrackingEvent(
+          {
+            order_id: orderId,
+            from_status: priorStatus,
+            to_status: Order_status.RECEIVED,
+            changed_by: requesterId,
+            changed_by_role: requesterRole,
+            action: 'branch_batch_received_by_scan',
+            description: `Kuryer skani orqali filialga qabul qilindi (paket #${batchId})`,
+            note: `Batch #${batchId} — skan orqali qabul`,
+          },
+          trackingRepo,
+        );
+      }
+
+      const custodyChanged =
+        priorHolderType !== OrderHolderType.BRANCH ||
+        String(priorHolderBranchId ?? '') !== destinationBranchId ||
+        Boolean(priorHolderCourierId);
+      if (custodyChanged) {
+        await this.custody.createCustodyEvent(
+          {
+            order_id: orderId,
+            from_holder_type: priorHolderType,
+            to_holder_type: OrderHolderType.BRANCH,
+            from_branch_id: priorHolderBranchId,
+            to_branch_id: destinationBranchId,
+            from_courier_id: priorHolderCourierId,
+            to_courier_id: null,
+            changed_by: requesterId,
+            changed_by_role: requesterRole,
+            note: `Batch #${batchId} — kuryer skani orqali filialga qabul`,
+          },
+          custodyRepo,
+        );
+      }
+
+      await batchItemRepo
+        .createQueryBuilder()
+        .update(BranchTransferBatchItem)
+        .set({ isDeleted: true })
+        .where('batch_id = :batchId', { batchId })
+        .andWhere('order_id = :orderId', { orderId })
+        .andWhere('"is_deleted" = false')
+        .execute();
+
+      // Paket faqat OXIRGI element qabul qilinganda yopiladi. Aks holda SENT
+      // holicha qoladi — qolgan buyurtmalar TEGILMAYDI (bu partial-receive
+      // yo'lidan asosiy farq).
+      const remaining = await batchItemRepo.count({
+        where: { batch_id: batchId, isDeleted: false },
+      });
+      const batchClosed = remaining === 0;
+      if (batchClosed) {
+        batch.status = BranchTransferBatchStatus.RECEIVED;
+        batch.received_at = new Date();
+        batch.received_by_user_id = requesterId;
+        await batchRepo.save(batch);
+      }
+
+      await historyRepo.save(
+        historyRepo.create({
+          batch_id: batchId,
+          user_id: requesterId,
+          action: BranchTransferBatchAction.RECEIVED,
+          notes: batchClosed
+            ? `Kuryer ${requesterName} skan orqali oxirgi buyurtmani qabul qildi — paket yopildi`
+            : `Kuryer ${requesterName} skan orqali 1 ta buyurtmani qabul qildi (paketda ${remaining} ta qoldi)`,
+        }),
+      );
+
+      await queryRunner.commitTransaction();
+
+      await this.activityLog.log({
+        entity_type: 'Order',
+        entity_id: orderId,
+        action: ActivityAction.STATUS_CHANGE,
+        old_value: { status: priorStatus },
+        new_value: { status: Order_status.RECEIVED },
+        ...this.custody.auditActor({ id: requesterId }),
+        metadata: {
+          batch_id: batchId,
+          branch_id: destinationBranchId,
+          via: 'courier_scan',
+          batch_closed: batchClosed,
+        },
+      });
+
+      return successRes(
+        {
+          received: true,
+          order_id: orderId,
+          batch_id: batchId,
+          branch_id: destinationBranchId,
+          batch_closed: batchClosed,
+        },
+        200,
+        'Order received into branch by courier scan',
+      );
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      throw error;
+    } finally {
+      await queryRunner.release();
+    }
+  }
+
   async cancelBranchTransferBatch(input: {
     batch_id?: string;
     reason?: string;

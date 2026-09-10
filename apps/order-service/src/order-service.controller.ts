@@ -1143,6 +1143,28 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * P1b — kuryer skani orqali BITTA buyurtmani filialga qabul qilish.
+   * `receive_orders`dan farqi: paket YOPILMAYDI va qolgan buyurtmalar
+   * tegilmaydi (inkremental). Faqat logistics `scanAssignOrder` chaqiradi.
+   */
+  @MessagePattern({ cmd: 'order.transfer_batch.receive_one_by_scan' })
+  receiveTransferBatchOneByScan(
+    @Payload()
+    data: {
+      order_id?: string;
+      courier_branch_id?: string;
+      requester_id?: string;
+      requester_name?: string;
+      requester_roles?: string[];
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.transferBatchService.receiveOneOrderByScan(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.transfer_batch.cancel' })
   cancelTransferBatchSingle(
     @Payload()
