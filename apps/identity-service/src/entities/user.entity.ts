@@ -94,6 +94,9 @@ export class User extends BaseEntity {
   @Column({ type: 'boolean', default: false })
   add_order: boolean;
 
+  @Column({ type: 'boolean', default: false })
+  can_add_extra_cost: boolean;
+
   @Column({ type: 'boolean', default: true })
   cancelled_handover_qr_required: boolean;
 

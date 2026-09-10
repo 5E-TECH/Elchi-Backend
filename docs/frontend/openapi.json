@@ -10283,7 +10283,7 @@
         ],
         "responses": {
           "200": {
-            "description": "[{ id, name }]"
+            "description": "[{ id, name, sato_code }]"
           }
         },
         "summary": "Elchi viloyatlari ro‘yxati",
@@ -10316,7 +10316,7 @@
         ],
         "responses": {
           "200": {
-            "description": "[{ id, name, region_id }]"
+            "description": "[{ id, name, region_id, sato_code }]"
           }
         },
         "summary": "Elchi tumanlari (region_id bo‘yicha)",
@@ -10558,6 +10558,88 @@
           }
         ],
         "summary": "Hamkorlar ro‘yxati (sirlarsiz)",
+        "tags": [
+          "Partners (admin)"
+        ]
+      }
+    },
+    "/admin/partners/webhooks": {
+      "get": {
+        "operationId": "PartnerAdminGatewayController_listWebhooks",
+        "parameters": [
+          {
+            "name": "partner_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Hamkor webhook outbox jurnali (yetkazilgan/kutilayotgan/xato)",
+        "tags": [
+          "Partners (admin)"
+        ]
+      }
+    },
+    "/admin/partners/webhooks/{webhookId}/retry": {
+      "post": {
+        "operationId": "PartnerAdminGatewayController_retryWebhook",
+        "parameters": [
+          {
+            "name": "webhookId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Muvaffaqiyatsiz webhookni qayta navbatga qo'yish va darhol urinib ko'rish",
         "tags": [
           "Partners (admin)"
         ]
@@ -10859,6 +10941,11 @@
           "add_order": {
             "type": "boolean",
             "example": true
+          },
+          "can_add_extra_cost": {
+            "type": "boolean",
+            "example": true,
+            "description": "Courier/manager buyurtmaga qo'shimcha xarajat yoza olishini boshqaradi. Faqat admin/superadmin o'zgartira oladi."
           },
           "default_tariff": {
             "type": "string",

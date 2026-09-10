@@ -997,6 +997,62 @@ export class OrderLifecycleService {
     return keys;
   }
 
+  private async assertCanAddExtraCost(params: {
+    actor: { can_add_extra_cost?: boolean | null } | undefined;
+    requester: { id: string; roles?: string[]; branch_id?: string | null };
+    order: {
+      branch_id?: string | null;
+      home_branch_id?: string | null;
+      holder_branch_id?: string | null;
+    };
+  }): Promise<void> {
+    const { actor, requester, order } = params;
+    if (actor?.can_add_extra_cost) {
+      return;
+    }
+
+    const isCourierRequester = this.hasRole(requester, Roles.COURIER);
+    if (!isCourierRequester) {
+      this.forbidden(
+        "Bu foydalanuvchiga qo'shimcha xarajat yozish ruxsati berilmagan",
+      );
+    }
+
+    const assignment = await this.lookup.getBranchAssignmentByUser(
+      String(requester.id),
+    );
+    const courierBranchId = String(assignment?.branch_id ?? '').trim();
+    if (!courierBranchId) {
+      this.forbidden(
+        "Bu courier filialga biriktirilmagan, qo'shimcha xarajat yozish mumkin emas",
+      );
+    }
+
+    const orderBranchIds = new Set(
+      [order.branch_id, order.home_branch_id, order.holder_branch_id]
+        .map((id) => String(id ?? '').trim())
+        .filter(Boolean),
+    );
+    if (!orderBranchIds.has(courierBranchId)) {
+      this.forbidden(
+        "Courier bu buyurtmaning filialiga tegishli emas, qo'shimcha xarajat yozish mumkin emas",
+      );
+    }
+
+    const branchUsers = await this.lookup.getBranchUsers(courierBranchId);
+    const branchManagerAllows = branchUsers.some((item) => {
+      const role = String(item?.role ?? item?.user?.role ?? '')
+        .trim()
+        .toUpperCase();
+      return role === 'MANAGER' && Boolean(item?.user?.can_add_extra_cost);
+    });
+    if (!branchManagerAllows) {
+      this.forbidden(
+        "Bu filial manageriga qo'shimcha xarajat ruxsati berilmagan",
+      );
+    }
+  }
+
   /**
    * Enqueue finance events triggered by an order's status change. Called from
    * the central status-change path (writeOrderChanges) inside its transaction,
@@ -3309,6 +3365,13 @@ export class OrderLifecycleService {
 
     const totalPrice = Number(order.total_price ?? 0);
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
+    if (extraCost > 0) {
+      await this.assertCanAddExtraCost({
+        actor: financialActor,
+        requester,
+        order,
+      });
+    }
     // Reject up front (before the transaction) if this market's proof policy is
     // triggered by this sell and the courier didn't attach valid file proof.
     const proofFiles = await this.enforceOperationProof({
@@ -3647,9 +3710,31 @@ export class OrderLifecycleService {
 
     // The market is needed for the proof policy regardless of extra cost, since
     // some conditions (e.g. cancelling a zero-total order) apply with no expense.
-    const market = await this.lookup
-      .getMarketsByIds([String(order.market_id)])
-      .then((rows) => rows[0]);
+    const [market, financialActor] = await Promise.all([
+      this.lookup
+        .getMarketsByIds([String(order.market_id)])
+        .then((rows) => rows[0]),
+      isManagerRequester
+        ? this.lookup.getUserById(String(requester.id))
+        : this.lookup
+            .getCouriersByIds([actorCourierId])
+            .then((rows) => rows[0]),
+    ]);
+    if (!market) {
+      this.notFound('Market not found');
+    }
+    if (extraCost > 0) {
+      if (!financialActor) {
+        this.notFound(
+          isManagerRequester ? 'Manager not found' : 'Courier not found',
+        );
+      }
+      await this.assertCanAddExtraCost({
+        actor: financialActor,
+        requester,
+        order,
+      });
+    }
 
     // Reject the cancel up front if this market's proof policy is triggered and
     // the courier didn't attach valid file proof.
@@ -4127,6 +4212,13 @@ export class OrderLifecycleService {
       : courierCashbox;
 
     const extraCost = Math.max(Number(dto?.extraCost ?? 0), 0);
+    if (extraCost > 0) {
+      await this.assertCanAddExtraCost({
+        actor: financialActor,
+        requester,
+        order,
+      });
+    }
     // Partly-sell is a sell variant → evaluated against SELL_* conditions, with
     // the new (partial) price as the operation total.
     const proofFiles = await this.enforceOperationProof({
