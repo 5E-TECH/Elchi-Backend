@@ -23,10 +23,11 @@ function makeService(integrationSend: jest.Mock) {
     {} as any, // orderItemRepo
     {} as any, // orderTrackingRepo
     {} as any, // orderCustodyEventRepo
-    {} as any, // transferBatchRepo
-    {} as any, // searchClient
+    {} as any, // orderSettlementRepo
+    {} as any, // extraCostApprovalRepo
+    {} as any, // transferBatchItemRepo
     {} as any, // identityClient
-    {} as any, // catalogClient
+    {} as any, // logisticsClient
     {} as any, // financeClient
     { send: integrationSend } as any, // integrationClient
     {} as any, // branchClient
@@ -34,6 +35,7 @@ function makeService(integrationSend: jest.Mock) {
     {} as any, // outbox
     { log: jest.fn().mockResolvedValue(undefined) } as any, // activityLog
     {} as any, // lookup
+    {} as any, // custody
   );
 }
 
