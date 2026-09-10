@@ -741,6 +741,7 @@ export class UserServiceService implements OnModuleInit {
       commission_type: admin.commission_type,
       commission_value: admin.commission_value,
       add_order: admin.add_order,
+      can_add_extra_cost: admin.can_add_extra_cost,
       password_changed: false,
     };
 
@@ -792,6 +793,20 @@ export class UserServiceService implements OnModuleInit {
       admin.add_order = dto.add_order;
     }
 
+    if (typeof dto.can_add_extra_cost !== 'undefined') {
+      if (!requesterIsPrivileged) {
+        this.forbidden(
+          "Qo'shimcha xarajat ruxsatini faqat admin yoki superadmin o'zgartira oladi",
+        );
+      }
+      if (![Roles.COURIER, Roles.MANAGER].includes(admin.role)) {
+        this.badRequest(
+          "Qo'shimcha xarajat ruxsati faqat courier yoki manager uchun",
+        );
+      }
+      admin.can_add_extra_cost = dto.can_add_extra_cost;
+    }
+
     if (
       typeof dto.default_tariff !== 'undefined' &&
       (requesterIsPrivileged || !requesterIsSelf)
@@ -836,6 +851,7 @@ export class UserServiceService implements OnModuleInit {
         commission_type: saved.commission_type,
         commission_value: saved.commission_value,
         add_order: saved.add_order,
+        can_add_extra_cost: saved.can_add_extra_cost,
         // Surface that the password was rotated without ever logging its value.
         password_changed: Boolean(dto.password),
       },
@@ -1131,6 +1147,15 @@ export class UserServiceService implements OnModuleInit {
 
   async createMarket(dto: CreateMarketDto, requester?: RequesterContext) {
     this.assertRequesterCanCreateMarket(requester);
+    if (
+      typeof dto.expense_proof_conditions !== 'undefined' &&
+      !this.hasRole(requester, Roles.SUPERADMIN) &&
+      !this.hasRole(requester, Roles.ADMIN)
+    ) {
+      this.forbidden(
+        "Market rasm/video isbot sozlamasini faqat admin yoki superadmin o'zgartira oladi",
+      );
+    }
 
     await this.ensurePhoneUnique(dto.phone_number);
     await this.ensureUsernameUnique(dto.username);
@@ -1195,6 +1220,7 @@ export class UserServiceService implements OnModuleInit {
       tariff_home: dto.tariff_home ?? 0,
       tariff_center: dto.tariff_center ?? 0,
       add_order: false,
+      can_add_extra_cost: false,
       default_tariff: null,
       isDeleted: false,
     });
@@ -1242,6 +1268,7 @@ export class UserServiceService implements OnModuleInit {
       tariff_home: dto.tariff_home ?? null,
       tariff_center: dto.tariff_center ?? null,
       add_order: false,
+      can_add_extra_cost: false,
       default_tariff: null,
       isDeleted: false,
     });
@@ -1305,6 +1332,7 @@ export class UserServiceService implements OnModuleInit {
       tariff_home: null,
       tariff_center: null,
       add_order: false,
+      can_add_extra_cost: false,
       default_tariff: null,
       isDeleted: false,
     });
@@ -1320,7 +1348,11 @@ export class UserServiceService implements OnModuleInit {
     return successRes(this.sanitize(saved), 201, 'Customer yaratildi');
   }
 
-  async updateMarket(id: string, dto: UpdateMarketDto) {
+  async updateMarket(
+    id: string,
+    dto: UpdateMarketDto,
+    requester?: RequesterContext,
+  ) {
     const market = await this.users.findOne({
       where: { id, role: Roles.MARKET, isDeleted: false },
     });
@@ -1386,6 +1418,14 @@ export class UserServiceService implements OnModuleInit {
     }
 
     if (typeof dto.expense_proof_conditions !== 'undefined') {
+      const requesterIsPrivileged =
+        this.hasRole(requester, Roles.SUPERADMIN) ||
+        this.hasRole(requester, Roles.ADMIN);
+      if (!requesterIsPrivileged) {
+        this.forbidden(
+          "Market rasm/video isbot sozlamasini faqat admin yoki superadmin o'zgartira oladi",
+        );
+      }
       // De-dupe; empty array clears the policy (proof never required).
       market.expense_proof_conditions = Array.from(
         new Set(dto.expense_proof_conditions),

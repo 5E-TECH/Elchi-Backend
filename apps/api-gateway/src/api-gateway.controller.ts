@@ -1257,7 +1257,7 @@ export class ApiGatewayController {
 
   @Patch('markets/:id/expense-proof')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({
     summary:
@@ -1272,18 +1272,6 @@ export class ApiGatewayController {
     @Body() dto: UpdateMarketExpenseProofRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    const requesterRoles = (req.user.roles ?? []).map((role) =>
-      String(role).toLowerCase(),
-    );
-    if (
-      requesterRoles.includes(RoleEnum.MARKET) &&
-      String(req.user.sub) !== id
-    ) {
-      throw new ForbiddenException(
-        'Market faqat o‘z rasm/video isbot sozlamasini o‘zgartira oladi',
-      );
-    }
-
     return this.identityClient.send(
       { cmd: 'identity.market.update' },
       {
@@ -1291,6 +1279,7 @@ export class ApiGatewayController {
         dto: {
           expense_proof_conditions: dto.expense_proof_conditions,
         },
+        requester: this.toRequester(req),
       },
     ).pipe(timeout(8000));
   }

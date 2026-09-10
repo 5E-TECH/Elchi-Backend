@@ -104,6 +104,15 @@ export class UpdateAdminRequestDto {
   @IsBoolean()
   add_order?: boolean;
 
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "Courier/manager buyurtmaga qo'shimcha xarajat yoza olishini boshqaradi. Faqat admin/superadmin o'zgartira oladi.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  can_add_extra_cost?: boolean;
+
   @ApiPropertyOptional({ example: 'center', enum: ['center', 'address'] })
   @IsOptional()
   @IsEnum(['center', 'address'])

@@ -10,6 +10,7 @@ export interface CreateMarketPayload {
 export interface UpdateMarketPayload {
   id: string;
   dto: UpdateMarketDto;
+  requester?: RequesterContext;
 }
 
 export interface DeleteMarketPayload {

@@ -95,7 +95,9 @@ export class OrderLookupService implements OnModuleInit {
         name?: string;
         tariff_home?: number;
         tariff_center?: number;
+        role?: string | null;
         compensation_mode?: string | null;
+        can_add_extra_cost?: boolean | null;
       }>;
     }>(
       this.identityClient,
@@ -112,7 +114,9 @@ export class OrderLookupService implements OnModuleInit {
         name?: string;
         tariff_home?: number;
         tariff_center?: number;
+        role?: string | null;
         compensation_mode?: string | null;
+        can_add_extra_cost?: boolean | null;
       };
     }>(
       this.identityClient,
@@ -121,6 +125,49 @@ export class OrderLookupService implements OnModuleInit {
     ).catch(() => ({ data: undefined }));
 
     return response?.data;
+  }
+
+  async getBranchAssignmentByUser(userId: string) {
+    const response = await rmqSend<{
+      data?: {
+        branch_id?: string | null;
+        role?: string | null;
+      } | null;
+    }>(
+      this.branchClient,
+      { cmd: 'branch.user.find_by_user' },
+      {
+        user_id: String(userId),
+        requester: { id: 'system', roles: ['superadmin'] },
+      },
+      { attachRequestId: false, retries: 1 },
+    ).catch(() => ({ data: null }));
+
+    return response?.data ?? null;
+  }
+
+  async getBranchUsers(branchId: string) {
+    const response = await rmqSend<{
+      data?: Array<{
+        user_id?: string | null;
+        role?: string | null;
+        user?: {
+          id?: string;
+          role?: string | null;
+          can_add_extra_cost?: boolean | null;
+        } | null;
+      }>;
+    }>(
+      this.branchClient,
+      { cmd: 'branch.user.find_by_branch' },
+      {
+        branch_id: String(branchId),
+        requester: { id: 'system', roles: ['superadmin'] },
+      },
+      { attachRequestId: false, retries: 1 },
+    ).catch(() => ({ data: [] }));
+
+    return response?.data ?? [];
   }
 
   async getCashboxByUser(userId: string, cashboxType: Cashbox_type) {
