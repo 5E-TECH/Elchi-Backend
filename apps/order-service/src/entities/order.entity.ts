@@ -154,6 +154,22 @@ export class Order extends BaseEntity {
   @Column({ type: 'jsonb', nullable: true })
   proof_files!: string[] | null;
 
+  /**
+   * When the parcel entered the delivery network (first transition into
+   * RECEIVED or beyond). Stamped once and never overwritten — a re-receive
+   * (return batch, corrective status write) must not move it.
+   *
+   * This is the single date axis for the dashboard cohort metrics: accepted /
+   * delivered / cancelled / inProgress are all FILTERs over one query keyed on
+   * this column, which is what makes `delivered <= accepted` structural.
+   * See docs/audit/DASHBOARD_METRICS_AUDIT_2026-08-15.md (R-01/R-02).
+   *
+   * NULL means "never accepted" (still created/new, or cancelled straight out
+   * of them) — such orders are excluded from the cohort entirely.
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  accepted_at!: Date | null;
+
   @Column({ type: 'bigint', nullable: true })
   sold_at!: string | null;
 
