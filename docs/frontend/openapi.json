@@ -1631,7 +1631,7 @@
             "bearer": []
           }
         ],
-        "summary": "Receive new orders",
+        "summary": "Receive new orders (branch-scoped for staff)",
         "tags": [
           "Orders"
         ]
@@ -10759,6 +10759,45 @@
         ]
       }
     },
+    "/admin/partners/{id}": {
+      "patch": {
+        "operationId": "PartnerAdminGatewayController_update",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePartnerRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Hamkor sozlamalari: webhook manzili/sekreti, IP ro'yxati, nom. API kalit BU YERDA o‘zgarmaydi — buning uchun rotate-key bor.",
+        "tags": [
+          "Partners (admin)"
+        ]
+      }
+    },
     "/admin/partners/{id}/rotate-key": {
       "post": {
         "operationId": "PartnerAdminGatewayController_rotateKey",
@@ -14017,6 +14056,33 @@
         "required": [
           "name"
         ]
+      },
+      "UpdatePartnerRequestDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "BeePost"
+          },
+          "webhook_url": {
+            "type": "string",
+            "example": "https://beepost.example.uz/api/v1/elchi/webhook",
+            "description": "Bo'sh satr yuborilsa webhook O'CHIRILADI"
+          },
+          "webhook_secret": {
+            "type": "string",
+            "description": "Chiquvchi webhook HMAC sekreti. Bo'sh satr — tozalash."
+          },
+          "ip_allowlist": {
+            "example": [
+              "203.0.113.10"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
       },
       "SetPartnerActiveRequestDto": {
         "type": "object",
