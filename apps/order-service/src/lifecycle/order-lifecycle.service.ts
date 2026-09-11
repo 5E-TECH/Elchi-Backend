@@ -219,6 +219,28 @@ export class OrderLifecycleService {
     return order;
   }
 
+  /**
+   * `last_handover_by` uchun aktyor id'si — FAQAT raqamli bo'lsa.
+   *
+   * ⚠️ NEGA KERAK. Ustun `bigint`, lekin aktyor har doim ham haqiqiy
+   * foydalanuvchi emas: hamkor (Partner API) oqimi sun'iy id yuboradi
+   * (`partner:1`), chunki uning ortida foydalanuvchi turmaydi. Bunday satr
+   * bigint ustunga yozilganda Postgres `22P02` beradi va BUTUN buyurtma
+   * yaratish tranzaksiyasi qaytadi.
+   *
+   * Aynan shu sabab hamkordan kelgan birinchi posilka yaratilmadi: xato
+   * "ID qiymatlari raqam ko'rinishida bo'lishi kerak" bo'lib chiqardi va
+   * qaysi maydon aybdor ekani ko'rinmasdi.
+   *
+   * Audit izi YO'QOLMAYDI: `order_tracking.changed_by` va
+   * `order_custody_events.changed_by` — `varchar`, ular sun'iy id'ni o'z
+   * holicha saqlaydi. Bu yerda esa "foydalanuvchi yo'q" degani `null`.
+   */
+  private numericActorId(actorId?: string | number | null): string | null {
+    const raw = String(actorId ?? '').trim();
+    return /^\d+$/.test(raw) ? raw : null;
+  }
+
   private async resolveBranchIdForOrder(
     explicitBranchId: string | null | undefined,
     requester?: { id: string; roles?: string[]; branch_id?: string | null },
@@ -2933,7 +2955,7 @@ export class OrderLifecycleService {
         holder_branch_id: resolvedHolder.holder_branch_id,
         holder_courier_id: resolvedHolder.holder_courier_id,
         last_handover_at: new Date(),
-        last_handover_by: requester?.id ? String(requester.id) : null,
+        last_handover_by: this.numericActorId(requester?.id),
         return_reason: dto.return_reason ?? null,
         district_id: dto.district_id ?? null,
         region_id: dto.region_id ?? null,
@@ -4966,7 +4988,7 @@ export class OrderLifecycleService {
           holder_branch_id: cancelledHolder.holder_branch_id,
           holder_courier_id: cancelledHolder.holder_courier_id,
           last_handover_at: new Date(),
-          last_handover_by: String(requester.id),
+          last_handover_by: this.numericActorId(requester.id),
           district_id: order.district_id ?? null,
           region_id: order.region_id ?? null,
           address: order.address ?? null,
@@ -5260,7 +5282,7 @@ export class OrderLifecycleService {
 
     if (custodyChanged) {
       order.last_handover_at = new Date();
-      order.last_handover_by = requester?.id ? String(requester.id) : null;
+      order.last_handover_by = this.numericActorId(requester?.id);
     }
 
     if (
