@@ -13966,6 +13966,11 @@
             "type": "number",
             "example": 2,
             "default": 1
+          },
+          "external_product_id": {
+            "type": "string",
+            "description": "Hamkor tizimidagi mahsulot id — katalog bog‘lanishi shu bo‘yicha (nom bo‘yicha emas)",
+            "example": "a3f1c8e2-7b44-4d91-9f02-1c5e6d8a4b30"
           }
         },
         "required": [

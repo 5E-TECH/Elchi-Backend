@@ -36,6 +36,7 @@ import { ProviderRemittance } from './entities/provider-remittance.entity';
 import { Partner } from './entities/partner.entity';
 import { PartnerMarketRef } from './entities/partner-market-ref.entity';
 import { PartnerShipmentRef } from './entities/partner-shipment-ref.entity';
+import { PartnerProductRef } from './entities/partner-product-ref.entity';
 import { PartnerWebhookOutbox } from './entities/partner-webhook-outbox.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 
@@ -163,6 +164,8 @@ export class IntegrationServiceService {
     private readonly partnerMarketRefRepo: Repository<PartnerMarketRef>,
     @InjectRepository(PartnerShipmentRef)
     private readonly partnerShipmentRefRepo: Repository<PartnerShipmentRef>,
+    @InjectRepository(PartnerProductRef)
+    private readonly partnerProductRefRepo: Repository<PartnerProductRef>,
     @InjectRepository(PartnerWebhookOutbox)
     private readonly partnerWebhookOutboxRepo: Repository<PartnerWebhookOutbox>,
     private readonly activityLog: ActivityLogService,
@@ -860,7 +863,11 @@ export class IntegrationServiceService {
     region_id?: string | null;
     district_id?: string | null;
     where_deliver?: string;
-    items?: Array<{ name?: string; quantity?: number }>;
+    items?: Array<{
+      name?: string;
+      quantity?: number;
+      external_product_id?: string | null;
+    }>;
     cod_amount?: number;
     subtotal?: number;
   }) {
@@ -914,7 +921,16 @@ export class IntegrationServiceService {
       throw new RpcException(errorRes('Customer yaratib bo‘lmadi', 502));
     }
 
-    // 2) order.create (to_be_paid = cod_amount; source=external; external_id)
+    // 2) Mahsulotlarni Elchi katalogiga bog'lash (yo'q bo'lsa yaratiladi).
+    //    order.create'dan OLDIN: buyurtma qatorlari product_id bilan yozilishi
+    //    kerak, aks holda UI nomni katalogdan olib bo'lmaydi.
+    const orderItems = await this.resolvePartnerOrderItems(
+      String(partnerId),
+      String(dto.elchi_market_id),
+      dto.items,
+    );
+
+    // 3) order.create (to_be_paid = cod_amount; source=external; external_id)
     const totalPrice = Number(dto.subtotal ?? cod);
     const orderRes = await this.rmqRequest<Record<string, any>>(
       this.orderClient,
@@ -934,7 +950,7 @@ export class IntegrationServiceService {
           to_be_paid: cod,
           source: 'external',
           external_id: externalOrderId,
-          items: this.shipmentOrderItems(dto.items),
+          items: orderItems,
           comment: this.shipmentItemsComment(dto.items),
         },
         requester: { id: `partner:${partnerId}`, roles: [Roles.SUPERADMIN] },
@@ -952,7 +968,7 @@ export class IntegrationServiceService {
       throw new RpcException(errorRes('Buyurtma yaratib bo‘lmadi', 502));
     }
 
-    // 3) Bog'lanishni saqlash (idempotency + teskari qidiruv; poyga → mavjudni qaytar)
+    // 4) Bog'lanishni saqlash (idempotency + teskari qidiruv; poyga → mavjudni qaytar)
     try {
       await this.partnerShipmentRefRepo.save(
         this.partnerShipmentRefRepo.create({
@@ -1329,20 +1345,193 @@ export class IntegrationServiceService {
   }
 
   /** External shipment itemlarini nullable product_id kontraktiga o‘giradi. */
-  private shipmentOrderItems(
-    items?: Array<{ name?: string; quantity?: number }>,
-  ): Array<{
-    product_id: null;
-    product_name: string;
-    quantity: number;
-  }> {
-    return (items ?? [])
-      .map((item) => ({
-        product_id: null,
-        product_name: String(item?.name ?? '').trim(),
-        quantity: item?.quantity ?? 1,
-      }))
-      .filter((item) => item.product_name.length > 0 && item.quantity > 0);
+  /**
+   * Hamkor posilkasidagi mahsulotlarni Elchi KATALOGIGA bog'laydi.
+   *
+   * Avval bu yerda `product_id: null` qaytarilardi va nom faqat matn bo'lib
+   * qolardi. Oqibati ikkita edi: UI mahsulot nomini katalogdan olgani uchun
+   * bunday qatorda yiqilardi, va mahsulot bo'yicha hisobot/qidiruvda hamkor
+   * mahsulotlari umuman ko'rinmasdi.
+   *
+   * Endi: mahsulot yo'q bo'lsa YARATILADI, bor bo'lsa QAYTA ISHLATILADI.
+   *
+   * Bog'lanish `external_product_id` (hamkor tomonidagi id) bo'yicha, NOM
+   * bo'yicha emas — nom o'zgaruvchan va nom bo'yicha bog'lansak, hamkor
+   * nomni tuzatgan zahoti katalogda dublikat paydo bo'lardi.
+   *
+   * Id bermagan hamkor uchun eski xulq saqlanadi (faqat matn) — integratsiya
+   * buzilmasin.
+   */
+  private async resolvePartnerOrderItems(
+    partnerId: string,
+    elchiMarketId: string,
+    items?: Array<{
+      name?: string;
+      quantity?: number;
+      external_product_id?: string | null;
+    }>,
+  ): Promise<
+    Array<{
+      product_id: string | null;
+      product_name: string;
+      quantity: number;
+    }>
+  > {
+    const out: Array<{
+      product_id: string | null;
+      product_name: string;
+      quantity: number;
+    }> = [];
+
+    for (const item of items ?? []) {
+      const name = String(item?.name ?? '').trim();
+      const quantity = Number(item?.quantity ?? 1);
+      if (!name || !Number.isFinite(quantity) || quantity <= 0) continue;
+
+      const externalId = String(item?.external_product_id ?? '').trim();
+      let productId: string | null = null;
+
+      if (externalId) {
+        try {
+          productId = await this.resolveCatalogProductId(
+            partnerId,
+            elchiMarketId,
+            externalId,
+            name,
+          );
+        } catch (error) {
+          /**
+           * Katalogga bog'lab bo'lmasa posilka YARATILAVERADI — nom matn
+           * bo'lib qoladi. Yetkazish mahsulot ma'lumotnomasidan MUHIMROQ:
+           * bog'lanish keyin ham tuzatilishi mumkin, yetkazilmagan posilka
+           * esa yo'qolgan pul.
+           */
+          this.logger.warn(
+            `Katalogga bog'lab bo'lmadi (partner=${partnerId}, ` +
+              `external_product_id=${externalId}): ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+          );
+        }
+      }
+
+      out.push({ product_id: productId, product_name: name, quantity });
+    }
+
+    return out;
+  }
+
+  /**
+   * `external_product_id` → Elchi katalogidagi mahsulot id.
+   *
+   * Tartib: mavjud bog'lanish → o'sha market katalogidan NOM bo'yicha qidirish
+   * → yangi mahsulot yaratish. Ikkinchi qadam kerak, chunki katalogda mahsulot
+   * `(name, user_id)` bo'yicha NOYOQ: nomi bir xil mahsulot allaqachon bo'lsa,
+   * yaratish xato beradi va biz mavjudini olishimiz kerak.
+   */
+  private async resolveCatalogProductId(
+    partnerId: string,
+    elchiMarketId: string,
+    externalProductId: string,
+    name: string,
+  ): Promise<string | null> {
+    const existingRef = await this.partnerProductRefRepo.findOne({
+      where: {
+        partner_id: partnerId,
+        external_product_id: externalProductId,
+        isDeleted: false,
+      },
+    });
+    if (existingRef) {
+      return String(existingRef.elchi_product_id);
+    }
+
+    const productId =
+      (await this.findCatalogProductByName(elchiMarketId, name)) ??
+      (await this.createCatalogProduct(elchiMarketId, name));
+
+    if (!productId) return null;
+
+    try {
+      await this.partnerProductRefRepo.save(
+        this.partnerProductRefRepo.create({
+          partner_id: partnerId,
+          external_product_id: externalProductId,
+          elchi_product_id: String(productId),
+          elchi_market_id: String(elchiMarketId),
+        }),
+      );
+    } catch (error) {
+      // Poyga: boshqa oqim shu bog'lanishni yozib ulgurgan — mavjudini olamiz.
+      if (!this.isUniqueViolation(error)) throw error;
+      const raced = await this.partnerProductRefRepo.findOne({
+        where: { partner_id: partnerId, external_product_id: externalProductId },
+      });
+      return raced ? String(raced.elchi_product_id) : String(productId);
+    }
+
+    return String(productId);
+  }
+
+  /** Market katalogidan AYNAN shu nomli mahsulotni qidiradi. */
+  private async findCatalogProductByName(
+    elchiMarketId: string,
+    name: string,
+  ): Promise<string | null> {
+    const res = await this.rmqRequest<{ data?: unknown }>(
+      this.catalogClient,
+      { cmd: 'catalog.product.find_all' },
+      { query: { user_id: String(elchiMarketId), search: name, limit: 50 } },
+      8000,
+    ).catch(() => null);
+
+    const rows = this.extractRows(res);
+    const match = rows.find(
+      (row) =>
+        String((row as { name?: unknown })?.name ?? '')
+          .trim()
+          .toLowerCase() === name.toLowerCase(),
+    );
+    const id = (match as { id?: unknown })?.id;
+    return id === undefined || id === null ? null : String(id);
+  }
+
+  /**
+   * Katalogda yangi mahsulot yaratadi.
+   *
+   * `rmqRequest` HAR QANDAY xatoni `null` ga aylantiradi (u shunday yozilgan),
+   * shuning uchun "dublikat" bilan "catalog javob bermadi"ni farqlab bo'lmaydi.
+   * Ikkalasida ham xulq bir xil: nom bo'yicha QAYTA qidiramiz. Agar mahsulot
+   * poygada boshqa oqim tomonidan yaratilgan bo'lsa (`(name, user_id)` noyob),
+   * shu ikkinchi qidiruv uni topadi.
+   */
+  private async createCatalogProduct(
+    elchiMarketId: string,
+    name: string,
+  ): Promise<string | null> {
+    const res = await this.rmqRequest<Record<string, any>>(
+      this.catalogClient,
+      { cmd: 'catalog.product.create' },
+      { dto: { name, user_id: String(elchiMarketId) } },
+      8000,
+    );
+    const created = this.pluckId(res);
+    if (created) return created;
+
+    return this.findCatalogProductByName(elchiMarketId, name);
+  }
+
+  /** Javob qobig'idan qatorlar ro'yxatini himoyalangan ochish. */
+  private extractRows(res: unknown): unknown[] {
+    const candidates = [
+      (res as { data?: { data?: unknown } })?.data?.data,
+      (res as { data?: unknown })?.data,
+      res,
+    ];
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate)) return candidate;
+    }
+    return [];
   }
 
   /** Item nomlarini operatorlar uchun order comment'ida ham ko‘rsatadi. */

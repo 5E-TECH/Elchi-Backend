@@ -185,7 +185,11 @@ export class IntegrationServiceController {
       region_id?: string | null;
       district_id?: string | null;
       where_deliver?: string;
-      items?: Array<{ name?: string; quantity?: number }>;
+      items?: Array<{
+        name?: string;
+        quantity?: number;
+        external_product_id?: string | null;
+      }>;
       cod_amount?: number;
       subtotal?: number;
     },

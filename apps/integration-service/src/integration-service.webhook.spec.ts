@@ -61,6 +61,9 @@ jest.mock('./entities/partner-market-ref.entity', () => ({
 jest.mock('./entities/partner-shipment-ref.entity', () => ({
   PartnerShipmentRef: class PartnerShipmentRef {},
 }));
+jest.mock('./entities/partner-product-ref.entity', () => ({
+  PartnerProductRef: class PartnerProductRef {},
+}));
 jest.mock('./entities/partner-webhook-outbox.entity', () => ({
   PartnerWebhookOutbox: class PartnerWebhookOutbox {},
 }));
@@ -115,6 +118,11 @@ function makeService(integration: Record<string, unknown> | null) {
   const partnerShipmentRefRepo: any = {
     findOne: jest.fn().mockResolvedValue(null),
   };
+  const partnerProductRefRepo: any = {
+    findOne: jest.fn().mockResolvedValue(null),
+    create: jest.fn((dto: any) => ({ ...dto })),
+    save: jest.fn(async (e: any) => ({ id: 'ppr1', ...e })),
+  };
   const partnerWebhookOutboxRepo: any = {
     findOne: jest.fn().mockResolvedValue(null),
     find: jest.fn().mockResolvedValue([]),
@@ -135,6 +143,7 @@ function makeService(integration: Record<string, unknown> | null) {
     partnerRepo,
     partnerMarketRefRepo,
     partnerShipmentRefRepo,
+    partnerProductRefRepo,
     partnerWebhookOutboxRepo,
     activityLog,
     noClient,

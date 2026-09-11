@@ -20,6 +20,7 @@ import { ProviderReceivable } from './entities/provider-receivable.entity';
 import { ProviderRemittance } from './entities/provider-remittance.entity';
 import { Partner } from './entities/partner.entity';
 import { PartnerShipmentRef } from './entities/partner-shipment-ref.entity';
+import { PartnerProductRef } from './entities/partner-product-ref.entity';
 import { PartnerMarketRef } from './entities/partner-market-ref.entity';
 import { PartnerWebhookOutbox } from './entities/partner-webhook-outbox.entity';
 import { SyncQueueScheduler } from './sync-queue.scheduler';
@@ -50,6 +51,7 @@ import { SyncQueueScheduler } from './sync-queue.scheduler';
       ProviderRemittance,
       Partner,
       PartnerShipmentRef,
+      PartnerProductRef,
       PartnerMarketRef,
       PartnerWebhookOutbox,
     ]),
