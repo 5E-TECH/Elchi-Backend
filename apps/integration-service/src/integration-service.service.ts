@@ -1012,25 +1012,63 @@ export class IntegrationServiceService {
    * topilmasa 404 (boshqa hamkor posilkasi ham 404, ma'lumot sizib chiqmaydi).
    * Kontrakt: docs/PARTNER_API.md §3.4.
    */
+  /**
+   * `GET|POST /partner/shipments/:id` uchun posilkani topadi.
+   *
+   * MUAMMO. Ilgari qidiruv TO'G'RIDAN-TO'G'RI `order_id` (bigint) ustunida
+   * bajarilardi. Hujjat esa marshrutni `:external_order_id` deb yozgan. Hamkor
+   * hujjatdagidek UUID yuborsa, Postgres bigint ustunga matnni sig'dirolmay
+   * `22P02` beradi va API **500** qaytaradi — "topilmadi" emas, "server
+   * buzildi". Bu `last_handover_by` bilan bir xil turdagi xato edi.
+   *
+   * YECHIM. Ikki shakl ham qabul qilinadi:
+   *   • faqat raqam  → Elchi `order_id` (POST javobidagi `shipment_id`);
+   *     topilmasa, hamkorning raqamli `external_order_id`'si ham sinaladi;
+   *   • raqam emas   → faqat `external_order_id` (bigint ustunga UMUMAN
+   *     tegilmaydi, shuning uchun 22P02 bo'lishi mumkin emas).
+   *
+   * Topilmasa — 404. Buzilgan kirish endi hech qachon 500 bermaydi.
+   */
+  private async findPartnerShipmentRef(
+    partnerId: string,
+    shipmentId: string,
+  ): Promise<PartnerShipmentRef> {
+    const isNumeric = /^\d+$/.test(shipmentId);
+
+    if (isNumeric) {
+      const byOrderId = await this.partnerShipmentRefRepo.findOne({
+        where: { partner_id: partnerId, order_id: shipmentId, isDeleted: false },
+      });
+      if (byOrderId) return byOrderId;
+    }
+
+    const byExternal = await this.partnerShipmentRefRepo.findOne({
+      where: {
+        partner_id: partnerId,
+        external_order_id: shipmentId,
+        isDeleted: false,
+      },
+    });
+    if (byExternal) return byExternal;
+
+    this.notFound('Shipment topilmadi');
+  }
+
   async getPartnerShipment(dto: { partner_id?: string; shipment_id?: string }) {
     const partnerId = String(dto?.partner_id ?? '').trim();
     const shipmentId = String(dto?.shipment_id ?? '').trim();
     if (!partnerId) this.badRequest('partner_id majburiy');
     if (!shipmentId) this.badRequest('shipment_id majburiy');
 
-    const ref = await this.partnerShipmentRefRepo.findOne({
-      where: {
-        partner_id: partnerId,
-        order_id: shipmentId,
-        isDeleted: false,
-      },
-    });
-    if (!ref) this.notFound('Shipment topilmadi');
+    const ref = await this.findPartnerShipmentRef(partnerId, shipmentId);
 
+    // ⚠️ Buyurtma `ref.order_id` bo'yicha olinadi, kirishdagi id bo'yicha EMAS:
+    // hamkor `external_order_id` yuborgan bo'lishi mumkin, u esa Elchi
+    // buyurtma id'si emas.
     const order = await this.rmqRequest<Record<string, any>>(
       this.orderClient,
       { cmd: 'order.find_by_id' },
-      { id: shipmentId },
+      { id: String(ref.order_id) },
       8000,
     );
     if (!order) {
@@ -1039,7 +1077,7 @@ export class IntegrationServiceService {
 
     return successRes(
       {
-        shipment_id: shipmentId,
+        shipment_id: String(ref.order_id),
         external_order_id: ref.external_order_id,
         status: this.pluck(order, 'status'),
         cod_amount: Number(this.pluck(order, 'to_be_paid') ?? 0),
@@ -1065,19 +1103,15 @@ export class IntegrationServiceService {
     if (!partnerId) this.badRequest('partner_id majburiy');
     if (!shipmentId) this.badRequest('shipment_id majburiy');
 
-    const ref = await this.partnerShipmentRefRepo.findOne({
-      where: {
-        partner_id: partnerId,
-        order_id: shipmentId,
-        isDeleted: false,
-      },
-    });
-    if (!ref) this.notFound('Shipment topilmadi');
+    const ref = await this.findPartnerShipmentRef(partnerId, shipmentId);
+    // Kirishdagi id `external_order_id` bo'lishi mumkin — Elchi tomoniga
+    // HAMISHA `ref.order_id` beriladi.
+    const orderId = String(ref.order_id);
 
     const order = await this.rmqRequest<Record<string, any>>(
       this.orderClient,
       { cmd: 'order.find_by_id' },
-      { id: shipmentId },
+      { id: orderId },
       8000,
     );
     if (!order) {
@@ -1096,7 +1130,7 @@ export class IntegrationServiceService {
     ) {
       return successRes(
         {
-          shipment_id: shipmentId,
+          shipment_id: orderId,
           status: Order_status.CANCELLED,
           idempotent: true,
         },
@@ -1109,10 +1143,10 @@ export class IntegrationServiceService {
       this.orderClient,
       { cmd: 'order.cancel' },
       {
-        id: shipmentId,
+        id: orderId,
         dto: { comment: 'Partner tomonidan bekor qilindi' },
         requester: { id: `partner:${partnerId}`, roles: [Roles.SUPERADMIN] },
-        request_id: `partner-cancel:${partnerId}:${shipmentId}`,
+        request_id: `partner-cancel:${partnerId}:${orderId}`,
       },
       10000,
     );
@@ -1121,7 +1155,7 @@ export class IntegrationServiceService {
     }
 
     return successRes(
-      { shipment_id: shipmentId, status: Order_status.CANCELLED },
+      { shipment_id: orderId, status: Order_status.CANCELLED },
       200,
       'shipment cancelled',
     );
