@@ -13,9 +13,9 @@ import { IntegrationServiceService } from './integration-service.service';
  */
 function makeService(opts: {
   refRows?: any[];
-  catalogFindAll?: jest.Mock;
-  catalogCreate?: jest.Mock;
-  saveRef?: jest.Mock;
+  catalogFindAll?: (payload: any) => any;
+  catalogCreate?: (payload: any) => any;
+  saveRef?: (entity: any) => any;
 }) {
   const refRows = opts.refRows ?? [];
   const saveRef = opts.saveRef ?? jest.fn(async (e: any) => ({ id: '1', ...e }));
