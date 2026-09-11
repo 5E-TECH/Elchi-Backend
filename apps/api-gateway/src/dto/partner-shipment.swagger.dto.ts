@@ -36,6 +36,28 @@ export class ShipmentItemDto {
   @IsInt()
   @Min(1)
   quantity?: number;
+
+  /**
+   * Hamkor tizimidagi mahsulot id.
+   *
+   * Berilsa, Elchi shu id bo'yicha katalogdan mahsulotni topadi — yo'q bo'lsa
+   * AVTOMATIK yaratadi, bor bo'lsa qayta ishlatadi. Shu orqali hamkor
+   * mahsulotlari hisobot va qidiruvda ko'rinadi.
+   *
+   * NOM bo'yicha bog'lanmaydi: nom o'zgaruvchan, va nom bo'yicha bog'lansa
+   * hamkor nomni tuzatgan zahoti katalogda dublikat paydo bo'lardi.
+   *
+   * Berilmasa, eski xulq saqlanadi: nom faqat matn bo'lib yoziladi.
+   */
+  @ApiPropertyOptional({
+    description:
+      'Hamkor tizimidagi mahsulot id — katalog bog‘lanishi shu bo‘yicha (nom bo‘yicha emas)',
+    example: 'a3f1c8e2-7b44-4d91-9f02-1c5e6d8a4b30',
+  })
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  external_product_id?: string;
 }
 
 /** `POST /partner/shipments` — kontrakt: docs/PARTNER_API.md §3.3. */
