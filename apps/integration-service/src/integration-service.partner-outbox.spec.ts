@@ -309,3 +309,104 @@ describe('IntegrationServiceService — partner webhook outbox (P5d)', () => {
     expect(qb.getRawMany).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * TARIF MOSLASHUVCHANLIGI — foydalanuvchi talabi (2026-09-11):
+ * "tarif moslashuvchan bo'lsin, bir marta ulangan integratsiyaga tegmasdan
+ * o'zgartirilsin; kelajakda har viloyat uchun alohida bo'lishi mumkin".
+ *
+ * Avval takroriy `provisionPartnerMarket` faqat mavjud id'ni qaytarardi va
+ * tarifga TEGMASDI — ya'ni tarifni o'zgartirishning yagona yo'li yangi market
+ * ochish bo'lardi. Bu jimgina pul xatosi: ikki tomon turli tarifda qolardi.
+ */
+describe('IntegrationServiceService — market tarifi yangilanishi', () => {
+  function makeSvc(existing: Row | null, current: Row | null) {
+    const svc: any = Object.create(IntegrationServiceService.prototype);
+    const calls: Row[] = [];
+    const logs: Row[] = [];
+
+    svc.partnerMarketRefRepo = {
+      findOne: jest.fn(() => Promise.resolve(existing)),
+      create: jest.fn((x: Row) => x),
+      save: jest.fn((x: Row) => Promise.resolve(x)),
+    };
+    svc.identityClient = {};
+    svc.rmqRequest = jest.fn((_c: unknown, pattern: Row, payload: Row) => {
+      calls.push({ cmd: pattern.cmd, payload });
+      if (pattern.cmd === 'identity.market.find_by_id') {
+        return Promise.resolve({ data: current });
+      }
+      return Promise.resolve({ data: { id: 'new-market' } });
+    });
+    svc.activityLog = {
+      log: jest.fn((p: Row) => {
+        logs.push(p);
+        return Promise.resolve();
+      }),
+    };
+    svc.logger = { warn: jest.fn(), error: jest.fn() };
+    return { svc: svc as IntegrationServiceService, calls, logs };
+  }
+
+  const dto = (home: number, center: number) => ({
+    partner_id: '1',
+    external_seller_id: 'seller-1',
+    name: 'BeePost',
+    phone: '+998900000000',
+    tariff_home: home,
+    tariff_center: center,
+  });
+
+  it('tarif FARQ QILSA — identity yangilanadi, market qayta yaratilmaydi', async () => {
+    const { svc, calls, logs } = makeSvc(
+      { elchi_market_id: 'm-1' },
+      { tariff_home: 25000, tariff_center: 15000 },
+    );
+
+    const res: any = await svc.provisionPartnerMarket(dto(30000, 20000));
+
+    const update = calls.find((c) => c.cmd === 'identity.market.update');
+    expect(update).toBeDefined();
+    expect(update!.payload.dto).toEqual({
+      tariff_home: 30000,
+      tariff_center: 20000,
+    });
+    // Yangi market OCHILMAYDI.
+    expect(calls.find((c) => c.cmd === 'identity.market.create')).toBeUndefined();
+    expect(res.data.elchi_market_id).toBe('m-1');
+    expect(res.data.tariff_updated).toBe(true);
+    // O'zgarish auditda eski/yangi qiymat bilan qoladi.
+    expect(logs[0].old_value).toEqual({ tariff_home: 25000, tariff_center: 15000 });
+  });
+
+  it('tarif BIR XIL bo\'lsa — ortiqcha yozuv qilinmaydi', async () => {
+    const { svc, calls, logs } = makeSvc(
+      { elchi_market_id: 'm-1' },
+      { tariff_home: 25000, tariff_center: 15000 },
+    );
+
+    const res: any = await svc.provisionPartnerMarket(dto(25000, 15000));
+
+    expect(calls.find((c) => c.cmd === 'identity.market.update')).toBeUndefined();
+    expect(res.data.tariff_updated).toBe(false);
+    expect(logs).toHaveLength(0);
+  });
+
+  it('tarif berilmasa — mavjud tarif SAQLANADI (nolga tushirilmaydi)', async () => {
+    const { svc, calls } = makeSvc(
+      { elchi_market_id: 'm-1' },
+      { tariff_home: 25000, tariff_center: 15000 },
+    );
+
+    await svc.provisionPartnerMarket({
+      partner_id: '1',
+      external_seller_id: 'seller-1',
+      name: 'BeePost',
+      phone: '+998900000000',
+    });
+
+    // Eng muhimi: tasodifan 0 yozib, Elchi'ni bepul yetkazuvchiga
+    // aylantirib qo'ymaslik.
+    expect(calls.find((c) => c.cmd === 'identity.market.update')).toBeUndefined();
+  });
+});
