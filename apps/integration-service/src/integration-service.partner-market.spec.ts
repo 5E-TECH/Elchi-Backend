@@ -77,7 +77,14 @@ describe('IntegrationServiceService.provisionPartnerMarket (C1.5)', () => {
     const res: any = await svc.provisionPartnerMarket({ ...baseDto });
 
     expect(res.statusCode).toBe(200);
-    expect(res.data).toEqual({ elchi_market_id: '500', idempotent: true });
+    // `tariff_updated` 2026-09-11 da qo'shildi: takroriy chaqiruv endi tarifni
+    // yangilay oladi (hamkor integratsiyani buzmasdan tarifni o'zgartirsin).
+    // Bu yerda dto'da tarif YO'Q, shuning uchun hech nima yangilanmaydi.
+    expect(res.data).toEqual({
+      elchi_market_id: '500',
+      idempotent: true,
+      tariff_updated: false,
+    });
     expect(identity).not.toHaveBeenCalled(); // market.create YO'Q
     expect(refRepo.save).not.toHaveBeenCalled();
   });

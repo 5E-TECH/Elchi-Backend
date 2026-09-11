@@ -686,10 +686,73 @@ export class IntegrationServiceService {
       },
     });
     if (existing) {
+      /**
+       * TARIF YANGILANADI, market QAYTA YARATILMAYDI.
+       *
+       * Avval bu shox faqat mavjud id'ni qaytarardi va tarifga TEGMASDI.
+       * Oqibati jimgina pul xatosi edi: hamkor o'z tomonida tarifni
+       * o'zgartirsa (masalan viloyat bo'yicha boshqa kelishuv), Elchi'dagi
+       * market eski tarifda qolardi — biz bir summani, hamkor boshqasini
+       * ushlab qolardi va ikki daftar ajralardi.
+       *
+       * "Idempotent" bu yerda "dublikat market ochilmasin" degani, "tarif
+       * muzlatilsin" degani EMAS. Shu bois identity'dagi market yozuvi
+       * yangilanadi va javobda `tariff_updated` qaytadi.
+       */
+      const nextHome = Number(dto.tariff_home ?? 0);
+      const nextCenter = Number(dto.tariff_center ?? 0);
+      let tariffUpdated = false;
+
+      if (nextHome > 0 || nextCenter > 0) {
+        const current = await this.rmqRequest<{
+          data?: { tariff_home?: number; tariff_center?: number } | null;
+        }>(
+          this.identityClient,
+          { cmd: 'identity.market.find_by_id' },
+          { id: existing.elchi_market_id },
+          8000,
+        ).catch(() => null);
+
+        const curHome = Number(current?.data?.tariff_home ?? 0);
+        const curCenter = Number(current?.data?.tariff_center ?? 0);
+
+        if (curHome !== nextHome || curCenter !== nextCenter) {
+          await this.rmqRequest(
+            this.identityClient,
+            { cmd: 'identity.market.update' },
+            {
+              id: existing.elchi_market_id,
+              dto: { tariff_home: nextHome, tariff_center: nextCenter },
+              requester: {
+                id: `partner:${partnerId}`,
+                roles: [Roles.SUPERADMIN],
+              },
+            },
+            8000,
+          );
+          tariffUpdated = true;
+
+          await this.activityLog.log({
+            entity_type: 'PartnerMarketRef',
+            entity_id: String(existing.elchi_market_id),
+            action: ActivityAction.UPDATED,
+            old_value: { tariff_home: curHome, tariff_center: curCenter },
+            new_value: { tariff_home: nextHome, tariff_center: nextCenter },
+            ...this.auditActor(dto?.requester),
+          });
+        }
+      }
+
       return successRes(
-        { elchi_market_id: existing.elchi_market_id, idempotent: true },
+        {
+          elchi_market_id: existing.elchi_market_id,
+          idempotent: true,
+          tariff_updated: tariffUpdated,
+        },
         200,
-        'market already provisioned',
+        tariffUpdated
+          ? 'market already provisioned, tariff updated'
+          : 'market already provisioned',
       );
     }
 
