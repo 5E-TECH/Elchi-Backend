@@ -9,8 +9,15 @@ export class District extends BaseEntity {
   @Column({ type: 'varchar' })
   name!: string;
 
-  @Column({ type: 'varchar' })
-  sato_code!: string;
+  /**
+   * Rasmiy SOATO kodi. `null` — NOMA'LUM.
+   *
+   * Nullable ATAYLAB: avval ustun NOT NULL edi va shu sabab seed soxta kod
+   * (`REG-01-DIS-01`) yasashga majbur bo'lardi. Soxta kod haqiqiydek
+   * ko'rinib, hamkor tizimlar bilan moslashni jimgina buzardi.
+   */
+  @Column({ type: 'varchar', nullable: true })
+  sato_code!: string | null;
 
   @Column({ type: 'bigint' })
   region_id!: string;

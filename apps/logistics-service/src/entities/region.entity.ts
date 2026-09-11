@@ -9,8 +9,12 @@ export class Region extends BaseEntity {
   @Column({ type: 'varchar' })
   name!: string;
 
-  @Column({ type: 'varchar', unique: true })
-  sato_code!: string;
+  /**
+   * Rasmiy SOATO kodi. `null` — noma'lum (soxta kod yozilmaydi).
+   * Postgres'da UNIQUE indeks bir nechta NULL'ga ruxsat beradi.
+   */
+  @Column({ type: 'varchar', unique: true, nullable: true })
+  sato_code!: string | null;
 
   @OneToMany(() => District, (district) => district.region)
   districts!: District[];
