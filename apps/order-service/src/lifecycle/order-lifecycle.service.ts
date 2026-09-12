@@ -1340,6 +1340,85 @@ export class OrderLifecycleService {
     );
   }
 
+  /**
+   * QO'SHIMCHA XARAJAT SUMMASI CHEGARASI.
+   *
+   * Ilgari Elchi'da faqat "KIM yozishi mumkin" tekshirilardi
+   * (`assertCanAddExtraCost`), "QANCHA" esa UMUMAN tekshirilmasdi — kuryer
+   * istagan summani yozib market kassasidan shuncha pul yechib olardi.
+   * Yetkazish turi ham hisobga olinmasdi.
+   *
+   * QOIDA BeePost bilan bir xil (`server/src/api/order/utils/
+   * extra-cost-limit.util.ts`) — ikki tizim ajralsa, kuryer eng bo'sh yo'lni
+   * topib ishlatadi va chegara amalda eng bo'sh joyi bo'yicha ishlaydi.
+   *
+   * SOTUV (va qisman sotuv):
+   *   1. UYGA yetkazishda xarajat YOZILMAYDI — uy tarifi allaqachon yuqori,
+   *      ustiga xarajat yozish ikki marta to'lash bo'lardi.
+   *   2. MARKAZGA: xarajat + markaz tarifi UY tarifidan oshmasin, ya'ni
+   *      maksimum `tariff_home − tariff_center`. Kuryer markazga olib borib
+   *      ustiga xarajat yozsa ham, uyga yetkazishdan qimmatga tushmasin.
+   *   3. Tariflar TENG bo'lsa 2-qoida 0 beradi va bunday kuryer umuman
+   *      xarajat yoza olmasdi. Bunda maksimum — o'z tarifining 50%i (to'liq
+   *      tarif ruxsat etilsa xizmat haqi ikki baravar bo'lib ketardi).
+   *
+   * BEKOR QILISH — ataylab boshqa qoida: kuryer borib qaytdi, vaqt-yoqilg'i
+   * sarfladi, lekin yetkazmadi. Maksimum = o'sha buyurtma kuryer tarifi,
+   * uyga/markazga ajratilmaydi.
+   */
+  private assertExtraCostWithinLimit(params: {
+    extraCost: number;
+    mode: 'sell' | 'cancel';
+    whereDeliver: Where_deliver | null | undefined;
+    tariffCenter: number;
+    tariffHome: number;
+    /**
+     * Manager kuryer emas — unda tarif tushunchasi YO'Q (`tariff_*` = 0).
+     * Tarifga asoslangan chegarani unga qo'llasak, maksimum 0 chiqib manager
+     * umuman xarajat yoza olmasdi. Manager uchun nazorat boshqa: uning
+     * xarajati TASDIQLASH oqimidan o'tadi
+     * (`requestExtraCostApprovalIfNeeded`).
+     */
+    isManager?: boolean;
+  }): void {
+    const { extraCost, mode, whereDeliver } = params;
+    if (!(extraCost > 0)) return;
+    if (params.isManager) return;
+
+    const center = Math.max(0, Number(params.tariffCenter) || 0);
+    const home = Math.max(0, Number(params.tariffHome) || 0);
+
+    if (mode === 'cancel') {
+      const tariff = whereDeliver === Where_deliver.CENTER ? center : home;
+      const max = Math.floor(tariff);
+      if (extraCost > max) {
+        this.badRequest(
+          `Qo'shimcha xarajat o'z xizmat haqqingizdan (${max} so'm) ` +
+            `oshmasligi kerak`,
+        );
+      }
+      return;
+    }
+
+    if (whereDeliver !== Where_deliver.CENTER) {
+      this.badRequest(
+        "Uyga yetkaziladigan buyurtmalarda qo'shimcha xarajat yozish mumkin " +
+          'emas — uy tarifi allaqachon yuqori',
+      );
+    }
+
+    const diff = home - center;
+    // `Math.floor` — chegara butun so'm bo'lsin, kasrli chegara xato
+    // xabarida tushunarsiz ko'rinadi.
+    const max = diff > 0 ? Math.floor(diff) : Math.floor(center / 2);
+    if (extraCost > max) {
+      this.badRequest(
+        `Qo'shimcha xarajat maksimal ${max} so'm bo'lishi mumkin ` +
+          `(markaz tarifi: ${center}, uy tarifi: ${home})`,
+      );
+    }
+  }
+
   private async assertCanAddExtraCost(params: {
     actor: { can_add_extra_cost?: boolean | null } | undefined;
     requester: { id: string; roles?: string[]; branch_id?: string | null };
@@ -3743,6 +3822,18 @@ export class OrderLifecycleService {
         requester,
         order,
       });
+      // Ruxsatdan KEYIN summa chegarasi: "kim yozadi" va "qancha yozadi" —
+      // ikki xil savol, ikkinchisi ilgari umuman tekshirilmasdi.
+      this.assertExtraCostWithinLimit({
+        extraCost,
+        mode: 'sell',
+        whereDeliver: order.where_deliver,
+        tariffCenter: Number(financialActor?.tariff_center ?? 0),
+        tariffHome: Number(financialActor?.tariff_home ?? 0),
+        isManager:
+          this.hasRole(requester, Roles.MANAGER) &&
+          !this.hasRole(requester, Roles.COURIER),
+      });
     }
     // Reject up front (before the transaction) if this market's proof policy is
     // triggered by this sell and the courier didn't attach valid file proof.
@@ -4117,6 +4208,18 @@ export class OrderLifecycleService {
         actor: financialActor,
         requester,
         order,
+      });
+      // Ruxsatdan KEYIN summa chegarasi: "kim yozadi" va "qancha yozadi" —
+      // ikki xil savol, ikkinchisi ilgari umuman tekshirilmasdi.
+      this.assertExtraCostWithinLimit({
+        extraCost,
+        mode: 'cancel',
+        whereDeliver: order.where_deliver,
+        tariffCenter: Number(financialActor?.tariff_center ?? 0),
+        tariffHome: Number(financialActor?.tariff_home ?? 0),
+        isManager:
+          this.hasRole(requester, Roles.MANAGER) &&
+          !this.hasRole(requester, Roles.COURIER),
       });
     }
 
@@ -4613,6 +4716,18 @@ export class OrderLifecycleService {
         actor: financialActor,
         requester,
         order,
+      });
+      // Ruxsatdan KEYIN summa chegarasi: "kim yozadi" va "qancha yozadi" —
+      // ikki xil savol, ikkinchisi ilgari umuman tekshirilmasdi.
+      this.assertExtraCostWithinLimit({
+        extraCost,
+        mode: 'sell',
+        whereDeliver: order.where_deliver,
+        tariffCenter: Number(financialActor?.tariff_center ?? 0),
+        tariffHome: Number(financialActor?.tariff_home ?? 0),
+        isManager:
+          this.hasRole(requester, Roles.MANAGER) &&
+          !this.hasRole(requester, Roles.COURIER),
       });
     }
     // Partly-sell is a sell variant → evaluated against SELL_* conditions, with
