@@ -120,6 +120,19 @@ export class Order extends BaseEntity {
   })
   branch_cashbox_amount!: number | null;
 
+  /**
+   * Sotuv/bekor qilishda kuryer yozgan qo'shimcha xarajat.
+   *
+   * Ilgari bu summa HECH QAYERDA buyurtmada saqlanmasdi — faqat kassa
+   * tarixida (`source_type = EXTRA_COST`) va audit logda qolardi. Oqibati:
+   * buyurtmani ko'rib turib qancha xarajat yozilganini bilish uchun kassa
+   * tarixini qazish kerak edi, hamkorga (BeePost) esa u UMUMAN yetib
+   * bormasdi — hamkor tomonida market hech narsa to'lamasdi va ikki
+   * daftar shu summaga ajralib qolardi.
+   */
+  @Column({ type: 'int', default: 0 })
+  extra_cost!: number;
+
   @Column({ type: 'int', default: 0 })
   to_be_paid!: number;
 

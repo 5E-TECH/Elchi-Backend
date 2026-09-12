@@ -232,6 +232,8 @@ export class IntegrationServiceController {
       old_status?: string;
       new_status?: string;
       cod_collected?: number;
+      total_price?: number;
+      extra_cost?: number;
     },
     @Ctx() context: RmqContext,
   ) {

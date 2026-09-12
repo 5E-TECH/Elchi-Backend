@@ -1102,6 +1102,12 @@ export class IntegrationServiceService {
         cod_amount: Number(this.pluck(order, 'to_be_paid') ?? 0),
         cod_collected: Number(this.pluck(order, 'paid_amount') ?? 0),
         total_price: Number(this.pluck(order, 'total_price') ?? 0),
+        /**
+         * Kuryer yozgan qo'shimcha xarajat. Hamkor buni o'z tomonida ham
+         * marketdan yechishi kerak — aks holda ikki daftar shu summaga
+         * ajralib qoladi (hamkorda market hech narsa to'lamaydi).
+         */
+        extra_cost: Number(this.pluck(order, 'extra_cost') ?? 0),
         tracking: this.pluck(order, 'qr_code_token') ?? null,
       },
       200,
@@ -1198,6 +1204,8 @@ export class IntegrationServiceService {
     old_status?: string;
     new_status?: string;
     cod_collected?: number;
+    total_price?: number;
+    extra_cost?: number;
   }) {
     const orderId = String(dto?.order_id ?? '').trim();
     if (!orderId) return successRes({ skipped: 'no order_id' }, 200, 'skipped');
@@ -1229,6 +1237,20 @@ export class IntegrationServiceService {
         Number.isFinite(codCollected)
           ? codCollected
           : 0,
+      /**
+       * YAKUNIY narx va qo'shimcha xarajat — hamkor o'z daftarida ham
+       * shu qiymatlar bo'yicha yozishi uchun.
+       *
+       * Ilgari yuborilmasdi: hamkor o'zining ESKI narxi bilan sotardi va
+       * kuryer yozgan xarajatni umuman bilmasdi, natijada ikki daftar
+       * jimgina ajralib ketardi.
+       */
+      total_price: Number.isFinite(Number(dto?.total_price))
+        ? Number(dto?.total_price)
+        : undefined,
+      extra_cost: Number.isFinite(Number(dto?.extra_cost))
+        ? Number(dto?.extra_cost)
+        : undefined,
       occurred_at: new Date().toISOString(),
     };
 
