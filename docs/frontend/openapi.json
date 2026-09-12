@@ -10821,7 +10821,7 @@
             "bearer": []
           }
         ],
-        "summary": "Hamkor sozlamalari: webhook manzili/sekreti, IP ro'yxati, nom. API kalit BU YERDA o‘zgarmaydi — buning uchun rotate-key bor.",
+        "summary": "Hamkor sozlamalari: webhook manzili/sekreti, SANDBOX manzili, IP ro'yxati, nom. API kalit BU YERDA o‘zgarmaydi — buning uchun rotate-key bor. `webhook_url` qo‘yilganda sozlama yo‘qligi tufayli kutib turgan hodisalar avtomatik navbatga qaytariladi (`requeued_webhooks`).",
         "tags": [
           "Partners (admin)"
         ]
@@ -14106,6 +14106,15 @@
           "webhook_secret": {
             "type": "string",
             "description": "Chiquvchi webhook HMAC sekreti. Bo'sh satr — tozalash."
+          },
+          "sandbox_webhook_url": {
+            "type": "string",
+            "example": "https://dev.beepost.example.uz/api/v1/elchi/webhook",
+            "description": "Sinov manzili — hodisa NUSXASI yuboriladi. Bo'sh satr — o'chirish. Xatosi asosiy yetkazishga ta'sir qilmaydi."
+          },
+          "sandbox_webhook_secret": {
+            "type": "string",
+            "description": "Sandbox uchun alohida HMAC sekreti. Berilmasa ASOSIY sekret ishlatiladi. Bo'sh satr — tozalash."
           },
           "ip_allowlist": {
             "example": [

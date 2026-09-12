@@ -87,6 +87,8 @@ export class IntegrationServiceController {
       name?: string;
       webhook_url?: string | null;
       webhook_secret?: string | null;
+      sandbox_webhook_url?: string | null;
+      sandbox_webhook_secret?: string | null;
       ip_allowlist?: string[] | null;
       requester?: { id?: string; roles?: string[] };
     },
@@ -99,6 +101,8 @@ export class IntegrationServiceController {
           name: data?.name,
           webhook_url: data?.webhook_url,
           webhook_secret: data?.webhook_secret,
+          sandbox_webhook_url: data?.sandbox_webhook_url,
+          sandbox_webhook_secret: data?.sandbox_webhook_secret,
           ip_allowlist: data?.ip_allowlist,
         },
         data?.requester,

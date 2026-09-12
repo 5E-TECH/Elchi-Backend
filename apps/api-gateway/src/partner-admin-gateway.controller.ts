@@ -179,8 +179,11 @@ export class PartnerAdminGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({
     summary:
-      "Hamkor sozlamalari: webhook manzili/sekreti, IP ro'yxati, nom. " +
-      'API kalit BU YERDA o‘zgarmaydi — buning uchun rotate-key bor.',
+      "Hamkor sozlamalari: webhook manzili/sekreti, SANDBOX manzili, " +
+      "IP ro'yxati, nom. API kalit BU YERDA o‘zgarmaydi — buning uchun " +
+      'rotate-key bor. `webhook_url` qo‘yilganda sozlama yo‘qligi tufayli ' +
+      'kutib turgan hodisalar avtomatik navbatga qaytariladi ' +
+      '(`requeued_webhooks`).',
   })
   @ApiParam({ name: 'id' })
   @ApiBody({ type: UpdatePartnerRequestDto })
