@@ -10581,7 +10581,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{ shipment_id, external_order_id, status, cod_amount, tracking }"
+            "description": "{ shipment_id, external_order_id, status, cod_amount, cod_collected, total_price, tracking }. `cod_amount` = to'lanishi kerak summa; `cod_collected` = kuryer mijozdan HAQIQATAN yiqqan pul (sotuvgacha 0) — pul solishtiruvi uchun."
           },
           "404": {
             "description": "Shipment topilmadi"

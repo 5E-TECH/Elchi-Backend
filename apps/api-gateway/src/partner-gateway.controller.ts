@@ -273,7 +273,9 @@ export class PartnerGatewayController {
   @ApiOperation({ summary: 'Shipment holati (status/tracking/cod)' })
   @ApiOkResponse({
     description:
-      '{ shipment_id, external_order_id, status, cod_amount, tracking }',
+      '{ shipment_id, external_order_id, status, cod_amount, cod_collected, total_price, tracking }. ' +
+      '`cod_amount` = to\'lanishi kerak summa; `cod_collected` = kuryer mijozdan ' +
+      'HAQIQATAN yiqqan pul (sotuvgacha 0) — pul solishtiruvi uchun.',
   })
   @ApiNotFoundResponse({ description: 'Shipment topilmadi' })
   getShipment(
