@@ -15,6 +15,12 @@ function makeController(
   );
 }
 
+/**
+ * ⚠️ QOBIQ BIRXILLASHTIRILDI (2026-09-12): geo marshrutlari ham endi
+ * `{ statusCode, message, data }` qaytaradi. Ilgari ular XOM massiv
+ * qaytarardi, `shipments`/`markets` esa qobiqli — bitta API ikki xil
+ * shaklda gaplashardi.
+ */
 describe('PartnerGatewayController — geo passthrough (C1.4)', () => {
   // QAROR O'ZGARDI (G1): avval `sato_code` ATAYLAB qirqilardi ("ortiqcha maydon
   // sizmasin"). Amalda bu teskari natija berdi — hamkor Elchi hududlarini o'z
@@ -32,7 +38,7 @@ describe('PartnerGatewayController — geo passthrough (C1.4)', () => {
     );
     const ctrl = makeController(logistics, jest.fn());
 
-    const regions = await ctrl.getRegions();
+    const { data: regions } = await ctrl.getRegions();
 
     expect(logistics).toHaveBeenCalledWith(
       { cmd: 'logistics.region.find_all' },
@@ -48,7 +54,7 @@ describe('PartnerGatewayController — geo passthrough (C1.4)', () => {
     const logistics = jest.fn(() => of({ data: [{ id: 9, name: 'Yangi' }] }));
     const ctrl = makeController(logistics, jest.fn());
 
-    const regions = await ctrl.getRegions();
+    const { data: regions } = await ctrl.getRegions();
 
     expect(regions[0]).toEqual({ id: '9', name: 'Yangi', sato_code: null });
   });
@@ -59,7 +65,7 @@ describe('PartnerGatewayController — geo passthrough (C1.4)', () => {
     );
     const ctrl = makeController(logistics, jest.fn());
 
-    const districts = await ctrl.getDistricts('5');
+    const { data: districts } = await ctrl.getDistricts('5');
 
     expect(logistics).toHaveBeenCalledWith(
       { cmd: 'logistics.district.find_all' },
@@ -84,7 +90,7 @@ describe('PartnerGatewayController — geo passthrough (C1.4)', () => {
     );
     const ctrl = makeController(logistics, jest.fn());
 
-    const districts = await ctrl.getDistricts('5');
+    const { data: districts } = await ctrl.getDistricts('5');
 
     expect(districts[0]).toEqual({
       id: '10',
@@ -111,7 +117,7 @@ describe('PartnerGatewayController — geo passthrough (C1.4)', () => {
       { cmd: 'identity.market.find_by_ids' },
       { ids: ['77'] },
     );
-    expect(center).toEqual({
+    expect(center.data).toEqual({
       elchi_market_id: '77',
       where_deliver: 'center',
       market_tariff: 10000,
@@ -121,7 +127,7 @@ describe('PartnerGatewayController — geo passthrough (C1.4)', () => {
       '77',
       'address',
     );
-    expect(address.market_tariff).toBe(15000);
+    expect(address.data.market_tariff).toBe(15000);
   });
 
   it('tariff: elchi_market_id yo‘q -> 400', async () => {

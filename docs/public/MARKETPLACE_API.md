@@ -104,34 +104,34 @@ loglardan aniq so'rovni topamiz.
 | `429` | Rate limitdan oshdi | ✅ ha, kutib |
 | `5xx` | Bizning tomonimizdagi xato | ✅ ha, backoff bilan |
 
-### Muvaffaqiyat — ⚠️ ikki xil shakl
+### Muvaffaqiyat — bitta shakl
 
-> **Diqqat.** Hozirgi API'da muvaffaqiyat javobi ikki xil ko'rinishda
-> qaytadi. Bu tarixiy va **biz uni birxillashtirmoqchimiz**, lekin hozir
-> shunday — kodingiz ikkalasini ham qabul qiladigan bo'lishi kerak.
-
-**Xom (qobiqsiz)** — `ping`, `regions`, `districts`, `tariff`:
-
-```json
-[{ "id": "3", "name": "Andijon", "sato_code": "1703" }]
-```
-
-**Qobiqli** — `markets`, `shipments`:
+**Barcha** `/partner/*` javobi shu qobiqda:
 
 ```json
 {
-  "statusCode": 201,
-  "message": "shipment created",
-  "data": { "shipment_id": "124", "order_status": "new" }
+  "statusCode": 200,
+  "message": "regions",
+  "data": [ ... ]
 }
 ```
 
-Xavfsiz o'qish namunasi:
+| Maydon | Izoh |
+|---|---|
+| `statusCode` | HTTP kodi bilan bir xil |
+| `message` | Qisqa yorliq (`regions`, `shipment created`, `shipment already exists`) |
+| `data` | Foydali yuk — obyekt yoki massiv |
+
+Foydali yukni o'qish:
 
 ```js
-// Ikkala shaklni ham qabul qiladi
-const unwrap = (body) => body?.data ?? body;
+const { data } = await res.json();
 ```
+
+> **Tarixiy qayd.** 2026-09-12 gacha `ping`, `regions`, `districts` va
+> `tariff` marshrutlari qobiqSIZ (xom) qaytarardi, `markets`/`shipments` esa
+> qobiqli. Endi hammasi birxil. Agar siz eski xulqqa moslashgan kod yozgan
+> bo'lsangiz, `body.data ?? body` naqshi ikkalasida ham ishlaydi.
 
 ---
 
@@ -143,19 +143,27 @@ kerak. Ularni bir marta olib keshlang.
 ### `GET /partner/regions`
 
 ```json
-[
-  { "id": "3",  "name": "Andijon", "sato_code": "1703" },
-  { "id": "14", "name": "Qoraqalpog'iston Respublikasi", "sato_code": "1735" }
-]
+{
+  "statusCode": 200,
+  "message": "regions",
+  "data": [
+    { "id": "3",  "name": "Andijon", "sato_code": "1703" },
+    { "id": "14", "name": "Qoraqalpog'iston Respublikasi", "sato_code": "1735" }
+  ]
+}
 ```
 
 ### `GET /partner/districts?region_id=3`
 
 ```json
-[
-  { "id": "28", "name": "Andijon", "region_id": "3", "sato_code": "1703203" },
-  { "id": "31", "name": "Asaka",   "region_id": "3", "sato_code": "1703224" }
-]
+{
+  "statusCode": 200,
+  "message": "districts",
+  "data": [
+    { "id": "28", "name": "Andijon", "region_id": "3", "sato_code": "1703203" },
+    { "id": "31", "name": "Asaka",   "region_id": "3", "sato_code": "1703224" }
+  ]
+}
 ```
 
 **`sato_code` — eng ishonchli kalit.** Bu O'zbekiston rasmiy SOATO
@@ -166,7 +174,15 @@ klassifikatori kodi. Agar sizning tizimingizda ham SOATO bo'lsa, tumanlarni
 ### `GET /partner/tariff?elchi_market_id=121&where_deliver=center`
 
 ```json
-{ "elchi_market_id": "121", "where_deliver": "center", "market_tariff": 15000 }
+{
+  "statusCode": 200,
+  "message": "tariff",
+  "data": {
+    "elchi_market_id": "121",
+    "where_deliver": "center",
+    "market_tariff": 15000
+  }
+}
 ```
 
 Narxni mijozga ko'rsatishdan oldin shu bilan tekshiring. `where_deliver`:
@@ -549,6 +565,7 @@ narsa qilmang.
 | Posilka dublikat bo'ldi | Timeoutdan keyin **boshqa** `external_order_id` bilan yuborilgan |
 | Pul summasi mos kelmaydi | `cod_amount` va `subtotal` teng yuborilmagan (§5.2) |
 | Tuman topilmadi | Nom bo'yicha moslangan — **SOATO** bo'yicha moslash kerak |
+| `data` `undefined` chiqdi | Javob qobig'i `{statusCode, message, data}` — `body.data` ni o'qing |
 | Katalogda mahsulot dublikati | `external_product_id` yuborilmagan |
 
 ---
