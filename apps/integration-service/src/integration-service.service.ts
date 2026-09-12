@@ -226,18 +226,41 @@ export class IntegrationServiceService {
    * chaqiriladi). Kalit hash bo'yicha topiladi. `is_active` ham qaytadi —
    * guard qaror qiladi: topilmasa 401, faol emas 403, aks holda o'tadi.
    */
-  async validatePartnerKey(
-    apiKey: string,
-  ): Promise<{ id: string; name: string; is_active: boolean } | null> {
+  /**
+   * API kalitni tekshiradi va guard qaror qabul qilishi uchun kerakli
+   * ma'lumotni qaytaradi.
+   *
+   * ⚠️ `ip_allowlist` HAM qaytariladi. Ilgali qaytarilmasdi va guard uni
+   * tekshirmasdi — ya'ni maydon bazada, admin API'da va UI'da bor edi, lekin
+   * HECH NARSA QILMASDI. Operator uni to'ldirib, kirish cheklangan deb
+   * o'ylardi; aslida har qanday IP'dan ishlardi. Bu yolg'on xavfsizlik
+   * hissi — yo'qligidan yomonroq.
+   */
+  async validatePartnerKey(apiKey: string): Promise<{
+    id: string;
+    name: string;
+    is_active: boolean;
+    ip_allowlist: string[] | null;
+  } | null> {
     if (typeof apiKey !== 'string' || !apiKey.trim()) {
       return null;
     }
     const partner = await this.partnerRepo.findOne({
       where: { api_key_hash: this.hashApiKey(apiKey), isDeleted: false },
-      select: { id: true, name: true, is_active: true },
+      select: {
+        id: true,
+        name: true,
+        is_active: true,
+        ip_allowlist: true as never,
+      },
     });
     return partner
-      ? { id: partner.id, name: partner.name, is_active: partner.is_active }
+      ? {
+          id: partner.id,
+          name: partner.name,
+          is_active: partner.is_active,
+          ip_allowlist: partner.ip_allowlist ?? null,
+        }
       : null;
   }
 
