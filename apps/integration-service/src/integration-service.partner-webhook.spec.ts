@@ -298,7 +298,19 @@ describe('IntegrationServiceService — partner outbound webhook (C2.3)', () => 
     expect(outboxSave).not.toHaveBeenCalled();
   });
 
-  it('webhook_url yo‘q partner -> yubormaydi (skipped)', async () => {
+  /**
+   * ⚠️ INVARIANT TESKARISIGA O'ZGARDI.
+   *
+   * Ilgari bu test `{ skipped: 'no webhook_url' }` qaytarilishini talab
+   * qilardi — chaqiruvchi esa shu "muvaffaqiyat"ni ko'rib qatorni
+   * `completed` deb yopardi. Ya'ni sozlama yo'qligi hodisani BUTUNLAY
+   * yo'qotardi va keyinroq `webhook_url` qo'yilganda ham hech narsa
+   * yetkazilmasdi. Jonli holat aynan shunday bo'lgan: PCS lokalda,
+   * `webhook_url` bo'sh, uchta sotuv hodisasi yo'qolgan.
+   *
+   * Endi signal tashlanadi va qator `awaiting_config`da KUTADI.
+   */
+  it('webhook_url yo‘q partner -> SIGNAL tashlaydi (jimgina yopilmaydi)', async () => {
     const svc: any = makeSvc({
       partnerFindOne: jest.fn(() =>
         Promise.resolve({ id: '7', webhook_url: null }),
@@ -307,13 +319,14 @@ describe('IntegrationServiceService — partner outbound webhook (C2.3)', () => 
     const fetchMock = jest.fn();
     global.fetch = fetchMock as unknown as typeof fetch;
 
-    const result = await svc.dispatchPartnerWebhook({
-      id: '1',
-      partner_id: '7',
-      payload: SOLD_PAYLOAD,
-    });
+    await expect(
+      svc.dispatchPartnerWebhook({
+        id: '1',
+        partner_id: '7',
+        payload: SOLD_PAYLOAD,
+      }),
+    ).rejects.toThrow(/webhook_url/);
 
-    expect(result).toEqual({ skipped: 'no webhook_url' });
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });

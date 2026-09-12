@@ -36,6 +36,19 @@ export type PartnerWebhookStatus =
   | 'pending'
   | 'processing'
   | 'completed'
+  /**
+   * Hamkorda `webhook_url` SOZLANMAGAN — yuborishga manzil yo'q.
+   *
+   * ⚠️ ILGARI BU HOLAT `completed` DEB YOPILARDI. Ya'ni sozlama yo'qligi
+   * jimgina "muvaffaqiyat" deb hisoblanardi va hodisa BUTUNLAY YO'QOLARDI:
+   * keyinroq `webhook_url` qo'yilganda ham hech narsa yetkazilmasdi va
+   * nosozlik hech qaysi ekranda ko'rinmasdi.
+   *
+   * Endi alohida holat: urinish HISOBLANMAYDI (yuborishga harakat ham
+   * qilinmadi), ishchi so'rovga tushmaydi, lekin `webhook_url` qo'yilgan
+   * zahoti `pending`ga qaytariladi va yetkaziladi.
+   */
+  | 'awaiting_config'
   | 'permanently_failed';
 
 @Entity({ name: 'partner_webhook_outbox' })
