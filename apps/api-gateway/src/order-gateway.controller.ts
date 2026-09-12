@@ -1029,6 +1029,76 @@ export class OrderGatewayController {
     });
   }
 
+  /**
+   * KIRUVCHI POSILKALARNING MANBALARI.
+   *
+   * "Kiruvchi posilkalar" ekrani ilgari BARCHA tashqi buyurtmani bitta
+   * ro'yxatda ko'rsatardi. Ikkinchi manba qo'shilishi bilan operator qo'lida
+   * bir manbaning qopi turib, ro'yxatda boshqasining posilkasini ham
+   * ko'rardi. Endi avval manba tanlanadi.
+   *
+   * ⚠️ ROLLAR `/orders/receive` BILAN BIR XIL (MANAGER bor, MARKET yo'q).
+   * `/orders/external` da MARKET ham bor, lekin market posilka QABUL
+   * QILMAYDI — unga manba tanlagichini ko'rsatish hech qayerga olib
+   * bormaydigan ekran bo'lardi.
+   *
+   * ⚠️ FILIAL DOIRASI `markets/new` BILAN AYNI. Buni tushirib qoldirib
+   * bo'lmaydi: `order.receive` ichida `resolveReceiveBranchScope` begona
+   * filial buyurtmasi bo'lsa BUTUN so'rovni rad etadi. Ya'ni doirasiz
+   * sanalgan son menejerga "12 posilka bor" deb ko'rsatib, qabul qilishda
+   * to'liq xato berardi — va sabab ekranda ko'rinmasdi.
+   */
+  @Get('external/sources')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Incoming parcel sources (grouped external NEW orders)',
+  })
+  async findExternalSources(@Req() req?: { user: JwtUser }) {
+    const roles = req?.user?.roles ?? [];
+    const normalizedRoles = this.normalizeRoles(roles);
+    const isBranchScopedRequester =
+      normalizedRoles.includes(RoleEnum.BRANCH) ||
+      normalizedRoles.includes(RoleEnum.MANAGER) ||
+      normalizedRoles.includes(RoleEnum.REGISTRATOR);
+
+    let resolvedBranchId: string | undefined;
+    if (isBranchScopedRequester && req?.user) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
+        throw new BadRequestException('Branch user branchga biriktirilmagan');
+      }
+      resolvedBranchId = String(assignment.branch_id);
+    }
+
+    const result = await firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.find_external_sources' },
+          { branch_id: resolvedBranchId },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+
+    // Order service nomni o'zi qo'shadi; qo'shmagan bo'lsa (eski versiya)
+    // gateway to'ldiradi — ekran nomsiz qolmasin.
+    if (!Array.isArray(result)) {
+      return result;
+    }
+    return this.enrichMarketRows(result);
+  }
+
   @Get('external')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(

@@ -746,6 +746,20 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * Kiruvchi posilkalarning manbalari — "Kiruvchi posilkalar" ekrani avval
+   * manba so'raydi, keyin o'sha manbaning posilkalarini skanerlaydi.
+   */
+  @MessagePattern({ cmd: 'order.find_external_sources' })
+  findExternalSources(
+    @Payload() data: { branch_id?: string } | undefined,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findExternalSourcesEnriched(data?.branch_id),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.find_new_markets_enriched' })
   findNewMarketsEnriched(
     @Payload()
