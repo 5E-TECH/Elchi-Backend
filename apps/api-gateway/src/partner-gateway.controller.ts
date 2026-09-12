@@ -13,6 +13,7 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
+import { successRes } from '../../../libs/common/helpers/response';
 import {
   ApiBody,
   ApiCreatedResponse,
@@ -64,6 +65,20 @@ const PARTNER_THROTTLE = {
 // it the provider-tier ceiling instead.
 const PARTNER_SHIPMENT_TIMEOUT_MS = 65_000;
 
+/**
+ * Partner API javob qobig'i.
+ *
+ * BARCHA `/partner/*` javobi shu shaklda (2026-09-12 dan). Ilgari geo va
+ * ping marshrutlari XOM qaytarardi, shipments/markets esa qobiqli — ya'ni
+ * bitta API ikki xil shaklda gaplashardi va tashqi dasturchi har endpoint
+ * uchun alohida o'qish mantiqini yozishi kerak edi.
+ */
+type PartnerEnvelope<T> = {
+  statusCode: number;
+  message: string;
+  data: T;
+};
+
 @ApiTags('Partner')
 @ApiHeader({
   name: 'X-Api-Key',
@@ -87,11 +102,27 @@ export class PartnerGatewayController {
    */
   @Get('ping')
   @ApiOperation({ summary: 'Partner API kalitini tekshirish (ping)' })
-  @ApiOkResponse({ description: 'Kalit yaroqli — hamkor ma‘lumoti qaytadi' })
+  @ApiOkResponse({
+    description: '{ statusCode, message, data: { authenticated, partner } }',
+  })
   @ApiUnauthorizedResponse({ description: 'X-Api-Key yo‘q yoki yaroqsiz' })
   @ApiTooManyRequestsResponse({ description: 'Rate limitdan oshdi' })
   ping(@Req() request: { partner: PartnerPrincipal }) {
-    return { authenticated: true, partner: request.partner };
+    /**
+     * ⚠️ QOBIQ BIRXILLASHTIRILDI (2026-09-12).
+     *
+     * Ilgari bu marshrut XOM javob qaytarardi (`{authenticated, partner}`),
+     * `POST /partner/shipments` esa `{statusCode, message, data}` qobig'ida.
+     * Ya'ni bitta API ikki xil shaklda gaplashardi va tashqi dasturchi
+     * har bir endpoint uchun alohida o'qish mantiqini yozishi kerak edi.
+     *
+     * Endi HAMMA `/partner/*` javobi bitta shaklda.
+     */
+    return successRes(
+      { authenticated: true, partner: request.partner },
+      200,
+      'authenticated',
+    );
   }
 
   /**
@@ -104,9 +135,13 @@ export class PartnerGatewayController {
    */
   @Get('regions')
   @ApiOperation({ summary: 'Elchi viloyatlari ro‘yxati' })
-  @ApiOkResponse({ description: '[{ id, name, sato_code }]' })
+  @ApiOkResponse({
+    description: '{ statusCode, message, data: [{ id, name, sato_code }] }',
+  })
   async getRegions(): Promise<
-    Array<{ id: string; name: string; sato_code: string | null }>
+    PartnerEnvelope<
+      Array<{ id: string; name: string; sato_code: string | null }>
+    >
   > {
     const res = await firstValueFrom(
       this.logisticsClient.send<{
@@ -117,11 +152,16 @@ export class PartnerGatewayController {
         }>;
       }>({ cmd: 'logistics.region.find_all' }, {}).pipe(timeout(8000)),
     );
-    return (res?.data ?? []).map((r) => ({
-      id: String(r.id),
-      name: r.name,
-      sato_code: r.sato_code ?? null,
-    }));
+    // Qobiq birxil (ping izohiga qara).
+    return successRes(
+      (res?.data ?? []).map((r) => ({
+        id: String(r.id),
+        name: r.name,
+        sato_code: r.sato_code ?? null,
+      })),
+      200,
+      'regions',
+    );
   }
 
   /**
@@ -135,16 +175,21 @@ export class PartnerGatewayController {
   @Get('districts')
   @ApiOperation({ summary: 'Elchi tumanlari (region_id bo‘yicha)' })
   @ApiQuery({ name: 'region_id', required: false, type: String })
-  @ApiOkResponse({ description: '[{ id, name, region_id, sato_code }]' })
+  @ApiOkResponse({
+    description:
+      '{ statusCode, message, data: [{ id, name, region_id, sato_code }] }',
+  })
   async getDistricts(
     @Query('region_id') regionId?: string,
   ): Promise<
-    Array<{
-      id: string;
-      name: string;
-      region_id: string;
-      sato_code: string | null;
-    }>
+    PartnerEnvelope<
+      Array<{
+        id: string;
+        name: string;
+        region_id: string;
+        sato_code: string | null;
+      }>
+    >
   > {
     const res = await firstValueFrom(
       this.logisticsClient.send<{
@@ -156,12 +201,16 @@ export class PartnerGatewayController {
         }>;
       }>({ cmd: 'logistics.district.find_all' }, { region_id: regionId }).pipe(timeout(8000)),
     );
-    return (res?.data ?? []).map((d) => ({
-      id: String(d.id),
-      name: d.name,
-      region_id: String(d.region_id),
-      sato_code: d.sato_code ?? null,
-    }));
+    return successRes(
+      (res?.data ?? []).map((d) => ({
+        id: String(d.id),
+        name: d.name,
+        region_id: String(d.region_id),
+        sato_code: d.sato_code ?? null,
+      })),
+      200,
+      'districts',
+    );
   }
 
   /**
@@ -179,17 +228,20 @@ export class PartnerGatewayController {
     enum: ['center', 'address'],
   })
   @ApiOkResponse({
-    description: '{ elchi_market_id, where_deliver, market_tariff }',
+    description:
+      '{ statusCode, message, data: { elchi_market_id, where_deliver, market_tariff } }',
   })
   @ApiNotFoundResponse({ description: 'Market topilmadi' })
   async getTariff(
     @Query('elchi_market_id') elchiMarketId?: string,
     @Query('where_deliver') whereDeliver?: string,
-  ): Promise<{
-    elchi_market_id: string;
-    where_deliver: string;
-    market_tariff: number;
-  }> {
+  ): Promise<
+    PartnerEnvelope<{
+      elchi_market_id: string;
+      where_deliver: string;
+      market_tariff: number;
+    }>
+  > {
     if (!elchiMarketId?.trim()) {
       throw new BadRequestException('elchi_market_id majburiy');
     }
@@ -211,11 +263,15 @@ export class PartnerGatewayController {
       mode === 'center'
         ? (market.tariff_center ?? 0)
         : (market.tariff_home ?? 0);
-    return {
-      elchi_market_id: String(elchiMarketId),
-      where_deliver: mode,
-      market_tariff: Number(tariff),
-    };
+    return successRes(
+      {
+        elchi_market_id: String(elchiMarketId),
+        where_deliver: mode,
+        market_tariff: Number(tariff),
+      },
+      200,
+      'tariff',
+    );
   }
 
   /**

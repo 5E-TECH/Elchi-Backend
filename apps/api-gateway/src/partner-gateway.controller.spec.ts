@@ -57,9 +57,17 @@ describe('PartnerGatewayController (HTTP) — auth + rate limit', () => {
   it('TC1: yaroqli kalit -> 200 va hamkor ma‘lumoti qaytadi', async () => {
     const res = await request(app.getHttpServer()).get('/partner/ping');
     expect(res.status).toBe(200);
+    /**
+     * ⚠️ QOBIQ BIRXILLASHTIRILDI (2026-09-12): `ping` ham endi
+     * `{ statusCode, message, data }` qaytaradi. Ilgari XOM qaytarardi,
+     * `shipments` esa qobiqli — bitta API ikki xil shaklda gaplashardi.
+     */
     expect(res.body).toMatchObject({
-      authenticated: true,
-      partner: { id: 'test-partner', name: 'Test' },
+      statusCode: 200,
+      data: {
+        authenticated: true,
+        partner: { id: 'test-partner', name: 'Test' },
+      },
     });
   });
 

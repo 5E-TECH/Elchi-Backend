@@ -10397,7 +10397,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Kalit yaroqli — hamkor ma‘lumoti qaytadi"
+            "description": "{ statusCode, message, data: { authenticated, partner } }"
           },
           "401": {
             "description": "X-Api-Key yo‘q yoki yaroqsiz"
@@ -10428,7 +10428,7 @@
         ],
         "responses": {
           "200": {
-            "description": "[{ id, name, sato_code }]"
+            "description": "{ statusCode, message, data: [{ id, name, sato_code }] }"
           }
         },
         "summary": "Elchi viloyatlari ro‘yxati",
@@ -10461,7 +10461,7 @@
         ],
         "responses": {
           "200": {
-            "description": "[{ id, name, region_id, sato_code }]"
+            "description": "{ statusCode, message, data: [{ id, name, region_id, sato_code }] }"
           }
         },
         "summary": "Elchi tumanlari (region_id bo‘yicha)",
@@ -10506,7 +10506,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{ elchi_market_id, where_deliver, market_tariff }"
+            "description": "{ statusCode, message, data: { elchi_market_id, where_deliver, market_tariff } }"
           },
           "404": {
             "description": "Market topilmadi"
