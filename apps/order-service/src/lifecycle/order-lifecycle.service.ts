@@ -3215,6 +3215,9 @@ export class OrderLifecycleService {
           old_status,
           new_status,
           cod_collected: Number(order.paid_amount ?? 0),
+          // Hamkor o'z tomonida ham narx/xarajatni qo'llashi uchun.
+          total_price: Number(order.total_price ?? 0),
+          extra_cost: Number(order.extra_cost ?? 0),
         },
       ).catch(() => undefined);
     }
@@ -4059,6 +4062,9 @@ export class OrderLifecycleService {
           status: nextStatus,
           to_be_paid: netToBePaid,
           paid_amount: paidAfter,
+          // Buyurtmada SAQLANADI: ilgari faqat kassa tarixida qolardi va
+          // hamkorga (BeePost) umuman yetib bormasdi.
+          extra_cost: extraCost,
           sold_at: soldAt,
           // Snapshot tariffs + the actually-kept shares so SELL_PROFIT
           // (marketTariff − courierShare − branchShare) and rollback are exact.

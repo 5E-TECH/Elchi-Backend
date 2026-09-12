@@ -212,6 +212,7 @@ describe('IntegrationServiceService — get/cancel PartnerShipment (C2.2)', () =
         to_be_paid: 50000,
         paid_amount: 12000,
         total_price: 65000,
+        extra_cost: 3000,
         qr_code_token: 'qr-xyz',
       },
     });
@@ -235,6 +236,9 @@ describe('IntegrationServiceService — get/cancel PartnerShipment (C2.2)', () =
       cod_amount: 50000,
       cod_collected: 12000,
       total_price: 65000,
+      // Kuryer yozgan xarajat — hamkor ham o'z marketidan yechishi kerak,
+      // aks holda ikki daftar shunga ajralib qoladi.
+      extra_cost: 3000,
       tracking: 'qr-xyz',
     });
     expect(orderSend).toHaveBeenCalledWith(
