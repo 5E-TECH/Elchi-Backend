@@ -60,6 +60,20 @@ export class IntegrationServiceController {
    * `url` berilsa saqlanganidan ustun turadi (yangi manzilni saqlashdan
    * OLDIN sinash uchun).
    */
+  /**
+   * Integratsiya paneli uchun metrika (hodisa, xato, navbat, javob vaqti).
+   * Ikki manbadan yig'iladi: hamkor webhook outbox'i va sinxron tarixi.
+   */
+  @MessagePattern({ cmd: 'integration.metrics' })
+  integrationMetrics(
+    @Payload() data: { hours?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.integrationMetrics(data?.hours),
+    );
+  }
+
   @MessagePattern({ cmd: 'integration.partner.webhook.test' })
   testPartnerWebhook(
     @Payload()

@@ -1440,6 +1440,14 @@ export class IntegrationServiceService {
     );
     if (!claim.affected) return false;
 
+    /**
+     * Javob vaqtini O'LCHAYMIZ. Panelda "o'rtacha javob vaqti" ko'rsatiladi
+     * va u sekinlashuvni erta aniqlashning yagona belgisi: hamkor hali 200
+     * qaytarib turadi-yu, vaqt 200 ms dan 8 s ga o'sgan bo'lsa — keyingi
+     * qadam timeout va yo'qolgan hodisa.
+     */
+    const startedAt = Date.now();
+
     try {
       const result = await this.dispatchPartnerWebhook(row);
       await this.partnerWebhookOutboxRepo.update(
@@ -1450,6 +1458,7 @@ export class IntegrationServiceService {
           last_error: null,
           last_response: result,
           next_retry_at: null,
+          duration_ms: Date.now() - startedAt,
         },
       );
       return true;
@@ -1482,6 +1491,14 @@ export class IntegrationServiceService {
         return false;
       }
 
+      /**
+       * Vaqt xato shoxida HAM yoziladi: sekin javob keyin timeout'ga
+       * aylanadi va o'sha sekinlikni ko'rish kerak. Tarmoq xatosida
+       * (javob umuman kelmagan) ham o'lchov foydali — u timeout chegarasiga
+       * qanchalik yaqin kelganini ko'rsatadi.
+       */
+      const durationMs = Date.now() - startedAt;
+
       if (attempts < Number(row.max_attempts ?? 4)) {
         await this.partnerWebhookOutboxRepo.update(
           { id: row.id },
@@ -1491,6 +1508,7 @@ export class IntegrationServiceService {
             next_retry_at: new Date(
               Date.now() + this.getRetryDelayMs(attempts),
             ),
+            duration_ms: durationMs,
           },
         );
       } else {
@@ -1500,6 +1518,7 @@ export class IntegrationServiceService {
             status: 'permanently_failed',
             last_error: message,
             next_retry_at: null,
+            duration_ms: durationMs,
           },
         );
       }
@@ -1740,6 +1759,178 @@ export class IntegrationServiceService {
       },
       200,
       ok ? 'webhook test ok' : 'webhook test failed',
+    );
+  }
+
+  /**
+   * INTEGRATSIYA METRIKASI — panel uchun jonli raqamlar.
+   *
+   * NEGA KERAK. Integratsiya paneli ilgari faqat checklist ko'rsatardi:
+   * "sozlangan / sozlanmagan". Lekin operatorning haqiqiy savoli boshqa —
+   * "ISHLAYAPTIMI?". Sozlama to'g'ri bo'lib, hodisalar yetmayotgan bo'lishi
+   * mumkin (hamkor 500 qaytaradi, sekret almashtirilgan, manzil o'zgargan).
+   * Busiz muammo faqat hamkor telefon qilganda ma'lum bo'lardi.
+   *
+   * IKKI MANBA, chunki yo'nalish boshqa:
+   *   inbound (`partner`)     — `partner_webhook_outbox`: BIZ yuborgan
+   *                             hodisalar, ularning holati va javob vaqti
+   *   outbound (`integration`)— `sync_history`: BIZ yuborgan so'rovlar tarixi
+   *
+   * ⚠️ SO'ROVLAR AGREGAT, qator-qator emas. Har ulanish uchun alohida
+   * `find()` qilib mijozda hisoblash 6 ulanishda ham 6 so'rov demak, va
+   * jadval o'sgach bu sekinlashadi. Bu yerda ikkita `GROUP BY` bilan
+   * hammasi bir martada olinadi.
+   */
+  async integrationMetrics(hours = 24) {
+    const windowHours = Math.max(1, Math.min(168, Number(hours) || 24));
+    const since = new Date(Date.now() - windowHours * 3600_000);
+
+    /**
+     * `COUNT(*) FILTER (WHERE ...)` — PostgreSQL'ning shartli agregati.
+     * `CASE WHEN` bilan yozsa ham bo'lardi, lekin `FILTER` o'qilishi
+     * ancha aniq va rejalashtiruvchi uni bir xil bajaradi.
+     *
+     * `queued` 24 SOAT OYNASIDAN TASHQARI hisoblanadi: navbatda turgan
+     * hodisa eski bo'lishi mumkin (`awaiting_config` haftalar yotishi
+     * mumkin) va uni oynadan chiqarib tashlash "navbat bo'sh" degan
+     * yolg'on natija berardi.
+     */
+    const partnerRows = await this.partnerWebhookOutboxRepo
+      .createQueryBuilder('w')
+      .select('w.partner_id', 'id')
+      .addSelect(
+        'COUNT(*) FILTER (WHERE w."createdAt" >= :since)',
+        'events',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE w."createdAt" >= :since AND w.status = 'completed')`,
+        'delivered',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE w."createdAt" >= :since AND w.status = 'permanently_failed')`,
+        'failed',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE w.status IN ('pending','processing','awaiting_config'))`,
+        'queued',
+      )
+      .addSelect(
+        'AVG(w.duration_ms) FILTER (WHERE w."createdAt" >= :since AND w.duration_ms IS NOT NULL)',
+        'avg_ms',
+      )
+      .addSelect('MAX(w."createdAt")', 'last_at')
+      .where('w.is_deleted = false')
+      .setParameter('since', since)
+      .groupBy('w.partner_id')
+      .getRawMany<{
+        id: string;
+        events: string;
+        delivered: string;
+        failed: string;
+        queued: string;
+        avg_ms: string | null;
+        last_at: Date | null;
+      }>();
+
+    const integrationRows = await this.syncHistoryRepo
+      .createQueryBuilder('h')
+      .select('h.integration_id', 'id')
+      .addSelect('COUNT(*) FILTER (WHERE h."createdAt" >= :since)', 'events')
+      .addSelect(
+        `COUNT(*) FILTER (WHERE h."createdAt" >= :since AND h.status = 'success')`,
+        'delivered',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE h."createdAt" >= :since AND h.status = 'failed')`,
+        'failed',
+      )
+      .addSelect('MAX(h."createdAt")', 'last_at')
+      .where('h.is_deleted = false')
+      .setParameter('since', since)
+      .groupBy('h.integration_id')
+      .getRawMany<{
+        id: string;
+        events: string;
+        delivered: string;
+        failed: string;
+        last_at: Date | null;
+      }>();
+
+    // Outbound navbat integratsiya bo'yicha alohida jadvalda.
+    const queueRows = await this.syncQueueRepo
+      .createQueryBuilder('q')
+      .select('q.integration_id', 'id')
+      .addSelect('COUNT(*)', 'queued')
+      .where(`q.status = 'pending'`)
+      .andWhere('q.is_deleted = false')
+      .groupBy('q.integration_id')
+      .getRawMany<{ id: string; queued: string }>();
+
+    const queueById = new Map(
+      queueRows.map((r) => [String(r.id), Number(r.queued) || 0]),
+    );
+
+    const n = (v: unknown) => Number(v ?? 0) || 0;
+
+    /**
+     * Muvaffaqiyat foizi — FAQAT yakunlangan hodisalar ustida
+     * (`delivered + failed`). Navbatda turganini hisobga olsak, foiz
+     * hodisalar ko'paygan sayin sun'iy tushib ketardi: "98% -> 62%" degan
+     * o'zgarish operatorni bejiz qo'rqitardi.
+     *
+     * Yakunlangani BO'LMASA `null` — 0% deb ko'rsatish "hammasi yiqildi"
+     * degan yolg'on xabar bo'lardi.
+     */
+    const rate = (delivered: number, failed: number): number | null => {
+      const done = delivered + failed;
+      return done > 0 ? Math.round((delivered / done) * 1000) / 10 : null;
+    };
+
+    const connections = [
+      ...partnerRows.map((r) => ({
+        kind: 'partner' as const,
+        id: String(r.id),
+        uid: `partner:${r.id}`,
+        events: n(r.events),
+        delivered: n(r.delivered),
+        failed: n(r.failed),
+        queued: n(r.queued),
+        success_rate: rate(n(r.delivered), n(r.failed)),
+        avg_ms: r.avg_ms == null ? null : Math.round(Number(r.avg_ms)),
+        last_event_at: r.last_at ? new Date(r.last_at).toISOString() : null,
+      })),
+      ...integrationRows.map((r) => ({
+        kind: 'integration' as const,
+        id: String(r.id),
+        uid: `integration:${r.id}`,
+        events: n(r.events),
+        delivered: n(r.delivered),
+        failed: n(r.failed),
+        queued: queueById.get(String(r.id)) ?? 0,
+        success_rate: rate(n(r.delivered), n(r.failed)),
+        /**
+         * Outbound uchun javob vaqti O'LCHANMAYDI — `sync_history` da bunday
+         * ustun yo'q. `null` qaytariladi va UI "—" ko'rsatadi. 0 yozish
+         * "bir zumda javob berdi" degan yolg'on bo'lardi.
+         */
+        avg_ms: null as number | null,
+        last_event_at: r.last_at ? new Date(r.last_at).toISOString() : null,
+      })),
+    ];
+
+    const totals = connections.reduce(
+      (acc, c) => ({
+        events: acc.events + c.events,
+        failed: acc.failed + c.failed,
+        queued: acc.queued + c.queued,
+      }),
+      { events: 0, failed: 0, queued: 0 },
+    );
+
+    return successRes(
+      { window_hours: windowHours, totals, connections },
+      200,
+      'integration metrics',
     );
   }
 

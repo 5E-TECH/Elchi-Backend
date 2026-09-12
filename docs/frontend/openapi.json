@@ -6685,6 +6685,36 @@
         ]
       }
     },
+    "/integrations/metrics": {
+      "get": {
+        "operationId": "IntegrationGatewayController_integrationMetrics",
+        "parameters": [
+          {
+            "name": "hours",
+            "required": false,
+            "in": "query",
+            "description": "Oyna (soat). Standart 24, maksimum 168",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ statusCode, message, data: { window_hours, totals, connections[] } }"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Integratsiya paneli metrikasi — hodisa, yetmagan, navbat, javob vaqti",
+        "tags": [
+          "Integrations"
+        ]
+      }
+    },
     "/integrations/sync/history": {
       "get": {
         "operationId": "IntegrationGatewayController_syncHistory",

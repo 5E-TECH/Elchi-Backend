@@ -103,4 +103,20 @@ export class PartnerWebhookOutbox extends BaseEntity {
 
   @Column({ type: 'timestamptz', nullable: true })
   delivered_at!: Date | null;
+
+  /**
+   * Oxirgi urinishning HTTP javob vaqti (ms).
+   *
+   * NEGA KERAK. Integratsiya panelida "o'rtacha javob vaqti" ko'rsatiladi va
+   * u sekinlashuvni ERTA aniqlashning yagona belgisi: hamkor hali 200
+   * qaytarib turadi-yu, javob vaqti 200 ms dan 8 s ga o'sgan bo'lsa,
+   * keyingi qadam — timeout va yo'qolgan hodisa.
+   *
+   * Ilgari hech qayerda o'lchanmasdi, ya'ni bu metrikani ko'rsatishning
+   * imkoni yo'q edi (uydirma raqam ko'rsatishdan ko'ra o'lchash to'g'ri).
+   *
+   * `null` — hali urinish bo'lmagan yoki tarmoq xatosi (javob kelmagan).
+   */
+  @Column({ type: 'int', nullable: true })
+  duration_ms!: number | null;
 }

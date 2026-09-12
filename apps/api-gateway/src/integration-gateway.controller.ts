@@ -17,6 +17,7 @@ import { Roles as RoleEnum } from '@app/common';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiQuery,
@@ -129,6 +130,38 @@ export class IntegrationGatewayController {
         },
       },
     ).pipe(timeout(8000));
+  }
+
+  /**
+   * INTEGRATSIYA METRIKASI — panel uchun jonli raqamlar.
+   *
+   * ⚠️ `:id` marshrutlaridan OLDIN e'lon qilingan bo'lishi kerak, aks holda
+   * "metrics" integratsiya id'si deb o'qilardi (bu tuzoqqa `partners/webhooks`
+   * bilan bir marta tushilgan).
+   */
+  @Get('metrics')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      'Integratsiya paneli metrikasi — hodisa, yetmagan, navbat, javob vaqti',
+  })
+  @ApiQuery({
+    name: 'hours',
+    required: false,
+    type: Number,
+    description: 'Oyna (soat). Standart 24, maksimum 168',
+  })
+  @ApiOkResponse({
+    description:
+      '{ statusCode, message, data: { window_hours, totals, connections[] } }',
+  })
+  integrationMetrics(@Query('hours') hours?: string) {
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.metrics' },
+        { hours: hours ? Number(hours) : undefined },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Get('sync/history')
