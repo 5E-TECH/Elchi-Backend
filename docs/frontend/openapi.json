@@ -1667,6 +1667,26 @@
         ]
       }
     },
+    "/orders/external/sources": {
+      "get": {
+        "operationId": "OrderGatewayController_findExternalSources",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Incoming parcel sources (grouped external NEW orders)",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
     "/orders/external": {
       "get": {
         "operationId": "OrderGatewayController_findAllExternal",
