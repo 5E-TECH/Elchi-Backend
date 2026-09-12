@@ -308,6 +308,8 @@ export class IntegrationServiceService {
       name?: string;
       webhook_url?: string | null;
       webhook_secret?: string | null;
+      sandbox_webhook_url?: string | null;
+      sandbox_webhook_secret?: string | null;
       ip_allowlist?: string[] | null;
     },
     requester?: { id?: string; roles?: string[] } | null,
@@ -349,6 +351,34 @@ export class IntegrationServiceService {
       partner.webhook_secret = secret ? this.encryptCredential(secret) : null;
       // Sir QIYMATI hech qachon loglanmaydi — faqat o'zgargani.
       changed.webhook_secret_changed = true;
+    }
+
+    if (dto.sandbox_webhook_url !== undefined) {
+      const url =
+        dto.sandbox_webhook_url === null
+          ? ''
+          : String(dto.sandbox_webhook_url).trim();
+      if (url) {
+        // Asosiy manzil bilan AYNI guard — sandbox ham tashqi so'rov qiladi,
+        // ya'ni SSRF xavfi bir xil.
+        await this.assertOutboundUrlSafe(url);
+        partner.sandbox_webhook_url = url;
+      } else {
+        partner.sandbox_webhook_url = null;
+      }
+      changed.sandbox_webhook_url = partner.sandbox_webhook_url;
+    }
+
+    if (dto.sandbox_webhook_secret !== undefined) {
+      const secret =
+        dto.sandbox_webhook_secret === null
+          ? ''
+          : String(dto.sandbox_webhook_secret).trim();
+      partner.sandbox_webhook_secret = secret
+        ? this.encryptCredential(secret)
+        : null;
+      // Sir QIYMATI hech qachon loglanmaydi — faqat o'zgargani.
+      changed.sandbox_webhook_secret_changed = true;
     }
 
     if (dto.ip_allowlist !== undefined) {
@@ -405,6 +435,7 @@ export class IntegrationServiceService {
         id: partner.id,
         name: partner.name,
         webhook_url: partner.webhook_url,
+        sandbox_webhook_url: partner.sandbox_webhook_url,
         is_active: partner.is_active,
         requeued_webhooks: requeued,
       },
@@ -1482,10 +1513,203 @@ export class IntegrationServiceService {
       body: rawBody,
       signal: AbortSignal.timeout(15000),
     });
+
+    /**
+     * SANDBOX NUSXASI — asosiy yetkazish natijasidan QAT'IY NAZAR yuboriladi,
+     * lekin uning natijasi hisobga OLINMAYDI.
+     *
+     * `void` va `catch` ataylab: sandbox sinov kanali, uning xatosi tufayli
+     * haqiqiy hodisa `permanently_failed` bo'lib qolishi mutlaqo qabul
+     * qilinmaydi. Shuning uchun `await` ham qilinmaydi — sinov muhiti sekin
+     * javob bersa, haqiqiy yetkazish kutib turmasin.
+     */
+    void this.mirrorToSandbox(partner, row);
+
     if (!res.ok) {
       throw new Error(`partner webhook HTTP ${res.status}`);
     }
     return { http_status: res.status };
+  }
+
+  /**
+   * Hodisa nusxasini hamkorning SANDBOX manziliga yuboradi.
+   *
+   * Prodakshnda `webhook_url` haqiqiy qabul qiluvchiga qaratilgan va unga
+   * tegib bo'lmaydi. Integratsiyani tekshirish uchun esa haqiqiy hodisalar
+   * oqimini ko'rish kerak — sinov buyurtmasi yaratmasdan. Shu bois nusxa.
+   *
+   * ⚠️ HECH QACHON XATO TASHLAMAYDI va hech narsani qayta urinmaydi.
+   * Outbox qatoriga ham tegmaydi: sandbox holati asosiy hodisaning holati
+   * EMAS.
+   */
+  private async mirrorToSandbox(
+    partner: Partner,
+    row: PartnerWebhookOutbox,
+  ): Promise<void> {
+    const target = String(partner.sandbox_webhook_url ?? '').trim();
+    if (!target) return;
+
+    try {
+      await this.assertOutboundUrlSafe(target);
+
+      /**
+       * `sandbox: true` — qabul qiluvchi buni haqiqiy hodisadan ajratishi
+       * uchun. Busiz sinov muhiti va prodakshn bir xil yukni ko'rib,
+       * loglarda ularni farqlash imkonsiz bo'lardi.
+       */
+      const body = JSON.stringify({ ...(row.payload ?? {}), sandbox: true });
+
+      // Alohida sandbox sekreti bo'lmasa asosiysi ishlatiladi — ko'p holatda
+      // sinov muhiti ayni sekret bilan tekshiradi.
+      const secret =
+        this.decryptCredential(partner.sandbox_webhook_secret) ??
+        this.decryptCredential(partner.webhook_secret) ??
+        '';
+      const signature = computeHmacSignature(body, secret, 'sha256', 'hex');
+
+      const res = await fetch(target, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Elchi-Signature': signature,
+          // Sinov muhiti so'rovni sarlavha bo'yicha ham ajrata olsin.
+          'X-Elchi-Sandbox': '1',
+        },
+        body,
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) {
+        this.logger.warn(
+          `sandbox webhook ${row.id}: HTTP ${res.status} (e'tiborsiz)`,
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `sandbox webhook ${row.id} yuborilmadi (e'tiborsiz): ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * SINOV WEBHOOKI — hamkor manzilini haqiqiy buyurtmaga TEGMASDAN tekshiradi.
+   *
+   * NEGA KERAK. Webhook zanjiri uch narsaga bog'liq: manzil yetib boradimi,
+   * imzo mos keladimi, qabul qiluvchi 2xx qaytaradimi. Ilgari bularni bilish
+   * uchun HAQIQIY sotuvni kutish kerak edi — ya'ni prodakshnda sozlamani
+   * "ko'r-ko'rona" qo'yib, birinchi real buyurtmada natijani ko'rish.
+   * Xato bo'lsa esa o'sha buyurtmaning hodisasi yo'qolardi.
+   *
+   * Bu metod SINXRON ishlaydi va to'liq diagnostika qaytaradi: HTTP kodi,
+   * javob tanasi (qisqartirilgan), kechikish, yuborilgan imzo. Outbox'ga
+   * QATOR YOZILMAYDI — bu tekshiruv, hodisa emas.
+   *
+   * `url` berilsa hamkorda saqlanganidan ustun turadi: yangi manzilni
+   * SAQLASHDAN OLDIN sinab ko'rish mumkin.
+   */
+  async testPartnerWebhook(
+    id: string,
+    dto?: { url?: string | null },
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
+    const partner = await this.partnerRepo.findOne({
+      where: { id: String(id), isDeleted: false },
+    });
+    if (!partner) {
+      this.notFound('Partner topilmadi');
+    }
+
+    const override = String(dto?.url ?? '').trim();
+    const target = override || String(partner.webhook_url ?? '').trim();
+    if (!target) {
+      this.badRequest(
+        "Sinov uchun manzil yo'q — `url` bering yoki hamkorga " +
+          '`webhook_url` sozlang',
+      );
+    }
+    // Haqiqiy yuborish bilan AYNI guard — sinov prodakshndan yumshoqroq
+    // bo'lmasligi kerak, aks holda "sinov o'tdi, real yiqildi" bo'lardi.
+    await this.assertOutboundUrlSafe(target);
+
+    const secret = this.decryptCredential(partner.webhook_secret) ?? '';
+
+    /**
+     * Sinov yuki haqiqiy hodisa SHAKLIDA, lekin `event` boshqa
+     * (`webhook.test`) va `test: true` bayrog'i bor — qabul qiluvchi buni
+     * buyurtma sifatida ishlab yubormasligi kerak.
+     */
+    const payload = {
+      event: 'webhook.test',
+      event_id: randomUUID(),
+      test: true,
+      partner_id: String(partner.id),
+      message: "Elchi sinov webhooki — buyurtmaga ta'sir qilmaydi",
+      occurred_at: new Date().toISOString(),
+    };
+    const rawBody = JSON.stringify(payload);
+    const signature = computeHmacSignature(rawBody, secret, 'sha256', 'hex');
+
+    const startedAt = Date.now();
+    let httpStatus: number | null = null;
+    let responseBody = '';
+    let error: string | null = null;
+
+    try {
+      const res = await fetch(target, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Elchi-Signature': signature,
+        },
+        body: rawBody,
+        signal: AbortSignal.timeout(15000),
+      });
+      httpStatus = res.status;
+      // Javob tanasi diagnostika uchun MUHIM: qabul qiluvchi 200 qaytarib
+      // ham "imzo yaroqsiz" deyishi mumkin.
+      responseBody = (await res.text().catch(() => '')).slice(0, 1000);
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'so‘rov bajarilmadi';
+    }
+
+    const durationMs = Date.now() - startedAt;
+    const ok = httpStatus != null && httpStatus >= 200 && httpStatus < 300;
+
+    await this.activityLog.log({
+      entity_type: 'Partner',
+      entity_id: String(partner.id),
+      action: ActivityAction.EXTERNAL_SYNC,
+      new_value: {
+        webhook_test: true,
+        url: target,
+        ok,
+        http_status: httpStatus,
+        duration_ms: durationMs,
+        note: ok
+          ? 'Sinov webhooki muvaffaqiyatli yetdi'
+          : 'Sinov webhooki yetmadi',
+      },
+      ...this.auditActor(requester),
+    });
+
+    return successRes(
+      {
+        ok,
+        url: target,
+        used_saved_url: !override,
+        http_status: httpStatus,
+        duration_ms: durationMs,
+        response_body: responseBody || null,
+        error,
+        // Imzo qaytariladi: qabul qiluvchi tomonda solishtirib, sekret
+        // mos kelmasligini aniqlash uchun.
+        signature_sent: signature,
+        secret_configured: !!secret,
+        event_id: payload.event_id,
+      },
+      200,
+      ok ? 'webhook test ok' : 'webhook test failed',
+    );
   }
 
   /** Postgres unique-violation (23505) — dedup uchun. */
