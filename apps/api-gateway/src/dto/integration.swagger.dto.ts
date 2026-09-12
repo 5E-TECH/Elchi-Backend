@@ -29,6 +29,53 @@ export class CreateIntegrationRequestDto {
   @IsString()
   slug?: string;
 
+  /**
+   * ROL — integratsiya bizning oqimimizda NIMA QILADI.
+   *
+   * `type` (api/webhook/ftp) TRANSPORT, ya'ni "qanday gaplashamiz". Rol esa
+   * boshqa savol va ilgari hech qayerda yozilmasdi: yetkazuvchi (bizdan
+   * posilka oladi) va manba (bizga buyurtma beradi) bir xil ko'rinardi.
+   *
+   *   carrier — bizdan posilka oladi, yetkazadi, COD qarzdor (LDG, BeePost)
+   *   source  — bizga buyurtma beradi (marketplace, do'kon, CRM)
+   *   payment — pul tasdiqlaydi (Payme, Click, bank)
+   *   mirror  — faqat o'qish uchun ko'zgu (Sheets, BI)
+   */
+  @ApiPropertyOptional({
+    example: 'carrier',
+    enum: ['carrier', 'source', 'payment', 'mirror'],
+    description: "Berilmasa `carrier` (mavjud ulanishlarning naqshi)",
+  })
+  @IsOptional()
+  @IsIn(['carrier', 'source', 'payment', 'mirror'])
+  role?: string;
+
+  /**
+   * TIZIM TURI — UI guruhlash va onboarding shabloni uchun.
+   *
+   * `role` bilan takrorlanmaydi: marketplace ham, CRM ham `source` roli,
+   * lekin boshqacha ulanadi. Rol XULQNI, kategoriya QANDAY SOZLASHNI
+   * belgilaydi.
+   */
+  @ApiPropertyOptional({
+    example: 'cargo',
+    enum: ['marketplace', 'crm', 'cargo', 'payment', 'spreadsheet', 'other'],
+  })
+  @IsOptional()
+  @IsIn(['marketplace', 'crm', 'cargo', 'payment', 'spreadsheet', 'other'])
+  category?: string;
+
+  /**
+   * ULANISH REJIMI.
+   *   spec    — biz kontrakt e'lon qilamiz, ular bajaradi (kod yozilmaydi)
+   *   adapter — biz ularga config-profil bilan moslashamiz
+   */
+  @ApiPropertyOptional({ example: 'adapter', enum: ['spec', 'adapter'] })
+  @IsOptional()
+  @IsIn(['spec', 'adapter'])
+  integration_mode?: string;
+
+
   @ApiProperty({ example: 'api', enum: ['api', 'webhook', 'ftp'] })
   @IsIn(['api', 'webhook', 'ftp'])
   type!: IntegrationType;
@@ -122,6 +169,53 @@ export class UpdateIntegrationRequestDto {
   @IsOptional()
   @IsString()
   slug?: string;
+
+  /**
+   * ROL — integratsiya bizning oqimimizda NIMA QILADI.
+   *
+   * `type` (api/webhook/ftp) TRANSPORT, ya'ni "qanday gaplashamiz". Rol esa
+   * boshqa savol va ilgari hech qayerda yozilmasdi: yetkazuvchi (bizdan
+   * posilka oladi) va manba (bizga buyurtma beradi) bir xil ko'rinardi.
+   *
+   *   carrier — bizdan posilka oladi, yetkazadi, COD qarzdor (LDG, BeePost)
+   *   source  — bizga buyurtma beradi (marketplace, do'kon, CRM)
+   *   payment — pul tasdiqlaydi (Payme, Click, bank)
+   *   mirror  — faqat o'qish uchun ko'zgu (Sheets, BI)
+   */
+  @ApiPropertyOptional({
+    example: 'carrier',
+    enum: ['carrier', 'source', 'payment', 'mirror'],
+    description: "Berilmasa `carrier` (mavjud ulanishlarning naqshi)",
+  })
+  @IsOptional()
+  @IsIn(['carrier', 'source', 'payment', 'mirror'])
+  role?: string;
+
+  /**
+   * TIZIM TURI — UI guruhlash va onboarding shabloni uchun.
+   *
+   * `role` bilan takrorlanmaydi: marketplace ham, CRM ham `source` roli,
+   * lekin boshqacha ulanadi. Rol XULQNI, kategoriya QANDAY SOZLASHNI
+   * belgilaydi.
+   */
+  @ApiPropertyOptional({
+    example: 'cargo',
+    enum: ['marketplace', 'crm', 'cargo', 'payment', 'spreadsheet', 'other'],
+  })
+  @IsOptional()
+  @IsIn(['marketplace', 'crm', 'cargo', 'payment', 'spreadsheet', 'other'])
+  category?: string;
+
+  /**
+   * ULANISH REJIMI.
+   *   spec    — biz kontrakt e'lon qilamiz, ular bajaradi (kod yozilmaydi)
+   *   adapter — biz ularga config-profil bilan moslashamiz
+   */
+  @ApiPropertyOptional({ example: 'adapter', enum: ['spec', 'adapter'] })
+  @IsOptional()
+  @IsIn(['spec', 'adapter'])
+  integration_mode?: string;
+
 
   @ApiPropertyOptional({ example: 'api', enum: ['api', 'webhook', 'ftp'] })
   @IsOptional()

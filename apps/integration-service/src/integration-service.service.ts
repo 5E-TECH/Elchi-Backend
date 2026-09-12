@@ -23,7 +23,12 @@ import {
   assertPublicUrl,
   SsrfBlockedError,
 } from '@app/common';
-import { ExternalIntegration } from './entities/external-integration.entity';
+import {
+  ExternalIntegration,
+  type IntegrationCategory,
+  type IntegrationMode,
+  type IntegrationRole,
+} from './entities/external-integration.entity';
 import { SyncQueue } from './entities/sync-queue.entity';
 import { SyncHistory } from './entities/sync-history.entity';
 import { ProviderWebhookLog } from './entities/provider-webhook-log.entity';
@@ -105,6 +110,9 @@ type StatusSyncConfig = {
 type FindAllIntegrationsQuery = {
   is_active?: boolean | string;
   status?: string;
+  /** Rol bo'yicha filtr — UI ulanishlarni rol guruhlariga ajratadi. */
+  role?: string;
+  category?: string;
   market_id?: string;
   from_date?: string;
   to_date?: string;
@@ -2290,6 +2298,42 @@ export class IntegrationServiceService {
     return normalized === 'inactive' ? 'inactive' : 'active';
   }
 
+  /**
+   * ROL normalizatori — noma'lum qiymat `carrier`ga tushadi.
+   *
+   * Nega `carrier` standart: mavjud integratsiyalarning hammasi shu naqshda
+   * (`dispatch_config` bilan posilka yaratamiz, ular COD qarzdor). Noma'lum
+   * qiymatni rad etish o'rniga eng ehtimolli rolga tushirish — mavjud
+   * chaqiruvchilar buzilmasin (ular `role` yubormaydi).
+   */
+  private normalizeRole(value: unknown): IntegrationRole {
+    const v = String(value ?? '').toLowerCase().trim();
+    return v === 'source' || v === 'payment' || v === 'mirror' ? v : 'carrier';
+  }
+
+  private normalizeCategory(value: unknown): IntegrationCategory {
+    const v = String(value ?? '').toLowerCase().trim();
+    const allowed: IntegrationCategory[] = [
+      'marketplace',
+      'crm',
+      'cargo',
+      'payment',
+      'spreadsheet',
+      'other',
+    ];
+    return (allowed as string[]).includes(v)
+      ? (v as IntegrationCategory)
+      : 'other';
+  }
+
+  private normalizeIntegrationMode(value: unknown): IntegrationMode {
+    // `adapter` standart: `spec` rejimi biz kontrakt e'lon qilganimizni
+    // bildiradi va bu ATAYLAB tanlanadigan holat.
+    return String(value ?? '').toLowerCase().trim() === 'spec'
+      ? 'spec'
+      : 'adapter';
+  }
+
   private normalizeType(value: unknown): 'api' | 'webhook' | 'ftp' {
     const normalized = String(value ?? 'api').toLowerCase();
     if (normalized === 'webhook' || normalized === 'ftp') {
@@ -2798,6 +2842,11 @@ export class IntegrationServiceService {
       name: name || slug,
       slug,
       type: integrationType,
+      role: this.normalizeRole((dto as any).role),
+      category: this.normalizeCategory((dto as any).category),
+      integration_mode: this.normalizeIntegrationMode(
+        (dto as any).integration_mode,
+      ),
       base_url: baseUrl,
       credentials: this.normalizeCredentialsForStorage(mergedCredentials),
       status,
@@ -2859,6 +2908,19 @@ export class IntegrationServiceService {
           String(query.is_active).toLowerCase(),
         );
       }
+    }
+
+    /**
+     * Rol/kategoriya filtri — UI ulanishlarni rol guruhlariga ajratadi.
+     * Noma'lum qiymat normalizatorda eng ehtimolli rolga tushib, "hech narsa
+     * topilmadi" degan chalkash natija bermasligi uchun XOM qiymat bilan
+     * filtrlanadi: operator nima yozgan bo'lsa shuni qidiradi.
+     */
+    if (query?.role) {
+      where.role = String(query.role).toLowerCase().trim();
+    }
+    if (query?.category) {
+      where.category = String(query.category).toLowerCase().trim();
     }
 
     if (query?.market_id) {
@@ -2977,6 +3039,26 @@ export class IntegrationServiceService {
     const before = auditSnapshot(row);
 
     Object.assign(row, dto);
+
+    /**
+     * Rol/kategoriya/rejim — `Object.assign`dan KEYIN normallashtiriladi.
+     *
+     * `Object.assign` xom qiymatni to'g'ridan-to'g'ri yozadi, ya'ni
+     * "Marketplace" yoki "CARRIER" kabi yozuv bazaga o'sha holida tushib,
+     * filtr va UI guruhlash buzilardi. Faqat BERILGAN maydon tegiladi —
+     * berilmasa mavjud qiymat saqlanadi.
+     */
+    if ((dto as any).role !== undefined) {
+      row.role = this.normalizeRole((dto as any).role);
+    }
+    if ((dto as any).category !== undefined) {
+      row.category = this.normalizeCategory((dto as any).category);
+    }
+    if ((dto as any).integration_mode !== undefined) {
+      row.integration_mode = this.normalizeIntegrationMode(
+        (dto as any).integration_mode,
+      );
+    }
     if (typeof (dto as any).type !== 'undefined') {
       row.type = this.normalizeType((dto as any).type);
     }

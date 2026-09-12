@@ -6566,6 +6566,37 @@
             }
           },
           {
+            "name": "role",
+            "required": false,
+            "in": "query",
+            "description": "Rol bo‘yicha filtr — UI ulanishlarni rol guruhlariga ajratadi",
+            "schema": {
+              "enum": [
+                "carrier",
+                "source",
+                "payment",
+                "mirror"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "marketplace",
+                "crm",
+                "cargo",
+                "payment",
+                "spreadsheet",
+                "other"
+              ],
+              "type": "string"
+            }
+          },
+          {
             "name": "market_id",
             "required": false,
             "in": "query",
@@ -13015,6 +13046,37 @@
             "type": "string",
             "example": "ozar"
           },
+          "role": {
+            "type": "string",
+            "example": "carrier",
+            "enum": [
+              "carrier",
+              "source",
+              "payment",
+              "mirror"
+            ],
+            "description": "Berilmasa `carrier` (mavjud ulanishlarning naqshi)"
+          },
+          "category": {
+            "type": "string",
+            "example": "cargo",
+            "enum": [
+              "marketplace",
+              "crm",
+              "cargo",
+              "payment",
+              "spreadsheet",
+              "other"
+            ]
+          },
+          "integration_mode": {
+            "type": "string",
+            "example": "adapter",
+            "enum": [
+              "spec",
+              "adapter"
+            ]
+          },
           "type": {
             "type": "string",
             "example": "api",
@@ -13111,6 +13173,37 @@
           "slug": {
             "type": "string",
             "example": "ozar"
+          },
+          "role": {
+            "type": "string",
+            "example": "carrier",
+            "enum": [
+              "carrier",
+              "source",
+              "payment",
+              "mirror"
+            ],
+            "description": "Berilmasa `carrier` (mavjud ulanishlarning naqshi)"
+          },
+          "category": {
+            "type": "string",
+            "example": "cargo",
+            "enum": [
+              "marketplace",
+              "crm",
+              "cargo",
+              "payment",
+              "spreadsheet",
+              "other"
+            ]
+          },
+          "integration_mode": {
+            "type": "string",
+            "example": "adapter",
+            "enum": [
+              "spec",
+              "adapter"
+            ]
           },
           "type": {
             "type": "string",

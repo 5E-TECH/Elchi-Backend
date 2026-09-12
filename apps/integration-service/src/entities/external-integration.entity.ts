@@ -2,14 +2,63 @@ import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '@app/common';
 
 export type AuthType = 'api_key' | 'login';
+/** TRANSPORT — qanday gaplashamiz. Rol EMAS (`IntegrationRole`ga qara). */
 export type IntegrationType = 'api' | 'webhook' | 'ftp';
 export type IntegrationStatus = 'active' | 'inactive';
+
+/**
+ * INTEGRATSIYANING ROLI — u bizning oqimimizda NIMA QILADI.
+ *
+ * Ilgari faqat `type` (api/webhook/ftp) bor edi — u TRANSPORT, ya'ni
+ * "qanday gaplashamiz". Rol esa "nima qiladi" degan boshqa savol va u
+ * hech qayerda yozilmasdi. Oqibati: UI'da barcha ulanish bir uyumda
+ * ko'rinardi va yetkazuvchini buyurtma manbasidan ajratib bo'lmasdi.
+ *
+ *  `carrier` — BIZDAN posilka oladi va yetkazadi (LDG, BeePost). Biz ularga
+ *              posilka yaratamiz (`dispatch_config`), ular status qaytaradi.
+ *              Pul oqimi bor: ular bizga COD qarzdor.
+ *  `source`  — BIZGA buyurtma beradi (marketplace, do'kon, CRM). Pul oqimi
+ *              teskari: biz ularning tovarini sotamiz.
+ *  `payment` — pul tasdiqlaydi (Payme, Click, bank). Buyurtma yaratmaydi ham,
+ *              olmaydi ham — faqat to'lov holatini bildiradi.
+ *  `mirror`  — faqat O'QISH uchun ko'zgu (Sheets, BI). Hech narsani
+ *              o'zgartirmaydi, shuning uchun xatosi biznesni to'smaydi.
+ */
+export type IntegrationRole = 'carrier' | 'source' | 'payment' | 'mirror';
+
+/**
+ * TIZIM TURI — UI guruhlash va onboarding shabloni uchun.
+ *
+ * `role` bilan TAKRORLANMAYDI: marketplace ham, CRM ham, o'z do'koni ham
+ * `source` roli, lekin ular boshqacha ulanadi (CRM'da voronka webhooki,
+ * marketplace'da buyurtma push'i). Ya'ni rol XULQNI, kategoriya esa
+ * QANDAY SOZLASHNI belgilaydi.
+ */
+export type IntegrationCategory =
+  | 'marketplace'
+  | 'crm'
+  | 'cargo'
+  | 'payment'
+  | 'spreadsheet'
+  | 'other';
+
+/**
+ * ULANISH REJIMI.
+ *
+ *  `spec`    — BIZ kontrakt e'lon qilamiz, ular bajaradi. Kod yozilmaydi,
+ *              faqat hujjat beriladi (yangi marketplace'lar uchun asosiy yo'l).
+ *  `adapter` — BIZ ularga moslashamiz: config-profil (`dispatch_config`,
+ *              `webhook_payload_paths`) orqali. O'zgartirib bo'lmaydigan
+ *              tizimlar uchun (Bitrix, amoCRM, eski cargolar).
+ */
+export type IntegrationMode = 'spec' | 'adapter';
 
 @Entity({ name: 'external_integrations' })
 @Index('IDX_INTEGRATION_SLUG', ['slug'], { unique: true })
 @Index('IDX_INTEGRATION_ACTIVE', ['is_active'])
 @Index('IDX_INTEGRATION_MARKET', ['market_id'])
 @Index('IDX_INTEGRATION_STATUS', ['status'])
+@Index('IDX_INTEGRATION_ROLE', ['role'])
 export class ExternalIntegration extends BaseEntity {
   @Column({ type: 'varchar' })
   name!: string;
@@ -19,6 +68,25 @@ export class ExternalIntegration extends BaseEntity {
 
   @Column({ type: 'varchar', default: 'api' })
   type!: IntegrationType;
+
+  /**
+   * Rol — integratsiya nima qiladi. Batafsil: `IntegrationRole`.
+   *
+   * ⚠️ MAVJUD QATORLAR uchun standart `carrier`: kod semantikasi shuni
+   * ko'rsatadi (`dispatch_config` bilan posilka YARATAMIZ,
+   * `ProviderShipment`/`ProviderReceivable` bilan ularning COD qarzini
+   * yuritamiz). Operator kerak bo'lsa qo'lda to'g'rilaydi.
+   */
+  @Column({ type: 'varchar', default: 'carrier' })
+  role!: IntegrationRole;
+
+  /** Tizim turi — UI guruhlash va onboarding shabloni. */
+  @Column({ type: 'varchar', default: 'other' })
+  category!: IntegrationCategory;
+
+  /** `spec` (biz kontrakt beramiz) yoki `adapter` (biz moslashamiz). */
+  @Column({ type: 'varchar', default: 'adapter' })
+  integration_mode!: IntegrationMode;
 
   @Column({ type: 'varchar', nullable: true })
   base_url!: string | null;
