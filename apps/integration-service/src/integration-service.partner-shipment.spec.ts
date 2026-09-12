@@ -204,12 +204,14 @@ const cancelCalls = (orderSend: jest.Mock) =>
   orderSend.mock.calls.filter((c: any[]) => c[0]?.cmd === 'order.cancel');
 
 describe('IntegrationServiceService — get/cancel PartnerShipment (C2.2)', () => {
-  it('TC1: GET -> status/tracking/cod qaytadi', async () => {
+  it('TC1: GET -> status/tracking/pul maydonlari qaytadi', async () => {
     const { svc, orderSend } = makeShipmentSvc({
       order: {
         id: '900',
         status: 'on the road',
         to_be_paid: 50000,
+        paid_amount: 12000,
+        total_price: 65000,
         qr_code_token: 'qr-xyz',
       },
     });
@@ -220,11 +222,19 @@ describe('IntegrationServiceService — get/cancel PartnerShipment (C2.2)', () =
     });
 
     expect(res.statusCode).toBe(200);
+    /**
+     * `cod_collected` va `total_price` hamkorning PUL SOLISHTIRUVI uchun
+     * qo'shildi. Ilgari faqat chiquvchi webhookda bor edi — hamkorda webhook
+     * ishlamasa pul ma'lumoti umuman yetib bormasdi va nomuvofiqlik jim
+     * qolardi.
+     */
     expect(res.data).toEqual({
       shipment_id: '900',
       external_order_id: 'ord-9',
       status: 'on the road',
       cod_amount: 50000,
+      cod_collected: 12000,
+      total_price: 65000,
       tracking: 'qr-xyz',
     });
     expect(orderSend).toHaveBeenCalledWith(

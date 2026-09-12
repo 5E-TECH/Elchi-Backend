@@ -3121,7 +3121,10 @@ export class OrderLifecycleService {
     // shartiga bog'liq EMAS (partner order'larda operator boshqacha) — barcha
     // external_id'li order uchun signal yuboriladi; integration-service
     // partner_shipment_ref bo'yicha filtrlaydi (partner emas → no-op).
-    // `paid_amount` = "sold"da kuryer yig'gan pul (cod_collected).
+    // ⚠️ `paid_amount` — "kuryer yig'gan pul" EMAS (avval shunday yozilgan edi).
+    // U `to_be_paid` (= total_price − market_tariff) QARZINING allaqachon
+    // to'langan qismi; oddiy sotuvda 0 bo'lib qoladi. Hamkorga `cod_collected`
+    // nomi bilan boradi — nom tarixiy, semantikasi shu.
     if (order.external_id) {
       await rmqSend(
         this.integrationClient,

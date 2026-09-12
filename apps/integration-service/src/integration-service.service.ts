@@ -1075,12 +1075,33 @@ export class IntegrationServiceService {
       throw new RpcException(errorRes('Elchi buyurtmasi topilmadi', 502));
     }
 
+    /**
+     * ⚠️ `cod_amount` va `cod_collected` — IKKI XIL narsa, aralashtirmaslik
+     * kerak:
+     *
+     *   `cod_amount`    = `to_be_paid`  — TO'LANISHI KERAK summa. Sotuvdan
+     *                     keyin Elchi undan o'z tarifini ushlab qoladi, ya'ni
+     *                     bu "marketga qoladigan" qiymatga aylanadi.
+     *   `cod_collected` = `paid_amount` — kuryer MIJOZDAN HAQIQATAN yiqqan pul.
+     *                     Sotuvgacha 0.
+     *
+     * `cod_collected` ilgari FAQAT chiquvchi webhookda bor edi. Hamkorda
+     * webhook ishlamasa (masalan PCS lokalda turgan bo'lsa), yig'ilgan summa
+     * unga umuman yetib bormasdi — natijada hamkor tomonidagi PUL
+     * NOMUVOFIQLIGI tekshiruvi jim qolardi: Elchi biz kutgandan boshqa summa
+     * yiqqan bo'lsa ham hech kim sezmasdi.
+     *
+     * Shu bois endi solishtirish (`GET`) yo'lida ham qaytariladi — himoya
+     * webhookka bog'liq bo'lmasin.
+     */
     return successRes(
       {
         shipment_id: String(ref.order_id),
         external_order_id: ref.external_order_id,
         status: this.pluck(order, 'status'),
         cod_amount: Number(this.pluck(order, 'to_be_paid') ?? 0),
+        cod_collected: Number(this.pluck(order, 'paid_amount') ?? 0),
+        total_price: Number(this.pluck(order, 'total_price') ?? 0),
         tracking: this.pluck(order, 'qr_code_token') ?? null,
       },
       200,
