@@ -64,6 +64,17 @@ export class IntegrationGatewayController {
   @ApiOperation({ summary: 'List integrations' })
   @ApiQuery({ name: 'is_active', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, enum: ['active', 'inactive'] })
+  @ApiQuery({
+    name: 'role',
+    required: false,
+    enum: ['carrier', 'source', 'payment', 'mirror'],
+    description: 'Rol bo‘yicha filtr — UI ulanishlarni rol guruhlariga ajratadi',
+  })
+  @ApiQuery({
+    name: 'category',
+    required: false,
+    enum: ['marketplace', 'crm', 'cargo', 'payment', 'spreadsheet', 'other'],
+  })
   @ApiQuery({ name: 'market_id', required: false, type: String })
   @ApiQuery({
     name: 'from_date',
@@ -82,6 +93,8 @@ export class IntegrationGatewayController {
   findAll(
     @Query('is_active') is_active?: string,
     @Query('status') status?: string,
+    @Query('role') role?: string,
+    @Query('category') category?: string,
     @Query('market_id') market_id?: string,
     @Query('from_date') from_date?: string,
     @Query('to_date') to_date?: string,
@@ -106,6 +119,8 @@ export class IntegrationGatewayController {
               ? ['true', '1', 'yes'].includes(is_active.toLowerCase())
               : statusToIsActive,
           status: normalizedStatus,
+          role,
+          category,
           market_id,
           from_date,
           to_date,
