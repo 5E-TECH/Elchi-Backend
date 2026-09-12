@@ -10759,6 +10759,35 @@
         ]
       }
     },
+    "/admin/partners/{id}/webhook-test": {
+      "post": {
+        "operationId": "PartnerAdminGatewayController_testWebhook",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ ok, url, http_status, duration_ms, response_body, error, signature_sent, secret_configured, event_id }"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Sinov webhookini yuborish — haqiqiy buyurtmaga tegmaydi. `url` berilsa saqlangan manzildan ustun turadi (saqlashdan OLDIN sinash).",
+        "tags": [
+          "Partners (admin)"
+        ]
+      }
+    },
     "/admin/partners/{id}": {
       "patch": {
         "operationId": "PartnerAdminGatewayController_update",

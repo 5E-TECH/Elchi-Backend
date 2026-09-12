@@ -1488,6 +1488,127 @@ export class IntegrationServiceService {
     return { http_status: res.status };
   }
 
+  /**
+   * SINOV WEBHOOKI — hamkor manzilini haqiqiy buyurtmaga TEGMASDAN tekshiradi.
+   *
+   * NEGA KERAK. Webhook zanjiri uch narsaga bog'liq: manzil yetib boradimi,
+   * imzo mos keladimi, qabul qiluvchi 2xx qaytaradimi. Ilgari bularni bilish
+   * uchun HAQIQIY sotuvni kutish kerak edi — ya'ni prodakshnda sozlamani
+   * "ko'r-ko'rona" qo'yib, birinchi real buyurtmada natijani ko'rish.
+   * Xato bo'lsa esa o'sha buyurtmaning hodisasi yo'qolardi.
+   *
+   * Bu metod SINXRON ishlaydi va to'liq diagnostika qaytaradi: HTTP kodi,
+   * javob tanasi (qisqartirilgan), kechikish, yuborilgan imzo. Outbox'ga
+   * QATOR YOZILMAYDI — bu tekshiruv, hodisa emas.
+   *
+   * `url` berilsa hamkorda saqlanganidan ustun turadi: yangi manzilni
+   * SAQLASHDAN OLDIN sinab ko'rish mumkin.
+   */
+  async testPartnerWebhook(
+    id: string,
+    dto?: { url?: string | null },
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
+    const partner = await this.partnerRepo.findOne({
+      where: { id: String(id), isDeleted: false },
+    });
+    if (!partner) {
+      this.notFound('Partner topilmadi');
+    }
+
+    const override = String(dto?.url ?? '').trim();
+    const target = override || String(partner.webhook_url ?? '').trim();
+    if (!target) {
+      this.badRequest(
+        "Sinov uchun manzil yo'q — `url` bering yoki hamkorga " +
+          '`webhook_url` sozlang',
+      );
+    }
+    // Haqiqiy yuborish bilan AYNI guard — sinov prodakshndan yumshoqroq
+    // bo'lmasligi kerak, aks holda "sinov o'tdi, real yiqildi" bo'lardi.
+    await this.assertOutboundUrlSafe(target);
+
+    const secret = this.decryptCredential(partner.webhook_secret) ?? '';
+
+    /**
+     * Sinov yuki haqiqiy hodisa SHAKLIDA, lekin `event` boshqa
+     * (`webhook.test`) va `test: true` bayrog'i bor — qabul qiluvchi buni
+     * buyurtma sifatida ishlab yubormasligi kerak.
+     */
+    const payload = {
+      event: 'webhook.test',
+      event_id: randomUUID(),
+      test: true,
+      partner_id: String(partner.id),
+      message: "Elchi sinov webhooki — buyurtmaga ta'sir qilmaydi",
+      occurred_at: new Date().toISOString(),
+    };
+    const rawBody = JSON.stringify(payload);
+    const signature = computeHmacSignature(rawBody, secret, 'sha256', 'hex');
+
+    const startedAt = Date.now();
+    let httpStatus: number | null = null;
+    let responseBody = '';
+    let error: string | null = null;
+
+    try {
+      const res = await fetch(target, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Elchi-Signature': signature,
+        },
+        body: rawBody,
+        signal: AbortSignal.timeout(15000),
+      });
+      httpStatus = res.status;
+      // Javob tanasi diagnostika uchun MUHIM: qabul qiluvchi 200 qaytarib
+      // ham "imzo yaroqsiz" deyishi mumkin.
+      responseBody = (await res.text().catch(() => '')).slice(0, 1000);
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'so‘rov bajarilmadi';
+    }
+
+    const durationMs = Date.now() - startedAt;
+    const ok = httpStatus != null && httpStatus >= 200 && httpStatus < 300;
+
+    await this.activityLog.log({
+      entity_type: 'Partner',
+      entity_id: String(partner.id),
+      action: ActivityAction.EXTERNAL_SYNC,
+      new_value: {
+        webhook_test: true,
+        url: target,
+        ok,
+        http_status: httpStatus,
+        duration_ms: durationMs,
+        note: ok
+          ? 'Sinov webhooki muvaffaqiyatli yetdi'
+          : 'Sinov webhooki yetmadi',
+      },
+      ...this.auditActor(requester),
+    });
+
+    return successRes(
+      {
+        ok,
+        url: target,
+        used_saved_url: !override,
+        http_status: httpStatus,
+        duration_ms: durationMs,
+        response_body: responseBody || null,
+        error,
+        // Imzo qaytariladi: qabul qiluvchi tomonda solishtirib, sekret
+        // mos kelmasligini aniqlash uchun.
+        signature_sent: signature,
+        secret_configured: !!secret,
+        event_id: payload.event_id,
+      },
+      200,
+      ok ? 'webhook test ok' : 'webhook test failed',
+    );
+  }
+
   /** Postgres unique-violation (23505) — dedup uchun. */
   private isUniqueViolation(error: unknown): boolean {
     const e = error as { code?: string; driverError?: { code?: string } };

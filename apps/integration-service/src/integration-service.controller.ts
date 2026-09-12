@@ -55,6 +55,30 @@ export class IntegrationServiceController {
   }
 
   /** Hamkor sozlamalari (webhook manzili/sekreti, IP ro'yxati, nom). */
+  /**
+   * Sinov webhooki — hamkor manzilini haqiqiy buyurtmaga tegmasdan tekshiradi.
+   * `url` berilsa saqlanganidan ustun turadi (yangi manzilni saqlashdan
+   * OLDIN sinash uchun).
+   */
+  @MessagePattern({ cmd: 'integration.partner.webhook.test' })
+  testPartnerWebhook(
+    @Payload()
+    data: {
+      id?: string;
+      url?: string | null;
+      requester?: { id?: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.testPartnerWebhook(
+        String(data?.id ?? ''),
+        { url: data?.url ?? null },
+        data?.requester ?? null,
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'integration.partner.update' })
   updatePartner(
     @Payload()
