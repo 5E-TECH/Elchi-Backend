@@ -5268,6 +5268,8 @@ export class OrderLifecycleService {
       branch_cashbox_amount?: number | null;
       to_be_paid?: number;
       paid_amount?: number;
+      /** Kuryer yozgan qo'shimcha xarajat — buyurtmada saqlanadi. */
+      extra_cost?: number;
       status?: Order_status;
       return_requested?: boolean;
       comment?: string | null;
