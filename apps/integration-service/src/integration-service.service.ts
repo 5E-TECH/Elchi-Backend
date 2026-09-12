@@ -121,6 +121,20 @@ type SyncHistoryQuery = {
   limit?: number;
 };
 
+/**
+ * Hamkorda `webhook_url` yo'q — yuborishga manzil yo'q degan SIGNAL.
+ *
+ * Oddiy xatodan ajratish SHART: oddiy xato retry hisobini yoqadi va
+ * 4 urinishdan keyin `permanently_failed` beradi. Sozlama yo'qligi esa
+ * hodisaning aybi emas — u kutib turishi va sozlangach yetkazilishi kerak.
+ */
+class PartnerWebhookNotConfiguredError extends Error {
+  constructor(message = "hamkorda webhook_url sozlanmagan") {
+    super(message);
+    this.name = 'PartnerWebhookNotConfiguredError';
+  }
+}
+
 @Injectable()
 export class IntegrationServiceService {
   private readonly logger = new Logger(IntegrationServiceService.name);
@@ -351,11 +365,38 @@ export class IntegrationServiceService {
 
     await this.partnerRepo.save(partner);
 
+    /**
+     * `webhook_url` QO'YILGAN bo'lsa, sozlama yo'qligi tufayli kutib turgan
+     * hodisalarni navbatga qaytaramiz.
+     *
+     * Busiz `awaiting_config` qatorlari abadiy o'sha holatda qolardi va
+     * operator ularni qo'lda bittalab "qayta yuborish" qilishi kerak bo'lardi
+     * — sozlashning ma'nosi esa aynan shu hodisalarni yetkazish edi.
+     */
+    let requeued = 0;
+    if (partner.webhook_url) {
+      const res = await this.partnerWebhookOutboxRepo.update(
+        { partner_id: String(partner.id), status: 'awaiting_config' },
+        { status: 'pending', next_retry_at: new Date(), last_error: null },
+      );
+      requeued = Number(res.affected ?? 0);
+      if (requeued > 0) {
+        this.logger.log(
+          `partner ${partner.id}: webhook_url sozlandi — ${requeued} ta ` +
+            `kutib turgan hodisa navbatga qaytarildi`,
+        );
+        // Darhol urinamiz — operator natijani kutib turgan bo'ladi.
+        void this.processPendingPartnerWebhooks(Math.min(requeued, 50)).catch(
+          () => undefined,
+        );
+      }
+    }
+
     await this.activityLog.log({
       entity_type: 'Partner',
       entity_id: String(partner.id),
       action: ActivityAction.UPDATED,
-      new_value: changed,
+      new_value: requeued > 0 ? { ...changed, requeued_webhooks: requeued } : changed,
       ...this.auditActor(requester),
     });
 
@@ -365,6 +406,7 @@ export class IntegrationServiceService {
         name: partner.name,
         webhook_url: partner.webhook_url,
         is_active: partner.is_active,
+        requeued_webhooks: requeued,
       },
       200,
       'partner updated',
@@ -1354,6 +1396,30 @@ export class IntegrationServiceService {
         error instanceof Error
           ? error.message
           : 'partner webhook dispatch failed';
+
+      if (error instanceof PartnerWebhookNotConfiguredError) {
+        /**
+         * Urinish QAYTARILADI: yuborishga harakat ham qilinmadi, shuning
+         * uchun bu hodisaning "urinishi" sifatida hisoblanmasligi kerak —
+         * aks holda sozlash kechiksa qator `permanently_failed`ga tushib
+         * ketardi.
+         */
+        await this.partnerWebhookOutboxRepo.update(
+          { id: row.id },
+          {
+            status: 'awaiting_config',
+            attempts: Number(row.attempts ?? 0),
+            last_error: message,
+            next_retry_at: null,
+          },
+        );
+        this.logger.warn(
+          `partner webhook ${row.id}: webhook_url sozlanmagan — ` +
+            `kutish holatiga o'tdi (partner=${row.partner_id})`,
+        );
+        return false;
+      }
+
       if (attempts < Number(row.max_attempts ?? 4)) {
         await this.partnerWebhookOutboxRepo.update(
           { id: row.id },
@@ -1391,8 +1457,15 @@ export class IntegrationServiceService {
       where: { id: String(row.partner_id), isDeleted: false },
     });
     if (!partner?.webhook_url) {
-      // Yuboradigan manzil yo'q — retry qilmaymiz, muvaffaqiyat deb yopamiz.
-      return { skipped: 'no webhook_url' };
+      /**
+       * ⚠️ ILGARI bu yerda `{ skipped: 'no webhook_url' }` qaytarilardi va
+       * chaqiruvchi qatorni `completed` deb yopardi — ya'ni sozlama yo'qligi
+       * jimgina "muvaffaqiyat" bo'lib, hodisa BUTUNLAY yo'qolardi. Keyinroq
+       * `webhook_url` qo'yilganda ham hech narsa yetkazilmasdi.
+       *
+       * Endi signal tashlanadi: qator `awaiting_config`da kutadi.
+       */
+      throw new PartnerWebhookNotConfiguredError();
     }
     await this.assertOutboundUrlSafe(partner.webhook_url);
 

@@ -88,8 +88,27 @@ describe('IntegrationServiceService — hamkorni tahrirlash', () => {
       .digest();
     svc.previousKey = null;
     svc.allowPrivateHosts = false;
-    svc.logger = { warn: jest.fn(), error: jest.fn() };
-    return { svc: svc as IntegrationServiceService, saved, logs, partner };
+    svc.logger = { warn: jest.fn(), error: jest.fn(), log: jest.fn() };
+    /**
+     * `webhook_url` qo'yilganda `updatePartner` sozlama yo'qligi tufayli
+     * kutib turgan (`awaiting_config`) hodisalarni navbatga qaytaradi —
+     * shuning uchun outbox repo ham kerak.
+     */
+    const requeued: Row[] = [];
+    svc.partnerWebhookOutboxRepo = {
+      update: jest.fn((where: Row, patch: Row) => {
+        requeued.push({ where, patch });
+        return Promise.resolve({ affected: 0 });
+      }),
+    };
+    svc.processPendingPartnerWebhooks = jest.fn().mockResolvedValue({});
+    return {
+      svc: svc as IntegrationServiceService,
+      saved,
+      logs,
+      partner,
+      requeued,
+    };
   }
 
   const base = (): Row => ({
