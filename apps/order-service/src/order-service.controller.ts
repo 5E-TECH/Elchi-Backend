@@ -233,6 +233,28 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * Tashqi posilkani SKANERLAB qabul qilish. Token serverda buyurtmaga
+   * moslanadi — ya'ni skanerlash dalili serverda bo'ladi (audit K2).
+   *
+   * ⚠️ `order.receive` bu yo'lni CHETLAB O'TA OLMAYDI: u tashqi manbali
+   * buyurtmani rad etadi va ichki `scanVerified` bayrog'ini message
+   * payload'idan qabul qilmaydi.
+   */
+  @MessagePattern({ cmd: 'order.receive_by_scan' })
+  receiveByScan(
+    @Payload()
+    data: { tokens: string[]; requester?: { id?: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.receiveExternalByScan({
+        tokens: data?.tokens ?? [],
+        requester: data?.requester,
+      }),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.receive' })
   receive(
     @Payload()
