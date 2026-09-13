@@ -143,6 +143,44 @@ export class PartnerAdminGatewayController {
    * hodisasi yo'qolardi. Bu marshrut sinxron tekshiradi va to'liq
    * diagnostika qaytaradi; outbox'ga qator YOZILMAYDI.
    */
+  /**
+   * Hamkordan kelgan posilkalar bog'lanishi.
+   *
+   * ⚠️ RO'YXAT YUPQA: bog'lanish bor (ularning buyurtma raqami ↔ bizning
+   * buyurtma id'si), status va summa YO'Q. Ular buyurtmaning o'zida, boshqa
+   * sxemada — bu yerda qo'shish har qator uchun alohida so'rov (N+1) talab
+   * qilardi. UI har qatordan buyurtma sahifasiga havola qiladi.
+   *
+   * ⚠️ `:id/shipments` `webhooks` dan KEYIN e'lon qilinadi, lekin
+   * to'qnashmaydi: `webhooks` bir segmentli literal, bu ikki segmentli.
+   */
+  @Get(':id/shipments')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary: "Hamkordan kelgan posilkalar (buyurtma bog'lanishi)",
+  })
+  @ApiParam({ name: 'id' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  listPartnerShipments(
+    @Param('id') id: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return firstValueFrom(
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.shipment.list' },
+          {
+            partner_id: id,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
+        )
+        .pipe(timeout(8000)),
+    );
+  }
+
   @Post(':id/webhook-test')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({

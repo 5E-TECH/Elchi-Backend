@@ -358,6 +358,44 @@ export class IntegrationGatewayController {
     ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
+  /**
+   * Bitta ulanishning jo'natmalari.
+   *
+   * ⚠️ `@Get('shipments/:order_id')` bilan TO'QNASHMAYDI: u yerda ikkinchi
+   * segment ixtiyoriy qiymat, bu yerda esa literal `shipments`. Ya'ni
+   * `/integrations/5/shipments` faqat shu marshrutga, `/integrations/shipments/5`
+   * faqat unisiga tushadi.
+   */
+  @Get(':id/shipments')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'List provider shipments for an integration' })
+  @ApiParam({ name: 'id', description: 'Integration id' })
+  @ApiQuery({ name: 'status', required: false, type: String })
+  @ApiQuery({ name: 'failed_only', required: false, type: Boolean })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  listProviderShipments(
+    @Param('id') id: string,
+    @Query('status') status?: string,
+    @Query('failed_only') failedOnly?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.shipment.list' },
+        {
+          integration_id: id,
+          status,
+          // Query satr bo'lib keladi — `'false'` ham rost bo'lib qolmasin.
+          failed_only: failedOnly === 'true' || failedOnly === '1',
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+        },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+  }
+
   @Get('shipments/:order_id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiOperation({ summary: 'Get the provider shipment for an order' })

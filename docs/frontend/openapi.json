@@ -7310,6 +7310,68 @@
         ]
       }
     },
+    "/integrations/{id}/shipments": {
+      "get": {
+        "operationId": "IntegrationGatewayController_listProviderShipments",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Integration id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "failed_only",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List provider shipments for an integration",
+        "tags": [
+          "Integrations"
+        ]
+      }
+    },
     "/integrations/shipments/{order_id}": {
       "get": {
         "operationId": "IntegrationGatewayController_getShipment",
@@ -10835,6 +10897,51 @@
           }
         ],
         "summary": "Muvaffaqiyatsiz webhookni qayta navbatga qo'yish va darhol urinib ko'rish",
+        "tags": [
+          "Partners (admin)"
+        ]
+      }
+    },
+    "/admin/partners/{id}/shipments": {
+      "get": {
+        "operationId": "PartnerAdminGatewayController_listPartnerShipments",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Hamkordan kelgan posilkalar (buyurtma bog'lanishi)",
         "tags": [
           "Partners (admin)"
         ]

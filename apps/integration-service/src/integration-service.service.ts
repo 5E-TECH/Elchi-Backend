@@ -5065,6 +5065,104 @@ export class IntegrationServiceService {
   }
 
   /** Outstanding (pending) COD total a provider still owes. */
+  /**
+   * JO'NATMALAR RO'YXATI — tashuvchiga berilgan posilkalar.
+   *
+   * NEGA KERAK BO'LDI. `provider_shipments` jadvalida boy ma'lumot bor
+   * (tashqi raqam, kuzatuv kodi, ikki tomonning statusi, urinishlar soni,
+   * oxirgi xato), lekin uni KO'RISH yo'li yo'q edi: faqat bitta buyurtma
+   * bo'yicha olish mumkin (`GET shipments/:order_id`). Ya'ni "qaysi posilka
+   * yetmadi?" degan savolga javob topish uchun buyurtmalarni bittalab
+   * ochib chiqish kerak edi.
+   *
+   * `status` — `internal_status` bo'yicha filtr. Ataylab ichki status:
+   * tashuvchining o'z statusi har provayderda boshqacha nomlanadi va
+   * ro'yxatni filtrlash uchun yaroqsiz.
+   */
+  async listProviderShipments(query: {
+    integration_id?: string;
+    status?: string;
+    /** `true` — faqat xato bilan yiqilganlar (qayta jo'natish kerak). */
+    failed_only?: boolean;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const limit = query.limit && query.limit > 0 ? Math.min(query.limit, 100) : 20;
+
+    const qb = this.shipmentRepo
+      .createQueryBuilder('s')
+      .where('s.isDeleted = :d', { d: false });
+
+    if (query.integration_id) {
+      qb.andWhere('s.integration_id = :iid', {
+        iid: String(query.integration_id),
+      });
+    }
+    if (query.status) {
+      qb.andWhere('s.internal_status = :st', { st: String(query.status) });
+    }
+    if (query.failed_only) {
+      // Xato MATNI bor qatorlar — "yiqilgan" ning yagona ishonchli belgisi.
+      qb.andWhere('s.last_error IS NOT NULL');
+    }
+
+    const [items, total] = await qb
+      .orderBy('s.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    return successRes(
+      {
+        items,
+        pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      },
+      200,
+      'Provider shipments',
+    );
+  }
+
+  /**
+   * HAMKORDAN KELGAN POSILKALAR — `partner_shipment_refs`.
+   *
+   * ⚠️ Bu jadval ATAYLAB yupqa: unda faqat bog'lanish bor (hamkor id,
+   * ularning buyurtma raqami, bizning buyurtma id'si). Status va summa
+   * buyurtmaning o'zida — boshqa sxemada. Ularni bu yerda qo'shish
+   * cross-schema so'rov yoki har qator uchun alohida RMQ chaqiruvi talab
+   * qilardi (N+1). Shu bois ro'yxat bog'lanishni beradi, UI esa har qatordan
+   * buyurtma sahifasiga havola qiladi.
+   */
+  async listPartnerShipments(query: {
+    partner_id?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const limit = query.limit && query.limit > 0 ? Math.min(query.limit, 100) : 20;
+
+    const where: Record<string, unknown> = { isDeleted: false };
+    if (query.partner_id) {
+      where.partner_id = String(query.partner_id);
+    }
+
+    const [items, total] = await this.partnerShipmentRefRepo.findAndCount({
+      where,
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    return successRes(
+      {
+        items,
+        pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+      },
+      200,
+      'Partner shipments',
+    );
+  }
+
   async getProviderBalance(integration_id: string) {
     if (!integration_id) {
       this.badRequest('integration_id is required');
