@@ -104,6 +104,20 @@ export class OrderLifecycleService {
     throw new RpcException({ statusCode: 404, message });
   }
 
+  /**
+   * Tashqi manbadan kelgan `region` qiymatini XAVFSIZ o'qish.
+   *
+   * `region_id` — bigint FK. Sayt u yerga matn yuborsa Postgres tip xatosi
+   * beradi va import partiyasi yarim yo'lda uziladi. Shu bois faqat butun
+   * son qabul qilinadi.
+   */
+  private numericRegionId(value: unknown): string | null {
+    if (value === null || typeof value === 'undefined') return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    return /^\d+$/.test(raw) ? raw : null;
+  }
+
   private badRequest(message: string): never {
     throw new RpcException({ statusCode: 400, message });
   }
@@ -3765,6 +3779,38 @@ export class OrderLifecycleService {
         continue;
       }
 
+      /**
+       * Tashqi yozuvdan mahsulot qatorlarini o'qish.
+       *
+       * `items_field` — massiv qaysi maydonda; `item_name_field` /
+       * `item_qty_field` — massiv ichidagi element maydonlari. Uchalasi ham
+       * sozlanadi, chunki har sayt boshqacha nomlaydi.
+       *
+       * Massiv bo'lmasa yoki nom bo'sh bo'lsa qator TASHLANADI — yarim
+       * to'ldirilgan qator buyurtmani buzardi.
+       */
+      const rawItems = this.getFieldValue(
+        ext,
+        fieldMapping.items_field ?? 'items',
+      );
+      const mappedItems = (Array.isArray(rawItems) ? rawItems : [])
+        .map((row: unknown) => {
+          const name = String(
+            this.getFieldValue(row, fieldMapping.item_name_field ?? 'name') ??
+              '',
+          ).trim();
+          const qtyRaw = Number(
+            this.getFieldValue(row, fieldMapping.item_qty_field ?? 'quantity') ??
+              1,
+          );
+          return {
+            product_id: null,
+            product_name: name,
+            quantity: Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 1,
+          };
+        })
+        .filter((item) => item.product_name.length > 0);
+
       const districtExternal = this.getFieldValue(
         ext,
         fieldMapping.district_code_field ?? 'district',
@@ -3852,13 +3898,39 @@ export class OrderLifecycleService {
           null,
         operator,
         district_id: districtId,
-        region_id: regionExternal == null ? null : String(regionExternal),
+        /**
+         * ⚠️ ILGARI TASHQI QIYMAT XOM YOZILARDI va bu 500 berardi (audit
+         * EI-06): `region_id` — bigint FK, sayt esa u yerga "Toshkent" yoki
+         * "TSH" kabi matn yuborishi mumkin. Postgres tip xatosi
+         * (`22P02`) chiqarardi va import BITTALAB ketgani uchun partiya
+         * YARIM YO'LDA uzilardi — bir qismi yaratilib, qolgani yo'q.
+         *
+         * Endi faqat SON qabul qilinadi. Matn bo'lsa `null`: bu xavfsiz,
+         * chunki marshrutlash `order.region_id` ga TAYANMAYDI — pochtaga
+         * ajratish tumandan olingan `assigned_region` bo'yicha ishlaydi
+         * (`receiveNewOrders` → `logistics.district.find_by_ids`).
+         */
+        region_id: this.numericRegionId(regionExternal),
         address:
           this.getFieldValue(ext, fieldMapping.address_field ?? 'address') ??
           null,
         qr_code_token: qrCode == null ? null : String(qrCode),
         external_id: externalId,
         source: Order_source.EXTERNAL,
+        /**
+         * MAHSULOT QATORLARI (audit EI-12).
+         *
+         * Ilgari import qilingan buyurtmada item UMUMAN yo'q edi: operator
+         * narxi bor, lekin ichida NIMA borligi ko'rinmaydigan posilkani
+         * ko'rardi. Qisman sotishda esa qatorsiz buyurtma bilan ishlab
+         * bo'lmaydi.
+         *
+         * ⚠️ KATALOGGA BOG'LANMAYDI (`product_id: null`). Kichik saytlar
+         * uchun ataylab shunday: ularning mahsulot id'lari bizning
+         * katalogimizga mos kelmaydi va har nomni katalogda yaratish
+         * katalogni axlatga to'ldirardi. Nom va soni yetarli.
+         */
+        items: mappedItems,
       });
 
       created.push({

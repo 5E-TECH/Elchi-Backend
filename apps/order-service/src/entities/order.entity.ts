@@ -34,6 +34,18 @@ export enum OrderHolderType {
 @Index('IDX_ORDER_DELETED_AT', ['deleted_at'], {
   where: 'deleted_at IS NOT NULL',
 })
+/**
+ * Tashqi buyurtma dublikat tekshiruvi (`receiveExternalOrders`) shu ikki
+ * ustun bo'yicha izlaydi. Indekssiz har kelgan yozuv uchun `orders` jadvali
+ * TO'LIQ skanerlanardi (audit EI-11).
+ *
+ * UNIQUE EMAS: `external_id` NULL bo'lishi mumkin va mavjud ma'lumotda
+ * dublikat bo'lsa migratsiya deploy'ni yiqitardi. Himoya kodda qoladi,
+ * indeks uni tez qiladi.
+ */
+@Index('IDX_ORDER_EXTERNAL_LOOKUP', ['external_id', 'operator'], {
+  where: '"external_id" IS NOT NULL',
+})
 export class Order extends BaseEntity {
   @Column({ type: 'bigint' })
   market_id!: string;

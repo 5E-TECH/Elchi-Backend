@@ -3770,6 +3770,114 @@ export class IntegrationServiceService {
     return this.executeExternalRequest(input);
   }
 
+  /**
+   * SKANERLAB QABUL QILISH — kichik saytlar uchun ODDIY yo'l.
+   *
+   * NEGA SHUNDAY. Kichik saytlar (Donoxon kabi) webhook qurmaydi va bizga
+   * buyurtma yubormaydi. Ular oddiy: posilkada QR bor, biz o'sha QR bo'yicha
+   * ularning API'sidan buyurtmani so'raymiz. Operator skanerlaydi — buyurtma
+   * tizimga tushadi. PCS'da aynan shu naqsh (Adosh) ishlab turadi.
+   *
+   * ZANJIR: QR → saytning API'si → maydon xaritasi → buyurtma.
+   *
+   * ⚠️ ILGARI ZANJIR UZUQ EDI (audit EI-01). `search-by-qr` FAQAT ma'lumot
+   * olib kelardi, buyurtma yaratmasdi; `receiveExternalOrders` esa JWT
+   * ortida turgan alohida endpoint edi. Ya'ni operator uchun ishlaydigan
+   * yo'l yo'q edi — Swagger'dan qo'lda JSON tashlash kerak bo'lardi.
+   *
+   * ⚠️ BIR SO'ROV = BIR POSILKA. Skaner har posilkani alohida o'qiydi va
+   * har biri darhol tizimga tushishi kerak: to'da yig'ib oxirida yuborish
+   * brauzer yopilganda butun sessiyani yo'qotardi.
+   */
+  async scanIntake(input: {
+    slug: string;
+    qr_code: string;
+    requester?: { id?: string; roles?: string[] } | null;
+  }) {
+    const qr = String(input.qr_code ?? '').trim();
+    if (!qr) {
+      this.badRequest('qr_code majburiy');
+    }
+
+    const integration = await this.findActiveBySlug(input.slug);
+    if (!integration.market_id) {
+      /**
+       * Sababni ANIQ aytamiz: bu eng ko'p uchraydigan sozlama xatosi
+       * (audit EI-02) va "400 bad request" operatorga hech narsa bermaydi.
+       */
+      this.badRequest(
+        `"${integration.name}" ulanishida market bog'lanmagan — ` +
+          'Sozlamalarda "Market" maydonini to‘ldirish kerak',
+      );
+    }
+
+    // 1) Saytdan buyurtmani so'raymiz.
+    const found = await this.searchByQr({ slug: input.slug, qr_code: qr });
+    /**
+     * ⚠️ `?? ` ISHLATILMAYDI. `{ data: null }` kelganda `?? ` `null`ni "yo'q"
+     * deb hisoblab BUTUN QOBIQQA qaytardi — u esa truthy, ya'ni "topilmadi"
+     * qo'riqchisi ishlamasdi va bo'sh buyurtma yaratishga ketardi.
+     * Kalit MAVJUDLIGI bo'yicha tekshiramiz.
+     */
+    const envelope = found as { data?: unknown } | null;
+    const raw =
+      envelope && typeof envelope === 'object' && 'data' in envelope
+        ? envelope.data
+        : envelope;
+    if (!raw || (Array.isArray(raw) && !raw.length)) {
+      this.notFound('Bu QR bo‘yicha saytda buyurtma topilmadi');
+    }
+
+    /**
+     * Sayt bitta obyekt ham, massiv ham qaytarishi mumkin. Ikkisini ham
+     * qabul qilamiz — aks holda har sayt uchun alohida shakl talab qilardi.
+     */
+    const orders = Array.isArray(raw) ? raw : [raw];
+
+    /**
+     * QR qiymatini yozib qo'yamiz: shu token buyurtmaning
+     * `qr_code_token`iga tushadi va POSILKANI SKANERLASH keyin ham ishlaydi
+     * (yorliq saytda chop etilgan). Sayt payload'ida QR bo'lmasa, biz
+     * skanerlangan qiymatni ishlatamiz.
+     */
+    const qrField =
+      (integration.field_mapping as Record<string, string> | null)
+        ?.qr_code_field ?? 'qr_code';
+    const enriched = orders.map((o) =>
+      o && typeof o === 'object' && !(qrField in (o as object))
+        ? { ...(o as Record<string, unknown>), [qrField]: qr }
+        : o,
+    );
+
+    // 2) Buyurtmaga aylantiramiz — mavjud import yo'lidan.
+    const created = await this.rmqRequestStrict<Record<string, any>>(
+      this.orderClient,
+      { cmd: 'order.receive_external' },
+      { integration_id: String(integration.id), orders: enriched },
+      15000,
+    );
+    if (!created) {
+      throw new RpcException(
+        errorRes('Buyurtmani yaratib bo‘lmadi — order service javob bermadi', 502),
+      );
+    }
+
+    await this.activityLog.log({
+      entity_type: 'ExternalIntegration',
+      entity_id: String(integration.id),
+      action: ActivityAction.EXTERNAL_SYNC,
+      new_value: { qr_code: qr, source: 'scan_intake' },
+      metadata: { provider: integration.slug },
+      ...this.auditActor(input.requester),
+    });
+
+    return successRes(
+      (created as { data?: unknown })?.data ?? created,
+      200,
+      'Scanned order imported',
+    );
+  }
+
   async searchByQr(input: QrSearchInput) {
     if (!input.qr_code?.trim()) {
       this.badRequest('qr_code is required');
