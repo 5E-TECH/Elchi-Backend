@@ -41,6 +41,7 @@ import { ProviderRemittance } from './entities/provider-remittance.entity';
 import { Partner } from './entities/partner.entity';
 import { PartnerMarketRef } from './entities/partner-market-ref.entity';
 import { PartnerShipmentRef } from './entities/partner-shipment-ref.entity';
+import { InboundDealRef } from './entities/inbound-deal-ref.entity';
 import { PartnerProductRef } from './entities/partner-product-ref.entity';
 import { PartnerWebhookOutbox } from './entities/partner-webhook-outbox.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
@@ -59,6 +60,23 @@ const PAID_STATUSES = new Set<string>([
   Order_status.PARTLY_PAID,
 ]);
 
+/**
+ * Posilka natijasi SHULARDAN biri bo'lsa, kiruvchi buyurtma yo'li sinaladi.
+ *
+ * Uchalasi ham "bu hodisa mavjud posilkaga tegishli emas" degani:
+ *   `no_paths`    — `webhook_payload_paths` sozlanmagan (faqat buyurtma
+ *                   qabul qiladigan CRM'da u umuman kerak emas)
+ *   `no_status`   — payload'da status yo'q (bitim hodisasida bo'lmaydi)
+ *   `no_shipment` — bu havola bo'yicha posilka topilmadi
+ *
+ * Qolgan natijalar (`updated`, `unchanged`, `unmapped`) MAVJUD posilkaga
+ * tegishli — ular yo'lida buyurtma yaratish dublikat yasardi.
+ */
+const INBOUND_ORDER_OUTCOMES = new Set<string>([
+  'no_paths',
+  'no_status',
+  'no_shipment',
+]);
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -205,6 +223,8 @@ export class IntegrationServiceService {
     private readonly partnerProductRefRepo: Repository<PartnerProductRef>,
     @InjectRepository(PartnerWebhookOutbox)
     private readonly partnerWebhookOutboxRepo: Repository<PartnerWebhookOutbox>,
+    @InjectRepository(InboundDealRef)
+    private readonly inboundDealRefRepo: Repository<InboundDealRef>,
     private readonly activityLog: ActivityLogService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
@@ -2405,11 +2425,139 @@ export class IntegrationServiceService {
       'dispatch_config',
       'inbound_status_mapping',
       'webhook_payload_paths',
+      'inbound_order_config',
     ];
     for (const f of fields) {
       if (typeof dto[f] !== 'undefined') {
         this.assertSafeJsonConfig(dto[f], f);
       }
+    }
+  }
+
+  /**
+   * KIRUVCHI BUYURTMA SOZLAMASINI TEKSHIRISH (audit P7).
+   *
+   * ⚠️ ENG MUHIM QOIDA: `enabled: true` bo'lsa KAMIDA BITTA DARVOZA shart.
+   *
+   * Darvozasiz har bir webhook buyurtma yaratishga urinardi. CRM esa
+   * "bitim yaratildi" hodisasini mijoz manzili va telefoni to'lmasdan
+   * OLDIN yuboradi — ya'ni chala buyurtma tug'ilardi. Dublikat tekshiruvi
+   * bundan QUTQARMAYDI: aksincha, u birinchi chala yozuvni saqlab qolib,
+   * to'g'ri ma'lumot kelganda "allaqachon bor" deb tashlab yuborardi.
+   *
+   * Shuning uchun xato YOZISH vaqtida qaytariladi, webhook vaqtida emas:
+   * operator formani saqlayotganda tushuntirish o'qiydi, kechasi
+   * kelgan webhook logidan izlab yurmaydi.
+   */
+  private assertInboundOrderConfig(dto: Record<string, unknown>): void {
+    const raw = dto.inbound_order_config;
+    if (typeof raw === 'undefined' || raw === null) return;
+
+    if (typeof raw !== 'object' || Array.isArray(raw)) {
+      this.badRequest('inbound_order_config obyekt bo‘lishi kerak');
+    }
+    const cfg = raw as Record<string, unknown>;
+    if (!cfg.enabled) return;
+
+    const arrayGate = (key: string): string[] => {
+      const value = cfg[key];
+      if (typeof value === 'undefined' || value === null) return [];
+      if (!Array.isArray(value)) {
+        this.badRequest(`inbound_order_config.${key} massiv bo‘lishi kerak`);
+      }
+      const cleaned = (value as unknown[])
+        .map((v) => String(v ?? '').trim())
+        .filter(Boolean);
+      if (cleaned.length !== (value as unknown[]).length) {
+        this.badRequest(
+          `inbound_order_config.${key} ichida bo‘sh qiymat bo‘lmasligi kerak`,
+        );
+      }
+      return cleaned;
+    };
+
+    /**
+     * ⚠️ YO'L MAYDONLARI SATR BO'LISHI SHART (adversarial tekshiruv).
+     *
+     * `@IsObject()` faqat "obyektmi" deb qaraydi, ICHINI tekshirmaydi.
+     * `stage_path: 123` bazaga tushsa, webhook vaqtida `extractPath`
+     * `path.trim()` chaqirib TypeError bilan yiqilardi — ya'ni butun
+     * webhook 500 beradi va CRM qayta yuborishni boshlaydi.
+     */
+    for (const key of ['deal_path', 'funnel_path', 'stage_path', 'funnel_id']) {
+      const value = cfg[key];
+      if (value != null && typeof value !== 'string') {
+        this.badRequest(`inbound_order_config.${key} satr bo‘lishi kerak`);
+      }
+    }
+
+    const stages = arrayGate('create_on_stages');
+    const events = arrayGate('create_on_events');
+
+    if (!stages.length && !events.length) {
+      this.badRequest(
+        'inbound_order_config yoqilgan, lekin darvoza yo‘q: ' +
+          '`create_on_stages` yoki `create_on_events` dan kamida bittasi ' +
+          'to‘ldirilishi shart. Aks holda CRM ning har bir hodisasi ' +
+          'buyurtma yaratardi — hatto mijoz manzili hali to‘lmagan ' +
+          '"bitim yaratildi" hodisasi ham.',
+      );
+    }
+
+    /**
+     * Bosqich bo'yicha darvoza BOSQICH YO'LINI talab qiladi — aks holda
+     * qiymat hech qachon o'qilmaydi va darvoza jimgina hamma narsani
+     * o'tkazib yuborardi (ochiq qolgan darvoza eng yomon holat).
+     */
+    if (stages.length && !String(cfg.stage_path ?? '').trim()) {
+      this.badRequest(
+        '`create_on_stages` berilgan bo‘lsa `stage_path` ham shart — ' +
+          'bosqich qiymati payload‘da qayerda turganini bilmasak, ' +
+          'darvoza tekshirib bo‘lmaydi.',
+      );
+    }
+    if (String(cfg.funnel_id ?? '').trim() && !String(cfg.funnel_path ?? '').trim()) {
+      this.badRequest(
+        '`funnel_id` berilgan bo‘lsa `funnel_path` ham shart.',
+      );
+    }
+  }
+
+  /**
+   * KIRUVCHI BUYURTMA YO'LINING SHARTLARI — YAKUNIY holatga qarab.
+   *
+   * ⚠️ NEGA `assertInboundOrderConfig` DAN AYRIM (adversarial tekshiruv).
+   * U faqat `dto` ni ko'radi, bu esa SAQLANADIGAN qatorni. Shartlar
+   * boshqa maydonlarga bog'liq:
+   *
+   *   • `role` — buyurtma faqat `source` orqali kiradi. Ishlash vaqtida
+   *     ham tekshiriladi, lekin u yerda hodisa JIMGINA tashlanadi:
+   *     operator formani saqlab "bo'ldi" deb o'ylab yurardi.
+   *   • `market_id` — `receiveExternalOrders` busiz 400 qaytaradi, ya'ni
+   *     darvoza to'g'ri sozlangan bo'lsa ham HAR BIR bitim yiqilardi.
+   *
+   * Ikkisi ham yozish vaqtida to'sildi: xato formada ko'rinadi, kechasi
+   * kelgan webhook logida emas.
+   */
+  private assertInboundOrderPrereqs(row: {
+    role?: string | null;
+    market_id?: string | null;
+    inbound_order_config?: { enabled?: boolean } | null;
+  }): void {
+    if (!row.inbound_order_config?.enabled) return;
+
+    if (row.role !== 'source') {
+      this.badRequest(
+        'Voronkadan buyurtma yaratish faqat "Buyurtma manbasi" (source) ' +
+          `rolida ishlaydi — hozir rol "${row.role ?? 'yo‘q'}". Kargo bizga ` +
+          'buyurtma bermaydi, biz unga beramiz.',
+      );
+    }
+    if (!String(row.market_id ?? '').trim()) {
+      this.badRequest(
+        'Voronkadan buyurtma yaratish uchun market bog‘lanishi shart — ' +
+          'busiz har bir bitim "market_id is required" bilan yiqiladi.',
+      );
     }
   }
 
@@ -3252,6 +3400,7 @@ export class IntegrationServiceService {
       await this.assertOutboundUrlSafe(authUrl);
     }
     this.assertSafeConfigFields(dto as Record<string, unknown>);
+    this.assertInboundOrderConfig(dto as Record<string, unknown>);
 
     const entity = this.integrationRepo.create({
       name: name || slug,
@@ -3303,10 +3452,13 @@ export class IntegrationServiceService {
       inbound_status_mapping: dto.inbound_status_mapping ?? null,
       webhook_payload_paths: dto.webhook_payload_paths ?? null,
       dispatch_config: dto.dispatch_config ?? null,
+      inbound_order_config: dto.inbound_order_config ?? null,
 
       last_sync_at: null,
       total_synced_orders: 0,
     });
+
+    this.assertInboundOrderPrereqs(entity);
 
     const saved = await this.integrationRepo.save(entity);
     const [enriched] = await this.attachMarkets([saved as any]);
@@ -3623,6 +3775,9 @@ export class IntegrationServiceService {
       await this.assertOutboundUrlSafe(row.auth_url);
     }
     this.assertSafeConfigFields(dto as Record<string, unknown>);
+    this.assertInboundOrderConfig(dto as Record<string, unknown>);
+    // Yakuniy holat bo'yicha — `Object.assign` dan KEYIN.
+    this.assertInboundOrderPrereqs(row);
     const saved = await this.integrationRepo.save(row);
     const [enriched] = await this.attachMarkets([saved as any]);
 
@@ -4656,11 +4811,22 @@ export class IntegrationServiceService {
       algorithm,
     });
 
+    /**
+     * ⚠️ SARLAVHA QIYMATI KESILADI (adversarial topilma).
+     *
+     * `delivery_id` va `event_type` — `varchar` ustunlar, sarlavha esa
+     * imzolanmagan va uzunligi cheklanmagan. Haddan tashqari uzun qiymat
+     * `INSERT` ni yiqitardi, `saveWebhookLog` esa xatoni YUTIB `null`
+     * qaytaradi va oqim davom etardi: ya'ni audit yozuvi ham, replay
+     * himoyasi ham JIMGINA o'chib qolardi.
+     */
     const deliveryId = integration.webhook_id_header
-      ? (headers[integration.webhook_id_header.toLowerCase()] ?? null)
+      ? this.clampHeader(headers[integration.webhook_id_header.toLowerCase()])
       : null;
     const parsed = this.tryParseJson(rawBody.toString('utf8'));
-    const eventType = this.extractEventType(parsed, headers);
+    const eventType = this.clampHeader(
+      this.extractEventType(parsed, headers) ?? undefined,
+    );
 
     if (!verification.valid) {
       await this.saveWebhookLog({
@@ -4779,8 +4945,48 @@ export class IntegrationServiceService {
     }
 
     const applied = await this.applyWebhookToShipment(integration, parsed);
+
+    /**
+     * KIRUVCHI BUYURTMA — CRM voronkasi yo'li (audit P5/EI-10).
+     *
+     * Tartib ATAYLAB shunday: avval MAVJUD posilka qidiriladi, topilmasa
+     * buyurtma yaratishga o'tiladi. Nega:
+     *
+     *  1. Mavjud xatti-harakat o'zgarmaydi — posilka topilsa, ilgarigidek
+     *     status yangilanadi. Ya'ni bu qo'shimcha, almashtirish emas.
+     *  2. `no_shipment` bugun BOSHI BERK ko'cha: hodisa jurnalga tushadi va
+     *     hech narsa bo'lmaydi. Aynan shu yerda CRM bitimi buyurtmaga
+     *     aylanishi kerak.
+     *
+     * `no_paths`/`no_status` ham ro'yxatda, chunki faqat buyurtma qabul
+     * qiladigan CRM'da `webhook_payload_paths` umuman sozlanmaydi — u
+     * posilka kuzatish uchun kerak.
+     */
+    const inbound = INBOUND_ORDER_OUTCOMES.has(applied.outcome)
+      ? await this.applyWebhookToInboundOrder(integration, parsed)
+      : null;
+
+    /**
+     * Jurnalga YAKUNIY natija yoziladi. Buyurtma yaratish urinishi bo'lsa,
+     * operator uchun muhim natija o'shanisi: `no_shipment` deb yozib qo'ysak,
+     * buyurtma yaratilgani logda KO'RINMASDI.
+     */
     if (log?.id) {
-      await this.markWebhookProcessed(log.id, applied.outcome);
+      /**
+       * ⚠️ SABAB HAM YOZILADI (adversarial tekshiruv). Ilgari jurnalda
+       * faqat `apply: inbound_failed` turardi — "market_id sozlanmagan",
+       * "tuman aniqlanmadi" va "telefon yo'q" bir xil ko'rinardi, ya'ni
+       * operator nima tuzatishini BILMASDI.
+       */
+      const outcome =
+        inbound && inbound.outcome !== 'inbound_disabled'
+          ? inbound.outcome
+          : applied.outcome;
+      await this.markWebhookProcessed(
+        log.id,
+        outcome,
+        inbound?.reason ?? undefined,
+      );
     }
 
     return {
@@ -4791,7 +4997,356 @@ export class IntegrationServiceService {
       delivery_id: deliveryId,
       log_id: log?.id ?? null,
       shipment: applied,
+      ...(inbound && inbound.outcome !== 'inbound_disabled'
+        ? { inbound_order: inbound }
+        : {}),
     };
+  }
+
+  /**
+   * CRM BITIMI → BUYURTMA (audit P5/P7/EI-10).
+   *
+   * Buyurtma yaratishning O'ZI bu yerda YOZILMAYDI — `order.receive_external`
+   * ga topshiriladi. Nega: u yo'lda dublikat tekshiruvi
+   * (`external_id` + `operator`), telefon normalizatsiyasi, tuman aniqlash,
+   * mahsulot qatorlari va viloyat FK himoyasi ALLAQACHON bor va testlangan
+   * (EI-02/05/06/12 tuzatishlari). Ikkinchi nusxa yozish o'sha
+   * tuzatishlarning hammasini qaytadan takrorlashni talab qilardi va bir
+   * kuni ikkisi bir-biridan uzoqlashardi.
+   *
+   * ⚠️ HECH QACHON XATO OTMAYDI. Webhook 200 olishi kerak: non-2xx bo'lsa
+   * CRM qayta yuborishni boshlaydi, holbuki muammo sozlamada (masalan
+   * `market_id` yo'q) va qayta yuborish yordam bermaydi. Natija jurnalga
+   * yoziladi — operator shu yerdan ko'radi.
+   */
+  private async applyWebhookToInboundOrder(
+    integration: ExternalIntegration,
+    parsed: Record<string, unknown> | null,
+  ): Promise<{
+    outcome:
+      | 'inbound_disabled'
+      | 'inbound_wrong_role'
+      | 'inbound_no_gate'
+      | 'inbound_no_deal'
+      | 'inbound_other_funnel'
+      | 'inbound_no_funnel'
+      | 'inbound_no_stage'
+      | 'inbound_stage_skipped'
+      | 'inbound_no_external_id'
+      | 'inbound_race'
+      | 'inbound_timeout'
+      | 'inbound_failed'
+      | 'inbound_duplicate'
+      | 'inbound_created';
+    order_id?: string;
+    external_id?: string | null;
+    stage?: string | null;
+    reason?: string;
+  }> {
+    const cfg = integration.inbound_order_config;
+    if (!cfg?.enabled) return { outcome: 'inbound_disabled' };
+
+    /**
+     * ROL DARVOZASI (H1 naqshi). Buyurtma faqat `source` roli orqali
+     * kiradi. Kargo yoki to'lov tizimi ulanishida bu yo'l yoqilgan bo'lsa
+     * — sozlama xatosi: kargo bizga buyurtma bermaydi, biz unga beramiz.
+     */
+    if (integration.role !== 'source') {
+      this.logger.warn(
+        `inbound order SKIPPED for ${integration.slug}: role='${integration.role}', ` +
+          "faqat 'source' buyurtma yaratadi",
+      );
+      return { outcome: 'inbound_wrong_role' };
+    }
+
+    const stages = (cfg.create_on_stages ?? [])
+      .map((v) => String(v ?? '').trim())
+      .filter(Boolean);
+    const events = (cfg.create_on_events ?? [])
+      .map((v) => String(v ?? '').trim())
+      .filter(Boolean);
+
+    /**
+     * ⚠️ DARVOZASIZ YARATMAYMIZ — hatto yozish validatsiyasi o'tib ketgan
+     * bo'lsa ham (eski qator, qo'lda SQL, migratsiyadan keyingi holat).
+     * Ochiq qolgan darvoza "bitim yaratildi" hodisasidan chala buyurtma
+     * yasardi va dublikat tekshiruvi keyin to'g'ri ma'lumotni to'sardi.
+     */
+    if (!stages.length && !events.length) {
+      this.logger.warn(
+        `inbound order SKIPPED for ${integration.slug}: darvoza sozlanmagan ` +
+          '(create_on_stages/create_on_events bo\'sh)',
+      );
+      return { outcome: 'inbound_no_gate' };
+    }
+
+    const dealRaw = this.extractPath(parsed, cfg.deal_path);
+    /**
+     * CRM ba'zan bitimlarni MASSIV qilib yuboradi (Bitrix batch, amoCRM
+     * `leads.status[]`). Bir elementli massivni ochib olamiz; ko'p
+     * elementli bo'lsa ham hammasini emas, BIRINCHISINI olmaymiz —
+     * jimgina yo'qotish eng yomon holat, shuning uchun rad etamiz.
+     */
+    const deal = Array.isArray(dealRaw)
+      ? dealRaw.length === 1
+        ? dealRaw[0]
+        : null
+      : dealRaw;
+
+    if (!deal || typeof deal !== 'object') {
+      this.logger.warn(
+        `inbound order SKIPPED for ${integration.slug}: bitim obyekti topilmadi ` +
+          `(deal_path='${cfg.deal_path ?? ''}'` +
+          (Array.isArray(dealRaw) ? `, massivda ${dealRaw.length} element` : '') +
+          ')',
+      );
+      return { outcome: 'inbound_no_deal' };
+    }
+    const dealObj = deal as Record<string, unknown>;
+
+    // Voronka darvozasi — boshqa voronkaning bitimi bizga tegishli emas.
+    if (cfg.funnel_id) {
+      const funnel = this.stringifyPath(
+        this.extractPath(dealObj, cfg.funnel_path),
+      );
+      /**
+       * ⚠️ IKKI HOLAT AJRATILADI (adversarial topilma).
+       *
+       * Qiymat UMUMAN topilmasa — bu `funnel_path` XATO yozilgani, ya'ni
+       * sozlama nuqsoni: darvoza HAR BIR bitimni to'sib turadi va jurnalda
+       * hech qanday xato ko'rinmasdi ("processed", sababsiz). Operator
+       * "nega buyurtma kelmayapti?" degan savolga javob topa olmasdi.
+       *
+       * Qiymat bor, lekin boshqa — bu KUTILGAN holat (boshqa voronkaning
+       * bitimi) va jurnalni ifloslantirmasligi kerak.
+       */
+      if (!funnel) {
+        this.logger.warn(
+          `inbound order SKIPPED for ${integration.slug}: voronka qiymati yo'q ` +
+            `(funnel_path='${cfg.funnel_path ?? ''}')`,
+        );
+        return { outcome: 'inbound_no_funnel' };
+      }
+      if (funnel !== String(cfg.funnel_id)) {
+        return { outcome: 'inbound_other_funnel', stage: null };
+      }
+    }
+
+    const stage = stages.length
+      ? this.stringifyPath(this.extractPath(dealObj, cfg.stage_path))
+      : null;
+
+    /**
+     * Darvozalar OR bilan birlashadi: bosqich mos kelsa YOKI hodisa turi
+     * mos kelsa yaratiladi. Nega OR: CRM'lar ikki xil ishlaydi — biri
+     * bosqich id'sini payload ichida beradi, ikkinchisi alohida hodisa
+     * turini yuboradi (`deal.won`). Ikkisini AND qilsak, faqat ikkisini
+     * ham yuboradigan CRM ishlardi.
+     */
+    const stageMatch = Boolean(stage && stages.includes(stage));
+    /**
+     * ⚠️ Hodisa turi TANADAN o'qiladi, sarlavhadan EMAS — sarlavha imzoga
+     * kirmaydi va uni o'zgartirib darvozani ochib yuborish mumkin edi.
+     */
+    const bodyEvent = this.extractEventTypeFromBody(parsed);
+    const eventMatch = Boolean(bodyEvent && events.includes(bodyEvent));
+
+    if (!stageMatch && !eventMatch) {
+      if (stages.length && !stage) {
+        this.logger.warn(
+          `inbound order SKIPPED for ${integration.slug}: bosqich qiymati yo'q ` +
+            `(stage_path='${cfg.stage_path ?? ''}')`,
+        );
+        return { outcome: 'inbound_no_stage' };
+      }
+      // Kutilgan holat: bitim boshqa bosqichda yurgan — shovqin qilmaymiz.
+      return { outcome: 'inbound_stage_skipped', stage };
+    }
+
+    /**
+     * ⚠️ BITIM ID'SI SHART — DUBLIKAT TO'SIG'INING YAGONA TAYANCHI.
+     *
+     * `receiveExternalOrders` dublikatni `(external_id, operator)` bo'yicha
+     * tekshiradi, LEKIN `external_id` null bo'lsa tekshiruvni butunlay
+     * o'tkazib yuboradi (`order-lifecycle.service.ts:3747` — `if (externalId)`).
+     *
+     * Tortib olish yo'lida bu chidamli edi: importni operator qo'lda ishga
+     * tushiradi. CRM webhooki esa bitim hayotining HAR qadamida keladi —
+     * ya'ni id bo'lmasa bitta bitim o'nlab buyurtma yasardi va hech kim
+     * sababini tushunmasdi.
+     *
+     * Shu bois id yo'q bo'lsa YARATMAYMIZ. Kalit nomi `field_mapping.id_field`
+     * dan olinadi — order-service'dagi AYNI sukut qiymati bilan (`'id'`),
+     * aks holda bu yerda o'tib, o'sha yerda null bo'lib qolardi.
+     */
+    const idField =
+      (integration.field_mapping as Record<string, string> | null)?.id_field ??
+      'id';
+    const dealId = this.stringifyPath(this.extractPath(dealObj, idField));
+    if (!dealId) {
+      this.logger.warn(
+        `inbound order SKIPPED for ${integration.slug}: bitim id'si yo'q ` +
+          `(id_field='${idField}') — dublikat to'sig'i ishlamaydi, ` +
+          'shuning uchun buyurtma yaratilmadi',
+      );
+      return { outcome: 'inbound_no_external_id', stage };
+    }
+
+    /**
+     * ⚠️ QAT'IY DUBLIKAT TO'SIG'I — YARATISHDAN OLDIN (adversarial topilma).
+     *
+     * `receiveExternalOrders` dublikatni O'QIB tekshiradi, keyin yaratadi;
+     * ikkisi orasida tuman aniqlash va mijoz yaratish uchun RMQ borish-
+     * kelishlari bor, ya'ni poyga oynasi yuzlab millisekund. CRM esa bitta
+     * harakat uchun bir nechta webhook yuboradi (bosqich + mas'ul + maydon
+     * o'zgardi) va hammasi AYNI bosqichni tashiydi — ya'ni hammasi
+     * darvozadan o'tadi. Ikkisi bir vaqtda kelsa ikkisi ham "yo'q" deb
+     * o'qib, IKKI buyurtma yasardi.
+     *
+     * `inbound_deal_refs` dagi UNIQUE indeks buni DB darajasida to'sadi:
+     * ikkinchi yozuv xato oladi. `orders` ustiga unique qo'yib bo'lmaydi —
+     * eski ma'lumotdagi dublikat migratsiyani yiqitardi.
+     */
+    const dealRef = await this.claimInboundDeal(
+      String(integration.id),
+      dealId,
+      stage,
+    );
+    if (!dealRef) {
+      return { outcome: 'inbound_race', external_id: dealId, stage };
+    }
+
+    /**
+     * Yaratishni order-service bajaradi. `rmqRequestStrict` — oddiy
+     * `rmqRequest` HAMMA xatoni yutib `null` qaytaradi, ya'ni "market_id
+     * sozlanmagan" kabi aniq sabab jurnalga umuman tushmasdi.
+     */
+    try {
+      const res = await this.rmqRequestStrict<{
+        data?: {
+          created?: Array<{ id: string; external_id: string | null }>;
+          skipped?: Array<{ external_id: string | null; reason: string }>;
+        };
+      }>(
+        this.orderClient,
+        { cmd: 'order.receive_external' },
+        {
+          integration_id: String(integration.id),
+          orders: [dealObj],
+          /**
+           * ⚠️ QAT'IY REJIM — CRM yo'lida TAXMIN QILISH TAQIQLANADI.
+           *
+           * Tortib olishni operator qo'lda ishga tushiradi va natijani
+           * ko'radi; CRM webhooki esa to'xtovsiz keladi va hech kim
+           * qaramaydi. Shu bois "aniqlanmasa taxmin qil" bu yerda xavfli:
+           * tuman mos kelmasa posilka jimgina boshqa viloyatga ketardi,
+           * narx kaliti mos kelmasa COD 0 bo'lib pul yo'qolardi.
+           */
+          options: { strict: true },
+        },
+        /**
+         * ⚠️ 30 SEKUND, sukutdagi 5 EMAS (adversarial topilma).
+         *
+         * Buyurtma yaratish yo'lida bir nechta RMQ borish-kelishi bor
+         * (tuman, mijoz, keyin yozish). 5 sekund yetmasa `rmqRequestStrict`
+         * `null` qaytaradi — holbuki buyurtma YARATILGAN bo'lishi mumkin.
+         */
+        30_000,
+      );
+
+      /**
+       * ⚠️ `null` = TIMEOUT (`rmqRequestStrict` shunda `null` qaytaradi).
+       *
+       * Bu "yaratilmadi" DEGANI EMAS: order-service ishni tugatgan, faqat
+       * javob yetib kelmagan bo'lishi mumkin. Shu bois:
+       *   • natija `inbound_timeout` — `inbound_failed` emas (jurnalda
+       *     "yiqildi" deb yozish noto'g'ri xulosaga olib borardi);
+       *   • band qilish BEKOR QILINMAYDI — aks holda keyingi webhook
+       *     ikkinchi buyurtma yasashi mumkin edi.
+       */
+      if (res === null) {
+        this.logger.error(
+          `inbound order TIMEOUT for ${integration.slug} (deal=${dealId}) — ` +
+            "buyurtma yaratilgan bo'lishi mumkin, band qilish saqlanadi",
+        );
+        return {
+          outcome: 'inbound_timeout',
+          external_id: dealId,
+          stage,
+          reason: 'order service javob bermadi (30s)',
+        };
+      }
+
+      const created = res?.data?.created ?? [];
+      const skipped = res?.data?.skipped ?? [];
+
+      if (created.length) {
+        // Bog'lanishni yozib qo'yamiz — keyin "qaysi bitim qaysi buyurtma"
+        // savoliga javob shu yerdan chiqadi.
+        await this.inboundDealRefRepo
+          .update({ id: dealRef.id }, { order_id: String(created[0].id) })
+          .catch(() => undefined);
+
+        await this.activityLog.log({
+          entity_type: 'Order',
+          entity_id: created[0].id,
+          action: ActivityAction.CREATED,
+          new_value: {
+            source: 'crm_webhook',
+            provider: integration.slug,
+            stage,
+            external_id: created[0].external_id,
+          },
+          metadata: { integration_id: String(integration.id) },
+        });
+        return {
+          outcome: 'inbound_created',
+          order_id: created[0].id,
+          external_id: created[0].external_id,
+          stage,
+        };
+      }
+
+      /**
+       * `already_exists` — KUTILGAN holat, xato emas: CRM bir bitimni
+       * bosqich o'zgargan sayin qayta yuboradi. Dublikat tekshiruvi
+       * (`external_id` + `operator`) aynan shuni to'sadi.
+       */
+      const reason = skipped[0]?.reason ?? 'unknown';
+      if (reason === 'already_exists') {
+        return {
+          outcome: 'inbound_duplicate',
+          external_id: skipped[0]?.external_id ?? null,
+          stage,
+        };
+      }
+
+      /**
+       * ⚠️ YARATILMADI — REF O'CHIRILADI. Aks holda bog'lanish qolib,
+       * buyurtma esa hech qachon yaratilmasdi: keyingi webhook "dublikat"
+       * deb to'silib, muammo ABADIY qotib qolardi. Sozlama tuzatilgach
+       * CRM keyingi hodisada qayta urinishi kerak.
+       */
+      await this.releaseInboundDeal(dealRef.id);
+      this.logger.warn(
+        `inbound order NOT created for ${integration.slug}: ${reason}`,
+      );
+      return { outcome: 'inbound_failed', reason, stage };
+    } catch (error) {
+      /**
+       * Sozlama xatosi (market_id yo'q, tuman topilmadi) yoki
+       * order-service yiqilgan. Webhook baribir 200 oladi — qayta
+       * yuborish yordam bermaydi, sozlamani tuzatish kerak.
+       */
+      const reason =
+        error instanceof Error ? error.message : 'order service unavailable';
+      // Yuqoridagi bilan ayni sabab: qayta urinish imkoni ochiq qolishi kerak.
+      await this.releaseInboundDeal(dealRef.id);
+      this.logger.error(
+        `inbound order FAILED for ${integration.slug}: ${reason}`,
+      );
+      return { outcome: 'inbound_failed', reason, stage };
+    }
   }
 
   /**
@@ -4987,9 +5542,76 @@ export class IntegrationServiceService {
     };
   }
 
+  /**
+   * KIRUVCHI WEBHOOK JURNALI — O'QISH (adversarial topilma, HIGH).
+   *
+   * ⚠️ NEGA KERAK BO'LDI. Butun kiruvchi diagnostika (`inbound_created`,
+   * `inbound_failed`, `no_shipment`, imzo rad etildi…) `provider_webhook_logs`
+   * ga yozilardi, lekin uni O'QIYDIGAN yo'l UMUMAN YO'Q edi — na endpoint,
+   * na UI. Ya'ni "xato jurnalda ko'rinadi" degan butun loyiha amalda
+   * ishlamasdi: operator sababni faqat DB'ga kirib yoki konteyner
+   * loglaridan topa olardi.
+   *
+   * ⚠️ TANA QAYTARILMAYDI. `raw_body` va `parsed_payload` ichida mijozning
+   * telefoni va manzili turadi. Ro'yxatda ular KERAK EMAS — savol "nima
+   * bo'ldi", "mijoz kim" emas. Shu bois maydonlar tanlab olinadi.
+   */
+  async listWebhookLogs(input: {
+    integration_id?: string;
+    status?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(1, Number(input?.page ?? 1) || 1);
+    const limit = Math.min(100, Math.max(1, Number(input?.limit ?? 20) || 20));
+
+    const where: Record<string, unknown> = {};
+    if (input?.integration_id) {
+      where.integration_id = String(input.integration_id);
+    }
+    if (input?.status) {
+      where.status = String(input.status);
+    }
+
+    const [rows, total] = await this.webhookLogRepo.findAndCount({
+      where,
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+      select: {
+        id: true,
+        createdAt: true,
+        integration_id: true,
+        provider_slug: true,
+        delivery_id: true,
+        event_type: true,
+        signature_valid: true,
+        status: true,
+        error: true,
+        processed_at: true,
+        trace_id: true,
+      },
+    });
+
+    return successRes(
+      {
+        items: rows,
+        meta: {
+          page,
+          limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+        },
+      },
+      200,
+      'webhook logs',
+    );
+  }
+
   private async markWebhookProcessed(
     logId: string,
     outcome: string,
+    detail?: string,
   ): Promise<void> {
     // Surface diagnostic outcomes (couldn't attach / map) in `error` so they
     // stand out in the log; a clean apply leaves error NULL.
@@ -4998,12 +5620,48 @@ export class IntegrationServiceService {
      * QO'LLANMAGAN. Jurnalda sababsiz "processed" bo'lib turishi chalg'itardi
      * — operator "nega status o'zgarmadi?" degan savolga javob topolmasdi.
      */
+    /**
+     * Kiruvchi buyurtma natijalari IKKIGA bo'linadi:
+     *
+     *   Diagnostika (sozlama xatosi — operator ko'rishi SHART):
+     *     `inbound_failed`      — yaratish yiqildi (market_id yo'q va h.k.)
+     *     `inbound_no_gate`     — darvoza sozlanmagan
+     *     `inbound_wrong_role`  — rol `source` emas
+     *     `inbound_no_deal`     — `deal_path` xato
+     *     `inbound_no_stage`    — `stage_path` xato
+     *     `inbound_no_external_id` — bitim id'si yo'q (dublikat to'sig'i
+     *                             ishlamaydi, shuning uchun yaratilmaydi)
+     *     `inbound_no_funnel`   — `funnel_path` xato (qiymat topilmadi)
+     *     `inbound_timeout`     — javob kelmadi; buyurtma YARATILGAN
+     *                             bo'lishi mumkin, tekshirish kerak
+     *
+     *   Kutilgan holat (jurnalni ifloslantirmasligi kerak):
+     *     `inbound_created`       — buyurtma yaratildi
+     *     `inbound_duplicate`     — bitim allaqachon buyurtmaga aylangan
+     *     `inbound_stage_skipped` — bitim boshqa bosqichda yuribdi
+     *     `inbound_race`          — bitim allaqachon band (bir vaqtda
+     *                             kelgan ikkinchi webhook)
+     *     `inbound_other_funnel`  — boshqa voronkaning bitimi
+     *
+     * ⚠️ Ikkinchi guruh NEGA xato emas: CRM bitimni bosqich o'zgargan sayin
+     * yuboradi, ya'ni bu hodisalar ASOSIY oqim. Ularni xato deb belgilasak
+     * jurnal soxta ogohlantirish bilan to'lib, haqiqiy xato ko'rinmay
+     * qolardi.
+     */
     const diagnostic = [
       'no_paths',
       'no_status',
       'no_shipment',
       'unmapped',
       'integration_inactive',
+      'inbound_failed',
+      'inbound_no_gate',
+      'inbound_wrong_role',
+      'inbound_no_deal',
+      'inbound_no_stage',
+      'inbound_no_external_id',
+      'inbound_timeout',
+      'inbound_no_funnel',
     ];
     try {
       await this.webhookLogRepo.update(
@@ -5011,7 +5669,10 @@ export class IntegrationServiceService {
         {
           status: 'processed',
           processed_at: new Date(),
-          error: diagnostic.includes(outcome) ? `apply: ${outcome}` : null,
+          error: diagnostic.includes(outcome)
+            ? // Sabab bo'lsa yoniga qo'shiladi, bo'lmasa natija yolg'iz.
+              `apply: ${outcome}${detail ? ` — ${detail}` : ''}`
+            : null,
         },
       );
     } catch {
@@ -5091,6 +5752,86 @@ export class IntegrationServiceService {
     const candidate =
       parsed?.['event'] ?? parsed?.['event_type'] ?? parsed?.['type'];
     return this.stringifyPath(candidate);
+  }
+
+  /**
+   * Bitimni "band qilish" — UNIQUE indeks orqali.
+   *
+   * `null` qaytsa: bu bitim allaqachon band (boshqa webhook oldinda) —
+   * ya'ni dublikat yoki poyga. Xato OTILMAYDI: webhook 200 olishi kerak.
+   *
+   * ⚠️ Faqat unique buzilishi (`23505`) dublikat deb hisoblanadi. Boshqa
+   * DB xatosi (ulanish uzildi va h.k.) YUQORIGA otiladi — uni dublikat deb
+   * yutib yuborsak, buyurtma jimgina yaratilmay qolardi.
+   */
+  private async claimInboundDeal(
+    integrationId: string,
+    dealId: string,
+    stage: string | null,
+  ): Promise<InboundDealRef | null> {
+    try {
+      const row = this.inboundDealRefRepo.create({
+        integration_id: integrationId,
+        deal_id: dealId,
+        order_id: null,
+        stage: stage ?? null,
+      });
+      return await this.inboundDealRefRepo.save(row);
+    } catch (error) {
+      const code = (error as { code?: string })?.code;
+      if (code === '23505') {
+        this.logger.warn(
+          `inbound deal ${dealId} allaqachon band (integration=${integrationId}) — ` +
+            'dublikat yoki bir vaqtda kelgan webhook',
+        );
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /** Band qilishni bekor qilish — yaratish yiqilganda. */
+  private async releaseInboundDeal(id: string): Promise<void> {
+    /**
+     * ⚠️ HAQIQIY o'chirish (`delete`), soft-delete EMAS. Soft-delete
+     * qatorni joyida qoldiradi va UNIQUE indeks `isDeleted` ni bilmaydi —
+     * ya'ni qayta urinish o'sha to'siqqa urilib, buyurtma hech qachon
+     * yaratilmasdi.
+     */
+    await this.inboundDealRefRepo.delete({ id }).catch(() => undefined);
+  }
+
+  /**
+   * HODISA TURI — FAQAT TANADAN (imzolangan qismdan).
+   *
+   * ⚠️ NEGA ALOHIDA METOD KERAK BO'LDI. `extractEventType` sarlavhani
+   * tanadan USTUN qo'yadi (`x-event` va h.k.) — jurnal uchun bu qulay,
+   * lekin QAROR qabul qilish uchun XAVFLI: HMAC imzo faqat TANANI qamraydi
+   * (`libs/common/src/webhook/hmac.ts` — `update(rawBody)`), sarlavhalar
+   * imzoga kirmaydi va gateway ularni o'zgarishsiz uzatadi.
+   *
+   * Ya'ni to'g'ri imzolangan bitta tanani qo'lga olgan odam uni
+   * `x-event: <create_on_events dagi qiymat>` sarlavhasi bilan qayta
+   * yuborib, BOSQICH darvozasini butunlay chetlab o'tardi — va natijada
+   * manzili to'lmagan chala bitimdan buyurtma tug'ilardi. Dublikat to'sig'i
+   * esa o'sha chala yozuvni abadiy qulflab qo'yardi.
+   *
+   * Shu bois darvoza faqat imzolangan ma'lumotga qaraydi.
+   */
+  private extractEventTypeFromBody(
+    parsed: Record<string, unknown> | null,
+  ): string | null {
+    const candidate =
+      parsed?.['event'] ?? parsed?.['event_type'] ?? parsed?.['type'];
+    return this.stringifyPath(candidate);
+  }
+
+  /** Sarlavhadan kelgan qiymatni ustun sig'imiga kesish. */
+  private clampHeader(value?: string | null, max = 255): string | null {
+    if (value == null) return null;
+    const trimmed = String(value).trim();
+    if (!trimmed) return null;
+    return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
   }
 
   private truncateBody(body: string, max = 20_000): string {

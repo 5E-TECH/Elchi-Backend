@@ -67,6 +67,9 @@ jest.mock('./entities/partner-product-ref.entity', () => ({
 jest.mock('./entities/partner-webhook-outbox.entity', () => ({
   PartnerWebhookOutbox: class PartnerWebhookOutbox {},
 }));
+jest.mock('./entities/inbound-deal-ref.entity', () => ({
+  InboundDealRef: class InboundDealRef {},
+}));
 
 const SECRET = 'provider-shared-secret';
 const BODY = JSON.stringify({ event: 'package.delivered', order_id: '1001' });
@@ -130,6 +133,12 @@ function makeService(integration: Record<string, unknown> | null) {
     save: jest.fn(async (e: any) => ({ id: 'pwo1', ...e })),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
   };
+  const inboundDealRefRepo: any = {
+    create: jest.fn((dto: any) => ({ ...dto })),
+    save: jest.fn(async (e: any) => ({ id: 'idr1', ...e })),
+    update: jest.fn().mockResolvedValue(undefined),
+    delete: jest.fn().mockResolvedValue(undefined),
+  };
   const noClient: any = {};
 
   const service = new IntegrationServiceService(
@@ -145,6 +154,7 @@ function makeService(integration: Record<string, unknown> | null) {
     partnerShipmentRefRepo,
     partnerProductRefRepo,
     partnerWebhookOutboxRepo,
+    inboundDealRefRepo,
     activityLog,
     noClient,
     noClient,

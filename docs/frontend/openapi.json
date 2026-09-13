@@ -6765,6 +6765,60 @@
         ]
       }
     },
+    "/integrations/webhook-logs": {
+      "get": {
+        "operationId": "IntegrationGatewayController_webhookLogs",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "rejected | verified | processed",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kiruvchi webhook jurnali — imzo, natija, xato sababi (tana qaytarilmaydi)",
+        "tags": [
+          "Integrations"
+        ]
+      }
+    },
     "/integrations/sync/history": {
       "get": {
         "operationId": "IntegrationGatewayController_syncHistory",
@@ -13439,6 +13493,20 @@
             },
             "description": "Kiruvchi webhook payload'ida posilkani va statusni qaysi yo'l bo'yicha topish"
           },
+          "inbound_order_config": {
+            "type": "object",
+            "example": {
+              "enabled": true,
+              "deal_path": "data.lead",
+              "funnel_path": "pipeline_id",
+              "funnel_id": "7482913",
+              "stage_path": "status_id",
+              "create_on_stages": [
+                "142"
+              ]
+            },
+            "description": "CRM voronkasidan buyurtma yaratish: qaysi voronka va BOSQICHDA bitim buyurtmaga aylanadi. Kamida bitta darvoza shart (`create_on_stages` yoki `create_on_events`) — darvozasiz CRM \"bitim yaratildi\" hodisasini manzil to'lmasdan oldin yuboradi va chala buyurtma tug'ilardi."
+          },
           "dispatch_config": {
             "type": "object",
             "example": {
@@ -13626,6 +13694,20 @@
               "status": "data.order.state"
             },
             "description": "Kiruvchi webhook payload'ida posilkani va statusni qaysi yo'l bo'yicha topish"
+          },
+          "inbound_order_config": {
+            "type": "object",
+            "example": {
+              "enabled": true,
+              "deal_path": "data.lead",
+              "funnel_path": "pipeline_id",
+              "funnel_id": "7482913",
+              "stage_path": "status_id",
+              "create_on_stages": [
+                "142"
+              ]
+            },
+            "description": "CRM voronkasidan buyurtma yaratish: qaysi voronka va BOSQICHDA bitim buyurtmaga aylanadi. Kamida bitta darvoza shart (`create_on_stages` yoki `create_on_events`) — darvozasiz CRM \"bitim yaratildi\" hodisasini manzil to'lmasdan oldin yuboradi va chala buyurtma tug'ilardi."
           },
           "dispatch_config": {
             "type": "object",

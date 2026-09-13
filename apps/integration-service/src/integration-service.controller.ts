@@ -356,6 +356,13 @@ export class IntegrationServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'integration.webhook.logs' })
+  listWebhookLogs(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listWebhookLogs(data?.query ?? data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'integration.sync.enqueue' })
   enqueueSync(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>

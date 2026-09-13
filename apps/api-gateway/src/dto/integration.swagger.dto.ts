@@ -244,6 +244,27 @@ export class CreateIntegrationRequestDto {
   @ApiPropertyOptional({
     type: Object,
     example: {
+      enabled: true,
+      deal_path: 'data.lead',
+      funnel_path: 'pipeline_id',
+      funnel_id: '7482913',
+      stage_path: 'status_id',
+      create_on_stages: ['142'],
+    },
+    description:
+      "CRM voronkasidan buyurtma yaratish: qaysi voronka va BOSQICHDA " +
+      "bitim buyurtmaga aylanadi. Kamida bitta darvoza shart " +
+      '(`create_on_stages` yoki `create_on_events`) — darvozasiz CRM ' +
+      "\"bitim yaratildi\" hodisasini manzil to'lmasdan oldin yuboradi va " +
+      'chala buyurtma tug\'ilardi.',
+  })
+  @IsOptional()
+  @IsObject()
+  inbound_order_config?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: {
       endpoint: '/v1/orders',
       method: 'POST',
       body_template: { receiver: '{{customer_name}}', cod: '{{cod_amount}}' },
@@ -489,6 +510,27 @@ export class UpdateIntegrationRequestDto {
   @IsOptional()
   @IsObject()
   webhook_payload_paths?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: {
+      enabled: true,
+      deal_path: 'data.lead',
+      funnel_path: 'pipeline_id',
+      funnel_id: '7482913',
+      stage_path: 'status_id',
+      create_on_stages: ['142'],
+    },
+    description:
+      "CRM voronkasidan buyurtma yaratish: qaysi voronka va BOSQICHDA " +
+      "bitim buyurtmaga aylanadi. Kamida bitta darvoza shart " +
+      '(`create_on_stages` yoki `create_on_events`) — darvozasiz CRM ' +
+      "\"bitim yaratildi\" hodisasini manzil to'lmasdan oldin yuboradi va " +
+      'chala buyurtma tug\'ilardi.',
+  })
+  @IsOptional()
+  @IsObject()
+  inbound_order_config?: Record<string, unknown>;
 
   @ApiPropertyOptional({
     type: Object,
