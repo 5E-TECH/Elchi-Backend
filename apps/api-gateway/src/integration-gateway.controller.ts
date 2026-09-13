@@ -311,6 +311,44 @@ export class IntegrationGatewayController {
     ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
+  /**
+   * SKANERLAB QABUL QILISH — kichik saytlar uchun oddiy yo'l (audit EI-01).
+   *
+   * Operator posilkadagi QR'ni skanerlaydi, Elchi saytning API'sidan
+   * buyurtmani so'rab oladi va tizimga yozadi. `search-by-qr` dan farqi:
+   * u FAQAT ma'lumot qaytaradi, bu esa buyurtma YARATADI.
+   *
+   * ⚠️ MANAGER ham kiradi: posilkalarni HQ menejeri qabul qiladi.
+   */
+  @Post(':slug/scan-intake')
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
+  @ApiOperation({
+    summary: 'Scan a parcel QR and import the order from the site',
+  })
+  @ApiParam({ name: 'slug' })
+  @ApiBody({ type: QrSearchRequestDto })
+  scanIntake(
+    @Param('slug') slug: string,
+    @Body() dto: QrSearchRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.scan_intake' },
+        {
+          slug,
+          qr_code: dto.qr_code,
+          requester: { id: req.user?.sub, roles: req.user?.roles ?? [] },
+        },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+  }
+
   @Post(':slug/search-by-qr')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiOperation({ summary: 'Universal QR search via integration config' })

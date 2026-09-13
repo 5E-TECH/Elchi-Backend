@@ -449,6 +449,25 @@ export class IntegrationServiceController {
     );
   }
 
+  /**
+   * Kichik sayt uchun ODDIY qabul yo'li: QR → saytning API'si → buyurtma.
+   * Ilgari zanjir uzuq edi (audit EI-01).
+   */
+  @MessagePattern({ cmd: 'integration.scan_intake' })
+  scanIntake(
+    @Payload()
+    data: {
+      slug: string;
+      qr_code: string;
+      requester?: { id?: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.scanIntake(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'integration.shipment.list' })
   listShipments(
     @Payload()
