@@ -13307,6 +13307,66 @@
           "status_sync_config": {
             "type": "object"
           },
+          "webhook_secret": {
+            "type": "string",
+            "description": "Kiruvchi webhook HMAC sekreti. Javobda QAYTMAYDI. Bo'sh satr — tozalash."
+          },
+          "webhook_signature_header": {
+            "type": "string",
+            "example": "x-signature",
+            "description": "Imzo qaysi sarlavhada keladi (sukut: x-signature)"
+          },
+          "webhook_signature_prefix": {
+            "type": "string",
+            "example": "sha256=",
+            "description": "Imzo qiymati oldidagi prefiks (masalan `sha256=`)"
+          },
+          "webhook_algorithm": {
+            "type": "string",
+            "example": "sha256",
+            "enum": [
+              "sha256",
+              "sha512"
+            ],
+            "description": "HMAC algoritmi"
+          },
+          "webhook_id_header": {
+            "type": "string",
+            "example": "x-delivery-id",
+            "description": "Takroriy yetkazishni aniqlash uchun hodisa id sarlavhasi (replay guard)"
+          },
+          "inbound_status_mapping": {
+            "type": "object",
+            "example": {
+              "delivered": "sold",
+              "canceled": "cancelled"
+            },
+            "description": "Ularning statusi → bizning statusimiz"
+          },
+          "webhook_payload_paths": {
+            "type": "object",
+            "example": {
+              "order_id": "data.order.id",
+              "status": "data.order.state"
+            },
+            "description": "Kiruvchi webhook payload'ida posilkani va statusni qaysi yo'l bo'yicha topish"
+          },
+          "dispatch_config": {
+            "type": "object",
+            "example": {
+              "endpoint": "/v1/orders",
+              "method": "POST",
+              "body_template": {
+                "receiver": "{{customer_name}}",
+                "cod": "{{cod_amount}}"
+              },
+              "response_paths": {
+                "external_ref": "data.id",
+                "tracking": "data.tracking"
+              }
+            },
+            "description": "Posilka jo'natish shabloni: endpoint, method, body_template, response_paths"
+          },
           "api_url": {
             "type": "string",
             "example": "https://api.ozar.uz"
@@ -13434,6 +13494,66 @@
           },
           "status_sync_config": {
             "type": "object"
+          },
+          "webhook_secret": {
+            "type": "string",
+            "description": "Kiruvchi webhook HMAC sekreti. Javobda QAYTMAYDI. Bo'sh satr — tozalash."
+          },
+          "webhook_signature_header": {
+            "type": "string",
+            "example": "x-signature",
+            "description": "Imzo qaysi sarlavhada keladi (sukut: x-signature)"
+          },
+          "webhook_signature_prefix": {
+            "type": "string",
+            "example": "sha256=",
+            "description": "Imzo qiymati oldidagi prefiks (masalan `sha256=`)"
+          },
+          "webhook_algorithm": {
+            "type": "string",
+            "example": "sha256",
+            "enum": [
+              "sha256",
+              "sha512"
+            ],
+            "description": "HMAC algoritmi"
+          },
+          "webhook_id_header": {
+            "type": "string",
+            "example": "x-delivery-id",
+            "description": "Takroriy yetkazishni aniqlash uchun hodisa id sarlavhasi (replay guard)"
+          },
+          "inbound_status_mapping": {
+            "type": "object",
+            "example": {
+              "delivered": "sold",
+              "canceled": "cancelled"
+            },
+            "description": "Ularning statusi → bizning statusimiz"
+          },
+          "webhook_payload_paths": {
+            "type": "object",
+            "example": {
+              "order_id": "data.order.id",
+              "status": "data.order.state"
+            },
+            "description": "Kiruvchi webhook payload'ida posilkani va statusni qaysi yo'l bo'yicha topish"
+          },
+          "dispatch_config": {
+            "type": "object",
+            "example": {
+              "endpoint": "/v1/orders",
+              "method": "POST",
+              "body_template": {
+                "receiver": "{{customer_name}}",
+                "cod": "{{cod_amount}}"
+              },
+              "response_paths": {
+                "external_ref": "data.id",
+                "tracking": "data.tracking"
+              }
+            },
+            "description": "Posilka jo'natish shabloni: endpoint, method, body_template, response_paths"
           }
         }
       },
