@@ -468,22 +468,6 @@ export class IntegrationServiceController {
     );
   }
 
-  @MessagePattern({ cmd: 'integration.shipment.list' })
-  listShipments(
-    @Payload()
-    data: {
-      integration_id?: string;
-      internal_status?: string;
-      limit?: number;
-      offset?: number;
-    },
-    @Ctx() context: RmqContext,
-  ) {
-    return this.executeAndAck(context, () =>
-      this.integrationService.listShipments(data),
-    );
-  }
-
   @MessagePattern({ cmd: 'integration.shipment.dispatch' })
   dispatchShipment(
     @Payload()
@@ -502,6 +486,19 @@ export class IntegrationServiceController {
 
   // ===== Provider COD reconciliation =====
 
+  /**
+   * ⚠️ BU NAQSH ILGARI IKKI MARTA RO'YXATDAN O'TGAN EDI (audit M1) — bu
+   * mening o'z xatom: jo'natmalar ro'yxatini qo'shganda mavjud
+   * `listShipments` handlerini sezmadim. Ikki handler bir naqshda bo'lsa
+   * bittasi SOYA ostida qoladi va qaysi biri ishlashi implementatsiyaga
+   * bog'liq — ya'ni gateway mening filtrlarimni (`status`, `failed_only`,
+   * `page`) yuborardi-yu, eski handler ularni E'TIBORSIZ qoldirishi mumkin
+   * edi va panel filtrlanmagan ma'lumot ko'rsatardi.
+   *
+   * Eski handler va uning `listShipments` metodi o'lik edi (hech bir
+   * gateway marshruti chaqirmasdi, testda ham ishlatilmasdi) — ikkisi ham
+   * olib tashlandi.
+   */
   @MessagePattern({ cmd: 'integration.shipment.list' })
   listProviderShipments(
     @Payload()

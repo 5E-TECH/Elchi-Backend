@@ -4744,6 +4744,40 @@ export class IntegrationServiceService {
     // a payload we can't map, or an order we don't have a shipment for, is
     // logged but never fails the webhook — the provider still gets a 200 and
     // the raw event stays in the log for replay.
+    /**
+     * ⚠️ KILL-SWITCH ASIMMETRIYASI (audit H2).
+     *
+     * `receiveWebhook` `is_active` ni TEKSHIRMASDI: o'chirilgan kargoning
+     * webhooki hamon buyurtma statusini o'zgartirardi va COD qarzini
+     * yozardi. Ya'ni "to'xtatish" tugmasi faqat yarim ishlardi va operator
+     * ulanish o'chiq deb o'ylab yurardi.
+     *
+     * ⚠️ 200 QAYTARAMIZ, rad etmaymiz. Non-2xx bo'lsa provayder qayta
+     * yuborishni boshlaydi va navbatini to'ldiradi — holbuki muammo bizda
+     * emas, qaror bizda. Hodisa JURNALGA yoziladi (qayta ijro uchun), lekin
+     * QO'LLANMAYDI. PCS'dagi boshqaruv paneli ham aynan shu xatti-harakatni
+     * tasvirlaydi: "o'chirilsa hodisalar jurnalga yoziladi, lekin
+     * qo'llanmaydi".
+     */
+    if (!integration.is_active) {
+      this.logger.warn(
+        `webhook SKIPPED for ${integration.slug}: ulanish o'chirilgan — ` +
+          'hodisa jurnalga yozildi, lekin qo\'llanmadi',
+      );
+      if (log?.id) {
+        await this.markWebhookProcessed(log.id, 'integration_inactive');
+      }
+      return {
+        ok: true,
+        code: 200,
+        reason: 'integration_inactive',
+        event_type: eventType,
+        delivery_id: deliveryId,
+        log_id: log?.id ?? null,
+        shipment: { outcome: 'skipped_inactive' as const },
+      };
+    }
+
     const applied = await this.applyWebhookToShipment(integration, parsed);
     if (log?.id) {
       await this.markWebhookProcessed(log.id, applied.outcome);
@@ -4890,13 +4924,48 @@ export class IntegrationServiceService {
       // receivable. Best-effort — never fail the webhook over it.
       try {
         if (mapped.action === 'sell') {
-          await this.recordProviderReceivable({
-            integration_id: String(integration.id),
-            order_id: shipment.order_id,
-            provider_slug: integration.slug,
-            external_ref: shipment.external_ref,
-            amount: Number(markResult?.data?.total_price ?? 0),
-          });
+          /**
+           * ⚠️ NOL SUMMALI QARZ YOZILMAYDI.
+           *
+           * MUAMMO. Summa `markResult?.data?.total_price` dan olinadi, lekin
+           * yuqoridagi `order.provider.mark` chaqiruvi "best-effort": xato
+           * bo'lsa `rmqRequest` uni YUTIB `null` qaytaradi va catch faqat
+           * ogohlantirish yozadi. O'sha holda `?? 0` ishga tushib, kargoning
+           * qarzi **0 so'm** bo'lib yozilardi.
+           *
+           * Nol qarz YO'Q qarzdan YOMONROQ: u "hisob yopilgan" kabi
+           * ko'rinadi, qoldiqda ko'rinmaydi va hech kim yo'qolgan pulni
+           * qidirmaydi. Order service bir zumga yiqilsa, kargo bizga
+           * qarzdorligi jimgina o'chib ketardi.
+           *
+           * Endi: summa o'qilmasa qarz YARATILMAYDI va bu ogohlantirish
+           * bilan yoziladi. Qarzni keyin solishtiruvchi yoki takroriy
+           * webhook tiklaydi — posilka statusi allaqachon saqlangan.
+           */
+          const codAmount = Number(markResult?.data?.total_price);
+          if (!Number.isFinite(codAmount) || codAmount <= 0) {
+            this.logger.warn(
+              `provider receivable SKIPPED for order ${shipment.order_id}: ` +
+                `summa o'qilmadi (total_price=${String(
+                  markResult?.data?.total_price,
+                )}). Nol summali qarz yozilmadi.`,
+            );
+            await this.activityLog.log({
+              entity_type: 'ProviderShipment',
+              entity_id: String(shipment.order_id),
+              action: ActivityAction.EXTERNAL_SYNC,
+              new_value: { receivable: 'skipped', reason: 'amount_unreadable' },
+              metadata: { provider: integration.slug },
+            });
+          } else {
+            await this.recordProviderReceivable({
+              integration_id: String(integration.id),
+              order_id: shipment.order_id,
+              provider_slug: integration.slug,
+              external_ref: shipment.external_ref,
+              amount: codAmount,
+            });
+          }
         } else {
           await this.cancelProviderReceivable(
             String(integration.id),
@@ -4924,7 +4993,18 @@ export class IntegrationServiceService {
   ): Promise<void> {
     // Surface diagnostic outcomes (couldn't attach / map) in `error` so they
     // stand out in the log; a clean apply leaves error NULL.
-    const diagnostic = ['no_paths', 'no_status', 'no_shipment', 'unmapped'];
+    /**
+     * `integration_inactive` ham diagnostika: hodisa qabul qilingan, lekin
+     * QO'LLANMAGAN. Jurnalda sababsiz "processed" bo'lib turishi chalg'itardi
+     * — operator "nega status o'zgarmadi?" degan savolga javob topolmasdi.
+     */
+    const diagnostic = [
+      'no_paths',
+      'no_status',
+      'no_shipment',
+      'unmapped',
+      'integration_inactive',
+    ];
     try {
       await this.webhookLogRepo.update(
         { id: logId },
@@ -5134,65 +5214,6 @@ export class IntegrationServiceService {
     return null;
   }
 
-  async listShipments(input: {
-    integration_id?: string;
-    internal_status?: string;
-    limit?: number;
-    offset?: number;
-  }) {
-    const take = Math.min(Math.max(Number(input.limit ?? 50), 1), 200);
-    const skip = Math.max(Number(input.offset ?? 0), 0);
-    const where: Record<string, unknown> = { isDeleted: false };
-    if (input.integration_id)
-      where.integration_id = String(input.integration_id);
-    if (input.internal_status) where.internal_status = input.internal_status;
-
-    const [rows, total] = await this.shipmentRepo.findAndCount({
-      where,
-      order: { updatedAt: 'DESC', id: 'DESC' },
-      take,
-      skip,
-    });
-    return successRes(
-      { rows, total, limit: take, offset: skip },
-      200,
-      'shipments',
-    );
-  }
-
-  /**
-   * Map a provider's raw status string to our internal handling using the
-   * integration's inbound_status_mapping. Case-insensitive on the provider
-   * code. Returns null when the provider status isn't mapped (caller decides
-   * whether that's an intermediate status to ignore or a config gap to log).
-   */
-  mapProviderStatus(
-    integration: Pick<ExternalIntegration, 'inbound_status_mapping'>,
-    providerStatus: string,
-  ): { status?: string; action?: string } | null {
-    const mapping = integration.inbound_status_mapping ?? {};
-    if (!providerStatus) return null;
-
-    // Exact match first, then case-insensitive.
-    if (mapping[providerStatus]) return mapping[providerStatus];
-    const upper = providerStatus.toUpperCase();
-    for (const [key, value] of Object.entries(mapping)) {
-      if (key.toUpperCase() === upper) return value;
-    }
-    return null;
-  }
-
-  /**
-   * Outbound: create a shipment for an order at the provider.
-   *
-   * Provider-agnostic — the request is built from the integration's
-   * dispatch_config templates interpolated with `context` (flat order fields
-   * the caller supplies; integration-service never imports the order schema).
-   * On success we record external_ref + tracking on the shipment; on failure
-   * we stamp last_error and bump send_attempts so a retry/redispatch is
-   * visible. Idempotent at the provider via an Idempotency-Key header the
-   * caller can template in.
-   */
   async dispatchShipment(input: {
     slug?: string;
     integration_id?: string;
@@ -5209,16 +5230,151 @@ export class IntegrationServiceService {
       this.notFound('integration not found for dispatch');
     }
 
+    /**
+     * ⚠️ KILL-SWITCH VA ROL QO'RIQCHILARI (audit H1, H2).
+     *
+     * `is_active` TEKSHIRILMASDI: o'chirilgan kargoga ham posilka
+     * jo'natilardi. Ya'ni "to'xtatish" tugmasi jo'natishni to'smasdi va
+     * operator ulanish o'chiq deb o'ylab yurardi.
+     *
+     * `role` ham TEKSHIRILMASDI: to'lov tizimiga yoki ko'zguga posilka
+     * jo'natish mumkin edi. Bu nafaqat ma'nosiz — sotuvda ular uchun COD
+     * QARZI yozilardi (`recordProviderReceivable`), ya'ni soxta qarz paydo
+     * bo'lardi va hisob-kitob buzilardi.
+     */
+    if (!integration.is_active) {
+      this.badRequest(
+        `"${integration.name}" ulanishi o'chirilgan — posilka jo'natilmaydi`,
+      );
+    }
+    if (integration.role && integration.role !== 'carrier') {
+      this.badRequest(
+        `"${integration.name}" yetkazuvchi emas (roli: ${integration.role}) — ` +
+          'posilka faqat yetkazuvchiga jo‘natiladi',
+      );
+    }
+
     const cfg = integration.dispatch_config;
     if (!cfg?.endpoint) {
       this.badRequest('dispatch_config.endpoint is required for this provider');
     }
 
+    /**
+     * ⚠️ KONTEKSTNI BACKEND O'ZI YIG'ADI (audit C3).
+     *
+     * MUAMMO. Ilgari kontekst FAQAT chaqiruvchidan kelardi
+     * (`input.context`), frontend esa faqat `{ order_id }` yuborardi. Ya'ni
+     * shablondagi barcha `{{customer_name}}`, `{{cod_amount}}`, `{{address}}`
+     * BO'SH SATRGA aylanardi.
+     *
+     * Bu PUL xavfi: kargo `cod_amount` ni bo'sh/0 olsa, kuryer mijozdan
+     * HECH NARSA undirmaydi. PCS'da aynan shu turdagi xato bir marta yuz
+     * bergan va izohda yozilgan.
+     *
+     * Chaqiruvchiga ishonib bo'lmaydi: har yangi chaqiruv joyi kerakli
+     * maydonlarni bilishi kerak bo'lardi va bittasi esdan chiqsa xato
+     * JIMGINA yuz berardi. Shu bois kontekst buyurtmadan YIG'ILADI,
+     * chaqiruvchi esa faqat USTIGA yozishi mumkin.
+     */
+    const orderRes = await this.rmqRequest<Record<string, any>>(
+      this.orderClient,
+      { cmd: 'order.find_by_id_enriched' },
+      { id: orderId },
+      8000,
+    );
+    const order = (orderRes?.data ?? orderRes ?? {}) as Record<string, any>;
+    const customer = (order.customer ?? {}) as Record<string, any>;
+
+    /**
+     * Bo'sh/null qiymat kontekstga QO'SHILMAYDI.
+     *
+     * ⚠️ Lekin bu o'zi yetarli EMAS: `interpolate` yo'q kalitni BO'SH SATR
+     * bilan almashtiradi (`:2450` — `ctx[key] ?? ''`). Ya'ni maydon
+     * jimgina bo'sh ketadi. Shu bois pastda ALOHIDA tekshiruv bor: qaysi
+     * o'rin egallari to'ldirilmaganini ogohlantirish bilan yozadi.
+     */
+    const put = (
+      target: Record<string, string>,
+      key: string,
+      value: unknown,
+    ) => {
+      if (value === null || typeof value === 'undefined') return;
+      const str = String(value).trim();
+      if (str) target[key] = str;
+    };
+
+    const fromOrder: Record<string, string> = {};
+    put(fromOrder, 'order_number', order.order_number);
+    put(fromOrder, 'customer_name', customer.name);
+    put(fromOrder, 'customer_phone', customer.phone_number);
+    put(fromOrder, 'extra_phone', customer.extra_number);
+    put(fromOrder, 'address', order.address ?? customer.address);
+    put(fromOrder, 'district', order.district?.name ?? customer.district?.name);
+    put(fromOrder, 'district_sato', order.district?.sato_code);
+    put(fromOrder, 'region', order.region?.name);
+    put(fromOrder, 'total_price', order.total_price);
+    /**
+     * `cod_amount` — mijozdan yig'ilishi kerak bo'lgan summa. Elchi'da
+     * bu `to_be_paid`, LEKIN u sotuvdan keyin boshqa ma'no oladi
+     * (`netToBePaid` bilan ustiga yoziladi — audit F2). Jo'natish esa
+     * sotuvdan OLDIN bo'ladi, shu bois bu yerda qiymat to'g'ri.
+     */
+    put(fromOrder, 'cod_amount', order.to_be_paid ?? order.total_price);
+    put(fromOrder, 'comment', order.comment);
+    put(
+      fromOrder,
+      'items',
+      Array.isArray(order.items)
+        ? order.items
+            .map(
+              (i: Record<string, any>) =>
+                `${String(i.product_name ?? i.product?.name ?? '')} x${
+                  i.quantity ?? 1
+                }`,
+            )
+            .filter((t: string) => t.trim().length > 2)
+            .join(', ')
+        : undefined,
+    );
+
     const ctx: Record<string, string> = {
       order_id: orderId,
+      ...fromOrder,
+      // Chaqiruvchi ATAYLAB oxirida — u buyurtmadan olinganini ustiga yozishi mumkin.
       ...(input.context ?? {}),
     };
     const method = (cfg.method ?? 'POST').toUpperCase() as HttpMethod;
+    /**
+     * ⚠️ TO'LDIRILMAGAN O'RIN EGALLARI — OGOHLANTIRISH.
+     *
+     * `interpolate` yo'q kalitni bo'sh satr qiladi, ya'ni shablon
+     * `{{cod_amount}}` deb yozilgan-u kontekstda qiymat bo'lmasa, kargo
+     * BO'SH summa oladi va kuryer mijozdan hech narsa undirmaydi — sabab
+     * esa hech qayerda ko'rinmasdi.
+     *
+     * Jo'natishni TO'XTATMAYMIZ: ba'zi maydon ataylab bo'sh bo'lishi
+     * mumkin (izoh, qo'shimcha telefon). Lekin ro'yxat logda va posilka
+     * yozuvida qoladi, ya'ni muammo ko'rinadi.
+     */
+    const templateText = JSON.stringify([
+      cfg.body_template ?? {},
+      cfg.query_template ?? {},
+      cfg.headers ?? {},
+    ]);
+    const missingPlaceholders = Array.from(
+      new Set(
+        [...templateText.matchAll(/\{\{\s*(\w+)\s*\}\}/g)]
+          .map((m) => m[1])
+          .filter((key) => !ctx[key]),
+      ),
+    );
+    if (missingPlaceholders.length) {
+      this.logger.warn(
+        `dispatch ${integration.slug} order ${orderId}: ` +
+          `to'ldirilmagan o'rin egallari — ${missingPlaceholders.join(', ')}`,
+      );
+    }
+
     const body = this.interpolate(cfg.body_template ?? {}, ctx) as Record<
       string,
       unknown
@@ -5449,6 +5605,39 @@ export class IntegrationServiceService {
   }
 
   /** Outstanding (pending) COD total a provider still owes. */
+  /**
+   * Map a provider's raw status string to our internal handling using the
+   * integration's inbound_status_mapping. Case-insensitive on the provider
+   * code. Returns null when the provider status isn't mapped (caller decides
+   * whether that's an intermediate status to ignore or a config gap to log).
+   */
+  mapProviderStatus(
+    integration: Pick<ExternalIntegration, 'inbound_status_mapping'>,
+    providerStatus: string,
+  ): { status?: string; action?: string } | null {
+    const mapping = integration.inbound_status_mapping ?? {};
+    if (!providerStatus) return null;
+
+    // Exact match first, then case-insensitive.
+    if (mapping[providerStatus]) return mapping[providerStatus];
+    const upper = providerStatus.toUpperCase();
+    for (const [key, value] of Object.entries(mapping)) {
+      if (key.toUpperCase() === upper) return value;
+    }
+    return null;
+  }
+
+  /**
+   * Outbound: create a shipment for an order at the provider.
+   *
+   * Provider-agnostic — the request is built from the integration's
+   * dispatch_config templates interpolated with `context` (flat order fields
+   * the caller supplies; integration-service never imports the order schema).
+   * On success we record external_ref + tracking on the shipment; on failure
+   * we stamp last_error and bump send_attempts so a retry/redispatch is
+   * visible. Idempotent at the provider via an Idempotency-Key header the
+   * caller can template in.
+   */
   /**
    * JO'NATMALAR RO'YXATI — tashuvchiga berilgan posilkalar.
    *
