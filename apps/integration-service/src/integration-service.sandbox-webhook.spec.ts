@@ -310,6 +310,44 @@ describe("Sandbox ko'zgusi", () => {
       );
     });
 
+    it('⭐ PRODAKSHN SOZLANMAGAN bo‘lsa ham nusxa KETADI', async () => {
+      /**
+       * Ilgari chaqiruv `!webhook_url` tekshiruvidan KEYIN turardi — ya'ni
+       * prodakshn webhooki sozlanmagan bo'lsa metod yuqorida xato tashlab
+       * chiqib ketardi va sinov muhitiga HECH NARSA yetmasdi.
+       *
+       * Natijada integratsiyaning eng birinchi qadami — "avval sandbox'da
+       * sinab ko'rish" — imkonsiz edi: sinov uchun prodakshn manzilini
+       * qo'yish kerak bo'lardi.
+       */
+      const svc = makeSvc({ ...FULL, webhook_url: null });
+      const f = fetchByUrl({});
+      global.fetch = f as any;
+
+      // Asosiy yo'l "sozlanmagan" deb xato tashlaydi — bu kutilgan.
+      await expect(svc.dispatchPartnerWebhook({ ...ROW })).rejects.toThrow();
+      await new Promise((r) => setImmediate(r));
+
+      expect(f.mock.calls.map((c: any[]) => c[0])).toEqual([SB]);
+    });
+
+    it('⭐ prodakshn TARMOQ XATOSI nusxani to‘smaydi', async () => {
+      /**
+       * Chaqiruv asosiy `fetch` dan keyin turganda, `fetch` otib yuborsa
+       * nusxa ham ketmasdi — aynan sinov muhiti kerak bo'lgan paytda.
+       */
+      const svc = makeSvc(FULL);
+      const f = fetchByUrl({ [MAIN]: new Error('ECONNRESET') });
+      global.fetch = f as any;
+
+      await expect(svc.dispatchPartnerWebhook({ ...ROW })).rejects.toThrow(
+        /ECONNRESET/,
+      );
+      await new Promise((r) => setImmediate(r));
+
+      expect(f.mock.calls.map((c: any[]) => c[0])).toContain(SB);
+    });
+
     it('urinish raqami berilmasa BIRINCHI deb qabul qilinadi', async () => {
       // Sukut qiymati eski chaqiruvlarni buzmasligi kerak.
       const svc = makeSvc(FULL);

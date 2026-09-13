@@ -1831,6 +1831,32 @@ export class IntegrationServiceService {
     const partner = await this.partnerRepo.findOne({
       where: { id: String(row.partner_id), isDeleted: false },
     });
+    /**
+     * SANDBOX NUSXASI — ASOSIY YO'LDAN MUSTAQIL.
+     *
+     * ⚠️ NEGA BU YERDA, YETKAZISHDAN OLDIN (UI/UX auditi). Ilgari chaqiruv
+     * asosiy `fetch` dan KEYIN va `!webhook_url` tekshiruvidan keyin
+     * turardi. Ikki oqibati bor edi:
+     *
+     *  1. Prodakshn webhooki hali SOZLANMAGAN bo'lsa metod yuqorida
+     *     `PartnerWebhookNotConfiguredError` tashlab chiqib ketardi — ya'ni
+     *     sinov muhitiga HECH NARSA yetmasdi. "Avval sandbox'da sinab
+     *     ko'rish" — integratsiyaning eng birinchi qadami — imkonsiz edi.
+     *  2. Prodakshn manzili yiqilsa (tarmoq xatosi) `fetch` otib yuborardi
+     *     va nusxa ham ketmasdi.
+     *
+     * ⚠️ INVARIANT BUZILMAYDI: `void` + metod ichidagi `try/catch` —
+     * sandbox xatosi hech qachon asosiy hodisaga ta'sir qilmaydi.
+     *
+     * ⚠️ FAQAT BIRINCHI URINISHDA. Ilgari nusxa har urinishda ketardi:
+     * hamkor 500 qaytarsa sinov muhiti AYNI hodisaning 4 nusxasini olardi
+     * va u yerda bitta buyurtma to'rt marta ishlangandek ko'rinib,
+     * sinovning O'ZI yolg'on natija berardi.
+     */
+    if (partner && attempt <= 1) {
+      void this.mirrorToSandbox(partner, row);
+    }
+
     if (!partner?.webhook_url) {
       /**
        * ⚠️ ILGARI bu yerda `{ skipped: 'no webhook_url' }` qaytarilardi va
@@ -1857,27 +1883,6 @@ export class IntegrationServiceService {
       body: rawBody,
       signal: AbortSignal.timeout(15000),
     });
-
-    /**
-     * SANDBOX NUSXASI — asosiy yetkazish natijasidan QAT'IY NAZAR yuboriladi,
-     * lekin uning natijasi hisobga OLINMAYDI.
-     *
-     * `void` va `catch` ataylab: sandbox sinov kanali, uning xatosi tufayli
-     * haqiqiy hodisa `permanently_failed` bo'lib qolishi mutlaqo qabul
-     * qilinmaydi. Shuning uchun `await` ham qilinmaydi — sinov muhiti sekin
-     * javob bersa, haqiqiy yetkazish kutib turmasin.
-     */
-    /**
-     * ⚠️ FAQAT BIRINCHI URINISHDA. Ilgari nusxa HAR urinishda ketardi:
-     * hamkor 500 qaytarsa asosiy hodisa 4 marta qayta yuborilardi va sinov
-     * muhiti AYNI hodisaning 4 nusxasini olardi. Sinov muhitida esa
-     * odatda idempotentlik himoyasi bo'lmaydi — ya'ni u yerda bitta
-     * buyurtma to'rt marta ishlangandek ko'rinardi va sinovning o'zi
-     * yolg'on natija berardi.
-     */
-    if (attempt <= 1) {
-      void this.mirrorToSandbox(partner, row);
-    }
 
     if (!res.ok) {
       throw new Error(`partner webhook HTTP ${res.status}`);
