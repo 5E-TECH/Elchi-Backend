@@ -4725,20 +4725,6 @@ export class OrderLifecycleService {
   }
 
   /**
-   * Apply a terminal status reported by an external delivery provider.
-   *
-   * STATUS-ONLY by design: this moves the order to the mapped status and
-   * records a tracking event, but performs NO cashbox / profit / commission
-   * movement. Provider-delivered orders settle financially via a separate
-   * provider-reconciliation flow (the provider collects COD and remits to us),
-   * which is intentionally not modelled here. We therefore bypass the finance
-   * emit path (enqueueFinanceOnStatusChange) entirely.
-   *
-   * action → status: sell → SOLD, cancel → CANCELLED, return → CLOSED.
-   * Idempotent: an order already in (or past) the target terminal state is a
-   * no-op, so a duplicate or out-of-order webhook can't double-apply.
-   */
-  /**
    * YETKAZISHDAN OLDIN bekor qilish — hamkor (Partner API) uchun tor yo'l.
    *
    * MUAMMO (audit F4). `cancelOrder` `WAITING` holat va `post_id` ni TALAB
@@ -4868,6 +4854,20 @@ export class OrderLifecycleService {
     );
   }
 
+  /**
+   * Apply a terminal status reported by an external delivery provider.
+   *
+   * STATUS-ONLY by design: this moves the order to the mapped status and
+   * records a tracking event, but performs NO cashbox / profit / commission
+   * movement. Provider-delivered orders settle financially via a separate
+   * provider-reconciliation flow (the provider collects COD and remits to us),
+   * which is intentionally not modelled here. We therefore bypass the finance
+   * emit path (enqueueFinanceOnStatusChange) entirely.
+   *
+   * action → status: sell → SOLD, cancel → CANCELLED, return → CLOSED.
+   * Idempotent: an order already in (or past) the target terminal state is a
+   * no-op, so a duplicate or out-of-order webhook can't double-apply.
+   */
   async markByProvider(input: {
     order_id: string;
     action: 'sell' | 'cancel' | 'return';
@@ -4907,6 +4907,61 @@ export class OrderLifecycleService {
         { id: order.id, status: oldStatus, skipped: true },
         200,
         'order already in target state (idempotent)',
+      );
+    }
+
+    /**
+     * ⚠️ SOTILGAN BUYURTMANI KARGO WEBHOOKI BEKOR QILA OLMAYDI (audit C5).
+     *
+     * MUAMMO. `cancelStates` ro'yxatida `SOLD`/`PAID`/`PARTLY_PAID` YO'Q,
+     * ya'ni ichki oqimda sotilgan buyurtma uchun kechikkan yoki takroriy
+     * `cancel` webhooki `alreadyApplied` ni false qoldirib statusni
+     * `CANCELLED` ga o'zgartirardi.
+     *
+     * Bu metod esa ATAYLAB status-only: kassani qaytarmaydi. Natijada
+     * buyurtma "bekor qilingan" bo'lib turadi, pul esa sotuv sifatida
+     * kassada qoladi — status va daftar JIMGINA ajraladi va farqni hech
+     * narsa ko'rsatmaydi.
+     *
+     * ⚠️ XATO TASHLAMAYMIZ: chaqiruvchi (`applyWebhookToShipment`) bu
+     * chaqiruvni "best-effort" qiladi va xato webhookni yiqitmaydi —
+     * ya'ni tashlangan xato JIMGINA yutilardi. Shu bois status
+     * O'ZGARTIRILMAYDI, hodisa esa audit jurnaliga ANIQ sabab bilan
+     * yoziladi: farqni odam ko'rib qaror qilishi kerak.
+     *
+     * Nega avtomatik qaytarmaymiz: pulni teskari aylantirish kassa, kuryer
+     * qarzi va operator daromadiga tegadi — buni webhook qaroriga
+     * qoldirish xavfli.
+     */
+    if (input.action === 'cancel' && soldStates.includes(oldStatus)) {
+      this.logger.warn(
+        `provider cancel REFUSED for order ${order.id}: ` +
+          `buyurtma '${oldStatus}' holatida (sotilgan). Status o'zgartirilmadi.`,
+      );
+      await this.activityLog.log({
+        entity_type: 'Order',
+        entity_id: String(order.id),
+        action: ActivityAction.EXTERNAL_SYNC,
+        old_value: { status: oldStatus },
+        new_value: { status: oldStatus, provider_action: 'cancel_refused' },
+        metadata: {
+          provider_slug: input.provider_slug ?? null,
+          external_ref: input.external_ref ?? null,
+          reason:
+            'sotilgan buyurtmani kargo webhooki bekor qila olmaydi — ' +
+            'pul qaytarish qo\'lda ko\'rib chiqilishi kerak',
+        },
+      });
+      return successRes(
+        {
+          id: order.id,
+          status: oldStatus,
+          skipped: true,
+          refused: true,
+          reason: 'sold_cannot_be_cancelled_by_provider',
+        },
+        200,
+        'provider cancel refused: order already sold',
       );
     }
 

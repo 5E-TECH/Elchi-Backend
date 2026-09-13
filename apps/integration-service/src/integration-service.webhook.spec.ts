@@ -164,7 +164,15 @@ function baseIntegration(overrides: Record<string, unknown> = {}) {
   return {
     id: '5',
     slug: 'acme-cargo',
+    name: 'Acme Cargo',
     isDeleted: false,
+    /**
+     * ⚠️ `is_active` va `role` 2026-09-13 da QO'SHILDI (audit H1, H2).
+     * Kill-switch endi ikki tomonda ham ishlaydi: o'chirilgan ulanishga
+     * posilka jo'natilmaydi va uning webhooki buyurtmaga QO'LLANMAYDI.
+     */
+    is_active: true,
+    role: 'carrier',
     webhook_secret: SECRET, // plaintext → decryptCredential returns as-is
     webhook_secret_previous: null,
     webhook_signature_header: 'x-signature',
