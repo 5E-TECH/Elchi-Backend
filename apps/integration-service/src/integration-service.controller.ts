@@ -483,6 +483,33 @@ export class IntegrationServiceController {
 
   // ===== Provider COD reconciliation =====
 
+  @MessagePattern({ cmd: 'integration.shipment.list' })
+  listProviderShipments(
+    @Payload()
+    data: {
+      integration_id?: string;
+      status?: string;
+      failed_only?: boolean;
+      page?: number;
+      limit?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listProviderShipments(data ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.partner.shipment.list' })
+  listPartnerShipments(
+    @Payload() data: { partner_id?: string; page?: number; limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listPartnerShipments(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'integration.receivable.list' })
   listReceivables(
     @Payload()
