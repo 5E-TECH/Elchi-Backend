@@ -101,3 +101,62 @@ export function computeSaleLegs(i: SaleShareInputs) {
     marketAmount: round2(i.total - i.marketTariff),
   };
 }
+
+/**
+ * Tiyin-level tolerance for the tariff-coverage check below. Money is stored as
+ * numeric(14,2), so anything at or under one tiyin is rounding noise, not a
+ * real shortfall.
+ */
+export const TARIFF_SHORTFALL_TOLERANCE = 0.01;
+
+/**
+ * How much a sale would cost HQ out of its own pocket, i.e. the amount by which
+ * what the courier and a PARTNER branch KEEP exceeds what the market is charged.
+ *
+ * The COD chain pays the market `total − marketTariff` but only collects
+ * `total − courierShare − branchShare` up the chain, so whenever the market
+ * tariff does not cover both shares HQ must hand the market MORE than it ever
+ * received — a silent per-order loss (booked as a negative `sell_profit`). This
+ * is the negated `computeSellProfit`, clamped at 0 so a healthy sale returns 0.
+ *
+ * Returns 0 (no shortfall) when the tariff covers the shares.
+ */
+export function computeTariffShortfall(
+  marketTariff: number,
+  courierShare: number,
+  branchShare: number,
+): number {
+  const shortfall = round2(
+    -computeSellProfit(marketTariff, courierShare, branchShare),
+  );
+  return shortfall > TARIFF_SHORTFALL_TOLERANCE ? shortfall : 0;
+}
+
+/**
+ * The tariff ONE order must be settled with: the per-order snapshot/override
+ * when the order carries one, otherwise the live profile tariff for the order's
+ * delivery mode (center vs home).
+ *
+ * Every sale and rollback path MUST resolve tariffs through this helper. The
+ * same 8-line ternary used to be copy-pasted per path and they had DRIFTED:
+ * `sellOrder` read only the live profile while `partlySellOrder` and the
+ * rollback preferred the snapshot — so an order with a per-order override got
+ * its market cashbox leg posted with one tariff while `sell_profit` and the
+ * reversal used another, leaving the market over/under-paid and a residue in
+ * its cashbox after a rollback.
+ */
+export function resolveOrderTariff(params: {
+  /** Per-order snapshot/override (`order.market_tariff` / `courier_tariff`). */
+  snapshot: number | null | undefined;
+  /** True when the order is delivered to a center (vs the customer's address). */
+  isCenter: boolean;
+  centerTariff: number | null | undefined;
+  homeTariff: number | null | undefined;
+}): number {
+  if (params.snapshot != null) {
+    return Number(params.snapshot);
+  }
+  return Number(
+    (params.isCenter ? params.centerTariff : params.homeTariff) ?? 0,
+  );
+}

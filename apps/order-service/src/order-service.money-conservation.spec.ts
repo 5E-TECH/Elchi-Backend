@@ -50,7 +50,10 @@ describe('COD money conservation (Faza 3)', () => {
       const total = round2(next() * 1_000_000); // up to 1,000,000 som
       const marketTariff = round2(next() * total); // 0..total
       // courierShare + branchShare drawn from within marketTariff so HQ profit
-      // stays ≥ 0 (the normal owned/per-order config space).
+      // stays ≥ 0 (the normal owned/per-order config space). The OPPOSITE
+      // region (tariff does not cover the shares → HQ pays the market more than
+      // it collected) is now REJECTED at sale time and is covered by
+      // order-service.tariff-guard.spec.ts.
       const courierShare = round2(next() * marketTariff);
       const branchShare = round2(next() * (marketTariff - courierShare));
       yield { total, marketTariff, courierShare, branchShare };

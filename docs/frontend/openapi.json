@@ -14720,6 +14720,15 @@
             "type": "string",
             "description": "Chiquvchi webhook HMAC sekret (AES bilan shifrlab saqlanadi)"
           },
+          "sandbox_webhook_url": {
+            "type": "string",
+            "example": "https://dev.marketplace.example.uz/webhooks/elchi",
+            "description": "Sinov muhitining manzili. Nusxa yuborish `sandbox_enabled` kaliti bilan boshqariladi — manzilning o‘zi oqimni yoqmaydi."
+          },
+          "sandbox_webhook_secret": {
+            "type": "string",
+            "description": "Sinov muhitining ALOHIDA HMAC sekreti. Prodakshn sekreti sinov muhitiga yuborilmaydi."
+          },
           "ip_allowlist": {
             "example": [
               "203.0.113.10"
@@ -14758,6 +14767,10 @@
           "sandbox_webhook_secret": {
             "type": "string",
             "description": "Sandbox uchun alohida HMAC sekreti. Berilmasa ASOSIY sekret ishlatiladi. Bo'sh satr — tozalash."
+          },
+          "sandbox_enabled": {
+            "type": "boolean",
+            "example": true
           },
           "ip_allowlist": {
             "example": [
