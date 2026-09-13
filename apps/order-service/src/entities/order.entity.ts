@@ -145,6 +145,50 @@ export class Order extends BaseEntity {
   @Column({ type: 'int', default: 0 })
   extra_cost!: number;
 
+  /**
+   * MIJOZ ONLAYN TO'LAGAN SUMMA (Uzum, Alif, Payme, Click, bank).
+   *
+   * ⚠️ `paid_amount` BILAN ARALASHTIRMANG — ular butunlay boshqa narsa:
+   *
+   *   `paid_amount`        = MARKET QARZINING avtomatik to'langan qismi
+   *                          (`sellOrder` da market kassasining manfiy
+   *                          balansidan kelib chiqadi). Mijoz puli EMAS.
+   *   `paid_online_amount` = MIJOZ to'lov tizimi orqali to'lagan pul.
+   *                          Kuryer bu summani naqd YIG'MASLIGI kerak.
+   *
+   * `total_price` bilan bir xil tip (`numeric(14,2)`): `to_be_paid` va
+   * `paid_amount` — eski `int` ustunlar, ya'ni tiyin saqlamaydi. Yangi
+   * maydonni ham `int` qilsak, to'lov tizimidan kelgan tiyinli summa
+   * jimgina yumaloqlanardi.
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    default: 0,
+    transformer: numericTransformer,
+  })
+  paid_online_amount!: number;
+
+  /**
+   * ONLAYN TO'LOV HOLATI.
+   *
+   * ⚠️ `Order_status.PAID` / `PARTLY_PAID` BILAN ARALASHTIRMANG — ular
+   * MARKET bilan hisob-kitob haqida. Bu maydon esa MIJOZNING to'lovi
+   * haqida; ikkisi bir-biridan mustaqil.
+   *
+   * Qiymatlar: `paid` | `partly` | `refunded`. `null` — onlayn to'lov
+   * bo'lmagan (COD, oddiy holat).
+   *
+   * ⚠️ NEGA ENUM EMAS. Postgres enum'iga qiymat qo'shish `ALTER TYPE`
+   * migratsiyasini talab qiladi va to'lov holatlari hali barqarorlashmagan
+   * (qaytarish, qisman qaytarish, bekor qilish tafsilotlari provayderga
+   * qarab farq qiladi). Qiymatlar kodda `PaymentState` tipi bilan
+   * cheklanadi.
+   */
+  @Column({ type: 'varchar', length: 32, nullable: true })
+  payment_status!: string | null;
+
   @Column({ type: 'int', default: 0 })
   to_be_paid!: number;
 

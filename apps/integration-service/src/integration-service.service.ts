@@ -42,6 +42,7 @@ import { Partner } from './entities/partner.entity';
 import { PartnerMarketRef } from './entities/partner-market-ref.entity';
 import { PartnerShipmentRef } from './entities/partner-shipment-ref.entity';
 import { InboundDealRef } from './entities/inbound-deal-ref.entity';
+import { PaymentTransaction } from './entities/payment-transaction.entity';
 import { PartnerProductRef } from './entities/partner-product-ref.entity';
 import { PartnerWebhookOutbox } from './entities/partner-webhook-outbox.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
@@ -225,6 +226,8 @@ export class IntegrationServiceService {
     private readonly partnerWebhookOutboxRepo: Repository<PartnerWebhookOutbox>,
     @InjectRepository(InboundDealRef)
     private readonly inboundDealRefRepo: Repository<InboundDealRef>,
+    @InjectRepository(PaymentTransaction)
+    private readonly paymentTxnRepo: Repository<PaymentTransaction>,
     private readonly activityLog: ActivityLogService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
@@ -1313,8 +1316,21 @@ export class IntegrationServiceService {
      *   `cod_amount`    = `to_be_paid`  — TO'LANISHI KERAK summa. Sotuvdan
      *                     keyin Elchi undan o'z tarifini ushlab qoladi, ya'ni
      *                     bu "marketga qoladigan" qiymatga aylanadi.
-     *   `cod_collected` = `paid_amount` — kuryer MIJOZDAN HAQIQATAN yiqqan pul.
-     *                     Sotuvgacha 0.
+     *   `cod_collected` = `paid_amount` — ⚠️ NOMI YOLG'ON. Bu kuryer
+     *                     mijozdan yiqqan pul EMAS. U MARKET QARZINING
+     *                     avtomatik to'langan qismi: `sellOrder` da
+     *                     `paidAfter = min(netToBePaid, currentPaid + autoPay)`
+     *                     va `autoPay` market kassasining MANFIY balansidan
+     *                     kelib chiqadi
+     *                     (`order-lifecycle.service.ts` — `sellOrder`).
+     *                     Market qarzi bo'lmasa oddiy sotuvda 0 bo'lib
+     *                     qoladi — kuryer butun summani yiqqan bo'lsa ham.
+     *
+     *                     Nom hamkor kontraktida allaqachon e'lon qilingan,
+     *                     shu bois o'zgartirilmaydi; yoniga aniq nomli
+     *                     `market_paid_amount` qo'shilgan (audit F1).
+     *                     Bu izoh ilgari TESKARISINI yozardi va pul
+     *                     nomuvofiqligini tekshirgan odamni chalg'itardi.
      *
      * `cod_collected` ilgari FAQAT chiquvchi webhookda bor edi. Hamkorda
      * webhook ishlamasa (masalan PCS lokalda turgan bo'lsa), yig'ilgan summa
@@ -2426,6 +2442,7 @@ export class IntegrationServiceService {
       'inbound_status_mapping',
       'webhook_payload_paths',
       'inbound_order_config',
+      'payment_config',
     ];
     for (const f of fields) {
       if (typeof dto[f] !== 'undefined') {
@@ -3453,6 +3470,7 @@ export class IntegrationServiceService {
       webhook_payload_paths: dto.webhook_payload_paths ?? null,
       dispatch_config: dto.dispatch_config ?? null,
       inbound_order_config: dto.inbound_order_config ?? null,
+      payment_config: dto.payment_config ?? null,
 
       last_sync_at: null,
       total_synced_orders: 0,
@@ -4885,7 +4903,7 @@ export class IntegrationServiceService {
       }
     }
 
-    const log = await this.saveWebhookLog({
+    const logResult = await this.saveWebhookLog({
       integration_id: String(integration.id),
       provider_slug: integration.slug,
       delivery_id: deliveryId,
@@ -4897,6 +4915,21 @@ export class IntegrationServiceService {
       error: null,
       trace_id: input.trace_id ?? null,
     });
+
+    /**
+     * ⚠️ BIR VAQTDA KELGAN NUSXA — HODISA QO'LLANMAYDI (audit P1).
+     *
+     * `:4875` dagi oldindan tekshiruv poyga oynasida ikkinchi nusxani
+     * ko'rmaydi; unikal indeks esa ko'radi. Ilgari bu holat jimgina `null`
+     * bo'lib o'tib ketardi va hodisa IKKI MARTA qo'llanardi.
+     *
+     * 200 qaytaramiz: provayder uchun bu muvaffaqiyatli yetkazish — u
+     * haqiqatan yetkazgan, biz esa allaqachon qabul qilganmiz.
+     */
+    if (logResult === 'duplicate') {
+      return { ok: true, code: 200, reason: 'duplicate', replay: true };
+    }
+    const log = logResult;
 
     await this.activityLog.log({
       entity_type: 'ProviderWebhook',
@@ -4941,6 +4974,43 @@ export class IntegrationServiceService {
         delivery_id: deliveryId,
         log_id: log?.id ?? null,
         shipment: { outcome: 'skipped_inactive' as const },
+      };
+    }
+
+    /**
+     * TO'LOV SHOXI — posilka yo'lidan OLDIN (audit P1/P2).
+     *
+     * ⚠️ NEGA OLDIN. To'lov hodisasida posilka YO'Q: mijoz pul to'lagan,
+     * bu jo'natma haqidagi xabar emas. `applyWebhookToShipment` esa mavjud
+     * posilka izlaydi va topmasa `no_shipment` qaytaradi — undan keyin
+     * kiruvchi buyurtma yo'li sinaladi va u `role !== 'source'` deb rad
+     * etadi. Natijada to'lov hodisasi imzo tekshiruvidan o'tib, keyin
+     * JIMGINA yo'qolardi.
+     *
+     * Shox `role === 'payment'` bo'lganda ishlaydi va o'z natijasini
+     * qaytarib, qolgan yo'llarni umuman ishga tushirmaydi.
+     */
+    if (integration.role === 'payment') {
+      const payment = await this.applyWebhookToPayment(
+        integration,
+        parsed,
+        log?.id ?? null,
+      );
+      if (log?.id) {
+        await this.markWebhookProcessed(
+          log.id,
+          payment.outcome,
+          payment.reason ?? undefined,
+        );
+      }
+      return {
+        ok: true,
+        code: 200,
+        reason: 'accepted',
+        event_type: eventType,
+        delivery_id: deliveryId,
+        log_id: log?.id ?? null,
+        payment,
       };
     }
 
@@ -5001,6 +5071,341 @@ export class IntegrationServiceService {
         ? { inbound_order: inbound }
         : {}),
     };
+  }
+
+  /**
+   * TO'LOV HODISASI → BUYURTMA (audit P1/P2).
+   *
+   * ⚠️ PULNI KASSAGA KO'CHIRMAYDI. Foydalanuvchi qarori (2026-09-13):
+   * onlayn pul hozircha kassaga yozilmaydi, faqat daftarga
+   * (`payment_transactions`) va buyurtmaning to'lov maydonlariga. Kompaniya
+   * balansi bu pulni hali ko'rmaydi — bu BILIB QILINGAN vaqtinchalik holat.
+   *
+   * ⚠️ HECH QACHON XATO OTMAYDI. To'lov tizimi non-2xx olsa tranzaksiyani
+   * BEKOR qilishi yoki qayta-qayta yuborishi mumkin — ikkisi ham pul bilan
+   * bog'liq zarar. Natija jurnalga yoziladi, javob esa 200.
+   */
+  private async applyWebhookToPayment(
+    integration: ExternalIntegration,
+    parsed: Record<string, unknown> | null,
+    webhookLogId: string | null,
+  ): Promise<{
+    outcome:
+      | 'payment_disabled'
+      | 'payment_no_config'
+      | 'payment_no_transaction_id'
+      | 'payment_no_status'
+      | 'payment_unmapped_status'
+      | 'payment_no_order_ref'
+      | 'payment_duplicate'
+      | 'payment_recorded'
+      | 'payment_not_applied'
+      | 'payment_failed';
+    reason?: string;
+    transaction_id?: string;
+    order_id?: string | null;
+    amount?: number;
+    status?: string;
+  }> {
+    const cfg = integration.payment_config;
+    if (!cfg?.enabled) return { outcome: 'payment_disabled' };
+    if (!parsed) {
+      return { outcome: 'payment_no_config', reason: 'JSON tana yo‘q' };
+    }
+
+    /**
+     * ⚠️ XARITA SHART. Provayderlarning holat qiymatlari butunlay boshqacha
+     * ("paid", 2, "CONFIRMED") — taxmin qilib bo'lmaydi. Xaritasiz hech bir
+     * hodisa qo'llanmaydi, aks holda noma'lum qiymat "to'landi" deb
+     * o'qilib ketardi.
+     */
+    if (!cfg.status_map || !Object.keys(cfg.status_map).length) {
+      this.logger.warn(
+        `payment SKIPPED for ${integration.slug}: status_map sozlanmagan`,
+      );
+      return { outcome: 'payment_no_config', reason: 'status_map yo‘q' };
+    }
+
+    const txnId = this.stringifyPath(
+      this.extractPath(parsed, cfg.transaction_id_path),
+    );
+    if (!txnId) {
+      this.logger.warn(
+        `payment SKIPPED for ${integration.slug}: tranzaksiya id yo‘q ` +
+          `(transaction_id_path='${cfg.transaction_id_path ?? ''}')`,
+      );
+      return { outcome: 'payment_no_transaction_id' };
+    }
+
+    const providerStatus = this.stringifyPath(
+      this.extractPath(parsed, cfg.status_path),
+    );
+    if (!providerStatus) {
+      return { outcome: 'payment_no_status' };
+    }
+
+    /**
+     * Xom holatni BIZNING holatga aylantirish. Solishtirish satr sifatida
+     * va registrga sezgir emas: provayderlar 2 (son) ham, "PAID" ham
+     * yuboradi.
+     */
+    const needle = providerStatus.toLowerCase();
+    let ourStatus: string | null = null;
+    for (const [ours, theirs] of Object.entries(cfg.status_map)) {
+      const list = Array.isArray(theirs) ? theirs : [];
+      if (list.some((v) => String(v ?? '').toLowerCase() === needle)) {
+        ourStatus = ours;
+        break;
+      }
+    }
+    if (!ourStatus) {
+      this.logger.warn(
+        `payment UNMAPPED for ${integration.slug}: provider status ` +
+          `'${providerStatus}' xaritada yo‘q`,
+      );
+      return {
+        outcome: 'payment_unmapped_status',
+        reason: `xaritada yo‘q: ${providerStatus}`,
+        transaction_id: txnId,
+      };
+    }
+
+    /**
+     * SUMMA havoladan OLDIN o'qiladi — adversarial topilma.
+     *
+     * Ilgari havola yo'q bo'lganda yozuv `amount: 0` bilan saqlanardi:
+     * ya'ni pulni kuzatish uchun yaratilgan YAGONA qator summani
+     * YO'QOTARDI. "Pul keldi, lekin qancha ekani ma'lum emas" — bu
+     * kuzatuvning ma'nosini butunlay yo'q qiladi.
+     *
+     * `amount_in_tiyin` bo'lsa 100 ga bo'linadi — to'lov tizimlari
+     * (Payme, Click) summani tiyinda yuboradi va 100 000 so'm 10 000 000
+     * bo'lib kelardi: buyurtma narxidan 100 baravar oshib, ortiqcha to'lov
+     * darvozasiga urilib, HAR BIR to'lov rad etilardi.
+     */
+    const rawAmount = this.extractPath(parsed, cfg.amount_path);
+    const parsedAmount = Number(
+      typeof rawAmount === 'string' ? rawAmount.trim() : rawAmount,
+    );
+    const amount = Number.isFinite(parsedAmount)
+      ? cfg.amount_in_tiyin
+        ? parsedAmount / 100
+        : parsedAmount
+      : NaN;
+    const currency =
+      this.stringifyPath(this.extractPath(parsed, cfg.currency_path)) ?? 'UZS';
+
+    const orderRef = this.stringifyPath(
+      this.extractPath(parsed, cfg.order_ref_path),
+    );
+    if (!orderRef) {
+      /**
+       * Buyurtma havolasi yo'q — pul kelgan, lekin kimga tegishli ekani
+       * ma'lum emas. Yozuv SAQLANADI (pulni kuzatish shart), buyurtmaga
+       * qo'llanmaydi.
+       */
+      await this.recordPaymentTxn({
+        integration,
+        txnId,
+        orderRef: null,
+        // Summa YOZILADI — pulni kuzatishning butun maqsadi shu.
+        amount: Number.isFinite(amount) ? amount : 0,
+        currency,
+        ourStatus,
+        providerStatus,
+        outcome: 'order_ref_missing',
+        webhookLogId,
+      });
+      return { outcome: 'payment_no_order_ref', transaction_id: txnId };
+    }
+
+    /**
+     * ⚠️ QAT'IY DUBLIKAT TO'SIG'I — QO'LLASHDAN OLDIN.
+     *
+     * To'lov tizimlari bir hodisani qayta-qayta yuboradi (bu ularning
+     * normal xatti-harakati). UNIQUE `(integration_id, transaction_id)`
+     * ikkinchi nusxani DB darajasida to'sadi — pulni ikki marta qo'llash
+     * eng qimmat xato bo'lardi.
+     */
+    const txnRow = await this.claimPaymentTxn({
+      integration,
+      txnId,
+      orderRef,
+      amount: Number.isFinite(amount) ? amount : 0,
+      currency,
+      ourStatus,
+      providerStatus,
+      webhookLogId,
+    });
+    if (!txnRow) {
+      return {
+        outcome: 'payment_duplicate',
+        transaction_id: txnId,
+        status: ourStatus,
+      };
+    }
+
+    try {
+      const res = await this.rmqRequestStrict<{
+        data?: {
+          outcome?: string;
+          order_id?: string;
+          paid_online_amount?: number;
+          payment_status?: string | null;
+        };
+      }>(
+        this.orderClient,
+        { cmd: 'order.payment.record' },
+        {
+          integration_slug: integration.slug,
+          provider_transaction_id: txnId,
+          /**
+           * Tenant darvozasi uchun: ulanish marketga bog'langan bo'lsa,
+           * to'lov faqat o'sha marketning buyurtmasiga yozilishi mumkin.
+           */
+          integration_market_id: integration.market_id ?? null,
+          order_ref: orderRef,
+          order_ref_field: cfg.order_ref_field ?? 'id',
+          amount,
+          currency,
+          status: ourStatus,
+        },
+        30_000,
+      );
+
+      /**
+       * ⚠️ `null` = TIMEOUT. Buyurtma YANGILANGAN bo'lishi mumkin — yozuv
+       * o'chirilmaydi, aks holda keyingi nusxa to'lovni IKKI MARTA
+       * qo'llardi. Natija ko'rinadigan qilinadi.
+       */
+      if (res === null) {
+        await this.paymentTxnRepo
+          .update({ id: txnRow.id }, { apply_outcome: 'timeout' })
+          .catch(() => undefined);
+        this.logger.error(
+          `payment TIMEOUT for ${integration.slug} (txn=${txnId}) — ` +
+            'buyurtma yangilangan bo‘lishi mumkin, tekshirish kerak',
+        );
+        return {
+          outcome: 'payment_failed',
+          reason: 'order service javob bermadi (30s)',
+          transaction_id: txnId,
+        };
+      }
+
+      const outcome = String(res?.data?.outcome ?? 'unknown');
+      await this.paymentTxnRepo
+        .update(
+          { id: txnRow.id },
+          {
+            apply_outcome: outcome.slice(0, 32),
+            order_id: res?.data?.order_id ?? null,
+          },
+        )
+        .catch(() => undefined);
+
+      if (outcome === 'recorded') {
+        return {
+          outcome: 'payment_recorded',
+          transaction_id: txnId,
+          order_id: res?.data?.order_id ?? null,
+          amount,
+          status: ourStatus,
+        };
+      }
+
+      /**
+       * Qo'llanmadi (buyurtma topilmadi, yopilgan, summa oshdi) — yozuv
+       * SAQLANADI. Pul kelgan; uni kuzatmasak yo'qolgan pul bo'lardi.
+       */
+      this.logger.warn(
+        `payment NOT applied for ${integration.slug} (txn=${txnId}): ${outcome}`,
+      );
+      return {
+        outcome: 'payment_not_applied',
+        reason: outcome,
+        transaction_id: txnId,
+        amount,
+        status: ourStatus,
+      };
+    } catch (error) {
+      const reason =
+        error instanceof Error ? error.message : 'order service error';
+      await this.paymentTxnRepo
+        .update({ id: txnRow.id }, { apply_outcome: 'error' })
+        .catch(() => undefined);
+      this.logger.error(
+        `payment FAILED for ${integration.slug} (txn=${txnId}): ${reason}`,
+      );
+      return { outcome: 'payment_failed', reason, transaction_id: txnId };
+    }
+  }
+
+  /**
+   * To'lov yozuvini "band qilish" — UNIQUE indeks orqali.
+   *
+   * `null` qaytsa: shu tranzaksiya allaqachon qayd etilgan (takroriy
+   * yetkazish yoki bir vaqtda kelgan nusxa). Xato OTILMAYDI.
+   *
+   * ⚠️ Faqat unique buzilishi (`23505`) dublikat deb hisoblanadi. Boshqa DB
+   * xatosini dublikat deb yutib yuborsak, to'lov jimgina qo'llanmay
+   * qolardi — pul kelib, tizim buni bilmasdi.
+   */
+  private async claimPaymentTxn(input: {
+    integration: ExternalIntegration;
+    txnId: string;
+    orderRef: string | null;
+    amount: number;
+    currency: string;
+    ourStatus: string;
+    providerStatus: string;
+    webhookLogId: string | null;
+  }): Promise<PaymentTransaction | null> {
+    try {
+      const row = this.paymentTxnRepo.create({
+        integration_id: String(input.integration.id),
+        provider_transaction_id: input.txnId,
+        order_id: null,
+        order_ref: input.orderRef,
+        amount: input.amount,
+        currency: input.currency.slice(0, 8),
+        status: input.ourStatus.slice(0, 24),
+        provider_status: input.providerStatus,
+        apply_outcome: null,
+        webhook_log_id: input.webhookLogId,
+      });
+      return await this.paymentTxnRepo.save(row);
+    } catch (error) {
+      const code = (error as { code?: string })?.code;
+      if (code === '23505') {
+        this.logger.warn(
+          `payment txn ${input.txnId} allaqachon qayd etilgan ` +
+            `(integration=${input.integration.id}) — qo‘llanmaydi`,
+        );
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /** Buyurtmaga bog'lanmagan to'lovni ham yozib qo'yish (pul kuzatilishi shart). */
+  private async recordPaymentTxn(input: {
+    integration: ExternalIntegration;
+    txnId: string;
+    orderRef: string | null;
+    amount: number;
+    currency: string;
+    ourStatus: string;
+    providerStatus: string;
+    outcome: string;
+    webhookLogId: string | null;
+  }): Promise<void> {
+    const row = await this.claimPaymentTxn(input).catch(() => null);
+    if (row) {
+      await this.paymentTxnRepo
+        .update({ id: row.id }, { apply_outcome: input.outcome.slice(0, 32) })
+        .catch(() => undefined);
+    }
   }
 
   /**
@@ -5608,6 +6013,75 @@ export class IntegrationServiceService {
     );
   }
 
+  /**
+   * ONLAYN TO'LOVLAR RO'YXATI (7-bosqich).
+   *
+   * ⚠️ NEGA KERAK. 6-bosqichning asosiy darsi: JURNALGA YOZISH ≠ KO'RINISH.
+   * To'lov yozuvlari bazaga tushardi, lekin ularni o'qiydigan yo'l bo'lmasa
+   * "pul keldi, lekin buyurtmaga bog'lanmadi" holati hech kimga ko'rinmaydi
+   * — ya'ni yo'qolgan pul.
+   *
+   * `apply_outcome` bo'yicha filtr shuning uchun bor: operatorning birinchi
+   * savoli "qaysi to'lov qo'llanmadi?".
+   */
+  async listPaymentTransactions(input: {
+    integration_id?: string;
+    /** `recorded` dan boshqa hammasi = e'tibor talab qiladigan to'lovlar. */
+    unapplied_only?: boolean;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(1, Number(input?.page ?? 1) || 1);
+    const limit = Math.min(100, Math.max(1, Number(input?.limit ?? 20) || 20));
+
+    /**
+     * ⚠️ `t.isDeleted` — TIRNOQSIZ. TypeORM tirnoqsiz `alias.property` ni
+     * ustun nomiga xaritalaydi; `t."isDeleted"` esa XOM SQL bo'lib ketadi va
+     * haqiqiy ustun `is_deleted` bo'lgani uchun `42703` bilan yiqilardi
+     * (`BaseEntity` da `@Column({ name: 'is_deleted' })`).
+     */
+    const qb = this.paymentTxnRepo
+      .createQueryBuilder('t')
+      .where('t.isDeleted = false');
+
+    if (input?.integration_id) {
+      qb.andWhere('t.integration_id = :iid', {
+        iid: String(input.integration_id),
+      });
+    }
+    if (input?.unapplied_only) {
+      /**
+       * `apply_outcome IS NULL` ham kiradi: yozuv band qilingan, lekin
+       * natija yozilmagan — ya'ni jarayon yarim yo'lda uzilgan. Bu aynan
+       * ko'rinishi kerak bo'lgan holat.
+       */
+      qb.andWhere(
+        '(t.apply_outcome IS NULL OR t.apply_outcome <> :ok)',
+        { ok: 'recorded' },
+      );
+    }
+
+    const [rows, total] = await qb
+      .orderBy('t.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    return successRes(
+      {
+        items: rows,
+        meta: {
+          page,
+          limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+        },
+      },
+      200,
+      'payment transactions',
+    );
+  }
+
   private async markWebhookProcessed(
     logId: string,
     outcome: string,
@@ -5662,6 +6136,18 @@ export class IntegrationServiceService {
       'inbound_no_external_id',
       'inbound_timeout',
       'inbound_no_funnel',
+      // To'lov: pul bilan bog'liq har qanday nomuvofiqlik KO'RINISHI shart.
+      // ⚠️ `payment_disabled` HAM diagnostika: to'lov roli ulanishiga hodisa
+      // kelgan, lekin sozlama o'chirilgan. Jurnalda "toza" ko'rinsa,
+      // operator sozlamani yoqishni unutganini bilmasdi.
+      'payment_disabled',
+      'payment_no_config',
+      'payment_no_transaction_id',
+      'payment_no_status',
+      'payment_unmapped_status',
+      'payment_no_order_ref',
+      'payment_not_applied',
+      'payment_failed',
     ];
     try {
       await this.webhookLogRepo.update(
@@ -5703,7 +6189,8 @@ export class IntegrationServiceService {
     parsed_payload: Record<string, unknown> | null;
     error: string | null;
     trace_id: string | null;
-  }): Promise<ProviderWebhookLog | null> {
+    /** `'duplicate'` — bir vaqtda kelgan nusxa; chaqiruvchi to'xtashi kerak. */
+  }): Promise<ProviderWebhookLog | null | 'duplicate'> {
     try {
       const entity = this.webhookLogRepo.create({
         ...data,
@@ -5711,9 +6198,34 @@ export class IntegrationServiceService {
       });
       return await this.webhookLogRepo.save(entity);
     } catch (err) {
-      // Unique violation on (integration_id, delivery_id) = concurrent replay;
-      // not fatal. Any other failure must not break the webhook response.
-      this.logger.warn(`webhook log write failed: ${(err as Error).message}`);
+      /**
+       * ⚠️ IKKI XIL YIQILISH — IKKI XIL JAVOB (audit P1).
+       *
+       * Ilgari ikkisi ham `null` qaytarardi va `receiveWebhook` hodisani
+       * BARIBIR qo'llardi. Status yangilash uchun bu zararsiz edi (idempotent),
+       * lekin PUL uchun halokatli: bir vaqtda kelgan ikki nusxa ikki marta
+       * qo'llanardi.
+       *
+       *   `23505` (unique buzilishi) — bu AYNI `delivery_id` bilan bir vaqtda
+       *     kelgan ikkinchi nusxa. `:4875` dagi oldindan tekshiruv poyga
+       *     oynasida uni ko'rmagan. Chaqiruvchi TO'XTASHI kerak.
+       *
+       *   boshqa xato (ulanish uzildi, ustun sig'maydi) — hodisaning o'zi
+       *     haqiqiy. To'xtatsak, provayder 200 olgani uchun qayta
+       *     yubormaydi va hodisa JIMGINA yo'qolardi. Shu bois oqim davom
+       *     etadi, lekin ERROR darajasida yoziladi.
+       */
+      const code = (err as { code?: string })?.code;
+      if (code === '23505') {
+        this.logger.warn(
+          `webhook log duplicate (delivery_id=${data.delivery_id}) — ` +
+            'bir vaqtda kelgan nusxa, qo\'llanmaydi',
+        );
+        return 'duplicate';
+      }
+      this.logger.error(
+        `webhook log write FAILED (audit yozuvi yo'q!): ${(err as Error).message}`,
+      );
       return null;
     }
   }

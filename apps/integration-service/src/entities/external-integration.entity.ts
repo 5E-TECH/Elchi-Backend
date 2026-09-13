@@ -264,6 +264,54 @@ export class ExternalIntegration extends BaseEntity {
     create_on_events?: string[];
   } | null;
 
+  /**
+   * ONLAYN TO'LOV SOZLAMASI — `role='payment'` uchun (audit P1/P2).
+   *
+   * MUAMMO. `role='payment'` bazaga yozilardi, lekin undan keyin HECH
+   * QAYERDA o'qilmasdi: mavjud yo'llarning hammasi uni AKTIV rad etardi
+   * (posilka yo'li `role !== 'carrier'`, buyurtma yo'li `role !== 'source'`).
+   * Ya'ni to'lov hodisasi imzo tekshiruvidan o'tib, keyin jimgina
+   * yo'qolardi.
+   *
+   *   {
+   *     "enabled": true,
+   *     "transaction_id_path": "data.transaction.id",
+   *     "amount_path": "data.amount",
+   *     "currency_path": "data.currency",
+   *     "status_path": "data.state",
+   *     "order_ref_path": "data.account.order_id",
+   *     "order_ref_field": "id",
+   *     "status_map": {
+   *       "succeeded": ["paid", "2"],
+   *       "failed": ["cancelled", "-1"],
+   *       "refunded": ["reversed"]
+   *     },
+   *     "amount_in_tiyin": true
+   *   }
+   *
+   * ⚠️ `amount_in_tiyin` — to'lov tizimlari summani TIYINDA yuboradi
+   * (Payme, Click shunday). 100 000 so'm → 10 000 000. Bunday summani
+   * to'g'ridan-to'g'ri yozsak, buyurtma narxidan 100 baravar oshib ketardi
+   * va ortiqcha to'lov darvozasi uni rad etardi — ya'ni HAR BIR to'lov
+   * ishlamasdi va sabab uzoq izlanardi.
+   *
+   * ⚠️ `status_map` SHART. Provayderlarning holat qiymatlari butunlay
+   * boshqacha ("paid", 2, "CONFIRMED") va ularni taxmin qilib bo'lmaydi.
+   * Xaritasiz hech bir hodisa qo'llanmaydi.
+   */
+  @Column({ type: 'jsonb', nullable: true })
+  payment_config!: {
+    enabled?: boolean;
+    transaction_id_path?: string;
+    amount_path?: string;
+    currency_path?: string;
+    status_path?: string;
+    order_ref_path?: string;
+    order_ref_field?: 'id' | 'external_id' | 'qr_code_token';
+    status_map?: Record<string, string[]>;
+    amount_in_tiyin?: boolean;
+  } | null;
+
   @Column({ type: 'timestamptz', nullable: true })
   last_sync_at!: Date | null;
 

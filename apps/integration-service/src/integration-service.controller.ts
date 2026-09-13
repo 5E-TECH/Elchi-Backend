@@ -356,6 +356,13 @@ export class IntegrationServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'integration.payment.list' })
+  listPaymentTransactions(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listPaymentTransactions(data?.query ?? data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'integration.webhook.logs' })
   listWebhookLogs(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
