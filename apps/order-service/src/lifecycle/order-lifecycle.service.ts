@@ -43,6 +43,8 @@ import {
 } from '../domain/order-status.machine';
 import {
   computeSellProfit,
+  computeTariffShortfall,
+  resolveOrderTariff,
   resolveSaleActorShare as resolveSaleActorShareAmount,
   resolveBranchCashboxSaleAmount as resolveBranchCashboxSaleAmountValue,
 } from '../domain/order-money';
@@ -456,10 +458,12 @@ export class OrderLifecycleService {
    * qolardi — ya'ni tekshiruvni chetlab o'tishning eng oson yo'li filialni
    * o'chirib qo'yish bo'lardi.
    */
-  private async resolveReceiveBranchScope(requester?: {
-    id?: string;
-    roles?: string[];
-  } | null): Promise<string | null> {
+  private async resolveReceiveBranchScope(
+    requester?: {
+      id?: string;
+      roles?: string[];
+    } | null,
+  ): Promise<string | null> {
     const roles = new Set(
       (requester?.roles ?? []).map((role) =>
         String(role ?? '')
@@ -721,6 +725,50 @@ export class OrderLifecycleService {
       totalPrice,
       branchPayable,
       isManagerSale,
+    );
+  }
+
+  /**
+   * TARIF QO'RIQCHISI: market tarifi kuryer (+ hamkor filial) ulushini qoplashi
+   * SHART, aks holda sotuv rad etiladi.
+   *
+   * NEGA BLOKLANADI. COD zanjiri marketga `total − marketTariff` to'laydi,
+   * lekin yuqoriga faqat `total − courierShare − branchShare` ko'tariladi.
+   * Market tarifi ikki ulushni qoplamasa, HQ marketga OLGANIDAN KO'P to'lashga
+   * majbur bo'ladi — 500 000 so'mlik buyurtmada kuryer 25 000 ni o'ziga oladi,
+   * 475 000 topshiradi, market tarifi 20 000 bo'lsa marketga 480 000 to'lanadi,
+   * ya'ni har buyurtmada 5 000 so'm HQ kissasidan ketadi. Bu xato hech qanday
+   * xatolik chiqarmasdi: faqat `sell_profit` manfiy bo'lib yozilardi va
+   * raqamlar jimgina buzilardi (aynan shu turdagi xato eng qimmat).
+   *
+   * Odatiy sabab — marketning `tariff_home`/`tariff_center`idan biri 0 yoki
+   * kuryer tarifidan kichik, buyurtma esa aynan shu `where_deliver` bilan
+   * kelgan. Yechim tarifni to'g'rilash, shuning uchun xato xabari raqamlarni
+   * ko'rsatadi.
+   */
+  private assertTariffCoversShares(params: {
+    marketTariff: number;
+    courierShare: number;
+    branchShare: number;
+  }): void {
+    const shortfall = computeTariffShortfall(
+      params.marketTariff,
+      params.courierShare,
+      params.branchShare,
+    );
+    if (shortfall <= 0) {
+      return;
+    }
+    const branchPart =
+      params.branchShare > 0
+        ? ` va filial ulushi (${params.branchShare} so'm)`
+        : '';
+    this.badRequest(
+      `Market tarifi (${params.marketTariff} so'm) kuryer ulushi ` +
+        `(${params.courierShare} so'm)${branchPart}ni qoplamaydi: ` +
+        `bu buyurtmada kompaniya ${shortfall} so'm zarar ko'radi va marketga ` +
+        `olgan puldan ko'p to'lashga majbur bo'ladi. Sotuv to'xtatildi — ` +
+        `market yoki kuryer tarifini to'g'rilab, so'ng qaytadan urinib ko'ring.`,
     );
   }
 
@@ -1100,9 +1148,7 @@ export class OrderLifecycleService {
     return keys;
   }
 
-  private isExtraCostApprovalRequired(params: {
-    extraCost: number;
-  }) {
+  private isExtraCostApprovalRequired(params: { extraCost: number }) {
     return params.extraCost > 0;
   }
 
@@ -1149,14 +1195,7 @@ export class OrderLifecycleService {
     proofFiles: string[];
     dto: Record<string, unknown>;
   }) {
-    const {
-      order,
-      requester,
-      action,
-      extraCost,
-      proofFiles,
-      dto,
-    } = params;
+    const { order, requester, action, extraCost, proofFiles, dto } = params;
     if (
       Boolean(dto.extraCostApproved) ||
       !this.isExtraCostApprovalRequired({ extraCost })
@@ -1836,18 +1875,18 @@ export class OrderLifecycleService {
     // mirrors the original sale exactly, even if the market/courier tariff has
     // since changed. Fall back to live tariffs for orders sold before snapshots
     // were recorded.
-    const marketTariff =
-      order.market_tariff != null
-        ? Number(order.market_tariff)
-        : order.where_deliver === Where_deliver.CENTER
-          ? Number(market.tariff_center ?? 0)
-          : Number(market.tariff_home ?? 0);
-    const courierTariff =
-      order.courier_tariff != null
-        ? Number(order.courier_tariff)
-        : order.where_deliver === Where_deliver.CENTER
-          ? Number(financialActor?.tariff_center ?? 0)
-          : Number(financialActor?.tariff_home ?? 0);
+    const marketTariff = resolveOrderTariff({
+      snapshot: order.market_tariff,
+      isCenter: order.where_deliver === Where_deliver.CENTER,
+      centerTariff: market.tariff_center,
+      homeTariff: market.tariff_home,
+    });
+    const courierTariff = resolveOrderTariff({
+      snapshot: order.courier_tariff,
+      isCenter: order.where_deliver === Where_deliver.CENTER,
+      centerTariff: financialActor?.tariff_center,
+      homeTariff: financialActor?.tariff_home,
+    });
     const rollbackComment = `[ROLLBACK] ${order.comment || ''}`.trim();
     const totalPrice = Number(order.total_price ?? 0);
     const actorExpenseUserId = isManagerRequester
@@ -3641,7 +3680,9 @@ export class OrderLifecycleService {
     requester?: { id?: string; roles?: string[] } | null;
   }) {
     const tokens = Array.from(
-      new Set((input.tokens ?? []).map((t) => String(t ?? '').trim()).filter(Boolean)),
+      new Set(
+        (input.tokens ?? []).map((t) => String(t ?? '').trim()).filter(Boolean),
+      ),
     );
     if (!tokens.length) {
       this.badRequest('tokens is required');
@@ -3902,7 +3943,11 @@ export class OrderLifecycleService {
         `online payment: buyurtma topilmadi (${field}=${ref}) — ` +
           'pul keldi, lekin bog‘lanmadi',
       );
-      return successRes({ outcome: 'order_not_found' }, 200, 'buyurtma topilmadi');
+      return successRes(
+        { outcome: 'order_not_found' },
+        200,
+        'buyurtma topilmadi',
+      );
     }
 
     /**
@@ -4119,10 +4164,7 @@ export class OrderLifecycleService {
    * ⚠️ `Order_status.PAID`/`PARTLY_PAID` BILAN ARALASHTIRMANG — ular market
    * bilan hisob-kitob haqida, bu esa MIJOZNING to'lovi haqida.
    */
-  private derivePaymentState(
-    paidOnline: number,
-    total: number,
-  ): string | null {
+  private derivePaymentState(paidOnline: number, total: number): string | null {
     if (paidOnline <= 0) return null;
     // 1 so'm bag'rikenglik — tiyin yumaloqlanishi uchun.
     return paidOnline + 1 >= total ? 'paid' : 'partly';
@@ -4325,8 +4367,10 @@ export class OrderLifecycleService {
               '',
           ).trim();
           const qtyRaw = Number(
-            this.getFieldValue(row, fieldMapping.item_qty_field ?? 'quantity') ??
-              1,
+            this.getFieldValue(
+              row,
+              fieldMapping.item_qty_field ?? 'quantity',
+            ) ?? 1,
           );
           return {
             product_id: null,
@@ -4661,20 +4705,32 @@ export class OrderLifecycleService {
 
     const marketBalanceBefore = Number(marketCashbox.balance ?? 0);
 
-    const marketTariff =
-      order.where_deliver === Where_deliver.CENTER
-        ? Number(market.tariff_center ?? 0)
-        : Number(market.tariff_home ?? 0);
-    const courierTariff =
-      order.where_deliver === Where_deliver.CENTER
-        ? Number(financialActor?.tariff_center ?? 0)
-        : Number(financialActor?.tariff_home ?? 0);
+    // Tariflar `resolveOrderTariff` orqali — buyurtmadagi override birinchi
+    // o'rinda. Ilgari AYNAN bu yo'l override'ni inkor qilib faqat live profildan
+    // olardi (partlySell va rollback esa snapshotni ustun qo'yardi), ya'ni kassa
+    // oyog'i bir tarif bilan, `sell_profit` va rollback boshqa tarif bilan
+    // hisoblanardi.
+    const marketTariff = resolveOrderTariff({
+      snapshot: order.market_tariff,
+      isCenter: order.where_deliver === Where_deliver.CENTER,
+      centerTariff: market.tariff_center,
+      homeTariff: market.tariff_home,
+    });
+    const courierTariff = resolveOrderTariff({
+      snapshot: order.courier_tariff,
+      isCenter: order.where_deliver === Where_deliver.CENTER,
+      centerTariff: financialActor?.tariff_center,
+      homeTariff: financialActor?.tariff_home,
+    });
     // courierShare = what the courier keeps (0 for salary-only couriers).
     const courierShare = this.resolveSaleActorShare(
       isManagerRequester,
       financialActor,
       courierTariff,
     );
+    // Tarif qoplamasa sotuv shu yerda to'xtaydi — tranzaksiyadan OLDIN, ya'ni
+    // hech bir kassa oyog'i yozilmaydi.
+    this.assertTariffCoversShares({ marketTariff, courierShare, branchShare });
     const actorExpenseUserId = isManagerRequester
       ? String(requester.branch_id ?? '')
       : actorCourierId;
@@ -4936,8 +4992,11 @@ export class OrderLifecycleService {
           sold_at: soldAt,
           // Snapshot tariffs + the actually-kept shares so SELL_PROFIT
           // (marketTariff − courierShare − branchShare) and rollback are exact.
-          market_tariff: order.market_tariff ?? marketTariff,
-          courier_tariff: order.courier_tariff ?? courierTariff,
+          // AYNAN kassa oyoqlarida ishlatilgan qiymat yoziladi (override bo'lsa
+          // `marketTariff` allaqachon undan olingan) — snapshot va yozilgan oyoq
+          // har doim bitta tarifga tayanadi.
+          market_tariff: marketTariff,
+          courier_tariff: courierTariff,
           courier_share: courierShare,
           branch_share: branchShare,
           branch_cashbox_amount: branchCashboxAmount,
@@ -5563,7 +5622,7 @@ export class OrderLifecycleService {
           external_ref: input.external_ref ?? null,
           reason:
             'sotilgan buyurtmani kargo webhooki bekor qila olmaydi — ' +
-            'pul qaytarish qo\'lda ko\'rib chiqilishi kerak',
+            "pul qaytarish qo'lda ko'rib chiqilishi kerak",
         },
       });
       return successRes(
@@ -5750,23 +5809,27 @@ export class OrderLifecycleService {
       : 0;
 
     const marketBalanceBefore = Number(marketCashbox.balance ?? 0);
-    const marketTariff =
-      order.market_tariff != null
-        ? Number(order.market_tariff)
-        : order.where_deliver === Where_deliver.CENTER
-          ? Number(market.tariff_center ?? 0)
-          : Number(market.tariff_home ?? 0);
-    const courierTariff =
-      order.courier_tariff != null
-        ? Number(order.courier_tariff)
-        : order.where_deliver === Where_deliver.CENTER
-          ? Number(financialActor?.tariff_center ?? 0)
-          : Number(financialActor?.tariff_home ?? 0);
+    const marketTariff = resolveOrderTariff({
+      snapshot: order.market_tariff,
+      isCenter: order.where_deliver === Where_deliver.CENTER,
+      centerTariff: market.tariff_center,
+      homeTariff: market.tariff_home,
+    });
+    const courierTariff = resolveOrderTariff({
+      snapshot: order.courier_tariff,
+      isCenter: order.where_deliver === Where_deliver.CENTER,
+      centerTariff: financialActor?.tariff_center,
+      homeTariff: financialActor?.tariff_home,
+    });
     const courierShare = this.resolveSaleActorShare(
       isManagerRequester,
       financialActor,
       courierTariff,
     );
+    // Qisman sotuvda ham kuryer to'liq tarifini oladi va market to'liq tarif
+    // bilan hisoblanadi, ya'ni tarif qoplamaslik zarari bu yo'lda ham xuddi
+    // shunday yuzaga keladi — sellOrder bilan bir xil qo'riqchi.
+    this.assertTariffCoversShares({ marketTariff, courierShare, branchShare });
     const actorExpenseUserId = isManagerRequester
       ? String(requester.branch_id ?? '')
       : actorCourierId;
@@ -6114,8 +6177,8 @@ export class OrderLifecycleService {
           paid_amount: paidAfter,
           sold_at: order.sold_at ?? soldAt,
           total_price: price,
-          market_tariff: order.market_tariff ?? marketTariff,
-          courier_tariff: order.courier_tariff ?? courierTariff,
+          market_tariff: marketTariff,
+          courier_tariff: courierTariff,
           courier_share: courierShare,
           branch_share: branchShare,
           branch_cashbox_amount: branchCashboxAmount,
