@@ -6765,6 +6765,60 @@
         ]
       }
     },
+    "/integrations/payments": {
+      "get": {
+        "operationId": "IntegrationGatewayController_paymentTransactions",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "unapplied_only",
+            "required": false,
+            "in": "query",
+            "description": "Faqat buyurtmaga qo'llanmagan to'lovlar",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Onlayn to'lov tranzaksiyalari — summa, holat, buyurtmaga qo'llanish natijasi",
+        "tags": [
+          "Integrations"
+        ]
+      }
+    },
     "/integrations/webhook-logs": {
       "get": {
         "operationId": "IntegrationGatewayController_webhookLogs",
@@ -13507,6 +13561,28 @@
             },
             "description": "CRM voronkasidan buyurtma yaratish: qaysi voronka va BOSQICHDA bitim buyurtmaga aylanadi. Kamida bitta darvoza shart (`create_on_stages` yoki `create_on_events`) — darvozasiz CRM \"bitim yaratildi\" hodisasini manzil to'lmasdan oldin yuboradi va chala buyurtma tug'ilardi."
           },
+          "payment_config": {
+            "type": "object",
+            "example": {
+              "enabled": true,
+              "transaction_id_path": "data.transaction.id",
+              "amount_path": "data.amount",
+              "status_path": "data.state",
+              "order_ref_path": "data.account.order_id",
+              "order_ref_field": "id",
+              "status_map": {
+                "succeeded": [
+                  "paid",
+                  "2"
+                ],
+                "failed": [
+                  "cancelled"
+                ]
+              },
+              "amount_in_tiyin": true
+            },
+            "description": "Onlayn to'lov sozlamasi: tranzaksiya id, summa, holat va buyurtma havolasi payload'da qayerda. `status_map` SHART — provayderlarning holat qiymatlari boshqacha va taxmin qilib bo'lmaydi. `amount_in_tiyin` — summa tiyinda kelsa (Payme/Click shunday)."
+          },
           "dispatch_config": {
             "type": "object",
             "example": {
@@ -13708,6 +13784,28 @@
               ]
             },
             "description": "CRM voronkasidan buyurtma yaratish: qaysi voronka va BOSQICHDA bitim buyurtmaga aylanadi. Kamida bitta darvoza shart (`create_on_stages` yoki `create_on_events`) — darvozasiz CRM \"bitim yaratildi\" hodisasini manzil to'lmasdan oldin yuboradi va chala buyurtma tug'ilardi."
+          },
+          "payment_config": {
+            "type": "object",
+            "example": {
+              "enabled": true,
+              "transaction_id_path": "data.transaction.id",
+              "amount_path": "data.amount",
+              "status_path": "data.state",
+              "order_ref_path": "data.account.order_id",
+              "order_ref_field": "id",
+              "status_map": {
+                "succeeded": [
+                  "paid",
+                  "2"
+                ],
+                "failed": [
+                  "cancelled"
+                ]
+              },
+              "amount_in_tiyin": true
+            },
+            "description": "Onlayn to'lov sozlamasi: tranzaksiya id, summa, holat va buyurtma havolasi payload'da qayerda. `status_map` SHART — provayderlarning holat qiymatlari boshqacha va taxmin qilib bo'lmaydi. `amount_in_tiyin` — summa tiyinda kelsa (Payme/Click shunday)."
           },
           "dispatch_config": {
             "type": "object",

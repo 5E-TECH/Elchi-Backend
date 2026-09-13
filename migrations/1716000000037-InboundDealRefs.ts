@@ -9,6 +9,12 @@ import { MigrationInterface, QueryRunner } from 'typeorm';
  * bosqichni tashiydi — ikkisi bir vaqtda kelsa bitta bitimdan IKKI buyurtma
  * tug'ilardi.
  *
+ * ⚠️ USTUN NOMI `is_deleted` (snake_case), `isDeleted` EMAS. `BaseEntity`
+ * da `@Column({ name: 'is_deleted' })` turadi — xossa camelCase, ustun esa
+ * snake_case. Bu yerda ilgari `"isDeleted"` yozilgan edi va har bir INSERT
+ * `42703 undefined column` bilan yiqilardi. `createdAt`/`updatedAt` esa
+ * aksincha camelCase (ularda `name:` yo'q) — ikkisini aralashtirmaslik kerak.
+ *
  * `orders` ustiga UNIQUE indeks qo'yish xavfli edi: `external_id` NULL
  * bo'lishi mumkin va mavjud ma'lumotdagi dublikat migratsiyani yiqitardi.
  * Bu jadval yangi — eski ma'lumot yo'q, UNIQUE xavfsiz.
@@ -22,7 +28,7 @@ export class InboundDealRefs1716000000037 implements MigrationInterface {
         "id" bigserial NOT NULL,
         "createdAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
         "updatedAt" TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT now(),
-        "isDeleted" boolean NOT NULL DEFAULT false,
+        "is_deleted" boolean NOT NULL DEFAULT false,
         "integration_id" bigint NOT NULL,
         "deal_id" character varying NOT NULL,
         "order_id" bigint,

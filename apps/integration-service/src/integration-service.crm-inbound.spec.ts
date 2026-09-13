@@ -87,6 +87,9 @@ jest.mock('./entities/partner-webhook-outbox.entity', () => ({
 jest.mock('./entities/inbound-deal-ref.entity', () => ({
   InboundDealRef: class InboundDealRef {},
 }));
+jest.mock('./entities/payment-transaction.entity', () => ({
+  PaymentTransaction: class PaymentTransaction {},
+}));
 
 const SECRET = 'crm-shared-secret';
 
@@ -119,6 +122,8 @@ function makeService(opts: {
    * (unique buzilishi `23505`).
    */
   dealRefError?: unknown;
+  /** To'lov yozuvini band qilishda otiladigan xato (unique buzilishi). */
+  paymentTxnError?: unknown;
 }) {
   const integrationRepo: any = {
     findOne: jest.fn().mockResolvedValue(opts.integration),
@@ -155,6 +160,15 @@ function makeService(opts: {
     delete: jest.fn().mockResolvedValue(undefined),
   };
 
+  const paymentTxnRepo: any = {
+    create: jest.fn((dto: any) => ({ ...dto })),
+    save: jest.fn(async (e: any) => {
+      if (opts.paymentTxnError) throw opts.paymentTxnError;
+      return { id: 'ptx1', ...e };
+    }),
+    update: jest.fn().mockResolvedValue(undefined),
+  };
+
   const orderSend = jest.fn(() =>
     opts.orderReply instanceof Error
       ? throwError(() => opts.orderReply)
@@ -177,13 +191,21 @@ function makeService(opts: {
     simpleRepo(),
     simpleRepo(),
     inboundDealRefRepo,
+    paymentTxnRepo,
     activityLog,
     noClient,
     noClient,
     orderClient,
     noClient,
   );
-  return { service, webhookLogRepo, orderSend, activityLog, inboundDealRefRepo };
+  return {
+    service,
+    webhookLogRepo,
+    orderSend,
+    activityLog,
+    inboundDealRefRepo,
+    paymentTxnRepo,
+  };
 }
 
 /** CRM ulanishi — `role: 'source'`, `category: 'crm'`. */

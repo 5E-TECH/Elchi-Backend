@@ -70,6 +70,9 @@ jest.mock('./entities/partner-webhook-outbox.entity', () => ({
 jest.mock('./entities/inbound-deal-ref.entity', () => ({
   InboundDealRef: class InboundDealRef {},
 }));
+jest.mock('./entities/payment-transaction.entity', () => ({
+  PaymentTransaction: class PaymentTransaction {},
+}));
 
 const SECRET = 'provider-shared-secret';
 const BODY = JSON.stringify({ event: 'package.delivered', order_id: '1001' });
@@ -139,6 +142,12 @@ function makeService(integration: Record<string, unknown> | null) {
     update: jest.fn().mockResolvedValue(undefined),
     delete: jest.fn().mockResolvedValue(undefined),
   };
+  const paymentTxnRepo: any = {
+    create: jest.fn((dto: any) => ({ ...dto })),
+    save: jest.fn(async (e: any) => ({ id: 'ptx1', ...e })),
+    update: jest.fn().mockResolvedValue(undefined),
+    findAndCount: jest.fn().mockResolvedValue([[], 0]),
+  };
   const noClient: any = {};
 
   const service = new IntegrationServiceService(
@@ -155,6 +164,7 @@ function makeService(integration: Record<string, unknown> | null) {
     partnerProductRefRepo,
     partnerWebhookOutboxRepo,
     inboundDealRefRepo,
+    paymentTxnRepo,
     activityLog,
     noClient,
     noClient,
@@ -766,5 +776,66 @@ describe('IntegrationServiceService webhook → order terminal action (D3b)', ()
 
     expect(res.ok).toBe(true);
     expect(res.shipment).toMatchObject({ outcome: 'updated', action: 'sell' });
+  });
+});
+
+describe("⭐ BIR VAQTDA kelgan nusxa — hodisa QO'LLANMAYDI (audit P1)", () => {
+  /**
+   * `receiveWebhook` avval `findOne` bilan `delivery_id` ni tekshiradi,
+   * keyin jurnalga yozadi. Poyga oynasida ikkinchi nusxa oldindan
+   * tekshiruvdan O'TADI, unikal indeks esa uni ushlaydi.
+   *
+   * Ilgari `saveWebhookLog` bu xatoni yutib `null` qaytarardi va
+   * `receiveWebhook` hodisani BARIBIR qo'llardi. Status yangilash uchun bu
+   * zararsiz edi (idempotent), lekin PUL uchun halokatli: bir tranzaksiya
+   * ikki marta qo'llanardi. Shu bois to'lov yo'lidan OLDIN tuzatilishi
+   * shart edi.
+   */
+  const uniqueViolation = Object.assign(new Error('duplicate key'), {
+    code: '23505',
+  });
+
+  it('unique buzilishida hodisa qo\'llanmaydi va 200 qaytadi', async () => {
+    const { service, shipmentRepo, webhookLogRepo } = makeService(
+      baseIntegration(),
+    );
+    webhookLogRepo.save.mockRejectedValueOnce(uniqueViolation);
+    const sig = computeHmacSignature(BODY, SECRET);
+
+    const res: any = await service.receiveWebhook(
+      bodyToInput('acme-cargo', BODY, {
+        'x-signature': sig,
+        'x-delivery-id': 'evt_dup',
+      }),
+    );
+
+    // Provayder uchun bu muvaffaqiyat — u haqiqatan yetkazgan.
+    expect(res.ok).toBe(true);
+    expect(res.code).toBe(200);
+    expect(res.reason).toBe('duplicate');
+    expect(res.replay).toBe(true);
+    // Eng muhimi: posilkaga TEGILMAYDI.
+    expect(shipmentRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('⭐ BOSHQA yozuv xatosida oqim DAVOM etadi', async () => {
+    /**
+     * Ulanish uzilishi yoki ustun sig'masligi — hodisaning O'ZI haqiqiy.
+     * To'xtatsak, provayder 200 olgani uchun qayta yubormaydi va hodisa
+     * JIMGINA yo'qolardi. Audit yozuvi yo'qolishi yomon, lekin hodisani
+     * yo'qotish battar.
+     */
+    const { service, webhookLogRepo } = makeService(baseIntegration());
+    webhookLogRepo.save.mockRejectedValueOnce(
+      Object.assign(new Error('connection lost'), { code: '08006' }),
+    );
+    const sig = computeHmacSignature(BODY, SECRET);
+
+    const res: any = await service.receiveWebhook(
+      bodyToInput('acme-cargo', BODY, { 'x-signature': sig }),
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.reason).toBe('accepted');
   });
 });

@@ -174,6 +174,49 @@ export class IntegrationGatewayController {
    * ⚠️ TANA QAYTARILMAYDI: `raw_body` ichida mijozning telefoni va manzili
    * turadi, ro'yxatda esa savol "nima bo'ldi", "mijoz kim" emas.
    */
+  /**
+   * ONLAYN TO'LOVLAR (7-bosqich).
+   *
+   * ⚠️ `:id` marshrutlaridan OLDIN — aks holda "payments" integratsiya
+   * id'si deb o'qilardi.
+   *
+   * `unapplied_only=true` — buyurtmaga qo'llanmagan to'lovlar. Operatorning
+   * birinchi savoli aynan shu: qaysi pul kelib, hech qayerga yozilmadi?
+   */
+  @Get('payments')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      "Onlayn to'lov tranzaksiyalari — summa, holat, buyurtmaga qo'llanish natijasi",
+  })
+  @ApiQuery({ name: 'integration_id', required: false, type: String })
+  @ApiQuery({
+    name: 'unapplied_only',
+    required: false,
+    type: Boolean,
+    description: "Faqat buyurtmaga qo'llanmagan to'lovlar",
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  paymentTransactions(
+    @Query('integration_id') integrationId?: string,
+    @Query('unapplied_only') unappliedOnly?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.payment.list' },
+        {
+          integration_id: integrationId,
+          unapplied_only: unappliedOnly === 'true' || unappliedOnly === '1',
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+        },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+  }
+
   @Get('webhook-logs')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({

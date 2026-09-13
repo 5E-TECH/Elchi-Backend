@@ -265,6 +265,28 @@ export class CreateIntegrationRequestDto {
   @ApiPropertyOptional({
     type: Object,
     example: {
+      enabled: true,
+      transaction_id_path: 'data.transaction.id',
+      amount_path: 'data.amount',
+      status_path: 'data.state',
+      order_ref_path: 'data.account.order_id',
+      order_ref_field: 'id',
+      status_map: { succeeded: ['paid', '2'], failed: ['cancelled'] },
+      amount_in_tiyin: true,
+    },
+    description:
+      "Onlayn to'lov sozlamasi: tranzaksiya id, summa, holat va buyurtma " +
+      "havolasi payload'da qayerda. `status_map` SHART — provayderlarning " +
+      'holat qiymatlari boshqacha va taxmin qilib bo\'lmaydi. ' +
+      "`amount_in_tiyin` — summa tiyinda kelsa (Payme/Click shunday).",
+  })
+  @IsOptional()
+  @IsObject()
+  payment_config?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: {
       endpoint: '/v1/orders',
       method: 'POST',
       body_template: { receiver: '{{customer_name}}', cod: '{{cod_amount}}' },
@@ -531,6 +553,28 @@ export class UpdateIntegrationRequestDto {
   @IsOptional()
   @IsObject()
   inbound_order_config?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: {
+      enabled: true,
+      transaction_id_path: 'data.transaction.id',
+      amount_path: 'data.amount',
+      status_path: 'data.state',
+      order_ref_path: 'data.account.order_id',
+      order_ref_field: 'id',
+      status_map: { succeeded: ['paid', '2'], failed: ['cancelled'] },
+      amount_in_tiyin: true,
+    },
+    description:
+      "Onlayn to'lov sozlamasi: tranzaksiya id, summa, holat va buyurtma " +
+      "havolasi payload'da qayerda. `status_map` SHART — provayderlarning " +
+      'holat qiymatlari boshqacha va taxmin qilib bo\'lmaydi. ' +
+      "`amount_in_tiyin` — summa tiyinda kelsa (Payme/Click shunday).",
+  })
+  @IsOptional()
+  @IsObject()
+  payment_config?: Record<string, unknown>;
 
   @ApiPropertyOptional({
     type: Object,

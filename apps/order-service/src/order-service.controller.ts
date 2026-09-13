@@ -691,6 +691,45 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * ONLAYN TO'LOVNI QAYD ETISH (7-bosqich).
+   *
+   * ⚠️ Pulni kassaga KO'CHIRMAYDI — faqat buyurtmadagi to'lov maydonlarini
+   * yangilaydi. Dublikatning qat'iy to'sig'i chaqiruvchida
+   * (`payment_transactions` UNIQUE), shu bois bu handler idempotentlikni
+   * o'zi ta'minlamaydi.
+   */
+  @MessagePattern({ cmd: 'order.payment.record' })
+  recordOnlinePayment(@Payload() data: any, @Ctx() context: RmqContext) {
+    /**
+     * ⚠️ `runIdempotent`, `executeAndAck` EMAS (adversarial topilma, kritik).
+     *
+     * RMQ `at-least-once` yetkazadi: ack yo'lda yo'qolsa xabar QAYTA
+     * keladi. `recordOnlinePayment` esa KUMULATIV
+     * (`paid_online_amount += amount`) — ya'ni qayta yetkazish summani
+     * ikki marta qo'shardi va buyurtma "ortiqcha to'langan" bo'lib qolardi.
+     *
+     * Chaqiruvchi tomonidagi `payment_transactions` UNIQUE bu holatdan
+     * QUTQARMAYDI: u integration-service ichida, bu esa order-service'ga
+     * kelgan xabarning qayta yetkazilishi.
+     *
+     * Kalit tranzaksiya va holatdan yasaladi — ayni to'lov hodisasi bir
+     * marta qo'llanadi, `pending`/`succeeded`/`refunded` esa alohida.
+     */
+    const requestId =
+      data?.request_id ??
+      [
+        'payment',
+        String(data?.integration_slug ?? ''),
+        String(data?.provider_transaction_id ?? ''),
+        String(data?.status ?? ''),
+      ].join(':');
+
+    return this.runIdempotent(context, 'order.payment.record', requestId, () =>
+      this.lifecycleService.recordOnlinePayment(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.receive_external' })
   receiveExternalOrders(
     @Payload() data: { integration_id: string; orders: any[] },

@@ -3742,6 +3742,488 @@ export class OrderLifecycleService {
    * `strict: true` bo'lsa bunday qator YARATILMAYDI — `skipped` ga aniq
    * sabab bilan tushadi va webhook jurnalida ko'rinadi.
    */
+  /**
+   * ONLAYN TO'LANGAN BUYURTMA NAQD OQIMIDAN O'TMAYDI (7-bosqich).
+   *
+   * ⚠️ NEGA ALOHIDA METOD. Darvoza IKKI joyda kerak: `sellOrder` va
+   * `partlySellOrder`. Ikkinchisi ayni kassa matematikasini bajaradi va
+   * ilgari tekshirilmagani uchun darvozani chetlab o'tishning tayyor yo'li
+   * bo'lgan (adversarial topilma). Bitta joyda yozilsa, keyingi sotuv
+   * yo'li qo'shilganda ham unutilishi ehtimoli kamayadi.
+   *
+   * ⚠️ Bo'sh satr ham `null` kabi "to'lov yo'q" deb qabul qilinadi —
+   * `if (order.payment_status)` allaqachon shunday ishlaydi, lekin buni
+   * ATAYLAB ekanini yozib qo'yish kerak: bo'sh satrni "to'langan" deb
+   * o'qish barcha oddiy buyurtmalarni to'sib qo'yardi.
+   */
+  private assertNotOnlinePaid(order: Order): void {
+    const state = String(order.payment_status ?? '').trim();
+    if (!state) return;
+
+    this.badRequest(
+      `Bu buyurtma onlayn to‘langan (${state}, ` +
+        `${Number(order.paid_online_amount ?? 0)} so‘m) — naqd sotuv oqimi ` +
+        'undan pul yig‘ilgandek hisoblaydi va kassa balansini buzadi. ' +
+        'Onlayn to‘lov uchun pul modeli hali kelishilmagan: marketga qarz, ' +
+        'kuryer tarifi va kompaniya kirimi qanday yozilishi aniqlanishi kerak.',
+    );
+  }
+
+  /**
+   * ONLAYN TO'LOVNI BUYURTMAGA QAYD ETISH (7-bosqich).
+   *
+   * ⚠️ PULNI KASSAGA KO'CHIRMAYDI. Foydalanuvchi qarori (2026-09-13):
+   * onlayn pul hozircha kassaga yozilmaydi, faqat daftarga. Bu metod
+   * buyurtmadagi IKKI maydonni yangilaydi va shu bilan tugaydi —
+   * `markByProvider` dagi ayni naqsh ("status-only, moliya emitsiz").
+   *
+   * ⚠️ NEGA BITTA METOD. Buyurtmani topish, summani tekshirish va yozish —
+   * uchalasi ayni yerda, order-service ichida. Ular integration-service'ga
+   * bo'linsa, "topdim → boshqa jarayon o'zgartirdi → yozdim" poygasi
+   * paydo bo'lardi. Dublikatning qat'iy to'sig'i esa chaqiruvchida
+   * (`payment_transactions` UNIQUE).
+   */
+  async recordOnlinePayment(input: {
+    integration_slug?: string;
+    provider_transaction_id?: string;
+    /**
+     * Ulanish bog'langan market (bo'lsa). Berilgan bo'lsa buyurtma AYNI
+     * marketga tegishli bo'lishi shart — aks holda bir marketning to'lov
+     * tizimi boshqa marketning buyurtmasini "to'langan" deb belgilay olardi.
+     */
+    integration_market_id?: string | null;
+    order_ref?: string;
+    /** Havola qaysi maydonga tegishli. Sukut: buyurtma raqami. */
+    /**
+     * Havola qaysi maydonga tegishli.
+     *
+     * ⚠️ ELCHI'DA `order_number` USTUNI YO'Q — buyurtma raqami `id`ning
+     * O'ZI (`order-service.service.ts` — `order_number: String(order.id)`).
+     * PCS/BeePost'da alohida `order_number` ketma-ketligi bor, bu yerda
+     * esa yo'q; ikkisini aralashtirmaslik kerak.
+     */
+    order_ref_field?: 'id' | 'external_id' | 'qr_code_token';
+    amount?: unknown;
+    currency?: string;
+    /** BIZNING holat: provayderning xom holati chaqiruvchida xaritalanadi. */
+    status?: string;
+  }) {
+    const ref = String(input?.order_ref ?? '').trim();
+    if (!ref) {
+      return successRes(
+        { outcome: 'order_ref_missing' },
+        200,
+        'to‘lov havolasi yo‘q',
+      );
+    }
+
+    /**
+     * FAQAT `succeeded` va `refunded` buyurtmaga tegadi.
+     *
+     * `pending` — pul hali kelmagan (to'lov tizimi tranzaksiyani band
+     * qilgan). Uni "to'langan" deb belgilash eng xavfli xato bo'lardi:
+     * kuryer naqd yig'masdi, pul esa kelmasdi.
+     * `failed` — yozuv sifatida saqlanadi, lekin qo'llanmaydi.
+     */
+    const status = String(input?.status ?? '').toLowerCase();
+    if (status !== 'succeeded' && status !== 'refunded') {
+      return successRes(
+        { outcome: 'ignored_status', status },
+        200,
+        'to‘lov holati qo‘llanmadi',
+      );
+    }
+
+    const amount = this.safeExternalAmount(input?.amount);
+    if (amount === null || amount <= 0) {
+      this.logger.warn(
+        `online payment REFUSED: summa yaroqsiz (${String(input?.amount)})`,
+      );
+      return successRes(
+        { outcome: 'amount_invalid' },
+        200,
+        'to‘lov summasi yaroqsiz',
+      );
+    }
+
+    const field = input?.order_ref_field ?? 'id';
+    /**
+     * ⚠️ Maydon nomi FOYDALANUVCHI SOZLAMASIDAN keladi — uni
+     * to'g'ridan-to'g'ri `where` ga qo'yish mumkin emas. Faqat oq ro'yxat.
+     */
+    const where: Record<string, unknown> = { isDeleted: false };
+    if (field === 'external_id') {
+      where.external_id = ref;
+    } else if (field === 'qr_code_token') {
+      where.qr_code_token = ref;
+    } else {
+      /**
+       * `id` — bigint. Son bo'lmagan havolani `where` ga qo'ysak Postgres
+       * `22P02` tip xatosi beradi va webhook 500 bilan yiqilardi; provayder
+       * esa qayta-qayta yuborishni boshlardi.
+       */
+      if (!/^\d+$/.test(ref)) {
+        return successRes(
+          { outcome: 'order_not_found', reason: 'id son emas' },
+          200,
+          'buyurtma topilmadi',
+        );
+      }
+      where.id = ref;
+    }
+
+    /**
+     * ⚠️ IKKITA QATOR TOPILSA RAD ETILADI (adversarial topilma).
+     *
+     * `external_id` va `qr_code_token` ustunlari UNIQUE EMAS
+     * (`order.entity.ts` — indeks ataylab unique qilinmagan, chunki eski
+     * ma'lumotda dublikat bor). `findOne` esa tartibsiz BITTASINI oladi —
+     * ya'ni to'lov BOSHQA mijozning buyurtmasiga yozilishi mumkin edi va
+     * u posilka "to'langan" bo'lib ketardi.
+     *
+     * Ikkitani so'raymiz: bittadan ko'p bo'lsa qaysi biri ekani NOMA'LUM
+     * va taxmin qilish pul bilan qilinadigan eng yomon ish.
+     */
+    const matches = await this.orderRepo.find({ where, take: 2 });
+    if (matches.length > 1) {
+      this.logger.warn(
+        `online payment REFUSED: ${field}=${ref} bo‘yicha ${matches.length} ` +
+          'buyurtma topildi — qaysi biri ekani noma‘lum',
+      );
+      return successRes(
+        { outcome: 'order_ref_ambiguous', matches: matches.length },
+        200,
+        'havola bir nechta buyurtmaga mos keldi',
+      );
+    }
+    const order = matches[0];
+    if (!order) {
+      this.logger.warn(
+        `online payment: buyurtma topilmadi (${field}=${ref}) — ` +
+          'pul keldi, lekin bog‘lanmadi',
+      );
+      return successRes({ outcome: 'order_not_found' }, 200, 'buyurtma topilmadi');
+    }
+
+    /**
+     * ⚠️ YOPILGAN BUYURTMAGA QO'LLANMAYDI.
+     *
+     * Buyurtma allaqachon sotilgan bo'lsa, kuryer naqd pulni YIG'IB
+     * BO'LGAN. Ustiga onlayn to'lovni qo'shsak, mijoz IKKI MARTA to'lagan
+     * bo'lib chiqadi va tizim buni "hammasi joyida" deb ko'rsatardi.
+     * Bu holat qaytarish (refund) talab qiladi — bu ODAM qarori, avtomatik
+     * hal qilinmaydi. Shu bois natija KO'RINADIGAN qilinadi.
+     */
+    /**
+     * ⚠️ TENANT DARVOZASI (adversarial topilma).
+     *
+     * Ulanish ma'lum bir marketga bog'langan bo'lsa (`market_id`), to'lov
+     * FAQAT o'sha marketning buyurtmasiga yozilishi mumkin. Busiz bir
+     * marketning to'lov tizimi (yoki uning kaliti qo'lga tushgan odam)
+     * tizimdagi ISTALGAN buyurtmani "to'langan" deb belgilab, kuryerni
+     * naqd yig'ishdan to'sib qo'yardi.
+     *
+     * Ulanishda market bog'lanmagan bo'lsa (kompaniya umumiy merchant
+     * akkaunti) tekshiruv o'tkazib yuboriladi — bu qonuniy holat.
+     */
+    const tenantMarket = String(input?.integration_market_id ?? '').trim();
+    if (tenantMarket && String(order.market_id) !== tenantMarket) {
+      this.logger.warn(
+        `online payment REFUSED for order ${order.id}: ulanish marketi ` +
+          `${tenantMarket}, buyurtma marketi ${order.market_id}`,
+      );
+      await this.activityLog.log({
+        entity_type: 'Order',
+        entity_id: String(order.id),
+        action: ActivityAction.PAYMENT,
+        new_value: {
+          outcome: 'market_mismatch',
+          integration_market_id: tenantMarket,
+          order_market_id: String(order.market_id),
+          provider: input?.integration_slug ?? null,
+        },
+      });
+      return successRes(
+        {
+          outcome: 'market_mismatch',
+          order_id: String(order.id),
+        },
+        200,
+        'to‘lov boshqa marketning buyurtmasiga tegishli',
+      );
+    }
+
+    /**
+     * ⚠️ QAYTARISH YOPILGAN BUYURTMADA HAM QAYD ETILADI (adversarial topilma).
+     *
+     * Ilgari "yopilgan" darvozasi qaytarishdan OLDIN turardi, ya'ni bekor
+     * qilingan yoki qaytarilgan buyurtmaning qaytarilgan puli
+     * STRUKTURAVIY ravishda yozib bo'lmasdi — aynan eng kerakli holat.
+     *
+     * Qaytarish majburiyat YARATMAYDI, u `paid_online_amount` ni
+     * KAMAYTIRADI; shu bois yopilgan buyurtmada ham xavfsiz.
+     */
+    const isRefund = status === 'refunded';
+
+    const CLOSED_STATES: string[] = [
+      Order_status.SOLD,
+      Order_status.PAID,
+      Order_status.PARTLY_PAID,
+      Order_status.CANCELLED,
+      Order_status.CANCELLED_SENT,
+      Order_status.RETURNED_TO_MARKET,
+      Order_status.CLOSED,
+    ];
+    if (!isRefund && CLOSED_STATES.includes(order.status)) {
+      this.logger.warn(
+        `online payment REFUSED for order ${order.id}: ` +
+          `status=${order.status} — kuryer naqd yig‘gan bo‘lishi mumkin, ` +
+          'qo‘lda ko‘rib chiqish kerak',
+      );
+      await this.activityLog.log({
+        entity_type: 'Order',
+        entity_id: String(order.id),
+        action: ActivityAction.PAYMENT,
+        new_value: {
+          outcome: 'order_already_closed',
+          order_status: order.status,
+          amount,
+          provider: input?.integration_slug ?? null,
+          provider_transaction_id: input?.provider_transaction_id ?? null,
+        },
+      });
+      return successRes(
+        {
+          outcome: 'order_already_closed',
+          order_id: String(order.id),
+          order_number: order.id,
+          order_status: order.status,
+        },
+        200,
+        'buyurtma yopilgan — to‘lov qo‘llanmadi',
+      );
+    }
+
+    const before = Number(order.paid_online_amount ?? 0);
+    const total = Number(order.total_price ?? 0);
+
+    if (isRefund) {
+      /**
+       * Qaytarish — `paid_online_amount` kamayadi, 0 dan pastga tushmaydi.
+       * Manfiy qoldiq "biz mijozga qarzdormiz" degan MA'NOSI boshqa narsa
+       * va u bu maydonda ifodalanmasligi kerak.
+       */
+      const after = Math.max(before - amount, 0);
+      await this.applyOnlinePaymentToOrder(order, after, total, {
+        status,
+        amount,
+        input,
+        before,
+      });
+      return successRes(
+        {
+          outcome: 'recorded',
+          order_id: String(order.id),
+          order_number: order.id,
+          paid_online_amount: after,
+          payment_status: this.derivePaymentState(after, total),
+        },
+        200,
+        'qaytarish qayd etildi',
+      );
+    }
+
+    const after = before + amount;
+    /**
+     * ⚠️ ORTIQCHA TO'LOV QO'LLANMAYDI.
+     *
+     * Summa buyurtma narxidan oshsa, eng ehtimolli sabab — to'lov
+     * NOTO'G'RI buyurtmaga moslashtirilgan (havola takrorlangan yoki
+     * provayder boshqa raqam yubordi). Uni qabul qilsak, mijoz to'lamagan
+     * buyurtma "to'langan" bo'lib qolardi va kuryer puldan qaytardi.
+     *
+     * 1 so'm bag'rikenglik — tiyin yumaloqlanishi uchun.
+     */
+    if (after > total + 1) {
+      this.logger.warn(
+        `online payment REFUSED for order ${order.id}: ` +
+          `${after} > total ${total} — noto‘g‘ri moslashtirish ehtimoli`,
+      );
+      await this.activityLog.log({
+        entity_type: 'Order',
+        entity_id: String(order.id),
+        action: ActivityAction.PAYMENT,
+        new_value: {
+          outcome: 'amount_exceeds_total',
+          amount,
+          already_paid_online: before,
+          total_price: total,
+          provider: input?.integration_slug ?? null,
+          provider_transaction_id: input?.provider_transaction_id ?? null,
+        },
+      });
+      return successRes(
+        {
+          outcome: 'amount_exceeds_total',
+          order_id: String(order.id),
+          order_number: order.id,
+          total_price: total,
+          already_paid_online: before,
+        },
+        200,
+        'to‘lov summasi buyurtma narxidan oshdi',
+      );
+    }
+
+    const applied = await this.applyOnlinePaymentToOrder(order, after, total, {
+      status,
+      amount,
+      input,
+      before,
+    });
+    /**
+     * Poygada chegara buzilgan — boshqa to'lov bir vaqtda o'tib ketgan.
+     * Natija ortiqcha to'lov bilan AYNI: summa sig'maydi.
+     */
+    if (!applied) {
+      return successRes(
+        {
+          outcome: 'amount_exceeds_total',
+          order_id: String(order.id),
+          order_number: order.id,
+          total_price: total,
+          already_paid_online: before,
+          race: true,
+        },
+        200,
+        'to‘lov summasi buyurtma narxidan oshdi (poyga)',
+      );
+    }
+
+    return successRes(
+      {
+        outcome: 'recorded',
+        order_id: String(order.id),
+        order_number: order.id,
+        paid_online_amount: after,
+        payment_status: this.derivePaymentState(after, total),
+      },
+      200,
+      'to‘lov qayd etildi',
+    );
+  }
+
+  /**
+   * Onlayn to'lov holatini summadan kelib chiqib aniqlash.
+   *
+   * ⚠️ `Order_status.PAID`/`PARTLY_PAID` BILAN ARALASHTIRMANG — ular market
+   * bilan hisob-kitob haqida, bu esa MIJOZNING to'lovi haqida.
+   */
+  private derivePaymentState(
+    paidOnline: number,
+    total: number,
+  ): string | null {
+    if (paidOnline <= 0) return null;
+    // 1 so'm bag'rikenglik — tiyin yumaloqlanishi uchun.
+    return paidOnline + 1 >= total ? 'paid' : 'partly';
+  }
+
+  /**
+   * To'lovni buyurtmaga ATOMIK yozish.
+   *
+   * ⚠️ NEGA `update({ paid_online_amount: after })` YETMAYDI (adversarial
+   * topilma). U "o'qi → hisobla → yoz" ketma-ketligi: bir buyurtmaga ikki
+   * to'lov bir vaqtda kelsa (qismiy to'lovlar, turli tranzaksiyalar)
+   * ikkisi ham ayni `before` ni o'qib, biri ikkinchisini USTIGA yozardi —
+   * ya'ni bitta to'lov JIMGINA yo'qolardi.
+   *
+   * Endi qiymat SQL ichida oshiriladi (`paid_online_amount + :amt`) va
+   * chegara `WHERE` ichida tekshiriladi — ya'ni tekshiruv va yozish bitta
+   * atomik amalda. `affected === 0` bo'lsa chegara buzilgan (poyga ichida
+   * boshqa to'lov o'tib ketgan).
+   *
+   * `payment_status` ham SQL ichida hisoblanadi: uni JS'da hisoblab
+   * yuborsak, yana eskirgan qiymatga tayangan bo'lardik.
+   */
+  private async applyOnlinePaymentToOrder(
+    order: Order,
+    after: number,
+    total: number,
+    ctx: {
+      status: string;
+      amount: number;
+      before: number;
+      input: { integration_slug?: string; provider_transaction_id?: string };
+    },
+  ): Promise<boolean> {
+    const isRefund = ctx.status === 'refunded';
+    const nextState = this.derivePaymentState(after, total);
+
+    /**
+     * Yangi qiymat ifodasi. Qaytarishda 0 dan pastga tushmaydi
+     * (`GREATEST`), to'lovda esa oddiy qo'shish.
+     */
+    const nextAmountSql = isRefund
+      ? 'GREATEST("paid_online_amount" - :amt, 0)'
+      : '"paid_online_amount" + :amt';
+
+    /**
+     * Holat AYNI ifodadan hisoblanadi. 1 so'm bag'rikenglik tiyin
+     * yumaloqlanishi uchun — `derivePaymentState` bilan bir xil qoida.
+     */
+    const nextStateSql =
+      `CASE WHEN ${nextAmountSql} <= 0 THEN NULL ` +
+      `WHEN ${nextAmountSql} + 1 >= "total_price" THEN 'paid' ` +
+      `ELSE 'partly' END`;
+
+    const qb = this.orderRepo
+      .createQueryBuilder()
+      .update(Order)
+      .set({
+        paid_online_amount: () => nextAmountSql,
+        payment_status: () => nextStateSql,
+      })
+      .where('id = :id', { id: order.id })
+      .setParameter('amt', ctx.amount);
+
+    /**
+     * ⚠️ CHEGARA FAQAT TO'LOVDA. Qaytarish summani kamaytiradi — u yerda
+     * "narxdan oshmasin" sharti ma'nosiz va qaytarishni bloklardi.
+     */
+    if (!isRefund) {
+      qb.andWhere('"paid_online_amount" + :amt <= "total_price" + 1');
+    }
+
+    const result = await qb.execute();
+    if (!result.affected) {
+      this.logger.warn(
+        `online payment LOST RACE for order ${order.id}: chegara buzilgan ` +
+          '(bir vaqtda boshqa to‘lov o‘tib ketgan)',
+      );
+      return false;
+    }
+
+    await this.activityLog.log({
+      entity_type: 'Order',
+      entity_id: String(order.id),
+      action: ActivityAction.PAYMENT,
+      old_value: {
+        paid_online_amount: ctx.before,
+        payment_status: order.payment_status ?? null,
+      },
+      new_value: {
+        paid_online_amount: after,
+        payment_status: nextState,
+        event: ctx.status,
+        amount: ctx.amount,
+        provider: ctx.input.integration_slug ?? null,
+        provider_transaction_id: ctx.input.provider_transaction_id ?? null,
+      },
+      metadata: { order_number: order.id },
+    });
+    return true;
+  }
+
   async receiveExternalOrders(dto: {
     integration_id: string;
     orders: any[];
@@ -4077,6 +4559,36 @@ export class OrderLifecycleService {
     if (!order.post_id) {
       this.badRequest('Order has no post');
     }
+
+    /**
+     * ⚠️ ONLAYN TO'LANGAN BUYURTMA ODDIY SOTUV OQIMIDAN O'TMAYDI (7-bosqich).
+     *
+     * NEGA RAD ETILADI, NEGA "JIMGINA HISOBLAB" O'TMAYDI. Butun kassa
+     * matematikasi kuryer MIJOZDAN NAQD YIG'GANIGA tayanadi:
+     *
+     *   courierIncome = total_price − courierShare   ← kuryer topshiradigan naqd
+     *   market        = total_price − market_tariff  ← marketga qoladigan
+     *   branchNet     = total_price − courierShare − branchShare
+     *
+     * Mijoz onlayn to'lagan bo'lsa naqd YO'Q, lekin bu formulalar o'zgarmaydi
+     * — ya'ni kuryer yig'MAGAN pulni topshirgandek yozilardi va kassa
+     * balansi jimgina buzilardi. Aynan shu turdagi xato eng qimmat: hech
+     * qanday xato chiqmaydi, faqat raqamlar noto'g'ri bo'ladi.
+     *
+     * ⚠️ TO'LIQ PUL MODELI HALI QAROR QILINMAGAN. Foydalanuvchi qarori
+     * (2026-09-13): onlayn pul kassaga yozilmaydi, marketga qarz
+     * yozilmaydi, kuryer tarifini esa HQ to'laydi. Bu uchtasi birgalikda
+     * HQ uchun ZARAR keltiradi (kirim yozilmaydi, chiqim yoziladi) va
+     * marketdan yetkazish haqini undiradigan maydon kodda YO'Q. Shu bois
+     * oyoqlarni yozib qo'yishdan ko'ra TO'XTATISH to'g'ri: xato ko'rinadi
+     * va tuzatiladi.
+     *
+     * BUGUN BU HOLAT YUZAGA KELMAYDI — hech bir to'lov provayderi
+     * ulanmagan, ya'ni `payment_status` hech qachon to'lmaydi. Darvoza
+     * provayder ulangan KUNI ishlaydi va noto'g'ri hisob-kitobni oldini
+     * oladi.
+     */
+    this.assertNotOnlinePaid(order);
 
     const postRes = await rmqSend<{
       data?: { id: string; courier_id?: string | null };
@@ -5150,6 +5662,14 @@ export class OrderLifecycleService {
       this.hasRole(requester, Roles.MANAGER) &&
       !this.hasRole(requester, Roles.COURIER);
     const order = await this.findById(id);
+    /**
+     * ⚠️ QISMAN SOTUV HAM TO'SILADI (adversarial topilma, kritik).
+     *
+     * Ilgari darvoza faqat `sellOrder` da bor edi, `partlySellOrder` esa
+     * AYNI kassa matematikasini bajaradi (kuryer, market, filial oyoqlari)
+     * — ya'ni darvozani chetlab o'tishning tayyor yo'li qolgan edi.
+     */
+    this.assertNotOnlinePaid(order);
     const oldTotalPrice = Number(order.total_price ?? 0);
     if (order.status !== Order_status.WAITING) {
       this.badRequest('Order not found or not in waiting status');

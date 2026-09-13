@@ -21,6 +21,7 @@ import { ProviderRemittance } from './entities/provider-remittance.entity';
 import { Partner } from './entities/partner.entity';
 import { PartnerShipmentRef } from './entities/partner-shipment-ref.entity';
 import { InboundDealRef } from './entities/inbound-deal-ref.entity';
+import { PaymentTransaction } from './entities/payment-transaction.entity';
 import { PartnerProductRef } from './entities/partner-product-ref.entity';
 import { PartnerMarketRef } from './entities/partner-market-ref.entity';
 import { PartnerWebhookOutbox } from './entities/partner-webhook-outbox.entity';
@@ -53,6 +54,7 @@ import { SyncQueueScheduler } from './sync-queue.scheduler';
       Partner,
       PartnerShipmentRef,
       InboundDealRef,
+      PaymentTransaction,
       PartnerProductRef,
       PartnerMarketRef,
       PartnerWebhookOutbox,
