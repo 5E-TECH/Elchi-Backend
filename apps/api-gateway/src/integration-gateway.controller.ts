@@ -164,6 +164,50 @@ export class IntegrationGatewayController {
       .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
+  /**
+   * KIRUVCHI WEBHOOK JURNALI (adversarial topilma, HIGH).
+   *
+   * ⚠️ `:id` marshrutlaridan OLDIN — aks holda "webhook-logs" integratsiya
+   * id'si deb o'qilardi (bu tuzoqqa `partners/webhooks` bilan bir marta
+   * tushilgan).
+   *
+   * ⚠️ TANA QAYTARILMAYDI: `raw_body` ichida mijozning telefoni va manzili
+   * turadi, ro'yxatda esa savol "nima bo'ldi", "mijoz kim" emas.
+   */
+  @Get('webhook-logs')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      "Kiruvchi webhook jurnali — imzo, natija, xato sababi (tana qaytarilmaydi)",
+  })
+  @ApiQuery({ name: 'integration_id', required: false, type: String })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    type: String,
+    description: 'rejected | verified | processed',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  webhookLogs(
+    @Query('integration_id') integrationId?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.webhook.logs' },
+        {
+          integration_id: integrationId,
+          status,
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+        },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+  }
+
   @Get('sync/history')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({

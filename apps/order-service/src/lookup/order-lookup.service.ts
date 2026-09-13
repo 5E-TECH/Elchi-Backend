@@ -274,13 +274,29 @@ export class OrderLookupService implements OnModuleInit {
     return districtId;
   }
 
-  async resolveDistrictId(
+  /**
+   * Tumanni aniqlash — MOS KELMASA `null`.
+   *
+   * ⚠️ NEGA ALOHIDA METOD KERAK BO'LDI (adversarial tekshiruv). Chaqiruvchi
+   * "aniqlandimi yoki zaxira ishlatildimi" degan savolga javob olishi
+   * kerak edi. `resolveDistrictId` ikkisini AJRATMAYDI — u zaxira qiymatni
+   * qaytaradi va chaqiruvchi buni haqiqiy moslik deb qabul qiladi.
+   *
+   * Zaxira esa `getDefaultDistrictId()` — u JADVALDAGI BIRINCHI tuman
+   * (`limit: 1`). Tuman viloyat va pochta marshrutini, tarifni ham
+   * belgilaydi; ya'ni mos kelmagan buyurtma JIMGINA boshqa viloyatga
+   * ketardi.
+   *
+   * ⚠️ Moslik faqat SOATO kodi yoki ichki ID bo'yicha izlanadi — NOM
+   * bo'yicha EMAS. Ya'ni "Chilonzor" deb yuborgan tizim hech qachon mos
+   * kelmaydi.
+   */
+  async resolveDistrictIdOrNull(
     externalDistrictValue: unknown,
-    fallbackDistrictId: string,
-  ): Promise<string> {
+  ): Promise<string | null> {
     const raw =
       externalDistrictValue == null ? '' : String(externalDistrictValue).trim();
-    if (!raw) return fallbackDistrictId;
+    if (!raw) return null;
 
     const bySato = await rmqSend<{ data?: { id?: string } }>(
       this.logisticsClient,
@@ -300,6 +316,17 @@ export class OrderLookupService implements OnModuleInit {
       return String(byId.data.id);
     }
 
-    return fallbackDistrictId;
+    return null;
+  }
+
+  /** Eski xatti-harakat: mos kelmasa zaxira tuman. */
+  async resolveDistrictId(
+    externalDistrictValue: unknown,
+    fallbackDistrictId: string,
+  ): Promise<string> {
+    return (
+      (await this.resolveDistrictIdOrNull(externalDistrictValue)) ??
+      fallbackDistrictId
+    );
   }
 }

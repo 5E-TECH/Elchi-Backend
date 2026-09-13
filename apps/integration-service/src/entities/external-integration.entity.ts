@@ -224,6 +224,46 @@ export class ExternalIntegration extends BaseEntity {
     timeout_ms?: number;
   } | null;
 
+  /**
+   * KIRUVCHI BUYURTMA YARATISH — CRM voronkasi uchun (audit P5/P7/EI-10).
+   *
+   * MUAMMO. Kiruvchi webhook faqat BIZ jo'natgan posilkaning statusini
+   * yangilay olardi (`applyWebhookToShipment` → `no_shipment`). CRM esa
+   * teskari ishlaydi: bitim voronkada bosqichdan bosqichga o'tadi va
+   * KERAKLI bosqichga yetganda buyurtma TUG'ILISHI kerak. Voronka/bosqich
+   * tushunchasi kodda umuman yo'q edi.
+   *
+   *   {
+   *     "enabled": true,
+   *     "deal_path": "data.lead",        // bitim obyekti qayerda
+   *     "funnel_path": "pipeline_id",    // voronka id'si (bitim ichida)
+   *     "funnel_id": "7482913",          // FAQAT shu voronka qabul qilinadi
+   *     "stage_path": "status_id",       // bosqich id'si
+   *     "create_on_stages": ["142"],     // FAQAT shu bosqichda yaratiladi
+   *     "create_on_events": ["deal.won"] // yoki hodisa turi bo'yicha
+   *   }
+   *
+   * Maydonlarning O'ZI `field_mapping` dan o'qiladi — u allaqachon
+   * import yo'li uchun ishlaydi (telefon normalizatsiyasi, tuman
+   * aniqlash, mahsulot qatorlari, dublikat tekshiruvi).
+   *
+   * ⚠️ KAMIDA BITTA DARVOZA SHART (`create_on_stages` yoki
+   * `create_on_events`). Darvozasiz har bir webhook buyurtma yaratishga
+   * urinardi — CRM esa "bitim yaratildi" hodisasini manzil va telefon
+   * to'lmasdan OLDIN yuboradi, ya'ni chala buyurtma tug'ilardi. Dublikat
+   * tekshiruvi bundan qutqarmaydi: u birinchi CHALA yozuvni saqlab qolardi.
+   */
+  @Column({ type: 'jsonb', nullable: true })
+  inbound_order_config!: {
+    enabled?: boolean;
+    deal_path?: string;
+    funnel_path?: string;
+    funnel_id?: string;
+    stage_path?: string;
+    create_on_stages?: string[];
+    create_on_events?: string[];
+  } | null;
+
   @Column({ type: 'timestamptz', nullable: true })
   last_sync_at!: Date | null;
 

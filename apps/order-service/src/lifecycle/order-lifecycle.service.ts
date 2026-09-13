@@ -3199,6 +3199,27 @@ export class OrderLifecycleService {
     return token;
   }
 
+  /**
+   * Tashqi tizimdan kelgan pul qiymatini XAVFSIZ o'qish.
+   *
+   * `null` qaytsa — qiymat SON EMAS va qator tashlanishi kerak.
+   * Berilmagan (`null`/`undefined`/bo'sh satr) esa 0 — bu qonuniy holat
+   * (bepul yoki oldindan to'langan posilka).
+   *
+   * ⚠️ `Number('250 000')` → `NaN`, `Number('')` → `0`, `Number([])` → `0`.
+   * Oxirgi ikkisi tuzoq: bo'sh massiv "narx yo'q" degani, 0 emas — shu
+   * bois faqat son va satr qabul qilinadi.
+   */
+  private safeExternalAmount(value: unknown): number | null {
+    if (value == null || value === '') return 0;
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value !== 'string') return null;
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
   private getFieldValue(obj: any, fieldPath?: string | null): any {
     if (!obj || !fieldPath) return undefined;
     return fieldPath.split('.').reduce((acc, key) => acc?.[key], obj);
@@ -3704,7 +3725,29 @@ export class OrderLifecycleService {
     );
   }
 
-  async receiveExternalOrders(dto: { integration_id: string; orders: any[] }) {
+  /**
+   * TASHQI BUYURTMANI QABUL QILISH.
+   *
+   * `options.strict` — CHAQIRUVCHI TAXMIN QILISHNI TAQIQLAYDI.
+   *
+   * ⚠️ NEGA KERAK BO'LDI (adversarial tekshiruv). Tortib olish yo'lida
+   * importni operator qo'lda ishga tushiradi va natijani ko'radi. CRM
+   * webhooki esa to'xtovsiz keladi va hech kim qaramaydi — shu bois
+   * "aniqlanmasa taxmin qil" xatti-harakati o'sha yerda xavfli:
+   *
+   *   • tuman mos kelmasa zaxira = JADVALDAGI BIRINCHI tuman, ya'ni posilka
+   *     jimgina boshqa viloyatga ketardi (tuman tarifni ham belgilaydi);
+   *   • narx kaliti mos kelmasa 0, ya'ni COD 0 bo'lib pul yo'qolardi.
+   *
+   * `strict: true` bo'lsa bunday qator YARATILMAYDI — `skipped` ga aniq
+   * sabab bilan tushadi va webhook jurnalida ko'rinadi.
+   */
+  async receiveExternalOrders(dto: {
+    integration_id: string;
+    orders: any[];
+    options?: { strict?: boolean };
+  }) {
+    const strict = Boolean(dto?.options?.strict);
     const integration = await this.lookup.getIntegrationById(
       String(dto.integration_id),
     );
@@ -3815,10 +3858,22 @@ export class OrderLifecycleService {
         ext,
         fieldMapping.district_code_field ?? 'district',
       );
-      const districtId = await this.lookup.resolveDistrictId(
-        districtExternal,
-        fallbackDistrictId,
-      );
+      /**
+       * ⚠️ Qat'iy rejimda ANIQLANGAN tuman talab qilinadi. Moslik faqat
+       * SOATO kodi yoki ichki ID bo'yicha izlanadi — NOM bo'yicha emas,
+       * ya'ni "Chilonzor" deb yuborgan tizim hech qachon mos kelmaydi va
+       * zaxira tuman ishlatilardi.
+       */
+      const resolvedDistrict =
+        await this.lookup.resolveDistrictIdOrNull(districtExternal);
+      if (strict && !resolvedDistrict) {
+        skipped.push({
+          external_id: externalId,
+          reason: 'district_unresolved',
+        });
+        continue;
+      }
+      const districtId = resolvedDistrict ?? fallbackDistrictId;
       const regionExternal = this.getFieldValue(
         ext,
         fieldMapping.region_code_field ?? 'region',
@@ -3858,22 +3913,69 @@ export class OrderLifecycleService {
         continue;
       }
 
-      const totalPrice = Number(
-        this.getFieldValue(
-          ext,
-          fieldMapping.total_price_field ?? 'total_price',
-        ) ?? 0,
+      /**
+       * ⚠️ NARX — `Number()` NI XOM ISHLATISH MUMKIN EMAS (adversarial
+       * tekshiruv, kritik).
+       *
+       * `Number('250 000')` → `NaN`, `Math.max(NaN, 0)` → `NaN`. Postgres
+       * `numeric` ustuni `NaN` ni QABUL QILADI, ya'ni xato chiqmaydi:
+       * buyurtma yaratiladi va undan keyin market hisobi, kassa yig'indisi,
+       * dashboard — hammasi `NaN` bo'lib qoladi. Bu eng yomon turdagi
+       * xato: jimgina va butun moliyani zaharlaydi.
+       *
+       * Endi son bo'lmagan qiymat qatorni TASHLAYDI (har qanday
+       * chaqiruvchida — `NaN` narx hech kim uchun to'g'ri emas).
+       */
+      const priceRaw = this.getFieldValue(
+        ext,
+        fieldMapping.total_price_field ?? 'total_price',
       );
-      const deliveryPrice = Number(
-        this.getFieldValue(
-          ext,
-          fieldMapping.delivery_price_field ?? 'delivery_price',
-        ) ?? 0,
+      const deliveryRaw = this.getFieldValue(
+        ext,
+        fieldMapping.delivery_price_field ?? 'delivery_price',
       );
+      const totalPrice = this.safeExternalAmount(priceRaw);
+      const deliveryPrice = this.safeExternalAmount(deliveryRaw);
+      if (totalPrice === null || deliveryPrice === null) {
+        skipped.push({ external_id: externalId, reason: 'price_invalid' });
+        continue;
+      }
+      /**
+       * Qat'iy rejimda NARX BERILGAN bo'lishi shart. Kalit mos kelmasa
+       * `undefined` → 0 bo'lib ketardi, ya'ni COD 0: kuryer puldan
+       * qaytardi va hech kim sababini bilmasdi.
+       */
+      if (strict && (priceRaw == null || priceRaw === '')) {
+        skipped.push({ external_id: externalId, reason: 'price_missing' });
+        continue;
+      }
       const finalPrice = Math.max(totalPrice, 0) + Math.max(deliveryPrice, 0);
-      const qrCode =
-        this.getFieldValue(ext, fieldMapping.qr_code_field ?? 'qr_code') ??
-        this.generateCustomToken();
+
+      /**
+       * SKAN TOKENI — TO'QNASHUV TEKSHIRUVI (adversarial tekshiruv).
+       *
+       * `qr_code_field` ATAYLAB qoladi: tashqi sayt o'z shtrix-kodini
+       * posilkaga bosib chiqaradi va pochta AYNI o'sha kodni skaner qiladi
+       * (foydalanuvchi so'ragan oqim). Lekin token skanerlab qabul qilish
+       * darvozasining KALITI — dublikat bo'lsa skanerlash BOSHQA
+       * buyurtmaga tushib ketardi.
+       */
+      const qrRaw = this.getFieldValue(
+        ext,
+        fieldMapping.qr_code_field ?? 'qr_code',
+      );
+      const providedQr = qrRaw == null ? '' : String(qrRaw).trim();
+      if (providedQr) {
+        const clash = await this.orderRepo.findOne({
+          where: { qr_code_token: providedQr, isDeleted: false },
+          select: { id: true },
+        });
+        if (clash) {
+          skipped.push({ external_id: externalId, reason: 'qr_code_conflict' });
+          continue;
+        }
+      }
+      const qrCode = providedQr || this.generateCustomToken();
 
       const createdOrder = await this.create({
         market_id: marketId,
