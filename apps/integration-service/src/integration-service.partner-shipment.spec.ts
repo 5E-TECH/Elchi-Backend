@@ -26,6 +26,15 @@ function makeService(
     jest.fn(() => of({ id: '900', status: 'new', qr_code_token: 'qr-abc' }));
   const svc = Object.create(IntegrationServiceService.prototype);
   svc.partnerShipmentRefRepo = ref;
+  /**
+   * MARKET EGALIGI (audit F3). `createPartnerShipment` endi
+   * `partner_market_refs` da `(partner_id, elchi_market_id)` juftligini
+   * talab qiladi — busiz 403. Testda sotuvchi ro'yxatdan o'tgan deb
+   * hisoblaymiz; egalik YO'Q holati alohida specda tekshiriladi
+   * (`integration-service.partner-guards.spec.ts`).
+   */
+  svc.partnerMarketRefRepo =
+    over.marketRefRepo ?? { findOne: jest.fn().mockResolvedValue({ id: '1' }) };
   svc.identityClient = { send: identitySend };
   svc.orderClient = { send: orderSend };
   return {

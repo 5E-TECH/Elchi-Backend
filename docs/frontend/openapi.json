@@ -14422,6 +14422,11 @@
           "subtotal": {
             "type": "number",
             "description": "Buyurtma qiymati (total_price uchun)"
+          },
+          "label_token": {
+            "type": "string",
+            "example": "a1b2c3d4e5f6a1b2c3d4e5f6",
+            "description": "Hamkor YORLIG'IDAGI QR qiymati. Berilsa Elchi shu tokenni buyurtmaga yozadi va posilkani skanerlash ishlaydi. Berilmasa Elchi o'z tokenini yaratadi va hamkor yorlig'i skanerda TOPILMAYDI."
           }
         },
         "required": [
