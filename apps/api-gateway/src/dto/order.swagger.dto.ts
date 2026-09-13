@@ -471,6 +471,25 @@ export class OrdersArrayDto {
   order_ids!: string[];
 }
 
+/**
+ * Skanerlangan yorliq tokenlari.
+ *
+ * ⚠️ `order_ids` EMAS va bu ataylab: server skanerlash DALILINI o'zi
+ * tekshirishi kerak. Frontend id yuborsa, skanerlash bo'lgan-bo'lmaganini
+ * server bilmaydi va darvoza faqat UI'da qoladi (audit K2).
+ */
+export class ReceiveByScanDto {
+  @ApiProperty({
+    type: [String],
+    description: "Posilka yorliqlaridan skanerlangan QR qiymatlari",
+    example: ['a1b2c3d4e5f6a1b2c3d4e5f6', 'f6e5d4c3b2a1f6e5d4c3b2a1'],
+  })
+  @IsArray()
+  @ArrayNotEmpty()
+  @IsString({ each: true })
+  tokens!: string[];
+}
+
 export class CancelledManualOverrideDto {
   @ApiProperty({ example: '101' })
   @IsNotEmpty()

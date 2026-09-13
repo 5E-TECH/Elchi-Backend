@@ -3332,6 +3332,13 @@ export class OrderLifecycleService {
     orderIds: string[],
     search?: string,
     requester?: { id?: string; roles?: string[] } | null,
+    /**
+     * ⚠️ FAQAT ICHKI CHAQIRUV UCHUN. `order.receive` message pattern'i bu
+     * argumentni UZATMAYDI (`order-service.controller.ts`), ya'ni tashqaridan
+     * berib bo'lmaydi. Uni faqat `receiveExternalByScan` beradi — u tokenni
+     * allaqachon tekshirgan bo'ladi.
+     */
+    internal?: { scanVerified?: boolean },
   ) {
     const uniqueOrderIds = Array.from(
       new Set((orderIds ?? []).filter(Boolean)),
@@ -3354,6 +3361,37 @@ export class OrderLifecycleService {
 
     if (!orders.length) {
       this.notFound('No orders found!');
+    }
+
+    /**
+     * ⚠️ TASHQI POSILKA FAQAT SKANERLAB QABUL QILINADI (audit K2).
+     *
+     * MUAMMO. Bu metod faqat `status = NEW` va filial doirasini tekshirardi —
+     * `source` haqida shart YO'Q edi. Natijada hamkor/sayt posilkalari oddiy
+     * "Marketlar" ro'yxatida market buyurtmalari bilan ARALASH turardi va
+     * operator ularni bitta tugma bilan OMMAVIY qabul qilardi.
+     *
+     * Oqibati javobgarlik (custody) buzilishi: posilka hali hamkor omborida
+     * bo'lishi mumkin, Elchi esa uni "qabul qildim" deb yozib qo'yadi.
+     * Yo'qolsa kim aybdor — aniqlanmaydi.
+     *
+     * Skan darvozasi ILGARI FAQAT FRONTENDDA edi, ya'ni boshqa ekrandan
+     * yoki to'g'ridan-to'g'ri API'dan chetlab o'tish mumkin edi. Endi
+     * chegara SERVERDA.
+     *
+     * Butun so'rov rad etiladi, qolganini jimgina qabul qilmaymiz — aks
+     * holda operator hammasini qabul qildim deb o'ylardi.
+     */
+    if (!internal?.scanVerified) {
+      const externalOrders = orders.filter(
+        (order) => order.source === Order_source.EXTERNAL,
+      );
+      if (externalOrders.length) {
+        this.badRequest(
+          `${externalOrders.length} ta posilka tashqi manbadan keldi — ` +
+            'ular faqat skanerlab qabul qilinadi (Kiruvchi posilkalar ekrani)',
+        );
+      }
     }
 
     /**
@@ -3547,6 +3585,111 @@ export class OrderLifecycleService {
     return successRes({}, 200, 'Orders received');
   }
 
+  /**
+   * TASHQI POSILKANI SKANERLAB QABUL QILISH.
+   *
+   * Operator posilkani qo'lida ushlab yorliqdagi QR'ni skanerlaydi. Server
+   * tokenni BUYURTMAGA moslaydi — ya'ni "qabul qildim" degan yozuv faqat
+   * jismonan qo'lda bo'lgan posilka uchun paydo bo'ladi.
+   *
+   * NEGA TOKEN, ID EMAS. Ilgari frontend skanerlagan tokenni o'zi
+   * buyurtmaga moslab, serverga `order_ids` yuborardi. Ya'ni server
+   * skanerlash bo'lgan-bo'lmaganini BILMASDI va darvozani chetlab o'tish
+   * mumkin edi (audit K2). Token serverga kelganda dalil serverda bo'ladi.
+   *
+   * ⚠️ TOPILMAGAN TOKENLAR JIMGINA TASHLANMAYDI — javobda qaytadi.
+   * Operator nechta posilka qabul qilinmaganini va nima uchun bilishi kerak,
+   * aks holda qolib ketgan posilkani hech kim sezmaydi.
+   */
+  async receiveExternalByScan(input: {
+    tokens: string[];
+    requester?: { id?: string; roles?: string[] } | null;
+  }) {
+    const tokens = Array.from(
+      new Set((input.tokens ?? []).map((t) => String(t ?? '').trim()).filter(Boolean)),
+    );
+    if (!tokens.length) {
+      this.badRequest('tokens is required');
+    }
+    /**
+     * Bir so'rovda qabul qilinadigan posilka soni chegaralangan: skaner
+     * sessiyasi odatda o'nlab posilka, mingtalik so'rov esa tranzaksiyani
+     * uzoq ushlab turardi.
+     */
+    if (tokens.length > 200) {
+      this.badRequest('bir so‘rovda 200 tadan ko‘p token yuborib bo‘lmaydi');
+    }
+
+    const orders = await this.orderRepo.find({
+      where: {
+        qr_code_token: In(tokens),
+        isDeleted: false,
+        status: Order_status.NEW,
+        source: Order_source.EXTERNAL,
+      },
+    });
+
+    /**
+     * Topilmagan tokenlar SABABI bilan ajratiladi. Bitta umumiy "topilmadi"
+     * xabari operatorni ko'r qoldirardi: token boshqa manbadan bo'lishi,
+     * allaqachon qabul qilingan bo'lishi yoki umuman tizimda bo'lmasligi
+     * mumkin — bular uch xil harakat talab qiladi.
+     */
+    const matched = new Map(orders.map((o) => [String(o.qr_code_token), o]));
+    const unmatched: Array<{ token: string; reason: string }> = [];
+    for (const token of tokens) {
+      if (matched.has(token)) continue;
+      const anyOrder = await this.orderRepo.findOne({
+        where: { qr_code_token: token, isDeleted: false },
+      });
+      if (!anyOrder) {
+        unmatched.push({ token, reason: 'tizimda topilmadi' });
+      } else if (anyOrder.source !== Order_source.EXTERNAL) {
+        unmatched.push({ token, reason: 'tashqi posilka emas' });
+      } else if (anyOrder.status !== Order_status.NEW) {
+        unmatched.push({
+          token,
+          reason: `allaqachon '${anyOrder.status}' holatida`,
+        });
+      } else {
+        unmatched.push({ token, reason: 'qabul qilib bo‘lmadi' });
+      }
+    }
+
+    if (!orders.length) {
+      return successRes(
+        { received: 0, unmatched },
+        200,
+        'No scannable parcels matched',
+      );
+    }
+
+    /**
+     * Qabul qilishning O'ZI mavjud yo'ldan o'tadi — filial doirasi, mijoz
+     * tekshiruvi, tuman→viloyat xaritasi va POCHTAGA AJRATISH allaqachon
+     * o'sha yerda. Nusxa ko'chirsak ikki yo'l asta bir-biridan farq qila
+     * boshlardi.
+     *
+     * `scanVerified` — skanerlash DALILI serverda tekshirilgani belgisi.
+     */
+    const result = await this.receiveNewOrders(
+      orders.map((o) => o.id),
+      undefined,
+      input.requester,
+      { scanVerified: true },
+    );
+
+    return successRes(
+      {
+        received: orders.length,
+        unmatched,
+        detail: (result as { data?: unknown })?.data ?? null,
+      },
+      200,
+      'Scanned parcels received',
+    );
+  }
+
   async receiveExternalOrders(dto: { integration_id: string; orders: any[] }) {
     const integration = await this.lookup.getIntegrationById(
       String(dto.integration_id),
@@ -3693,7 +3836,17 @@ export class OrderLifecycleService {
         total_price: finalPrice,
         to_be_paid: 0,
         paid_amount: 0,
-        status: Order_status.RECEIVED,
+        /**
+         * ⚠️ ILGARI `RECEIVED` EDI va bu buyurtmani ORALIQDA qoldirardi
+         * (audit EI-05): "Kiruvchi posilkalar" ekrani `NEW` so'raydi, ya'ni
+         * import qilingan buyurtma skanerlash ro'yxatida KO'RINMASDI; pochta
+         * ham tayinlanmasdi (bu metod post yozmaydi). Natijada buyurtma
+         * bazada bor, operator uchun esa mavjud emas.
+         *
+         * Endi `NEW`: posilka jismonan kelganda skanerlanadi va aynan
+         * o'shanda pochtaga ajratiladi (`receiveNewOrders` → post assign).
+         */
+        status: Order_status.NEW,
         comment:
           this.getFieldValue(ext, fieldMapping.comment_field ?? 'comment') ??
           null,
