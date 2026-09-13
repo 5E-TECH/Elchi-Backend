@@ -11,6 +11,19 @@ import { IntegrationServiceService } from './integration-service.service';
  * ⚠️ ENG MUHIM INVARIANT: sandbox sinov kanali. Uning xatosi asosiy
  * yetkazishga TA'SIR QILMASLIGI shart — aks holda sinov muhiti yiqilganda
  * haqiqiy hodisalar `permanently_failed` bo'lib yo'qolardi.
+ *
+ * ⚠️ 2026-09-14 DA UCH QOIDA QO'SHILDI (UI/UX auditi):
+ *
+ *  1. `sandbox_enabled` — ANIQ KALIT. Ilgari yagona boshqaruv manzilni
+ *     yozish/O'CHIRIB TASHLASH bo'lgan, ya'ni sinovni vaqtincha to'xtatish
+ *     uchun manzilni yo'qotish kerak edi.
+ *  2. ALOHIDA SEKRET SHART. Ilgari sandbox sekreti bo'sh bo'lsa PRODAKSHN
+ *     sekreti ishlatilardi — ya'ni haqiqiy imzo kaliti dev hostga
+ *     yuborilardi. Sinov muhitlari kamroq himoyalangan; kalit oqsa u bilan
+ *     HAQIQIY webhook imzolash mumkin bo'lardi.
+ *  3. FAQAT BIRINCHI URINISHDA. Ilgari nusxa har urinishda ketardi: hamkor
+ *     500 qaytarsa sinov muhiti AYNI hodisaning 4 nusxasini olardi va
+ *     u yerda bitta buyurtma to'rt marta ishlangandek ko'rinardi.
  */
 function makeSvc(partner: Record<string, unknown>) {
   const svc: any = Object.create(IntegrationServiceService.prototype);
@@ -52,6 +65,8 @@ describe("Sandbox ko'zgusi", () => {
       webhook_url: MAIN,
       webhook_secret: 'enc:main',
       sandbox_webhook_url: SB,
+      sandbox_webhook_secret: 'enc:sb',
+      sandbox_enabled: true,
     });
     const f = fetchByUrl({});
     global.fetch = f as any;
@@ -70,6 +85,8 @@ describe("Sandbox ko'zgusi", () => {
       webhook_url: MAIN,
       webhook_secret: 'enc:main',
       sandbox_webhook_url: SB,
+      sandbox_webhook_secret: 'enc:sb',
+      sandbox_enabled: true,
     });
     const f = fetchByUrl({});
     global.fetch = f as any;
@@ -96,6 +113,8 @@ describe("Sandbox ko'zgusi", () => {
       webhook_url: MAIN,
       webhook_secret: 'enc:main',
       sandbox_webhook_url: SB,
+      sandbox_webhook_secret: 'enc:sb',
+      sandbox_enabled: true,
     });
     global.fetch = fetchByUrl({
       [MAIN]: { ok: true, status: 200 },
@@ -116,6 +135,8 @@ describe("Sandbox ko'zgusi", () => {
       webhook_url: MAIN,
       webhook_secret: 'enc:main',
       sandbox_webhook_url: SB,
+      sandbox_webhook_secret: 'enc:sb',
+      sandbox_enabled: true,
     });
     global.fetch = fetchByUrl({
       [MAIN]: { ok: true, status: 200 },
@@ -135,6 +156,8 @@ describe("Sandbox ko'zgusi", () => {
       webhook_url: MAIN,
       webhook_secret: 'enc:main',
       sandbox_webhook_url: SB,
+      sandbox_webhook_secret: 'enc:sb',
+      sandbox_enabled: true,
     });
     global.fetch = fetchByUrl({
       [MAIN]: { ok: false, status: 502 },
@@ -151,6 +174,7 @@ describe("Sandbox ko'zgusi", () => {
       webhook_secret: 'enc:main',
       sandbox_webhook_url: SB,
       sandbox_webhook_secret: 'enc:sb',
+      sandbox_enabled: true,
     });
     const f = fetchByUrl({});
     global.fetch = f as any;
@@ -190,6 +214,8 @@ describe("Sandbox ko'zgusi", () => {
       webhook_url: MAIN,
       webhook_secret: 'enc:main',
       sandbox_webhook_url: SB,
+      sandbox_webhook_secret: 'enc:sb',
+      sandbox_enabled: true,
     });
     // Guard asosiy manzilga ruxsat beradi, sandboxni bloklaydi.
     svc.assertOutboundUrlSafe = jest.fn((u: string) =>
@@ -206,5 +232,94 @@ describe("Sandbox ko'zgusi", () => {
     // Bloklangan sandbox asosiy yetkazishni buzmaydi.
     expect(res).toEqual({ http_status: 200 });
     expect(f.mock.calls.map((c: any[]) => c[0])).toEqual([MAIN]);
+  });
+
+  describe('⭐ 2026-09-14 QOIDALARI', () => {
+    const FULL = {
+      id: '7',
+      webhook_url: MAIN,
+      webhook_secret: 'enc:main',
+      sandbox_webhook_url: SB,
+      sandbox_webhook_secret: 'enc:sb',
+      sandbox_enabled: true,
+    };
+
+    it('⭐ KALIT o‘chiq bo‘lsa nusxa KETMAYDI', async () => {
+      /**
+       * Manzil ham, sekret ham joyida — lekin kalit o'chiq. Ilgari bunday
+       * tushuncha yo'q edi: sinovni to'xtatish uchun MANZILNI o'chirish
+       * kerak bo'lardi, keyin esa qayerga yozilganini eslab qolish.
+       */
+      const svc = makeSvc({ ...FULL, sandbox_enabled: false });
+      const f = fetchByUrl({});
+      global.fetch = f as any;
+
+      await svc.dispatchPartnerWebhook({ ...ROW });
+      await new Promise((r) => setImmediate(r));
+
+      expect(f.mock.calls.map((c: any[]) => c[0])).toEqual([MAIN]);
+    });
+
+    it('⭐ PRODAKSHN SEKRETI sinov muhitiga YUBORILMAYDI', async () => {
+      /**
+       * Ilgari sandbox sekreti bo'sh bo'lsa asosiy sekret ishlatilardi va
+       * kod izohi buni "qulaylik" deb tushuntirardi. Amalda bu prodakshn
+       * imzo kalitini dev hostga yuborish edi — kalit oqsa u bilan HAQIQIY
+       * webhook imzolash mumkin bo'lardi.
+       *
+       * Endi o'z sekreti bo'lmasa nusxa umuman ketmaydi.
+       */
+      const svc = makeSvc({ ...FULL, sandbox_webhook_secret: null });
+      const f = fetchByUrl({});
+      global.fetch = f as any;
+
+      await svc.dispatchPartnerWebhook({ ...ROW });
+      await new Promise((r) => setImmediate(r));
+
+      expect(f.mock.calls.map((c: any[]) => c[0])).toEqual([MAIN]);
+      // Sabab operator uchun log'da qolishi kerak.
+      expect(svc.logger.warn).toHaveBeenCalledWith(
+        expect.stringContaining('sekreti'),
+      );
+    });
+
+    it('⭐ nusxa FAQAT BIRINCHI urinishda ketadi', async () => {
+      /**
+       * Hamkor 500 qaytarsa asosiy hodisa 4 marta qayta yuboriladi. Ilgari
+       * sinov muhiti AYNI hodisaning 4 nusxasini olardi — va u yerda
+       * odatda idempotentlik himoyasi bo'lmaydi, ya'ni bitta buyurtma
+       * to'rt marta ishlangandek ko'rinib, sinovning o'zi YOLG'ON natija
+       * berardi.
+       */
+      const svc = makeSvc(FULL);
+      const f = fetchByUrl({});
+      global.fetch = f as any;
+
+      // 2-urinish: faqat asosiy manzil.
+      await svc.dispatchPartnerWebhook({ ...ROW }, 2);
+      await new Promise((r) => setImmediate(r));
+      expect(f.mock.calls.map((c: any[]) => c[0])).toEqual([MAIN]);
+
+      f.mockClear();
+
+      // 1-urinish: ikkisi ham.
+      await svc.dispatchPartnerWebhook({ ...ROW }, 1);
+      await new Promise((r) => setImmediate(r));
+      expect(f.mock.calls.map((c: any[]) => c[0]).sort()).toEqual(
+        [MAIN, SB].sort(),
+      );
+    });
+
+    it('urinish raqami berilmasa BIRINCHI deb qabul qilinadi', async () => {
+      // Sukut qiymati eski chaqiruvlarni buzmasligi kerak.
+      const svc = makeSvc(FULL);
+      const f = fetchByUrl({});
+      global.fetch = f as any;
+
+      await svc.dispatchPartnerWebhook({ ...ROW });
+      await new Promise((r) => setImmediate(r));
+
+      expect(f.mock.calls.map((c: any[]) => c[0])).toContain(SB);
+    });
   });
 });

@@ -28,6 +28,35 @@ export class CreatePartnerRequestDto {
   @IsString()
   webhook_secret?: string;
 
+  /**
+   * ⚠️ SANDBOX MAYDONLARI YARATISHDA HAM QABUL QILINADI.
+   *
+   * Ilgari ular faqat `UpdatePartnerRequestDto` da bor edi. Gateway'da
+   * `whitelist: true, forbidNonWhitelisted: true` (`main.ts`), ya'ni usta
+   * yaratish so'rovida sandbox manzilini yuborsa — 400. Operator
+   * "Sandbox manzili" maydonini to'ldirib "Yakunlash" bosardi va butun
+   * ulanish YARATILMASDI; xato sababi esa maydon nomi bo'lib, u UI'da
+   * ko'rinmasdi.
+   */
+  @ApiPropertyOptional({
+    example: 'https://dev.marketplace.example.uz/webhooks/elchi',
+    description:
+      "Sinov muhitining manzili. Nusxa yuborish `sandbox_enabled` kaliti " +
+      'bilan boshqariladi — manzilning o‘zi oqimni yoqmaydi.',
+  })
+  @IsOptional()
+  @IsUrl()
+  sandbox_webhook_url?: string;
+
+  @ApiPropertyOptional({
+    description:
+      "Sinov muhitining ALOHIDA HMAC sekreti. Prodakshn sekreti sinov " +
+      'muhitiga yuborilmaydi.',
+  })
+  @IsOptional()
+  @IsString()
+  sandbox_webhook_secret?: string;
+
   @ApiPropertyOptional({ type: [String], example: ['203.0.113.10'] })
   @IsOptional()
   @IsArray()
@@ -92,6 +121,21 @@ export class UpdatePartnerRequestDto {
   @IsOptional()
   @IsString()
   sandbox_webhook_secret?: string;
+
+  /**
+   * SANDBOX REJIMI — ANIQ KALIT.
+   *
+   * Ilgari sandbox'ni to'xtatish uchun MANZILNI o'chirish kerak bo'lardi,
+   * keyin esa qaytadan yozish. Endi manzil saqlanib qoladi, oqim esa
+   * kalit bilan boshqariladi.
+   *
+   * ⚠️ Yoqish uchun manzil VA alohida sandbox sekreti shart — aks holda
+   * operator "yoqdim" deb o'ylab yurardi, nusxa esa ketmasdi.
+   */
+  @ApiPropertyOptional({ example: true })
+  @IsOptional()
+  @IsBoolean()
+  sandbox_enabled?: boolean;
 
   @ApiPropertyOptional({ type: [String], example: ['203.0.113.10'] })
   @IsOptional()

@@ -314,6 +314,8 @@ export class IntegrationServiceService {
     name?: string;
     webhook_url?: string | null;
     webhook_secret?: string | null;
+    sandbox_webhook_url?: string | null;
+    sandbox_webhook_secret?: string | null;
     ip_allowlist?: string[] | null;
     requester?: { id?: string; roles?: string[] } | null;
   }) {
@@ -325,6 +327,18 @@ export class IntegrationServiceService {
     if (dto.webhook_url) {
       await this.assertOutboundUrlSafe(dto.webhook_url);
     }
+    /**
+     * ⚠️ SANDBOX MAYDONLARI YARATISHDA HAM SAQLANADI.
+     *
+     * Ilgari bu metod ularni UMUMAN o'qimasdi — ya'ni gateway DTO'si
+     * qabul qilgan taqdirda ham qiymat jimgina yo'qolardi. Operator
+     * "Sandbox manzili" ni to'ldirib ulanish yaratardi, keyin panelda
+     * maydon BO'SH turardi va nima uchun ekanini tushunmasdi.
+     */
+    if (dto.sandbox_webhook_url) {
+      // Asosiy manzil bilan AYNI guard — sandbox ham tashqi so'rov qiladi.
+      await this.assertOutboundUrlSafe(dto.sandbox_webhook_url);
+    }
     const apiKey = this.generatePartnerApiKey();
     const saved = await this.partnerRepo.save(
       this.partnerRepo.create({
@@ -332,6 +346,20 @@ export class IntegrationServiceService {
         api_key_hash: this.hashApiKey(apiKey),
         webhook_url: dto.webhook_url ?? null,
         webhook_secret: this.encryptCredential(dto.webhook_secret ?? null),
+        sandbox_webhook_url: dto.sandbox_webhook_url ?? null,
+        sandbox_webhook_secret: this.encryptCredential(
+          dto.sandbox_webhook_secret ?? null,
+        ),
+        /**
+         * ⚠️ YARATISHDA HAR DOIM O'CHIQ — ataylab.
+         *
+         * Usta yarim to'ldirilib yakunlanishi mumkin (manzil bor, sekret
+         * yo'q yoki manzil xato). Kalit avtomatik yoqilsa, HAQIQIY
+         * hodisalar nusxasi tekshirilmagan manzilga darhol oqib ketardi.
+         * Operator sozlamani ko'rib chiqib, keyin o'zi yoqadi — va
+         * o'shanda shartlar tekshiriladi.
+         */
+        sandbox_enabled: false,
         ip_allowlist: dto.ip_allowlist ?? null,
         is_active: true,
       }),
@@ -383,6 +411,7 @@ export class IntegrationServiceService {
       webhook_secret?: string | null;
       sandbox_webhook_url?: string | null;
       sandbox_webhook_secret?: string | null;
+      sandbox_enabled?: boolean;
       ip_allowlist?: string[] | null;
     },
     requester?: { id?: string; roles?: string[] } | null,
@@ -454,6 +483,37 @@ export class IntegrationServiceService {
       changed.sandbox_webhook_secret_changed = true;
     }
 
+    /**
+     * SANDBOX KALITI.
+     *
+     * ⚠️ YOQISHDA SHARTLAR TEKSHIRILADI. Manzil yoki o'z sekreti bo'lmasa
+     * kalit yoqilsa — operator "yoqdim" deb o'ylab yuradi, nusxa esa
+     * ketmaydi va sabab faqat server logida qoladi. Shu bois xato YOZISH
+     * vaqtida qaytariladi.
+     */
+    if (dto.sandbox_enabled !== undefined) {
+      const next = Boolean(dto.sandbox_enabled);
+      if (next) {
+        const url = String(partner.sandbox_webhook_url ?? '').trim();
+        if (!url) {
+          this.badRequest(
+            'Sandbox yoqish uchun sandbox manzili shart — hodisa nusxasi ' +
+              'qayerga yuborilishi noma‘lum.',
+          );
+        }
+        if (!partner.sandbox_webhook_secret) {
+          this.badRequest(
+            'Sandbox yoqish uchun ALOHIDA sandbox sekreti shart. Prodakshn ' +
+              'sekreti sinov muhitiga yuborilmaydi: sinov muhitlari kamroq ' +
+              'himoyalangan va kalit oqib ketsa u bilan haqiqiy webhook ' +
+              'imzolash mumkin bo‘lardi.',
+          );
+        }
+      }
+      partner.sandbox_enabled = next;
+      changed.sandbox_enabled = next;
+    }
+
     if (dto.ip_allowlist !== undefined) {
       const list = Array.isArray(dto.ip_allowlist)
         ? dto.ip_allowlist.map((v) => String(v).trim()).filter(Boolean)
@@ -509,6 +569,7 @@ export class IntegrationServiceService {
         name: partner.name,
         webhook_url: partner.webhook_url,
         sandbox_webhook_url: partner.sandbox_webhook_url,
+        sandbox_enabled: partner.sandbox_enabled,
         is_active: partner.is_active,
         requeued_webhooks: requeued,
       },
@@ -595,6 +656,26 @@ export class IntegrationServiceService {
         id: true,
         name: true,
         webhook_url: true,
+        /**
+         * ⚠️ SANDBOX MAYDONLARI RO'YXATDA HAM QAYTADI.
+         *
+         * Ilgari ular `select` da yo'q edi, UI esa ularni o'qiydi
+         * (`ConnectionOverview` — "Sandbox sozlangan" qatori). Natijada
+         * qiymat HAR DOIM `undefined` bo'lib, operator sandbox manzilini
+         * saqlagandan keyin ham "sozlanmagan" ko'rardi va qayta-qayta
+         * saqlashga urinardi — tugamaydigan halqa.
+         *
+         * ⚠️ SEKRET QAYTMAYDI: u shifrlangan holda saqlanadi va tashqariga
+         * chiqmasligi kerak. UI faqat "sozlanganmi" ni bilishi kifoya.
+         */
+        sandbox_webhook_url: true,
+        sandbox_enabled: true,
+        /**
+         * Sekretning O'ZI javobga CHIQMAYDI — pastda `has_sandbox_secret`
+         * bayrog'iga aylantirilib, xom qiymat o'chiriladi. UI uchun
+         * "sozlanganmi" degan javob kifoya (`has_webhook_secret` naqshi).
+         */
+        sandbox_webhook_secret: true,
         is_active: true,
         createdAt: true,
       },
@@ -656,8 +737,14 @@ export class IntegrationServiceService {
     }
 
     return successRes(
-      partners.map((p) => ({
+      partners.map(({ sandbox_webhook_secret, ...p }) => ({
         ...p,
+        /**
+         * ⚠️ SHIFRLANGAN SEKRET JAVOBDAN OLIB TASHLANDI, faqat bayroq
+         * qoladi. Sekretni qaytarish hech qanday foyda bermaydi va uni
+         * brauzer tarixida, log'da, ekran suratida qoldiradi.
+         */
+        has_sandbox_secret: Boolean(sandbox_webhook_secret),
         webhooks: summary.get(String(p.id)) ?? {
           pending: 0,
           failed: 0,
@@ -1651,7 +1738,7 @@ export class IntegrationServiceService {
     const startedAt = Date.now();
 
     try {
-      const result = await this.dispatchPartnerWebhook(row);
+      const result = await this.dispatchPartnerWebhook(row, attempts);
       await this.partnerWebhookOutboxRepo.update(
         { id: row.id },
         {
@@ -1735,6 +1822,11 @@ export class IntegrationServiceService {
    */
   private async dispatchPartnerWebhook(
     row: PartnerWebhookOutbox,
+    /**
+     * Nechanchi urinish (1 dan boshlanadi). Sandbox nusxasi FAQAT
+     * birinchisida yuboriladi — pastdagi izohga qarang.
+     */
+    attempt = 1,
   ): Promise<Record<string, any>> {
     const partner = await this.partnerRepo.findOne({
       where: { id: String(row.partner_id), isDeleted: false },
@@ -1775,7 +1867,17 @@ export class IntegrationServiceService {
      * qilinmaydi. Shuning uchun `await` ham qilinmaydi — sinov muhiti sekin
      * javob bersa, haqiqiy yetkazish kutib turmasin.
      */
-    void this.mirrorToSandbox(partner, row);
+    /**
+     * ⚠️ FAQAT BIRINCHI URINISHDA. Ilgari nusxa HAR urinishda ketardi:
+     * hamkor 500 qaytarsa asosiy hodisa 4 marta qayta yuborilardi va sinov
+     * muhiti AYNI hodisaning 4 nusxasini olardi. Sinov muhitida esa
+     * odatda idempotentlik himoyasi bo'lmaydi — ya'ni u yerda bitta
+     * buyurtma to'rt marta ishlangandek ko'rinardi va sinovning o'zi
+     * yolg'on natija berardi.
+     */
+    if (attempt <= 1) {
+      void this.mirrorToSandbox(partner, row);
+    }
 
     if (!res.ok) {
       throw new Error(`partner webhook HTTP ${res.status}`);
@@ -1798,8 +1900,43 @@ export class IntegrationServiceService {
     partner: Partner,
     row: PartnerWebhookOutbox,
   ): Promise<void> {
+    /**
+     * ⚠️ ANIQ KALIT. Ilgari yagona shart manzilning bo'sh emasligi edi —
+     * ya'ni sinovni to'xtatish uchun manzilni O'CHIRIB TASHLASH kerak
+     * bo'lardi. Endi kalit alohida: manzil saqlanib qoladi, oqim esa
+     * to'xtaydi.
+     */
+    if (!partner.sandbox_enabled) return;
+
     const target = String(partner.sandbox_webhook_url ?? '').trim();
-    if (!target) return;
+    if (!target) {
+      this.logger.warn(
+        `sandbox yoqilgan, lekin manzil yo'q (partner=${partner.id}) — ` +
+          'nusxa yuborilmadi',
+      );
+      return;
+    }
+
+    /**
+     * ⚠️ PRODAKSHN SEKRETI SINOV MUHITIGA CHIQMAYDI.
+     *
+     * Ilgari sandbox sekreti bo'sh bo'lsa ASOSIY sekret ishlatilardi va
+     * kod izohi buni "qulaylik" deb tushuntirardi. Amalda bu prodakshn
+     * imzo kalitini dev hostga yuborish edi: sinov muhitlari odatda
+     * kamroq himoyalangan (umumiy log, ochiq tunnel, uchinchi tomon
+     * xizmati) va kalit oqib ketsa, u bilan HAQIQIY webhook imzolash
+     * mumkin bo'lardi.
+     *
+     * Endi sandbox o'z sekretiga ega bo'lishi SHART.
+     */
+    const sandboxSecret = this.decryptCredential(partner.sandbox_webhook_secret);
+    if (!sandboxSecret) {
+      this.logger.warn(
+        `sandbox yoqilgan, lekin O'Z sekreti yo'q (partner=${partner.id}) — ` +
+          'nusxa yuborilmadi. Prodakshn sekreti sinov muhitiga yuborilmaydi.',
+      );
+      return;
+    }
 
     try {
       await this.assertOutboundUrlSafe(target);
@@ -1811,13 +1948,12 @@ export class IntegrationServiceService {
        */
       const body = JSON.stringify({ ...(row.payload ?? {}), sandbox: true });
 
-      // Alohida sandbox sekreti bo'lmasa asosiysi ishlatiladi — ko'p holatda
-      // sinov muhiti ayni sekret bilan tekshiradi.
-      const secret =
-        this.decryptCredential(partner.sandbox_webhook_secret) ??
-        this.decryptCredential(partner.webhook_secret) ??
-        '';
-      const signature = computeHmacSignature(body, secret, 'sha256', 'hex');
+      const signature = computeHmacSignature(
+        body,
+        sandboxSecret,
+        'sha256',
+        'hex',
+      );
 
       const res = await fetch(target, {
         method: 'POST',
