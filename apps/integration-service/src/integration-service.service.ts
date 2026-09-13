@@ -3076,6 +3076,33 @@ export class IntegrationServiceService {
       field_mapping: dto.field_mapping ?? null,
       status_mapping: dto.status_mapping ?? null,
       status_sync_config: dto.status_sync_config ?? null,
+
+      /*
+        KIRUVCHI WEBHOOK VA JO'NATISH SOZLAMALARI.
+
+        ⚠️ ILGARI BU MAYDONLAR YARATISHDA UMUMAN YOZILMASDI. Entity'da ustun
+        bor, kod ularni o'qiydi (`receiveWebhook`, `dispatchShipment`), lekin
+        `createIntegration` ularni tushirib qoldirardi va gateway DTO'sida
+        ham yo'q edi. Natija: yangi ulanish har doim webhook'siz va
+        dispatch'siz tug'ilardi — uchta funksiya jimgina o'lik edi.
+
+        ⚠️ `webhook_secret` SHIFRLANADI. Xom saqlansa `receiveWebhook` dagi
+        `decryptCredential` uni o'qiy olmaydi va har kiruvchi webhook 401
+        bo'lardi — sababi esa hech qayerda ko'rinmasdi.
+      */
+      webhook_secret: this.encryptCredential(
+        (dto as { webhook_secret?: string | null }).webhook_secret ?? null,
+      ),
+      // Rotatsiya oynasi TIZIM tomonidan boshqariladi — yaratishda bo'sh.
+      webhook_secret_previous: null,
+      webhook_signature_header: dto.webhook_signature_header ?? null,
+      webhook_signature_prefix: dto.webhook_signature_prefix ?? null,
+      webhook_algorithm: dto.webhook_algorithm ?? null,
+      webhook_id_header: dto.webhook_id_header ?? null,
+      inbound_status_mapping: dto.inbound_status_mapping ?? null,
+      webhook_payload_paths: dto.webhook_payload_paths ?? null,
+      dispatch_config: dto.dispatch_config ?? null,
+
       last_sync_at: null,
       total_synced_orders: 0,
     });
@@ -3251,6 +3278,11 @@ export class IntegrationServiceService {
       market_id: r.market_id ?? null,
     });
     const before = auditSnapshot(row);
+    /**
+     * Eski shifrlangan sekret — `Object.assign` uni ustiga yozib yuborishidan
+     * OLDIN saqlab qolinadi (rotatsiya oynasi uchun kerak).
+     */
+    const before_webhook_secret = row.webhook_secret;
 
     Object.assign(row, dto);
 
@@ -3334,6 +3366,49 @@ export class IntegrationServiceService {
     }
     if (typeof dto.password !== 'undefined') {
       row.password = this.encryptCredential(dto.password ?? null);
+    }
+
+    /**
+     * WEBHOOK SEKRETI — shifrlash + ROTATSIYA OYNASI.
+     *
+     * ⚠️ `Object.assign(row, dto)` yuqorida XOM qiymatni yozib qo'ygan bo'ladi.
+     * Uni shu yerda shifrlangan qiymat bilan ALMASHTIRISH shart, aks holda
+     * bazada ochiq sekret qolardi va `receiveWebhook` dagi
+     * `decryptCredential` uni o'qiy olmay har webhookni 401 qilardi.
+     *
+     * ⚠️ ROTATSIYA: yangi sekret qo'yilganda ESKISI `webhook_secret_previous`
+     * ga ko'chadi. Sabab — tashqi tizim sekretni bir zumda almashtira
+     * olmaydi; oyna bo'lmasa almashtirish paytida kelgan har webhook
+     * yo'qolardi. `verifyHmacSignature` ikkinchi sekretni ham sinaydi.
+     *
+     * `webhook_secret_previous` DTO'da ATAYLAB yo'q — u faqat shu yerda
+     * to'ldiriladi, qo'lda kiritilmaydi.
+     */
+    if (typeof (dto as { webhook_secret?: unknown }).webhook_secret !== 'undefined') {
+      const raw = (dto as { webhook_secret?: string | null }).webhook_secret;
+      const next = raw === null ? '' : String(raw).trim();
+      if (next) {
+        /**
+         * ⚠️ SHIFRMATNLARNI SOLISHTIRIB BO'LMAYDI. `encryptCredential` har
+         * safar tasodifiy IV ishlatadi (`randomBytes(16)`), ya'ni AYNI
+         * sekret har safar BOSHQA shifrmatn beradi. Shifrmatnni solishtirsak
+         * "o'zgardi" har doim rost bo'lib, oyna bekorga surilardi.
+         *
+         * Shu bois OCHIQ MATNLAR solishtiriladi.
+         */
+        const previousPlain = before_webhook_secret
+          ? this.decryptCredential(before_webhook_secret)
+          : null;
+        if (previousPlain !== next) {
+          row.webhook_secret_previous = before_webhook_secret;
+        }
+        row.webhook_secret = this.encryptCredential(next);
+      } else {
+        // Bo'sh satr — tozalash. Oyna ham yopiladi, aks holda o'chirilgan
+        // sekret `previous` orqali ishlashda davom etardi.
+        row.webhook_secret = null;
+        row.webhook_secret_previous = null;
+      }
     }
     if (typeof dto.auth_type !== 'undefined') {
       row.auth_type = dto.auth_type === 'login' ? 'login' : 'api_key';

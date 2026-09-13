@@ -9,6 +9,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  MaxLength,
   IsUrl,
   Min,
   ValidateIf,
@@ -152,6 +153,108 @@ export class CreateIntegrationRequestDto {
   @IsObject()
   status_sync_config?: Record<string, unknown>;
 
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     KIRUVCHI WEBHOOK VA JO'NATISH SOZLAMALARI
+
+     ⚠️ BU MAYDONLAR ILGARI DTO'DA YO'Q EDI va bu jimgina o'lik funksiyaga
+     olib kelgan: entity'da ustun bor, servis ularni O'QIYDI, lekin yozish
+     yo'li yo'q edi. `main.ts` da `ValidationPipe({ whitelist: true,
+     forbidNonWhitelisted: true })` turgani uchun:
+       • UI'dan yuborilsa  → jimgina TASHLANADI
+       • curl bilan        → 400 "property should not exist"
+
+     Natijada uchta funksiya butunlay ishlamasdi: kiruvchi webhook
+     (`webhook_secret` yo'q → 401 not_configured), posilka jo'natish
+     (`dispatch_config` yo'q → 400), tashqi status xaritasi.
+
+     ⚠️ `webhook_secret_previous` ATAYLAB YO'Q. U rotatsiya oynasi uchun va
+     qo'lda to'ldirilmasligi kerak: yangi sekret qo'yilganda servis eskisini
+     o'zi shu maydonga ko'chiradi. Uni ochish "eski sekretni qo'lda
+     kiritish" imkonini berardi va bu himoyani zaiflashtiradi.
+
+     ⚠️ Javobda bu sirlar QAYTMAYDI: `sanitizeIntegrationRow` ularni
+     o'chiradi va faqat `has_webhook_secret` bayrog'ini beradi.
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  @ApiPropertyOptional({
+    description:
+      "Kiruvchi webhook HMAC sekreti. Javobda QAYTMAYDI. Bo'sh satr — tozalash.",
+  })
+  @IsOptional()
+  @IsString()
+  webhook_secret?: string;
+
+  @ApiPropertyOptional({
+    example: 'x-signature',
+    description: 'Imzo qaysi sarlavhada keladi (sukut: x-signature)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  webhook_signature_header?: string;
+
+  @ApiPropertyOptional({
+    example: 'sha256=',
+    description: "Imzo qiymati oldidagi prefiks (masalan `sha256=`)",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  webhook_signature_prefix?: string;
+
+  @ApiPropertyOptional({
+    example: 'sha256',
+    enum: ['sha256', 'sha512'],
+    description: 'HMAC algoritmi',
+  })
+  @IsOptional()
+  @IsIn(['sha256', 'sha512'])
+  webhook_algorithm?: string;
+
+  @ApiPropertyOptional({
+    example: 'x-delivery-id',
+    description:
+      "Takroriy yetkazishni aniqlash uchun hodisa id sarlavhasi (replay guard)",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  webhook_id_header?: string;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: { delivered: 'sold', canceled: 'cancelled' },
+    description: "Ularning statusi → bizning statusimiz",
+  })
+  @IsOptional()
+  @IsObject()
+  inbound_status_mapping?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: { order_id: 'data.order.id', status: 'data.order.state' },
+    description:
+      "Kiruvchi webhook payload'ida posilkani va statusni qaysi yo'l bo'yicha topish",
+  })
+  @IsOptional()
+  @IsObject()
+  webhook_payload_paths?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: {
+      endpoint: '/v1/orders',
+      method: 'POST',
+      body_template: { receiver: '{{customer_name}}', cod: '{{cod_amount}}' },
+      response_paths: { external_ref: 'data.id', tracking: 'data.tracking' },
+    },
+    description:
+      "Posilka jo'natish shabloni: endpoint, method, body_template, response_paths",
+  })
+  @IsOptional()
+  @IsObject()
+  dispatch_config?: Record<string, unknown>;
   @ApiPropertyOptional({ example: 'https://api.ozar.uz' })
   @IsOptional()
   @IsString()
@@ -299,6 +402,108 @@ export class UpdateIntegrationRequestDto {
   @IsOptional()
   @IsObject()
   status_sync_config?: Record<string, unknown>;
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     KIRUVCHI WEBHOOK VA JO'NATISH SOZLAMALARI
+
+     ⚠️ BU MAYDONLAR ILGARI DTO'DA YO'Q EDI va bu jimgina o'lik funksiyaga
+     olib kelgan: entity'da ustun bor, servis ularni O'QIYDI, lekin yozish
+     yo'li yo'q edi. `main.ts` da `ValidationPipe({ whitelist: true,
+     forbidNonWhitelisted: true })` turgani uchun:
+       • UI'dan yuborilsa  → jimgina TASHLANADI
+       • curl bilan        → 400 "property should not exist"
+
+     Natijada uchta funksiya butunlay ishlamasdi: kiruvchi webhook
+     (`webhook_secret` yo'q → 401 not_configured), posilka jo'natish
+     (`dispatch_config` yo'q → 400), tashqi status xaritasi.
+
+     ⚠️ `webhook_secret_previous` ATAYLAB YO'Q. U rotatsiya oynasi uchun va
+     qo'lda to'ldirilmasligi kerak: yangi sekret qo'yilganda servis eskisini
+     o'zi shu maydonga ko'chiradi. Uni ochish "eski sekretni qo'lda
+     kiritish" imkonini berardi va bu himoyani zaiflashtiradi.
+
+     ⚠️ Javobda bu sirlar QAYTMAYDI: `sanitizeIntegrationRow` ularni
+     o'chiradi va faqat `has_webhook_secret` bayrog'ini beradi.
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  @ApiPropertyOptional({
+    description:
+      "Kiruvchi webhook HMAC sekreti. Javobda QAYTMAYDI. Bo'sh satr — tozalash.",
+  })
+  @IsOptional()
+  @IsString()
+  webhook_secret?: string;
+
+  @ApiPropertyOptional({
+    example: 'x-signature',
+    description: 'Imzo qaysi sarlavhada keladi (sukut: x-signature)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  webhook_signature_header?: string;
+
+  @ApiPropertyOptional({
+    example: 'sha256=',
+    description: "Imzo qiymati oldidagi prefiks (masalan `sha256=`)",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  webhook_signature_prefix?: string;
+
+  @ApiPropertyOptional({
+    example: 'sha256',
+    enum: ['sha256', 'sha512'],
+    description: 'HMAC algoritmi',
+  })
+  @IsOptional()
+  @IsIn(['sha256', 'sha512'])
+  webhook_algorithm?: string;
+
+  @ApiPropertyOptional({
+    example: 'x-delivery-id',
+    description:
+      "Takroriy yetkazishni aniqlash uchun hodisa id sarlavhasi (replay guard)",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  webhook_id_header?: string;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: { delivered: 'sold', canceled: 'cancelled' },
+    description: "Ularning statusi → bizning statusimiz",
+  })
+  @IsOptional()
+  @IsObject()
+  inbound_status_mapping?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: { order_id: 'data.order.id', status: 'data.order.state' },
+    description:
+      "Kiruvchi webhook payload'ida posilkani va statusni qaysi yo'l bo'yicha topish",
+  })
+  @IsOptional()
+  @IsObject()
+  webhook_payload_paths?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: {
+      endpoint: '/v1/orders',
+      method: 'POST',
+      body_template: { receiver: '{{customer_name}}', cod: '{{cod_amount}}' },
+      response_paths: { external_ref: 'data.id', tracking: 'data.tracking' },
+    },
+    description:
+      "Posilka jo'natish shabloni: endpoint, method, body_template, response_paths",
+  })
+  @IsOptional()
+  @IsObject()
+  dispatch_config?: Record<string, unknown>;
 }
 
 export class QrSearchRequestDto {
