@@ -3214,7 +3214,36 @@ export class OrderLifecycleService {
           action,
           old_status,
           new_status,
+          /**
+           * ⚠️ NOMI TARIXIY VA CHALG'ITADI (audit F1).
+           *
+           * `paid_amount` — MIJOZDAN yig'ilgan pul EMAS. U market qarzining
+           * (`total_price − market_tariff`) darhol to'langan qismi. Oddiy
+           * sotuvda u 0 bo'lib qoladi.
+           *
+           * Nom hamkor kontraktida allaqachon e'lon qilingan, shuning uchun
+           * uni olib tashlamaymiz — lekin yoniga ANIQ NOMLI maydonlar
+           * qo'shildi (`market_paid_amount`, `cod_amount`).
+           */
           cod_collected: Number(order.paid_amount ?? 0),
+          /** Yuqoridagi qiymatning to'g'ri nomi. */
+          market_paid_amount: Number(order.paid_amount ?? 0),
+          /*
+            ⚠️ `cod_amount` ATAYLAB YUBORILMAYDI.
+ 
+            Uni `order.to_be_paid` dan olish MANTIQIY ko'rinadi, lekin bu
+            ustun IKKI XIL ma'noda ishlatiladi:
+              • hamkor posilkasi yaratilganda — mijozdan yig'ilishi kerak
+                bo'lgan COD (`createPartnerShipment` shunday yozadi);
+              • ichki buyurtmada sukut bo'yicha 0, va SOTUVDAN KEYIN
+                `netToBePaid` (= total_price − market_tariff) bilan ustiga
+                yoziladi (`:4081`, `:4153`, `:5200`).
+ 
+            Ya'ni sotuvdan keyin qiymat butunlay boshqa narsani bildiradi va
+            hamkorga yuborilsa YOLG'ON bo'lardi. Hamkor o'zi yuborgan
+            `cod_amount`ni biladi; bizda esa uni ishonchli saqlaydigan joy
+            yo'q. Bu audit F2 ning bir qismi va alohida qaror talab qiladi.
+          */
           // Hamkor o'z tomonida ham narx/xarajatni qo'llashi uchun.
           total_price: Number(order.total_price ?? 0),
           extra_cost: Number(order.extra_cost ?? 0),
@@ -4484,6 +4513,136 @@ export class OrderLifecycleService {
    * Idempotent: an order already in (or past) the target terminal state is a
    * no-op, so a duplicate or out-of-order webhook can't double-apply.
    */
+  /**
+   * YETKAZISHDAN OLDIN bekor qilish — hamkor (Partner API) uchun tor yo'l.
+   *
+   * MUAMMO (audit F4). `cancelOrder` `WAITING` holat va `post_id` ni TALAB
+   * qiladi (`:4167`, `:4170`), chunki u pochta/kuryer/kassa qaytarishini
+   * bajaradi. Hamkor posilkasi esa yaratilgandan keyin `NEW` da turadi
+   * (skanerlanmaguncha) va mijoz aynan shu oynada buyurtmani bekor qiladi.
+   * O'sha holda `cancelOrder` xato berardi, `rmqRequest` esa uni yutib
+   * hamkorga **502** qaytarardi — ya'ni bekor qilishning eng ko'p
+   * uchraydigan holati umuman ishlamasdi.
+   *
+   * NEGA ALOHIDA METOD. `cancelOrder`ni yumshatish butun ilovaga ta'sir
+   * qiladi: u pochta soni, kuryer qarzi va kassa harakati bilan bog'langan.
+   * Bu metod esa FAQAT pul va pochta hali tegmagan holatlarda ishlaydi,
+   * shuning uchun qaytariladigan hech narsa yo'q.
+   *
+   * ⚠️ RUXSAT ETILGAN HOLATLAR ATAYLAB `CREATED` va `NEW` bilan
+   * CHEKLANGAN. `RECEIVED` bo'lsa buyurtma allaqachon POCHTAGA qo'shilgan
+   * (`receiveNewOrders` `post_id` yozadi) va uni bekor qilish pochta sonini
+   * ham tuzatishni talab qiladi — bu boshqa ish. Shu bois `RECEIVED` va
+   * undan keyingi holatlarda bu metod ATAYLAB rad etadi va chaqiruvchi
+   * hamkorga aniq sabab qaytaradi.
+   *
+   * Idempotent: allaqachon bekor qilingan bo'lsa xato bermaydi.
+   */
+  async cancelPreDeliveryOrder(input: {
+    order_id: string;
+    reason?: string | null;
+    /** Jurnalda kim bekor qilganini ko'rsatish uchun. */
+    actor?: string | null;
+  }) {
+    const order = await this.findById(String(input.order_id));
+    const oldStatus = order.status;
+
+    // Idempotentlik — qayta chaqirilsa muvaffaqiyat qaytadi.
+    if (
+      oldStatus === Order_status.CANCELLED ||
+      oldStatus === Order_status.CANCELLED_SENT
+    ) {
+      return successRes(
+        { id: order.id, status: order.status, idempotent: true },
+        200,
+        'Order already cancelled',
+      );
+    }
+
+    const allowed = [Order_status.CREATED, Order_status.NEW];
+    if (!allowed.includes(oldStatus)) {
+      /**
+       * 409 — "holat mos emas", 400 emas: so'rov to'g'ri, lekin buyurtma
+       * boshqa bosqichda. Hamkor shu farqni ko'rishi kerak, aks holda
+       * so'rovni takrorlab yurardi.
+       */
+      throw new RpcException({
+        statusCode: 409,
+        message:
+          `Buyurtma '${oldStatus}' holatida — yetkazishdan oldin bekor ` +
+          'qilish faqat qabul qilinmagan posilkada mumkin',
+      });
+    }
+
+    const note =
+      `Yetkazishdan oldin bekor qilindi` +
+      (input.reason ? `: ${input.reason}` : '') +
+      (input.actor ? ` (${input.actor})` : '');
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const orderRepo = queryRunner.manager.getRepository(Order);
+      const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+
+      order.status = Order_status.CANCELLED;
+      /**
+       * ⚠️ PUL VA POCHTA TEGILMAYDI va bu ataylab: `CREATED`/`NEW` holatda
+       * na kassa harakati, na `post_id` mavjud. Moliya emit yo'li ham
+       * chaqirilmaydi — qaytariladigan harakat yo'q.
+       */
+      await orderRepo.save(order);
+
+      await this.custody.createTrackingEvent(
+        {
+          order_id: order.id,
+          from_status: oldStatus,
+          to_status: Order_status.CANCELLED,
+          changed_by: 'system',
+          changed_by_role: 'system',
+          note,
+        },
+        trackingRepo,
+      );
+
+      await this.syncOrderToSearch(order, queryRunner.manager);
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.handleDbError(error);
+    } finally {
+      await queryRunner.release();
+    }
+
+    await this.activityLog.log({
+      entity_type: 'Order',
+      entity_id: String(order.id),
+      action: ActivityAction.STATUS_CHANGE,
+      old_value: { status: oldStatus },
+      new_value: { status: Order_status.CANCELLED },
+      metadata: { reason: input.reason ?? null, actor: input.actor ?? null },
+    });
+
+    /**
+     * Tashqi tizimga signal — hamkor o'z tomonida ham bekor qilganini
+     * ko'rishi kerak. `queueExternalStatusSync` `external_id` bo'lmasa
+     * o'zi hech narsa qilmaydi.
+     */
+    await this.queueExternalStatusSync(
+      order,
+      'canceled',
+      oldStatus,
+      Order_status.CANCELLED,
+    ).catch(() => undefined);
+
+    return successRes(
+      { id: order.id, status: Order_status.CANCELLED },
+      200,
+      'Order cancelled',
+    );
+  }
+
   async markByProvider(input: {
     order_id: string;
     action: 'sell' | 'cancel' | 'return';

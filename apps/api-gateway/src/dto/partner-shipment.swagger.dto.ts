@@ -9,6 +9,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  Matches,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -118,4 +119,20 @@ export class CreatePartnerShipmentRequestDto {
   @IsNumber()
   @Min(0)
   subtotal?: number;
+
+  @ApiPropertyOptional({
+    example: 'a1b2c3d4e5f6a1b2c3d4e5f6',
+    description:
+      "Hamkor YORLIG'IDAGI QR qiymati. Berilsa Elchi shu tokenni buyurtmaga " +
+      "yozadi va posilkani skanerlash ishlaydi. Berilmasa Elchi o'z tokenini " +
+      'yaratadi va hamkor yorlig\'i skanerda TOPILMAYDI.',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]{8,128}$/, {
+    message:
+      'label_token 8-128 belgidan iborat bo‘lishi va faqat harf/raqam/_/- ' +
+      'saqlashi kerak',
+  })
+  label_token?: string;
 }

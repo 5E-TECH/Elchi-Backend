@@ -45,6 +45,21 @@ import { PartnerProductRef } from './entities/partner-product-ref.entity';
 import { PartnerWebhookOutbox } from './entities/partner-webhook-outbox.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 
+/**
+ * SOTUV HOLATLARI — bu holatlarda mijozdan pul yig'ilgan bo'ladi.
+ *
+ * `cod_collected` / `market_paid_amount` FAQAT shu holatlarda ma'noli.
+ * Bekor qilingan yoki qaytarilgan posilkada pul yig'ilmagan va u yerda
+ * qiymat 0 bo'lishi kerak — aks holda hamkor bekor qilingan buyurtma uchun
+ * pul olgandek yozib qo'yardi.
+ */
+const PAID_STATUSES = new Set<string>([
+  Order_status.SOLD,
+  Order_status.PAID,
+  Order_status.PARTLY_PAID,
+]);
+
+
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
 type ExternalRequestInput = {
@@ -207,6 +222,10 @@ export class IntegrationServiceService {
 
   private conflict(message: string): never {
     throw new RpcException(errorRes(message, 409));
+  }
+
+  private forbidden(message: string): never {
+    throw new RpcException(errorRes(message, 403));
   }
 
   // ===== Partner API (Elchi Partner API) — C1.2 + C1.3 =====
@@ -974,6 +993,8 @@ export class IntegrationServiceService {
     }>;
     cod_amount?: number;
     subtotal?: number;
+    /** Hamkor yorlig'idagi QR qiymati (K3). */
+    label_token?: string | null;
   }) {
     const partnerId = String(dto?.partner_id ?? '').trim();
     const externalOrderId = String(dto?.external_order_id ?? '').trim();
@@ -989,6 +1010,38 @@ export class IntegrationServiceService {
     const cod = Number(dto.cod_amount ?? 0);
     if (!Number.isFinite(cod) || cod < 0) {
       this.badRequest('cod_amount manfiy bo‘lmasligi kerak');
+    }
+
+    /**
+     * ⚠️ MARKET EGALIGI — IDOR himoyasi (audit F3).
+     *
+     * MUAMMO. Ilgari `elchi_market_id` faqat MAVJUDLIGI tekshirilardi. Har
+     * hamkor so'rovi esa ichkarida `Roles.SUPERADMIN` bilan bajariladi
+     * (pastdagi `requester`), ya'ni tekshiruvsiz market id = to'liq huquqli
+     * IDOR: hamkor B boshqa hamkorning yoki ichki marketning id'sini yozib,
+     * o'sha marketga buyurtma (va pul harakati) yaratib yuborardi.
+     *
+     * YECHIM. `partner_market_refs` — bu bog'lanish `POST /partner/markets`
+     * da yaratiladi, ya'ni har hamkor o'z sotuvchilarini oldin ro'yxatdan
+     * o'tkazadi. Shu jadvalda `(partner_id, elchi_market_id)` juftligi
+     * bo'lmasa — rad etiladi.
+     *
+     * ⚠️ XABAR "yo'q" va "sizning emas" HOLATINI AJRATMAYDI: ikkisi ham
+     * bir xil 403 beradi. Aks holda hamkor id'larni sanab chiqib qaysi
+     * market mavjudligini aniqlay olardi.
+     */
+    const ownsMarket = await this.partnerMarketRefRepo.findOne({
+      where: {
+        partner_id: partnerId,
+        elchi_market_id: String(dto.elchi_market_id),
+        isDeleted: false,
+      },
+    });
+    if (!ownsMarket) {
+      this.forbidden(
+        'elchi_market_id shu hamkorga tegishli emas — sotuvchini avval ' +
+          'POST /partner/markets bilan ro‘yxatdan o‘tkazish kerak',
+      );
     }
 
     // Idempotentlik: shu (partner, external_order_id) uchun shipment bormi?
@@ -1034,6 +1087,47 @@ export class IntegrationServiceService {
       dto.items,
     );
 
+    /**
+     * YORLIQ TOKENI VA TO'QNASHUV QO'RIQCHISI (audit K3 + K11).
+     *
+     * ⚠️ `qr_code_token` bazada NOYOB EMAS (order entity'da unique indeks
+     * yo'q). Tashqi manba token qiymatini belgilay olishi esa xavfli: ikki
+     * buyurtmada bir xil token bo'lsa, skan NOTO'G'RI posilkani topadi va
+     * operator boshqa buyurtmani qabul qilib yuboradi.
+     *
+     * Shu bois yozishdan OLDIN tekshiramiz. DB darajasidagi unique indeks
+     * qo'yilmadi: mavjud ma'lumotda dublikat bo'lishi mumkin
+     * (`CANCEL-${Date.now()}` naqshi bir ms ichida ikki marta tug'ilishi
+     * mumkin) va migratsiya deploy'ni yiqitardi. Avval haqiqiy ma'lumot
+     * sanalishi kerak — reja: docs/integrations/08-qabul-skaneri.md.
+     */
+    const labelTokenRaw = String(dto.label_token ?? '').trim();
+    let labelToken: string | undefined;
+    if (labelTokenRaw) {
+      const clash = await this.rmqRequest<Record<string, any>>(
+        this.orderClient,
+        { cmd: 'order.find_by_qr' },
+        // ⚠️ Kalit `token` — `qr_code_token` EMAS
+        // (`order-service.controller.ts:170`). Noto'g'ri nom bersak
+        // `data.token` undefined bo'lib, qo'riqchi JIMGINA ishlamasdi.
+        { token: labelTokenRaw },
+        8000,
+      );
+      const clashId = this.pluckId(clash);
+      if (clashId) {
+        /**
+         * Ayni posilkani qayta yuborish — xato EMAS: idempotentlik
+         * yuqorida allaqachon ishlangan, bu yerga faqat YANGI posilka
+         * keladi. Demak token boshqa buyurtmada band.
+         */
+        this.conflict(
+          'label_token allaqachon boshqa buyurtmada ishlatilgan — ' +
+            'har posilkaga noyob yorliq tokeni kerak',
+        );
+      }
+      labelToken = labelTokenRaw;
+    }
+
     // 3) order.create (to_be_paid = cod_amount; source=external; external_id)
     const totalPrice = Number(dto.subtotal ?? cod);
     const orderRes = await this.rmqRequest<Record<string, any>>(
@@ -1056,6 +1150,19 @@ export class IntegrationServiceService {
           external_id: externalOrderId,
           items: orderItems,
           comment: this.shipmentItemsComment(dto.items),
+          /**
+           * ⚠️ YORLIQ TOKENI (audit K3).
+           *
+           * MUAMMO. Operator hamkor posilkasini skanerlaganda qo'lidagi
+           * yorliqdagi QR o'qiladi — u HAMKOR tizimida chop etilgan.
+           * Elchi esa `order.create`da O'Z tokenini yaratardi
+           * (`qr_code_token` uzatilmasdi), ya'ni skan HECH QACHON mos
+           * kelmasdi va xato "skaner buzuq" kabi ko'rinardi.
+           *
+           * Berilmasa avvalgidek Elchi o'zi yaratadi — eski hamkorlar
+           * buzilmaydi.
+           */
+          qr_code_token: labelToken,
         },
         requester: { id: `partner:${partnerId}`, roles: [Roles.SUPERADMIN] },
         // Partner-scope the idempotency key so two different partners reusing
@@ -1270,15 +1377,40 @@ export class IntegrationServiceService {
       );
     }
 
-    const cancelled = await this.rmqRequest<Record<string, any>>(
+    /**
+     * ⚠️ IKKI YO'L, HOLATGA QARAB (audit F4).
+     *
+     * `order.cancel` `WAITING` holat va `post_id` ni TALAB qiladi, chunki u
+     * pochta/kuryer/kassa qaytarishini bajaradi. Hamkor posilkasi esa
+     * yaratilgandan keyin `NEW` da turadi (skanerlanmaguncha) — va mijoz
+     * aynan shu oynada bekor qiladi. Ilgari shu holatda `order.cancel`
+     * chaqirilardi, xato bersa `rmqRequest` uni YUTIB hamkorga 502
+     * qaytarardi: ya'ni bekor qilishning eng ko'p uchraydigan holati
+     * umuman ishlamasdi va sabab ham ko'rinmasdi.
+     */
+    const preDelivery =
+      status === Order_status.CREATED || status === Order_status.NEW;
+
+    const cancelled = await this.rmqRequestStrict<Record<string, any>>(
       this.orderClient,
-      { cmd: 'order.cancel' },
-      {
-        id: orderId,
-        dto: { comment: 'Partner tomonidan bekor qilindi' },
-        requester: { id: `partner:${partnerId}`, roles: [Roles.SUPERADMIN] },
-        request_id: `partner-cancel:${partnerId}:${orderId}`,
-      },
+      preDelivery
+        ? { cmd: 'order.cancel_pre_delivery' }
+        : { cmd: 'order.cancel' },
+      preDelivery
+        ? {
+            order_id: orderId,
+            reason: 'Partner tomonidan bekor qilindi',
+            actor: `partner:${partnerId}`,
+          }
+        : {
+            id: orderId,
+            dto: { comment: 'Partner tomonidan bekor qilindi' },
+            requester: {
+              id: `partner:${partnerId}`,
+              roles: [Roles.SUPERADMIN],
+            },
+            request_id: `partner-cancel:${partnerId}:${orderId}`,
+          },
       10000,
     );
     if (!cancelled) {
@@ -1308,6 +1440,8 @@ export class IntegrationServiceService {
     old_status?: string;
     new_status?: string;
     cod_collected?: number;
+    market_paid_amount?: number;
+    cod_amount?: number;
     total_price?: number;
     extra_cost?: number;
   }) {
@@ -1335,12 +1469,44 @@ export class IntegrationServiceService {
       external_order_id: ref.external_order_id,
       shipment_id: orderId,
       status: newStatus,
-      // COD yig'ilgan summa faqat `sold`da ma'noli (kuryer pulni topshirdi).
-      cod_collected:
-        newStatus === (Order_status.SOLD as string) &&
-        Number.isFinite(codCollected)
+      /**
+       * ⚠️ ILGARI BU MAYDON MATEMATIK JIHATDAN HAR DOIM 0 EDI (audit F1).
+       *
+       * Ikki shart bir-birini yo'q qilardi:
+       *   • qiymat FAQAT `newStatus === 'sold'` bo'lganda yuborilardi;
+       *   • status `sold` bo'lishining YAGONA sharti esa `paidAfter === 0`
+       *     (`order-lifecycle.service.ts:3910` — `paidAfter > 0` bo'lsa
+       *     status `paid`/`partly_paid` bo'ladi).
+       * Ya'ni `sold` ⟺ `paid_amount = 0`. Hamkor har doim 0 olardi.
+       *
+       * TUZATISH: darvoza `sold` dan SOTUV HOLATLARI to'plamiga kengaytirildi
+       * (`sold`, `paid`, `partly_paid`). Darvozani butunlay olib tashlash
+       * XATO bo'lardi: bekor qilingan yoki qaytarilgan posilkada pul
+       * yig'ilmagan, ya'ni u yerda qiymat 0 bo'lishi KERAK — aks holda
+       * hamkor bekor qilingan buyurtma uchun pul olgandek yozib qo'yardi.
+       *
+       * Nomi tarixiy va chalg'itadi (`paid_amount` mijozdan yig'ilgan pul
+       * emas), shu bois yoniga aniq nomli maydon qo'shildi.
+       */
+      cod_collected: PAID_STATUSES.has(newStatus) && Number.isFinite(codCollected)
+        ? codCollected
+        : 0,
+      /** `cod_collected` ning to'g'ri nomi — market qarzining to'langan qismi. */
+      market_paid_amount:
+        PAID_STATUSES.has(newStatus) && Number.isFinite(codCollected)
           ? codCollected
           : 0,
+      /*
+        ⚠️ `cod_amount` FAQAT chaqiruvchi uni ANIQ uzatganda qo'shiladi.
+ 
+        Uni buyurtmadan olish MUMKIN EMAS: `order.to_be_paid` ikki xil
+        ma'noda ishlatiladi va sotuvdan keyin `netToBePaid` bilan ustiga
+        yoziladi (`order-lifecycle.service.ts:4081`). Ya'ni buyurtmadan
+        olingan qiymat sotuvdan keyin yolg'on bo'lardi.
+      */
+      ...(Number.isFinite(Number(dto?.cod_amount))
+        ? { cod_amount: Number(dto?.cod_amount) }
+        : {}),
       /**
        * YAKUNIY narx va qo'shimcha xarajat — hamkor o'z daftarida ham
        * shu qiymatlar bo'yicha yozishi uchun.
@@ -2443,6 +2609,41 @@ export class IntegrationServiceService {
         return null;
       }
       return null;
+    }
+  }
+
+  /**
+   * `rmqRequest` bilan bir xil, LEKIN xatoni YUTMAYDI.
+   *
+   * ⚠️ `rmqRequest` har qanday xatoda `null` qaytaradi (`:2477`). Bu ko'p
+   * joyda to'g'ri (signal yo'qolsa ish davom etsin), lekin hamkor
+   * so'roviga javob berishda YOMON: order-service "buyurtma boshqa
+   * holatda" desa ham hamkor 502 "server buzildi" ko'rardi va so'rovni
+   * takrorlab yurardi.
+   *
+   * Faqat TIMEOUT `null` qaytaradi — u haqiqatan "javob kelmadi" holati.
+   */
+  private async rmqRequestStrict<T>(
+    client: ClientProxy,
+    pattern: { cmd: string },
+    payload: Record<string, any>,
+    ttlMs = 5000,
+  ): Promise<T | null> {
+    try {
+      return await firstValueFrom(
+        client.send(pattern, payload).pipe(timeout(ttlMs)),
+      );
+    } catch (error) {
+      if (error instanceof TimeoutError) {
+        return null;
+      }
+      // Asl statusCode va xabarni hamkorga o'tkazamiz.
+      throw new RpcException(
+        errorRes(
+          (error as { message?: string })?.message ?? 'order service error',
+          Number((error as { statusCode?: number })?.statusCode) || 502,
+        ),
+      );
     }
   }
 

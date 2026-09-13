@@ -281,6 +281,22 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * Yetkazishdan OLDIN bekor qilish — hamkor posilkasi hali `NEW` da
+   * turganda. `order.cancel` `WAITING` + pochta talab qiladi, ya'ni bu
+   * holatda ishlamaydi (audit F4).
+   */
+  @MessagePattern({ cmd: 'order.cancel_pre_delivery' })
+  cancelPreDelivery(
+    @Payload()
+    data: { order_id: string; reason?: string | null; actor?: string | null },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.cancelPreDeliveryOrder(data),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.cancel' })
   cancel(
     @Payload()
