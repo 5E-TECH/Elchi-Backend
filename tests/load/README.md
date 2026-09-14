@@ -11,8 +11,9 @@ o'lchovga almashtiradi.
 
 ## ⚠️ Avval o'qing
 
-1. **Produksiyaga qarshi yurgizilmaydi.** `create_orders` senariysi haqiqiy
-   buyurtma yaratadi. Staging bazasida ishlating.
+1. **`main.js`/`capacity.js` produksiyaga qarshi yurgizilmaydi.**
+   `create_orders` haqiqiy buyurtma yaratadi, `capacity.js` esa yukni
+   uzilishgacha ko'taradi. Produksiyada faqat `probe.mjs` (0-bo'lim).
 2. **Rate limit testni buzadi.** Gateway sukut bo'yicha IP bo'yicha
    daqiqasiga 60 so'rovga ruxsat beradi — ya'ni yuk testi darhol `429` ga
    uriladi va siz **yukni emas, chegarani** o'lchaysiz. Staging'da testdan
@@ -42,6 +43,35 @@ echo "deb [signed-by=/usr/share/keyrings/k6-archive-keyring.gpg] https://dl.k6.i
   | sudo tee /etc/apt/sources.list.d/k6.list
 sudo apt-get update && sudo apt-get install k6
 ```
+
+---
+
+## 0. Produksiyada xavfsiz o'lchov — `probe.mjs`
+
+⚠️ **`main.js` va `capacity.js` produksiyada yurgizilmaydi.** Ular yukni
+o'nlab/yuzlab req/s gacha ko'taradi — bu jonli tizimda ataylab uzilish
+demakdir. Ustiga produksiyada throttle (IP bo'yicha daqiqasiga 60) yoqiq,
+ya'ni natija baribir yuk emas, chegara o'lchovi bo'lib chiqadi.
+
+`probe.mjs` boshqa narsa qiladi: og'ir ekranlarni **bitta operator
+tezligida** (1 so'rov/soniya) ochib, ularning REAL ma'lumot hajmidagi
+kechikishini o'lchaydi. Yuk — bitta odam brauzerda bosgani bilan bir xil.
+k6 ham kerak emas, faqat Node.
+
+```bash
+BASE_URL=https://api.elchipochta.uz \
+LOGIN_PHONE='+998...' LOGIN_PASSWORD='...' \
+node tests/load/probe.mjs
+```
+
+**Nega bu yetarli.** Sig'im modelidagi yagona katta noma'lum — og'ir
+so'rovning haqiqiy bazadagi narxi. Uni bilsak qolgani hisob: bir so'rov
+N ms server ishi yesa, bitta yadro sekundiga ~1000/N ta shunday so'rovni
+ko'taradi. Skript `health` (ish qilmaydigan endpoint) ni baza sifatida olib,
+undan ortiqchasini "server ishi" deb ajratadi — ya'ni tarmoq va tunnel
+kechikishi natijani buzmaydi.
+
+Hech narsa yozmaydi: faqat `GET` + oddiy login.
 
 ---
 
