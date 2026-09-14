@@ -66,6 +66,33 @@ describe('RmqService — navbat argumentlari bitta manbadan', () => {
     expect(ttl).toBe(60000);
   });
 
+  /**
+   * ⚠️ TCP_NODELAY — PRODUKSIYADA O'LCHANGAN ENG KATTA YUTUQ.
+   *
+   * Xom amqplib bilan so'rov→javob borib-kelishi o'lchandi:
+   *     noDelay o'chiq : 45,4 ms
+   *     noDelay yoqiq  :  2,6 ms   (17×)
+   *
+   * Sabab — Nagle algoritmi + delayed ACK: AMQP kadri kichik bo'lgani uchun
+   * yadro uni ~40 ms ushlab turadi. Bu kechikish HAR BIR RMQ borib-kelishiga
+   * tushadi: bitta sotuvda 5–9 marta, outbox'ning ketma-ket nashrida esa har
+   * hodisaga qayta.
+   *
+   * Test shu sozlamani qulflaydi — u tasodifan olib tashlansa, butun tizim
+   * jimgina 17 barobar sekinlashadi va buni faqat o'lchov ko'rsatadi.
+   */
+  it('TCP_NODELAY yoqilgan (server tomoni)', () => {
+    const service = makeService(baseEnv);
+    const options = service.getOptions('ORDER') as {
+      options: {
+        socketOptions?: { connectionOptions?: { noDelay?: boolean } };
+      };
+    };
+    expect(options.options.socketOptions?.connectionOptions?.noDelay).toBe(
+      true,
+    );
+  });
+
   it('DLX/DLQ nomlari transport bilan mos', () => {
     const service = makeService(baseEnv);
     const options = service.getOptions('ORDER') as {
