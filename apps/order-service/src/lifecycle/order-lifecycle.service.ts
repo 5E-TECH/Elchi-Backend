@@ -1535,16 +1535,25 @@ export class OrderLifecycleService {
    * On rollback to WAITING:
    *   - operator earning removal
    *
-   * finance-service dedupes both on order_id, so re-delivery or a status
-   * bounce is safe. We deliberately do NOT auto-reverse SELL_PROFIT on
-   * rollback — the ledger is append-only and the SELL_PROFIT row is recorded
-   * once per order; an operator can post a manual CORRECTION if a confirmed
-   * sale is undone.
+   * finance-service dedupes on (source_type, order_id, dedup_key), so
+   * re-delivery or a status bounce is safe.
+   *
+   * ⚠️ ROLLBACKDA FOYDA ENDI QAYTARILADI (audit M4). Ilgari `sell_profit`
+   * ataylab qaytarilmasdi ("daftar append-only"), lekin yozuv
+   * `(source_type, order_id)` bo'yicha yagona edi — ya'ni ikki xato birga
+   * yurardi: (a) buyurtma qaytarilib boshqa sotilmasa, olinmagan foyda
+   * daftarda abadiy qolardi; (b) boshqa narxda qayta sotilsa, ESKI foyda
+   * qolib, yangisi jimgina o'tkazib yuborilardi. Endi rollback teskari
+   * CORRECTION yozuvini qo'yadi, har sotuv urinishi esa o'z `dedup_key`si
+   * bilan keladi (`sold_at` — urinish boshiga yangi), shuning uchun qayta
+   * sotuvning foydasi to'g'ri yoziladi.
    */
   private async enqueueFinanceOnStatusChange(
     order: Order,
     oldStatus: Order_status,
     manager: EntityManager,
+    /** Rollbackdan OLDINGI `sold_at` — qaytariladigan sotuvning tokeni. */
+    previousSoldAt?: string | null,
   ): Promise<void> {
     const soldStates = [
       Order_status.SOLD,
@@ -1593,18 +1602,59 @@ export class OrderLifecycleService {
             order_id: String(order.id),
             related_user_id: order.market_id ? String(order.market_id) : null,
             comment: `Order #${order.id} sell profit`,
+            // Urinish tokeni: `sold_at` har sotuvda yangidan yoziladi, ya'ni
+            // qayta sotuv yangi yozuv ochadi, takroriy yetkazish esa ayni
+            // token bilan kelib bir marta yoziladi.
+            dedup_key: this.saleLedgerKey(order.sold_at),
           },
           { manager },
         );
       }
-    } else if (leftSold && order.operator_id) {
-      await this.outbox.enqueue(
-        'FINANCE',
-        'finance.operator.earning.remove',
-        { order_id: String(order.id) },
-        { manager },
+    } else if (leftSold) {
+      if (order.operator_id) {
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.operator.earning.remove',
+          { order_id: String(order.id) },
+          { manager },
+        );
+      }
+
+      // Sotuv foydasini teskari qilish. Summalar buyurtmadagi snapshotlardan
+      // olinadi (rollback ularni o'chirmaydi), ya'ni tarif keyin o'zgargan
+      // bo'lsa ham aynan yozilgani qaytariladi.
+      const rolledBackProfit = computeSellProfit(
+        Number(order.market_tariff ?? 0),
+        Number(order.courier_share ?? order.courier_tariff ?? 0),
+        Number(order.branch_share ?? 0),
       );
+      if (rolledBackProfit !== 0) {
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.financial_balance.record',
+          {
+            amount: -rolledBackProfit,
+            source_type: 'correction',
+            order_id: String(order.id),
+            related_user_id: order.market_id ? String(order.market_id) : null,
+            comment: `Order #${order.id} sell profit rollback`,
+            dedup_key: `rollback:${this.saleLedgerKey(previousSoldAt)}`,
+          },
+          { manager },
+        );
+      }
     }
+  }
+
+  /**
+   * Sotuv urinishining daftar tokeni. `sold_at` har sotuvda yangidan yoziladi
+   * (wall-clock), shuning uchun u urinishlarni ajratish uchun yetarli. Qiymat
+   * bo'lmasa (juda eski buyurtmalar) bo'sh token qaytadi — u holda eski,
+   * "buyurtma boshiga bitta yozuv" qoidasi ishlaydi.
+   */
+  private saleLedgerKey(soldAt?: string | null): string {
+    const value = String(soldAt ?? '').trim();
+    return value ? `sale:${value}` : '';
   }
 
   private hasRole(requester: { roles?: string[] } | undefined, role: Roles) {
@@ -6416,6 +6466,10 @@ export class OrderLifecycleService {
       await this.assertDeliveryDetailsEditable(order, dto);
     }
     const oldStatus = order.status;
+    // Rollback `sold_at` ni null qiladi, foydani teskari yozish esa
+    // qaytarilayotgan sotuvning tokenini talab qiladi — shuning uchun
+    // o'zgarishlar qo'llanishidan OLDIN saqlab qo'yamiz (audit M4).
+    const previousSoldAt = order.sold_at;
     const previousCanceledPostId = order.canceled_post_id;
     const previousHolderType = order.holder_type;
     const previousHolderBranchId = order.holder_branch_id;
@@ -6650,7 +6704,12 @@ export class OrderLifecycleService {
       // rollback. Enqueued in this transaction so events are durable iff the
       // order change commits; finance-service dedupes on order_id.
       if (oldStatus !== order.status) {
-        await this.enqueueFinanceOnStatusChange(order, oldStatus, manager);
+        await this.enqueueFinanceOnStatusChange(
+          order,
+          oldStatus,
+          manager,
+          previousSoldAt,
+        );
       }
     };
 

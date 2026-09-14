@@ -20,6 +20,15 @@ jest.mock('@app/common', () => ({
     EXTRA_COST: 'extra_cost',
     MANUAL_INCOME: 'manual_income',
     MANUAL_EXPENSE: 'manual_expense',
+    SALARY: 'salary',
+  },
+  FinancialSource_type: {
+    SELL_PROFIT: 'sell_profit',
+    MANUAL_INCOME: 'manual_income',
+    MANUAL_EXPENSE: 'manual_expense',
+    SALARY: 'salary',
+    CORRECTION: 'correction',
+    BILLS: 'bills',
   },
   PaymentMethod: {
     CASH: 'cash',
@@ -126,6 +135,7 @@ function makeService(manager: MockManager) {
     create: jest.fn((dto: any) => dto),
     createQueryBuilder: jest.fn(),
     findAndCount: jest.fn(),
+    softDelete: jest.fn().mockResolvedValue(undefined),
   };
   const financialHistoryRepo: any = {
     findOne: jest.fn(),
@@ -813,9 +823,20 @@ describe('FinanceServiceService operator earnings & payments', () => {
     });
   });
 
-  it('records an operator payment', async () => {
+  /**
+   * AUDIT M6. Operator komissiyasini to'lash faqat o'z jadvaliga yozilardi:
+   * MAIN kassa tegilmasdi, P&L daftariga ham tushmasdi — ya'ni kompaniyadan
+   * chiqqan haqiqiy pul hisobotda ko'rinmasdi.
+   */
+  it('records an operator payment AND debits the MAIN cashbox + ledger', async () => {
     const manager = makeManager();
     const { service, paymentRepo, activityLog } = makeService(manager);
+    const cashbox = jest
+      .spyOn(service, 'updateBalance')
+      .mockResolvedValue({} as never);
+    const ledger = jest
+      .spyOn(service, 'recordFinancialBalance')
+      .mockResolvedValue({} as never);
 
     const res = await service.createOperatorPayment({
       operator_id: '42',
@@ -828,7 +849,37 @@ describe('FinanceServiceService operator earnings & payments', () => {
     expect(paymentRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 15000, operator_id: '42' }),
     );
+    expect(cashbox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cashbox_type: 'main',
+        operation_type: 'expense',
+        amount: 15000,
+        source_id: 'p1',
+      }),
+    );
+    expect(ledger).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: -15000,
+        dedup_key: 'operator-payment:p1',
+      }),
+    );
     expect(activityLog.log).toHaveBeenCalled();
+    cashbox.mockRestore();
+    ledger.mockRestore();
+  });
+
+  it('kassa harakati o`tmasa to`lov qatori ham qoldirilmaydi', async () => {
+    const manager = makeManager();
+    const { service, paymentRepo } = makeService(manager);
+    const cashbox = jest
+      .spyOn(service, 'updateBalance')
+      .mockRejectedValue(new Error('Insufficient cash balance'));
+
+    await expect(
+      service.createOperatorPayment({ operator_id: '42', amount: 15000 }),
+    ).rejects.toBeTruthy();
+    expect(paymentRepo.softDelete).toHaveBeenCalledWith({ id: 'p1' });
+    cashbox.mockRestore();
   });
 
   it('rejects a non-positive payment amount', async () => {

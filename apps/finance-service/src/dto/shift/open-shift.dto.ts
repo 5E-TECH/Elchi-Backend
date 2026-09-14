@@ -16,4 +16,13 @@ export class OpenShiftDto {
   @IsOptional()
   @IsString()
   comment?: string;
+
+  /**
+   * Smena qaysi kassa bo'yicha yopiladi (audit M7). Berilmasa markaziy MAIN
+   * kassa olinadi. Filial smenasi uchun bu yerga filial ID'si beriladi.
+   */
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  cashbox_user_id?: string;
 }

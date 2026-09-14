@@ -1,12 +1,15 @@
-import { Injectable } from '@nestjs/common';
-import { RpcException } from '@nestjs/microservices';
+import { Inject, Injectable } from '@nestjs/common';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, ILike, In, Repository } from 'typeorm';
 import {
   ActivityAction,
   ActivityLogQuery,
   ActivityLogService,
+  Cashbox_type,
+  FinancialSource_type,
   Status,
+  rmqSend,
 } from '@app/common';
 import { Investor } from './entities/investor.entity';
 import { Investment } from './entities/investment.entity';
@@ -48,6 +51,7 @@ export class InvestorServiceService {
     @InjectRepository(Investment) private readonly investmentRepo: Repository<Investment>,
     @InjectRepository(ProfitShare) private readonly profitShareRepo: Repository<ProfitShare>,
     private readonly activityLog: ActivityLogService,
+    @Inject('FINANCE') private readonly financeClient: ClientProxy,
   ) {}
 
   private auditActor(
@@ -750,6 +754,48 @@ export class InvestorServiceService {
     });
     if (!row) {
       this.notFound('profit share not found');
+    }
+
+    /**
+     * ⚠️ PUL KASSADAN YECHILADI (audit M6).
+     *
+     * Ilgari bu metod faqat `is_paid = true` qo'yardi: investorga haqiqatan
+     * chiqqan pul MAIN kassada ham, P&L daftarida ham ko'rinmasdi. Natijada
+     * kompaniya qoldig'i doimiy ravishda haqiqiy naqddan ko'p bo'lib turardi
+     * va o'sha "bor" pul asosida yangi to'lovlar qilinardi.
+     *
+     * Tartib ATAYLAB shunday: avval pul yechiladi, keyin qator "to'landi"
+     * deb belgilanadi. Kassada pul yetmasa (`Insufficient cash balance`)
+     * belgilash umuman bo'lmaydi — ya'ni "to'landi, lekin pul chiqmagan"
+     * holati yuzaga kelmaydi. Takroriy bosish `dedup_epoch` bilan bir marta
+     * o'tadi.
+     */
+    if (!row.is_paid) {
+      const dedupToken = `investor-profit:${String(row.id)}`;
+      await rmqSend(
+        this.financeClient,
+        { cmd: 'finance.cashbox.spend' },
+        {
+          user_id: String(requester?.id ?? '0'),
+          cashbox_type: Cashbox_type.MAIN,
+          amount: Number(row.amount),
+          comment: `Investor #${String(row.investor_id)} foyda to'lovi`,
+          created_by: requester?.id ? String(requester.id) : null,
+          dedup_epoch: dedupToken,
+        },
+      );
+      await rmqSend(
+        this.financeClient,
+        { cmd: 'finance.financial_balance.record' },
+        {
+          amount: -Number(row.amount),
+          source_type: FinancialSource_type.MANUAL_EXPENSE,
+          related_user_id: String(row.investor_id),
+          comment: `Investor #${String(row.investor_id)} foyda to'lovi`,
+          created_by: requester?.id ? String(requester.id) : null,
+          dedup_key: dedupToken,
+        },
+      ).catch(() => undefined);
     }
 
     row.is_paid = true;
