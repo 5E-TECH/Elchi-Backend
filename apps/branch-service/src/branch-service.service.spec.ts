@@ -508,51 +508,49 @@ describe('BranchServiceService', () => {
     ).rejects.toBeInstanceOf(RpcException);
   });
 
+  /**
+   * SCALE 1-BOSQICH. Ilgari bu panel har filial uchun alohida
+   * `order.find_all` chaqirib, 5 000 tagacha buyurtmani tortib olib JS'da
+   * sanardi. Endi bitta `order.analytics.branch_dashboard` chaqiruvi tayyor
+   * yig'indilarni qaytaradi — buyurtma qatorlari umuman tashilmaydi.
+   */
+  const dashboardStats = (overrides: Record<string, unknown> = {}) => ({
+    today_orders_count: 2,
+    week_orders_count: 2,
+    selected_orders_count: 2,
+    active_batches_count: 2,
+    orders_card: {
+      total: 2,
+      new: 1,
+      on_the_road: 0,
+      delivered: 1,
+      returned: 0,
+    },
+    markets: [
+      {
+        market_id: '10',
+        orders_count: 2,
+        delivered_count: 1,
+        total_price: 250000,
+      },
+    ],
+    packages: { on_the_way: 0, waiting_for_acceptance: 0 },
+    active_couriers: 1,
+    ...overrides,
+  });
+
   it('getBranchStats returns aggregated branch metrics', async () => {
-    const now = new Date();
     branchRepo.findOne.mockResolvedValue({ id: '1', isDeleted: false });
     branchRepo.find
       .mockResolvedValueOnce([{ id: '2' }])
       .mockResolvedValueOnce([]);
-    // Analitika doirasi raw SQL orqali: branch '1' + avlodi '2'.
     branchRepo.manager.query.mockResolvedValue([{ id: '1' }, { id: '2' }]);
     branchUserRepo.find.mockResolvedValue([
       { user_id: 'c1' },
       { user_id: 'c2' },
       { user_id: 'c3' },
     ]);
-    orderClient.send
-      .mockReturnValueOnce(
-        of({
-          data: [
-            {
-              id: 'o1',
-              branch_id: '1',
-              market_id: '10',
-              status: 'new',
-              total_price: 100000,
-              current_batch_id: 'b1',
-              createdAt: now.toISOString(),
-            },
-          ],
-        }),
-      )
-      .mockReturnValueOnce(
-        of({
-          data: [
-            {
-              id: 'o2',
-              branch_id: '2',
-              market_id: '11',
-              status: 'waiting',
-              total_price: 200000,
-              current_batch_id: 'b2',
-              createdAt: now.toISOString(),
-            },
-          ],
-        }),
-      )
-      .mockReturnValueOnce(of({ data: [] }));
+    orderClient.send.mockReturnValue(of({ data: dashboardStats() }));
 
     const res = await service.getBranchStats('1', {
       id: '1',
@@ -564,34 +562,21 @@ describe('BranchServiceService', () => {
     expect(res.data.week_orders_count).toBe(2);
     expect(res.data.active_batches_count).toBe(2);
     expect(res.data.couriers_count).toBe(3);
+
+    // Buyurtma qatorlari endi umuman so'ralmaydi.
+    const cmds = orderClient.send.mock.calls.map(
+      ([pattern]: [{ cmd: string }]) => pattern.cmd,
+    );
+    expect(cmds).toContain('order.analytics.branch_dashboard');
+    expect(cmds).not.toContain('order.find_all');
   });
 
   it('getBranchMarketsAnalytics returns grouped market data', async () => {
     branchRepo.findOne.mockResolvedValue({ id: '1', isDeleted: false });
     branchRepo.find.mockResolvedValueOnce([]);
     branchRepo.manager.query.mockResolvedValue([{ id: '1' }]);
-    orderClient.send.mockReturnValueOnce(
-      of({
-        data: [
-          {
-            id: 'o1',
-            branch_id: '1',
-            market_id: '10',
-            status: 'sold',
-            total_price: 100000,
-            createdAt: new Date().toISOString(),
-          },
-          {
-            id: 'o2',
-            branch_id: '1',
-            market_id: '10',
-            status: 'new',
-            total_price: 150000,
-            createdAt: new Date().toISOString(),
-          },
-        ],
-      }),
-    );
+    branchUserRepo.find.mockResolvedValue([]);
+    orderClient.send.mockReturnValue(of({ data: dashboardStats() }));
 
     const res = await service.getBranchMarketsAnalytics('1', {
       id: '1',
@@ -620,13 +605,9 @@ describe('BranchServiceService', () => {
       { branch_id: '100', role: 'MANAGER', isDeleted: false },
     ]);
     branchRepo.find.mockResolvedValue([{ id: '200' }]);
-    // Avlod filiallar raw SQL (manager.query) orqali: root '100' + bola '200'.
     branchRepo.manager.query.mockResolvedValue([{ id: '100' }, { id: '200' }]);
     branchUserRepo.count.mockResolvedValue(0);
-    orderClient.send
-      .mockReturnValueOnce(of({ data: [] }))
-      .mockReturnValueOnce(of({ data: [] }))
-      .mockReturnValue(of({ data: { acceptedCount: 0 } }));
+    orderClient.send.mockReturnValue(of({ data: dashboardStats() }));
 
     const res = await service.getBranchStats('100', {
       id: 'u-manager',
@@ -634,25 +615,14 @@ describe('BranchServiceService', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const findAllCalls = orderClient.send.mock.calls.filter(
-      ([pattern]) => pattern.cmd === 'order.find_all',
+    // Bitta chaqiruv, ichida ikkala filial ham bor (ilgari — ikki chaqiruv).
+    const dashboardCalls = orderClient.send.mock.calls.filter(
+      ([pattern]: [{ cmd: string }]) =>
+        pattern.cmd === 'order.analytics.branch_dashboard',
     );
-    expect(findAllCalls).toHaveLength(2);
-    expect(findAllCalls).toEqual(
-      expect.arrayContaining([
-        [
-          { cmd: 'order.find_all' },
-          expect.objectContaining({
-            query: expect.objectContaining({ branch_id: '100' }),
-          }),
-        ],
-        [
-          { cmd: 'order.find_all' },
-          expect.objectContaining({
-            query: expect.objectContaining({ branch_id: '200' }),
-          }),
-        ],
-      ]),
+    expect(dashboardCalls).toHaveLength(1);
+    expect(dashboardCalls[0][1].branch_ids).toEqual(
+      expect.arrayContaining(['100', '200']),
     );
   });
 
@@ -662,9 +632,7 @@ describe('BranchServiceService', () => {
       { branch_id: '300', role: 'REGISTRATOR', isDeleted: false },
     ]);
     branchUserRepo.count.mockResolvedValue(0);
-    orderClient.send
-      .mockReturnValueOnce(of({ data: [] }))
-      .mockReturnValue(of({ data: { acceptedCount: 0 } }));
+    orderClient.send.mockReturnValue(of({ data: dashboardStats() }));
 
     const res = await service.getBranchStats('300', {
       id: 'u-registrator',
@@ -672,17 +640,12 @@ describe('BranchServiceService', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const findAllCalls = orderClient.send.mock.calls.filter(
-      ([pattern]) => pattern.cmd === 'order.find_all',
+    const dashboardCalls = orderClient.send.mock.calls.filter(
+      ([pattern]: [{ cmd: string }]) =>
+        pattern.cmd === 'order.analytics.branch_dashboard',
     );
-    expect(findAllCalls).toEqual([
-      [
-        { cmd: 'order.find_all' },
-        expect.objectContaining({
-          query: expect.objectContaining({ branch_id: '300' }),
-        }),
-      ],
-    ]);
+    expect(dashboardCalls).toHaveLength(1);
+    expect(dashboardCalls[0][1].branch_ids).toEqual(['300']);
   });
 
   it('stats and markets analytics respond under 300ms in local unit run', async () => {

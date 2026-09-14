@@ -46,7 +46,6 @@ import {
   computeTariffShortfall,
   resolveOrderTariff,
   resolveSaleActorShare as resolveSaleActorShareAmount,
-  resolveBranchCashboxSaleAmount as resolveBranchCashboxSaleAmountValue,
 } from '../domain/order-money';
 import { OrderLookupService } from '../lookup/order-lookup.service';
 import { OrderCustodyService } from '../custody/order-custody.service';
@@ -716,18 +715,6 @@ export class OrderLifecycleService {
     return resolveSaleActorShareAmount(isManagerSale, financialActor, tariff);
   }
 
-  private resolveBranchCashboxSaleAmount(
-    totalPrice: number,
-    branchPayable: number,
-    isManagerSale: boolean,
-  ): number {
-    return resolveBranchCashboxSaleAmountValue(
-      totalPrice,
-      branchPayable,
-      isManagerSale,
-    );
-  }
-
   /**
    * TARIF QO'RIQCHISI: market tarifi kuryer (+ hamkor filial) ulushini qoplashi
    * SHART, aks holda sotuv rad etiladi.
@@ -791,6 +778,13 @@ export class OrderLifecycleService {
       branch_amount: number;
       market_amount: number;
       hasCourier: boolean;
+      /**
+       * Naqd UCHINCHI TOMONDA (kargoda) — audit M5. Kuryer ham, filial ham
+       * yo'q, lekin pul HQ'ga yetib kelmagan: u kargo hisob-kitob qilgandan
+       * keyin keladi. Bunday qator PENDING bo'lib turadi va remittance
+       * kelganda BRANCH_SETTLED ga o'tkaziladi.
+       */
+      cashHeldByProvider?: boolean;
     },
   ): Promise<void> {
     const repo = manager.getRepository(OrderSettlement);
@@ -800,7 +794,7 @@ export class OrderLifecycleService {
     let status = SettlementStatus.PENDING;
     let courier_to_branch_at: Date | null = null;
     let branch_to_hq_at: Date | null = null;
-    if (!data.hasCourier) {
+    if (!data.hasCourier && !data.cashHeldByProvider) {
       courier_to_branch_at = now;
       if (isBranchSale) {
         status = SettlementStatus.COURIER_SETTLED;
@@ -815,9 +809,18 @@ export class OrderLifecycleService {
       courier_id: data.courier_id ? String(data.courier_id) : null,
       branch_id: data.branch_id ? String(data.branch_id) : null,
       market_id: data.market_id ? String(data.market_id) : null,
-      courier_amount: Math.max(data.courier_amount, 0),
-      branch_amount: Math.max(data.branch_amount, 0),
-      market_amount: Math.max(data.market_amount, 0),
+      /**
+       * ISHORALI (signed) saqlanadi — audit M10. Ilgari uchala summa ham
+       * `Math.max(x, 0)` bilan qirqilardi, ya'ni arzon mahsulot holatida
+       * (masalan 5 000 so'mlik buyurtma, kuryer tarifi 25 000) ledger 0 yozar,
+       * kassa esa teskari yo'nalishda real oyoq yozardi: HQ'ning kuryerga
+       * ustama to'lovi va marketning HQ oldidagi qarzi ledgerdan butunlay
+       * tushib qolardi. FIFO hisob-kitobi manfiy oyoqni "qarz yo'q" deb
+       * bepul o'tkazadi, shuning uchun qirqishning keragi yo'q.
+       */
+      courier_amount: data.courier_amount,
+      branch_amount: data.branch_amount,
+      market_amount: data.market_amount,
       status,
       courier_to_branch_at,
       courier_to_branch_by: null,
@@ -1539,16 +1542,25 @@ export class OrderLifecycleService {
    * On rollback to WAITING:
    *   - operator earning removal
    *
-   * finance-service dedupes both on order_id, so re-delivery or a status
-   * bounce is safe. We deliberately do NOT auto-reverse SELL_PROFIT on
-   * rollback — the ledger is append-only and the SELL_PROFIT row is recorded
-   * once per order; an operator can post a manual CORRECTION if a confirmed
-   * sale is undone.
+   * finance-service dedupes on (source_type, order_id, dedup_key), so
+   * re-delivery or a status bounce is safe.
+   *
+   * ⚠️ ROLLBACKDA FOYDA ENDI QAYTARILADI (audit M4). Ilgari `sell_profit`
+   * ataylab qaytarilmasdi ("daftar append-only"), lekin yozuv
+   * `(source_type, order_id)` bo'yicha yagona edi — ya'ni ikki xato birga
+   * yurardi: (a) buyurtma qaytarilib boshqa sotilmasa, olinmagan foyda
+   * daftarda abadiy qolardi; (b) boshqa narxda qayta sotilsa, ESKI foyda
+   * qolib, yangisi jimgina o'tkazib yuborilardi. Endi rollback teskari
+   * CORRECTION yozuvini qo'yadi, har sotuv urinishi esa o'z `dedup_key`si
+   * bilan keladi (`sold_at` — urinish boshiga yangi), shuning uchun qayta
+   * sotuvning foydasi to'g'ri yoziladi.
    */
   private async enqueueFinanceOnStatusChange(
     order: Order,
     oldStatus: Order_status,
     manager: EntityManager,
+    /** Rollbackdan OLDINGI `sold_at` — qaytariladigan sotuvning tokeni. */
+    previousSoldAt?: string | null,
   ): Promise<void> {
     const soldStates = [
       Order_status.SOLD,
@@ -1597,18 +1609,59 @@ export class OrderLifecycleService {
             order_id: String(order.id),
             related_user_id: order.market_id ? String(order.market_id) : null,
             comment: `Order #${order.id} sell profit`,
+            // Urinish tokeni: `sold_at` har sotuvda yangidan yoziladi, ya'ni
+            // qayta sotuv yangi yozuv ochadi, takroriy yetkazish esa ayni
+            // token bilan kelib bir marta yoziladi.
+            dedup_key: this.saleLedgerKey(order.sold_at),
           },
           { manager },
         );
       }
-    } else if (leftSold && order.operator_id) {
-      await this.outbox.enqueue(
-        'FINANCE',
-        'finance.operator.earning.remove',
-        { order_id: String(order.id) },
-        { manager },
+    } else if (leftSold) {
+      if (order.operator_id) {
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.operator.earning.remove',
+          { order_id: String(order.id) },
+          { manager },
+        );
+      }
+
+      // Sotuv foydasini teskari qilish. Summalar buyurtmadagi snapshotlardan
+      // olinadi (rollback ularni o'chirmaydi), ya'ni tarif keyin o'zgargan
+      // bo'lsa ham aynan yozilgani qaytariladi.
+      const rolledBackProfit = computeSellProfit(
+        Number(order.market_tariff ?? 0),
+        Number(order.courier_share ?? order.courier_tariff ?? 0),
+        Number(order.branch_share ?? 0),
       );
+      if (rolledBackProfit !== 0) {
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.financial_balance.record',
+          {
+            amount: -rolledBackProfit,
+            source_type: 'correction',
+            order_id: String(order.id),
+            related_user_id: order.market_id ? String(order.market_id) : null,
+            comment: `Order #${order.id} sell profit rollback`,
+            dedup_key: `rollback:${this.saleLedgerKey(previousSoldAt)}`,
+          },
+          { manager },
+        );
+      }
     }
+  }
+
+  /**
+   * Sotuv urinishining daftar tokeni. `sold_at` har sotuvda yangidan yoziladi
+   * (wall-clock), shuning uchun u urinishlarni ajratish uchun yetarli. Qiymat
+   * bo'lmasa (juda eski buyurtmalar) bo'sh token qaytadi — u holda eski,
+   * "buyurtma boshiga bitta yozuv" qoidasi ishlaydi.
+   */
+  private saleLedgerKey(soldAt?: string | null): string {
+    const value = String(soldAt ?? '').trim();
+    return value ? `sale:${value}` : '';
   }
 
   private hasRole(requester: { roles?: string[] } | undefined, role: Roles) {
@@ -4799,11 +4852,6 @@ export class OrderLifecycleService {
     const courierIncome = Math.max(totalPrice - courierShare, 0);
     const courierExpense = Math.max(courierShare - totalPrice, 0);
     const branchNet = totalPrice - courierShare - branchShare;
-    const branchCashboxAmount = this.resolveBranchCashboxSaleAmount(
-      totalPrice,
-      branchNet,
-      isManagerRequester,
-    );
     const saleComment =
       totalPrice === 0
         ? "0 so'mlik mahsulot sotuvi"
@@ -4913,32 +4961,24 @@ export class OrderLifecycleService {
         }
       }
 
-      // ---- Branch leg (branch ↔ HQ) — only for non-HQ branch sales ----
-      if (branchCashbox && settlementBranchId) {
-        if (branchCashboxAmount > 0) {
-          await pay({
-            user_id: settlementBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount: branchCashboxAmount,
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: saleComment,
-          });
-        } else if (branchCashboxAmount < 0) {
-          await pay({
-            user_id: settlementBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount: -branchCashboxAmount,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: saleComment,
-          });
-        }
-      }
+      /**
+       * ---- Filial oyog'i SOTUVDA YOZILMAYDI (audit M3) ----
+       *
+       * Ilgari bu yerda filial kassasiga `total − courierShare − branchShare`
+       * INCOME qilib yozilardi. Ayni summa kuryer kassasiga ham yozilardi, va
+       * keyin manager kuryerdan naqdni qabul qilganda filialga YANA yozilardi
+       * (`finance.cashbox.payment_courier`, qabul qiluvchi = BRANCH) — hech
+       * qanday kompensatsiya oyog'isiz. Natijada bitta pul filial kassasida
+       * ikki marta turardi: yo filial qarzi cheksiz shishardi, yo
+       * "filial → MAIN" o'tkazmasi MAIN'ga mavjud bo'lmagan pulni yozardi.
+       *
+       * Endi ma'no bitta: BRANCH kassa qoldig'i = FILIAL JISMONAN USHLAB
+       * TURGAN NAQD. U faqat kuryerdan pul qabul qilinganda ko'payadi va
+       * HQ'ga topshirilganda kamayadi — ya'ni managerning sanab topshiradigan
+       * pulini bildiradi. "Filial HQ'ga qancha qarz" degan savolga esa
+       * `order_settlement.branch_amount` javob beradi (buyurtma boshiga bir
+       * marta, qaysi bo'g'inda turganidan qat'i nazar).
+       */
 
       if (extraCost > 0) {
         await pay({
@@ -4999,7 +5039,10 @@ export class OrderLifecycleService {
           courier_tariff: courierTariff,
           courier_share: courierShare,
           branch_share: branchShare,
-          branch_cashbox_amount: branchCashboxAmount,
+          // Sotuvda filial kassasiga oyoq yozilmaydi (audit M3), shu bois
+          // qaytariladigan summa ham 0. Eski buyurtmalarda bu ustun real
+          // qiymat bilan to'lgan va rollback o'shani aynan teskari qiladi.
+          branch_cashbox_amount: 0,
           comment: finalComment || null,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
         },
@@ -5013,9 +5056,15 @@ export class OrderLifecycleService {
         courier_id: courierCashbox ? actorCourierId : null,
         branch_id: settlementBranchId,
         market_id: order.market_id ? String(order.market_id) : null,
-        courier_amount: courierIncome,
-        branch_amount: Math.max(branchNet, 0),
-        market_amount: marketIncome,
+        // Ishorali summalar (audit M10) + marketning qo'shimcha xarajati
+        // (audit M8): u sotuvda market kassasidan yechiladi, demak marketga
+        // qoladigan haqiqiy summa aynan shuncha kam. Ilgari ledger buni
+        // ko'rmasdi va solishtirish skripti farqni "extra-cost shovqini" deb
+        // kechirardi — ya'ni haqiqiy nomuvofiqlik ham o'sha bag'rikenglik
+        // ichida yashirinardi.
+        courier_amount: totalPrice - courierShare,
+        branch_amount: branchNet,
+        market_amount: totalPrice - marketTariff - extraCost,
         hasCourier: Boolean(courierCashbox),
       });
 
@@ -5642,6 +5691,25 @@ export class OrderLifecycleService {
       `Provider ${input.provider_slug ?? 'external'} → ${input.action}` +
       (input.external_ref ? ` (ref: ${input.external_ref})` : '');
 
+    // Kargo sotuvi uchun pul summalari (audit M5). Tranzaksiyadan OLDIN
+    // hisoblanadi: market ma'lumoti tashqi (RMQ) chaqiruv talab qiladi.
+    let providerMarketTariff = 0;
+    let providerMarketAmount = 0;
+    const providerTotal = Number(order.total_price ?? 0);
+    if (input.action === 'sell' && order.market_id) {
+      const market = await this.lookup
+        .getMarketsByIds([String(order.market_id)])
+        .then((rows) => rows[0])
+        .catch(() => undefined);
+      providerMarketTariff = resolveOrderTariff({
+        snapshot: order.market_tariff,
+        isCenter: order.where_deliver === Where_deliver.CENTER,
+        centerTariff: market?.tariff_center,
+        homeTariff: market?.tariff_home,
+      });
+      providerMarketAmount = providerTotal - providerMarketTariff;
+    }
+
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -5652,8 +5720,92 @@ export class OrderLifecycleService {
       order.status = targetStatus;
       if (input.action === 'sell') {
         order.sold_at = order.sold_at ?? String(Date.now());
+        // Tariflar sotuv paytida qotiriladi — keyin tarif o'zgarsa ham
+        // hisob-kitob va rollback aynan shu qiymatlar bilan ishlaydi.
+        order.market_tariff = order.market_tariff ?? providerMarketTariff;
+        order.courier_share = 0;
+        order.branch_share = 0;
+        order.to_be_paid = providerMarketAmount;
       }
       await orderRepo.save(order);
+
+      /**
+       * ⚠️ KARGO SOTUVI ENDI KASSAGA HAM YOZILADI (audit M5).
+       *
+       * Ilgari bu yo'l ATAYLAB "status-only" edi: marketga qarz yozilmasdi,
+       * `order_settlement` qatori yaratilmasdi, `sell_profit` va operator
+       * komissiyasi ham yo'q edi. Kargoning qarzi esa butunlay boshqa
+       * jadvalda (`provider_receivables`) turardi va kassaga umuman
+       * bog'lanmasdi. Natijada marketga to'lov qo'lda, hech qanday
+       * bog'lanishsiz qilinardi — ikki marta to'lash yoki umuman to'lamaslik
+       * daftarda ko'rinmasdi.
+       *
+       * Model: kargo mijozdan naqdni yig'adi (shuning uchun settlement qatori
+       * PENDING bo'lib turadi), Elchi esa marketga `total − market_tariff`
+       * qarzdor bo'lib qoladi. Kargo hisob-kitob qilganda
+       * (`integration.provider.remittance`) MAIN kassaga kirim yoziladi va
+       * qator BRANCH_SETTLED ga o'tadi.
+       *
+       * ⚠️ KARGONING O'Z HAQI HALI MODELLASHTIRILMAGAN: kodda kargo uchun
+       * tarif maydoni yo'q. U kelguncha kargoga to'lov qo'lda chiqim sifatida
+       * yoziladi va bu yerdagi foyda faqat market tarifi bo'lib qoladi.
+       */
+      if (input.action === 'sell') {
+        const pay = (
+          data: Parameters<typeof this.updateCashboxBalance>[0],
+        ): Promise<void> =>
+          this.updateCashboxBalance(
+            { ...data, dedup_epoch: `provider-sell:${String(order.id)}` },
+            queryRunner.manager,
+          );
+
+        if (order.market_id) {
+          if (providerMarketAmount > 0) {
+            await pay({
+              user_id: String(order.market_id),
+              cashbox_type: Cashbox_type.FOR_MARKET,
+              amount: providerMarketAmount,
+              operation_type: Operation_type.INCOME,
+              source_type: Source_type.SELL,
+              source_id: String(order.id),
+              created_by: 'system',
+              comment: note,
+            });
+          } else if (providerMarketAmount < 0) {
+            await pay({
+              user_id: String(order.market_id),
+              cashbox_type: Cashbox_type.FOR_MARKET,
+              amount: -providerMarketAmount,
+              operation_type: Operation_type.EXPENSE,
+              source_type: Source_type.SELL,
+              source_id: String(order.id),
+              created_by: 'system',
+              comment: note,
+            });
+          }
+        }
+
+        await this.recordSaleSettlement(queryRunner.manager, {
+          order_id: String(order.id),
+          courier_id: null,
+          branch_id: null,
+          market_id: order.market_id ? String(order.market_id) : null,
+          courier_amount: 0,
+          branch_amount: providerTotal,
+          market_amount: providerMarketAmount,
+          hasCourier: false,
+          // Naqd kargoda — HQ'ga hali yetib kelmagan.
+          cashHeldByProvider: true,
+        });
+
+        // Foyda + operator komissiyasi. `orderRepo.save` `updateFull` dan
+        // o'tmagani uchun bu ilgak qo'lda chaqiriladi.
+        await this.enqueueFinanceOnStatusChange(
+          order,
+          oldStatus,
+          queryRunner.manager,
+        );
+      }
 
       await this.custody.createTrackingEvent(
         {
@@ -5980,11 +6132,6 @@ export class OrderLifecycleService {
     const courierIncome = Math.max(price - courierShare, 0);
     const courierExpense = Math.max(courierShare - price, 0);
     const branchNet = price - courierShare - branchShare;
-    const branchCashboxAmount = this.resolveBranchCashboxSaleAmount(
-      price,
-      branchNet,
-      isManagerRequester,
-    );
     const saleComment =
       price === 0
         ? "0 so'mlik mahsulot qisman sotuvi"
@@ -6102,32 +6249,24 @@ export class OrderLifecycleService {
         }
       }
 
-      // ---- Branch leg (non-HQ branch only) ----
-      if (branchCashbox && settlementBranchId) {
-        if (branchCashboxAmount > 0) {
-          await pay({
-            user_id: settlementBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount: branchCashboxAmount,
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: saleComment,
-          });
-        } else if (branchCashboxAmount < 0) {
-          await pay({
-            user_id: settlementBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount: -branchCashboxAmount,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: saleComment,
-          });
-        }
-      }
+      /**
+       * ---- Filial oyog'i SOTUVDA YOZILMAYDI (audit M3) ----
+       *
+       * Ilgari bu yerda filial kassasiga `total − courierShare − branchShare`
+       * INCOME qilib yozilardi. Ayni summa kuryer kassasiga ham yozilardi, va
+       * keyin manager kuryerdan naqdni qabul qilganda filialga YANA yozilardi
+       * (`finance.cashbox.payment_courier`, qabul qiluvchi = BRANCH) — hech
+       * qanday kompensatsiya oyog'isiz. Natijada bitta pul filial kassasida
+       * ikki marta turardi: yo filial qarzi cheksiz shishardi, yo
+       * "filial → MAIN" o'tkazmasi MAIN'ga mavjud bo'lmagan pulni yozardi.
+       *
+       * Endi ma'no bitta: BRANCH kassa qoldig'i = FILIAL JISMONAN USHLAB
+       * TURGAN NAQD. U faqat kuryerdan pul qabul qilinganda ko'payadi va
+       * HQ'ga topshirilganda kamayadi — ya'ni managerning sanab topshiradigan
+       * pulini bildiradi. "Filial HQ'ga qancha qarz" degan savolga esa
+       * `order_settlement.branch_amount` javob beradi (buyurtma boshiga bir
+       * marta, qaysi bo'g'inda turganidan qat'i nazar).
+       */
 
       if (extraCost > 0) {
         await pay({
@@ -6181,7 +6320,10 @@ export class OrderLifecycleService {
           courier_tariff: courierTariff,
           courier_share: courierShare,
           branch_share: branchShare,
-          branch_cashbox_amount: branchCashboxAmount,
+          // Sotuvda filial kassasiga oyoq yozilmaydi (audit M3), shu bois
+          // qaytariladigan summa ham 0. Eski buyurtmalarda bu ustun real
+          // qiymat bilan to'lgan va rollback o'shani aynan teskari qiladi.
+          branch_cashbox_amount: 0,
           return_requested: false,
           comment: finalComment || null,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
@@ -6202,9 +6344,11 @@ export class OrderLifecycleService {
         courier_id: courierCashbox ? actorCourierId : null,
         branch_id: settlementBranchId,
         market_id: order.market_id ? String(order.market_id) : null,
-        courier_amount: courierIncome,
-        branch_amount: Math.max(branchNet, 0),
-        market_amount: marketIncome,
+        // Ishorali summalar + extra_cost ayirmasi — sellOrder bilan bir xil
+        // (audit M8/M10).
+        courier_amount: price - courierShare,
+        branch_amount: branchNet,
+        market_amount: price - marketTariff - extraCost,
         hasCourier: Boolean(courierCashbox),
       });
 
@@ -6432,6 +6576,10 @@ export class OrderLifecycleService {
       await this.assertDeliveryDetailsEditable(order, dto);
     }
     const oldStatus = order.status;
+    // Rollback `sold_at` ni null qiladi, foydani teskari yozish esa
+    // qaytarilayotgan sotuvning tokenini talab qiladi — shuning uchun
+    // o'zgarishlar qo'llanishidan OLDIN saqlab qo'yamiz (audit M4).
+    const previousSoldAt = order.sold_at;
     const previousCanceledPostId = order.canceled_post_id;
     const previousHolderType = order.holder_type;
     const previousHolderBranchId = order.holder_branch_id;
@@ -6666,7 +6814,12 @@ export class OrderLifecycleService {
       // rollback. Enqueued in this transaction so events are durable iff the
       // order change commits; finance-service dedupes on order_id.
       if (oldStatus !== order.status) {
-        await this.enqueueFinanceOnStatusChange(order, oldStatus, manager);
+        await this.enqueueFinanceOnStatusChange(
+          order,
+          oldStatus,
+          manager,
+          previousSoldAt,
+        );
       }
     };
 

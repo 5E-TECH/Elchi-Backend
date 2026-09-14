@@ -41,9 +41,11 @@ const ROW = {
   payload: { event: 'shipment.status_changed' },
 };
 
-describe("webhook_url sozlanmagan -> awaiting_config", () => {
+describe('webhook_url sozlanmagan -> awaiting_config', () => {
   it("TC1: `completed` EMAS, `awaiting_config` bo'ladi", async () => {
-    const { svc, updates } = makeSvc({ partner: { id: '7', webhook_url: null } });
+    const { svc, updates } = makeSvc({
+      partner: { id: '7', webhook_url: null },
+    });
 
     const ok = await svc.deliverPartnerWebhookRow({ ...ROW });
 
@@ -67,7 +69,9 @@ describe("webhook_url sozlanmagan -> awaiting_config", () => {
   });
 
   it('TC3: sabab yozib qoldiriladi va next_retry tozalanadi', async () => {
-    const { svc, updates } = makeSvc({ partner: { id: '7', webhook_url: null } });
+    const { svc, updates } = makeSvc({
+      partner: { id: '7', webhook_url: null },
+    });
 
     await svc.deliverPartnerWebhookRow({ ...ROW });
 
@@ -120,7 +124,7 @@ describe('webhook_url sozlanganda kutayotganlar navbatga qaytadi', () => {
     return { svc, calls, webhookUrl };
   }
 
-  it('TC5: url qo\'yilsa awaiting_config -> pending', async () => {
+  it("TC5: url qo'yilsa awaiting_config -> pending", async () => {
     const { svc, calls } = makeUpdateSvc(null, 3);
 
     const res: any = await svc.updatePartner('7', {

@@ -55,21 +55,6 @@ export function resolveSaleActorShare(
   return isManagerSale ? tariff : resolveCourierShare(financialActor, tariff);
 }
 
-/**
- * Amount credited to the branch cashbox at sale time. Branch/HQ balances show
- * the tariff-adjusted payable share, regardless of whether a courier or manager
- * performed the sale; the gross product price remains on the order detail.
- */
-export function resolveBranchCashboxSaleAmount(
-  totalPrice: number,
-  branchPayable: number,
-  isManagerSale: boolean,
-): number {
-  void totalPrice;
-  void isManagerSale;
-  return branchPayable;
-}
-
 export interface SaleShareInputs {
   /** Total COD price the customer pays on delivery. */
   total: number;

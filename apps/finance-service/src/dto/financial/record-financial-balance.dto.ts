@@ -41,4 +41,12 @@ export class RecordFinancialBalanceDto {
     message: 'created_by must be a bigint-like numeric string',
   })
   created_by?: string | null;
+
+  /**
+   * Urinish tokeni (audit M4) — daftar idempotentligining ikkinchi o'lchovi.
+   * Bo'sh/berilmagan bo'lsa buyurtma boshiga bitta yozuv qoidasi ishlaydi.
+   */
+  @IsOptional()
+  @IsString()
+  dedup_key?: string | null;
 }

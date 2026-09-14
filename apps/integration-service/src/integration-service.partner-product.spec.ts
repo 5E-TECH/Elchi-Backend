@@ -18,17 +18,19 @@ function makeService(opts: {
   saveRef?: (entity: any) => any;
 }) {
   const refRows = opts.refRows ?? [];
-  const saveRef = opts.saveRef ?? jest.fn(async (e: any) => ({ id: '1', ...e }));
+  const saveRef =
+    opts.saveRef ?? jest.fn(async (e: any) => ({ id: '1', ...e }));
 
   const svc: any = Object.create(IntegrationServiceService.prototype);
   svc.logger = { warn: jest.fn(), error: jest.fn(), log: jest.fn() };
   svc.partnerProductRefRepo = {
-    findOne: jest.fn(async ({ where }: any) =>
-      refRows.find(
-        (r) =>
-          r.partner_id === where.partner_id &&
-          r.external_product_id === where.external_product_id,
-      ) ?? null,
+    findOne: jest.fn(
+      async ({ where }: any) =>
+        refRows.find(
+          (r) =>
+            r.partner_id === where.partner_id &&
+            r.external_product_id === where.external_product_id,
+        ) ?? null,
     ),
     create: jest.fn((dto: any) => ({ ...dto })),
     save: saveRef,
@@ -37,15 +39,19 @@ function makeService(opts: {
 
   // `rmqRequest`ni to'g'ridan-to'g'ri almashtiramiz: haqiqiy versiyasi
   // HAR QANDAY xatoni `null` ga aylantiradi, mock ham shunday qiladi.
-  svc.rmqRequest = jest.fn(async (_client: any, pattern: { cmd: string }, payload: any) => {
-    if (pattern.cmd === 'catalog.product.find_all') {
-      return opts.catalogFindAll ? opts.catalogFindAll(payload) : { data: [], total: 0 };
-    }
-    if (pattern.cmd === 'catalog.product.create') {
-      return opts.catalogCreate ? opts.catalogCreate(payload) : null;
-    }
-    return null;
-  });
+  svc.rmqRequest = jest.fn(
+    async (_client: any, pattern: { cmd: string }, payload: any) => {
+      if (pattern.cmd === 'catalog.product.find_all') {
+        return opts.catalogFindAll
+          ? opts.catalogFindAll(payload)
+          : { data: [], total: 0 };
+      }
+      if (pattern.cmd === 'catalog.product.create') {
+        return opts.catalogCreate ? opts.catalogCreate(payload) : null;
+      }
+      return null;
+    },
+  );
 
   return { svc: svc as IntegrationServiceService, saveRef };
 }
@@ -88,14 +94,22 @@ describe('Hamkor mahsuloti → Elchi katalogi', () => {
     const create = jest.fn(() => ({ id: 111 }));
     const { svc, saveRef } = makeService({
       refRows: [
-        { partner_id: '7', external_product_id: 'pcs-uuid-1', elchi_product_id: '900' },
+        {
+          partner_id: '7',
+          external_product_id: 'pcs-uuid-1',
+          elchi_product_id: '900',
+        },
       ],
       catalogFindAll: findAll,
       catalogCreate: create,
     });
 
     const items = await resolve(svc, [
-      { name: 'Qalam (yangi nom)', quantity: 1, external_product_id: 'pcs-uuid-1' },
+      {
+        name: 'Qalam (yangi nom)',
+        quantity: 1,
+        external_product_id: 'pcs-uuid-1',
+      },
     ]);
 
     // ⭐ Nom O'ZGARGAN, lekin bog'lanish ID bo'yicha — DUBLIKAT YARATILMAYDI.

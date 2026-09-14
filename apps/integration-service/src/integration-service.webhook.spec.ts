@@ -170,6 +170,8 @@ function makeService(integration: Record<string, unknown> | null) {
     noClient,
     noClient,
     noClient,
+    // FINANCE klienti (audit M5) — kargo hisob-kitobi MAIN kassaga yoziladi.
+    noClient,
   );
   return {
     service,
@@ -795,10 +797,9 @@ describe("⭐ BIR VAQTDA kelgan nusxa — hodisa QO'LLANMAYDI (audit P1)", () =>
     code: '23505',
   });
 
-  it('unique buzilishida hodisa qo\'llanmaydi va 200 qaytadi', async () => {
-    const { service, shipmentRepo, webhookLogRepo } = makeService(
-      baseIntegration(),
-    );
+  it("unique buzilishida hodisa qo'llanmaydi va 200 qaytadi", async () => {
+    const { service, shipmentRepo, webhookLogRepo } =
+      makeService(baseIntegration());
     webhookLogRepo.save.mockRejectedValueOnce(uniqueViolation);
     const sig = computeHmacSignature(BODY, SECRET);
 
@@ -832,10 +833,36 @@ describe("⭐ BIR VAQTDA kelgan nusxa — hodisa QO'LLANMAYDI (audit P1)", () =>
     const sig = computeHmacSignature(BODY, SECRET);
 
     const res: any = await service.receiveWebhook(
-      bodyToInput('acme-cargo', BODY, { 'x-signature': sig }),
+      bodyToInput('acme-cargo', BODY, {
+        'x-signature': sig,
+        // Delivery-id endi majburiy (audit S7) — bu test aynan YOZUV xatosi
+        // yo'lini tekshiradi, id yo'qligini emas.
+        'x-delivery-id': 'evt_write_error',
+      }),
     );
 
     expect(res.ok).toBe(true);
     expect(res.reason).toBe('accepted');
+  });
+
+  /**
+   * AUDIT S7. Replay himoyasi delivery-id ga tayanadi: ushlangan haqiqiy
+   * webhook qayta yuborilsa, faqat id takrorlanishi uni to'sadi. Ilgari
+   * `INTEGRATION_REQUIRE_DELIVERY_ID` sukut bo'yicha o'chiq edi, ya'ni
+   * `webhook_id_header` e'lon qilgan provayder uni yubormay qo'ysa himoya
+   * JIMGINA o'chib qolardi.
+   */
+  it('⭐ delivery-id siz webhook rad etiladi (S7)', async () => {
+    const { service, shipmentRepo } = makeService(baseIntegration());
+    const sig = computeHmacSignature(BODY, SECRET);
+
+    const res: any = await service.receiveWebhook(
+      bodyToInput('acme-cargo', BODY, { 'x-signature': sig }),
+    );
+
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe(400);
+    expect(res.reason).toBe('missing_delivery_id');
+    expect(shipmentRepo.save).not.toHaveBeenCalled();
   });
 });

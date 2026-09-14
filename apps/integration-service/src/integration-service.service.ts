@@ -14,10 +14,12 @@ import {
   ActivityAction,
   ActivityLogService,
   ActivityLogQuery,
+  Cashbox_type,
   HmacAlgorithm,
   Order_status,
   Roles,
   Where_deliver,
+  rmqSend,
   verifyHmacSignature,
   computeHmacSignature,
   assertPublicUrl,
@@ -171,7 +173,7 @@ type SyncHistoryQuery = {
  * hodisaning aybi emas — u kutib turishi va sozlangach yetkazilishi kerak.
  */
 class PartnerWebhookNotConfiguredError extends Error {
-  constructor(message = "hamkorda webhook_url sozlanmagan") {
+  constructor(message = 'hamkorda webhook_url sozlanmagan') {
     super(message);
     this.name = 'PartnerWebhookNotConfiguredError';
   }
@@ -233,6 +235,7 @@ export class IntegrationServiceService {
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('NOTIFICATION') private readonly notificationClient: ClientProxy,
+    @Inject('FINANCE') private readonly financeClient: ClientProxy,
   ) {}
 
   private badRequest(message: string): never {
@@ -435,7 +438,8 @@ export class IntegrationServiceService {
     }
 
     if (dto.webhook_url !== undefined) {
-      const url = dto.webhook_url === null ? '' : String(dto.webhook_url).trim();
+      const url =
+        dto.webhook_url === null ? '' : String(dto.webhook_url).trim();
       if (url) {
         // SSRF himoyasi yaratishdagi bilan AYNI — tahrir orqali ichki
         // manzilga o'tib ketish yo'li ochilib qolmasin.
@@ -559,7 +563,8 @@ export class IntegrationServiceService {
       entity_type: 'Partner',
       entity_id: String(partner.id),
       action: ActivityAction.UPDATED,
-      new_value: requeued > 0 ? { ...changed, requeued_webhooks: requeued } : changed,
+      new_value:
+        requeued > 0 ? { ...changed, requeued_webhooks: requeued } : changed,
       ...this.auditActor(requester),
     });
 
@@ -1358,7 +1363,11 @@ export class IntegrationServiceService {
 
     if (isNumeric) {
       const byOrderId = await this.partnerShipmentRefRepo.findOne({
-        where: { partner_id: partnerId, order_id: shipmentId, isDeleted: false },
+        where: {
+          partner_id: partnerId,
+          order_id: shipmentId,
+          isDeleted: false,
+        },
       });
       if (byOrderId) return byOrderId;
     }
@@ -1611,9 +1620,10 @@ export class IntegrationServiceService {
        * Nomi tarixiy va chalg'itadi (`paid_amount` mijozdan yig'ilgan pul
        * emas), shu bois yoniga aniq nomli maydon qo'shildi.
        */
-      cod_collected: PAID_STATUSES.has(newStatus) && Number.isFinite(codCollected)
-        ? codCollected
-        : 0,
+      cod_collected:
+        PAID_STATUSES.has(newStatus) && Number.isFinite(codCollected)
+          ? codCollected
+          : 0,
       /** `cod_collected` ning to'g'ri nomi — market qarzining to'langan qismi. */
       market_paid_amount:
         PAID_STATUSES.has(newStatus) && Number.isFinite(codCollected)
@@ -1934,7 +1944,9 @@ export class IntegrationServiceService {
      *
      * Endi sandbox o'z sekretiga ega bo'lishi SHART.
      */
-    const sandboxSecret = this.decryptCredential(partner.sandbox_webhook_secret);
+    const sandboxSecret = this.decryptCredential(
+      partner.sandbox_webhook_secret,
+    );
     if (!sandboxSecret) {
       this.logger.warn(
         `sandbox yoqilgan, lekin O'Z sekreti yo'q (partner=${partner.id}) — ` +
@@ -2141,10 +2153,7 @@ export class IntegrationServiceService {
     const partnerRows = await this.partnerWebhookOutboxRepo
       .createQueryBuilder('w')
       .select('w.partner_id', 'id')
-      .addSelect(
-        'COUNT(*) FILTER (WHERE w."createdAt" >= :since)',
-        'events',
-      )
+      .addSelect('COUNT(*) FILTER (WHERE w."createdAt" >= :since)', 'events')
       .addSelect(
         `COUNT(*) FILTER (WHERE w."createdAt" >= :since AND w.status = 'completed')`,
         'delivered',
@@ -2404,7 +2413,10 @@ export class IntegrationServiceService {
       // Poyga: boshqa oqim shu bog'lanishni yozib ulgurgan — mavjudini olamiz.
       if (!this.isUniqueViolation(error)) throw error;
       const raced = await this.partnerProductRefRepo.findOne({
-        where: { partner_id: partnerId, external_product_id: externalProductId },
+        where: {
+          partner_id: partnerId,
+          external_product_id: externalProductId,
+        },
       });
       return raced ? String(raced.elchi_product_id) : String(productId);
     }
@@ -2526,11 +2538,24 @@ export class IntegrationServiceService {
     String(process.env.INTEGRATION_ALLOW_PRIVATE_HOSTS ?? '').toLowerCase() ===
     'true';
 
-  // When true, reject signature-valid webhooks that carry no delivery id (for
-  // providers that declared a webhook_id_header) — forces replay protection on.
+  /**
+   * Delivery-id yo'q, imzosi to'g'ri webhookni rad etish (audit S7).
+   *
+   * ⚠️ SUKUT QIYMATI `false` DAN `true` GA O'ZGARTIRILDI. Replay himoyasi
+   * aynan shu id'ga tayanadi: ushlangan haqiqiy webhook qayta-qayta
+   * yuborilsa, faqat delivery-id takrorlanishi uni to'sadi. `false` bo'lsa,
+   * webhook_id_header e'lon qilgan provayder uni yubormay qo'yganida himoya
+   * JIMGINA o'chib qolardi — bu esa himoya yo'qligidan yomonroq, chunki
+   * sozlamada u "bor" bo'lib ko'rinadi.
+   *
+   * Rad etish faqat `webhook_id_header` e'lon qilingan provayderlarga
+   * tegishli. Zarur bo'lsa `INTEGRATION_REQUIRE_DELIVERY_ID=false` bilan
+   * ataylab o'chirish mumkin.
+   */
   private readonly requireDeliveryId =
-    String(process.env.INTEGRATION_REQUIRE_DELIVERY_ID ?? '').toLowerCase() ===
-    'true';
+    String(
+      process.env.INTEGRATION_REQUIRE_DELIVERY_ID ?? 'true',
+    ).toLowerCase() !== 'false';
 
   // Bounds for operator-supplied JSON config blobs (mapping/dispatch/sync).
   private static readonly MAX_CONFIG_BYTES = 64 * 1024; // 64 KB serialized
@@ -2674,10 +2699,11 @@ export class IntegrationServiceService {
           'darvoza tekshirib bo‘lmaydi.',
       );
     }
-    if (String(cfg.funnel_id ?? '').trim() && !String(cfg.funnel_path ?? '').trim()) {
-      this.badRequest(
-        '`funnel_id` berilgan bo‘lsa `funnel_path` ham shart.',
-      );
+    if (
+      String(cfg.funnel_id ?? '').trim() &&
+      !String(cfg.funnel_path ?? '').trim()
+    ) {
+      this.badRequest('`funnel_id` berilgan bo‘lsa `funnel_path` ham shart.');
     }
   }
 
@@ -3028,12 +3054,16 @@ export class IntegrationServiceService {
    * chaqiruvchilar buzilmasin (ular `role` yubormaydi).
    */
   private normalizeRole(value: unknown): IntegrationRole {
-    const v = String(value ?? '').toLowerCase().trim();
+    const v = String(value ?? '')
+      .toLowerCase()
+      .trim();
     return v === 'source' || v === 'payment' || v === 'mirror' ? v : 'carrier';
   }
 
   private normalizeCategory(value: unknown): IntegrationCategory {
-    const v = String(value ?? '').toLowerCase().trim();
+    const v = String(value ?? '')
+      .toLowerCase()
+      .trim();
     const allowed: IntegrationCategory[] = [
       'marketplace',
       'crm',
@@ -3050,7 +3080,9 @@ export class IntegrationServiceService {
   private normalizeIntegrationMode(value: unknown): IntegrationMode {
     // `adapter` standart: `spec` rejimi biz kontrakt e'lon qilganimizni
     // bildiradi va bu ATAYLAB tanlanadigan holat.
-    return String(value ?? '').toLowerCase().trim() === 'spec'
+    return String(value ?? '')
+      .toLowerCase()
+      .trim() === 'spec'
       ? 'spec'
       : 'adapter';
   }
@@ -3896,7 +3928,10 @@ export class IntegrationServiceService {
      * `webhook_secret_previous` DTO'da ATAYLAB yo'q — u faqat shu yerda
      * to'ldiriladi, qo'lda kiritilmaydi.
      */
-    if (typeof (dto as { webhook_secret?: unknown }).webhook_secret !== 'undefined') {
+    if (
+      typeof (dto as { webhook_secret?: unknown }).webhook_secret !==
+      'undefined'
+    ) {
       const raw = (dto as { webhook_secret?: string | null }).webhook_secret;
       const next = raw === null ? '' : String(raw).trim();
       if (next) {
@@ -4172,7 +4207,10 @@ export class IntegrationServiceService {
     );
     if (!created) {
       throw new RpcException(
-        errorRes('Buyurtmani yaratib bo‘lmadi — order service javob bermadi', 502),
+        errorRes(
+          'Buyurtmani yaratib bo‘lmadi — order service javob bermadi',
+          502,
+        ),
       );
     }
 
@@ -5102,7 +5140,7 @@ export class IntegrationServiceService {
     if (!integration.is_active) {
       this.logger.warn(
         `webhook SKIPPED for ${integration.slug}: ulanish o'chirilgan — ` +
-          'hodisa jurnalga yozildi, lekin qo\'llanmadi',
+          "hodisa jurnalga yozildi, lekin qo'llanmadi",
       );
       if (log?.id) {
         await this.markWebhookProcessed(log.id, 'integration_inactive');
@@ -5621,7 +5659,7 @@ export class IntegrationServiceService {
     if (!stages.length && !events.length) {
       this.logger.warn(
         `inbound order SKIPPED for ${integration.slug}: darvoza sozlanmagan ` +
-          '(create_on_stages/create_on_events bo\'sh)',
+          "(create_on_stages/create_on_events bo'sh)",
       );
       return { outcome: 'inbound_no_gate' };
     }
@@ -5643,7 +5681,9 @@ export class IntegrationServiceService {
       this.logger.warn(
         `inbound order SKIPPED for ${integration.slug}: bitim obyekti topilmadi ` +
           `(deal_path='${cfg.deal_path ?? ''}'` +
-          (Array.isArray(dealRaw) ? `, massivda ${dealRaw.length} element` : '') +
+          (Array.isArray(dealRaw)
+            ? `, massivda ${dealRaw.length} element`
+            : '') +
           ')',
       );
       return { outcome: 'inbound_no_deal' };
@@ -6196,10 +6236,9 @@ export class IntegrationServiceService {
        * natija yozilmagan — ya'ni jarayon yarim yo'lda uzilgan. Bu aynan
        * ko'rinishi kerak bo'lgan holat.
        */
-      qb.andWhere(
-        '(t.apply_outcome IS NULL OR t.apply_outcome <> :ok)',
-        { ok: 'recorded' },
-      );
+      qb.andWhere('(t.apply_outcome IS NULL OR t.apply_outcome <> :ok)', {
+        ok: 'recorded',
+      });
     }
 
     const [rows, total] = await qb
@@ -6360,7 +6399,7 @@ export class IntegrationServiceService {
       if (code === '23505') {
         this.logger.warn(
           `webhook log duplicate (delivery_id=${data.delivery_id}) — ` +
-            'bir vaqtda kelgan nusxa, qo\'llanmaydi',
+            "bir vaqtda kelgan nusxa, qo'llanmaydi",
         );
         return 'duplicate';
       }
@@ -7055,7 +7094,8 @@ export class IntegrationServiceService {
     limit?: number;
   }) {
     const page = query.page && query.page > 0 ? query.page : 1;
-    const limit = query.limit && query.limit > 0 ? Math.min(query.limit, 100) : 20;
+    const limit =
+      query.limit && query.limit > 0 ? Math.min(query.limit, 100) : 20;
 
     const qb = this.shipmentRepo
       .createQueryBuilder('s')
@@ -7083,7 +7123,12 @@ export class IntegrationServiceService {
     return successRes(
       {
         items,
-        pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
       },
       200,
       'Provider shipments',
@@ -7106,7 +7151,8 @@ export class IntegrationServiceService {
     limit?: number;
   }) {
     const page = query.page && query.page > 0 ? query.page : 1;
-    const limit = query.limit && query.limit > 0 ? Math.min(query.limit, 100) : 20;
+    const limit =
+      query.limit && query.limit > 0 ? Math.min(query.limit, 100) : 20;
 
     const where: Record<string, unknown> = { isDeleted: false };
     if (query.partner_id) {
@@ -7123,10 +7169,40 @@ export class IntegrationServiceService {
     return successRes(
       {
         items,
-        pagination: { total, page, limit, totalPages: Math.ceil(total / limit) },
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
       },
       200,
       'Partner shipments',
+    );
+  }
+
+  /**
+   * Barcha kargolarning umumiy qarzi (audit M5). Kompaniya holati formulasiga
+   * kiradi: kargo sotuvida marketga qarz darhol yoziladi, uning qarama-qarshi
+   * tomoni esa aynan shu qarz — u hisobga olinmasa balans o'sha summaga
+   * manfiyga og'ib turadi.
+   */
+  async getProviderOutstandingTotal() {
+    const raw = await this.receivableRepo
+      .createQueryBuilder('r')
+      .select('COALESCE(SUM(r.amount), 0)', 'sum')
+      .addSelect('COUNT(r.id)', 'count')
+      .where('r.is_deleted = false')
+      .andWhere('r.status = :status', { status: ReceivableStatus.PENDING })
+      .getRawOne<{ sum: string; count: string }>();
+
+    return successRes(
+      {
+        outstanding_amount: Number(raw?.sum ?? 0),
+        outstanding_count: Number(raw?.count ?? 0),
+      },
+      200,
+      'Provider outstanding total',
     );
   }
 
@@ -7263,6 +7339,60 @@ export class IntegrationServiceService {
         };
       },
     );
+
+    /**
+     * ⚠️ HISOB-KITOB ENDI KASSAGA HAM YOZILADI (audit M5).
+     *
+     * Ilgari bu metodning izohida ochiq yozilgan edi: "Reconciliation only —
+     * does not post to a cashbox". Ya'ni kargodan kelgan pul faqat
+     * `provider_receivables` jadvalida yopilardi, MAIN kassa esa o'zgarmasdi.
+     * Marketga to'lov ham qo'lda, hech qanday bog'lanishsiz qilinardi.
+     *
+     * Endi: kelgan summa MAIN kassaga kirim bo'lib yoziladi va yopilgan
+     * buyurtmalarning settlement qatorlari "HQ'ga yetdi" holatiga o'tadi —
+     * shundan keyin marketga to'lov FIFO bilan normal yopiladi.
+     *
+     * Tranzaksiyadan KEYIN, best-effort: kassa yozuvi `dedup_epoch` bilan
+     * idempotent, takroriy urinish pulni ikki marta yozmaydi.
+     */
+    try {
+      await rmqSend(
+        this.financeClient,
+        { cmd: 'finance.cashbox.fill' },
+        {
+          user_id: String(input.created_by ?? '0'),
+          cashbox_type: Cashbox_type.MAIN,
+          amount,
+          comment:
+            input.note ??
+            `Kargo (${integration.slug ?? integrationId}) hisob-kitobi`,
+          created_by: input.created_by ? String(input.created_by) : null,
+          dedup_epoch: `provider-remittance:${String(result.remittance_id)}`,
+        },
+      );
+    } catch (err) {
+      this.logger.error(
+        `provider remittance cashbox posting FAILED for remittance ` +
+          `${String(result.remittance_id)}: ${(err as Error)?.message ?? err}. ` +
+          `Pul kelgan, lekin MAIN kassaga yozilmadi — qo'lda tekshirilsin.`,
+      );
+    }
+
+    if (settledOrderIds.length) {
+      await rmqSend(
+        this.orderClient,
+        { cmd: 'order.settlement.provider_settled' },
+        {
+          order_ids: settledOrderIds,
+          requester_id: input.created_by ? String(input.created_by) : 'system',
+        },
+      ).catch((err) => {
+        this.logger.warn(
+          `provider settlement advance failed for remittance ` +
+            `${String(result.remittance_id)}: ${(err as Error)?.message ?? err}`,
+        );
+      });
+    }
 
     // Audit AFTER the transaction commits — one row per remittance (batch over
     // many receivables), collection summarised in metadata.

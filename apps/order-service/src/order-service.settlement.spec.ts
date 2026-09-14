@@ -68,9 +68,9 @@ describe('OrderSettlementService settlement (FIFO)', () => {
   // cashbox legs. The legacy cashbox-posting settle* path is retired (Faza 2b).
   it('advance courier→branch settles oldest orders whole until the lump-sum runs out (state-only)', async () => {
     const { service, store, outbox } = makeService([
-      { order_id: '101', courier_id: '7', courier_amount: 60 },
-      { order_id: '102', courier_id: '7', courier_amount: 50 },
-      { order_id: '103', courier_id: '7', courier_amount: 40 },
+      { order_id: '101', courier_id: '7', branch_id: '10', courier_amount: 60 },
+      { order_id: '102', courier_id: '7', branch_id: '10', courier_amount: 50 },
+      { order_id: '103', courier_id: '7', branch_id: '10', courier_amount: 40 },
     ]);
 
     const res: any = await service.advanceSettlement({
@@ -89,6 +89,33 @@ describe('OrderSettlementService settlement (FIFO)', () => {
     expect(store[2].status).toBe(SettlementStatus.PENDING);
     // State-only: the cashbox was already moved by the finance payment path.
     expect(outbox.enqueue).not.toHaveBeenCalled();
+  });
+
+  /**
+   * HQ sotuvida filial bo'g'ini YO'Q: kuryer naqdni to'g'ridan-to'g'ri HQ'ga
+   * topshiradi. Ilgari bunday qatorlar `COURIER_SETTLED` da qotib qolardi va
+   * `hq_to_market` (u `BRANCH_SETTLED` dan boshlanadi) ularni hech qachon
+   * ko'rmasdi — ya'ni HQ sotuvlari uchun marketga hisob-kitob ledgeri abadiy
+   * ochiq turardi (audit M1).
+   */
+  it('filialsiz (HQ) buyurtma kuryer topshirganda darhol BRANCH_SETTLED bo`ladi', async () => {
+    const { service, store } = makeService([
+      { order_id: '301', courier_id: '7', branch_id: null, courier_amount: 60 },
+      { order_id: '302', courier_id: '7', branch_id: '10', courier_amount: 40 },
+    ]);
+
+    const res: any = await service.advanceSettlement({
+      level: 'courier_to_branch',
+      match_value: '7',
+      amount: 100,
+      requester_id: '1',
+    });
+
+    expect(res.data.settled_order_ids).toEqual(['301', '302']);
+    // Filialsiz — pul allaqachon HQ'da.
+    expect(store[0].status).toBe(SettlementStatus.BRANCH_SETTLED);
+    // Filialli — hali filialda, HQ'ga topshirilishi kerak.
+    expect(store[1].status).toBe(SettlementStatus.COURIER_SETTLED);
   });
 
   it('advance branch→HQ only advances COURIER_SETTLED orders (state-only)', async () => {
@@ -164,7 +191,7 @@ describe('OrderSettlementService settlement (FIFO)', () => {
     ).rejects.toThrow();
   });
 
-  it('summarizes open branch receivables and market payables', async () => {
+  it('summarizes the whole chain receivable — HQ rows (branch_id NULL) included', async () => {
     const { service, settlementRepo } = makeService([]);
     const makeQb = (rows: any[]) => ({
       select: jest.fn().mockReturnThis(),
@@ -177,6 +204,10 @@ describe('OrderSettlementService settlement (FIFO)', () => {
     const branchQb = makeQb([
       { branch_id: '10', amount: '150000' },
       { branch_id: '11', amount: '50000' },
+      // HQ sotuvi: `resolveSettlementBranchId` null qaytaradi. Ilgari bu qator
+      // `branch_id IS NOT NULL` filtri bilan qirqilardi va HQ kuryerlaridagi
+      // pul kompaniya holatidan butunlay tushib qolardi (audit M1).
+      { branch_id: null, amount: '90000' },
     ]);
     const marketQb = makeQb([
       { market_id: '20', amount: '120000' },
@@ -189,7 +220,9 @@ describe('OrderSettlementService settlement (FIFO)', () => {
     const response: any = await service.getFinancialBalanceSettlementSummary();
 
     expect(response.data).toEqual({
+      chain_receivable: 290000,
       branch_receivable: 200000,
+      hq_receivable: 90000,
       market_payable: 150000,
       branches: [
         { branch_id: '10', amount: 150000 },
@@ -200,6 +233,10 @@ describe('OrderSettlementService settlement (FIFO)', () => {
         { market_id: '21', amount: 30000 },
       ],
     });
+    // Filtr olib tashlangani tasdiqlanadi: endi branch_id bo'yicha shart yo'q.
+    expect(branchQb.andWhere).not.toHaveBeenCalledWith(
+      'settlement.branch_id IS NOT NULL',
+    );
     expect(branchQb.andWhere).toHaveBeenCalledWith(
       'settlement.status IN (:...statuses)',
       {

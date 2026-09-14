@@ -842,6 +842,66 @@ export class OrderServiceService {
   }
 
   /**
+   * Dalil faylining EGASINI topadi (audit S5).
+   *
+   * ⚠️ NEGA KERAK. Fayl kaliti — o'zi bir "bearer" imkoniyat: kalitni bilgan
+   * har kim signed URL so'ray olardi. Himoya faqat prefiks + rol evristikasi
+   * edi, ya'ni bitta market boshqa marketning moliyaviy dalilini, bitta
+   * kuryer boshqa kuryerning isbotini bemalol ochishi mumkin edi — rol
+   * "market"/"courier" bo'lishining o'zi yetarli edi.
+   *
+   * Haqiqiy egalik munosabati allaqachon bazada bor: dalil fayllari
+   * buyurtmaning `proof_files` ro'yxatida saqlanadi. Shu bois yangi jadval
+   * kerak emas — kalit bo'yicha buyurtmani topib, so'rovchi o'sha buyurtmani
+   * ko'rish huquqiga egami degan savolga javob beriladi.
+   */
+  async findOwnerByProofFile(key: string) {
+    const objectKey = String(key ?? '').trim();
+    if (!objectKey) {
+      return successRes(null, 200, 'Proof file owner');
+    }
+
+    const order = await this.orderRepo
+      .createQueryBuilder('order')
+      .select([
+        'order.id',
+        'order.market_id',
+        'order.courier_id',
+        'order.holder_courier_id',
+        'order.branch_id',
+        'order.holder_branch_id',
+        'order.home_branch_id',
+      ])
+      .where('order.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('order.proof_files @> :key::jsonb', {
+        key: JSON.stringify([objectKey]),
+      })
+      .getOne();
+
+    return successRes(
+      order
+        ? {
+            order_id: String(order.id),
+            market_id: order.market_id ? String(order.market_id) : null,
+            courier_id: order.courier_id ? String(order.courier_id) : null,
+            holder_courier_id: order.holder_courier_id
+              ? String(order.holder_courier_id)
+              : null,
+            branch_id: order.branch_id ? String(order.branch_id) : null,
+            holder_branch_id: order.holder_branch_id
+              ? String(order.holder_branch_id)
+              : null,
+            home_branch_id: order.home_branch_id
+              ? String(order.home_branch_id)
+              : null,
+          }
+        : null,
+      200,
+      'Proof file owner',
+    );
+  }
+
+  /**
    * Check whether a branch is safe to soft-delete from order-service's perspective:
    * counts active (non-closed) orders and active transfer batches that reference it.
    * branch-service consults this before allowing deleteBranch to proceed.
@@ -1016,7 +1076,11 @@ export class OrderServiceService {
         description:
           row.description ??
           noteDescription ??
-          this.custody.describeTrackingAction(action, row.from_status, row.to_status),
+          this.custody.describeTrackingAction(
+            action,
+            row.from_status,
+            row.to_status,
+          ),
         changed_by: row.changed_by,
         changed_by_role: changedByRole,
         actor,

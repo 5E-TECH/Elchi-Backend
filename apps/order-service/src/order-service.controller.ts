@@ -156,6 +156,17 @@ export class OrderServiceController {
     );
   }
 
+  /** Dalil faylining egasi — fayl kirish nazorati uchun (audit S5). */
+  @MessagePattern({ cmd: 'order.find_owner_by_proof_file' })
+  findOwnerByProofFile(
+    @Payload() data: { key?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findOwnerByProofFile(data?.key ?? ''),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.branch_can_delete' })
   branchCanDelete(
     @Payload() data: { branch_id: string },
@@ -577,6 +588,34 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * Bitta filial kesimidagi hisob-kitob yig'indisi (audit C1). Manager paneli
+   * ilgari buni 5 000 tagacha buyurtmani tortib olib JS'da hisoblardi.
+   */
+  @MessagePattern({ cmd: 'order.settlement.branch_summary' })
+  settlementBranchSummary(
+    @Payload() data: { branch_id?: string | null; courier_ids?: string[] },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.settlementService.getBranchSettlementSummary(data ?? {}),
+    );
+  }
+
+  /**
+   * Kargo hisob-kitob qilgan buyurtmalarni HQ'ga yetgan deb belgilash
+   * (audit M5).
+   */
+  @MessagePattern({ cmd: 'order.settlement.provider_settled' })
+  settlementProviderSettled(
+    @Payload() data: { order_ids?: string[]; requester_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.settlementService.markProviderSettledToHq(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.initiate_return' })
   initiateReturn(
     @Payload()
@@ -974,6 +1013,40 @@ export class OrderServiceController {
         data.requester,
       );
     });
+  }
+
+  /**
+   * Filial paneli uchun barcha raqamlar — bazada hisoblanadi (Scale
+   * 1-bosqich). Ilgari branch-service buyurtmalarni 5 000 talab tortib
+   * olib JS'da sanardi.
+   */
+  @MessagePattern({ cmd: 'order.analytics.branch_dashboard' })
+  branchDashboardStats(
+    @Payload()
+    data: {
+      branch_ids?: string[];
+      courier_ids?: string[];
+      start?: string | null;
+      end?: string | null;
+      today_start: string;
+      week_start: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.getBranchDashboardStats(data),
+    );
+  }
+
+  /** Filiallar kesimidagi buyurtma soni — bitta so'rovda (Scale 1-bosqich). */
+  @MessagePattern({ cmd: 'order.analytics.count_by_branch' })
+  countOrdersByBranch(
+    @Payload() data: { branch_ids?: string[]; status?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.countOrdersByBranch(data ?? {}),
+    );
   }
 
   @MessagePattern({ cmd: 'order.analytics.overview' })

@@ -71,3 +71,7 @@ docs/*.pdf
 /backups
 backups/
 *.sql.gz
+
+# k6 yuk testi natijalari (har yurgizishda qayta yoziladi)
+tests/load/summary.json
+tests/load/capacity-summary.json

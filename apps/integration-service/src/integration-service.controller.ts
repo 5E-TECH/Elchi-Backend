@@ -1,5 +1,10 @@
 import { Controller } from '@nestjs/common';
-import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
+import {
+  Ctx,
+  MessagePattern,
+  Payload,
+  RmqContext,
+} from '@nestjs/microservices';
 import { RmqService, executeAndAck } from '@app/common';
 import { IntegrationServiceService } from './integration-service.service';
 
@@ -313,14 +318,20 @@ export class IntegrationServiceController {
   @MessagePattern({ cmd: 'integration.update' })
   update(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.integrationService.updateIntegration(String(data?.id), data?.dto ?? {}),
+      this.integrationService.updateIntegration(
+        String(data?.id),
+        data?.dto ?? {},
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'integration.delete' })
   remove(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.integrationService.deleteIntegration(String(data?.id), data?.requester),
+      this.integrationService.deleteIntegration(
+        String(data?.id),
+        data?.requester,
+      ),
     );
   }
 
@@ -363,7 +374,9 @@ export class IntegrationServiceController {
   @MessagePattern({ cmd: 'integration.payment.list' })
   listPaymentTransactions(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.integrationService.listPaymentTransactions(data?.query ?? data ?? {}),
+      this.integrationService.listPaymentTransactions(
+        data?.query ?? data ?? {},
+      ),
     );
   }
 
@@ -567,6 +580,17 @@ export class IntegrationServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.integrationService.getProviderBalance(data.integration_id),
+    );
+  }
+
+  /**
+   * Barcha kargolarning umumiy qarzi — moliyaviy balans formulasi uchun
+   * (audit M5).
+   */
+  @MessagePattern({ cmd: 'integration.receivable.outstanding_total' })
+  getProviderOutstandingTotal(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.getProviderOutstandingTotal(),
     );
   }
 

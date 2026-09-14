@@ -64,7 +64,7 @@ describe('scanIntake — QR dan buyurtmaga', () => {
     );
   });
 
-  it('⭐ market bog\'lanmagan bo\'lsa ANIQ sabab beradi', async () => {
+  it("⭐ market bog'lanmagan bo'lsa ANIQ sabab beradi", async () => {
     /**
      * Eng ko'p uchraydigan sozlama xatosi (audit EI-02). "400 bad request"
      * operatorga hech narsa bermaydi — ulanish nomi va nima qilish kerakligi
@@ -85,7 +85,7 @@ describe('scanIntake — QR dan buyurtmaga', () => {
     expect(s.searchByQr).not.toHaveBeenCalled();
   });
 
-  it('⭐ QR payloadda bo\'lmasa SKANERLANGAN qiymat qo\'shiladi', async () => {
+  it("⭐ QR payloadda bo'lmasa SKANERLANGAN qiymat qo'shiladi", async () => {
     /**
      * Shu token buyurtmaning `qr_code_token`iga tushadi va posilkani
      * skanerlash keyin ham ishlaydi (yorliq saytda chop etilgan).
@@ -96,7 +96,7 @@ describe('scanIntake — QR dan buyurtmaga', () => {
     expect(payload.orders[0].qr_code).toBe('QR-77');
   });
 
-  it('payloadda QR bor bo\'lsa TEGILMAYDI', async () => {
+  it("payloadda QR bor bo'lsa TEGILMAYDI", async () => {
     const s = svc({
       searchByQr: jest
         .fn()
@@ -110,13 +110,15 @@ describe('scanIntake — QR dan buyurtmaga', () => {
   it('sayt MASSIV qaytarsa ham ishlaydi', async () => {
     // Har sayt boshqacha qaytaradi — ikkisini ham qabul qilamiz.
     const s = svc({
-      searchByQr: jest.fn().mockResolvedValue({ data: [{ id: 'E1' }, { id: 'E2' }] }),
+      searchByQr: jest
+        .fn()
+        .mockResolvedValue({ data: [{ id: 'E1' }, { id: 'E2' }] }),
     });
     await (s as any).scanIntake({ slug: 'donoxon', qr_code: 'QR-1' });
     expect(s.rmqRequestStrict.mock.calls[0][2].orders).toHaveLength(2);
   });
 
-  it('QR bo\'sh bo\'lsa 400', async () => {
+  it("QR bo'sh bo'lsa 400", async () => {
     const s = svc();
     await expect(
       (s as any).scanIntake({ slug: 'donoxon', qr_code: '  ' }),

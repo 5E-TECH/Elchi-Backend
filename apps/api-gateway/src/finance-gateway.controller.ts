@@ -31,10 +31,8 @@ import { RolesGuard } from './auth/roles.guard';
 import {
   Cashbox_type,
   Operation_type,
-  Order_status,
   Roles as RoleEnum,
   Source_type,
-  Where_deliver,
 } from '@app/common';
 import {
   CashboxAllInfoQueryDto,
@@ -504,7 +502,22 @@ export class FinanceGatewayController {
       managerBranchId = this.extractBranchId(managerProfile);
     }
 
-    const branchCouriers: any[] = [];
+    /**
+     * ⚠️ AUDIT C1/C2 — BU BLOK QAYTA YOZILDI.
+     *
+     * Ilgari bu yerda: har bir kuryer uchun alohida identity chaqiruvi, har
+     * biri uchun yana alohida kassa chaqiruvi (20 kuryerli filialda ~45 RMQ
+     * borib-kelishi), so'ng `order.find_all` ni IKKI marta 5 000 qator bilan
+     * chaqirib (~6 MB ma'lumot) JS'da qo'shib chiqish bor edi. Ikki oqibati:
+     *   • sekin — va u order-service bilan bitta event loop'ni bo'lishgani
+     *     uchun sotuv kechikishini ham oshirardi;
+     *   • NOTO'G'RI — filialning jamlanma buyurtmalari 5 000 dan oshgan kuni
+     *     summa jimgina qirqilib, KAM ko'rsata boshlardi.
+     *
+     * Endi: bitta `identity.courier.find_by_ids` (ro'yxat uchun) va bitta
+     * `order.settlement.branch_summary` (yig'indilar bazada SQL SUM bilan).
+     */
+    let courierIds: string[] = [];
     if (managerBranchId) {
       try {
         const branchUsersResponse = await this.sendBranch<{ data?: any[] }>(
@@ -514,180 +527,47 @@ export class FinanceGatewayController {
         const branchUsers = Array.isArray(branchUsersResponse?.data)
           ? branchUsersResponse.data
           : [];
-        const courierAssignments = branchUsers.filter((item: any) => {
-          const role = String(item?.role ?? '').toUpperCase();
-          return role === 'COURIER' && item?.user_id;
-        });
-
-        const loadedCouriers = await Promise.all(
-          courierAssignments.map(async (assignment: any) => {
-            try {
-              const userRes = await this.sendIdentity<{
-                data?: Record<string, any>;
-              }>(
-                { cmd: 'identity.user.find_by_id' },
-                { id: String(assignment.user_id) },
-              );
-              return userRes?.data ?? null;
-            } catch {
-              return null;
-            }
-          }),
-        );
-
-        branchCouriers.push(...loadedCouriers.filter(Boolean));
+        courierIds = branchUsers
+          .filter(
+            (item: any) =>
+              String(item?.role ?? '').toUpperCase() === 'COURIER' &&
+              item?.user_id,
+          )
+          .map((item: any) => String(item.user_id));
       } catch {
-        // fallthrough to generic identity list below
+        // fallthrough: ro'yxatsiz ham yig'indilar filial bo'yicha chiqadi
       }
     }
 
-    let couriers = branchCouriers;
-    if (!couriers.length) {
-      const couriersResponse = await this.sendIdentity<{
-        data?: { items?: any[] };
-      }>(
-        { cmd: 'identity.user.find_all' },
-        { query: { role: RoleEnum.COURIER, limit: 1000, page: 1 } },
-      );
-      const allCouriers = couriersResponse?.data?.items ?? [];
-      couriers = allCouriers.filter((courier) => {
-        const sameCreator =
-          String(courier?.created_by ?? '') === String(user.sub);
-        const sameBranch =
-          String(courier?.branch_id ?? '') &&
-          String(courier?.branch_id ?? '') === String(managerBranchId ?? '');
-        return sameCreator || sameBranch;
-      });
-    }
+    const couriers: any[] = courierIds.length
+      ? ((
+          await this.sendIdentity<{ data?: any[] }>(
+            { cmd: 'identity.courier.find_by_ids' },
+            { ids: courierIds },
+          ).catch(() => null)
+        )?.data ?? [])
+      : [];
 
-    const courierTariffMap = new Map(
-      couriers.map((courier) => [
-        String(courier?.id ?? ''),
-        {
-          home: Number(courier?.tariff_home ?? 0),
-          center: Number(courier?.tariff_center ?? 0),
-        },
-      ]),
-    );
+    const settlementSummary = await this.sendOrder<{
+      data?: { branch_payable?: number; courier_receivable?: number };
+    }>(
+      { cmd: 'order.settlement.branch_summary' },
+      { branch_id: managerBranchId || null, courier_ids: courierIds },
+    ).catch(() => null);
 
-    const courierCashboxes = await Promise.all(
-      couriers.map(async (courier) => {
-        const courierId = String(courier?.id ?? '').trim();
-        const cashboxRes = await this.send(
-          { cmd: 'finance.cashbox.find_by_user' },
-          {
-            user_id: courierId,
-            cashbox_type: Cashbox_type.FOR_COURIER,
-            with_history: false,
-          },
-        ).catch(() => null);
-        const cashbox = cashboxRes?.data?.cashbox ?? cashboxRes?.data ?? null;
-        return {
-          courierId,
-          balance: Number(cashbox?.balance ?? 0),
-        };
-      }),
-    );
-    const olinishiKerak = courierCashboxes.reduce(
-      (sum, item) => sum + Math.max(Number(item.balance ?? 0), 0),
+    // Kuryerlar filialga qancha qarz (hali topshirmagan naqd).
+    const olinishiKerak = Math.max(
+      Number(settlementSummary?.data?.courier_receivable ?? 0),
       0,
     );
-
-    const courierIds = couriers
-      .map((courier) => String(courier?.id ?? '').trim())
-      .filter(Boolean);
-
-    const soldOrderQuery = {
-      status: [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID],
-      page: 1,
-      limit: 5000,
-      start_day: query?.fromDate,
-      end_day: query?.toDate,
-    };
-    const [branchSoldOrdersResponse, courierSoldOrdersResponse] =
-      await Promise.all([
-        managerBranchId
-          ? this.sendOrder(
-              { cmd: 'order.find_all' },
-              {
-                query: {
-                  ...soldOrderQuery,
-                  branch_id: managerBranchId,
-                },
-              },
-            ).catch(() => null)
-          : Promise.resolve(null),
-        courierIds.length
-          ? this.sendOrder(
-              { cmd: 'order.find_all' },
-              {
-                query: {
-                  ...soldOrderQuery,
-                  courier_ids: courierIds,
-                },
-              },
-            ).catch(() => null)
-          : Promise.resolve(null),
-      ]);
-
-    const extractOrders = (response: any): any[] => {
-      const rows =
-        response?.data?.data ?? response?.data?.items ?? response?.data ?? [];
-      return Array.isArray(rows) ? rows : [];
-    };
-    const soldOrders = Array.from(
-      new Map(
-        [
-          ...extractOrders(branchSoldOrdersResponse),
-          ...extractOrders(courierSoldOrdersResponse),
-        ].map((order: any) => [String(order?.id ?? ''), order]),
-      ).values(),
-    );
-
-    const calculateOrderAmounts = (order: any) => {
-      const totalPrice = Math.max(Number(order?.total_price ?? 0), 0);
-      const whereDeliver = String(order?.where_deliver ?? '').toLowerCase();
-      const courierId = String(order?.courier_id ?? '').trim();
-      // Prefer the snapshotted courier_share (what the courier actually KEEPS —
-      // 0 for SALARY_ONLY couriers) so this display matches the authoritative
-      // settlement ledger. Fall back to the snapshotted tariff, then live tariff
-      // for older orders that predate share snapshots. (Audit I4.)
-      const courierShareFromOrder = Number(order?.courier_share ?? NaN);
-      const courierTariffFromOrder = Number(order?.courier_tariff ?? NaN);
-      const courierTariffByUser =
-        courierId && courierTariffMap.has(courierId)
-          ? whereDeliver === String(Where_deliver.CENTER).toLowerCase()
-            ? Number(courierTariffMap.get(courierId)?.center ?? 0)
-            : Number(courierTariffMap.get(courierId)?.home ?? 0)
-          : 0;
-      const courierShare = Math.max(
-        Number.isFinite(courierShareFromOrder)
-          ? courierShareFromOrder
-          : Number.isFinite(courierTariffFromOrder)
-            ? courierTariffFromOrder
-            : courierTariffByUser,
-        0,
-      );
-      const branchCashboxAmountFromOrder = Number(
-        order?.branch_cashbox_amount ?? NaN,
-      );
-      const branchShare = Math.max(Number(order?.branch_share ?? 0), 0);
-      const hqPayable = Math.max(
-        Number.isFinite(branchCashboxAmountFromOrder)
-          ? branchCashboxAmountFromOrder
-          : totalPrice - courierShare - branchShare,
-        0,
-      );
-
-      return {
-        courierId,
-        courierReceivable: Math.max(totalPrice - courierShare, 0),
-        hqPayable,
-      };
-    };
-
-    const berilishiKerak = soldOrders.reduce(
-      (sum, order) => sum + calculateOrderAmounts(order).hqPayable,
+    /**
+     * Filial HQ'ga qancha qarz. Ledger faqat HQ'ga YETIB KELMAGAN
+     * buyurtmalarni sanaydi (topshirilganlari BRANCH_SETTLED bo'lib chiqib
+     * ketadi), shuning uchun ilgarigidek "to'langanini ayirish" kerak emas —
+     * o'sha ayirish sana oynasiga bog'liq edi va noto'g'ri natija berardi.
+     */
+    const berilishiKerak = Math.max(
+      Number(settlementSummary?.data?.branch_payable ?? 0),
       0,
     );
 
@@ -718,15 +598,11 @@ export class FinanceGatewayController {
       },
       0,
     );
-    const remainingPayableToHq = Math.max(
-      Math.round(berilishiKerak) - paidToHq,
-      0,
-    );
-
     return {
       kassa,
-      olinishi_kerak: Math.max(olinishiKerak, 0),
-      berilishi_kerak: remainingPayableToHq,
+      olinishi_kerak: olinishiKerak,
+      berilishi_kerak: berilishiKerak,
+      // Tanlangan davrda HQ'ga topshirilgan summa — ma'lumot uchun.
       hq_ga_tollangan: paidToHq,
       counterparty: 'HQ',
       cashbox: ownCashbox,
@@ -1889,28 +1765,32 @@ export class FinanceGatewayController {
       this.hasRole(req?.user, RoleEnum.MARKET) &&
       !this.isPrivileged(req?.user)
     ) {
-      return this.attachCreatedByUsersToHistoryResponse(await this.send(
-        { cmd: 'finance.history.find_all' },
-        {
-          ...query,
-          user_id: String(req.user.sub),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-        },
-      ));
+      return this.attachCreatedByUsersToHistoryResponse(
+        await this.send(
+          { cmd: 'finance.history.find_all' },
+          {
+            ...query,
+            user_id: String(req.user.sub),
+            cashbox_type: Cashbox_type.FOR_MARKET,
+          },
+        ),
+      );
     }
 
     if (
       this.hasRole(req?.user, RoleEnum.COURIER) &&
       !this.isPrivileged(req?.user)
     ) {
-      return this.attachCreatedByUsersToHistoryResponse(await this.send(
-        { cmd: 'finance.history.find_all' },
-        {
-          ...query,
-          user_id: String(req.user.sub),
-          cashbox_type: Cashbox_type.FOR_COURIER,
-        },
-      ));
+      return this.attachCreatedByUsersToHistoryResponse(
+        await this.send(
+          { cmd: 'finance.history.find_all' },
+          {
+            ...query,
+            user_id: String(req.user.sub),
+            cashbox_type: Cashbox_type.FOR_COURIER,
+          },
+        ),
+      );
     }
 
     if (
@@ -1992,12 +1872,14 @@ export class FinanceGatewayController {
       query.cashboxType,
     );
 
-    return this.attachCreatedByUsersToHistoryResponse(await this.send(
-      { cmd: 'finance.history.find_all' },
-      hasCashboxSelector
-        ? query
-        : { ...query, cashbox_type: Cashbox_type.MAIN },
-    ));
+    return this.attachCreatedByUsersToHistoryResponse(
+      await this.send(
+        { cmd: 'finance.history.find_all' },
+        hasCashboxSelector
+          ? query
+          : { ...query, cashbox_type: Cashbox_type.MAIN },
+      ),
+    );
   }
 
   @Get('history/:id')

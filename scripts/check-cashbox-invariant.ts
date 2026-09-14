@@ -172,8 +172,8 @@ async function main(): Promise<void> {
   // production cash path stops advancing order_settlement (the split-brain
   // failure), settlement rows pile up at PENDING while cashboxes keep moving.
   // This section surfaces that drift. It never changes the exit code (the SQL
-  // spans two schemas and tolerates extra-cost/correction noise), so it cannot
-  // false-fail the migration gate — but it gives ops a real divergence signal.
+  // spans two schemas), so it cannot false-fail the migration gate — but it
+  // gives ops a real divergence signal.
   // -----------------------------------------------------------------
   // Lifted so --reconcile-strict can fail/alert on it after the report below.
   let reconDiverging: Array<{
@@ -223,8 +223,19 @@ async function main(): Promise<void> {
       ORDER BY ABS(cb.balance - COALESCE(SUM(os.market_amount),0)) DESC
       LIMIT 20
     `);
-    const RECON_TOL = 1; // som; absorbs extra-cost/correction noise
-    const diverging = marketRecon.filter((m) => Math.abs(Number(m.diff)) > RECON_TOL);
+    /**
+     * Tolerantlik (audit M8). Ilgari bu yerda "extra-cost/correction shovqini"
+     * yutilardi: qo'shimcha xarajat market kassasidan yechilardi, lekin
+     * `order_settlement.market_amount` ga kirmasdi — ya'ni ikki manba
+     * TIZIMLI ravishda farq qilardi va haqiqiy nomuvofiqlik ham o'sha
+     * farqning ichida yashirinardi. Endi `market_amount` extra_cost'ni
+     * hisobga oladi, shuning uchun bu chegara faqat tiyin yaxlitlashini
+     * yutadi.
+     */
+    const RECON_TOL = 1; // som; faqat yaxlitlash
+    const diverging = marketRecon.filter(
+      (m) => Math.abs(Number(m.diff)) > RECON_TOL,
+    );
     reconDiverging = diverging;
     if (diverging.length) {
       console.log(
@@ -239,7 +250,9 @@ async function main(): Promise<void> {
         '       (large/persistent diffs = settlement not advancing with the cashbox — investigate.)',
       );
     } else {
-      console.log('\n✅ Settlement ledger reconciles with FOR_MARKET cashboxes (within tol).');
+      console.log(
+        '\n✅ Settlement ledger reconciles with FOR_MARKET cashboxes (within tol).',
+      );
     }
   } catch (err) {
     console.log(

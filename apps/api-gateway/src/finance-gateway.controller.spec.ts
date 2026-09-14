@@ -188,7 +188,14 @@ describe('FinanceGatewayController', () => {
     );
   });
 
-  it('counts courier-sold branch orders as branch payable before courier cash is accepted', async () => {
+  /**
+   * AUDIT C1/C2. Ilgari manager paneli bu ikki raqamni gateway'da hisoblardi:
+   * har kuryer uchun alohida identity+kassa chaqiruvi va `order.find_all` ni
+   * IKKI marta 5 000 qator bilan tortib olish. Filialning jamlanma
+   * buyurtmalari 5 000 dan oshgan kuni summa jimgina qirqilib KAM ko'rsata
+   * boshlardi. Endi yig'indi ledgerdan, SQL SUM bilan keladi.
+   */
+  it('yig`indilarni settlement ledgeridan oladi, buyurtmalarni tortmaydi', async () => {
     const {
       controller,
       financeClient,
@@ -197,96 +204,44 @@ describe('FinanceGatewayController', () => {
       orderClient,
     } = setup();
 
-    financeClient.send.mockImplementation(
-      (pattern: { cmd: string }, payload: any) => {
-        if (pattern.cmd === 'finance.cashbox.my') {
-          return of({
-            data: {
-              cashbox: {
-                id: 'branch-cashbox-16',
-                user_id: '16',
-                cashbox_type: 'branch',
-                balance: 0,
-              },
+    financeClient.send.mockImplementation((pattern: { cmd: string }) => {
+      if (pattern.cmd === 'finance.cashbox.my') {
+        return of({
+          data: {
+            cashbox: {
+              id: 'branch-cashbox-16',
+              user_id: '16',
+              cashbox_type: 'branch',
+              balance: 0,
             },
-          });
-        }
-        if (pattern.cmd === 'finance.cashbox.find_by_user') {
-          expect(payload).toEqual(
-            expect.objectContaining({
-              user_id: 'courier-1',
-              cashbox_type: 'for_courier',
-            }),
-          );
-          return of({
-            data: {
-              cashbox: {
-                id: 'courier-cashbox-1',
-                user_id: 'courier-1',
-                cashbox_type: 'for_courier',
-                balance: 90_000,
-              },
-            },
-          });
-        }
-        if (pattern.cmd === 'finance.history.find_all') {
-          return of({ data: { items: [] } });
-        }
-        return of({ data: {} });
-      },
-    );
+          },
+        });
+      }
+      if (pattern.cmd === 'finance.history.find_all') {
+        return of({ data: { items: [] } });
+      }
+      return of({ data: {} });
+    });
 
-    identityClient.send.mockImplementation(
-      (pattern: { cmd: string }, payload: any) => {
-        if (
-          pattern.cmd === 'identity.user.find_by_id' &&
-          payload.id === 'manager-1'
-        ) {
-          return of({
-            data: { id: 'manager-1', tariff_home: 10_000, tariff_center: 0 },
-          });
-        }
-        if (
-          pattern.cmd === 'identity.user.find_by_id' &&
-          payload.id === 'courier-1'
-        ) {
-          return of({
-            data: { id: 'courier-1', tariff_home: 10_000, tariff_center: 0 },
-          });
-        }
-        return of({ data: {} });
-      },
-    );
+    identityClient.send.mockImplementation((pattern: { cmd: string }) => {
+      if (pattern.cmd === 'identity.courier.find_by_ids') {
+        return of({ data: [{ id: 'courier-1', name: 'Kuryer' }] });
+      }
+      return of({ data: { id: 'manager-1', branch_id: '16' } });
+    });
 
     branchClient.send.mockReturnValue(
-      of({
-        data: [{ user_id: 'courier-1', role: 'COURIER' }],
-      }),
+      of({ data: [{ user_id: 'courier-1', role: 'COURIER' }] }),
     );
 
-    orderClient.send.mockImplementation(
-      (pattern: { cmd: string }, payload: any) => {
-        if (pattern.cmd !== 'order.find_all') return of({ data: [] });
-        if (payload.query?.branch_id === '16') {
-          return of({ data: [] });
-        }
-        if (payload.query?.courier_ids?.includes('courier-1')) {
-          return of({
-            data: [
-              {
-                id: 'order-1',
-                total_price: 100_000,
-                courier_id: 'courier-1',
-                courier_share: 10_000,
-                where_deliver: 'home',
-                createdAt: '2026-08-17T00:00:00.000Z',
-              },
-            ],
-          });
-        }
-        return of({ data: [] });
-      },
-    );
+    orderClient.send.mockImplementation((pattern: { cmd: string }) => {
+      if (pattern.cmd === 'order.settlement.branch_summary') {
+        return of({
+          data: { branch_payable: 90_000, courier_receivable: 90_000 },
+        });
+      }
+      return of({ data: {} });
+    });
 
     const response = await (controller as any).buildManagerSettlement({
       sub: 'manager-1',
@@ -296,9 +251,37 @@ describe('FinanceGatewayController', () => {
 
     expect(response.olinishi_kerak).toBe(90_000);
     expect(response.berilishi_kerak).toBe(90_000);
+
+    // C1: buyurtmalar endi umuman tortilmaydi.
+    const orderCmds = orderClient.send.mock.calls.map(
+      (call: any[]) => call[0]?.cmd,
+    );
+    expect(orderCmds).not.toContain('order.find_all');
+    expect(orderCmds).toContain('order.settlement.branch_summary');
+
+    // C2: kuryerlar bitta to'plamli chaqiruv bilan olinadi, har biri uchun
+    // alohida emas.
+    const identityCmds = identityClient.send.mock.calls.map(
+      (call: any[]) => call[0]?.cmd,
+    );
+    expect(identityCmds).toContain('identity.courier.find_by_ids');
+    expect(
+      identityCmds.filter((cmd: string) => cmd === 'identity.user.find_by_id')
+        .length,
+    ).toBeLessThanOrEqual(1);
+    // Kuryer kassalari endi bittalab so'ralmaydi.
+    const financeCmds = financeClient.send.mock.calls.map(
+      (call: any[]) => call[0]?.cmd,
+    );
+    expect(financeCmds).not.toContain('finance.cashbox.find_by_user');
   });
 
-  it('uses snapshotted branch net amount for manager-to-HQ payable', async () => {
+  /**
+   * Ledger faqat HQ'ga yetib kelmagan buyurtmalarni sanaydi, shuning uchun
+   * "to'langanini ayirish" kerak emas — ilgari o'sha ayirish sana oynasiga
+   * bog'liq edi va davr tanlanganda raqam noto'g'ri chiqardi.
+   */
+  it('to`langan summani ikkinchi marta ayirmaydi', async () => {
     const {
       controller,
       financeClient,
@@ -307,87 +290,26 @@ describe('FinanceGatewayController', () => {
       orderClient,
     } = setup();
 
-    financeClient.send.mockImplementation(
-      (pattern: { cmd: string }, payload: any) => {
-        if (pattern.cmd === 'finance.cashbox.my') {
-          return of({
-            data: {
-              cashbox: {
-                id: 'branch-cashbox-16',
-                user_id: '16',
-                cashbox_type: 'branch',
-                balance: 0,
-              },
-            },
-          });
-        }
-        if (pattern.cmd === 'finance.cashbox.find_by_user') {
-          return of({
-            data: {
-              cashbox: {
-                id: 'courier-cashbox-1',
-                user_id: payload.user_id,
-                cashbox_type: 'for_courier',
-                balance: 290_000,
-              },
-            },
-          });
-        }
-        if (pattern.cmd === 'finance.history.find_all') {
-          return of({ data: { items: [] } });
-        }
-        return of({ data: {} });
-      },
-    );
-
-    identityClient.send.mockImplementation(
-      (pattern: { cmd: string }, payload: any) => {
-        if (
-          pattern.cmd === 'identity.user.find_by_id' &&
-          payload.id === 'manager-1'
-        ) {
-          return of({
-            data: { id: 'manager-1', tariff_home: 50_000, branch_id: '16' },
-          });
-        }
-        if (
-          pattern.cmd === 'identity.user.find_by_id' &&
-          payload.id === 'courier-1'
-        ) {
-          return of({ data: { id: 'courier-1', tariff_home: 10_000 } });
-        }
-        return of({ data: {} });
-      },
-    );
-
-    branchClient.send.mockReturnValue(
-      of({
-        data: [{ user_id: 'courier-1', role: 'COURIER' }],
-      }),
-    );
-
-    orderClient.send.mockImplementation(
-      (pattern: { cmd: string }, payload: any) => {
-        if (pattern.cmd !== 'order.find_all') return of({ data: [] });
-        if (payload.query?.branch_id === '16') {
-          return of({
-            data: [
-              {
-                id: 'order-1',
-                total_price: 300_000,
-                courier_id: 'courier-1',
-                courier_share: 10_000,
-                branch_share: 20_000,
-                branch_cashbox_amount: 270_000,
-                where_deliver: 'home',
-                createdAt: '2026-08-17T00:00:00.000Z',
-              },
-            ],
-          });
-        }
-        return of({ data: [] });
-      },
-    );
+    financeClient.send.mockImplementation((pattern: { cmd: string }) => {
+      if (pattern.cmd === 'finance.cashbox.my') {
+        return of({
+          data: { cashbox: { id: 'c16', user_id: '16', balance: 0 } },
+        });
+      }
+      if (pattern.cmd === 'finance.history.find_all') {
+        // Davr ichida HQ'ga 40 000 topshirilgan.
+        return of({ data: { items: [{ amount: 40_000 }] } });
+      }
+      return of({ data: {} });
+    });
+    identityClient.send.mockReturnValue(of({ data: { id: 'manager-1' } }));
+    branchClient.send.mockReturnValue(of({ data: [] }));
+    orderClient.send.mockImplementation((pattern: { cmd: string }) => {
+      if (pattern.cmd === 'order.settlement.branch_summary') {
+        return of({ data: { branch_payable: 90_000, courier_receivable: 0 } });
+      }
+      return of({ data: {} });
+    });
 
     const response = await (controller as any).buildManagerSettlement({
       sub: 'manager-1',
@@ -395,8 +317,8 @@ describe('FinanceGatewayController', () => {
       branch_id: '16',
     });
 
-    expect(response.olinishi_kerak).toBe(290_000);
-    expect(response.berilishi_kerak).toBe(270_000);
+    expect(response.berilishi_kerak).toBe(90_000);
+    expect(response.hq_ga_tollangan).toBe(40_000);
   });
 
   it('scopes market payment history to the current market cashbox', async () => {

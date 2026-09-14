@@ -33,6 +33,18 @@ export class Shift extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   closed_by!: string | null;
 
+  /**
+   * Smena QAYSI KASSAGA tegishli (audit M7).
+   *
+   * Ilgari smena yopilganda kirim/chiqim butun kompaniya bo'yicha —
+   * barcha kuryer, market, filial va MAIN kassalari bo'yicha — hisoblanardi.
+   * Shu bois "sanab topshirilgan naqd" bilan tizim raqamini solishtirib
+   * bo'lmasdi va kamomadni aniqlaydigan nazorat ishlamasdi. Endi yig'indi
+   * faqat shu kassa bo'yicha olinadi. Sukut: markaziy MAIN kassa ('0').
+   */
+  @Column({ type: 'bigint', nullable: true })
+  cashbox_user_id!: string | null;
+
   @Column({ type: 'timestamptz' })
   opened_at!: Date;
 
