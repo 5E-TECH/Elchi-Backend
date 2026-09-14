@@ -157,5 +157,9 @@
     "moduleNameMapper": {
       "^@app/common(|/.*)$": "<rootDir>/libs/common/src/$1"
     }
+  },
+  "overrides": {
+    "multer": "^2.3.0",
+    "brace-expansion": "^2.0.2"
   }
 }
