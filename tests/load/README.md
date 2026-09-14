@@ -127,6 +127,41 @@ Oxirida skript **buyurtma/kun** ga aylantirilgan xulosa chiqaradi.
 
 ---
 
+## Eng aniq usul: testni SERVERNING O'ZIDA yurgizish
+
+Tashqaridan (internet → Cloudflare → tunnel) o'lchaganda javobga ~200 ms
+tarmoq qo'shiladi va Cloudflare o'zi ham yukni cheklashi mumkin — ya'ni siz
+tizimni emas, yo'lni o'lchaysiz. Server ichidan `http://localhost:3004` ga
+urish bu qatlamlarni butunlay chetlab o'tadi.
+
+```bash
+# 1) Serverga kirish
+ssh elchi
+
+# 2) k6 (bir marta)
+curl -sL https://github.com/grafana/k6/releases/download/v0.54.0/k6-v0.54.0-linux-amd64.tar.gz \
+  | tar xz && sudo mv k6-v0.54.0-linux-amd64/k6 /usr/local/bin/
+
+# 3) Throttle'ni VAQTINCHA ko'tarish (aks holda 429 o'lchanadi, yuk emas)
+cd ~/apps/backend
+echo "THROTTLE_LIMIT=100000" >> .env.production
+docker compose -f docker-compose.prod.yml up -d --no-deps api-gateway
+
+# 4) O'lchov
+BASE_URL=http://localhost:3004 LOGIN_PHONE='+998...' LOGIN_PASSWORD='...' \
+  k6 run tests/load/capacity.js
+
+# 5) Throttle'ni QAYTARISH — bu qadam unutilmasin
+sed -i '/^THROTTLE_LIMIT=100000$/d' .env.production
+docker compose -f docker-compose.prod.yml up -d --no-deps api-gateway
+```
+
+⚠️ k6 o'sha 6 vCPU ni servislar bilan bo'lishadi. 100 req/s gacha ta'siri
+sezilarsiz; undan yuqorida k6 ni boshqa mashinadan yurgizib, `BASE_URL` ni
+serverning ichki manzili qilib qo'yish to'g'riroq.
+
+---
+
 ## Natijani buyurtma/kunga aylantirish
 
 O'lchov `req/s` beradi, savol esa `buyurtma/kun` haqida. Aylantirish:
