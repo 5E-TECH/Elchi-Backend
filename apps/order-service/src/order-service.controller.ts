@@ -1015,6 +1015,40 @@ export class OrderServiceController {
     });
   }
 
+  /**
+   * Filial paneli uchun barcha raqamlar — bazada hisoblanadi (Scale
+   * 1-bosqich). Ilgari branch-service buyurtmalarni 5 000 talab tortib
+   * olib JS'da sanardi.
+   */
+  @MessagePattern({ cmd: 'order.analytics.branch_dashboard' })
+  branchDashboardStats(
+    @Payload()
+    data: {
+      branch_ids?: string[];
+      courier_ids?: string[];
+      start?: string | null;
+      end?: string | null;
+      today_start: string;
+      week_start: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.getBranchDashboardStats(data),
+    );
+  }
+
+  /** Filiallar kesimidagi buyurtma soni — bitta so'rovda (Scale 1-bosqich). */
+  @MessagePattern({ cmd: 'order.analytics.count_by_branch' })
+  countOrdersByBranch(
+    @Payload() data: { branch_ids?: string[]; status?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.countOrdersByBranch(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.analytics.overview' })
   analyticsOverview(
     @Payload()

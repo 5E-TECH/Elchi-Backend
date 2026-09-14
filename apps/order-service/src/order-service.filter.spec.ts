@@ -463,6 +463,76 @@ describe('OrderServiceService filters', () => {
     );
   });
 
+  /**
+   * SCALE 1-BOSQICH. Analitika ilgari oynadagi HAR BIR buyurtmani JS
+   * xotirasiga yuklardi (`getMany()`): kuniga 2 000 buyurtmada 180 kunlik
+   * oyna ~360 ming qator. Endi bazadan bitta yig'indi qatori keladi.
+   */
+  describe('analitika agregatsiyasi bazada', () => {
+    it('getOverviewStats buyurtma qatorlarini umuman yuklamaydi', async () => {
+      const { analytics, qb } = setup();
+      qb.getRawOne.mockResolvedValue({
+        sold_count: '120',
+        revenue: '54000000',
+        profit: '3000000',
+      });
+
+      const res: any = await analytics.getOverviewStats(
+        '2026-01-01',
+        '2026-01-31',
+      );
+
+      expect(qb.getMany).not.toHaveBeenCalled();
+      expect(res.soldAndPaid).toBe(120);
+      expect(res.totalRevenue).toBe(54000000);
+      expect(res.profit).toBe(3000000);
+    });
+
+    it('foyda daftardagi formuladan (snapshotlardan) olinadi', () => {
+      const { analytics } = setup();
+      const sql = (analytics.constructor as any).PROFIT_SQL as string;
+
+      // sell_profit = market_tariff − courier_share − branch_share
+      expect(sql).toContain('o.market_tariff');
+      expect(sql).toContain('o.courier_share');
+      expect(sql).toContain('o.branch_share');
+    });
+
+    it('daromad bandlari Toshkent kuni bo`yicha kesiladi', () => {
+      const { analytics } = setup();
+      const daily = (analytics as any).tashkentPeriodKeySql('daily') as string;
+      const weekly = (analytics as any).tashkentPeriodKeySql(
+        'weekly',
+      ) as string;
+
+      // Ilgari kun SERVER vaqtida (UTC) kesilardi, kalit esa Toshkentda
+      // formatlanardi — ertalab 05:00 gacha sotilgan buyurtma oldingi kunga
+      // tushardi.
+      expect(daily).toContain("AT TIME ZONE 'Asia/Tashkent'");
+      expect(daily).toContain("date_trunc('day'");
+      expect(weekly).toContain("date_trunc('week'");
+    });
+
+    it('getRevenueStats bandlarni bazadan oladi', async () => {
+      const { analytics, qb } = setup();
+      qb.getRawMany.mockResolvedValue([
+        { period_key: '2026-01-05', orders_count: '7', revenue: '3500000' },
+      ]);
+
+      const res: any = await analytics.getRevenueStats(
+        '2026-01-01',
+        '2026-01-31',
+        'daily',
+      );
+
+      expect(qb.getMany).not.toHaveBeenCalled();
+      expect(res.summary.totalOrders).toBe(7);
+      expect(res.summary.totalRevenue).toBe(3500000);
+      const filled = res.data.find((row: any) => row.ordersCount > 0);
+      expect(filled.period).toBe('2026-01-05');
+    });
+  });
+
   // Audit (unbounded query): getRevenueStats/getMarketStat load individual
   // order rows for the range and aggregate in JS. analyticsDateRange must cap
   // the span so a pathologically-wide range can't pull the whole orders table.
