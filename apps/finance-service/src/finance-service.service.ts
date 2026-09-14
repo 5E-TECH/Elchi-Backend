@@ -2627,7 +2627,9 @@ export class FinanceServiceService implements OnModuleInit {
       );
       const settlementResponse = await rmqSend<{
         data?: {
+          chain_receivable?: number;
           branch_receivable?: number;
+          hq_receivable?: number;
           market_payable?: number;
           branches?: Array<{ branch_id: string; amount: number }>;
           markets?: Array<{ market_id: string; amount: number }>;
@@ -2638,20 +2640,59 @@ export class FinanceServiceService implements OnModuleInit {
         {},
       );
       const settlement = settlementResponse?.data ?? {};
-      const branchReceivable = Math.max(
-        Number(settlement.branch_receivable ?? 0),
-        0,
+
+      /**
+       * ⚠️ AUDIT M1 — KOMPANIYA HOLATI FORMULASI.
+       *
+       * Eski formula: `main + branch_receivable − market_payable`. Ikki xato
+       * bor edi: (1) `branch_receivable` faqat filialga bog'langan
+       * buyurtmalarni hisoblardi, HQ kuryerlaridagi pul esa umuman
+       * ko'rinmasdi; (2) `couriersTotalBalanse` javobda 0 deb qotib qolgan
+       * edi. Marketga qarz esa sotuv paytida darhol yozilgani uchun, natija
+       * har bir "yo'ldagi" buyurtma qiymatiga manfiyga og'ardi — ya'ni
+       * kompaniya o'zini yo'q qarz bilan ko'rsatardi.
+       *
+       * Yangi formula har somni AYNAN BIR MARTA sanaydi:
+       *
+       *   holat = MAIN + zanjirdagi qarz − marketga qarz
+       *
+       * `zanjirdagi qarz` (`chain_receivable`) — sotilgan, lekin hali HQ'ga
+       * yetib kelmagan pul: kuryerda ham, filialda ham bo'lishi mumkin, lekin
+       * buyurtma boshiga bir marta hisoblanadi (`order_settlement.branch_amount`,
+       * holati PENDING yoki COURIER_SETTLED). Shu bois kassa yig'indilari
+       * (kuryer/filial) bu yerga QO'SHILMAYDI — ular ayni pulning ikkinchi
+       * ko'rinishi.
+       *
+       * Kassa yig'indilari operatsion ko'rinish sifatida javobda qoladi.
+       */
+      const chainReceivable = Number(
+        settlement.chain_receivable ?? settlement.branch_receivable ?? 0,
       );
-      const marketPayable = Math.max(marketCashboxTotal, 0);
-      const difference = branchReceivable - marketPayable;
+      const branchReceivable = Number(settlement.branch_receivable ?? 0);
+      const hqReceivable = Number(settlement.hq_receivable ?? 0);
+      const [courierCashboxTotal, branchCashboxTotal] = await Promise.all([
+        this.sumCashboxBalanceByType(Cashbox_type.FOR_COURIER),
+        this.sumCashboxBalanceByType(Cashbox_type.BRANCH),
+      ]);
+      const marketPayable = marketCashboxTotal;
+      const difference = chainReceivable - marketPayable;
       const currentSituation = Number(mainCashbox.balance) + difference;
 
       return this.successRes(
         {
           currentSituation,
           main: mainCashbox,
+          chain: {
+            chainReceivable,
+            branchReceivable,
+            hqReceivable,
+          },
           branches: {
             branchReceivable,
+            // Filiallar JISMONAN ushlab turgan naqd (kuryerdan qabul qilingan,
+            // HQ'ga hali topshirilmagan). Holat formulasiga kirmaydi —
+            // u allaqachon `chainReceivable` ichida.
+            branchCashboxTotal,
             items: settlement.branches ?? [],
           },
           markets: {
@@ -2660,10 +2701,12 @@ export class FinanceServiceService implements OnModuleInit {
           },
           couriers: {
             allCourierCashboxes: [],
-            couriersTotalBalanse: 0,
+            // Kuryerlar qo'lidagi yig'indi qarz — ma'lumot uchun (ilgari
+            // 0 deb qotib qolgan edi).
+            couriersTotalBalanse: courierCashboxTotal,
           },
           difference,
-          formula: 'main_cashbox + branch_receivable - market_cashbox_payable',
+          formula: 'main_cashbox + chain_receivable - market_cashbox_payable',
         },
         200,
         'Financial balance infos',

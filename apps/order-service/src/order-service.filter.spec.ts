@@ -360,30 +360,6 @@ describe('OrderServiceService filters', () => {
     expect(qb.andWhere).toHaveBeenCalledWith('order.canceled_post_id IS NULL');
   });
 
-  it('credits the tariff-adjusted branch payable for manager-direct sales', () => {
-    const { lifecycle } = setup();
-
-    const amount = (lifecycle as any).resolveBranchCashboxSaleAmount(
-      1_000_000,
-      950_000,
-      true,
-    );
-
-    expect(amount).toBe(950_000);
-  });
-
-  it('keeps the existing tariff-adjusted branch amount for courier sales', () => {
-    const { lifecycle } = setup();
-
-    const amount = (lifecycle as any).resolveBranchCashboxSaleAmount(
-      1_000_000,
-      940_000,
-      false,
-    );
-
-    expect(amount).toBe(940_000);
-  });
-
   it('always deducts manager tariff from the amount payable to HQ', () => {
     const { lifecycle } = setup();
 

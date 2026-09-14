@@ -366,7 +366,13 @@ describe('FinanceServiceService.myCashbox', () => {
 });
 
 describe('FinanceServiceService.financialBalance', () => {
-  it('uses main + branch receivable - market cashbox payable', async () => {
+  /**
+   * AUDIT M1. Kompaniya holati = MAIN + zanjirdagi qarz − marketga qarz.
+   * "Zanjirdagi qarz" buyurtma boshiga BIR MARTA hisoblanadi (kuryerda ham,
+   * filialda ham bo'lishi mumkin), shuning uchun kassa yig'indilari formulaga
+   * QO'SHILMAYDI — aks holda ayni pul ikki marta sanalardi.
+   */
+  it('uses main + chain receivable - market cashbox payable', async () => {
     const manager = makeManager();
     const { service, cashboxRepo } = makeService(manager);
     cashboxRepo.findOne.mockResolvedValue({
@@ -375,36 +381,71 @@ describe('FinanceServiceService.financialBalance', () => {
       cashbox_type: 'main',
       balance: 500000,
     });
-    // Market total now comes from a SQL SUM (sumCashboxBalanceByType), not a
-    // full-table find(); the full market-cashbox list is no longer returned.
+    // sumCashboxBalanceByType chaqirilish tartibi: market → courier → branch.
+    const getRawOne = jest
+      .fn()
+      .mockResolvedValueOnce({ total: '900000' })
+      .mockResolvedValueOnce({ total: '400000' })
+      .mockResolvedValueOnce({ total: '100000' });
     cashboxRepo.createQueryBuilder = jest.fn().mockReturnValue({
       select: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
-      getRawOne: jest.fn().mockResolvedValue({ total: '999999' }),
+      getRawOne,
     });
     rmqSendMock.mockResolvedValue({
       data: {
+        chain_receivable: 950000,
         branch_receivable: 200000,
-        market_payable: 150000,
+        hq_receivable: 750000,
+        market_payable: 900000,
         branches: [{ branch_id: '10', amount: 200000 }],
-        markets: [{ market_id: '20', amount: 150000 }],
+        markets: [{ market_id: '20', amount: 900000 }],
       },
     });
 
     const response: any = await service.financialBalance();
 
-    expect(response.data.currentSituation).toBe(-299999);
+    // 500 000 + 950 000 − 900 000
+    expect(response.data.currentSituation).toBe(550000);
+    expect(response.data.chain.chainReceivable).toBe(950000);
+    expect(response.data.chain.hqReceivable).toBe(750000);
     expect(response.data.branches.branchReceivable).toBe(200000);
-    expect(response.data.markets.marketPayable).toBe(999999);
-    expect(response.data.markets.marketsTotalBalans).toBe(-999999);
+    expect(response.data.markets.marketPayable).toBe(900000);
+    expect(response.data.markets.marketsTotalBalans).toBe(-900000);
     // The unbounded full list + per-row items array are intentionally gone.
     expect(response.data.markets.allMarketCashboxes).toBeUndefined();
     expect(response.data.markets.items).toBeUndefined();
-    expect(response.data.couriers.couriersTotalBalanse).toBe(0);
+    // Ilgari bu qiymat 0 deb qotib qolgan edi — endi haqiqiy yig'indi.
+    expect(response.data.couriers.couriersTotalBalanse).toBe(400000);
+    expect(response.data.branches.branchCashboxTotal).toBe(100000);
     expect(response.data.formula).toBe(
-      'main_cashbox + branch_receivable - market_cashbox_payable',
+      'main_cashbox + chain_receivable - market_cashbox_payable',
     );
+  });
+
+  it('eski javobga (chain_receivable yo`q) ham chidaydi', async () => {
+    const manager = makeManager();
+    const { service, cashboxRepo } = makeService(manager);
+    cashboxRepo.findOne.mockResolvedValue({
+      id: 'main-1',
+      user_id: '0',
+      cashbox_type: 'main',
+      balance: 0,
+    });
+    cashboxRepo.createQueryBuilder = jest.fn().mockReturnValue({
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({ total: '0' }),
+    });
+    rmqSendMock.mockResolvedValue({
+      data: { branch_receivable: 120000, markets: [], branches: [] },
+    });
+
+    const response: any = await service.financialBalance();
+
+    expect(response.data.currentSituation).toBe(120000);
   });
 });
 

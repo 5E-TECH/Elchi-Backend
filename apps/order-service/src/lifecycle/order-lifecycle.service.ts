@@ -46,7 +46,6 @@ import {
   computeTariffShortfall,
   resolveOrderTariff,
   resolveSaleActorShare as resolveSaleActorShareAmount,
-  resolveBranchCashboxSaleAmount as resolveBranchCashboxSaleAmountValue,
 } from '../domain/order-money';
 import { OrderLookupService } from '../lookup/order-lookup.service';
 import { OrderCustodyService } from '../custody/order-custody.service';
@@ -716,18 +715,6 @@ export class OrderLifecycleService {
     return resolveSaleActorShareAmount(isManagerSale, financialActor, tariff);
   }
 
-  private resolveBranchCashboxSaleAmount(
-    totalPrice: number,
-    branchPayable: number,
-    isManagerSale: boolean,
-  ): number {
-    return resolveBranchCashboxSaleAmountValue(
-      totalPrice,
-      branchPayable,
-      isManagerSale,
-    );
-  }
-
   /**
    * TARIF QO'RIQCHISI: market tarifi kuryer (+ hamkor filial) ulushini qoplashi
    * SHART, aks holda sotuv rad etiladi.
@@ -815,9 +802,18 @@ export class OrderLifecycleService {
       courier_id: data.courier_id ? String(data.courier_id) : null,
       branch_id: data.branch_id ? String(data.branch_id) : null,
       market_id: data.market_id ? String(data.market_id) : null,
-      courier_amount: Math.max(data.courier_amount, 0),
-      branch_amount: Math.max(data.branch_amount, 0),
-      market_amount: Math.max(data.market_amount, 0),
+      /**
+       * ISHORALI (signed) saqlanadi — audit M10. Ilgari uchala summa ham
+       * `Math.max(x, 0)` bilan qirqilardi, ya'ni arzon mahsulot holatida
+       * (masalan 5 000 so'mlik buyurtma, kuryer tarifi 25 000) ledger 0 yozar,
+       * kassa esa teskari yo'nalishda real oyoq yozardi: HQ'ning kuryerga
+       * ustama to'lovi va marketning HQ oldidagi qarzi ledgerdan butunlay
+       * tushib qolardi. FIFO hisob-kitobi manfiy oyoqni "qarz yo'q" deb
+       * bepul o'tkazadi, shuning uchun qirqishning keragi yo'q.
+       */
+      courier_amount: data.courier_amount,
+      branch_amount: data.branch_amount,
+      market_amount: data.market_amount,
       status,
       courier_to_branch_at,
       courier_to_branch_by: null,
@@ -4799,11 +4795,6 @@ export class OrderLifecycleService {
     const courierIncome = Math.max(totalPrice - courierShare, 0);
     const courierExpense = Math.max(courierShare - totalPrice, 0);
     const branchNet = totalPrice - courierShare - branchShare;
-    const branchCashboxAmount = this.resolveBranchCashboxSaleAmount(
-      totalPrice,
-      branchNet,
-      isManagerRequester,
-    );
     const saleComment =
       totalPrice === 0
         ? "0 so'mlik mahsulot sotuvi"
@@ -4913,32 +4904,24 @@ export class OrderLifecycleService {
         }
       }
 
-      // ---- Branch leg (branch ↔ HQ) — only for non-HQ branch sales ----
-      if (branchCashbox && settlementBranchId) {
-        if (branchCashboxAmount > 0) {
-          await pay({
-            user_id: settlementBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount: branchCashboxAmount,
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: saleComment,
-          });
-        } else if (branchCashboxAmount < 0) {
-          await pay({
-            user_id: settlementBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount: -branchCashboxAmount,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: saleComment,
-          });
-        }
-      }
+      /**
+       * ---- Filial oyog'i SOTUVDA YOZILMAYDI (audit M3) ----
+       *
+       * Ilgari bu yerda filial kassasiga `total − courierShare − branchShare`
+       * INCOME qilib yozilardi. Ayni summa kuryer kassasiga ham yozilardi, va
+       * keyin manager kuryerdan naqdni qabul qilganda filialga YANA yozilardi
+       * (`finance.cashbox.payment_courier`, qabul qiluvchi = BRANCH) — hech
+       * qanday kompensatsiya oyog'isiz. Natijada bitta pul filial kassasida
+       * ikki marta turardi: yo filial qarzi cheksiz shishardi, yo
+       * "filial → MAIN" o'tkazmasi MAIN'ga mavjud bo'lmagan pulni yozardi.
+       *
+       * Endi ma'no bitta: BRANCH kassa qoldig'i = FILIAL JISMONAN USHLAB
+       * TURGAN NAQD. U faqat kuryerdan pul qabul qilinganda ko'payadi va
+       * HQ'ga topshirilganda kamayadi — ya'ni managerning sanab topshiradigan
+       * pulini bildiradi. "Filial HQ'ga qancha qarz" degan savolga esa
+       * `order_settlement.branch_amount` javob beradi (buyurtma boshiga bir
+       * marta, qaysi bo'g'inda turganidan qat'i nazar).
+       */
 
       if (extraCost > 0) {
         await pay({
@@ -4999,7 +4982,10 @@ export class OrderLifecycleService {
           courier_tariff: courierTariff,
           courier_share: courierShare,
           branch_share: branchShare,
-          branch_cashbox_amount: branchCashboxAmount,
+          // Sotuvda filial kassasiga oyoq yozilmaydi (audit M3), shu bois
+          // qaytariladigan summa ham 0. Eski buyurtmalarda bu ustun real
+          // qiymat bilan to'lgan va rollback o'shani aynan teskari qiladi.
+          branch_cashbox_amount: 0,
           comment: finalComment || null,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
         },
@@ -5013,9 +4999,15 @@ export class OrderLifecycleService {
         courier_id: courierCashbox ? actorCourierId : null,
         branch_id: settlementBranchId,
         market_id: order.market_id ? String(order.market_id) : null,
-        courier_amount: courierIncome,
-        branch_amount: Math.max(branchNet, 0),
-        market_amount: marketIncome,
+        // Ishorali summalar (audit M10) + marketning qo'shimcha xarajati
+        // (audit M8): u sotuvda market kassasidan yechiladi, demak marketga
+        // qoladigan haqiqiy summa aynan shuncha kam. Ilgari ledger buni
+        // ko'rmasdi va solishtirish skripti farqni "extra-cost shovqini" deb
+        // kechirardi — ya'ni haqiqiy nomuvofiqlik ham o'sha bag'rikenglik
+        // ichida yashirinardi.
+        courier_amount: totalPrice - courierShare,
+        branch_amount: branchNet,
+        market_amount: totalPrice - marketTariff - extraCost,
         hasCourier: Boolean(courierCashbox),
       });
 
@@ -5980,11 +5972,6 @@ export class OrderLifecycleService {
     const courierIncome = Math.max(price - courierShare, 0);
     const courierExpense = Math.max(courierShare - price, 0);
     const branchNet = price - courierShare - branchShare;
-    const branchCashboxAmount = this.resolveBranchCashboxSaleAmount(
-      price,
-      branchNet,
-      isManagerRequester,
-    );
     const saleComment =
       price === 0
         ? "0 so'mlik mahsulot qisman sotuvi"
@@ -6102,32 +6089,24 @@ export class OrderLifecycleService {
         }
       }
 
-      // ---- Branch leg (non-HQ branch only) ----
-      if (branchCashbox && settlementBranchId) {
-        if (branchCashboxAmount > 0) {
-          await pay({
-            user_id: settlementBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount: branchCashboxAmount,
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: saleComment,
-          });
-        } else if (branchCashboxAmount < 0) {
-          await pay({
-            user_id: settlementBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount: -branchCashboxAmount,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: saleComment,
-          });
-        }
-      }
+      /**
+       * ---- Filial oyog'i SOTUVDA YOZILMAYDI (audit M3) ----
+       *
+       * Ilgari bu yerda filial kassasiga `total − courierShare − branchShare`
+       * INCOME qilib yozilardi. Ayni summa kuryer kassasiga ham yozilardi, va
+       * keyin manager kuryerdan naqdni qabul qilganda filialga YANA yozilardi
+       * (`finance.cashbox.payment_courier`, qabul qiluvchi = BRANCH) — hech
+       * qanday kompensatsiya oyog'isiz. Natijada bitta pul filial kassasida
+       * ikki marta turardi: yo filial qarzi cheksiz shishardi, yo
+       * "filial → MAIN" o'tkazmasi MAIN'ga mavjud bo'lmagan pulni yozardi.
+       *
+       * Endi ma'no bitta: BRANCH kassa qoldig'i = FILIAL JISMONAN USHLAB
+       * TURGAN NAQD. U faqat kuryerdan pul qabul qilinganda ko'payadi va
+       * HQ'ga topshirilganda kamayadi — ya'ni managerning sanab topshiradigan
+       * pulini bildiradi. "Filial HQ'ga qancha qarz" degan savolga esa
+       * `order_settlement.branch_amount` javob beradi (buyurtma boshiga bir
+       * marta, qaysi bo'g'inda turganidan qat'i nazar).
+       */
 
       if (extraCost > 0) {
         await pay({
@@ -6181,7 +6160,10 @@ export class OrderLifecycleService {
           courier_tariff: courierTariff,
           courier_share: courierShare,
           branch_share: branchShare,
-          branch_cashbox_amount: branchCashboxAmount,
+          // Sotuvda filial kassasiga oyoq yozilmaydi (audit M3), shu bois
+          // qaytariladigan summa ham 0. Eski buyurtmalarda bu ustun real
+          // qiymat bilan to'lgan va rollback o'shani aynan teskari qiladi.
+          branch_cashbox_amount: 0,
           return_requested: false,
           comment: finalComment || null,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
@@ -6202,9 +6184,11 @@ export class OrderLifecycleService {
         courier_id: courierCashbox ? actorCourierId : null,
         branch_id: settlementBranchId,
         market_id: order.market_id ? String(order.market_id) : null,
-        courier_amount: courierIncome,
-        branch_amount: Math.max(branchNet, 0),
-        market_amount: marketIncome,
+        // Ishorali summalar + extra_cost ayirmasi — sellOrder bilan bir xil
+        // (audit M8/M10).
+        courier_amount: price - courierShare,
+        branch_amount: branchNet,
+        market_amount: price - marketTariff - extraCost,
         hasCourier: Boolean(courierCashbox),
       });
 
