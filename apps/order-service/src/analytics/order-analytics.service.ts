@@ -40,8 +40,16 @@ export class OrderAnalyticsService {
    * clamped to the most recent window (and logged). Proper fix for arbitrarily
    * wide ranges is a SQL GROUP BY aggregation endpoint — tracked separately.
    */
-  private static readonly MAX_ANALYTICS_SPAN_MS =
-    768 * 24 * 60 * 60 * 1000;
+  /**
+   * Analitika so'rovining eng katta oynasi (audit C3).
+   *
+   * ⚠️ 768 KUN AMALDA CHEGARA EMAS EDI. Kuniga 1 000 buyurtmada bu ~770 ming
+   * qatorni JS xotirasiga yuklash degani — servis xotira shifti 1,5 GB, ya'ni
+   * dashboard OOM bilan yiqilardi. 180 kun (yarim yil) real hisobotlar uchun
+   * yetarli, undan uzoq davrni esa `sold_at` bo'yicha SQL agregatsiyasi bilan
+   * alohida qilish kerak.
+   */
+  private static readonly MAX_ANALYTICS_SPAN_MS = 180 * 24 * 60 * 60 * 1000;
 
   constructor(
     @InjectRepository(Order) private readonly orderRepo: Repository<Order>,
@@ -130,6 +138,35 @@ export class OrderAnalyticsService {
       start = clampedStart;
     }
 
+    return { start, end };
+  }
+
+  /**
+   * Analitika oynasini hal qiladi. `all=true` — "butun davr" tugmasi, lekin u
+   * CHEGARANI CHETLAB O'TMAYDI (audit C3): ilgari `all` berilganda oyna
+   * umuman qo'yilmasdi va so'rov butun `orders` jadvalini JS xotirasiga
+   * yuklardi. Endi u eng katta ruxsat etilgan oynaga (`MAX_ANALYTICS_SPAN_MS`)
+   * teng, bugungi kun bilan tugaydigan davrni beradi va qisqartirish jurnalga
+   * yoziladi — ya'ni raqam "butun davr" emasligi ko'rinadi.
+   */
+  private resolveAnalyticsRange(
+    startDate: string | undefined,
+    endDate: string | undefined,
+    all: boolean,
+  ): { start: Date; end: Date } {
+    if (!all) {
+      return this.analyticsDateRange(startDate, endDate);
+    }
+    const end = new Date();
+    const start = new Date(
+      end.getTime() - OrderAnalyticsService.MAX_ANALYTICS_SPAN_MS,
+    );
+    this.logger.warn(
+      `Analytics 'all' requested; clamped to the last ` +
+        `${Math.round(
+          OrderAnalyticsService.MAX_ANALYTICS_SPAN_MS / 86_400_000,
+        )} days (${start.toISOString()} → ${end.toISOString()})`,
+    );
     return { start, end };
   }
 
@@ -259,8 +296,7 @@ export class OrderAnalyticsService {
         .createQueryBuilder('o')
         .where('o.isDeleted = :isDeleted', { isDeleted: false }),
       branchId,
-    )
-      .select('COUNT(DISTINCT COALESCE(o.parent_order_id, o.id))', 'count');
+    ).select('COUNT(DISTINCT COALESCE(o.parent_order_id, o.id))', 'count');
 
     if (range) {
       query.andWhere('o.createdAt BETWEEN :start AND :end', range);
@@ -563,7 +599,7 @@ export class OrderAnalyticsService {
     branchId?: string,
     all = false,
   ) {
-    const range = all ? null : this.analyticsDateRange(startDate, endDate);
+    const range = this.resolveAnalyticsRange(startDate, endDate, all);
     const soldStatuses = this.soldStatuses();
 
     const soldOrdersQuery = this.applyAnalyticsBranchScope(
@@ -1084,7 +1120,7 @@ export class OrderAnalyticsService {
     endDate?: string,
     all = false,
   ) {
-    const range = all ? null : this.analyticsDateRange(startDate, endDate);
+    const range = this.resolveAnalyticsRange(startDate, endDate, all);
     const soldStatuses = this.soldStatuses();
     const courierPosts = (await this.getAllPostsForAnalytics()).filter(
       (post) => {

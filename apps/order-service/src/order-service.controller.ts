@@ -577,6 +577,20 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * Bitta filial kesimidagi hisob-kitob yig'indisi (audit C1). Manager paneli
+   * ilgari buni 5 000 tagacha buyurtmani tortib olib JS'da hisoblardi.
+   */
+  @MessagePattern({ cmd: 'order.settlement.branch_summary' })
+  settlementBranchSummary(
+    @Payload() data: { branch_id?: string | null; courier_ids?: string[] },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.settlementService.getBranchSettlementSummary(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.initiate_return' })
   initiateReturn(
     @Payload()

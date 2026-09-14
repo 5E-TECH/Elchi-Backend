@@ -468,7 +468,9 @@ describe('OrderServiceService filters', () => {
   // the span so a pathologically-wide range can't pull the whole orders table.
   describe('analytics date-span cap', () => {
     const DAY = 24 * 60 * 60 * 1000;
-    const MAX_SPAN = 768 * DAY;
+    // Audit C3: oyna 768 kundan 180 kunga tushirildi — 768 kun kuniga 1 000
+    // buyurtmada ~770 ming qatorni JS xotirasiga yuklash degani edi.
+    const MAX_SPAN = 180 * DAY;
 
     const revenueSpanMs = (qb: any): number => {
       const call = qb.andWhere.mock.calls.find(

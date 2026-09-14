@@ -212,6 +212,82 @@ export class OrderSettlementService {
     );
   }
 
+  /**
+   * Bitta filial uchun hisob-kitob yig'indisi — SQL `SUM` bilan (audit C1).
+   *
+   * ⚠️ NEGA KERAK BO'LDI. Manager paneli bu raqamlarni gateway'da hisoblardi:
+   * `order.find_all` ni IKKI marta chaqirib (filial bo'yicha va kuryerlar
+   * bo'yicha), har birida 5 000 tagacha buyurtmani (mahsulotlari bilan)
+   * RabbitMQ orqali tortib olib, JS'da qo'shib chiqardi. Sana filtri esa
+   * majburiy emas edi — ya'ni filialning jamlanma buyurtmalari 5 000 dan
+   * oshgan kuni summa JIMGINA qirqilib, KAM ko'rsata boshlardi. Hech qanday
+   * xato ham, log ham yo'q: pul raqami shunchaki noto'g'ri bo'lardi.
+   *
+   * Endi yig'indi ledgerdan, bazada hisoblanadi:
+   *   • `branch_payable` — filial HQ'ga qancha qarz (PENDING + COURIER_SETTLED;
+   *     HQ'ga topshirilgan buyurtmalar allaqachon BRANCH_SETTLED bo'lgani
+   *     uchun o'z-o'zidan chiqib ketadi — ilgari to'langan summani alohida
+   *     ayirish kerak edi va u sana oynasiga bog'liq edi);
+   *   • `courier_receivable` — kuryerlar filialga qancha qarz (PENDING).
+   */
+  async getBranchSettlementSummary(data: {
+    branch_id?: string | null;
+    courier_ids?: string[];
+  }) {
+    const branchId = String(data?.branch_id ?? '').trim();
+    const courierIds = (data?.courier_ids ?? [])
+      .map((id) => String(id ?? '').trim())
+      .filter(Boolean);
+
+    const sumOf = async (
+      column: 'branch_amount' | 'courier_amount',
+      apply: (
+        qb: ReturnType<Repository<OrderSettlement>['createQueryBuilder']>,
+      ) => void,
+      statuses: SettlementStatus[],
+    ): Promise<number> => {
+      const qb = this.orderSettlementRepo
+        .createQueryBuilder('settlement')
+        .select(`COALESCE(SUM(settlement.${column}), 0)`, 'amount')
+        .where('settlement.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('settlement.status IN (:...statuses)', { statuses });
+      apply(qb);
+      const row = await qb.getRawOne<{ amount: string }>();
+      return Number(row?.amount ?? 0) || 0;
+    };
+
+    const [branchPayable, courierReceivable] = await Promise.all([
+      branchId
+        ? sumOf(
+            'branch_amount',
+            (qb) =>
+              qb.andWhere('settlement.branch_id = :branchId', { branchId }),
+            [SettlementStatus.PENDING, SettlementStatus.COURIER_SETTLED],
+          )
+        : Promise.resolve(0),
+      courierIds.length
+        ? sumOf(
+            'courier_amount',
+            (qb) =>
+              qb.andWhere('settlement.courier_id IN (:...courierIds)', {
+                courierIds,
+              }),
+            [SettlementStatus.PENDING],
+          )
+        : Promise.resolve(0),
+    ]);
+
+    return successRes(
+      {
+        branch_id: branchId || null,
+        branch_payable: branchPayable,
+        courier_receivable: courierReceivable,
+      },
+      200,
+      'Branch settlement summary',
+    );
+  }
+
   private static readonly MAIN_CASHBOX_USER_ID = '0';
 
   /** Ensure the singleton MAIN (HQ) cashbox exists before posting to it. */
