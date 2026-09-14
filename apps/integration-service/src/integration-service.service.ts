@@ -2538,11 +2538,24 @@ export class IntegrationServiceService {
     String(process.env.INTEGRATION_ALLOW_PRIVATE_HOSTS ?? '').toLowerCase() ===
     'true';
 
-  // When true, reject signature-valid webhooks that carry no delivery id (for
-  // providers that declared a webhook_id_header) — forces replay protection on.
+  /**
+   * Delivery-id yo'q, imzosi to'g'ri webhookni rad etish (audit S7).
+   *
+   * ⚠️ SUKUT QIYMATI `false` DAN `true` GA O'ZGARTIRILDI. Replay himoyasi
+   * aynan shu id'ga tayanadi: ushlangan haqiqiy webhook qayta-qayta
+   * yuborilsa, faqat delivery-id takrorlanishi uni to'sadi. `false` bo'lsa,
+   * webhook_id_header e'lon qilgan provayder uni yubormay qo'yganida himoya
+   * JIMGINA o'chib qolardi — bu esa himoya yo'qligidan yomonroq, chunki
+   * sozlamada u "bor" bo'lib ko'rinadi.
+   *
+   * Rad etish faqat `webhook_id_header` e'lon qilingan provayderlarga
+   * tegishli. Zarur bo'lsa `INTEGRATION_REQUIRE_DELIVERY_ID=false` bilan
+   * ataylab o'chirish mumkin.
+   */
   private readonly requireDeliveryId =
-    String(process.env.INTEGRATION_REQUIRE_DELIVERY_ID ?? '').toLowerCase() ===
-    'true';
+    String(
+      process.env.INTEGRATION_REQUIRE_DELIVERY_ID ?? 'true',
+    ).toLowerCase() !== 'false';
 
   // Bounds for operator-supplied JSON config blobs (mapping/dispatch/sync).
   private static readonly MAX_CONFIG_BYTES = 64 * 1024; // 64 KB serialized

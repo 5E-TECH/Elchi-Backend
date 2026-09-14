@@ -156,6 +156,17 @@ export class OrderServiceController {
     );
   }
 
+  /** Dalil faylining egasi — fayl kirish nazorati uchun (audit S5). */
+  @MessagePattern({ cmd: 'order.find_owner_by_proof_file' })
+  findOwnerByProofFile(
+    @Payload() data: { key?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findOwnerByProofFile(data?.key ?? ''),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.branch_can_delete' })
   branchCanDelete(
     @Payload() data: { branch_id: string },

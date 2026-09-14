@@ -61,7 +61,11 @@ export class FileGatewayController {
     'video/webm',
   ]);
 
-  constructor(@Inject('FILE') private readonly fileClient: ClientProxy) {}
+  constructor(
+    @Inject('FILE') private readonly fileClient: ClientProxy,
+    // Dalil faylining egasini aniqlash uchun (audit S5).
+    @Inject('ORDER') private readonly orderClient: ClientProxy,
+  ) {}
 
   @Post('files/upload')
   @UseGuards(JwtAuthGuard)
@@ -166,7 +170,18 @@ export class FileGatewayController {
     );
   }
 
-  private assertCanAccessPrivateKey(key: string, roles: string[]): void {
+  /** Faylni faqat o'z buyurtmasi doirasida ko'ra oladigan rollar. */
+  private static readonly SCOPED_FILE_ROLES = new Set<string>([
+    RoleEnum.MARKET,
+    RoleEnum.MARKET_OPERATOR,
+    RoleEnum.COURIER,
+  ]);
+
+  private async assertCanAccessPrivateKey(
+    key: string,
+    req: { user?: { sub?: string; roles?: string[]; branch_id?: string } },
+  ): Promise<void> {
+    const roles = this.rolesOf(req);
     const safeKey = String(key ?? '');
     const isPrivate = FileGatewayController.PRIVATE_KEY_PREFIXES.some(
       (prefix) => safeKey.startsWith(prefix),
@@ -182,6 +197,54 @@ export class FileGatewayController {
         'Bu maxfiy faylga (moliyaviy dalil) kirish uchun ruxsatingiz yetarli emas',
       );
     }
+
+    /**
+     * ⚠️ PER-OBYEKT EGALIK TEKSHIRUVI (audit S5).
+     *
+     * Rol tekshiruvining o'zi "market rolidagi HAR KIM — HAR QANDAY
+     * marketning dalilini" ochishga yo'l qo'yardi (kuryerlar uchun ham
+     * xuddi shunday). Fayl kaliti o'zi bir bearer imkoniyat bo'lgani uchun
+     * bu haqiqiy IDOR edi.
+     *
+     * Egalik munosabati allaqachon bazada: dalil fayllari buyurtmaning
+     * `proof_files` ro'yxatida turadi. Shu bois yangi jadval kerak emas —
+     * kalit bo'yicha buyurtma topiladi va so'rovchi o'sha buyurtmaga
+     * tegishlimi degan savolga javob beriladi. Xodim rollari (admin,
+     * manager, operator, registrator) avvalgidek ishlaydi: ular allaqachon
+     * butun oqimni ko'radi.
+     */
+    const isScoped = roles.some((role) =>
+      FileGatewayController.SCOPED_FILE_ROLES.has(role),
+    );
+    if (!isScoped) {
+      return;
+    }
+
+    const sub = String(req?.user?.sub ?? '');
+    const owner = await firstValueFrom(
+      this.orderClient
+        .send<{
+          data?: {
+            market_id?: string | null;
+            courier_id?: string | null;
+            holder_courier_id?: string | null;
+          } | null;
+        }>({ cmd: 'order.find_owner_by_proof_file' }, { key: safeKey })
+        .pipe(timeout(FILE_RPC_TIMEOUT_MS)),
+    ).catch(() => null);
+
+    const ownerData = owner?.data ?? null;
+    const belongsToRequester =
+      Boolean(ownerData) &&
+      (String(ownerData?.market_id ?? '') === sub ||
+        String(ownerData?.courier_id ?? '') === sub ||
+        String(ownerData?.holder_courier_id ?? '') === sub);
+
+    if (!belongsToRequester) {
+      throw new ForbiddenException(
+        'Bu fayl sizning buyurtmangizga tegishli emas',
+      );
+    }
   }
 
   @Get('files/:key')
@@ -194,16 +257,18 @@ export class FileGatewayController {
     type: Number,
     example: 3600,
   })
-  getFileUrl(
+  async getFileUrl(
     @Param('key') key: string,
-    @Req() req: { user?: { roles?: string[] } },
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
     @Query('expires_in', new ParseIntPipe({ optional: true }))
     expires_in?: number,
   ) {
-    this.assertCanAccessPrivateKey(key, this.rolesOf(req));
-    return this.fileClient
-      .send({ cmd: 'file.get_url' }, { key, expires_in })
-      .pipe(timeout(FILE_RPC_TIMEOUT_MS));
+    await this.assertCanAccessPrivateKey(key, req);
+    return firstValueFrom(
+      this.fileClient
+        .send({ cmd: 'file.get_url' }, { key, expires_in })
+        .pipe(timeout(FILE_RPC_TIMEOUT_MS)),
+    );
   }
 
   // Object-key prefixes that may be served UNAUTHENTICATED (so plain <img src>
