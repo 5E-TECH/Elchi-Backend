@@ -61,8 +61,17 @@ jest.mock('./entities/partner-market-ref.entity', () => ({
 jest.mock('./entities/partner-shipment-ref.entity', () => ({
   PartnerShipmentRef: class PartnerShipmentRef {},
 }));
+jest.mock('./entities/partner-product-ref.entity', () => ({
+  PartnerProductRef: class PartnerProductRef {},
+}));
 jest.mock('./entities/partner-webhook-outbox.entity', () => ({
   PartnerWebhookOutbox: class PartnerWebhookOutbox {},
+}));
+jest.mock('./entities/inbound-deal-ref.entity', () => ({
+  InboundDealRef: class InboundDealRef {},
+}));
+jest.mock('./entities/payment-transaction.entity', () => ({
+  PaymentTransaction: class PaymentTransaction {},
 }));
 
 const SECRET = 'provider-shared-secret';
@@ -115,12 +124,29 @@ function makeService(integration: Record<string, unknown> | null) {
   const partnerShipmentRefRepo: any = {
     findOne: jest.fn().mockResolvedValue(null),
   };
+  const partnerProductRefRepo: any = {
+    findOne: jest.fn().mockResolvedValue(null),
+    create: jest.fn((dto: any) => ({ ...dto })),
+    save: jest.fn(async (e: any) => ({ id: 'ppr1', ...e })),
+  };
   const partnerWebhookOutboxRepo: any = {
     findOne: jest.fn().mockResolvedValue(null),
     find: jest.fn().mockResolvedValue([]),
     create: jest.fn((dto: any) => ({ ...dto })),
     save: jest.fn(async (e: any) => ({ id: 'pwo1', ...e })),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
+  };
+  const inboundDealRefRepo: any = {
+    create: jest.fn((dto: any) => ({ ...dto })),
+    save: jest.fn(async (e: any) => ({ id: 'idr1', ...e })),
+    update: jest.fn().mockResolvedValue(undefined),
+    delete: jest.fn().mockResolvedValue(undefined),
+  };
+  const paymentTxnRepo: any = {
+    create: jest.fn((dto: any) => ({ ...dto })),
+    save: jest.fn(async (e: any) => ({ id: 'ptx1', ...e })),
+    update: jest.fn().mockResolvedValue(undefined),
+    findAndCount: jest.fn().mockResolvedValue([[], 0]),
   };
   const noClient: any = {};
 
@@ -135,11 +161,16 @@ function makeService(integration: Record<string, unknown> | null) {
     partnerRepo,
     partnerMarketRefRepo,
     partnerShipmentRefRepo,
+    partnerProductRefRepo,
     partnerWebhookOutboxRepo,
+    inboundDealRefRepo,
+    paymentTxnRepo,
     activityLog,
     noClient,
     noClient,
     noClient,
+    noClient,
+    // FINANCE klienti (audit M5) — kargo hisob-kitobi MAIN kassaga yoziladi.
     noClient,
   );
   return {
@@ -155,7 +186,15 @@ function baseIntegration(overrides: Record<string, unknown> = {}) {
   return {
     id: '5',
     slug: 'acme-cargo',
+    name: 'Acme Cargo',
     isDeleted: false,
+    /**
+     * ⚠️ `is_active` va `role` 2026-09-13 da QO'SHILDI (audit H1, H2).
+     * Kill-switch endi ikki tomonda ham ishlaydi: o'chirilgan ulanishga
+     * posilka jo'natilmaydi va uning webhooki buyurtmaga QO'LLANMAYDI.
+     */
+    is_active: true,
+    role: 'carrier',
     webhook_secret: SECRET, // plaintext → decryptCredential returns as-is
     webhook_secret_previous: null,
     webhook_signature_header: 'x-signature',
@@ -739,5 +778,91 @@ describe('IntegrationServiceService webhook → order terminal action (D3b)', ()
 
     expect(res.ok).toBe(true);
     expect(res.shipment).toMatchObject({ outcome: 'updated', action: 'sell' });
+  });
+});
+
+describe("⭐ BIR VAQTDA kelgan nusxa — hodisa QO'LLANMAYDI (audit P1)", () => {
+  /**
+   * `receiveWebhook` avval `findOne` bilan `delivery_id` ni tekshiradi,
+   * keyin jurnalga yozadi. Poyga oynasida ikkinchi nusxa oldindan
+   * tekshiruvdan O'TADI, unikal indeks esa uni ushlaydi.
+   *
+   * Ilgari `saveWebhookLog` bu xatoni yutib `null` qaytarardi va
+   * `receiveWebhook` hodisani BARIBIR qo'llardi. Status yangilash uchun bu
+   * zararsiz edi (idempotent), lekin PUL uchun halokatli: bir tranzaksiya
+   * ikki marta qo'llanardi. Shu bois to'lov yo'lidan OLDIN tuzatilishi
+   * shart edi.
+   */
+  const uniqueViolation = Object.assign(new Error('duplicate key'), {
+    code: '23505',
+  });
+
+  it("unique buzilishida hodisa qo'llanmaydi va 200 qaytadi", async () => {
+    const { service, shipmentRepo, webhookLogRepo } =
+      makeService(baseIntegration());
+    webhookLogRepo.save.mockRejectedValueOnce(uniqueViolation);
+    const sig = computeHmacSignature(BODY, SECRET);
+
+    const res: any = await service.receiveWebhook(
+      bodyToInput('acme-cargo', BODY, {
+        'x-signature': sig,
+        'x-delivery-id': 'evt_dup',
+      }),
+    );
+
+    // Provayder uchun bu muvaffaqiyat — u haqiqatan yetkazgan.
+    expect(res.ok).toBe(true);
+    expect(res.code).toBe(200);
+    expect(res.reason).toBe('duplicate');
+    expect(res.replay).toBe(true);
+    // Eng muhimi: posilkaga TEGILMAYDI.
+    expect(shipmentRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('⭐ BOSHQA yozuv xatosida oqim DAVOM etadi', async () => {
+    /**
+     * Ulanish uzilishi yoki ustun sig'masligi — hodisaning O'ZI haqiqiy.
+     * To'xtatsak, provayder 200 olgani uchun qayta yubormaydi va hodisa
+     * JIMGINA yo'qolardi. Audit yozuvi yo'qolishi yomon, lekin hodisani
+     * yo'qotish battar.
+     */
+    const { service, webhookLogRepo } = makeService(baseIntegration());
+    webhookLogRepo.save.mockRejectedValueOnce(
+      Object.assign(new Error('connection lost'), { code: '08006' }),
+    );
+    const sig = computeHmacSignature(BODY, SECRET);
+
+    const res: any = await service.receiveWebhook(
+      bodyToInput('acme-cargo', BODY, {
+        'x-signature': sig,
+        // Delivery-id endi majburiy (audit S7) — bu test aynan YOZUV xatosi
+        // yo'lini tekshiradi, id yo'qligini emas.
+        'x-delivery-id': 'evt_write_error',
+      }),
+    );
+
+    expect(res.ok).toBe(true);
+    expect(res.reason).toBe('accepted');
+  });
+
+  /**
+   * AUDIT S7. Replay himoyasi delivery-id ga tayanadi: ushlangan haqiqiy
+   * webhook qayta yuborilsa, faqat id takrorlanishi uni to'sadi. Ilgari
+   * `INTEGRATION_REQUIRE_DELIVERY_ID` sukut bo'yicha o'chiq edi, ya'ni
+   * `webhook_id_header` e'lon qilgan provayder uni yubormay qo'ysa himoya
+   * JIMGINA o'chib qolardi.
+   */
+  it('⭐ delivery-id siz webhook rad etiladi (S7)', async () => {
+    const { service, shipmentRepo } = makeService(baseIntegration());
+    const sig = computeHmacSignature(BODY, SECRET);
+
+    const res: any = await service.receiveWebhook(
+      bodyToInput('acme-cargo', BODY, { 'x-signature': sig }),
+    );
+
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe(400);
+    expect(res.reason).toBe('missing_delivery_id');
+    expect(shipmentRepo.save).not.toHaveBeenCalled();
   });
 });

@@ -32,6 +32,51 @@ export class Partner extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   webhook_secret_previous!: string | null;
 
+  /**
+   * SANDBOX (sinov) manzili — har bir chiquvchi hodisaning NUSXASI shu yerga
+   * ham yuboriladi.
+   *
+   * NEGA KERAK. Prodakshnga chiqqandan keyin `webhook_url` haqiqiy qabul
+   * qiluvchiga qaratilgan bo'ladi va unga tegib bo'lmaydi. Integratsiyani
+   * tekshirish uchun esa HAQIQIY hodisalar oqimini ko'rish kerak — sinov
+   * buyurtmasi yaratmasdan.
+   *
+   * ⚠️ MUHIM: sandboxga yuborish "eng yaxshi harakat" (best-effort). Uning
+   * xatosi asosiy yetkazishga TA'SIR QILMAYDI va qayta urinilmaydi —
+   * sinov kanali tufayli haqiqiy hodisa `permanently_failed` bo'lib
+   * qolishi mutlaqo qabul qilinmaydi.
+   *
+   * Yuqilgan yukda `sandbox: true` bayrog'i bo'ladi, ya'ni qabul qiluvchi
+   * uni haqiqiy hodisadan ajrata oladi.
+   */
+  @Column({ type: 'varchar', nullable: true })
+  sandbox_webhook_url!: string | null;
+
+  /**
+   * SANDBOX REJIMI — ANIQ KALIT.
+   *
+   * ⚠️ NEGA ALOHIDA USTUN KERAK BO'LDI. Ilgari sandbox'ni "yoqish/o'chirish"
+   * degan tushuncha YO'Q edi: yagona boshqaruv `sandbox_webhook_url` ni
+   * yozish yoki O'CHIRIB TASHLASH bo'lgan. Ya'ni operator sinovni
+   * vaqtincha to'xtatmoqchi bo'lsa manzilni o'chirishi, keyin qaytadan
+   * yozishi kerak edi — va qayerga yozilganini eslab qolishi kerak edi.
+   *
+   * Foydalanuvchi shikoyati: "sandbox va real rejim bir biriga aralashib
+   * ketgan".
+   *
+   * Sukut bo'yicha `false` — mavjud hamkorlarda sandbox JIMGINA yoqilib
+   * qolmasin. Manzili bor, lekin kaliti o'chiq hamkor nusxa OLMAYDI.
+   */
+  @Column({ type: 'boolean', default: false })
+  sandbox_enabled!: boolean;
+
+  /**
+   * Sandbox uchun alohida sekret. Berilmasa ASOSIY sekret ishlatiladi —
+   * ko'p holatda sinov muhiti ayni sekret bilan tekshiradi.
+   */
+  @Column({ type: 'varchar', nullable: true })
+  sandbox_webhook_secret!: string | null;
+
   /** Ixtiyoriy IP allowlist (bo'sh/null = cheklovsiz). */
   @Column({ type: 'jsonb', nullable: true })
   ip_allowlist!: string[] | null;

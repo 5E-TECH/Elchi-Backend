@@ -2,14 +2,63 @@ import { Column, Entity, Index } from 'typeorm';
 import { BaseEntity } from '@app/common';
 
 export type AuthType = 'api_key' | 'login';
+/** TRANSPORT — qanday gaplashamiz. Rol EMAS (`IntegrationRole`ga qara). */
 export type IntegrationType = 'api' | 'webhook' | 'ftp';
 export type IntegrationStatus = 'active' | 'inactive';
+
+/**
+ * INTEGRATSIYANING ROLI — u bizning oqimimizda NIMA QILADI.
+ *
+ * Ilgari faqat `type` (api/webhook/ftp) bor edi — u TRANSPORT, ya'ni
+ * "qanday gaplashamiz". Rol esa "nima qiladi" degan boshqa savol va u
+ * hech qayerda yozilmasdi. Oqibati: UI'da barcha ulanish bir uyumda
+ * ko'rinardi va yetkazuvchini buyurtma manbasidan ajratib bo'lmasdi.
+ *
+ *  `carrier` — BIZDAN posilka oladi va yetkazadi (LDG, BeePost). Biz ularga
+ *              posilka yaratamiz (`dispatch_config`), ular status qaytaradi.
+ *              Pul oqimi bor: ular bizga COD qarzdor.
+ *  `source`  — BIZGA buyurtma beradi (marketplace, do'kon, CRM). Pul oqimi
+ *              teskari: biz ularning tovarini sotamiz.
+ *  `payment` — pul tasdiqlaydi (Payme, Click, bank). Buyurtma yaratmaydi ham,
+ *              olmaydi ham — faqat to'lov holatini bildiradi.
+ *  `mirror`  — faqat O'QISH uchun ko'zgu (Sheets, BI). Hech narsani
+ *              o'zgartirmaydi, shuning uchun xatosi biznesni to'smaydi.
+ */
+export type IntegrationRole = 'carrier' | 'source' | 'payment' | 'mirror';
+
+/**
+ * TIZIM TURI — UI guruhlash va onboarding shabloni uchun.
+ *
+ * `role` bilan TAKRORLANMAYDI: marketplace ham, CRM ham, o'z do'koni ham
+ * `source` roli, lekin ular boshqacha ulanadi (CRM'da voronka webhooki,
+ * marketplace'da buyurtma push'i). Ya'ni rol XULQNI, kategoriya esa
+ * QANDAY SOZLASHNI belgilaydi.
+ */
+export type IntegrationCategory =
+  | 'marketplace'
+  | 'crm'
+  | 'cargo'
+  | 'payment'
+  | 'spreadsheet'
+  | 'other';
+
+/**
+ * ULANISH REJIMI.
+ *
+ *  `spec`    — BIZ kontrakt e'lon qilamiz, ular bajaradi. Kod yozilmaydi,
+ *              faqat hujjat beriladi (yangi marketplace'lar uchun asosiy yo'l).
+ *  `adapter` — BIZ ularga moslashamiz: config-profil (`dispatch_config`,
+ *              `webhook_payload_paths`) orqali. O'zgartirib bo'lmaydigan
+ *              tizimlar uchun (Bitrix, amoCRM, eski cargolar).
+ */
+export type IntegrationMode = 'spec' | 'adapter';
 
 @Entity({ name: 'external_integrations' })
 @Index('IDX_INTEGRATION_SLUG', ['slug'], { unique: true })
 @Index('IDX_INTEGRATION_ACTIVE', ['is_active'])
 @Index('IDX_INTEGRATION_MARKET', ['market_id'])
 @Index('IDX_INTEGRATION_STATUS', ['status'])
+@Index('IDX_INTEGRATION_ROLE', ['role'])
 export class ExternalIntegration extends BaseEntity {
   @Column({ type: 'varchar' })
   name!: string;
@@ -19,6 +68,25 @@ export class ExternalIntegration extends BaseEntity {
 
   @Column({ type: 'varchar', default: 'api' })
   type!: IntegrationType;
+
+  /**
+   * Rol — integratsiya nima qiladi. Batafsil: `IntegrationRole`.
+   *
+   * ⚠️ MAVJUD QATORLAR uchun standart `carrier`: kod semantikasi shuni
+   * ko'rsatadi (`dispatch_config` bilan posilka YARATAMIZ,
+   * `ProviderShipment`/`ProviderReceivable` bilan ularning COD qarzini
+   * yuritamiz). Operator kerak bo'lsa qo'lda to'g'rilaydi.
+   */
+  @Column({ type: 'varchar', default: 'carrier' })
+  role!: IntegrationRole;
+
+  /** Tizim turi — UI guruhlash va onboarding shabloni. */
+  @Column({ type: 'varchar', default: 'other' })
+  category!: IntegrationCategory;
+
+  /** `spec` (biz kontrakt beramiz) yoki `adapter` (biz moslashamiz). */
+  @Column({ type: 'varchar', default: 'adapter' })
+  integration_mode!: IntegrationMode;
 
   @Column({ type: 'varchar', nullable: true })
   base_url!: string | null;
@@ -154,6 +222,94 @@ export class ExternalIntegration extends BaseEntity {
       status?: string;
     };
     timeout_ms?: number;
+  } | null;
+
+  /**
+   * KIRUVCHI BUYURTMA YARATISH — CRM voronkasi uchun (audit P5/P7/EI-10).
+   *
+   * MUAMMO. Kiruvchi webhook faqat BIZ jo'natgan posilkaning statusini
+   * yangilay olardi (`applyWebhookToShipment` → `no_shipment`). CRM esa
+   * teskari ishlaydi: bitim voronkada bosqichdan bosqichga o'tadi va
+   * KERAKLI bosqichga yetganda buyurtma TUG'ILISHI kerak. Voronka/bosqich
+   * tushunchasi kodda umuman yo'q edi.
+   *
+   *   {
+   *     "enabled": true,
+   *     "deal_path": "data.lead",        // bitim obyekti qayerda
+   *     "funnel_path": "pipeline_id",    // voronka id'si (bitim ichida)
+   *     "funnel_id": "7482913",          // FAQAT shu voronka qabul qilinadi
+   *     "stage_path": "status_id",       // bosqich id'si
+   *     "create_on_stages": ["142"],     // FAQAT shu bosqichda yaratiladi
+   *     "create_on_events": ["deal.won"] // yoki hodisa turi bo'yicha
+   *   }
+   *
+   * Maydonlarning O'ZI `field_mapping` dan o'qiladi — u allaqachon
+   * import yo'li uchun ishlaydi (telefon normalizatsiyasi, tuman
+   * aniqlash, mahsulot qatorlari, dublikat tekshiruvi).
+   *
+   * ⚠️ KAMIDA BITTA DARVOZA SHART (`create_on_stages` yoki
+   * `create_on_events`). Darvozasiz har bir webhook buyurtma yaratishga
+   * urinardi — CRM esa "bitim yaratildi" hodisasini manzil va telefon
+   * to'lmasdan OLDIN yuboradi, ya'ni chala buyurtma tug'ilardi. Dublikat
+   * tekshiruvi bundan qutqarmaydi: u birinchi CHALA yozuvni saqlab qolardi.
+   */
+  @Column({ type: 'jsonb', nullable: true })
+  inbound_order_config!: {
+    enabled?: boolean;
+    deal_path?: string;
+    funnel_path?: string;
+    funnel_id?: string;
+    stage_path?: string;
+    create_on_stages?: string[];
+    create_on_events?: string[];
+  } | null;
+
+  /**
+   * ONLAYN TO'LOV SOZLAMASI — `role='payment'` uchun (audit P1/P2).
+   *
+   * MUAMMO. `role='payment'` bazaga yozilardi, lekin undan keyin HECH
+   * QAYERDA o'qilmasdi: mavjud yo'llarning hammasi uni AKTIV rad etardi
+   * (posilka yo'li `role !== 'carrier'`, buyurtma yo'li `role !== 'source'`).
+   * Ya'ni to'lov hodisasi imzo tekshiruvidan o'tib, keyin jimgina
+   * yo'qolardi.
+   *
+   *   {
+   *     "enabled": true,
+   *     "transaction_id_path": "data.transaction.id",
+   *     "amount_path": "data.amount",
+   *     "currency_path": "data.currency",
+   *     "status_path": "data.state",
+   *     "order_ref_path": "data.account.order_id",
+   *     "order_ref_field": "id",
+   *     "status_map": {
+   *       "succeeded": ["paid", "2"],
+   *       "failed": ["cancelled", "-1"],
+   *       "refunded": ["reversed"]
+   *     },
+   *     "amount_in_tiyin": true
+   *   }
+   *
+   * ⚠️ `amount_in_tiyin` — to'lov tizimlari summani TIYINDA yuboradi
+   * (Payme, Click shunday). 100 000 so'm → 10 000 000. Bunday summani
+   * to'g'ridan-to'g'ri yozsak, buyurtma narxidan 100 baravar oshib ketardi
+   * va ortiqcha to'lov darvozasi uni rad etardi — ya'ni HAR BIR to'lov
+   * ishlamasdi va sabab uzoq izlanardi.
+   *
+   * ⚠️ `status_map` SHART. Provayderlarning holat qiymatlari butunlay
+   * boshqacha ("paid", 2, "CONFIRMED") va ularni taxmin qilib bo'lmaydi.
+   * Xaritasiz hech bir hodisa qo'llanmaydi.
+   */
+  @Column({ type: 'jsonb', nullable: true })
+  payment_config!: {
+    enabled?: boolean;
+    transaction_id_path?: string;
+    amount_path?: string;
+    currency_path?: string;
+    status_path?: string;
+    order_ref_path?: string;
+    order_ref_field?: 'id' | 'external_id' | 'qr_code_token';
+    status_map?: Record<string, string[]>;
+    amount_in_tiyin?: boolean;
   } | null;
 
   @Column({ type: 'timestamptz', nullable: true })

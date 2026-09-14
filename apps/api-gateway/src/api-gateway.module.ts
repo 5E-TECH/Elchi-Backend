@@ -9,7 +9,7 @@ import {
 } from '@app/common';
 import { JwtModule } from '@nestjs/jwt';
 import { PassportModule } from '@nestjs/passport';
-import { ThrottlerModule, ThrottlerGuard } from '@nestjs/throttler';
+import { ThrottlerModule } from '@nestjs/throttler';
 import { APP_GUARD } from '@nestjs/core';
 import { JwtStrategy } from './auth/jwt.strategy';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -17,6 +17,7 @@ import { RolesGuard } from './auth/roles.guard';
 import { SelfGuard } from './auth/self.guard';
 import { PartnerApiKeyGuard } from './auth/partner-api-key.guard';
 import { PartnerThrottlerGuard } from './auth/partner-throttler.guard';
+import { ClientIpThrottlerGuard } from './auth/client-ip-throttler.guard';
 import { PartnerGatewayController } from './partner-gateway.controller';
 import { PartnerAdminGatewayController } from './partner-admin-gateway.controller';
 import { AuthGatewayController } from './auth-gateway.controller';
@@ -136,7 +137,11 @@ import type { StringValue } from 'ms';
     PartnerThrottlerGuard,
     RealtimeGateway,
     AuditEnrichmentService,
-    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    // Rate limit kaliti soxtalashtirib bo'lmaydigan mijoz IP'si bo'yicha
+    // olinadi (audit S3) — standart guard `req.ip` ni ishlatadi, u esa
+    // `trust proxy` yoqilganda mijozning o'z `X-Forwarded-For` qiymati bo'lib
+    // chiqadi va chegarani aylanib o'tish imkonini beradi.
+    { provide: APP_GUARD, useClass: ClientIpThrottlerGuard },
     // Default-deny authentication: every HTTP route requires a valid JWT unless
     // explicitly marked @Public() (health, login/refresh, HMAC webhooks, public
     // file view, Partner API which uses its own key guard). (Audit authz P1.)

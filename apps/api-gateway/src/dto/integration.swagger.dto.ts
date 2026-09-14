@@ -9,6 +9,7 @@ import {
   IsObject,
   IsOptional,
   IsString,
+  MaxLength,
   IsUrl,
   Min,
   ValidateIf,
@@ -28,6 +29,53 @@ export class CreateIntegrationRequestDto {
   @IsOptional()
   @IsString()
   slug?: string;
+
+  /**
+   * ROL — integratsiya bizning oqimimizda NIMA QILADI.
+   *
+   * `type` (api/webhook/ftp) TRANSPORT, ya'ni "qanday gaplashamiz". Rol esa
+   * boshqa savol va ilgari hech qayerda yozilmasdi: yetkazuvchi (bizdan
+   * posilka oladi) va manba (bizga buyurtma beradi) bir xil ko'rinardi.
+   *
+   *   carrier — bizdan posilka oladi, yetkazadi, COD qarzdor (LDG, BeePost)
+   *   source  — bizga buyurtma beradi (marketplace, do'kon, CRM)
+   *   payment — pul tasdiqlaydi (Payme, Click, bank)
+   *   mirror  — faqat o'qish uchun ko'zgu (Sheets, BI)
+   */
+  @ApiPropertyOptional({
+    example: 'carrier',
+    enum: ['carrier', 'source', 'payment', 'mirror'],
+    description: "Berilmasa `carrier` (mavjud ulanishlarning naqshi)",
+  })
+  @IsOptional()
+  @IsIn(['carrier', 'source', 'payment', 'mirror'])
+  role?: string;
+
+  /**
+   * TIZIM TURI — UI guruhlash va onboarding shabloni uchun.
+   *
+   * `role` bilan takrorlanmaydi: marketplace ham, CRM ham `source` roli,
+   * lekin boshqacha ulanadi. Rol XULQNI, kategoriya QANDAY SOZLASHNI
+   * belgilaydi.
+   */
+  @ApiPropertyOptional({
+    example: 'cargo',
+    enum: ['marketplace', 'crm', 'cargo', 'payment', 'spreadsheet', 'other'],
+  })
+  @IsOptional()
+  @IsIn(['marketplace', 'crm', 'cargo', 'payment', 'spreadsheet', 'other'])
+  category?: string;
+
+  /**
+   * ULANISH REJIMI.
+   *   spec    — biz kontrakt e'lon qilamiz, ular bajaradi (kod yozilmaydi)
+   *   adapter — biz ularga config-profil bilan moslashamiz
+   */
+  @ApiPropertyOptional({ example: 'adapter', enum: ['spec', 'adapter'] })
+  @IsOptional()
+  @IsIn(['spec', 'adapter'])
+  integration_mode?: string;
+
 
   @ApiProperty({ example: 'api', enum: ['api', 'webhook', 'ftp'] })
   @IsIn(['api', 'webhook', 'ftp'])
@@ -105,6 +153,151 @@ export class CreateIntegrationRequestDto {
   @IsObject()
   status_sync_config?: Record<string, unknown>;
 
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     KIRUVCHI WEBHOOK VA JO'NATISH SOZLAMALARI
+
+     ⚠️ BU MAYDONLAR ILGARI DTO'DA YO'Q EDI va bu jimgina o'lik funksiyaga
+     olib kelgan: entity'da ustun bor, servis ularni O'QIYDI, lekin yozish
+     yo'li yo'q edi. `main.ts` da `ValidationPipe({ whitelist: true,
+     forbidNonWhitelisted: true })` turgani uchun:
+       • UI'dan yuborilsa  → jimgina TASHLANADI
+       • curl bilan        → 400 "property should not exist"
+
+     Natijada uchta funksiya butunlay ishlamasdi: kiruvchi webhook
+     (`webhook_secret` yo'q → 401 not_configured), posilka jo'natish
+     (`dispatch_config` yo'q → 400), tashqi status xaritasi.
+
+     ⚠️ `webhook_secret_previous` ATAYLAB YO'Q. U rotatsiya oynasi uchun va
+     qo'lda to'ldirilmasligi kerak: yangi sekret qo'yilganda servis eskisini
+     o'zi shu maydonga ko'chiradi. Uni ochish "eski sekretni qo'lda
+     kiritish" imkonini berardi va bu himoyani zaiflashtiradi.
+
+     ⚠️ Javobda bu sirlar QAYTMAYDI: `sanitizeIntegrationRow` ularni
+     o'chiradi va faqat `has_webhook_secret` bayrog'ini beradi.
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  @ApiPropertyOptional({
+    description:
+      "Kiruvchi webhook HMAC sekreti. Javobda QAYTMAYDI. Bo'sh satr — tozalash.",
+  })
+  @IsOptional()
+  @IsString()
+  webhook_secret?: string;
+
+  @ApiPropertyOptional({
+    example: 'x-signature',
+    description: 'Imzo qaysi sarlavhada keladi (sukut: x-signature)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  webhook_signature_header?: string;
+
+  @ApiPropertyOptional({
+    example: 'sha256=',
+    description: "Imzo qiymati oldidagi prefiks (masalan `sha256=`)",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  webhook_signature_prefix?: string;
+
+  @ApiPropertyOptional({
+    example: 'sha256',
+    enum: ['sha256', 'sha512'],
+    description: 'HMAC algoritmi',
+  })
+  @IsOptional()
+  @IsIn(['sha256', 'sha512'])
+  webhook_algorithm?: string;
+
+  @ApiPropertyOptional({
+    example: 'x-delivery-id',
+    description:
+      "Takroriy yetkazishni aniqlash uchun hodisa id sarlavhasi (replay guard)",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  webhook_id_header?: string;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: { delivered: 'sold', canceled: 'cancelled' },
+    description: "Ularning statusi → bizning statusimiz",
+  })
+  @IsOptional()
+  @IsObject()
+  inbound_status_mapping?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: { order_id: 'data.order.id', status: 'data.order.state' },
+    description:
+      "Kiruvchi webhook payload'ida posilkani va statusni qaysi yo'l bo'yicha topish",
+  })
+  @IsOptional()
+  @IsObject()
+  webhook_payload_paths?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: {
+      enabled: true,
+      deal_path: 'data.lead',
+      funnel_path: 'pipeline_id',
+      funnel_id: '7482913',
+      stage_path: 'status_id',
+      create_on_stages: ['142'],
+    },
+    description:
+      "CRM voronkasidan buyurtma yaratish: qaysi voronka va BOSQICHDA " +
+      "bitim buyurtmaga aylanadi. Kamida bitta darvoza shart " +
+      '(`create_on_stages` yoki `create_on_events`) — darvozasiz CRM ' +
+      "\"bitim yaratildi\" hodisasini manzil to'lmasdan oldin yuboradi va " +
+      'chala buyurtma tug\'ilardi.',
+  })
+  @IsOptional()
+  @IsObject()
+  inbound_order_config?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: {
+      enabled: true,
+      transaction_id_path: 'data.transaction.id',
+      amount_path: 'data.amount',
+      status_path: 'data.state',
+      order_ref_path: 'data.account.order_id',
+      order_ref_field: 'id',
+      status_map: { succeeded: ['paid', '2'], failed: ['cancelled'] },
+      amount_in_tiyin: true,
+    },
+    description:
+      "Onlayn to'lov sozlamasi: tranzaksiya id, summa, holat va buyurtma " +
+      "havolasi payload'da qayerda. `status_map` SHART — provayderlarning " +
+      'holat qiymatlari boshqacha va taxmin qilib bo\'lmaydi. ' +
+      "`amount_in_tiyin` — summa tiyinda kelsa (Payme/Click shunday).",
+  })
+  @IsOptional()
+  @IsObject()
+  payment_config?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: {
+      endpoint: '/v1/orders',
+      method: 'POST',
+      body_template: { receiver: '{{customer_name}}', cod: '{{cod_amount}}' },
+      response_paths: { external_ref: 'data.id', tracking: 'data.tracking' },
+    },
+    description:
+      "Posilka jo'natish shabloni: endpoint, method, body_template, response_paths",
+  })
+  @IsOptional()
+  @IsObject()
+  dispatch_config?: Record<string, unknown>;
   @ApiPropertyOptional({ example: 'https://api.ozar.uz' })
   @IsOptional()
   @IsString()
@@ -122,6 +315,53 @@ export class UpdateIntegrationRequestDto {
   @IsOptional()
   @IsString()
   slug?: string;
+
+  /**
+   * ROL — integratsiya bizning oqimimizda NIMA QILADI.
+   *
+   * `type` (api/webhook/ftp) TRANSPORT, ya'ni "qanday gaplashamiz". Rol esa
+   * boshqa savol va ilgari hech qayerda yozilmasdi: yetkazuvchi (bizdan
+   * posilka oladi) va manba (bizga buyurtma beradi) bir xil ko'rinardi.
+   *
+   *   carrier — bizdan posilka oladi, yetkazadi, COD qarzdor (LDG, BeePost)
+   *   source  — bizga buyurtma beradi (marketplace, do'kon, CRM)
+   *   payment — pul tasdiqlaydi (Payme, Click, bank)
+   *   mirror  — faqat o'qish uchun ko'zgu (Sheets, BI)
+   */
+  @ApiPropertyOptional({
+    example: 'carrier',
+    enum: ['carrier', 'source', 'payment', 'mirror'],
+    description: "Berilmasa `carrier` (mavjud ulanishlarning naqshi)",
+  })
+  @IsOptional()
+  @IsIn(['carrier', 'source', 'payment', 'mirror'])
+  role?: string;
+
+  /**
+   * TIZIM TURI — UI guruhlash va onboarding shabloni uchun.
+   *
+   * `role` bilan takrorlanmaydi: marketplace ham, CRM ham `source` roli,
+   * lekin boshqacha ulanadi. Rol XULQNI, kategoriya QANDAY SOZLASHNI
+   * belgilaydi.
+   */
+  @ApiPropertyOptional({
+    example: 'cargo',
+    enum: ['marketplace', 'crm', 'cargo', 'payment', 'spreadsheet', 'other'],
+  })
+  @IsOptional()
+  @IsIn(['marketplace', 'crm', 'cargo', 'payment', 'spreadsheet', 'other'])
+  category?: string;
+
+  /**
+   * ULANISH REJIMI.
+   *   spec    — biz kontrakt e'lon qilamiz, ular bajaradi (kod yozilmaydi)
+   *   adapter — biz ularga config-profil bilan moslashamiz
+   */
+  @ApiPropertyOptional({ example: 'adapter', enum: ['spec', 'adapter'] })
+  @IsOptional()
+  @IsIn(['spec', 'adapter'])
+  integration_mode?: string;
+
 
   @ApiPropertyOptional({ example: 'api', enum: ['api', 'webhook', 'ftp'] })
   @IsOptional()
@@ -205,6 +445,151 @@ export class UpdateIntegrationRequestDto {
   @IsOptional()
   @IsObject()
   status_sync_config?: Record<string, unknown>;
+
+  /* ═══════════════════════════════════════════════════════════════════════
+     KIRUVCHI WEBHOOK VA JO'NATISH SOZLAMALARI
+
+     ⚠️ BU MAYDONLAR ILGARI DTO'DA YO'Q EDI va bu jimgina o'lik funksiyaga
+     olib kelgan: entity'da ustun bor, servis ularni O'QIYDI, lekin yozish
+     yo'li yo'q edi. `main.ts` da `ValidationPipe({ whitelist: true,
+     forbidNonWhitelisted: true })` turgani uchun:
+       • UI'dan yuborilsa  → jimgina TASHLANADI
+       • curl bilan        → 400 "property should not exist"
+
+     Natijada uchta funksiya butunlay ishlamasdi: kiruvchi webhook
+     (`webhook_secret` yo'q → 401 not_configured), posilka jo'natish
+     (`dispatch_config` yo'q → 400), tashqi status xaritasi.
+
+     ⚠️ `webhook_secret_previous` ATAYLAB YO'Q. U rotatsiya oynasi uchun va
+     qo'lda to'ldirilmasligi kerak: yangi sekret qo'yilganda servis eskisini
+     o'zi shu maydonga ko'chiradi. Uni ochish "eski sekretni qo'lda
+     kiritish" imkonini berardi va bu himoyani zaiflashtiradi.
+
+     ⚠️ Javobda bu sirlar QAYTMAYDI: `sanitizeIntegrationRow` ularni
+     o'chiradi va faqat `has_webhook_secret` bayrog'ini beradi.
+     ═══════════════════════════════════════════════════════════════════════ */
+
+  @ApiPropertyOptional({
+    description:
+      "Kiruvchi webhook HMAC sekreti. Javobda QAYTMAYDI. Bo'sh satr — tozalash.",
+  })
+  @IsOptional()
+  @IsString()
+  webhook_secret?: string;
+
+  @ApiPropertyOptional({
+    example: 'x-signature',
+    description: 'Imzo qaysi sarlavhada keladi (sukut: x-signature)',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  webhook_signature_header?: string;
+
+  @ApiPropertyOptional({
+    example: 'sha256=',
+    description: "Imzo qiymati oldidagi prefiks (masalan `sha256=`)",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(32)
+  webhook_signature_prefix?: string;
+
+  @ApiPropertyOptional({
+    example: 'sha256',
+    enum: ['sha256', 'sha512'],
+    description: 'HMAC algoritmi',
+  })
+  @IsOptional()
+  @IsIn(['sha256', 'sha512'])
+  webhook_algorithm?: string;
+
+  @ApiPropertyOptional({
+    example: 'x-delivery-id',
+    description:
+      "Takroriy yetkazishni aniqlash uchun hodisa id sarlavhasi (replay guard)",
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  webhook_id_header?: string;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: { delivered: 'sold', canceled: 'cancelled' },
+    description: "Ularning statusi → bizning statusimiz",
+  })
+  @IsOptional()
+  @IsObject()
+  inbound_status_mapping?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: { order_id: 'data.order.id', status: 'data.order.state' },
+    description:
+      "Kiruvchi webhook payload'ida posilkani va statusni qaysi yo'l bo'yicha topish",
+  })
+  @IsOptional()
+  @IsObject()
+  webhook_payload_paths?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: {
+      enabled: true,
+      deal_path: 'data.lead',
+      funnel_path: 'pipeline_id',
+      funnel_id: '7482913',
+      stage_path: 'status_id',
+      create_on_stages: ['142'],
+    },
+    description:
+      "CRM voronkasidan buyurtma yaratish: qaysi voronka va BOSQICHDA " +
+      "bitim buyurtmaga aylanadi. Kamida bitta darvoza shart " +
+      '(`create_on_stages` yoki `create_on_events`) — darvozasiz CRM ' +
+      "\"bitim yaratildi\" hodisasini manzil to'lmasdan oldin yuboradi va " +
+      'chala buyurtma tug\'ilardi.',
+  })
+  @IsOptional()
+  @IsObject()
+  inbound_order_config?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: {
+      enabled: true,
+      transaction_id_path: 'data.transaction.id',
+      amount_path: 'data.amount',
+      status_path: 'data.state',
+      order_ref_path: 'data.account.order_id',
+      order_ref_field: 'id',
+      status_map: { succeeded: ['paid', '2'], failed: ['cancelled'] },
+      amount_in_tiyin: true,
+    },
+    description:
+      "Onlayn to'lov sozlamasi: tranzaksiya id, summa, holat va buyurtma " +
+      "havolasi payload'da qayerda. `status_map` SHART — provayderlarning " +
+      'holat qiymatlari boshqacha va taxmin qilib bo\'lmaydi. ' +
+      "`amount_in_tiyin` — summa tiyinda kelsa (Payme/Click shunday).",
+  })
+  @IsOptional()
+  @IsObject()
+  payment_config?: Record<string, unknown>;
+
+  @ApiPropertyOptional({
+    type: Object,
+    example: {
+      endpoint: '/v1/orders',
+      method: 'POST',
+      body_template: { receiver: '{{customer_name}}', cod: '{{cod_amount}}' },
+      response_paths: { external_ref: 'data.id', tracking: 'data.tracking' },
+    },
+    description:
+      "Posilka jo'natish shabloni: endpoint, method, body_template, response_paths",
+  })
+  @IsOptional()
+  @IsObject()
+  dispatch_config?: Record<string, unknown>;
 }
 
 export class QrSearchRequestDto {

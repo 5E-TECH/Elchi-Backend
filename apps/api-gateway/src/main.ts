@@ -1,5 +1,9 @@
 import { NestFactory } from '@nestjs/core';
-import { ValidationPipe, VersioningType, VERSION_NEUTRAL } from '@nestjs/common';
+import {
+  ValidationPipe,
+  VersioningType,
+  VERSION_NEUTRAL,
+} from '@nestjs/common';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { MicroserviceOptions, Transport } from '@nestjs/microservices';
 import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
@@ -100,6 +104,18 @@ async function bootstrap() {
     }),
   );
 
+  /**
+   * ⚠️ LOCALHOST FAQAT DEV'DA (audit S4).
+   *
+   * Ilgari har qanday `http://localhost:<port>` manbasi PRODDA ham qabul
+   * qilinardi, ustiga `credentials: true` bilan. Ya'ni qurbonning o'z
+   * mashinasida ochilgan zararli sahifa (yoki lokal portda ishlayotgan
+   * begona ilova) brauzer cookie'lari bilan bizning API'ga murojaat qila
+   * olardi. Dev qulayligi uchun qo'yilgan bu yo'l prodda kerak emas: u yerda
+   * frontend faqat `CORS_ORIGINS` ro'yxatidagi domenlardan keladi.
+   */
+  const isProduction = process.env.NODE_ENV === 'production';
+
   app.enableCors({
     origin: (origin, callback) => {
       // Non-browser clients (curl, server-to-server) may not send Origin.
@@ -109,8 +125,9 @@ async function bootstrap() {
       }
 
       const isLocalhost =
-        /^http:\/\/localhost:\d+$/.test(origin) ||
-        /^http:\/\/127\.0\.0\.1:\d+$/.test(origin);
+        !isProduction &&
+        (/^http:\/\/localhost:\d+$/.test(origin) ||
+          /^http:\/\/127\.0\.0\.1:\d+$/.test(origin));
 
       if (isLocalhost || corsOrigins.includes(origin)) {
         callback(null, true);
@@ -146,7 +163,7 @@ async function bootstrap() {
 
     const swaggerUser = process.env.SWAGGER_USER ?? 'admin';
     const swaggerPassword = process.env.SWAGGER_PASSWORD ?? '';
-    const isProd = process.env.NODE_ENV === 'production';
+    const isProd = isProduction;
 
     // Productionда Swagger faqat parol belgilangandagina ochiladi va u
     // har doim HTTP Basic Auth bilan himoyalanadi. Parol bo'lmasa — Swagger

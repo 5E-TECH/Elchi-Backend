@@ -1637,6 +1637,36 @@
         ]
       }
     },
+    "/orders/external/receive-by-scan": {
+      "post": {
+        "operationId": "OrderGatewayController_receiveExternalByScan",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReceiveByScanDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Receive external parcels by scanned label tokens",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
     "/orders/external/receive": {
       "post": {
         "operationId": "OrderGatewayController_receiveExternalOrders",
@@ -1662,6 +1692,26 @@
           }
         ],
         "summary": "Receive orders from external integration payload",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
+    "/orders/external/sources": {
+      "get": {
+        "operationId": "OrderGatewayController_findExternalSources",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Incoming parcel sources (grouped external NEW orders)",
         "tags": [
           "Orders"
         ]
@@ -6566,6 +6616,37 @@
             }
           },
           {
+            "name": "role",
+            "required": false,
+            "in": "query",
+            "description": "Rol bo‘yicha filtr — UI ulanishlarni rol guruhlariga ajratadi",
+            "schema": {
+              "enum": [
+                "carrier",
+                "source",
+                "payment",
+                "mirror"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "category",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "marketplace",
+                "crm",
+                "cargo",
+                "payment",
+                "spreadsheet",
+                "other"
+              ],
+              "type": "string"
+            }
+          },
+          {
             "name": "market_id",
             "required": false,
             "in": "query",
@@ -6649,6 +6730,144 @@
           }
         ],
         "summary": "Create integration",
+        "tags": [
+          "Integrations"
+        ]
+      }
+    },
+    "/integrations/metrics": {
+      "get": {
+        "operationId": "IntegrationGatewayController_integrationMetrics",
+        "parameters": [
+          {
+            "name": "hours",
+            "required": false,
+            "in": "query",
+            "description": "Oyna (soat). Standart 24, maksimum 168",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ statusCode, message, data: { window_hours, totals, connections[] } }"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Integratsiya paneli metrikasi — hodisa, yetmagan, navbat, javob vaqti",
+        "tags": [
+          "Integrations"
+        ]
+      }
+    },
+    "/integrations/payments": {
+      "get": {
+        "operationId": "IntegrationGatewayController_paymentTransactions",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "unapplied_only",
+            "required": false,
+            "in": "query",
+            "description": "Faqat buyurtmaga qo'llanmagan to'lovlar",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Onlayn to'lov tranzaksiyalari — summa, holat, buyurtmaga qo'llanish natijasi",
+        "tags": [
+          "Integrations"
+        ]
+      }
+    },
+    "/integrations/webhook-logs": {
+      "get": {
+        "operationId": "IntegrationGatewayController_webhookLogs",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "description": "rejected | verified | processed",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kiruvchi webhook jurnali — imzo, natija, xato sababi (tana qaytarilmaydi)",
         "tags": [
           "Integrations"
         ]
@@ -7112,6 +7331,45 @@
         ]
       }
     },
+    "/integrations/{slug}/scan-intake": {
+      "post": {
+        "operationId": "IntegrationGatewayController_scanIntake",
+        "parameters": [
+          {
+            "name": "slug",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/QrSearchRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Scan a parcel QR and import the order from the site",
+        "tags": [
+          "Integrations"
+        ]
+      }
+    },
     "/integrations/{slug}/search-by-qr": {
       "post": {
         "operationId": "IntegrationGatewayController_searchByQr",
@@ -7224,6 +7482,68 @@
           }
         ],
         "summary": "Dispatch an order to this provider (create a shipment)",
+        "tags": [
+          "Integrations"
+        ]
+      }
+    },
+    "/integrations/{id}/shipments": {
+      "get": {
+        "operationId": "IntegrationGatewayController_listProviderShipments",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Integration id",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "failed_only",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List provider shipments for an integration",
         "tags": [
           "Integrations"
         ]
@@ -10366,7 +10686,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Kalit yaroqli — hamkor ma‘lumoti qaytadi"
+            "description": "{ statusCode, message, data: { authenticated, partner } }"
           },
           "401": {
             "description": "X-Api-Key yo‘q yoki yaroqsiz"
@@ -10397,7 +10717,7 @@
         ],
         "responses": {
           "200": {
-            "description": "[{ id, name, sato_code }]"
+            "description": "{ statusCode, message, data: [{ id, name, sato_code }] }"
           }
         },
         "summary": "Elchi viloyatlari ro‘yxati",
@@ -10430,7 +10750,7 @@
         ],
         "responses": {
           "200": {
-            "description": "[{ id, name, region_id, sato_code }]"
+            "description": "{ statusCode, message, data: [{ id, name, region_id, sato_code }] }"
           }
         },
         "summary": "Elchi tumanlari (region_id bo‘yicha)",
@@ -10475,7 +10795,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{ elchi_market_id, where_deliver, market_tariff }"
+            "description": "{ statusCode, message, data: { elchi_market_id, where_deliver, market_tariff } }"
           },
           "404": {
             "description": "Market topilmadi"
@@ -10581,7 +10901,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{ shipment_id, external_order_id, status, cod_amount, tracking }"
+            "description": "{ shipment_id, external_order_id, status, cod_amount, cod_collected, total_price, tracking }. `cod_amount` = to'lanishi kerak summa; `cod_collected` = kuryer mijozdan HAQIQATAN yiqqan pul (sotuvgacha 0) — pul solishtiruvi uchun."
           },
           "404": {
             "description": "Shipment topilmadi"
@@ -10759,6 +11079,80 @@
         ]
       }
     },
+    "/admin/partners/{id}/shipments": {
+      "get": {
+        "operationId": "PartnerAdminGatewayController_listPartnerShipments",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Hamkordan kelgan posilkalar (buyurtma bog'lanishi)",
+        "tags": [
+          "Partners (admin)"
+        ]
+      }
+    },
+    "/admin/partners/{id}/webhook-test": {
+      "post": {
+        "operationId": "PartnerAdminGatewayController_testWebhook",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ ok, url, http_status, duration_ms, response_body, error, signature_sent, secret_configured, event_id }"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Sinov webhookini yuborish — haqiqiy buyurtmaga tegmaydi. `url` berilsa saqlangan manzildan ustun turadi (saqlashdan OLDIN sinash).",
+        "tags": [
+          "Partners (admin)"
+        ]
+      }
+    },
     "/admin/partners/{id}": {
       "patch": {
         "operationId": "PartnerAdminGatewayController_update",
@@ -10792,7 +11186,7 @@
             "bearer": []
           }
         ],
-        "summary": "Hamkor sozlamalari: webhook manzili/sekreti, IP ro'yxati, nom. API kalit BU YERDA o‘zgarmaydi — buning uchun rotate-key bor.",
+        "summary": "Hamkor sozlamalari: webhook manzili/sekreti, SANDBOX manzili, IP ro'yxati, nom. API kalit BU YERDA o‘zgarmaydi — buning uchun rotate-key bor. `webhook_url` qo‘yilganda sozlama yo‘qligi tufayli kutib turgan hodisalar avtomatik navbatga qaytariladi (`requeued_webhooks`).",
         "tags": [
           "Partners (admin)"
         ]
@@ -11626,6 +12020,25 @@
         },
         "required": [
           "order_ids"
+        ]
+      },
+      "ReceiveByScanDto": {
+        "type": "object",
+        "properties": {
+          "tokens": {
+            "description": "Posilka yorliqlaridan skanerlangan QR qiymatlari",
+            "example": [
+              "a1b2c3d4e5f6a1b2c3d4e5f6",
+              "f6e5d4c3b2a1f6e5d4c3b2a1"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "tokens"
         ]
       },
       "ReceiveExternalOrdersDto": {
@@ -12986,6 +13399,37 @@
             "type": "string",
             "example": "ozar"
           },
+          "role": {
+            "type": "string",
+            "example": "carrier",
+            "enum": [
+              "carrier",
+              "source",
+              "payment",
+              "mirror"
+            ],
+            "description": "Berilmasa `carrier` (mavjud ulanishlarning naqshi)"
+          },
+          "category": {
+            "type": "string",
+            "example": "cargo",
+            "enum": [
+              "marketplace",
+              "crm",
+              "cargo",
+              "payment",
+              "spreadsheet",
+              "other"
+            ]
+          },
+          "integration_mode": {
+            "type": "string",
+            "example": "adapter",
+            "enum": [
+              "spec",
+              "adapter"
+            ]
+          },
           "type": {
             "type": "string",
             "example": "api",
@@ -13059,6 +13503,102 @@
           "status_sync_config": {
             "type": "object"
           },
+          "webhook_secret": {
+            "type": "string",
+            "description": "Kiruvchi webhook HMAC sekreti. Javobda QAYTMAYDI. Bo'sh satr — tozalash."
+          },
+          "webhook_signature_header": {
+            "type": "string",
+            "example": "x-signature",
+            "description": "Imzo qaysi sarlavhada keladi (sukut: x-signature)"
+          },
+          "webhook_signature_prefix": {
+            "type": "string",
+            "example": "sha256=",
+            "description": "Imzo qiymati oldidagi prefiks (masalan `sha256=`)"
+          },
+          "webhook_algorithm": {
+            "type": "string",
+            "example": "sha256",
+            "enum": [
+              "sha256",
+              "sha512"
+            ],
+            "description": "HMAC algoritmi"
+          },
+          "webhook_id_header": {
+            "type": "string",
+            "example": "x-delivery-id",
+            "description": "Takroriy yetkazishni aniqlash uchun hodisa id sarlavhasi (replay guard)"
+          },
+          "inbound_status_mapping": {
+            "type": "object",
+            "example": {
+              "delivered": "sold",
+              "canceled": "cancelled"
+            },
+            "description": "Ularning statusi → bizning statusimiz"
+          },
+          "webhook_payload_paths": {
+            "type": "object",
+            "example": {
+              "order_id": "data.order.id",
+              "status": "data.order.state"
+            },
+            "description": "Kiruvchi webhook payload'ida posilkani va statusni qaysi yo'l bo'yicha topish"
+          },
+          "inbound_order_config": {
+            "type": "object",
+            "example": {
+              "enabled": true,
+              "deal_path": "data.lead",
+              "funnel_path": "pipeline_id",
+              "funnel_id": "7482913",
+              "stage_path": "status_id",
+              "create_on_stages": [
+                "142"
+              ]
+            },
+            "description": "CRM voronkasidan buyurtma yaratish: qaysi voronka va BOSQICHDA bitim buyurtmaga aylanadi. Kamida bitta darvoza shart (`create_on_stages` yoki `create_on_events`) — darvozasiz CRM \"bitim yaratildi\" hodisasini manzil to'lmasdan oldin yuboradi va chala buyurtma tug'ilardi."
+          },
+          "payment_config": {
+            "type": "object",
+            "example": {
+              "enabled": true,
+              "transaction_id_path": "data.transaction.id",
+              "amount_path": "data.amount",
+              "status_path": "data.state",
+              "order_ref_path": "data.account.order_id",
+              "order_ref_field": "id",
+              "status_map": {
+                "succeeded": [
+                  "paid",
+                  "2"
+                ],
+                "failed": [
+                  "cancelled"
+                ]
+              },
+              "amount_in_tiyin": true
+            },
+            "description": "Onlayn to'lov sozlamasi: tranzaksiya id, summa, holat va buyurtma havolasi payload'da qayerda. `status_map` SHART — provayderlarning holat qiymatlari boshqacha va taxmin qilib bo'lmaydi. `amount_in_tiyin` — summa tiyinda kelsa (Payme/Click shunday)."
+          },
+          "dispatch_config": {
+            "type": "object",
+            "example": {
+              "endpoint": "/v1/orders",
+              "method": "POST",
+              "body_template": {
+                "receiver": "{{customer_name}}",
+                "cod": "{{cod_amount}}"
+              },
+              "response_paths": {
+                "external_ref": "data.id",
+                "tracking": "data.tracking"
+              }
+            },
+            "description": "Posilka jo'natish shabloni: endpoint, method, body_template, response_paths"
+          },
           "api_url": {
             "type": "string",
             "example": "https://api.ozar.uz"
@@ -13082,6 +13622,37 @@
           "slug": {
             "type": "string",
             "example": "ozar"
+          },
+          "role": {
+            "type": "string",
+            "example": "carrier",
+            "enum": [
+              "carrier",
+              "source",
+              "payment",
+              "mirror"
+            ],
+            "description": "Berilmasa `carrier` (mavjud ulanishlarning naqshi)"
+          },
+          "category": {
+            "type": "string",
+            "example": "cargo",
+            "enum": [
+              "marketplace",
+              "crm",
+              "cargo",
+              "payment",
+              "spreadsheet",
+              "other"
+            ]
+          },
+          "integration_mode": {
+            "type": "string",
+            "example": "adapter",
+            "enum": [
+              "spec",
+              "adapter"
+            ]
           },
           "type": {
             "type": "string",
@@ -13155,6 +13726,102 @@
           },
           "status_sync_config": {
             "type": "object"
+          },
+          "webhook_secret": {
+            "type": "string",
+            "description": "Kiruvchi webhook HMAC sekreti. Javobda QAYTMAYDI. Bo'sh satr — tozalash."
+          },
+          "webhook_signature_header": {
+            "type": "string",
+            "example": "x-signature",
+            "description": "Imzo qaysi sarlavhada keladi (sukut: x-signature)"
+          },
+          "webhook_signature_prefix": {
+            "type": "string",
+            "example": "sha256=",
+            "description": "Imzo qiymati oldidagi prefiks (masalan `sha256=`)"
+          },
+          "webhook_algorithm": {
+            "type": "string",
+            "example": "sha256",
+            "enum": [
+              "sha256",
+              "sha512"
+            ],
+            "description": "HMAC algoritmi"
+          },
+          "webhook_id_header": {
+            "type": "string",
+            "example": "x-delivery-id",
+            "description": "Takroriy yetkazishni aniqlash uchun hodisa id sarlavhasi (replay guard)"
+          },
+          "inbound_status_mapping": {
+            "type": "object",
+            "example": {
+              "delivered": "sold",
+              "canceled": "cancelled"
+            },
+            "description": "Ularning statusi → bizning statusimiz"
+          },
+          "webhook_payload_paths": {
+            "type": "object",
+            "example": {
+              "order_id": "data.order.id",
+              "status": "data.order.state"
+            },
+            "description": "Kiruvchi webhook payload'ida posilkani va statusni qaysi yo'l bo'yicha topish"
+          },
+          "inbound_order_config": {
+            "type": "object",
+            "example": {
+              "enabled": true,
+              "deal_path": "data.lead",
+              "funnel_path": "pipeline_id",
+              "funnel_id": "7482913",
+              "stage_path": "status_id",
+              "create_on_stages": [
+                "142"
+              ]
+            },
+            "description": "CRM voronkasidan buyurtma yaratish: qaysi voronka va BOSQICHDA bitim buyurtmaga aylanadi. Kamida bitta darvoza shart (`create_on_stages` yoki `create_on_events`) — darvozasiz CRM \"bitim yaratildi\" hodisasini manzil to'lmasdan oldin yuboradi va chala buyurtma tug'ilardi."
+          },
+          "payment_config": {
+            "type": "object",
+            "example": {
+              "enabled": true,
+              "transaction_id_path": "data.transaction.id",
+              "amount_path": "data.amount",
+              "status_path": "data.state",
+              "order_ref_path": "data.account.order_id",
+              "order_ref_field": "id",
+              "status_map": {
+                "succeeded": [
+                  "paid",
+                  "2"
+                ],
+                "failed": [
+                  "cancelled"
+                ]
+              },
+              "amount_in_tiyin": true
+            },
+            "description": "Onlayn to'lov sozlamasi: tranzaksiya id, summa, holat va buyurtma havolasi payload'da qayerda. `status_map` SHART — provayderlarning holat qiymatlari boshqacha va taxmin qilib bo'lmaydi. `amount_in_tiyin` — summa tiyinda kelsa (Payme/Click shunday)."
+          },
+          "dispatch_config": {
+            "type": "object",
+            "example": {
+              "endpoint": "/v1/orders",
+              "method": "POST",
+              "body_template": {
+                "receiver": "{{customer_name}}",
+                "cod": "{{cod_amount}}"
+              },
+              "response_paths": {
+                "external_ref": "data.id",
+                "tracking": "data.tracking"
+              }
+            },
+            "description": "Posilka jo'natish shabloni: endpoint, method, body_template, response_paths"
           }
         }
       },
@@ -13966,6 +14633,11 @@
             "type": "number",
             "example": 2,
             "default": 1
+          },
+          "external_product_id": {
+            "type": "string",
+            "description": "Hamkor tizimidagi mahsulot id — katalog bog‘lanishi shu bo‘yicha (nom bo‘yicha emas)",
+            "example": "a3f1c8e2-7b44-4d91-9f02-1c5e6d8a4b30"
           }
         },
         "required": [
@@ -14018,6 +14690,11 @@
           "subtotal": {
             "type": "number",
             "description": "Buyurtma qiymati (total_price uchun)"
+          },
+          "label_token": {
+            "type": "string",
+            "example": "a1b2c3d4e5f6a1b2c3d4e5f6",
+            "description": "Hamkor YORLIG'IDAGI QR qiymati. Berilsa Elchi shu tokenni buyurtmaga yozadi va posilkani skanerlash ishlaydi. Berilmasa Elchi o'z tokenini yaratadi va hamkor yorlig'i skanerda TOPILMAYDI."
           }
         },
         "required": [
@@ -14042,6 +14719,15 @@
           "webhook_secret": {
             "type": "string",
             "description": "Chiquvchi webhook HMAC sekret (AES bilan shifrlab saqlanadi)"
+          },
+          "sandbox_webhook_url": {
+            "type": "string",
+            "example": "https://dev.marketplace.example.uz/webhooks/elchi",
+            "description": "Sinov muhitining manzili. Nusxa yuborish `sandbox_enabled` kaliti bilan boshqariladi — manzilning o‘zi oqimni yoqmaydi."
+          },
+          "sandbox_webhook_secret": {
+            "type": "string",
+            "description": "Sinov muhitining ALOHIDA HMAC sekreti. Prodakshn sekreti sinov muhitiga yuborilmaydi."
           },
           "ip_allowlist": {
             "example": [
@@ -14072,6 +14758,19 @@
           "webhook_secret": {
             "type": "string",
             "description": "Chiquvchi webhook HMAC sekreti. Bo'sh satr — tozalash."
+          },
+          "sandbox_webhook_url": {
+            "type": "string",
+            "example": "https://dev.beepost.example.uz/api/v1/elchi/webhook",
+            "description": "Sinov manzili — hodisa NUSXASI yuboriladi. Bo'sh satr — o'chirish. Xatosi asosiy yetkazishga ta'sir qilmaydi."
+          },
+          "sandbox_webhook_secret": {
+            "type": "string",
+            "description": "Sandbox uchun alohida HMAC sekreti. Berilmasa ASOSIY sekret ishlatiladi. Bo'sh satr — tozalash."
+          },
+          "sandbox_enabled": {
+            "type": "boolean",
+            "example": true
           },
           "ip_allowlist": {
             "example": [

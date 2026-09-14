@@ -20,6 +20,9 @@ import { ProviderReceivable } from './entities/provider-receivable.entity';
 import { ProviderRemittance } from './entities/provider-remittance.entity';
 import { Partner } from './entities/partner.entity';
 import { PartnerShipmentRef } from './entities/partner-shipment-ref.entity';
+import { InboundDealRef } from './entities/inbound-deal-ref.entity';
+import { PaymentTransaction } from './entities/payment-transaction.entity';
+import { PartnerProductRef } from './entities/partner-product-ref.entity';
 import { PartnerMarketRef } from './entities/partner-market-ref.entity';
 import { PartnerWebhookOutbox } from './entities/partner-webhook-outbox.entity';
 import { SyncQueueScheduler } from './sync-queue.scheduler';
@@ -37,6 +40,8 @@ import { SyncQueueScheduler } from './sync-queue.scheduler';
     RmqModule.register({ name: 'CATALOG' }),
     RmqModule.register({ name: 'ORDER' }),
     RmqModule.register({ name: 'NOTIFICATION' }),
+    // Kargo hisob-kitobi endi MAIN kassaga kirim yozadi (audit M5).
+    RmqModule.register({ name: 'FINANCE' }),
     DatabaseModule,
     ScheduleModule.forRoot(),
     ActivityLogModule.forService('integration-service'),
@@ -50,6 +55,9 @@ import { SyncQueueScheduler } from './sync-queue.scheduler';
       ProviderRemittance,
       Partner,
       PartnerShipmentRef,
+      InboundDealRef,
+      PaymentTransaction,
+      PartnerProductRef,
       PartnerMarketRef,
       PartnerWebhookOutbox,
     ]),

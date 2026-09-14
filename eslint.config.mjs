@@ -6,7 +6,10 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['eslint.config.mjs'],
+    // k6 skriptlari TypeScript loyihasiga kirmaydi (k6 o'z runtime'ida
+    // ishlaydi, `node_modules` ham ko'rmaydi) — shu bois type-aware lint
+    // ularni tahlil qila olmaydi va xato beradi.
+    ignores: ['eslint.config.mjs', 'tests/load/**'],
   },
   eslint.configs.recommended,
   ...tseslint.configs.recommendedTypeChecked,

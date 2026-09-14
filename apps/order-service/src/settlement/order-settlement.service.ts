@@ -125,6 +125,23 @@ export class OrderSettlementService {
     return successRes(settlement ?? null, 200, 'Order settlement');
   }
 
+  /**
+   * Kompaniya holati uchun zanjir qarzi + marketga qarz yig'indisi.
+   *
+   * ⚠️ AUDIT M1 — `branch_id IS NOT NULL` FILTRI OLIB TASHLANDI.
+   * Ilgari bu yig'indi faqat filialga bog'langan qatorlarni hisoblardi. HQ
+   * sotuvlarida esa `resolveSettlementBranchId` ataylab `null` qaytaradi (HQ
+   * alohida filial sifatida qaralmaydi) — ya'ni HQ kuryerlari ushlab turgan
+   * pul zanjir qarzidan butunlay tushib qolardi. Marketga qarz esa sotuv
+   * paytida DARHOL yoziladi, natijada moliyaviy balans har bir "yo'ldagi"
+   * buyurtma uchun manfiyga og'ib turardi: kuniga 1 000 buyurtma × 450 000
+   * so'm ≈ 450 mln so'mlik soxta qarz.
+   *
+   * Endi `chain_receivable` — buyurtma boshiga BIR MARTA, qaysi bo'g'inda
+   * turganidan (kuryer/filial) va filialga bog'langan-bog'lanmaganidan qat'i
+   * nazar hisoblanadi. Filiallar kesimi (`branches`) operatsion ko'rinish
+   * uchun qoladi; HQ qatorlari `hq` bandiga yig'iladi.
+   */
   async getFinancialBalanceSettlementSummary() {
     const activeStatuses = [
       SettlementStatus.PENDING,
@@ -142,12 +159,11 @@ export class OrderSettlementService {
         .select('settlement.branch_id', 'branch_id')
         .addSelect('COALESCE(SUM(settlement.branch_amount), 0)', 'amount')
         .where('settlement.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('settlement.branch_id IS NOT NULL')
         .andWhere('settlement.status IN (:...statuses)', {
           statuses: branchReceivableStatuses,
         })
         .groupBy('settlement.branch_id')
-        .getRawMany<{ branch_id: string; amount: string }>(),
+        .getRawMany<{ branch_id: string | null; amount: string }>(),
       this.orderSettlementRepo
         .createQueryBuilder('settlement')
         .select('settlement.market_id', 'market_id')
@@ -161,24 +177,159 @@ export class OrderSettlementService {
         .getRawMany<{ market_id: string; amount: string }>(),
     ]);
 
-    const branches = branchRows.map((row) => ({
-      branch_id: String(row.branch_id),
-      amount: Math.max(Number(row.amount) || 0, 0),
-    }));
+    // Qirqish YO'Q: manfiy qoldiq ham haqiqiy ma'lumot (HQ o'sha bo'g'inga
+    // ustama to'lagan). Ilgari `Math.max(x, 0)` uni jimgina yo'qotardi.
+    const hqAmount = branchRows
+      .filter((row) => !row.branch_id)
+      .reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+    const branches = branchRows
+      .filter((row) => Boolean(row.branch_id))
+      .map((row) => ({
+        branch_id: String(row.branch_id),
+        amount: Number(row.amount) || 0,
+      }));
     const markets = marketRows.map((row) => ({
       market_id: String(row.market_id),
-      amount: Math.max(Number(row.amount) || 0, 0),
+      amount: Number(row.amount) || 0,
     }));
+
+    const branchReceivable = branches.reduce((sum, row) => sum + row.amount, 0);
 
     return successRes(
       {
-        branch_receivable: branches.reduce((sum, row) => sum + row.amount, 0),
+        // Zanjirda (kuryer yoki filial qo'lida) turgan va HQ'ga tegishli pul.
+        chain_receivable: branchReceivable + hqAmount,
+        // Filiallarga bog'langan qismi — operatsion kesim uchun.
+        branch_receivable: branchReceivable,
+        // HQ kuryerlari ushlab turgan qism.
+        hq_receivable: hqAmount,
         market_payable: markets.reduce((sum, row) => sum + row.amount, 0),
         branches,
         markets,
       },
       200,
       'Financial balance settlement summary',
+    );
+  }
+
+  /**
+   * Bitta filial uchun hisob-kitob yig'indisi — SQL `SUM` bilan (audit C1).
+   *
+   * ⚠️ NEGA KERAK BO'LDI. Manager paneli bu raqamlarni gateway'da hisoblardi:
+   * `order.find_all` ni IKKI marta chaqirib (filial bo'yicha va kuryerlar
+   * bo'yicha), har birida 5 000 tagacha buyurtmani (mahsulotlari bilan)
+   * RabbitMQ orqali tortib olib, JS'da qo'shib chiqardi. Sana filtri esa
+   * majburiy emas edi — ya'ni filialning jamlanma buyurtmalari 5 000 dan
+   * oshgan kuni summa JIMGINA qirqilib, KAM ko'rsata boshlardi. Hech qanday
+   * xato ham, log ham yo'q: pul raqami shunchaki noto'g'ri bo'lardi.
+   *
+   * Endi yig'indi ledgerdan, bazada hisoblanadi:
+   *   • `branch_payable` — filial HQ'ga qancha qarz (PENDING + COURIER_SETTLED;
+   *     HQ'ga topshirilgan buyurtmalar allaqachon BRANCH_SETTLED bo'lgani
+   *     uchun o'z-o'zidan chiqib ketadi — ilgari to'langan summani alohida
+   *     ayirish kerak edi va u sana oynasiga bog'liq edi);
+   *   • `courier_receivable` — kuryerlar filialga qancha qarz (PENDING).
+   */
+  async getBranchSettlementSummary(data: {
+    branch_id?: string | null;
+    courier_ids?: string[];
+  }) {
+    const branchId = String(data?.branch_id ?? '').trim();
+    const courierIds = (data?.courier_ids ?? [])
+      .map((id) => String(id ?? '').trim())
+      .filter(Boolean);
+
+    const sumOf = async (
+      column: 'branch_amount' | 'courier_amount',
+      apply: (
+        qb: ReturnType<Repository<OrderSettlement>['createQueryBuilder']>,
+      ) => void,
+      statuses: SettlementStatus[],
+    ): Promise<number> => {
+      const qb = this.orderSettlementRepo
+        .createQueryBuilder('settlement')
+        .select(`COALESCE(SUM(settlement.${column}), 0)`, 'amount')
+        .where('settlement.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('settlement.status IN (:...statuses)', { statuses });
+      apply(qb);
+      const row = await qb.getRawOne<{ amount: string }>();
+      return Number(row?.amount ?? 0) || 0;
+    };
+
+    const [branchPayable, courierReceivable] = await Promise.all([
+      branchId
+        ? sumOf(
+            'branch_amount',
+            (qb) =>
+              qb.andWhere('settlement.branch_id = :branchId', { branchId }),
+            [SettlementStatus.PENDING, SettlementStatus.COURIER_SETTLED],
+          )
+        : Promise.resolve(0),
+      courierIds.length
+        ? sumOf(
+            'courier_amount',
+            (qb) =>
+              qb.andWhere('settlement.courier_id IN (:...courierIds)', {
+                courierIds,
+              }),
+            [SettlementStatus.PENDING],
+          )
+        : Promise.resolve(0),
+    ]);
+
+    return successRes(
+      {
+        branch_id: branchId || null,
+        branch_payable: branchPayable,
+        courier_receivable: courierReceivable,
+      },
+      200,
+      'Branch settlement summary',
+    );
+  }
+
+  /**
+   * Kargo hisob-kitob qilganda uning buyurtmalarini "HQ'ga yetib keldi"
+   * holatiga o'tkazadi (audit M5).
+   *
+   * FIFO emas, ANIQ RO'YXAT bo'yicha: remittance qaysi buyurtmalarni
+   * yopganini `provider_receivables` allaqachon biladi, shuning uchun taxmin
+   * qilishning keragi yo'q. Faqat kuryersiz va filialsiz (ya'ni haqiqatan
+   * kargo yo'lidan kelgan) PENDING qatorlar o'zgaradi — ichki sotuvga
+   * tegib ketmasligi uchun.
+   */
+  async markProviderSettledToHq(data: {
+    order_ids?: string[];
+    requester_id?: string;
+  }) {
+    const orderIds = (data?.order_ids ?? [])
+      .map((id) => String(id ?? '').trim())
+      .filter(Boolean);
+    if (!orderIds.length) {
+      return successRes({ settled_order_ids: [] }, 200, 'Nothing to settle');
+    }
+
+    const now = new Date();
+    const result = await this.orderSettlementRepo
+      .createQueryBuilder()
+      .update(OrderSettlement)
+      .set({
+        status: SettlementStatus.BRANCH_SETTLED,
+        courier_to_branch_at: now,
+        branch_to_hq_at: now,
+        branch_to_hq_by: String(data?.requester_id ?? 'system'),
+      })
+      .where('order_id IN (:...orderIds)', { orderIds })
+      .andWhere('status = :status', { status: SettlementStatus.PENDING })
+      .andWhere('courier_id IS NULL')
+      .andWhere('branch_id IS NULL')
+      .andWhere('is_deleted = :isDeleted', { isDeleted: false })
+      .execute();
+
+    return successRes(
+      { settled_order_ids: orderIds, affected: result.affected ?? 0 },
+      200,
+      'Provider settlement advanced',
     );
   }
 
@@ -207,7 +358,15 @@ export class OrderSettlementService {
     matchColumn: 'courier_id' | 'branch_id' | 'market_id';
     matchValue: string;
     fromStatus: SettlementStatus;
-    toStatus: SettlementStatus;
+    /**
+     * Keyingi holat QATOR BO'YICHA hisoblanadi. Sabab (audit M1): HQ sotuvida
+     * filial bo'g'ini umuman yo'q — kuryer naqdni to'g'ridan-to'g'ri HQ'ga
+     * topshiradi. Ilgari bu qatorlar `COURIER_SETTLED` da qotib qolardi va
+     * `hq_to_market` (u `BRANCH_SETTLED` dan boshlanadi) ularni hech qachon
+     * ko'rmasdi, ya'ni HQ sotuvlari uchun marketga hisob-kitob ledgeri abadiy
+     * ochiq turardi.
+     */
+    toStatus: (settlement: OrderSettlement) => SettlementStatus;
     amountField: 'courier_amount' | 'branch_amount' | 'market_amount';
     lumpSum: number;
     requesterId: string;
@@ -262,7 +421,7 @@ export class OrderSettlementService {
         }
         await repo.update(
           { id: settlement.id },
-          { status: params.toStatus, ...params.stamp(now) },
+          { status: params.toStatus(settlement), ...params.stamp(now) },
         );
         if (legAmount > 0) {
           await params.postLeg(tx, settlement, legAmount);
@@ -329,7 +488,12 @@ export class OrderSettlementService {
       courier_to_branch: {
         matchColumn: 'courier_id' as const,
         fromStatus: SettlementStatus.PENDING,
-        toStatus: SettlementStatus.COURIER_SETTLED,
+        // Filial bo'lsa — filialda; bo'lmasa (HQ sotuvi) naqd allaqachon
+        // HQ'da, shuning uchun darhol BRANCH_SETTLED.
+        toStatus: (settlement: OrderSettlement) =>
+          settlement.branch_id
+            ? SettlementStatus.COURIER_SETTLED
+            : SettlementStatus.BRANCH_SETTLED,
         amountField: 'courier_amount' as const,
         stamp: (now: Date) => ({
           courier_to_branch_at: now,
@@ -339,7 +503,7 @@ export class OrderSettlementService {
       branch_to_hq: {
         matchColumn: 'branch_id' as const,
         fromStatus: SettlementStatus.COURIER_SETTLED,
-        toStatus: SettlementStatus.BRANCH_SETTLED,
+        toStatus: () => SettlementStatus.BRANCH_SETTLED,
         amountField: 'branch_amount' as const,
         stamp: (now: Date) => ({
           branch_to_hq_at: now,
@@ -349,7 +513,7 @@ export class OrderSettlementService {
       hq_to_market: {
         matchColumn: 'market_id' as const,
         fromStatus: SettlementStatus.BRANCH_SETTLED,
-        toStatus: SettlementStatus.MARKET_SETTLED,
+        toStatus: () => SettlementStatus.MARKET_SETTLED,
         amountField: 'market_amount' as const,
         stamp: (now: Date) => ({
           hq_to_market_at: now,

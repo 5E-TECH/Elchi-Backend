@@ -18,7 +18,11 @@ export class RmqService {
 
   constructor(private readonly configService: ConfigService) {}
 
-  private getQueueNames(queueId: string): { main: string; dlq: string; dlx: string } {
+  private getQueueNames(queueId: string): {
+    main: string;
+    dlq: string;
+    dlx: string;
+  } {
     const main = this.configService.get<string>(`RABBITMQ_${queueId}_QUEUE`)!;
     return {
       main,
@@ -50,7 +54,23 @@ export class RmqService {
   }
 
   getOptions(queueId: string, noAck = false): RmqOptions {
-    const ttl = Number(this.configService.get<string>('RMQ_RPC_TTL_MS') ?? 10000);
+    /**
+     * Navbatdagi xabarning yashash muddati (audit C5).
+     *
+     * ⚠️ 10 SEKUND JUDA QISQA EDI. Bu qiymat navbatda KUTISH vaqtini
+     * cheklaydi: iste'molchi band bo'lsa (masalan og'ir dashboard so'rovi
+     * event loop'ni ushlab tursa), xabar shunchaki kechikmasdan DLQ'ga
+     * tushardi. Ya'ni yuk oshganda tizim sekinlashmaydi — YO'QOTA
+     * boshlaydi. Pul oyoqlari outbox bilan qayta yuborilgani uchun
+     * himoyalangan, lekin qidiruv indeksi va tashqi status sinxronizatsiyasi
+     * kabi hodisalar jimgina tushib qolardi.
+     *
+     * 60 s — RPC timeout'laridan (5–10 s) ancha katta, ya'ni normal ishda
+     * hech qachon tegmaydi va faqat haqiqiy tiqilib qolishda ishlaydi.
+     */
+    const ttl = Number(
+      this.configService.get<string>('RMQ_RPC_TTL_MS') ?? 60000,
+    );
     // Per-consumer prefetch: bound how many unacked messages a single service
     // instance holds (Scale NOW-1). With prefetch UNSET (NestJS default 0 =
     // unlimited) a burst shovels unbounded messages into one Node event loop,
@@ -59,7 +79,9 @@ export class RmqService {
     // Money-safe: messages are still individually acked/nacked (noAck=false) and
     // every handler is idempotent (request_id + the cashbox UNIQUE dedup index),
     // so a redelivery from the bounded window can never double-post.
-    const prefetch = Number(this.configService.get<string>('RMQ_PREFETCH') ?? 20);
+    const prefetch = Number(
+      this.configService.get<string>('RMQ_PREFETCH') ?? 20,
+    );
     const { main, dlq, dlx } = this.getQueueNames(queueId);
 
     return {
@@ -67,7 +89,8 @@ export class RmqService {
       options: {
         urls: [this.configService.get<string>('RABBITMQ_URI')!],
         queue: main,
-        prefetchCount: Number.isFinite(prefetch) && prefetch > 0 ? prefetch : 20,
+        prefetchCount:
+          Number.isFinite(prefetch) && prefetch > 0 ? prefetch : 20,
         isGlobalPrefetchCount: false,
         queueOptions: {
           durable: true,

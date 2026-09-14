@@ -156,6 +156,17 @@ export class OrderServiceController {
     );
   }
 
+  /** Dalil faylining egasi — fayl kirish nazorati uchun (audit S5). */
+  @MessagePattern({ cmd: 'order.find_owner_by_proof_file' })
+  findOwnerByProofFile(
+    @Payload() data: { key?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findOwnerByProofFile(data?.key ?? ''),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.branch_can_delete' })
   branchCanDelete(
     @Payload() data: { branch_id: string },
@@ -233,6 +244,28 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * Tashqi posilkani SKANERLAB qabul qilish. Token serverda buyurtmaga
+   * moslanadi — ya'ni skanerlash dalili serverda bo'ladi (audit K2).
+   *
+   * ⚠️ `order.receive` bu yo'lni CHETLAB O'TA OLMAYDI: u tashqi manbali
+   * buyurtmani rad etadi va ichki `scanVerified` bayrog'ini message
+   * payload'idan qabul qilmaydi.
+   */
+  @MessagePattern({ cmd: 'order.receive_by_scan' })
+  receiveByScan(
+    @Payload()
+    data: { tokens: string[]; requester?: { id?: string; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.receiveExternalByScan({
+        tokens: data?.tokens ?? [],
+        requester: data?.requester,
+      }),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.receive' })
   receive(
     @Payload()
@@ -278,6 +311,22 @@ export class OrderServiceController {
         data.dto ?? {},
         data.request_id,
       ),
+    );
+  }
+
+  /**
+   * Yetkazishdan OLDIN bekor qilish — hamkor posilkasi hali `NEW` da
+   * turganda. `order.cancel` `WAITING` + pochta talab qiladi, ya'ni bu
+   * holatda ishlamaydi (audit F4).
+   */
+  @MessagePattern({ cmd: 'order.cancel_pre_delivery' })
+  cancelPreDelivery(
+    @Payload()
+    data: { order_id: string; reason?: string | null; actor?: string | null },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.lifecycleService.cancelPreDeliveryOrder(data),
     );
   }
 
@@ -539,6 +588,34 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * Bitta filial kesimidagi hisob-kitob yig'indisi (audit C1). Manager paneli
+   * ilgari buni 5 000 tagacha buyurtmani tortib olib JS'da hisoblardi.
+   */
+  @MessagePattern({ cmd: 'order.settlement.branch_summary' })
+  settlementBranchSummary(
+    @Payload() data: { branch_id?: string | null; courier_ids?: string[] },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.settlementService.getBranchSettlementSummary(data ?? {}),
+    );
+  }
+
+  /**
+   * Kargo hisob-kitob qilgan buyurtmalarni HQ'ga yetgan deb belgilash
+   * (audit M5).
+   */
+  @MessagePattern({ cmd: 'order.settlement.provider_settled' })
+  settlementProviderSettled(
+    @Payload() data: { order_ids?: string[]; requester_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.settlementService.markProviderSettledToHq(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.initiate_return' })
   initiateReturn(
     @Payload()
@@ -653,6 +730,45 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * ONLAYN TO'LOVNI QAYD ETISH (7-bosqich).
+   *
+   * ⚠️ Pulni kassaga KO'CHIRMAYDI — faqat buyurtmadagi to'lov maydonlarini
+   * yangilaydi. Dublikatning qat'iy to'sig'i chaqiruvchida
+   * (`payment_transactions` UNIQUE), shu bois bu handler idempotentlikni
+   * o'zi ta'minlamaydi.
+   */
+  @MessagePattern({ cmd: 'order.payment.record' })
+  recordOnlinePayment(@Payload() data: any, @Ctx() context: RmqContext) {
+    /**
+     * ⚠️ `runIdempotent`, `executeAndAck` EMAS (adversarial topilma, kritik).
+     *
+     * RMQ `at-least-once` yetkazadi: ack yo'lda yo'qolsa xabar QAYTA
+     * keladi. `recordOnlinePayment` esa KUMULATIV
+     * (`paid_online_amount += amount`) — ya'ni qayta yetkazish summani
+     * ikki marta qo'shardi va buyurtma "ortiqcha to'langan" bo'lib qolardi.
+     *
+     * Chaqiruvchi tomonidagi `payment_transactions` UNIQUE bu holatdan
+     * QUTQARMAYDI: u integration-service ichida, bu esa order-service'ga
+     * kelgan xabarning qayta yetkazilishi.
+     *
+     * Kalit tranzaksiya va holatdan yasaladi — ayni to'lov hodisasi bir
+     * marta qo'llanadi, `pending`/`succeeded`/`refunded` esa alohida.
+     */
+    const requestId =
+      data?.request_id ??
+      [
+        'payment',
+        String(data?.integration_slug ?? ''),
+        String(data?.provider_transaction_id ?? ''),
+        String(data?.status ?? ''),
+      ].join(':');
+
+    return this.runIdempotent(context, 'order.payment.record', requestId, () =>
+      this.lifecycleService.recordOnlinePayment(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.receive_external' })
   receiveExternalOrders(
     @Payload() data: { integration_id: string; orders: any[] },
@@ -743,6 +859,20 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.findByIdEnriched(data.id),
+    );
+  }
+
+  /**
+   * Kiruvchi posilkalarning manbalari — "Kiruvchi posilkalar" ekrani avval
+   * manba so'raydi, keyin o'sha manbaning posilkalarini skanerlaydi.
+   */
+  @MessagePattern({ cmd: 'order.find_external_sources' })
+  findExternalSources(
+    @Payload() data: { branch_id?: string } | undefined,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findExternalSourcesEnriched(data?.branch_id),
     );
   }
 
@@ -883,6 +1013,40 @@ export class OrderServiceController {
         data.requester,
       );
     });
+  }
+
+  /**
+   * Filial paneli uchun barcha raqamlar — bazada hisoblanadi (Scale
+   * 1-bosqich). Ilgari branch-service buyurtmalarni 5 000 talab tortib
+   * olib JS'da sanardi.
+   */
+  @MessagePattern({ cmd: 'order.analytics.branch_dashboard' })
+  branchDashboardStats(
+    @Payload()
+    data: {
+      branch_ids?: string[];
+      courier_ids?: string[];
+      start?: string | null;
+      end?: string | null;
+      today_start: string;
+      week_start: string;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.getBranchDashboardStats(data),
+    );
+  }
+
+  /** Filiallar kesimidagi buyurtma soni — bitta so'rovda (Scale 1-bosqich). */
+  @MessagePattern({ cmd: 'order.analytics.count_by_branch' })
+  countOrdersByBranch(
+    @Payload() data: { branch_ids?: string[]; status?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.countOrdersByBranch(data ?? {}),
+    );
   }
 
   @MessagePattern({ cmd: 'order.analytics.overview' })

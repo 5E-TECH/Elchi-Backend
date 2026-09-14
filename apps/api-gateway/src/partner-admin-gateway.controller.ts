@@ -16,6 +16,7 @@ import { Roles as RoleEnum } from '@app/common';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiQuery,
@@ -133,12 +134,94 @@ export class PartnerAdminGatewayController {
     );
   }
 
+  /**
+   * SINOV WEBHOOKI.
+   *
+   * Webhook zanjiri uch narsaga bog'liq: manzil yetib boradimi, imzo mos
+   * keladimi, qabul qiluvchi 2xx qaytaradimi. Ilgari bularni bilish uchun
+   * HAQIQIY sotuvni kutish kerak edi — xato bo'lsa o'sha buyurtmaning
+   * hodisasi yo'qolardi. Bu marshrut sinxron tekshiradi va to'liq
+   * diagnostika qaytaradi; outbox'ga qator YOZILMAYDI.
+   */
+  /**
+   * Hamkordan kelgan posilkalar bog'lanishi.
+   *
+   * ⚠️ RO'YXAT YUPQA: bog'lanish bor (ularning buyurtma raqami ↔ bizning
+   * buyurtma id'si), status va summa YO'Q. Ular buyurtmaning o'zida, boshqa
+   * sxemada — bu yerda qo'shish har qator uchun alohida so'rov (N+1) talab
+   * qilardi. UI har qatordan buyurtma sahifasiga havola qiladi.
+   *
+   * ⚠️ `:id/shipments` `webhooks` dan KEYIN e'lon qilinadi, lekin
+   * to'qnashmaydi: `webhooks` bir segmentli literal, bu ikki segmentli.
+   */
+  @Get(':id/shipments')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary: "Hamkordan kelgan posilkalar (buyurtma bog'lanishi)",
+  })
+  @ApiParam({ name: 'id' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  listPartnerShipments(
+    @Param('id') id: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return firstValueFrom(
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.shipment.list' },
+          {
+            partner_id: id,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
+        )
+        .pipe(timeout(8000)),
+    );
+  }
+
+  @Post(':id/webhook-test')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      "Sinov webhookini yuborish — haqiqiy buyurtmaga tegmaydi. " +
+      "`url` berilsa saqlangan manzildan ustun turadi (saqlashdan OLDIN sinash).",
+  })
+  @ApiOkResponse({
+    description:
+      '{ ok, url, http_status, duration_ms, response_body, error, ' +
+      'signature_sent, secret_configured, event_id }',
+  })
+  @ApiParam({ name: 'id' })
+  testWebhook(
+    @Param('id') id: string,
+    @Body() body: { url?: string | null },
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    // Sinov TASHQI so'rov qiladi (15s timeout) — gateway kutishi undan
+    // uzunroq bo'lishi kerak, aks holda natija o'qilmay qoladi.
+    // (Izoh `.send()` va `.pipe()` ORASIGA qo'yilmaydi: `gateway-rpc-timeout`
+    // darvozasi matn bo'yicha tekshiradi va oraliqdagi izoh uni chalg'itadi.)
+    return firstValueFrom(
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.webhook.test' },
+          { id, url: body?.url ?? null, requester: this.auditActor(req) },
+        )
+        .pipe(timeout(25000)),
+    );
+  }
+
   @Patch(':id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({
     summary:
-      "Hamkor sozlamalari: webhook manzili/sekreti, IP ro'yxati, nom. " +
-      'API kalit BU YERDA o‘zgarmaydi — buning uchun rotate-key bor.',
+      "Hamkor sozlamalari: webhook manzili/sekreti, SANDBOX manzili, " +
+      "IP ro'yxati, nom. API kalit BU YERDA o‘zgarmaydi — buning uchun " +
+      'rotate-key bor. `webhook_url` qo‘yilganda sozlama yo‘qligi tufayli ' +
+      'kutib turgan hodisalar avtomatik navbatga qaytariladi ' +
+      '(`requeued_webhooks`).',
   })
   @ApiParam({ name: 'id' })
   @ApiBody({ type: UpdatePartnerRequestDto })

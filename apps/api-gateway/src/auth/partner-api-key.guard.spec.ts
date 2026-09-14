@@ -7,9 +7,14 @@ import { ClientProxy } from '@nestjs/microservices';
 import { of, throwError } from 'rxjs';
 import { PartnerApiKeyGuard } from './partner-api-key.guard';
 
-function makeContext(headers: Record<string, unknown>) {
-  const request: { headers: Record<string, unknown>; partner?: unknown } = {
+function makeContext(headers: Record<string, unknown>, ip?: string) {
+  const request: {
+    headers: Record<string, unknown>;
+    partner?: unknown;
+    ip?: string;
+  } = {
     headers,
+    ip,
   };
   const context = {
     switchToHttp: () => ({ getRequest: () => request }),
@@ -84,5 +89,85 @@ describe('PartnerApiKeyGuard', () => {
     await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
       UnauthorizedException,
     );
+  });
+});
+
+/**
+ * IP ALLOWLIST — guard darajasida.
+ *
+ * ⚠️ Ilgari bu tekshiruv UMUMAN YO'Q EDI: `ip_allowlist` bazada, admin API'da
+ * va UI'da bor edi, lekin guard uni o'qimasdi. Operator uni to'ldirib kirish
+ * cheklangan deb o'ylardi — aslida har qanday IP'dan ishlardi.
+ */
+describe('PartnerApiKeyGuard — IP allowlist', () => {
+  const makeGuard = (sendImpl: jest.Mock) =>
+    new PartnerApiKeyGuard({ send: sendImpl } as unknown as ClientProxy);
+
+  const validation = (ipAllowlist: string[] | null) =>
+    jest.fn(() =>
+      of({
+        id: '7',
+        name: 'Acme Market',
+        is_active: true,
+        ip_allowlist: ipAllowlist,
+      }),
+    );
+
+  it("TC-IP1: ro'yxat bo'sh -> o'tadi (mavjud hamkorlar buzilmasin)", async () => {
+    const guard = makeGuard(validation(null));
+    const { context } = makeContext({ 'x-api-key': 'elp_x' }, '203.0.113.10');
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+  });
+
+  it("TC-IP2: ro'yxatdagi IP -> o'tadi", async () => {
+    const guard = makeGuard(validation(['203.0.113.10']));
+    const { context } = makeContext({ 'x-api-key': 'elp_x' }, '203.0.113.10');
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+  });
+
+  it('TC-IP3: ⭐ ro‘yxatdan TASHQARI IP -> 403', async () => {
+    const guard = makeGuard(validation(['203.0.113.10']));
+    const { context } = makeContext({ 'x-api-key': 'elp_x' }, '198.51.100.9');
+
+    await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  it("TC-IP4: CIDR diapazoni ishlaydi", async () => {
+    const guard = makeGuard(validation(['203.0.113.0/24']));
+    const { context } = makeContext({ 'x-api-key': 'elp_x' }, '203.0.113.77');
+
+    await expect(guard.canActivate(context)).resolves.toBe(true);
+  });
+
+  it("TC-IP5: IP aniqlanmasa va ro'yxat bor -> 403", async () => {
+    // Cheklov qo'yilgan joyda "IP'ni bilmadim, o'tkazib yuboraman" degan
+    // xulq cheklovni ma'nosiz qilardi.
+    const guard = makeGuard(validation(['203.0.113.10']));
+    const { context } = makeContext({ 'x-api-key': 'elp_x' });
+
+    await expect(guard.canActivate(context)).rejects.toBeInstanceOf(
+      ForbiddenException,
+    );
+  });
+
+  it('TC-IP6: faol EMAS hamkor IP to‘g‘ri bo‘lsa ham 403', async () => {
+    // Tartib muhim: `is_active` tekshiruvi IP'dan OLDIN turadi.
+    const guard = makeGuard(
+      jest.fn(() =>
+        of({
+          id: '7',
+          name: 'Acme',
+          is_active: false,
+          ip_allowlist: ['203.0.113.10'],
+        }),
+      ),
+    );
+    const { context } = makeContext({ 'x-api-key': 'elp_x' }, '203.0.113.10');
+
+    await expect(guard.canActivate(context)).rejects.toThrow(/faol emas/);
   });
 });

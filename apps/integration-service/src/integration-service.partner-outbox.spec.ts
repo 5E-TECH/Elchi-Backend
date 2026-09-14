@@ -15,12 +15,14 @@ import { IntegrationServiceService } from './integration-service.service';
 
 type Row = Record<string, any>;
 
-function makeService(over: {
-  row?: Row | null;
-  partners?: Row[];
-  summaryRows?: Row[];
-  updateImpl?: jest.Mock;
-} = {}) {
+function makeService(
+  over: {
+    row?: Row | null;
+    partners?: Row[];
+    summaryRows?: Row[];
+    updateImpl?: jest.Mock;
+  } = {},
+) {
   const updates: Row[] = [];
   const logs: Row[] = [];
   const svc: any = Object.create(IntegrationServiceService.prototype);
@@ -88,8 +90,27 @@ describe('IntegrationServiceService — hamkorni tahrirlash', () => {
       .digest();
     svc.previousKey = null;
     svc.allowPrivateHosts = false;
-    svc.logger = { warn: jest.fn(), error: jest.fn() };
-    return { svc: svc as IntegrationServiceService, saved, logs, partner };
+    svc.logger = { warn: jest.fn(), error: jest.fn(), log: jest.fn() };
+    /**
+     * `webhook_url` qo'yilganda `updatePartner` sozlama yo'qligi tufayli
+     * kutib turgan (`awaiting_config`) hodisalarni navbatga qaytaradi —
+     * shuning uchun outbox repo ham kerak.
+     */
+    const requeued: Row[] = [];
+    svc.partnerWebhookOutboxRepo = {
+      update: jest.fn((where: Row, patch: Row) => {
+        requeued.push({ where, patch });
+        return Promise.resolve({ affected: 0 });
+      }),
+    };
+    svc.processPendingPartnerWebhooks = jest.fn().mockResolvedValue({});
+    return {
+      svc: svc as IntegrationServiceService,
+      saved,
+      logs,
+      partner,
+      requeued,
+    };
   }
 
   const base = (): Row => ({
@@ -118,7 +139,7 @@ describe('IntegrationServiceService — hamkorni tahrirlash', () => {
     expect(saved[0].webhook_secret).toBeNull();
   });
 
-  it('yangi webhook manzili SSRF guardidan o\'tadi', async () => {
+  it("yangi webhook manzili SSRF guardidan o'tadi", async () => {
     const { svc, saved } = makeEditSvc(base());
     const spy = jest
       .spyOn(svc as any, 'assertOutboundUrlSafe')
@@ -158,9 +179,9 @@ describe('IntegrationServiceService — hamkorni tahrirlash', () => {
 
   it("bo'sh nom RAD ETILADI", async () => {
     const { svc } = makeEditSvc(base());
-    await expect(svc.updatePartner('1', { name: '   ' })).rejects.toBeInstanceOf(
-      RpcException,
-    );
+    await expect(
+      svc.updatePartner('1', { name: '   ' }),
+    ).rejects.toBeInstanceOf(RpcException);
   });
 
   it('hech qanday maydon berilmasa RAD ETILADI', async () => {
@@ -174,11 +195,11 @@ describe('IntegrationServiceService — hamkorni tahrirlash', () => {
   it('topilmagan hamkor RAD ETILADI', async () => {
     const { svc } = makeEditSvc(null);
     await expect(
-      svc.updatePartner('yo\'q', { name: 'X' }),
+      svc.updatePartner("yo'q", { name: 'X' }),
     ).rejects.toBeInstanceOf(RpcException);
   });
 
-  it('API kalit bu yerda O\'ZGARMAYDI', async () => {
+  it("API kalit bu yerda O'ZGARMAYDI", async () => {
     const p = base();
     p.api_key_hash = 'eski-hash';
     const { svc, saved } = makeEditSvc(p);
@@ -246,7 +267,7 @@ describe('IntegrationServiceService — partner webhook outbox (P5d)', () => {
   it("unique bo'lmagan DB xatosi YUTILMAYDI", async () => {
     const { svc } = makeService({
       row: { id: '7', status: 'permanently_failed', attempts: 4 },
-      updateImpl: jest.fn(() => Promise.reject(new Error('disk to\'la'))),
+      updateImpl: jest.fn(() => Promise.reject(new Error("disk to'la"))),
     });
 
     await expect(svc.retryPartnerWebhook('7')).rejects.toThrow("disk to'la");
@@ -254,7 +275,7 @@ describe('IntegrationServiceService — partner webhook outbox (P5d)', () => {
 
   it('topilmagan yozuv rad etiladi', async () => {
     const { svc } = makeService({ row: null });
-    await expect(svc.retryPartnerWebhook('yo\'q')).rejects.toBeInstanceOf(
+    await expect(svc.retryPartnerWebhook("yo'q")).rejects.toBeInstanceOf(
       RpcException,
     );
   });
@@ -266,9 +287,24 @@ describe('IntegrationServiceService — partner webhook outbox (P5d)', () => {
         { id: '2', name: 'Acme', is_active: false },
       ],
       summaryRows: [
-        { partner_id: '1', status: 'completed', cnt: '10', last_delivered_at: new Date(5) },
-        { partner_id: '1', status: 'pending', cnt: '2', last_delivered_at: null },
-        { partner_id: '1', status: 'permanently_failed', cnt: '1', last_delivered_at: null },
+        {
+          partner_id: '1',
+          status: 'completed',
+          cnt: '10',
+          last_delivered_at: new Date(5),
+        },
+        {
+          partner_id: '1',
+          status: 'pending',
+          cnt: '2',
+          last_delivered_at: null,
+        },
+        {
+          partner_id: '1',
+          status: 'permanently_failed',
+          cnt: '1',
+          last_delivered_at: null,
+        },
       ],
     });
 
@@ -292,8 +328,18 @@ describe('IntegrationServiceService — partner webhook outbox (P5d)', () => {
     const { svc } = makeService({
       partners: [{ id: '1', name: 'BeePost' }],
       summaryRows: [
-        { partner_id: '1', status: 'pending', cnt: '1', last_delivered_at: null },
-        { partner_id: '1', status: 'processing', cnt: '3', last_delivered_at: null },
+        {
+          partner_id: '1',
+          status: 'pending',
+          cnt: '1',
+          last_delivered_at: null,
+        },
+        {
+          partner_id: '1',
+          status: 'processing',
+          cnt: '3',
+          last_delivered_at: null,
+        },
       ],
     });
 
@@ -372,14 +418,19 @@ describe('IntegrationServiceService — market tarifi yangilanishi', () => {
       tariff_center: 20000,
     });
     // Yangi market OCHILMAYDI.
-    expect(calls.find((c) => c.cmd === 'identity.market.create')).toBeUndefined();
+    expect(
+      calls.find((c) => c.cmd === 'identity.market.create'),
+    ).toBeUndefined();
     expect(res.data.elchi_market_id).toBe('m-1');
     expect(res.data.tariff_updated).toBe(true);
     // O'zgarish auditda eski/yangi qiymat bilan qoladi.
-    expect(logs[0].old_value).toEqual({ tariff_home: 25000, tariff_center: 15000 });
+    expect(logs[0].old_value).toEqual({
+      tariff_home: 25000,
+      tariff_center: 15000,
+    });
   });
 
-  it('tarif BIR XIL bo\'lsa — ortiqcha yozuv qilinmaydi', async () => {
+  it("tarif BIR XIL bo'lsa — ortiqcha yozuv qilinmaydi", async () => {
     const { svc, calls, logs } = makeSvc(
       { elchi_market_id: 'm-1' },
       { tariff_home: 25000, tariff_center: 15000 },
@@ -387,7 +438,9 @@ describe('IntegrationServiceService — market tarifi yangilanishi', () => {
 
     const res: any = await svc.provisionPartnerMarket(dto(25000, 15000));
 
-    expect(calls.find((c) => c.cmd === 'identity.market.update')).toBeUndefined();
+    expect(
+      calls.find((c) => c.cmd === 'identity.market.update'),
+    ).toBeUndefined();
     expect(res.data.tariff_updated).toBe(false);
     expect(logs).toHaveLength(0);
   });
@@ -407,6 +460,8 @@ describe('IntegrationServiceService — market tarifi yangilanishi', () => {
 
     // Eng muhimi: tasodifan 0 yozib, Elchi'ni bepul yetkazuvchiga
     // aylantirib qo'ymaslik.
-    expect(calls.find((c) => c.cmd === 'identity.market.update')).toBeUndefined();
+    expect(
+      calls.find((c) => c.cmd === 'identity.market.update'),
+    ).toBeUndefined();
   });
 });

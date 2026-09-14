@@ -20,6 +20,15 @@ jest.mock('@app/common', () => ({
     EXTRA_COST: 'extra_cost',
     MANUAL_INCOME: 'manual_income',
     MANUAL_EXPENSE: 'manual_expense',
+    SALARY: 'salary',
+  },
+  FinancialSource_type: {
+    SELL_PROFIT: 'sell_profit',
+    MANUAL_INCOME: 'manual_income',
+    MANUAL_EXPENSE: 'manual_expense',
+    SALARY: 'salary',
+    CORRECTION: 'correction',
+    BILLS: 'bills',
   },
   PaymentMethod: {
     CASH: 'cash',
@@ -126,6 +135,7 @@ function makeService(manager: MockManager) {
     create: jest.fn((dto: any) => dto),
     createQueryBuilder: jest.fn(),
     findAndCount: jest.fn(),
+    softDelete: jest.fn().mockResolvedValue(undefined),
   };
   const financialHistoryRepo: any = {
     findOne: jest.fn(),
@@ -145,6 +155,9 @@ function makeService(manager: MockManager) {
   const identityClient: any = {};
   const outbox: any = { enqueue: jest.fn().mockResolvedValue(undefined) };
 
+  const integrationClient: any = {
+    send: jest.fn(() => ({ subscribe: jest.fn() })),
+  };
   const service = new FinanceServiceService(
     cashboxRepo,
     historyRepo,
@@ -156,6 +169,8 @@ function makeService(manager: MockManager) {
     dataSource,
     activityLog,
     orderClient,
+    // INTEGRATION klienti (audit M5) — kargo qarzi holat formulasiga kiradi.
+    integrationClient,
     identityClient,
     outbox,
   );
@@ -366,7 +381,13 @@ describe('FinanceServiceService.myCashbox', () => {
 });
 
 describe('FinanceServiceService.financialBalance', () => {
-  it('uses main + branch receivable - market cashbox payable', async () => {
+  /**
+   * AUDIT M1. Kompaniya holati = MAIN + zanjirdagi qarz − marketga qarz.
+   * "Zanjirdagi qarz" buyurtma boshiga BIR MARTA hisoblanadi (kuryerda ham,
+   * filialda ham bo'lishi mumkin), shuning uchun kassa yig'indilari formulaga
+   * QO'SHILMAYDI — aks holda ayni pul ikki marta sanalardi.
+   */
+  it('uses main + chain receivable - market cashbox payable', async () => {
     const manager = makeManager();
     const { service, cashboxRepo } = makeService(manager);
     cashboxRepo.findOne.mockResolvedValue({
@@ -375,36 +396,111 @@ describe('FinanceServiceService.financialBalance', () => {
       cashbox_type: 'main',
       balance: 500000,
     });
-    // Market total now comes from a SQL SUM (sumCashboxBalanceByType), not a
-    // full-table find(); the full market-cashbox list is no longer returned.
+    // sumCashboxBalanceByType chaqirilish tartibi: market → courier → branch.
+    const getRawOne = jest
+      .fn()
+      .mockResolvedValueOnce({ total: '900000' })
+      .mockResolvedValueOnce({ total: '400000' })
+      .mockResolvedValueOnce({ total: '100000' });
     cashboxRepo.createQueryBuilder = jest.fn().mockReturnValue({
       select: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
-      getRawOne: jest.fn().mockResolvedValue({ total: '999999' }),
+      getRawOne,
     });
     rmqSendMock.mockResolvedValue({
       data: {
+        chain_receivable: 950000,
         branch_receivable: 200000,
-        market_payable: 150000,
+        hq_receivable: 750000,
+        market_payable: 900000,
         branches: [{ branch_id: '10', amount: 200000 }],
-        markets: [{ market_id: '20', amount: 150000 }],
+        markets: [{ market_id: '20', amount: 900000 }],
       },
     });
 
     const response: any = await service.financialBalance();
 
-    expect(response.data.currentSituation).toBe(-299999);
+    // 500 000 + 950 000 − 900 000
+    expect(response.data.currentSituation).toBe(550000);
+    expect(response.data.chain.chainReceivable).toBe(950000);
+    expect(response.data.chain.hqReceivable).toBe(750000);
     expect(response.data.branches.branchReceivable).toBe(200000);
-    expect(response.data.markets.marketPayable).toBe(999999);
-    expect(response.data.markets.marketsTotalBalans).toBe(-999999);
+    expect(response.data.markets.marketPayable).toBe(900000);
+    expect(response.data.markets.marketsTotalBalans).toBe(-900000);
     // The unbounded full list + per-row items array are intentionally gone.
     expect(response.data.markets.allMarketCashboxes).toBeUndefined();
     expect(response.data.markets.items).toBeUndefined();
-    expect(response.data.couriers.couriersTotalBalanse).toBe(0);
+    // Ilgari bu qiymat 0 deb qotib qolgan edi — endi haqiqiy yig'indi.
+    expect(response.data.couriers.couriersTotalBalanse).toBe(400000);
+    expect(response.data.branches.branchCashboxTotal).toBe(100000);
     expect(response.data.formula).toBe(
-      'main_cashbox + branch_receivable - market_cashbox_payable',
+      'main_cashbox + chain_receivable + provider_receivable - market_cashbox_payable',
     );
+  });
+
+  /**
+   * AUDIT M5. Kargo orqali sotilgan buyurtmada marketga qarz darhol
+   * yoziladi, naqd esa kargoda qoladi. Kargoning qarzi hisobga olinmasa
+   * balans aynan o'sha summaga manfiyga og'ib turardi.
+   */
+  it('kargo qarzini ham hisobga oladi', async () => {
+    const manager = makeManager();
+    const { service, cashboxRepo } = makeService(manager);
+    cashboxRepo.findOne.mockResolvedValue({
+      id: 'main-1',
+      user_id: '0',
+      cashbox_type: 'main',
+      balance: 0,
+    });
+    cashboxRepo.createQueryBuilder = jest.fn().mockReturnValue({
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getRawOne: jest
+        .fn()
+        .mockResolvedValueOnce({ total: '475000' })
+        .mockResolvedValue({ total: '0' }),
+    });
+    rmqSendMock.mockImplementation((_client: unknown, pattern: any) => {
+      if (pattern?.cmd === 'integration.receivable.outstanding_total') {
+        return Promise.resolve({ data: { outstanding_amount: 500000 } });
+      }
+      return Promise.resolve({
+        data: { chain_receivable: 0, market_payable: 475000 },
+      });
+    });
+
+    const response: any = await service.financialBalance();
+
+    // 0 (MAIN) + 0 (zanjir) + 500 000 (kargo) − 475 000 (market) = 25 000
+    // — ya'ni aynan market tarifi, kutilgan foyda.
+    expect(response.data.chain.providerReceivable).toBe(500000);
+    expect(response.data.currentSituation).toBe(25000);
+  });
+
+  it('eski javobga (chain_receivable yo`q) ham chidaydi', async () => {
+    const manager = makeManager();
+    const { service, cashboxRepo } = makeService(manager);
+    cashboxRepo.findOne.mockResolvedValue({
+      id: 'main-1',
+      user_id: '0',
+      cashbox_type: 'main',
+      balance: 0,
+    });
+    cashboxRepo.createQueryBuilder = jest.fn().mockReturnValue({
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({ total: '0' }),
+    });
+    rmqSendMock.mockResolvedValue({
+      data: { branch_receivable: 120000, markets: [], branches: [] },
+    });
+
+    const response: any = await service.financialBalance();
+
+    expect(response.data.currentSituation).toBe(120000);
   });
 });
 
@@ -772,9 +868,20 @@ describe('FinanceServiceService operator earnings & payments', () => {
     });
   });
 
-  it('records an operator payment', async () => {
+  /**
+   * AUDIT M6. Operator komissiyasini to'lash faqat o'z jadvaliga yozilardi:
+   * MAIN kassa tegilmasdi, P&L daftariga ham tushmasdi — ya'ni kompaniyadan
+   * chiqqan haqiqiy pul hisobotda ko'rinmasdi.
+   */
+  it('records an operator payment AND debits the MAIN cashbox + ledger', async () => {
     const manager = makeManager();
     const { service, paymentRepo, activityLog } = makeService(manager);
+    const cashbox = jest
+      .spyOn(service, 'updateBalance')
+      .mockResolvedValue({} as never);
+    const ledger = jest
+      .spyOn(service, 'recordFinancialBalance')
+      .mockResolvedValue({} as never);
 
     const res = await service.createOperatorPayment({
       operator_id: '42',
@@ -787,7 +894,37 @@ describe('FinanceServiceService operator earnings & payments', () => {
     expect(paymentRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 15000, operator_id: '42' }),
     );
+    expect(cashbox).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cashbox_type: 'main',
+        operation_type: 'expense',
+        amount: 15000,
+        source_id: 'p1',
+      }),
+    );
+    expect(ledger).toHaveBeenCalledWith(
+      expect.objectContaining({
+        amount: -15000,
+        dedup_key: 'operator-payment:p1',
+      }),
+    );
     expect(activityLog.log).toHaveBeenCalled();
+    cashbox.mockRestore();
+    ledger.mockRestore();
+  });
+
+  it('kassa harakati o`tmasa to`lov qatori ham qoldirilmaydi', async () => {
+    const manager = makeManager();
+    const { service, paymentRepo } = makeService(manager);
+    const cashbox = jest
+      .spyOn(service, 'updateBalance')
+      .mockRejectedValue(new Error('Insufficient cash balance'));
+
+    await expect(
+      service.createOperatorPayment({ operator_id: '42', amount: 15000 }),
+    ).rejects.toBeTruthy();
+    expect(paymentRepo.softDelete).toHaveBeenCalledWith({ id: 'p1' });
+    cashbox.mockRestore();
   });
 
   it('rejects a non-positive payment amount', async () => {

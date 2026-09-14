@@ -35,6 +35,13 @@ function createService() {
   };
   orderItemRepo.createQueryBuilder.mockReturnValue(qb);
 
+  const settlementRepo: any = {
+    findOne: jest.fn().mockResolvedValue(null),
+    create: jest.fn((dto: any) => dto),
+    save: jest.fn(async (row: any) => row),
+    update: jest.fn().mockResolvedValue(undefined),
+  };
+
   const queryRunner = {
     connect: jest.fn(),
     startTransaction: jest.fn(),
@@ -45,6 +52,8 @@ function createService() {
       getRepository: jest.fn((entity: { name: string }) => {
         if (entity.name === 'Order') return orderRepo;
         if (entity.name === 'OrderItem') return orderItemRepo;
+        // Kargo sotuvi settlement qatorini ochadi (audit M5).
+        if (entity.name === 'OrderSettlement') return settlementRepo;
         return trackingRepo;
       }),
     },
@@ -165,6 +174,8 @@ function createService() {
     orderCustodyEventRepo,
     transferBatchItemRepo,
     queryRunner,
+    settlementRepo,
+    outbox,
   };
 }
 
@@ -515,9 +526,28 @@ describe('Order tracking lifecycle', () => {
 });
 
 describe('markByProvider (status-only provider transition)', () => {
-  it('sell → SOLD with a tracking event, no finance emit', async () => {
-    const { lifecycle, orderRepo, trackingRepo, queryRunner } = createService();
-    const order = { id: '500', status: Order_status.WAITING, sold_at: null };
+  /**
+   * AUDIT M5. Ilgari bu yo'l ataylab "status-only" edi: marketga qarz
+   * yozilmasdi, settlement qatori ochilmasdi, foyda ham hisoblanmasdi —
+   * kargo orqali sotilgan buyurtmalar butunlay kassadan tashqarida qolardi.
+   */
+  it('sell → SOLD + marketga qarz + settlement qatori (PENDING)', async () => {
+    const {
+      lifecycle,
+      orderRepo,
+      trackingRepo,
+      queryRunner,
+      settlementRepo,
+      outbox,
+    } = createService();
+    const order = {
+      id: '500',
+      status: Order_status.WAITING,
+      sold_at: null,
+      market_id: '7',
+      total_price: 500000,
+      market_tariff: 25000,
+    };
     jest
       .spyOn(lifecycle, 'findById')
       .mockResolvedValueOnce(order as any)
@@ -542,6 +572,26 @@ describe('markByProvider (status-only provider transition)', () => {
       }),
     );
     expect(res.data).toMatchObject({ status: Order_status.SOLD });
+
+    // Marketga qarz: 500 000 − 25 000.
+    const marketLeg = outbox.enqueue.mock.calls.find(
+      (call: any[]) =>
+        call[1] === 'finance.cashbox.update_balance' &&
+        call[2]?.cashbox_type === 'markets',
+    );
+    expect(marketLeg?.[2]).toEqual(
+      expect.objectContaining({ amount: 475000, operation_type: 'income' }),
+    );
+
+    // Naqd kargoda — qator PENDING bo'lib turadi va remittance kelganda
+    // BRANCH_SETTLED ga o'tadi.
+    expect(settlementRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        order_id: '500',
+        market_amount: 475000,
+        status: 'pending',
+      }),
+    );
   });
 
   it('cancel → CANCELLED', async () => {

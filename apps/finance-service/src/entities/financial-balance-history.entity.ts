@@ -52,6 +52,18 @@ export class FinancialBalanceHistory extends BaseEntity {
   })
   balance_after!: number;
 
+  /**
+   * Urinish tokeni — daftar idempotentligining ikkinchi o'lchovi (audit M4).
+   *
+   * Yagona indeks `(source_type, order_id, dedup_key)`. Takroriy yetkazish ayni
+   * token bilan keladi va bir marta yoziladi; sotuv → rollback → qayta sotuv
+   * zanjirida esa har urinish o'z tokeni bilan keladi, ya'ni yangi foyda
+   * yozuvi jimgina o'tkazib yuborilmaydi. Bo'sh qiymat — eski xatti-harakat
+   * (buyurtma boshiga bitta yozuv).
+   */
+  @Column({ type: 'varchar', default: '' })
+  dedup_key!: string;
+
   @Column({ type: 'enum', enum: FinancialSource_type })
   source_type!: FinancialSource_type;
 

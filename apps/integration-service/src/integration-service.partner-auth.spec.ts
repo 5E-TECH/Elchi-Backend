@@ -24,14 +24,30 @@ describe('IntegrationServiceService.validatePartnerKey', () => {
 
     const result = await svc.validatePartnerKey('super-secret-key');
 
-    expect(result).toEqual({ id: '7', name: 'Acme Market', is_active: true });
+    /**
+     * `ip_allowlist` HAM qaytariladi — guard uni tekshiradi. Ilgari
+     * qaytarilmasdi va guard tekshirmasdi: maydon bazada, admin API'da va
+     * UI'da bor edi, lekin HECH NARSA QILMASDI.
+     */
+    expect(result).toEqual({
+      id: '7',
+      name: 'Acme Market',
+      is_active: true,
+      ip_allowlist: null,
+    });
     // is_active FILTRLANMAYDI — guard 401(topilmadi) va 403(faol emas)ni ajratsin.
     expect(findOne).toHaveBeenCalledWith({
       where: {
         api_key_hash: sha256('super-secret-key'),
         isDeleted: false,
       },
-      select: { id: true, name: true, is_active: true },
+      // `ip_allowlist` ham tanlanadi — guard IP cheklovini tekshiradi.
+      select: {
+        id: true,
+        name: true,
+        is_active: true,
+        ip_allowlist: true,
+      },
     });
   });
 
@@ -45,6 +61,7 @@ describe('IntegrationServiceService.validatePartnerKey', () => {
       id: '9',
       name: 'Off',
       is_active: false,
+      ip_allowlist: null,
     });
   });
 

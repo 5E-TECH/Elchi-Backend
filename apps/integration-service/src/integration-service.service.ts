@@ -14,16 +14,23 @@ import {
   ActivityAction,
   ActivityLogService,
   ActivityLogQuery,
+  Cashbox_type,
   HmacAlgorithm,
   Order_status,
   Roles,
   Where_deliver,
+  rmqSend,
   verifyHmacSignature,
   computeHmacSignature,
   assertPublicUrl,
   SsrfBlockedError,
 } from '@app/common';
-import { ExternalIntegration } from './entities/external-integration.entity';
+import {
+  ExternalIntegration,
+  type IntegrationCategory,
+  type IntegrationMode,
+  type IntegrationRole,
+} from './entities/external-integration.entity';
 import { SyncQueue } from './entities/sync-queue.entity';
 import { SyncHistory } from './entities/sync-history.entity';
 import { ProviderWebhookLog } from './entities/provider-webhook-log.entity';
@@ -36,8 +43,43 @@ import { ProviderRemittance } from './entities/provider-remittance.entity';
 import { Partner } from './entities/partner.entity';
 import { PartnerMarketRef } from './entities/partner-market-ref.entity';
 import { PartnerShipmentRef } from './entities/partner-shipment-ref.entity';
+import { InboundDealRef } from './entities/inbound-deal-ref.entity';
+import { PaymentTransaction } from './entities/payment-transaction.entity';
+import { PartnerProductRef } from './entities/partner-product-ref.entity';
 import { PartnerWebhookOutbox } from './entities/partner-webhook-outbox.entity';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
+
+/**
+ * SOTUV HOLATLARI — bu holatlarda mijozdan pul yig'ilgan bo'ladi.
+ *
+ * `cod_collected` / `market_paid_amount` FAQAT shu holatlarda ma'noli.
+ * Bekor qilingan yoki qaytarilgan posilkada pul yig'ilmagan va u yerda
+ * qiymat 0 bo'lishi kerak — aks holda hamkor bekor qilingan buyurtma uchun
+ * pul olgandek yozib qo'yardi.
+ */
+const PAID_STATUSES = new Set<string>([
+  Order_status.SOLD,
+  Order_status.PAID,
+  Order_status.PARTLY_PAID,
+]);
+
+/**
+ * Posilka natijasi SHULARDAN biri bo'lsa, kiruvchi buyurtma yo'li sinaladi.
+ *
+ * Uchalasi ham "bu hodisa mavjud posilkaga tegishli emas" degani:
+ *   `no_paths`    — `webhook_payload_paths` sozlanmagan (faqat buyurtma
+ *                   qabul qiladigan CRM'da u umuman kerak emas)
+ *   `no_status`   — payload'da status yo'q (bitim hodisasida bo'lmaydi)
+ *   `no_shipment` — bu havola bo'yicha posilka topilmadi
+ *
+ * Qolgan natijalar (`updated`, `unchanged`, `unmapped`) MAVJUD posilkaga
+ * tegishli — ular yo'lida buyurtma yaratish dublikat yasardi.
+ */
+const INBOUND_ORDER_OUTCOMES = new Set<string>([
+  'no_paths',
+  'no_status',
+  'no_shipment',
+]);
 
 type HttpMethod = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE';
 
@@ -104,6 +146,9 @@ type StatusSyncConfig = {
 type FindAllIntegrationsQuery = {
   is_active?: boolean | string;
   status?: string;
+  /** Rol bo'yicha filtr — UI ulanishlarni rol guruhlariga ajratadi. */
+  role?: string;
+  category?: string;
   market_id?: string;
   from_date?: string;
   to_date?: string;
@@ -119,6 +164,20 @@ type SyncHistoryQuery = {
   page?: number;
   limit?: number;
 };
+
+/**
+ * Hamkorda `webhook_url` yo'q — yuborishga manzil yo'q degan SIGNAL.
+ *
+ * Oddiy xatodan ajratish SHART: oddiy xato retry hisobini yoqadi va
+ * 4 urinishdan keyin `permanently_failed` beradi. Sozlama yo'qligi esa
+ * hodisaning aybi emas — u kutib turishi va sozlangach yetkazilishi kerak.
+ */
+class PartnerWebhookNotConfiguredError extends Error {
+  constructor(message = 'hamkorda webhook_url sozlanmagan') {
+    super(message);
+    this.name = 'PartnerWebhookNotConfiguredError';
+  }
+}
 
 @Injectable()
 export class IntegrationServiceService {
@@ -163,13 +222,20 @@ export class IntegrationServiceService {
     private readonly partnerMarketRefRepo: Repository<PartnerMarketRef>,
     @InjectRepository(PartnerShipmentRef)
     private readonly partnerShipmentRefRepo: Repository<PartnerShipmentRef>,
+    @InjectRepository(PartnerProductRef)
+    private readonly partnerProductRefRepo: Repository<PartnerProductRef>,
     @InjectRepository(PartnerWebhookOutbox)
     private readonly partnerWebhookOutboxRepo: Repository<PartnerWebhookOutbox>,
+    @InjectRepository(InboundDealRef)
+    private readonly inboundDealRefRepo: Repository<InboundDealRef>,
+    @InjectRepository(PaymentTransaction)
+    private readonly paymentTxnRepo: Repository<PaymentTransaction>,
     private readonly activityLog: ActivityLogService,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('CATALOG') private readonly catalogClient: ClientProxy,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('NOTIFICATION') private readonly notificationClient: ClientProxy,
+    @Inject('FINANCE') private readonly financeClient: ClientProxy,
   ) {}
 
   private badRequest(message: string): never {
@@ -182,6 +248,10 @@ export class IntegrationServiceService {
 
   private conflict(message: string): never {
     throw new RpcException(errorRes(message, 409));
+  }
+
+  private forbidden(message: string): never {
+    throw new RpcException(errorRes(message, 403));
   }
 
   // ===== Partner API (Elchi Partner API) — C1.2 + C1.3 =====
@@ -201,18 +271,41 @@ export class IntegrationServiceService {
    * chaqiriladi). Kalit hash bo'yicha topiladi. `is_active` ham qaytadi —
    * guard qaror qiladi: topilmasa 401, faol emas 403, aks holda o'tadi.
    */
-  async validatePartnerKey(
-    apiKey: string,
-  ): Promise<{ id: string; name: string; is_active: boolean } | null> {
+  /**
+   * API kalitni tekshiradi va guard qaror qabul qilishi uchun kerakli
+   * ma'lumotni qaytaradi.
+   *
+   * ⚠️ `ip_allowlist` HAM qaytariladi. Ilgali qaytarilmasdi va guard uni
+   * tekshirmasdi — ya'ni maydon bazada, admin API'da va UI'da bor edi, lekin
+   * HECH NARSA QILMASDI. Operator uni to'ldirib, kirish cheklangan deb
+   * o'ylardi; aslida har qanday IP'dan ishlardi. Bu yolg'on xavfsizlik
+   * hissi — yo'qligidan yomonroq.
+   */
+  async validatePartnerKey(apiKey: string): Promise<{
+    id: string;
+    name: string;
+    is_active: boolean;
+    ip_allowlist: string[] | null;
+  } | null> {
     if (typeof apiKey !== 'string' || !apiKey.trim()) {
       return null;
     }
     const partner = await this.partnerRepo.findOne({
       where: { api_key_hash: this.hashApiKey(apiKey), isDeleted: false },
-      select: { id: true, name: true, is_active: true },
+      select: {
+        id: true,
+        name: true,
+        is_active: true,
+        ip_allowlist: true as never,
+      },
     });
     return partner
-      ? { id: partner.id, name: partner.name, is_active: partner.is_active }
+      ? {
+          id: partner.id,
+          name: partner.name,
+          is_active: partner.is_active,
+          ip_allowlist: partner.ip_allowlist ?? null,
+        }
       : null;
   }
 
@@ -224,6 +317,8 @@ export class IntegrationServiceService {
     name?: string;
     webhook_url?: string | null;
     webhook_secret?: string | null;
+    sandbox_webhook_url?: string | null;
+    sandbox_webhook_secret?: string | null;
     ip_allowlist?: string[] | null;
     requester?: { id?: string; roles?: string[] } | null;
   }) {
@@ -235,6 +330,18 @@ export class IntegrationServiceService {
     if (dto.webhook_url) {
       await this.assertOutboundUrlSafe(dto.webhook_url);
     }
+    /**
+     * ⚠️ SANDBOX MAYDONLARI YARATISHDA HAM SAQLANADI.
+     *
+     * Ilgari bu metod ularni UMUMAN o'qimasdi — ya'ni gateway DTO'si
+     * qabul qilgan taqdirda ham qiymat jimgina yo'qolardi. Operator
+     * "Sandbox manzili" ni to'ldirib ulanish yaratardi, keyin panelda
+     * maydon BO'SH turardi va nima uchun ekanini tushunmasdi.
+     */
+    if (dto.sandbox_webhook_url) {
+      // Asosiy manzil bilan AYNI guard — sandbox ham tashqi so'rov qiladi.
+      await this.assertOutboundUrlSafe(dto.sandbox_webhook_url);
+    }
     const apiKey = this.generatePartnerApiKey();
     const saved = await this.partnerRepo.save(
       this.partnerRepo.create({
@@ -242,6 +349,20 @@ export class IntegrationServiceService {
         api_key_hash: this.hashApiKey(apiKey),
         webhook_url: dto.webhook_url ?? null,
         webhook_secret: this.encryptCredential(dto.webhook_secret ?? null),
+        sandbox_webhook_url: dto.sandbox_webhook_url ?? null,
+        sandbox_webhook_secret: this.encryptCredential(
+          dto.sandbox_webhook_secret ?? null,
+        ),
+        /**
+         * ⚠️ YARATISHDA HAR DOIM O'CHIQ — ataylab.
+         *
+         * Usta yarim to'ldirilib yakunlanishi mumkin (manzil bor, sekret
+         * yo'q yoki manzil xato). Kalit avtomatik yoqilsa, HAQIQIY
+         * hodisalar nusxasi tekshirilmagan manzilga darhol oqib ketardi.
+         * Operator sozlamani ko'rib chiqib, keyin o'zi yoqadi — va
+         * o'shanda shartlar tekshiriladi.
+         */
+        sandbox_enabled: false,
         ip_allowlist: dto.ip_allowlist ?? null,
         is_active: true,
       }),
@@ -291,6 +412,9 @@ export class IntegrationServiceService {
       name?: string;
       webhook_url?: string | null;
       webhook_secret?: string | null;
+      sandbox_webhook_url?: string | null;
+      sandbox_webhook_secret?: string | null;
+      sandbox_enabled?: boolean;
       ip_allowlist?: string[] | null;
     },
     requester?: { id?: string; roles?: string[] } | null,
@@ -314,7 +438,8 @@ export class IntegrationServiceService {
     }
 
     if (dto.webhook_url !== undefined) {
-      const url = dto.webhook_url === null ? '' : String(dto.webhook_url).trim();
+      const url =
+        dto.webhook_url === null ? '' : String(dto.webhook_url).trim();
       if (url) {
         // SSRF himoyasi yaratishdagi bilan AYNI — tahrir orqali ichki
         // manzilga o'tib ketish yo'li ochilib qolmasin.
@@ -334,6 +459,65 @@ export class IntegrationServiceService {
       changed.webhook_secret_changed = true;
     }
 
+    if (dto.sandbox_webhook_url !== undefined) {
+      const url =
+        dto.sandbox_webhook_url === null
+          ? ''
+          : String(dto.sandbox_webhook_url).trim();
+      if (url) {
+        // Asosiy manzil bilan AYNI guard — sandbox ham tashqi so'rov qiladi,
+        // ya'ni SSRF xavfi bir xil.
+        await this.assertOutboundUrlSafe(url);
+        partner.sandbox_webhook_url = url;
+      } else {
+        partner.sandbox_webhook_url = null;
+      }
+      changed.sandbox_webhook_url = partner.sandbox_webhook_url;
+    }
+
+    if (dto.sandbox_webhook_secret !== undefined) {
+      const secret =
+        dto.sandbox_webhook_secret === null
+          ? ''
+          : String(dto.sandbox_webhook_secret).trim();
+      partner.sandbox_webhook_secret = secret
+        ? this.encryptCredential(secret)
+        : null;
+      // Sir QIYMATI hech qachon loglanmaydi — faqat o'zgargani.
+      changed.sandbox_webhook_secret_changed = true;
+    }
+
+    /**
+     * SANDBOX KALITI.
+     *
+     * ⚠️ YOQISHDA SHARTLAR TEKSHIRILADI. Manzil yoki o'z sekreti bo'lmasa
+     * kalit yoqilsa — operator "yoqdim" deb o'ylab yuradi, nusxa esa
+     * ketmaydi va sabab faqat server logida qoladi. Shu bois xato YOZISH
+     * vaqtida qaytariladi.
+     */
+    if (dto.sandbox_enabled !== undefined) {
+      const next = Boolean(dto.sandbox_enabled);
+      if (next) {
+        const url = String(partner.sandbox_webhook_url ?? '').trim();
+        if (!url) {
+          this.badRequest(
+            'Sandbox yoqish uchun sandbox manzili shart — hodisa nusxasi ' +
+              'qayerga yuborilishi noma‘lum.',
+          );
+        }
+        if (!partner.sandbox_webhook_secret) {
+          this.badRequest(
+            'Sandbox yoqish uchun ALOHIDA sandbox sekreti shart. Prodakshn ' +
+              'sekreti sinov muhitiga yuborilmaydi: sinov muhitlari kamroq ' +
+              'himoyalangan va kalit oqib ketsa u bilan haqiqiy webhook ' +
+              'imzolash mumkin bo‘lardi.',
+          );
+        }
+      }
+      partner.sandbox_enabled = next;
+      changed.sandbox_enabled = next;
+    }
+
     if (dto.ip_allowlist !== undefined) {
       const list = Array.isArray(dto.ip_allowlist)
         ? dto.ip_allowlist.map((v) => String(v).trim()).filter(Boolean)
@@ -348,11 +532,39 @@ export class IntegrationServiceService {
 
     await this.partnerRepo.save(partner);
 
+    /**
+     * `webhook_url` QO'YILGAN bo'lsa, sozlama yo'qligi tufayli kutib turgan
+     * hodisalarni navbatga qaytaramiz.
+     *
+     * Busiz `awaiting_config` qatorlari abadiy o'sha holatda qolardi va
+     * operator ularni qo'lda bittalab "qayta yuborish" qilishi kerak bo'lardi
+     * — sozlashning ma'nosi esa aynan shu hodisalarni yetkazish edi.
+     */
+    let requeued = 0;
+    if (partner.webhook_url) {
+      const res = await this.partnerWebhookOutboxRepo.update(
+        { partner_id: String(partner.id), status: 'awaiting_config' },
+        { status: 'pending', next_retry_at: new Date(), last_error: null },
+      );
+      requeued = Number(res.affected ?? 0);
+      if (requeued > 0) {
+        this.logger.log(
+          `partner ${partner.id}: webhook_url sozlandi — ${requeued} ta ` +
+            `kutib turgan hodisa navbatga qaytarildi`,
+        );
+        // Darhol urinamiz — operator natijani kutib turgan bo'ladi.
+        void this.processPendingPartnerWebhooks(Math.min(requeued, 50)).catch(
+          () => undefined,
+        );
+      }
+    }
+
     await this.activityLog.log({
       entity_type: 'Partner',
       entity_id: String(partner.id),
       action: ActivityAction.UPDATED,
-      new_value: changed,
+      new_value:
+        requeued > 0 ? { ...changed, requeued_webhooks: requeued } : changed,
       ...this.auditActor(requester),
     });
 
@@ -361,7 +573,10 @@ export class IntegrationServiceService {
         id: partner.id,
         name: partner.name,
         webhook_url: partner.webhook_url,
+        sandbox_webhook_url: partner.sandbox_webhook_url,
+        sandbox_enabled: partner.sandbox_enabled,
         is_active: partner.is_active,
+        requeued_webhooks: requeued,
       },
       200,
       'partner updated',
@@ -446,6 +661,26 @@ export class IntegrationServiceService {
         id: true,
         name: true,
         webhook_url: true,
+        /**
+         * ⚠️ SANDBOX MAYDONLARI RO'YXATDA HAM QAYTADI.
+         *
+         * Ilgari ular `select` da yo'q edi, UI esa ularni o'qiydi
+         * (`ConnectionOverview` — "Sandbox sozlangan" qatori). Natijada
+         * qiymat HAR DOIM `undefined` bo'lib, operator sandbox manzilini
+         * saqlagandan keyin ham "sozlanmagan" ko'rardi va qayta-qayta
+         * saqlashga urinardi — tugamaydigan halqa.
+         *
+         * ⚠️ SEKRET QAYTMAYDI: u shifrlangan holda saqlanadi va tashqariga
+         * chiqmasligi kerak. UI faqat "sozlanganmi" ni bilishi kifoya.
+         */
+        sandbox_webhook_url: true,
+        sandbox_enabled: true,
+        /**
+         * Sekretning O'ZI javobga CHIQMAYDI — pastda `has_sandbox_secret`
+         * bayrog'iga aylantirilib, xom qiymat o'chiriladi. UI uchun
+         * "sozlanganmi" degan javob kifoya (`has_webhook_secret` naqshi).
+         */
+        sandbox_webhook_secret: true,
         is_active: true,
         createdAt: true,
       },
@@ -507,8 +742,14 @@ export class IntegrationServiceService {
     }
 
     return successRes(
-      partners.map((p) => ({
+      partners.map(({ sandbox_webhook_secret, ...p }) => ({
         ...p,
+        /**
+         * ⚠️ SHIFRLANGAN SEKRET JAVOBDAN OLIB TASHLANDI, faqat bayroq
+         * qoladi. Sekretni qaytarish hech qanday foyda bermaydi va uni
+         * brauzer tarixida, log'da, ekran suratida qoldiradi.
+         */
+        has_sandbox_secret: Boolean(sandbox_webhook_secret),
         webhooks: summary.get(String(p.id)) ?? {
           pending: 0,
           failed: 0,
@@ -860,9 +1101,15 @@ export class IntegrationServiceService {
     region_id?: string | null;
     district_id?: string | null;
     where_deliver?: string;
-    items?: Array<{ name?: string; quantity?: number }>;
+    items?: Array<{
+      name?: string;
+      quantity?: number;
+      external_product_id?: string | null;
+    }>;
     cod_amount?: number;
     subtotal?: number;
+    /** Hamkor yorlig'idagi QR qiymati (K3). */
+    label_token?: string | null;
   }) {
     const partnerId = String(dto?.partner_id ?? '').trim();
     const externalOrderId = String(dto?.external_order_id ?? '').trim();
@@ -878,6 +1125,38 @@ export class IntegrationServiceService {
     const cod = Number(dto.cod_amount ?? 0);
     if (!Number.isFinite(cod) || cod < 0) {
       this.badRequest('cod_amount manfiy bo‘lmasligi kerak');
+    }
+
+    /**
+     * ⚠️ MARKET EGALIGI — IDOR himoyasi (audit F3).
+     *
+     * MUAMMO. Ilgari `elchi_market_id` faqat MAVJUDLIGI tekshirilardi. Har
+     * hamkor so'rovi esa ichkarida `Roles.SUPERADMIN` bilan bajariladi
+     * (pastdagi `requester`), ya'ni tekshiruvsiz market id = to'liq huquqli
+     * IDOR: hamkor B boshqa hamkorning yoki ichki marketning id'sini yozib,
+     * o'sha marketga buyurtma (va pul harakati) yaratib yuborardi.
+     *
+     * YECHIM. `partner_market_refs` — bu bog'lanish `POST /partner/markets`
+     * da yaratiladi, ya'ni har hamkor o'z sotuvchilarini oldin ro'yxatdan
+     * o'tkazadi. Shu jadvalda `(partner_id, elchi_market_id)` juftligi
+     * bo'lmasa — rad etiladi.
+     *
+     * ⚠️ XABAR "yo'q" va "sizning emas" HOLATINI AJRATMAYDI: ikkisi ham
+     * bir xil 403 beradi. Aks holda hamkor id'larni sanab chiqib qaysi
+     * market mavjudligini aniqlay olardi.
+     */
+    const ownsMarket = await this.partnerMarketRefRepo.findOne({
+      where: {
+        partner_id: partnerId,
+        elchi_market_id: String(dto.elchi_market_id),
+        isDeleted: false,
+      },
+    });
+    if (!ownsMarket) {
+      this.forbidden(
+        'elchi_market_id shu hamkorga tegishli emas — sotuvchini avval ' +
+          'POST /partner/markets bilan ro‘yxatdan o‘tkazish kerak',
+      );
     }
 
     // Idempotentlik: shu (partner, external_order_id) uchun shipment bormi?
@@ -914,7 +1193,57 @@ export class IntegrationServiceService {
       throw new RpcException(errorRes('Customer yaratib bo‘lmadi', 502));
     }
 
-    // 2) order.create (to_be_paid = cod_amount; source=external; external_id)
+    // 2) Mahsulotlarni Elchi katalogiga bog'lash (yo'q bo'lsa yaratiladi).
+    //    order.create'dan OLDIN: buyurtma qatorlari product_id bilan yozilishi
+    //    kerak, aks holda UI nomni katalogdan olib bo'lmaydi.
+    const orderItems = await this.resolvePartnerOrderItems(
+      String(partnerId),
+      String(dto.elchi_market_id),
+      dto.items,
+    );
+
+    /**
+     * YORLIQ TOKENI VA TO'QNASHUV QO'RIQCHISI (audit K3 + K11).
+     *
+     * ⚠️ `qr_code_token` bazada NOYOB EMAS (order entity'da unique indeks
+     * yo'q). Tashqi manba token qiymatini belgilay olishi esa xavfli: ikki
+     * buyurtmada bir xil token bo'lsa, skan NOTO'G'RI posilkani topadi va
+     * operator boshqa buyurtmani qabul qilib yuboradi.
+     *
+     * Shu bois yozishdan OLDIN tekshiramiz. DB darajasidagi unique indeks
+     * qo'yilmadi: mavjud ma'lumotda dublikat bo'lishi mumkin
+     * (`CANCEL-${Date.now()}` naqshi bir ms ichida ikki marta tug'ilishi
+     * mumkin) va migratsiya deploy'ni yiqitardi. Avval haqiqiy ma'lumot
+     * sanalishi kerak — reja: docs/integrations/08-qabul-skaneri.md.
+     */
+    const labelTokenRaw = String(dto.label_token ?? '').trim();
+    let labelToken: string | undefined;
+    if (labelTokenRaw) {
+      const clash = await this.rmqRequest<Record<string, any>>(
+        this.orderClient,
+        { cmd: 'order.find_by_qr' },
+        // ⚠️ Kalit `token` — `qr_code_token` EMAS
+        // (`order-service.controller.ts:170`). Noto'g'ri nom bersak
+        // `data.token` undefined bo'lib, qo'riqchi JIMGINA ishlamasdi.
+        { token: labelTokenRaw },
+        8000,
+      );
+      const clashId = this.pluckId(clash);
+      if (clashId) {
+        /**
+         * Ayni posilkani qayta yuborish — xato EMAS: idempotentlik
+         * yuqorida allaqachon ishlangan, bu yerga faqat YANGI posilka
+         * keladi. Demak token boshqa buyurtmada band.
+         */
+        this.conflict(
+          'label_token allaqachon boshqa buyurtmada ishlatilgan — ' +
+            'har posilkaga noyob yorliq tokeni kerak',
+        );
+      }
+      labelToken = labelTokenRaw;
+    }
+
+    // 3) order.create (to_be_paid = cod_amount; source=external; external_id)
     const totalPrice = Number(dto.subtotal ?? cod);
     const orderRes = await this.rmqRequest<Record<string, any>>(
       this.orderClient,
@@ -934,8 +1263,21 @@ export class IntegrationServiceService {
           to_be_paid: cod,
           source: 'external',
           external_id: externalOrderId,
-          items: this.shipmentOrderItems(dto.items),
+          items: orderItems,
           comment: this.shipmentItemsComment(dto.items),
+          /**
+           * ⚠️ YORLIQ TOKENI (audit K3).
+           *
+           * MUAMMO. Operator hamkor posilkasini skanerlaganda qo'lidagi
+           * yorliqdagi QR o'qiladi — u HAMKOR tizimida chop etilgan.
+           * Elchi esa `order.create`da O'Z tokenini yaratardi
+           * (`qr_code_token` uzatilmasdi), ya'ni skan HECH QACHON mos
+           * kelmasdi va xato "skaner buzuq" kabi ko'rinardi.
+           *
+           * Berilmasa avvalgidek Elchi o'zi yaratadi — eski hamkorlar
+           * buzilmaydi.
+           */
+          qr_code_token: labelToken,
         },
         requester: { id: `partner:${partnerId}`, roles: [Roles.SUPERADMIN] },
         // Partner-scope the idempotency key so two different partners reusing
@@ -952,7 +1294,7 @@ export class IntegrationServiceService {
       throw new RpcException(errorRes('Buyurtma yaratib bo‘lmadi', 502));
     }
 
-    // 3) Bog'lanishni saqlash (idempotency + teskari qidiruv; poyga → mavjudni qaytar)
+    // 4) Bog'lanishni saqlash (idempotency + teskari qidiruv; poyga → mavjudni qaytar)
     try {
       await this.partnerShipmentRefRepo.save(
         this.partnerShipmentRefRepo.create({
@@ -996,37 +1338,119 @@ export class IntegrationServiceService {
    * topilmasa 404 (boshqa hamkor posilkasi ham 404, ma'lumot sizib chiqmaydi).
    * Kontrakt: docs/PARTNER_API.md §3.4.
    */
+  /**
+   * `GET|POST /partner/shipments/:id` uchun posilkani topadi.
+   *
+   * MUAMMO. Ilgari qidiruv TO'G'RIDAN-TO'G'RI `order_id` (bigint) ustunida
+   * bajarilardi. Hujjat esa marshrutni `:external_order_id` deb yozgan. Hamkor
+   * hujjatdagidek UUID yuborsa, Postgres bigint ustunga matnni sig'dirolmay
+   * `22P02` beradi va API **500** qaytaradi — "topilmadi" emas, "server
+   * buzildi". Bu `last_handover_by` bilan bir xil turdagi xato edi.
+   *
+   * YECHIM. Ikki shakl ham qabul qilinadi:
+   *   • faqat raqam  → Elchi `order_id` (POST javobidagi `shipment_id`);
+   *     topilmasa, hamkorning raqamli `external_order_id`'si ham sinaladi;
+   *   • raqam emas   → faqat `external_order_id` (bigint ustunga UMUMAN
+   *     tegilmaydi, shuning uchun 22P02 bo'lishi mumkin emas).
+   *
+   * Topilmasa — 404. Buzilgan kirish endi hech qachon 500 bermaydi.
+   */
+  private async findPartnerShipmentRef(
+    partnerId: string,
+    shipmentId: string,
+  ): Promise<PartnerShipmentRef> {
+    const isNumeric = /^\d+$/.test(shipmentId);
+
+    if (isNumeric) {
+      const byOrderId = await this.partnerShipmentRefRepo.findOne({
+        where: {
+          partner_id: partnerId,
+          order_id: shipmentId,
+          isDeleted: false,
+        },
+      });
+      if (byOrderId) return byOrderId;
+    }
+
+    const byExternal = await this.partnerShipmentRefRepo.findOne({
+      where: {
+        partner_id: partnerId,
+        external_order_id: shipmentId,
+        isDeleted: false,
+      },
+    });
+    if (byExternal) return byExternal;
+
+    this.notFound('Shipment topilmadi');
+  }
+
   async getPartnerShipment(dto: { partner_id?: string; shipment_id?: string }) {
     const partnerId = String(dto?.partner_id ?? '').trim();
     const shipmentId = String(dto?.shipment_id ?? '').trim();
     if (!partnerId) this.badRequest('partner_id majburiy');
     if (!shipmentId) this.badRequest('shipment_id majburiy');
 
-    const ref = await this.partnerShipmentRefRepo.findOne({
-      where: {
-        partner_id: partnerId,
-        order_id: shipmentId,
-        isDeleted: false,
-      },
-    });
-    if (!ref) this.notFound('Shipment topilmadi');
+    const ref = await this.findPartnerShipmentRef(partnerId, shipmentId);
 
+    // ⚠️ Buyurtma `ref.order_id` bo'yicha olinadi, kirishdagi id bo'yicha EMAS:
+    // hamkor `external_order_id` yuborgan bo'lishi mumkin, u esa Elchi
+    // buyurtma id'si emas.
     const order = await this.rmqRequest<Record<string, any>>(
       this.orderClient,
       { cmd: 'order.find_by_id' },
-      { id: shipmentId },
+      { id: String(ref.order_id) },
       8000,
     );
     if (!order) {
       throw new RpcException(errorRes('Elchi buyurtmasi topilmadi', 502));
     }
 
+    /**
+     * ⚠️ `cod_amount` va `cod_collected` — IKKI XIL narsa, aralashtirmaslik
+     * kerak:
+     *
+     *   `cod_amount`    = `to_be_paid`  — TO'LANISHI KERAK summa. Sotuvdan
+     *                     keyin Elchi undan o'z tarifini ushlab qoladi, ya'ni
+     *                     bu "marketga qoladigan" qiymatga aylanadi.
+     *   `cod_collected` = `paid_amount` — ⚠️ NOMI YOLG'ON. Bu kuryer
+     *                     mijozdan yiqqan pul EMAS. U MARKET QARZINING
+     *                     avtomatik to'langan qismi: `sellOrder` da
+     *                     `paidAfter = min(netToBePaid, currentPaid + autoPay)`
+     *                     va `autoPay` market kassasining MANFIY balansidan
+     *                     kelib chiqadi
+     *                     (`order-lifecycle.service.ts` — `sellOrder`).
+     *                     Market qarzi bo'lmasa oddiy sotuvda 0 bo'lib
+     *                     qoladi — kuryer butun summani yiqqan bo'lsa ham.
+     *
+     *                     Nom hamkor kontraktida allaqachon e'lon qilingan,
+     *                     shu bois o'zgartirilmaydi; yoniga aniq nomli
+     *                     `market_paid_amount` qo'shilgan (audit F1).
+     *                     Bu izoh ilgari TESKARISINI yozardi va pul
+     *                     nomuvofiqligini tekshirgan odamni chalg'itardi.
+     *
+     * `cod_collected` ilgari FAQAT chiquvchi webhookda bor edi. Hamkorda
+     * webhook ishlamasa (masalan PCS lokalda turgan bo'lsa), yig'ilgan summa
+     * unga umuman yetib bormasdi — natijada hamkor tomonidagi PUL
+     * NOMUVOFIQLIGI tekshiruvi jim qolardi: Elchi biz kutgandan boshqa summa
+     * yiqqan bo'lsa ham hech kim sezmasdi.
+     *
+     * Shu bois endi solishtirish (`GET`) yo'lida ham qaytariladi — himoya
+     * webhookka bog'liq bo'lmasin.
+     */
     return successRes(
       {
-        shipment_id: shipmentId,
+        shipment_id: String(ref.order_id),
         external_order_id: ref.external_order_id,
         status: this.pluck(order, 'status'),
         cod_amount: Number(this.pluck(order, 'to_be_paid') ?? 0),
+        cod_collected: Number(this.pluck(order, 'paid_amount') ?? 0),
+        total_price: Number(this.pluck(order, 'total_price') ?? 0),
+        /**
+         * Kuryer yozgan qo'shimcha xarajat. Hamkor buni o'z tomonida ham
+         * marketdan yechishi kerak — aks holda ikki daftar shu summaga
+         * ajralib qoladi (hamkorda market hech narsa to'lamaydi).
+         */
+        extra_cost: Number(this.pluck(order, 'extra_cost') ?? 0),
         tracking: this.pluck(order, 'qr_code_token') ?? null,
       },
       200,
@@ -1049,19 +1473,15 @@ export class IntegrationServiceService {
     if (!partnerId) this.badRequest('partner_id majburiy');
     if (!shipmentId) this.badRequest('shipment_id majburiy');
 
-    const ref = await this.partnerShipmentRefRepo.findOne({
-      where: {
-        partner_id: partnerId,
-        order_id: shipmentId,
-        isDeleted: false,
-      },
-    });
-    if (!ref) this.notFound('Shipment topilmadi');
+    const ref = await this.findPartnerShipmentRef(partnerId, shipmentId);
+    // Kirishdagi id `external_order_id` bo'lishi mumkin — Elchi tomoniga
+    // HAMISHA `ref.order_id` beriladi.
+    const orderId = String(ref.order_id);
 
     const order = await this.rmqRequest<Record<string, any>>(
       this.orderClient,
       { cmd: 'order.find_by_id' },
-      { id: shipmentId },
+      { id: orderId },
       8000,
     );
     if (!order) {
@@ -1080,7 +1500,7 @@ export class IntegrationServiceService {
     ) {
       return successRes(
         {
-          shipment_id: shipmentId,
+          shipment_id: orderId,
           status: Order_status.CANCELLED,
           idempotent: true,
         },
@@ -1089,15 +1509,40 @@ export class IntegrationServiceService {
       );
     }
 
-    const cancelled = await this.rmqRequest<Record<string, any>>(
+    /**
+     * ⚠️ IKKI YO'L, HOLATGA QARAB (audit F4).
+     *
+     * `order.cancel` `WAITING` holat va `post_id` ni TALAB qiladi, chunki u
+     * pochta/kuryer/kassa qaytarishini bajaradi. Hamkor posilkasi esa
+     * yaratilgandan keyin `NEW` da turadi (skanerlanmaguncha) — va mijoz
+     * aynan shu oynada bekor qiladi. Ilgari shu holatda `order.cancel`
+     * chaqirilardi, xato bersa `rmqRequest` uni YUTIB hamkorga 502
+     * qaytarardi: ya'ni bekor qilishning eng ko'p uchraydigan holati
+     * umuman ishlamasdi va sabab ham ko'rinmasdi.
+     */
+    const preDelivery =
+      status === Order_status.CREATED || status === Order_status.NEW;
+
+    const cancelled = await this.rmqRequestStrict<Record<string, any>>(
       this.orderClient,
-      { cmd: 'order.cancel' },
-      {
-        id: shipmentId,
-        dto: { comment: 'Partner tomonidan bekor qilindi' },
-        requester: { id: `partner:${partnerId}`, roles: [Roles.SUPERADMIN] },
-        request_id: `partner-cancel:${partnerId}:${shipmentId}`,
-      },
+      preDelivery
+        ? { cmd: 'order.cancel_pre_delivery' }
+        : { cmd: 'order.cancel' },
+      preDelivery
+        ? {
+            order_id: orderId,
+            reason: 'Partner tomonidan bekor qilindi',
+            actor: `partner:${partnerId}`,
+          }
+        : {
+            id: orderId,
+            dto: { comment: 'Partner tomonidan bekor qilindi' },
+            requester: {
+              id: `partner:${partnerId}`,
+              roles: [Roles.SUPERADMIN],
+            },
+            request_id: `partner-cancel:${partnerId}:${orderId}`,
+          },
       10000,
     );
     if (!cancelled) {
@@ -1105,7 +1550,7 @@ export class IntegrationServiceService {
     }
 
     return successRes(
-      { shipment_id: shipmentId, status: Order_status.CANCELLED },
+      { shipment_id: orderId, status: Order_status.CANCELLED },
       200,
       'shipment cancelled',
     );
@@ -1127,6 +1572,10 @@ export class IntegrationServiceService {
     old_status?: string;
     new_status?: string;
     cod_collected?: number;
+    market_paid_amount?: number;
+    cod_amount?: number;
+    total_price?: number;
+    extra_cost?: number;
   }) {
     const orderId = String(dto?.order_id ?? '').trim();
     if (!orderId) return successRes({ skipped: 'no order_id' }, 200, 'skipped');
@@ -1152,12 +1601,59 @@ export class IntegrationServiceService {
       external_order_id: ref.external_order_id,
       shipment_id: orderId,
       status: newStatus,
-      // COD yig'ilgan summa faqat `sold`da ma'noli (kuryer pulni topshirdi).
+      /**
+       * ⚠️ ILGARI BU MAYDON MATEMATIK JIHATDAN HAR DOIM 0 EDI (audit F1).
+       *
+       * Ikki shart bir-birini yo'q qilardi:
+       *   • qiymat FAQAT `newStatus === 'sold'` bo'lganda yuborilardi;
+       *   • status `sold` bo'lishining YAGONA sharti esa `paidAfter === 0`
+       *     (`order-lifecycle.service.ts:3910` — `paidAfter > 0` bo'lsa
+       *     status `paid`/`partly_paid` bo'ladi).
+       * Ya'ni `sold` ⟺ `paid_amount = 0`. Hamkor har doim 0 olardi.
+       *
+       * TUZATISH: darvoza `sold` dan SOTUV HOLATLARI to'plamiga kengaytirildi
+       * (`sold`, `paid`, `partly_paid`). Darvozani butunlay olib tashlash
+       * XATO bo'lardi: bekor qilingan yoki qaytarilgan posilkada pul
+       * yig'ilmagan, ya'ni u yerda qiymat 0 bo'lishi KERAK — aks holda
+       * hamkor bekor qilingan buyurtma uchun pul olgandek yozib qo'yardi.
+       *
+       * Nomi tarixiy va chalg'itadi (`paid_amount` mijozdan yig'ilgan pul
+       * emas), shu bois yoniga aniq nomli maydon qo'shildi.
+       */
       cod_collected:
-        newStatus === (Order_status.SOLD as string) &&
-        Number.isFinite(codCollected)
+        PAID_STATUSES.has(newStatus) && Number.isFinite(codCollected)
           ? codCollected
           : 0,
+      /** `cod_collected` ning to'g'ri nomi — market qarzining to'langan qismi. */
+      market_paid_amount:
+        PAID_STATUSES.has(newStatus) && Number.isFinite(codCollected)
+          ? codCollected
+          : 0,
+      /*
+        ⚠️ `cod_amount` FAQAT chaqiruvchi uni ANIQ uzatganda qo'shiladi.
+ 
+        Uni buyurtmadan olish MUMKIN EMAS: `order.to_be_paid` ikki xil
+        ma'noda ishlatiladi va sotuvdan keyin `netToBePaid` bilan ustiga
+        yoziladi (`order-lifecycle.service.ts:4081`). Ya'ni buyurtmadan
+        olingan qiymat sotuvdan keyin yolg'on bo'lardi.
+      */
+      ...(Number.isFinite(Number(dto?.cod_amount))
+        ? { cod_amount: Number(dto?.cod_amount) }
+        : {}),
+      /**
+       * YAKUNIY narx va qo'shimcha xarajat — hamkor o'z daftarida ham
+       * shu qiymatlar bo'yicha yozishi uchun.
+       *
+       * Ilgari yuborilmasdi: hamkor o'zining ESKI narxi bilan sotardi va
+       * kuryer yozgan xarajatni umuman bilmasdi, natijada ikki daftar
+       * jimgina ajralib ketardi.
+       */
+      total_price: Number.isFinite(Number(dto?.total_price))
+        ? Number(dto?.total_price)
+        : undefined,
+      extra_cost: Number.isFinite(Number(dto?.extra_cost))
+        ? Number(dto?.extra_cost)
+        : undefined,
       occurred_at: new Date().toISOString(),
     };
 
@@ -1243,8 +1739,16 @@ export class IntegrationServiceService {
     );
     if (!claim.affected) return false;
 
+    /**
+     * Javob vaqtini O'LCHAYMIZ. Panelda "o'rtacha javob vaqti" ko'rsatiladi
+     * va u sekinlashuvni erta aniqlashning yagona belgisi: hamkor hali 200
+     * qaytarib turadi-yu, vaqt 200 ms dan 8 s ga o'sgan bo'lsa — keyingi
+     * qadam timeout va yo'qolgan hodisa.
+     */
+    const startedAt = Date.now();
+
     try {
-      const result = await this.dispatchPartnerWebhook(row);
+      const result = await this.dispatchPartnerWebhook(row, attempts);
       await this.partnerWebhookOutboxRepo.update(
         { id: row.id },
         {
@@ -1253,6 +1757,7 @@ export class IntegrationServiceService {
           last_error: null,
           last_response: result,
           next_retry_at: null,
+          duration_ms: Date.now() - startedAt,
         },
       );
       return true;
@@ -1261,6 +1766,38 @@ export class IntegrationServiceService {
         error instanceof Error
           ? error.message
           : 'partner webhook dispatch failed';
+
+      if (error instanceof PartnerWebhookNotConfiguredError) {
+        /**
+         * Urinish QAYTARILADI: yuborishga harakat ham qilinmadi, shuning
+         * uchun bu hodisaning "urinishi" sifatida hisoblanmasligi kerak —
+         * aks holda sozlash kechiksa qator `permanently_failed`ga tushib
+         * ketardi.
+         */
+        await this.partnerWebhookOutboxRepo.update(
+          { id: row.id },
+          {
+            status: 'awaiting_config',
+            attempts: Number(row.attempts ?? 0),
+            last_error: message,
+            next_retry_at: null,
+          },
+        );
+        this.logger.warn(
+          `partner webhook ${row.id}: webhook_url sozlanmagan — ` +
+            `kutish holatiga o'tdi (partner=${row.partner_id})`,
+        );
+        return false;
+      }
+
+      /**
+       * Vaqt xato shoxida HAM yoziladi: sekin javob keyin timeout'ga
+       * aylanadi va o'sha sekinlikni ko'rish kerak. Tarmoq xatosida
+       * (javob umuman kelmagan) ham o'lchov foydali — u timeout chegarasiga
+       * qanchalik yaqin kelganini ko'rsatadi.
+       */
+      const durationMs = Date.now() - startedAt;
+
       if (attempts < Number(row.max_attempts ?? 4)) {
         await this.partnerWebhookOutboxRepo.update(
           { id: row.id },
@@ -1270,6 +1807,7 @@ export class IntegrationServiceService {
             next_retry_at: new Date(
               Date.now() + this.getRetryDelayMs(attempts),
             ),
+            duration_ms: durationMs,
           },
         );
       } else {
@@ -1279,6 +1817,7 @@ export class IntegrationServiceService {
             status: 'permanently_failed',
             last_error: message,
             next_retry_at: null,
+            duration_ms: durationMs,
           },
         );
       }
@@ -1293,13 +1832,51 @@ export class IntegrationServiceService {
    */
   private async dispatchPartnerWebhook(
     row: PartnerWebhookOutbox,
+    /**
+     * Nechanchi urinish (1 dan boshlanadi). Sandbox nusxasi FAQAT
+     * birinchisida yuboriladi — pastdagi izohga qarang.
+     */
+    attempt = 1,
   ): Promise<Record<string, any>> {
     const partner = await this.partnerRepo.findOne({
       where: { id: String(row.partner_id), isDeleted: false },
     });
+    /**
+     * SANDBOX NUSXASI — ASOSIY YO'LDAN MUSTAQIL.
+     *
+     * ⚠️ NEGA BU YERDA, YETKAZISHDAN OLDIN (UI/UX auditi). Ilgari chaqiruv
+     * asosiy `fetch` dan KEYIN va `!webhook_url` tekshiruvidan keyin
+     * turardi. Ikki oqibati bor edi:
+     *
+     *  1. Prodakshn webhooki hali SOZLANMAGAN bo'lsa metod yuqorida
+     *     `PartnerWebhookNotConfiguredError` tashlab chiqib ketardi — ya'ni
+     *     sinov muhitiga HECH NARSA yetmasdi. "Avval sandbox'da sinab
+     *     ko'rish" — integratsiyaning eng birinchi qadami — imkonsiz edi.
+     *  2. Prodakshn manzili yiqilsa (tarmoq xatosi) `fetch` otib yuborardi
+     *     va nusxa ham ketmasdi.
+     *
+     * ⚠️ INVARIANT BUZILMAYDI: `void` + metod ichidagi `try/catch` —
+     * sandbox xatosi hech qachon asosiy hodisaga ta'sir qilmaydi.
+     *
+     * ⚠️ FAQAT BIRINCHI URINISHDA. Ilgari nusxa har urinishda ketardi:
+     * hamkor 500 qaytarsa sinov muhiti AYNI hodisaning 4 nusxasini olardi
+     * va u yerda bitta buyurtma to'rt marta ishlangandek ko'rinib,
+     * sinovning O'ZI yolg'on natija berardi.
+     */
+    if (partner && attempt <= 1) {
+      void this.mirrorToSandbox(partner, row);
+    }
+
     if (!partner?.webhook_url) {
-      // Yuboradigan manzil yo'q — retry qilmaymiz, muvaffaqiyat deb yopamiz.
-      return { skipped: 'no webhook_url' };
+      /**
+       * ⚠️ ILGARI bu yerda `{ skipped: 'no webhook_url' }` qaytarilardi va
+       * chaqiruvchi qatorni `completed` deb yopardi — ya'ni sozlama yo'qligi
+       * jimgina "muvaffaqiyat" bo'lib, hodisa BUTUNLAY yo'qolardi. Keyinroq
+       * `webhook_url` qo'yilganda ham hech narsa yetkazilmasdi.
+       *
+       * Endi signal tashlanadi: qator `awaiting_config`da kutadi.
+       */
+      throw new PartnerWebhookNotConfiguredError();
     }
     await this.assertOutboundUrlSafe(partner.webhook_url);
 
@@ -1316,10 +1893,397 @@ export class IntegrationServiceService {
       body: rawBody,
       signal: AbortSignal.timeout(15000),
     });
+
     if (!res.ok) {
       throw new Error(`partner webhook HTTP ${res.status}`);
     }
     return { http_status: res.status };
+  }
+
+  /**
+   * Hodisa nusxasini hamkorning SANDBOX manziliga yuboradi.
+   *
+   * Prodakshnda `webhook_url` haqiqiy qabul qiluvchiga qaratilgan va unga
+   * tegib bo'lmaydi. Integratsiyani tekshirish uchun esa haqiqiy hodisalar
+   * oqimini ko'rish kerak — sinov buyurtmasi yaratmasdan. Shu bois nusxa.
+   *
+   * ⚠️ HECH QACHON XATO TASHLAMAYDI va hech narsani qayta urinmaydi.
+   * Outbox qatoriga ham tegmaydi: sandbox holati asosiy hodisaning holati
+   * EMAS.
+   */
+  private async mirrorToSandbox(
+    partner: Partner,
+    row: PartnerWebhookOutbox,
+  ): Promise<void> {
+    /**
+     * ⚠️ ANIQ KALIT. Ilgari yagona shart manzilning bo'sh emasligi edi —
+     * ya'ni sinovni to'xtatish uchun manzilni O'CHIRIB TASHLASH kerak
+     * bo'lardi. Endi kalit alohida: manzil saqlanib qoladi, oqim esa
+     * to'xtaydi.
+     */
+    if (!partner.sandbox_enabled) return;
+
+    const target = String(partner.sandbox_webhook_url ?? '').trim();
+    if (!target) {
+      this.logger.warn(
+        `sandbox yoqilgan, lekin manzil yo'q (partner=${partner.id}) — ` +
+          'nusxa yuborilmadi',
+      );
+      return;
+    }
+
+    /**
+     * ⚠️ PRODAKSHN SEKRETI SINOV MUHITIGA CHIQMAYDI.
+     *
+     * Ilgari sandbox sekreti bo'sh bo'lsa ASOSIY sekret ishlatilardi va
+     * kod izohi buni "qulaylik" deb tushuntirardi. Amalda bu prodakshn
+     * imzo kalitini dev hostga yuborish edi: sinov muhitlari odatda
+     * kamroq himoyalangan (umumiy log, ochiq tunnel, uchinchi tomon
+     * xizmati) va kalit oqib ketsa, u bilan HAQIQIY webhook imzolash
+     * mumkin bo'lardi.
+     *
+     * Endi sandbox o'z sekretiga ega bo'lishi SHART.
+     */
+    const sandboxSecret = this.decryptCredential(
+      partner.sandbox_webhook_secret,
+    );
+    if (!sandboxSecret) {
+      this.logger.warn(
+        `sandbox yoqilgan, lekin O'Z sekreti yo'q (partner=${partner.id}) — ` +
+          'nusxa yuborilmadi. Prodakshn sekreti sinov muhitiga yuborilmaydi.',
+      );
+      return;
+    }
+
+    try {
+      await this.assertOutboundUrlSafe(target);
+
+      /**
+       * `sandbox: true` — qabul qiluvchi buni haqiqiy hodisadan ajratishi
+       * uchun. Busiz sinov muhiti va prodakshn bir xil yukni ko'rib,
+       * loglarda ularni farqlash imkonsiz bo'lardi.
+       */
+      const body = JSON.stringify({ ...(row.payload ?? {}), sandbox: true });
+
+      const signature = computeHmacSignature(
+        body,
+        sandboxSecret,
+        'sha256',
+        'hex',
+      );
+
+      const res = await fetch(target, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Elchi-Signature': signature,
+          // Sinov muhiti so'rovni sarlavha bo'yicha ham ajrata olsin.
+          'X-Elchi-Sandbox': '1',
+        },
+        body,
+        signal: AbortSignal.timeout(10000),
+      });
+      if (!res.ok) {
+        this.logger.warn(
+          `sandbox webhook ${row.id}: HTTP ${res.status} (e'tiborsiz)`,
+        );
+      }
+    } catch (error) {
+      this.logger.warn(
+        `sandbox webhook ${row.id} yuborilmadi (e'tiborsiz): ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * SINOV WEBHOOKI — hamkor manzilini haqiqiy buyurtmaga TEGMASDAN tekshiradi.
+   *
+   * NEGA KERAK. Webhook zanjiri uch narsaga bog'liq: manzil yetib boradimi,
+   * imzo mos keladimi, qabul qiluvchi 2xx qaytaradimi. Ilgari bularni bilish
+   * uchun HAQIQIY sotuvni kutish kerak edi — ya'ni prodakshnda sozlamani
+   * "ko'r-ko'rona" qo'yib, birinchi real buyurtmada natijani ko'rish.
+   * Xato bo'lsa esa o'sha buyurtmaning hodisasi yo'qolardi.
+   *
+   * Bu metod SINXRON ishlaydi va to'liq diagnostika qaytaradi: HTTP kodi,
+   * javob tanasi (qisqartirilgan), kechikish, yuborilgan imzo. Outbox'ga
+   * QATOR YOZILMAYDI — bu tekshiruv, hodisa emas.
+   *
+   * `url` berilsa hamkorda saqlanganidan ustun turadi: yangi manzilni
+   * SAQLASHDAN OLDIN sinab ko'rish mumkin.
+   */
+  async testPartnerWebhook(
+    id: string,
+    dto?: { url?: string | null },
+    requester?: { id?: string; roles?: string[] } | null,
+  ) {
+    const partner = await this.partnerRepo.findOne({
+      where: { id: String(id), isDeleted: false },
+    });
+    if (!partner) {
+      this.notFound('Partner topilmadi');
+    }
+
+    const override = String(dto?.url ?? '').trim();
+    const target = override || String(partner.webhook_url ?? '').trim();
+    if (!target) {
+      this.badRequest(
+        "Sinov uchun manzil yo'q — `url` bering yoki hamkorga " +
+          '`webhook_url` sozlang',
+      );
+    }
+    // Haqiqiy yuborish bilan AYNI guard — sinov prodakshndan yumshoqroq
+    // bo'lmasligi kerak, aks holda "sinov o'tdi, real yiqildi" bo'lardi.
+    await this.assertOutboundUrlSafe(target);
+
+    const secret = this.decryptCredential(partner.webhook_secret) ?? '';
+
+    /**
+     * Sinov yuki haqiqiy hodisa SHAKLIDA, lekin `event` boshqa
+     * (`webhook.test`) va `test: true` bayrog'i bor — qabul qiluvchi buni
+     * buyurtma sifatida ishlab yubormasligi kerak.
+     */
+    const payload = {
+      event: 'webhook.test',
+      event_id: randomUUID(),
+      test: true,
+      partner_id: String(partner.id),
+      message: "Elchi sinov webhooki — buyurtmaga ta'sir qilmaydi",
+      occurred_at: new Date().toISOString(),
+    };
+    const rawBody = JSON.stringify(payload);
+    const signature = computeHmacSignature(rawBody, secret, 'sha256', 'hex');
+
+    const startedAt = Date.now();
+    let httpStatus: number | null = null;
+    let responseBody = '';
+    let error: string | null = null;
+
+    try {
+      const res = await fetch(target, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Elchi-Signature': signature,
+        },
+        body: rawBody,
+        signal: AbortSignal.timeout(15000),
+      });
+      httpStatus = res.status;
+      // Javob tanasi diagnostika uchun MUHIM: qabul qiluvchi 200 qaytarib
+      // ham "imzo yaroqsiz" deyishi mumkin.
+      responseBody = (await res.text().catch(() => '')).slice(0, 1000);
+    } catch (e) {
+      error = e instanceof Error ? e.message : 'so‘rov bajarilmadi';
+    }
+
+    const durationMs = Date.now() - startedAt;
+    const ok = httpStatus != null && httpStatus >= 200 && httpStatus < 300;
+
+    await this.activityLog.log({
+      entity_type: 'Partner',
+      entity_id: String(partner.id),
+      action: ActivityAction.EXTERNAL_SYNC,
+      new_value: {
+        webhook_test: true,
+        url: target,
+        ok,
+        http_status: httpStatus,
+        duration_ms: durationMs,
+        note: ok
+          ? 'Sinov webhooki muvaffaqiyatli yetdi'
+          : 'Sinov webhooki yetmadi',
+      },
+      ...this.auditActor(requester),
+    });
+
+    return successRes(
+      {
+        ok,
+        url: target,
+        used_saved_url: !override,
+        http_status: httpStatus,
+        duration_ms: durationMs,
+        response_body: responseBody || null,
+        error,
+        // Imzo qaytariladi: qabul qiluvchi tomonda solishtirib, sekret
+        // mos kelmasligini aniqlash uchun.
+        signature_sent: signature,
+        secret_configured: !!secret,
+        event_id: payload.event_id,
+      },
+      200,
+      ok ? 'webhook test ok' : 'webhook test failed',
+    );
+  }
+
+  /**
+   * INTEGRATSIYA METRIKASI — panel uchun jonli raqamlar.
+   *
+   * NEGA KERAK. Integratsiya paneli ilgari faqat checklist ko'rsatardi:
+   * "sozlangan / sozlanmagan". Lekin operatorning haqiqiy savoli boshqa —
+   * "ISHLAYAPTIMI?". Sozlama to'g'ri bo'lib, hodisalar yetmayotgan bo'lishi
+   * mumkin (hamkor 500 qaytaradi, sekret almashtirilgan, manzil o'zgargan).
+   * Busiz muammo faqat hamkor telefon qilganda ma'lum bo'lardi.
+   *
+   * IKKI MANBA, chunki yo'nalish boshqa:
+   *   inbound (`partner`)     — `partner_webhook_outbox`: BIZ yuborgan
+   *                             hodisalar, ularning holati va javob vaqti
+   *   outbound (`integration`)— `sync_history`: BIZ yuborgan so'rovlar tarixi
+   *
+   * ⚠️ SO'ROVLAR AGREGAT, qator-qator emas. Har ulanish uchun alohida
+   * `find()` qilib mijozda hisoblash 6 ulanishda ham 6 so'rov demak, va
+   * jadval o'sgach bu sekinlashadi. Bu yerda ikkita `GROUP BY` bilan
+   * hammasi bir martada olinadi.
+   */
+  async integrationMetrics(hours = 24) {
+    const windowHours = Math.max(1, Math.min(168, Number(hours) || 24));
+    const since = new Date(Date.now() - windowHours * 3600_000);
+
+    /**
+     * `COUNT(*) FILTER (WHERE ...)` — PostgreSQL'ning shartli agregati.
+     * `CASE WHEN` bilan yozsa ham bo'lardi, lekin `FILTER` o'qilishi
+     * ancha aniq va rejalashtiruvchi uni bir xil bajaradi.
+     *
+     * `queued` 24 SOAT OYNASIDAN TASHQARI hisoblanadi: navbatda turgan
+     * hodisa eski bo'lishi mumkin (`awaiting_config` haftalar yotishi
+     * mumkin) va uni oynadan chiqarib tashlash "navbat bo'sh" degan
+     * yolg'on natija berardi.
+     */
+    const partnerRows = await this.partnerWebhookOutboxRepo
+      .createQueryBuilder('w')
+      .select('w.partner_id', 'id')
+      .addSelect('COUNT(*) FILTER (WHERE w."createdAt" >= :since)', 'events')
+      .addSelect(
+        `COUNT(*) FILTER (WHERE w."createdAt" >= :since AND w.status = 'completed')`,
+        'delivered',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE w."createdAt" >= :since AND w.status = 'permanently_failed')`,
+        'failed',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE w.status IN ('pending','processing','awaiting_config'))`,
+        'queued',
+      )
+      .addSelect(
+        'AVG(w.duration_ms) FILTER (WHERE w."createdAt" >= :since AND w.duration_ms IS NOT NULL)',
+        'avg_ms',
+      )
+      .addSelect('MAX(w."createdAt")', 'last_at')
+      .where('w.is_deleted = false')
+      .setParameter('since', since)
+      .groupBy('w.partner_id')
+      .getRawMany<{
+        id: string;
+        events: string;
+        delivered: string;
+        failed: string;
+        queued: string;
+        avg_ms: string | null;
+        last_at: Date | null;
+      }>();
+
+    const integrationRows = await this.syncHistoryRepo
+      .createQueryBuilder('h')
+      .select('h.integration_id', 'id')
+      .addSelect('COUNT(*) FILTER (WHERE h."createdAt" >= :since)', 'events')
+      .addSelect(
+        `COUNT(*) FILTER (WHERE h."createdAt" >= :since AND h.status = 'success')`,
+        'delivered',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE h."createdAt" >= :since AND h.status = 'failed')`,
+        'failed',
+      )
+      .addSelect('MAX(h."createdAt")', 'last_at')
+      .where('h.is_deleted = false')
+      .setParameter('since', since)
+      .groupBy('h.integration_id')
+      .getRawMany<{
+        id: string;
+        events: string;
+        delivered: string;
+        failed: string;
+        last_at: Date | null;
+      }>();
+
+    // Outbound navbat integratsiya bo'yicha alohida jadvalda.
+    const queueRows = await this.syncQueueRepo
+      .createQueryBuilder('q')
+      .select('q.integration_id', 'id')
+      .addSelect('COUNT(*)', 'queued')
+      .where(`q.status = 'pending'`)
+      .andWhere('q.is_deleted = false')
+      .groupBy('q.integration_id')
+      .getRawMany<{ id: string; queued: string }>();
+
+    const queueById = new Map(
+      queueRows.map((r) => [String(r.id), Number(r.queued) || 0]),
+    );
+
+    const n = (v: unknown) => Number(v ?? 0) || 0;
+
+    /**
+     * Muvaffaqiyat foizi — FAQAT yakunlangan hodisalar ustida
+     * (`delivered + failed`). Navbatda turganini hisobga olsak, foiz
+     * hodisalar ko'paygan sayin sun'iy tushib ketardi: "98% -> 62%" degan
+     * o'zgarish operatorni bejiz qo'rqitardi.
+     *
+     * Yakunlangani BO'LMASA `null` — 0% deb ko'rsatish "hammasi yiqildi"
+     * degan yolg'on xabar bo'lardi.
+     */
+    const rate = (delivered: number, failed: number): number | null => {
+      const done = delivered + failed;
+      return done > 0 ? Math.round((delivered / done) * 1000) / 10 : null;
+    };
+
+    const connections = [
+      ...partnerRows.map((r) => ({
+        kind: 'partner' as const,
+        id: String(r.id),
+        uid: `partner:${r.id}`,
+        events: n(r.events),
+        delivered: n(r.delivered),
+        failed: n(r.failed),
+        queued: n(r.queued),
+        success_rate: rate(n(r.delivered), n(r.failed)),
+        avg_ms: r.avg_ms == null ? null : Math.round(Number(r.avg_ms)),
+        last_event_at: r.last_at ? new Date(r.last_at).toISOString() : null,
+      })),
+      ...integrationRows.map((r) => ({
+        kind: 'integration' as const,
+        id: String(r.id),
+        uid: `integration:${r.id}`,
+        events: n(r.events),
+        delivered: n(r.delivered),
+        failed: n(r.failed),
+        queued: queueById.get(String(r.id)) ?? 0,
+        success_rate: rate(n(r.delivered), n(r.failed)),
+        /**
+         * Outbound uchun javob vaqti O'LCHANMAYDI — `sync_history` da bunday
+         * ustun yo'q. `null` qaytariladi va UI "—" ko'rsatadi. 0 yozish
+         * "bir zumda javob berdi" degan yolg'on bo'lardi.
+         */
+        avg_ms: null as number | null,
+        last_event_at: r.last_at ? new Date(r.last_at).toISOString() : null,
+      })),
+    ];
+
+    const totals = connections.reduce(
+      (acc, c) => ({
+        events: acc.events + c.events,
+        failed: acc.failed + c.failed,
+        queued: acc.queued + c.queued,
+      }),
+      { events: 0, failed: 0, queued: 0 },
+    );
+
+    return successRes(
+      { window_hours: windowHours, totals, connections },
+      200,
+      'integration metrics',
+    );
   }
 
   /** Postgres unique-violation (23505) — dedup uchun. */
@@ -1329,20 +2293,196 @@ export class IntegrationServiceService {
   }
 
   /** External shipment itemlarini nullable product_id kontraktiga o‘giradi. */
-  private shipmentOrderItems(
-    items?: Array<{ name?: string; quantity?: number }>,
-  ): Array<{
-    product_id: null;
-    product_name: string;
-    quantity: number;
-  }> {
-    return (items ?? [])
-      .map((item) => ({
-        product_id: null,
-        product_name: String(item?.name ?? '').trim(),
-        quantity: item?.quantity ?? 1,
-      }))
-      .filter((item) => item.product_name.length > 0 && item.quantity > 0);
+  /**
+   * Hamkor posilkasidagi mahsulotlarni Elchi KATALOGIGA bog'laydi.
+   *
+   * Avval bu yerda `product_id: null` qaytarilardi va nom faqat matn bo'lib
+   * qolardi. Oqibati ikkita edi: UI mahsulot nomini katalogdan olgani uchun
+   * bunday qatorda yiqilardi, va mahsulot bo'yicha hisobot/qidiruvda hamkor
+   * mahsulotlari umuman ko'rinmasdi.
+   *
+   * Endi: mahsulot yo'q bo'lsa YARATILADI, bor bo'lsa QAYTA ISHLATILADI.
+   *
+   * Bog'lanish `external_product_id` (hamkor tomonidagi id) bo'yicha, NOM
+   * bo'yicha emas — nom o'zgaruvchan va nom bo'yicha bog'lansak, hamkor
+   * nomni tuzatgan zahoti katalogda dublikat paydo bo'lardi.
+   *
+   * Id bermagan hamkor uchun eski xulq saqlanadi (faqat matn) — integratsiya
+   * buzilmasin.
+   */
+  private async resolvePartnerOrderItems(
+    partnerId: string,
+    elchiMarketId: string,
+    items?: Array<{
+      name?: string;
+      quantity?: number;
+      external_product_id?: string | null;
+    }>,
+  ): Promise<
+    Array<{
+      product_id: string | null;
+      product_name: string;
+      quantity: number;
+    }>
+  > {
+    const out: Array<{
+      product_id: string | null;
+      product_name: string;
+      quantity: number;
+    }> = [];
+
+    for (const item of items ?? []) {
+      const name = String(item?.name ?? '').trim();
+      const quantity = Number(item?.quantity ?? 1);
+      if (!name || !Number.isFinite(quantity) || quantity <= 0) continue;
+
+      const externalId = String(item?.external_product_id ?? '').trim();
+      let productId: string | null = null;
+
+      if (externalId) {
+        try {
+          productId = await this.resolveCatalogProductId(
+            partnerId,
+            elchiMarketId,
+            externalId,
+            name,
+          );
+        } catch (error) {
+          /**
+           * Katalogga bog'lab bo'lmasa posilka YARATILAVERADI — nom matn
+           * bo'lib qoladi. Yetkazish mahsulot ma'lumotnomasidan MUHIMROQ:
+           * bog'lanish keyin ham tuzatilishi mumkin, yetkazilmagan posilka
+           * esa yo'qolgan pul.
+           */
+          this.logger.warn(
+            `Katalogga bog'lab bo'lmadi (partner=${partnerId}, ` +
+              `external_product_id=${externalId}): ${
+                error instanceof Error ? error.message : String(error)
+              }`,
+          );
+        }
+      }
+
+      out.push({ product_id: productId, product_name: name, quantity });
+    }
+
+    return out;
+  }
+
+  /**
+   * `external_product_id` → Elchi katalogidagi mahsulot id.
+   *
+   * Tartib: mavjud bog'lanish → o'sha market katalogidan NOM bo'yicha qidirish
+   * → yangi mahsulot yaratish. Ikkinchi qadam kerak, chunki katalogda mahsulot
+   * `(name, user_id)` bo'yicha NOYOQ: nomi bir xil mahsulot allaqachon bo'lsa,
+   * yaratish xato beradi va biz mavjudini olishimiz kerak.
+   */
+  private async resolveCatalogProductId(
+    partnerId: string,
+    elchiMarketId: string,
+    externalProductId: string,
+    name: string,
+  ): Promise<string | null> {
+    const existingRef = await this.partnerProductRefRepo.findOne({
+      where: {
+        partner_id: partnerId,
+        external_product_id: externalProductId,
+        isDeleted: false,
+      },
+    });
+    if (existingRef) {
+      return String(existingRef.elchi_product_id);
+    }
+
+    const productId =
+      (await this.findCatalogProductByName(elchiMarketId, name)) ??
+      (await this.createCatalogProduct(elchiMarketId, name));
+
+    if (!productId) return null;
+
+    try {
+      await this.partnerProductRefRepo.save(
+        this.partnerProductRefRepo.create({
+          partner_id: partnerId,
+          external_product_id: externalProductId,
+          elchi_product_id: String(productId),
+          elchi_market_id: String(elchiMarketId),
+        }),
+      );
+    } catch (error) {
+      // Poyga: boshqa oqim shu bog'lanishni yozib ulgurgan — mavjudini olamiz.
+      if (!this.isUniqueViolation(error)) throw error;
+      const raced = await this.partnerProductRefRepo.findOne({
+        where: {
+          partner_id: partnerId,
+          external_product_id: externalProductId,
+        },
+      });
+      return raced ? String(raced.elchi_product_id) : String(productId);
+    }
+
+    return String(productId);
+  }
+
+  /** Market katalogidan AYNAN shu nomli mahsulotni qidiradi. */
+  private async findCatalogProductByName(
+    elchiMarketId: string,
+    name: string,
+  ): Promise<string | null> {
+    const res = await this.rmqRequest<{ data?: unknown }>(
+      this.catalogClient,
+      { cmd: 'catalog.product.find_all' },
+      { query: { user_id: String(elchiMarketId), search: name, limit: 50 } },
+      8000,
+    ).catch(() => null);
+
+    const rows = this.extractRows(res);
+    const match = rows.find(
+      (row) =>
+        String((row as { name?: unknown })?.name ?? '')
+          .trim()
+          .toLowerCase() === name.toLowerCase(),
+    );
+    const id = (match as { id?: unknown })?.id;
+    return id === undefined || id === null ? null : String(id);
+  }
+
+  /**
+   * Katalogda yangi mahsulot yaratadi.
+   *
+   * `rmqRequest` HAR QANDAY xatoni `null` ga aylantiradi (u shunday yozilgan),
+   * shuning uchun "dublikat" bilan "catalog javob bermadi"ni farqlab bo'lmaydi.
+   * Ikkalasida ham xulq bir xil: nom bo'yicha QAYTA qidiramiz. Agar mahsulot
+   * poygada boshqa oqim tomonidan yaratilgan bo'lsa (`(name, user_id)` noyob),
+   * shu ikkinchi qidiruv uni topadi.
+   */
+  private async createCatalogProduct(
+    elchiMarketId: string,
+    name: string,
+  ): Promise<string | null> {
+    const res = await this.rmqRequest<Record<string, any>>(
+      this.catalogClient,
+      { cmd: 'catalog.product.create' },
+      { dto: { name, user_id: String(elchiMarketId) } },
+      8000,
+    );
+    const created = this.pluckId(res);
+    if (created) return created;
+
+    return this.findCatalogProductByName(elchiMarketId, name);
+  }
+
+  /** Javob qobig'idan qatorlar ro'yxatini himoyalangan ochish. */
+  private extractRows(res: unknown): unknown[] {
+    const candidates = [
+      (res as { data?: { data?: unknown } })?.data?.data,
+      (res as { data?: unknown })?.data,
+      res,
+    ];
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate)) return candidate;
+    }
+    return [];
   }
 
   /** Item nomlarini operatorlar uchun order comment'ida ham ko‘rsatadi. */
@@ -1398,11 +2538,24 @@ export class IntegrationServiceService {
     String(process.env.INTEGRATION_ALLOW_PRIVATE_HOSTS ?? '').toLowerCase() ===
     'true';
 
-  // When true, reject signature-valid webhooks that carry no delivery id (for
-  // providers that declared a webhook_id_header) — forces replay protection on.
+  /**
+   * Delivery-id yo'q, imzosi to'g'ri webhookni rad etish (audit S7).
+   *
+   * ⚠️ SUKUT QIYMATI `false` DAN `true` GA O'ZGARTIRILDI. Replay himoyasi
+   * aynan shu id'ga tayanadi: ushlangan haqiqiy webhook qayta-qayta
+   * yuborilsa, faqat delivery-id takrorlanishi uni to'sadi. `false` bo'lsa,
+   * webhook_id_header e'lon qilgan provayder uni yubormay qo'yganida himoya
+   * JIMGINA o'chib qolardi — bu esa himoya yo'qligidan yomonroq, chunki
+   * sozlamada u "bor" bo'lib ko'rinadi.
+   *
+   * Rad etish faqat `webhook_id_header` e'lon qilingan provayderlarga
+   * tegishli. Zarur bo'lsa `INTEGRATION_REQUIRE_DELIVERY_ID=false` bilan
+   * ataylab o'chirish mumkin.
+   */
   private readonly requireDeliveryId =
-    String(process.env.INTEGRATION_REQUIRE_DELIVERY_ID ?? '').toLowerCase() ===
-    'true';
+    String(
+      process.env.INTEGRATION_REQUIRE_DELIVERY_ID ?? 'true',
+    ).toLowerCase() !== 'false';
 
   // Bounds for operator-supplied JSON config blobs (mapping/dispatch/sync).
   private static readonly MAX_CONFIG_BYTES = 64 * 1024; // 64 KB serialized
@@ -1454,11 +2607,141 @@ export class IntegrationServiceService {
       'dispatch_config',
       'inbound_status_mapping',
       'webhook_payload_paths',
+      'inbound_order_config',
+      'payment_config',
     ];
     for (const f of fields) {
       if (typeof dto[f] !== 'undefined') {
         this.assertSafeJsonConfig(dto[f], f);
       }
+    }
+  }
+
+  /**
+   * KIRUVCHI BUYURTMA SOZLAMASINI TEKSHIRISH (audit P7).
+   *
+   * ⚠️ ENG MUHIM QOIDA: `enabled: true` bo'lsa KAMIDA BITTA DARVOZA shart.
+   *
+   * Darvozasiz har bir webhook buyurtma yaratishga urinardi. CRM esa
+   * "bitim yaratildi" hodisasini mijoz manzili va telefoni to'lmasdan
+   * OLDIN yuboradi — ya'ni chala buyurtma tug'ilardi. Dublikat tekshiruvi
+   * bundan QUTQARMAYDI: aksincha, u birinchi chala yozuvni saqlab qolib,
+   * to'g'ri ma'lumot kelganda "allaqachon bor" deb tashlab yuborardi.
+   *
+   * Shuning uchun xato YOZISH vaqtida qaytariladi, webhook vaqtida emas:
+   * operator formani saqlayotganda tushuntirish o'qiydi, kechasi
+   * kelgan webhook logidan izlab yurmaydi.
+   */
+  private assertInboundOrderConfig(dto: Record<string, unknown>): void {
+    const raw = dto.inbound_order_config;
+    if (typeof raw === 'undefined' || raw === null) return;
+
+    if (typeof raw !== 'object' || Array.isArray(raw)) {
+      this.badRequest('inbound_order_config obyekt bo‘lishi kerak');
+    }
+    const cfg = raw as Record<string, unknown>;
+    if (!cfg.enabled) return;
+
+    const arrayGate = (key: string): string[] => {
+      const value = cfg[key];
+      if (typeof value === 'undefined' || value === null) return [];
+      if (!Array.isArray(value)) {
+        this.badRequest(`inbound_order_config.${key} massiv bo‘lishi kerak`);
+      }
+      const cleaned = (value as unknown[])
+        .map((v) => String(v ?? '').trim())
+        .filter(Boolean);
+      if (cleaned.length !== (value as unknown[]).length) {
+        this.badRequest(
+          `inbound_order_config.${key} ichida bo‘sh qiymat bo‘lmasligi kerak`,
+        );
+      }
+      return cleaned;
+    };
+
+    /**
+     * ⚠️ YO'L MAYDONLARI SATR BO'LISHI SHART (adversarial tekshiruv).
+     *
+     * `@IsObject()` faqat "obyektmi" deb qaraydi, ICHINI tekshirmaydi.
+     * `stage_path: 123` bazaga tushsa, webhook vaqtida `extractPath`
+     * `path.trim()` chaqirib TypeError bilan yiqilardi — ya'ni butun
+     * webhook 500 beradi va CRM qayta yuborishni boshlaydi.
+     */
+    for (const key of ['deal_path', 'funnel_path', 'stage_path', 'funnel_id']) {
+      const value = cfg[key];
+      if (value != null && typeof value !== 'string') {
+        this.badRequest(`inbound_order_config.${key} satr bo‘lishi kerak`);
+      }
+    }
+
+    const stages = arrayGate('create_on_stages');
+    const events = arrayGate('create_on_events');
+
+    if (!stages.length && !events.length) {
+      this.badRequest(
+        'inbound_order_config yoqilgan, lekin darvoza yo‘q: ' +
+          '`create_on_stages` yoki `create_on_events` dan kamida bittasi ' +
+          'to‘ldirilishi shart. Aks holda CRM ning har bir hodisasi ' +
+          'buyurtma yaratardi — hatto mijoz manzili hali to‘lmagan ' +
+          '"bitim yaratildi" hodisasi ham.',
+      );
+    }
+
+    /**
+     * Bosqich bo'yicha darvoza BOSQICH YO'LINI talab qiladi — aks holda
+     * qiymat hech qachon o'qilmaydi va darvoza jimgina hamma narsani
+     * o'tkazib yuborardi (ochiq qolgan darvoza eng yomon holat).
+     */
+    if (stages.length && !String(cfg.stage_path ?? '').trim()) {
+      this.badRequest(
+        '`create_on_stages` berilgan bo‘lsa `stage_path` ham shart — ' +
+          'bosqich qiymati payload‘da qayerda turganini bilmasak, ' +
+          'darvoza tekshirib bo‘lmaydi.',
+      );
+    }
+    if (
+      String(cfg.funnel_id ?? '').trim() &&
+      !String(cfg.funnel_path ?? '').trim()
+    ) {
+      this.badRequest('`funnel_id` berilgan bo‘lsa `funnel_path` ham shart.');
+    }
+  }
+
+  /**
+   * KIRUVCHI BUYURTMA YO'LINING SHARTLARI — YAKUNIY holatga qarab.
+   *
+   * ⚠️ NEGA `assertInboundOrderConfig` DAN AYRIM (adversarial tekshiruv).
+   * U faqat `dto` ni ko'radi, bu esa SAQLANADIGAN qatorni. Shartlar
+   * boshqa maydonlarga bog'liq:
+   *
+   *   • `role` — buyurtma faqat `source` orqali kiradi. Ishlash vaqtida
+   *     ham tekshiriladi, lekin u yerda hodisa JIMGINA tashlanadi:
+   *     operator formani saqlab "bo'ldi" deb o'ylab yurardi.
+   *   • `market_id` — `receiveExternalOrders` busiz 400 qaytaradi, ya'ni
+   *     darvoza to'g'ri sozlangan bo'lsa ham HAR BIR bitim yiqilardi.
+   *
+   * Ikkisi ham yozish vaqtida to'sildi: xato formada ko'rinadi, kechasi
+   * kelgan webhook logida emas.
+   */
+  private assertInboundOrderPrereqs(row: {
+    role?: string | null;
+    market_id?: string | null;
+    inbound_order_config?: { enabled?: boolean } | null;
+  }): void {
+    if (!row.inbound_order_config?.enabled) return;
+
+    if (row.role !== 'source') {
+      this.badRequest(
+        'Voronkadan buyurtma yaratish faqat "Buyurtma manbasi" (source) ' +
+          `rolida ishlaydi — hozir rol "${row.role ?? 'yo‘q'}". Kargo bizga ` +
+          'buyurtma bermaydi, biz unga beramiz.',
+      );
+    }
+    if (!String(row.market_id ?? '').trim()) {
+      this.badRequest(
+        'Voronkadan buyurtma yaratish uchun market bog‘lanishi shart — ' +
+          'busiz har bir bitim "market_id is required" bilan yiqiladi.',
+      );
     }
   }
 
@@ -1661,6 +2944,41 @@ export class IntegrationServiceService {
     }
   }
 
+  /**
+   * `rmqRequest` bilan bir xil, LEKIN xatoni YUTMAYDI.
+   *
+   * ⚠️ `rmqRequest` har qanday xatoda `null` qaytaradi (`:2477`). Bu ko'p
+   * joyda to'g'ri (signal yo'qolsa ish davom etsin), lekin hamkor
+   * so'roviga javob berishda YOMON: order-service "buyurtma boshqa
+   * holatda" desa ham hamkor 502 "server buzildi" ko'rardi va so'rovni
+   * takrorlab yurardi.
+   *
+   * Faqat TIMEOUT `null` qaytaradi — u haqiqatan "javob kelmadi" holati.
+   */
+  private async rmqRequestStrict<T>(
+    client: ClientProxy,
+    pattern: { cmd: string },
+    payload: Record<string, any>,
+    ttlMs = 5000,
+  ): Promise<T | null> {
+    try {
+      return await firstValueFrom(
+        client.send(pattern, payload).pipe(timeout(ttlMs)),
+      );
+    } catch (error) {
+      if (error instanceof TimeoutError) {
+        return null;
+      }
+      // Asl statusCode va xabarni hamkorga o'tkazamiz.
+      throw new RpcException(
+        errorRes(
+          (error as { message?: string })?.message ?? 'order service error',
+          Number((error as { statusCode?: number })?.statusCode) || 502,
+        ),
+      );
+    }
+  }
+
   private getRetryDelayMs(attempt: number): number {
     // Exponential-like backoff requested for retries: 1m, 5m, 15m
     const retryDelays = [60_000, 5 * 60_000, 15 * 60_000];
@@ -1725,6 +3043,48 @@ export class IntegrationServiceService {
   private normalizeStatus(value: unknown): 'active' | 'inactive' {
     const normalized = String(value ?? 'active').toLowerCase();
     return normalized === 'inactive' ? 'inactive' : 'active';
+  }
+
+  /**
+   * ROL normalizatori — noma'lum qiymat `carrier`ga tushadi.
+   *
+   * Nega `carrier` standart: mavjud integratsiyalarning hammasi shu naqshda
+   * (`dispatch_config` bilan posilka yaratamiz, ular COD qarzdor). Noma'lum
+   * qiymatni rad etish o'rniga eng ehtimolli rolga tushirish — mavjud
+   * chaqiruvchilar buzilmasin (ular `role` yubormaydi).
+   */
+  private normalizeRole(value: unknown): IntegrationRole {
+    const v = String(value ?? '')
+      .toLowerCase()
+      .trim();
+    return v === 'source' || v === 'payment' || v === 'mirror' ? v : 'carrier';
+  }
+
+  private normalizeCategory(value: unknown): IntegrationCategory {
+    const v = String(value ?? '')
+      .toLowerCase()
+      .trim();
+    const allowed: IntegrationCategory[] = [
+      'marketplace',
+      'crm',
+      'cargo',
+      'payment',
+      'spreadsheet',
+      'other',
+    ];
+    return (allowed as string[]).includes(v)
+      ? (v as IntegrationCategory)
+      : 'other';
+  }
+
+  private normalizeIntegrationMode(value: unknown): IntegrationMode {
+    // `adapter` standart: `spec` rejimi biz kontrakt e'lon qilganimizni
+    // bildiradi va bu ATAYLAB tanlanadigan holat.
+    return String(value ?? '')
+      .toLowerCase()
+      .trim() === 'spec'
+      ? 'spec'
+      : 'adapter';
   }
 
   private normalizeType(value: unknown): 'api' | 'webhook' | 'ftp' {
@@ -2230,11 +3590,17 @@ export class IntegrationServiceService {
       await this.assertOutboundUrlSafe(authUrl);
     }
     this.assertSafeConfigFields(dto as Record<string, unknown>);
+    this.assertInboundOrderConfig(dto as Record<string, unknown>);
 
     const entity = this.integrationRepo.create({
       name: name || slug,
       slug,
       type: integrationType,
+      role: this.normalizeRole((dto as any).role),
+      category: this.normalizeCategory((dto as any).category),
+      integration_mode: this.normalizeIntegrationMode(
+        (dto as any).integration_mode,
+      ),
       base_url: baseUrl,
       credentials: this.normalizeCredentialsForStorage(mergedCredentials),
       status,
@@ -2250,9 +3616,40 @@ export class IntegrationServiceService {
       field_mapping: dto.field_mapping ?? null,
       status_mapping: dto.status_mapping ?? null,
       status_sync_config: dto.status_sync_config ?? null,
+
+      /*
+        KIRUVCHI WEBHOOK VA JO'NATISH SOZLAMALARI.
+
+        ⚠️ ILGARI BU MAYDONLAR YARATISHDA UMUMAN YOZILMASDI. Entity'da ustun
+        bor, kod ularni o'qiydi (`receiveWebhook`, `dispatchShipment`), lekin
+        `createIntegration` ularni tushirib qoldirardi va gateway DTO'sida
+        ham yo'q edi. Natija: yangi ulanish har doim webhook'siz va
+        dispatch'siz tug'ilardi — uchta funksiya jimgina o'lik edi.
+
+        ⚠️ `webhook_secret` SHIFRLANADI. Xom saqlansa `receiveWebhook` dagi
+        `decryptCredential` uni o'qiy olmaydi va har kiruvchi webhook 401
+        bo'lardi — sababi esa hech qayerda ko'rinmasdi.
+      */
+      webhook_secret: this.encryptCredential(
+        (dto as { webhook_secret?: string | null }).webhook_secret ?? null,
+      ),
+      // Rotatsiya oynasi TIZIM tomonidan boshqariladi — yaratishda bo'sh.
+      webhook_secret_previous: null,
+      webhook_signature_header: dto.webhook_signature_header ?? null,
+      webhook_signature_prefix: dto.webhook_signature_prefix ?? null,
+      webhook_algorithm: dto.webhook_algorithm ?? null,
+      webhook_id_header: dto.webhook_id_header ?? null,
+      inbound_status_mapping: dto.inbound_status_mapping ?? null,
+      webhook_payload_paths: dto.webhook_payload_paths ?? null,
+      dispatch_config: dto.dispatch_config ?? null,
+      inbound_order_config: dto.inbound_order_config ?? null,
+      payment_config: dto.payment_config ?? null,
+
       last_sync_at: null,
       total_synced_orders: 0,
     });
+
+    this.assertInboundOrderPrereqs(entity);
 
     const saved = await this.integrationRepo.save(entity);
     const [enriched] = await this.attachMarkets([saved as any]);
@@ -2296,6 +3693,19 @@ export class IntegrationServiceService {
           String(query.is_active).toLowerCase(),
         );
       }
+    }
+
+    /**
+     * Rol/kategoriya filtri — UI ulanishlarni rol guruhlariga ajratadi.
+     * Noma'lum qiymat normalizatorda eng ehtimolli rolga tushib, "hech narsa
+     * topilmadi" degan chalkash natija bermasligi uchun XOM qiymat bilan
+     * filtrlanadi: operator nima yozgan bo'lsa shuni qidiradi.
+     */
+    if (query?.role) {
+      where.role = String(query.role).toLowerCase().trim();
+    }
+    if (query?.category) {
+      where.category = String(query.category).toLowerCase().trim();
     }
 
     if (query?.market_id) {
@@ -2412,8 +3822,33 @@ export class IntegrationServiceService {
       market_id: r.market_id ?? null,
     });
     const before = auditSnapshot(row);
+    /**
+     * Eski shifrlangan sekret — `Object.assign` uni ustiga yozib yuborishidan
+     * OLDIN saqlab qolinadi (rotatsiya oynasi uchun kerak).
+     */
+    const before_webhook_secret = row.webhook_secret;
 
     Object.assign(row, dto);
+
+    /**
+     * Rol/kategoriya/rejim — `Object.assign`dan KEYIN normallashtiriladi.
+     *
+     * `Object.assign` xom qiymatni to'g'ridan-to'g'ri yozadi, ya'ni
+     * "Marketplace" yoki "CARRIER" kabi yozuv bazaga o'sha holida tushib,
+     * filtr va UI guruhlash buzilardi. Faqat BERILGAN maydon tegiladi —
+     * berilmasa mavjud qiymat saqlanadi.
+     */
+    if ((dto as any).role !== undefined) {
+      row.role = this.normalizeRole((dto as any).role);
+    }
+    if ((dto as any).category !== undefined) {
+      row.category = this.normalizeCategory((dto as any).category);
+    }
+    if ((dto as any).integration_mode !== undefined) {
+      row.integration_mode = this.normalizeIntegrationMode(
+        (dto as any).integration_mode,
+      );
+    }
     if (typeof (dto as any).type !== 'undefined') {
       row.type = this.normalizeType((dto as any).type);
     }
@@ -2476,6 +3911,52 @@ export class IntegrationServiceService {
     if (typeof dto.password !== 'undefined') {
       row.password = this.encryptCredential(dto.password ?? null);
     }
+
+    /**
+     * WEBHOOK SEKRETI — shifrlash + ROTATSIYA OYNASI.
+     *
+     * ⚠️ `Object.assign(row, dto)` yuqorida XOM qiymatni yozib qo'ygan bo'ladi.
+     * Uni shu yerda shifrlangan qiymat bilan ALMASHTIRISH shart, aks holda
+     * bazada ochiq sekret qolardi va `receiveWebhook` dagi
+     * `decryptCredential` uni o'qiy olmay har webhookni 401 qilardi.
+     *
+     * ⚠️ ROTATSIYA: yangi sekret qo'yilganda ESKISI `webhook_secret_previous`
+     * ga ko'chadi. Sabab — tashqi tizim sekretni bir zumda almashtira
+     * olmaydi; oyna bo'lmasa almashtirish paytida kelgan har webhook
+     * yo'qolardi. `verifyHmacSignature` ikkinchi sekretni ham sinaydi.
+     *
+     * `webhook_secret_previous` DTO'da ATAYLAB yo'q — u faqat shu yerda
+     * to'ldiriladi, qo'lda kiritilmaydi.
+     */
+    if (
+      typeof (dto as { webhook_secret?: unknown }).webhook_secret !==
+      'undefined'
+    ) {
+      const raw = (dto as { webhook_secret?: string | null }).webhook_secret;
+      const next = raw === null ? '' : String(raw).trim();
+      if (next) {
+        /**
+         * ⚠️ SHIFRMATNLARNI SOLISHTIRIB BO'LMAYDI. `encryptCredential` har
+         * safar tasodifiy IV ishlatadi (`randomBytes(16)`), ya'ni AYNI
+         * sekret har safar BOSHQA shifrmatn beradi. Shifrmatnni solishtirsak
+         * "o'zgardi" har doim rost bo'lib, oyna bekorga surilardi.
+         *
+         * Shu bois OCHIQ MATNLAR solishtiriladi.
+         */
+        const previousPlain = before_webhook_secret
+          ? this.decryptCredential(before_webhook_secret)
+          : null;
+        if (previousPlain !== next) {
+          row.webhook_secret_previous = before_webhook_secret;
+        }
+        row.webhook_secret = this.encryptCredential(next);
+      } else {
+        // Bo'sh satr — tozalash. Oyna ham yopiladi, aks holda o'chirilgan
+        // sekret `previous` orqali ishlashda davom etardi.
+        row.webhook_secret = null;
+        row.webhook_secret_previous = null;
+      }
+    }
     if (typeof dto.auth_type !== 'undefined') {
       row.auth_type = dto.auth_type === 'login' ? 'login' : 'api_key';
     }
@@ -2488,6 +3969,9 @@ export class IntegrationServiceService {
       await this.assertOutboundUrlSafe(row.auth_url);
     }
     this.assertSafeConfigFields(dto as Record<string, unknown>);
+    this.assertInboundOrderConfig(dto as Record<string, unknown>);
+    // Yakuniy holat bo'yicha — `Object.assign` dan KEYIN.
+    this.assertInboundOrderPrereqs(row);
     const saved = await this.integrationRepo.save(row);
     const [enriched] = await this.attachMarkets([saved as any]);
 
@@ -2633,6 +4117,117 @@ export class IntegrationServiceService {
 
   async externalRequest(input: ExternalRequestInput) {
     return this.executeExternalRequest(input);
+  }
+
+  /**
+   * SKANERLAB QABUL QILISH — kichik saytlar uchun ODDIY yo'l.
+   *
+   * NEGA SHUNDAY. Kichik saytlar (Donoxon kabi) webhook qurmaydi va bizga
+   * buyurtma yubormaydi. Ular oddiy: posilkada QR bor, biz o'sha QR bo'yicha
+   * ularning API'sidan buyurtmani so'raymiz. Operator skanerlaydi — buyurtma
+   * tizimga tushadi. PCS'da aynan shu naqsh (Adosh) ishlab turadi.
+   *
+   * ZANJIR: QR → saytning API'si → maydon xaritasi → buyurtma.
+   *
+   * ⚠️ ILGARI ZANJIR UZUQ EDI (audit EI-01). `search-by-qr` FAQAT ma'lumot
+   * olib kelardi, buyurtma yaratmasdi; `receiveExternalOrders` esa JWT
+   * ortida turgan alohida endpoint edi. Ya'ni operator uchun ishlaydigan
+   * yo'l yo'q edi — Swagger'dan qo'lda JSON tashlash kerak bo'lardi.
+   *
+   * ⚠️ BIR SO'ROV = BIR POSILKA. Skaner har posilkani alohida o'qiydi va
+   * har biri darhol tizimga tushishi kerak: to'da yig'ib oxirida yuborish
+   * brauzer yopilganda butun sessiyani yo'qotardi.
+   */
+  async scanIntake(input: {
+    slug: string;
+    qr_code: string;
+    requester?: { id?: string; roles?: string[] } | null;
+  }) {
+    const qr = String(input.qr_code ?? '').trim();
+    if (!qr) {
+      this.badRequest('qr_code majburiy');
+    }
+
+    const integration = await this.findActiveBySlug(input.slug);
+    if (!integration.market_id) {
+      /**
+       * Sababni ANIQ aytamiz: bu eng ko'p uchraydigan sozlama xatosi
+       * (audit EI-02) va "400 bad request" operatorga hech narsa bermaydi.
+       */
+      this.badRequest(
+        `"${integration.name}" ulanishida market bog'lanmagan — ` +
+          'Sozlamalarda "Market" maydonini to‘ldirish kerak',
+      );
+    }
+
+    // 1) Saytdan buyurtmani so'raymiz.
+    const found = await this.searchByQr({ slug: input.slug, qr_code: qr });
+    /**
+     * ⚠️ `?? ` ISHLATILMAYDI. `{ data: null }` kelganda `?? ` `null`ni "yo'q"
+     * deb hisoblab BUTUN QOBIQQA qaytardi — u esa truthy, ya'ni "topilmadi"
+     * qo'riqchisi ishlamasdi va bo'sh buyurtma yaratishga ketardi.
+     * Kalit MAVJUDLIGI bo'yicha tekshiramiz.
+     */
+    const envelope = found as { data?: unknown } | null;
+    const raw =
+      envelope && typeof envelope === 'object' && 'data' in envelope
+        ? envelope.data
+        : envelope;
+    if (!raw || (Array.isArray(raw) && !raw.length)) {
+      this.notFound('Bu QR bo‘yicha saytda buyurtma topilmadi');
+    }
+
+    /**
+     * Sayt bitta obyekt ham, massiv ham qaytarishi mumkin. Ikkisini ham
+     * qabul qilamiz — aks holda har sayt uchun alohida shakl talab qilardi.
+     */
+    const orders = Array.isArray(raw) ? raw : [raw];
+
+    /**
+     * QR qiymatini yozib qo'yamiz: shu token buyurtmaning
+     * `qr_code_token`iga tushadi va POSILKANI SKANERLASH keyin ham ishlaydi
+     * (yorliq saytda chop etilgan). Sayt payload'ida QR bo'lmasa, biz
+     * skanerlangan qiymatni ishlatamiz.
+     */
+    const qrField =
+      (integration.field_mapping as Record<string, string> | null)
+        ?.qr_code_field ?? 'qr_code';
+    const enriched = orders.map((o) =>
+      o && typeof o === 'object' && !(qrField in (o as object))
+        ? { ...(o as Record<string, unknown>), [qrField]: qr }
+        : o,
+    );
+
+    // 2) Buyurtmaga aylantiramiz — mavjud import yo'lidan.
+    const created = await this.rmqRequestStrict<Record<string, any>>(
+      this.orderClient,
+      { cmd: 'order.receive_external' },
+      { integration_id: String(integration.id), orders: enriched },
+      15000,
+    );
+    if (!created) {
+      throw new RpcException(
+        errorRes(
+          'Buyurtmani yaratib bo‘lmadi — order service javob bermadi',
+          502,
+        ),
+      );
+    }
+
+    await this.activityLog.log({
+      entity_type: 'ExternalIntegration',
+      entity_id: String(integration.id),
+      action: ActivityAction.EXTERNAL_SYNC,
+      new_value: { qr_code: qr, source: 'scan_intake' },
+      metadata: { provider: integration.slug },
+      ...this.auditActor(input.requester),
+    });
+
+    return successRes(
+      (created as { data?: unknown })?.data ?? created,
+      200,
+      'Scanned order imported',
+    );
   }
 
   async searchByQr(input: QrSearchInput) {
@@ -3413,11 +5008,22 @@ export class IntegrationServiceService {
       algorithm,
     });
 
+    /**
+     * ⚠️ SARLAVHA QIYMATI KESILADI (adversarial topilma).
+     *
+     * `delivery_id` va `event_type` — `varchar` ustunlar, sarlavha esa
+     * imzolanmagan va uzunligi cheklanmagan. Haddan tashqari uzun qiymat
+     * `INSERT` ni yiqitardi, `saveWebhookLog` esa xatoni YUTIB `null`
+     * qaytaradi va oqim davom etardi: ya'ni audit yozuvi ham, replay
+     * himoyasi ham JIMGINA o'chib qolardi.
+     */
     const deliveryId = integration.webhook_id_header
-      ? (headers[integration.webhook_id_header.toLowerCase()] ?? null)
+      ? this.clampHeader(headers[integration.webhook_id_header.toLowerCase()])
       : null;
     const parsed = this.tryParseJson(rawBody.toString('utf8'));
-    const eventType = this.extractEventType(parsed, headers);
+    const eventType = this.clampHeader(
+      this.extractEventType(parsed, headers) ?? undefined,
+    );
 
     if (!verification.valid) {
       await this.saveWebhookLog({
@@ -3476,7 +5082,7 @@ export class IntegrationServiceService {
       }
     }
 
-    const log = await this.saveWebhookLog({
+    const logResult = await this.saveWebhookLog({
       integration_id: String(integration.id),
       provider_slug: integration.slug,
       delivery_id: deliveryId,
@@ -3488,6 +5094,21 @@ export class IntegrationServiceService {
       error: null,
       trace_id: input.trace_id ?? null,
     });
+
+    /**
+     * ⚠️ BIR VAQTDA KELGAN NUSXA — HODISA QO'LLANMAYDI (audit P1).
+     *
+     * `:4875` dagi oldindan tekshiruv poyga oynasida ikkinchi nusxani
+     * ko'rmaydi; unikal indeks esa ko'radi. Ilgari bu holat jimgina `null`
+     * bo'lib o'tib ketardi va hodisa IKKI MARTA qo'llanardi.
+     *
+     * 200 qaytaramiz: provayder uchun bu muvaffaqiyatli yetkazish — u
+     * haqiqatan yetkazgan, biz esa allaqachon qabul qilganmiz.
+     */
+    if (logResult === 'duplicate') {
+      return { ok: true, code: 200, reason: 'duplicate', replay: true };
+    }
+    const log = logResult;
 
     await this.activityLog.log({
       entity_type: 'ProviderWebhook',
@@ -3501,9 +5122,120 @@ export class IntegrationServiceService {
     // a payload we can't map, or an order we don't have a shipment for, is
     // logged but never fails the webhook — the provider still gets a 200 and
     // the raw event stays in the log for replay.
+    /**
+     * ⚠️ KILL-SWITCH ASIMMETRIYASI (audit H2).
+     *
+     * `receiveWebhook` `is_active` ni TEKSHIRMASDI: o'chirilgan kargoning
+     * webhooki hamon buyurtma statusini o'zgartirardi va COD qarzini
+     * yozardi. Ya'ni "to'xtatish" tugmasi faqat yarim ishlardi va operator
+     * ulanish o'chiq deb o'ylab yurardi.
+     *
+     * ⚠️ 200 QAYTARAMIZ, rad etmaymiz. Non-2xx bo'lsa provayder qayta
+     * yuborishni boshlaydi va navbatini to'ldiradi — holbuki muammo bizda
+     * emas, qaror bizda. Hodisa JURNALGA yoziladi (qayta ijro uchun), lekin
+     * QO'LLANMAYDI. PCS'dagi boshqaruv paneli ham aynan shu xatti-harakatni
+     * tasvirlaydi: "o'chirilsa hodisalar jurnalga yoziladi, lekin
+     * qo'llanmaydi".
+     */
+    if (!integration.is_active) {
+      this.logger.warn(
+        `webhook SKIPPED for ${integration.slug}: ulanish o'chirilgan — ` +
+          "hodisa jurnalga yozildi, lekin qo'llanmadi",
+      );
+      if (log?.id) {
+        await this.markWebhookProcessed(log.id, 'integration_inactive');
+      }
+      return {
+        ok: true,
+        code: 200,
+        reason: 'integration_inactive',
+        event_type: eventType,
+        delivery_id: deliveryId,
+        log_id: log?.id ?? null,
+        shipment: { outcome: 'skipped_inactive' as const },
+      };
+    }
+
+    /**
+     * TO'LOV SHOXI — posilka yo'lidan OLDIN (audit P1/P2).
+     *
+     * ⚠️ NEGA OLDIN. To'lov hodisasida posilka YO'Q: mijoz pul to'lagan,
+     * bu jo'natma haqidagi xabar emas. `applyWebhookToShipment` esa mavjud
+     * posilka izlaydi va topmasa `no_shipment` qaytaradi — undan keyin
+     * kiruvchi buyurtma yo'li sinaladi va u `role !== 'source'` deb rad
+     * etadi. Natijada to'lov hodisasi imzo tekshiruvidan o'tib, keyin
+     * JIMGINA yo'qolardi.
+     *
+     * Shox `role === 'payment'` bo'lganda ishlaydi va o'z natijasini
+     * qaytarib, qolgan yo'llarni umuman ishga tushirmaydi.
+     */
+    if (integration.role === 'payment') {
+      const payment = await this.applyWebhookToPayment(
+        integration,
+        parsed,
+        log?.id ?? null,
+      );
+      if (log?.id) {
+        await this.markWebhookProcessed(
+          log.id,
+          payment.outcome,
+          payment.reason ?? undefined,
+        );
+      }
+      return {
+        ok: true,
+        code: 200,
+        reason: 'accepted',
+        event_type: eventType,
+        delivery_id: deliveryId,
+        log_id: log?.id ?? null,
+        payment,
+      };
+    }
+
     const applied = await this.applyWebhookToShipment(integration, parsed);
+
+    /**
+     * KIRUVCHI BUYURTMA — CRM voronkasi yo'li (audit P5/EI-10).
+     *
+     * Tartib ATAYLAB shunday: avval MAVJUD posilka qidiriladi, topilmasa
+     * buyurtma yaratishga o'tiladi. Nega:
+     *
+     *  1. Mavjud xatti-harakat o'zgarmaydi — posilka topilsa, ilgarigidek
+     *     status yangilanadi. Ya'ni bu qo'shimcha, almashtirish emas.
+     *  2. `no_shipment` bugun BOSHI BERK ko'cha: hodisa jurnalga tushadi va
+     *     hech narsa bo'lmaydi. Aynan shu yerda CRM bitimi buyurtmaga
+     *     aylanishi kerak.
+     *
+     * `no_paths`/`no_status` ham ro'yxatda, chunki faqat buyurtma qabul
+     * qiladigan CRM'da `webhook_payload_paths` umuman sozlanmaydi — u
+     * posilka kuzatish uchun kerak.
+     */
+    const inbound = INBOUND_ORDER_OUTCOMES.has(applied.outcome)
+      ? await this.applyWebhookToInboundOrder(integration, parsed)
+      : null;
+
+    /**
+     * Jurnalga YAKUNIY natija yoziladi. Buyurtma yaratish urinishi bo'lsa,
+     * operator uchun muhim natija o'shanisi: `no_shipment` deb yozib qo'ysak,
+     * buyurtma yaratilgani logda KO'RINMASDI.
+     */
     if (log?.id) {
-      await this.markWebhookProcessed(log.id, applied.outcome);
+      /**
+       * ⚠️ SABAB HAM YOZILADI (adversarial tekshiruv). Ilgari jurnalda
+       * faqat `apply: inbound_failed` turardi — "market_id sozlanmagan",
+       * "tuman aniqlanmadi" va "telefon yo'q" bir xil ko'rinardi, ya'ni
+       * operator nima tuzatishini BILMASDI.
+       */
+      const outcome =
+        inbound && inbound.outcome !== 'inbound_disabled'
+          ? inbound.outcome
+          : applied.outcome;
+      await this.markWebhookProcessed(
+        log.id,
+        outcome,
+        inbound?.reason ?? undefined,
+      );
     }
 
     return {
@@ -3514,7 +5246,693 @@ export class IntegrationServiceService {
       delivery_id: deliveryId,
       log_id: log?.id ?? null,
       shipment: applied,
+      ...(inbound && inbound.outcome !== 'inbound_disabled'
+        ? { inbound_order: inbound }
+        : {}),
     };
+  }
+
+  /**
+   * TO'LOV HODISASI → BUYURTMA (audit P1/P2).
+   *
+   * ⚠️ PULNI KASSAGA KO'CHIRMAYDI. Foydalanuvchi qarori (2026-09-13):
+   * onlayn pul hozircha kassaga yozilmaydi, faqat daftarga
+   * (`payment_transactions`) va buyurtmaning to'lov maydonlariga. Kompaniya
+   * balansi bu pulni hali ko'rmaydi — bu BILIB QILINGAN vaqtinchalik holat.
+   *
+   * ⚠️ HECH QACHON XATO OTMAYDI. To'lov tizimi non-2xx olsa tranzaksiyani
+   * BEKOR qilishi yoki qayta-qayta yuborishi mumkin — ikkisi ham pul bilan
+   * bog'liq zarar. Natija jurnalga yoziladi, javob esa 200.
+   */
+  private async applyWebhookToPayment(
+    integration: ExternalIntegration,
+    parsed: Record<string, unknown> | null,
+    webhookLogId: string | null,
+  ): Promise<{
+    outcome:
+      | 'payment_disabled'
+      | 'payment_no_config'
+      | 'payment_no_transaction_id'
+      | 'payment_no_status'
+      | 'payment_unmapped_status'
+      | 'payment_no_order_ref'
+      | 'payment_duplicate'
+      | 'payment_recorded'
+      | 'payment_not_applied'
+      | 'payment_failed';
+    reason?: string;
+    transaction_id?: string;
+    order_id?: string | null;
+    amount?: number;
+    status?: string;
+  }> {
+    const cfg = integration.payment_config;
+    if (!cfg?.enabled) return { outcome: 'payment_disabled' };
+    if (!parsed) {
+      return { outcome: 'payment_no_config', reason: 'JSON tana yo‘q' };
+    }
+
+    /**
+     * ⚠️ XARITA SHART. Provayderlarning holat qiymatlari butunlay boshqacha
+     * ("paid", 2, "CONFIRMED") — taxmin qilib bo'lmaydi. Xaritasiz hech bir
+     * hodisa qo'llanmaydi, aks holda noma'lum qiymat "to'landi" deb
+     * o'qilib ketardi.
+     */
+    if (!cfg.status_map || !Object.keys(cfg.status_map).length) {
+      this.logger.warn(
+        `payment SKIPPED for ${integration.slug}: status_map sozlanmagan`,
+      );
+      return { outcome: 'payment_no_config', reason: 'status_map yo‘q' };
+    }
+
+    const txnId = this.stringifyPath(
+      this.extractPath(parsed, cfg.transaction_id_path),
+    );
+    if (!txnId) {
+      this.logger.warn(
+        `payment SKIPPED for ${integration.slug}: tranzaksiya id yo‘q ` +
+          `(transaction_id_path='${cfg.transaction_id_path ?? ''}')`,
+      );
+      return { outcome: 'payment_no_transaction_id' };
+    }
+
+    const providerStatus = this.stringifyPath(
+      this.extractPath(parsed, cfg.status_path),
+    );
+    if (!providerStatus) {
+      return { outcome: 'payment_no_status' };
+    }
+
+    /**
+     * Xom holatni BIZNING holatga aylantirish. Solishtirish satr sifatida
+     * va registrga sezgir emas: provayderlar 2 (son) ham, "PAID" ham
+     * yuboradi.
+     */
+    const needle = providerStatus.toLowerCase();
+    let ourStatus: string | null = null;
+    for (const [ours, theirs] of Object.entries(cfg.status_map)) {
+      const list = Array.isArray(theirs) ? theirs : [];
+      if (list.some((v) => String(v ?? '').toLowerCase() === needle)) {
+        ourStatus = ours;
+        break;
+      }
+    }
+    if (!ourStatus) {
+      this.logger.warn(
+        `payment UNMAPPED for ${integration.slug}: provider status ` +
+          `'${providerStatus}' xaritada yo‘q`,
+      );
+      return {
+        outcome: 'payment_unmapped_status',
+        reason: `xaritada yo‘q: ${providerStatus}`,
+        transaction_id: txnId,
+      };
+    }
+
+    /**
+     * SUMMA havoladan OLDIN o'qiladi — adversarial topilma.
+     *
+     * Ilgari havola yo'q bo'lganda yozuv `amount: 0` bilan saqlanardi:
+     * ya'ni pulni kuzatish uchun yaratilgan YAGONA qator summani
+     * YO'QOTARDI. "Pul keldi, lekin qancha ekani ma'lum emas" — bu
+     * kuzatuvning ma'nosini butunlay yo'q qiladi.
+     *
+     * `amount_in_tiyin` bo'lsa 100 ga bo'linadi — to'lov tizimlari
+     * (Payme, Click) summani tiyinda yuboradi va 100 000 so'm 10 000 000
+     * bo'lib kelardi: buyurtma narxidan 100 baravar oshib, ortiqcha to'lov
+     * darvozasiga urilib, HAR BIR to'lov rad etilardi.
+     */
+    const rawAmount = this.extractPath(parsed, cfg.amount_path);
+    const parsedAmount = Number(
+      typeof rawAmount === 'string' ? rawAmount.trim() : rawAmount,
+    );
+    const amount = Number.isFinite(parsedAmount)
+      ? cfg.amount_in_tiyin
+        ? parsedAmount / 100
+        : parsedAmount
+      : NaN;
+    const currency =
+      this.stringifyPath(this.extractPath(parsed, cfg.currency_path)) ?? 'UZS';
+
+    const orderRef = this.stringifyPath(
+      this.extractPath(parsed, cfg.order_ref_path),
+    );
+    if (!orderRef) {
+      /**
+       * Buyurtma havolasi yo'q — pul kelgan, lekin kimga tegishli ekani
+       * ma'lum emas. Yozuv SAQLANADI (pulni kuzatish shart), buyurtmaga
+       * qo'llanmaydi.
+       */
+      await this.recordPaymentTxn({
+        integration,
+        txnId,
+        orderRef: null,
+        // Summa YOZILADI — pulni kuzatishning butun maqsadi shu.
+        amount: Number.isFinite(amount) ? amount : 0,
+        currency,
+        ourStatus,
+        providerStatus,
+        outcome: 'order_ref_missing',
+        webhookLogId,
+      });
+      return { outcome: 'payment_no_order_ref', transaction_id: txnId };
+    }
+
+    /**
+     * ⚠️ QAT'IY DUBLIKAT TO'SIG'I — QO'LLASHDAN OLDIN.
+     *
+     * To'lov tizimlari bir hodisani qayta-qayta yuboradi (bu ularning
+     * normal xatti-harakati). UNIQUE `(integration_id, transaction_id)`
+     * ikkinchi nusxani DB darajasida to'sadi — pulni ikki marta qo'llash
+     * eng qimmat xato bo'lardi.
+     */
+    const txnRow = await this.claimPaymentTxn({
+      integration,
+      txnId,
+      orderRef,
+      amount: Number.isFinite(amount) ? amount : 0,
+      currency,
+      ourStatus,
+      providerStatus,
+      webhookLogId,
+    });
+    if (!txnRow) {
+      return {
+        outcome: 'payment_duplicate',
+        transaction_id: txnId,
+        status: ourStatus,
+      };
+    }
+
+    try {
+      const res = await this.rmqRequestStrict<{
+        data?: {
+          outcome?: string;
+          order_id?: string;
+          paid_online_amount?: number;
+          payment_status?: string | null;
+        };
+      }>(
+        this.orderClient,
+        { cmd: 'order.payment.record' },
+        {
+          integration_slug: integration.slug,
+          provider_transaction_id: txnId,
+          /**
+           * Tenant darvozasi uchun: ulanish marketga bog'langan bo'lsa,
+           * to'lov faqat o'sha marketning buyurtmasiga yozilishi mumkin.
+           */
+          integration_market_id: integration.market_id ?? null,
+          order_ref: orderRef,
+          order_ref_field: cfg.order_ref_field ?? 'id',
+          amount,
+          currency,
+          status: ourStatus,
+        },
+        30_000,
+      );
+
+      /**
+       * ⚠️ `null` = TIMEOUT. Buyurtma YANGILANGAN bo'lishi mumkin — yozuv
+       * o'chirilmaydi, aks holda keyingi nusxa to'lovni IKKI MARTA
+       * qo'llardi. Natija ko'rinadigan qilinadi.
+       */
+      if (res === null) {
+        await this.paymentTxnRepo
+          .update({ id: txnRow.id }, { apply_outcome: 'timeout' })
+          .catch(() => undefined);
+        this.logger.error(
+          `payment TIMEOUT for ${integration.slug} (txn=${txnId}) — ` +
+            'buyurtma yangilangan bo‘lishi mumkin, tekshirish kerak',
+        );
+        return {
+          outcome: 'payment_failed',
+          reason: 'order service javob bermadi (30s)',
+          transaction_id: txnId,
+        };
+      }
+
+      const outcome = String(res?.data?.outcome ?? 'unknown');
+      await this.paymentTxnRepo
+        .update(
+          { id: txnRow.id },
+          {
+            apply_outcome: outcome.slice(0, 32),
+            order_id: res?.data?.order_id ?? null,
+          },
+        )
+        .catch(() => undefined);
+
+      if (outcome === 'recorded') {
+        return {
+          outcome: 'payment_recorded',
+          transaction_id: txnId,
+          order_id: res?.data?.order_id ?? null,
+          amount,
+          status: ourStatus,
+        };
+      }
+
+      /**
+       * Qo'llanmadi (buyurtma topilmadi, yopilgan, summa oshdi) — yozuv
+       * SAQLANADI. Pul kelgan; uni kuzatmasak yo'qolgan pul bo'lardi.
+       */
+      this.logger.warn(
+        `payment NOT applied for ${integration.slug} (txn=${txnId}): ${outcome}`,
+      );
+      return {
+        outcome: 'payment_not_applied',
+        reason: outcome,
+        transaction_id: txnId,
+        amount,
+        status: ourStatus,
+      };
+    } catch (error) {
+      const reason =
+        error instanceof Error ? error.message : 'order service error';
+      await this.paymentTxnRepo
+        .update({ id: txnRow.id }, { apply_outcome: 'error' })
+        .catch(() => undefined);
+      this.logger.error(
+        `payment FAILED for ${integration.slug} (txn=${txnId}): ${reason}`,
+      );
+      return { outcome: 'payment_failed', reason, transaction_id: txnId };
+    }
+  }
+
+  /**
+   * To'lov yozuvini "band qilish" — UNIQUE indeks orqali.
+   *
+   * `null` qaytsa: shu tranzaksiya allaqachon qayd etilgan (takroriy
+   * yetkazish yoki bir vaqtda kelgan nusxa). Xato OTILMAYDI.
+   *
+   * ⚠️ Faqat unique buzilishi (`23505`) dublikat deb hisoblanadi. Boshqa DB
+   * xatosini dublikat deb yutib yuborsak, to'lov jimgina qo'llanmay
+   * qolardi — pul kelib, tizim buni bilmasdi.
+   */
+  private async claimPaymentTxn(input: {
+    integration: ExternalIntegration;
+    txnId: string;
+    orderRef: string | null;
+    amount: number;
+    currency: string;
+    ourStatus: string;
+    providerStatus: string;
+    webhookLogId: string | null;
+  }): Promise<PaymentTransaction | null> {
+    try {
+      const row = this.paymentTxnRepo.create({
+        integration_id: String(input.integration.id),
+        provider_transaction_id: input.txnId,
+        order_id: null,
+        order_ref: input.orderRef,
+        amount: input.amount,
+        currency: input.currency.slice(0, 8),
+        status: input.ourStatus.slice(0, 24),
+        provider_status: input.providerStatus,
+        apply_outcome: null,
+        webhook_log_id: input.webhookLogId,
+      });
+      return await this.paymentTxnRepo.save(row);
+    } catch (error) {
+      const code = (error as { code?: string })?.code;
+      if (code === '23505') {
+        this.logger.warn(
+          `payment txn ${input.txnId} allaqachon qayd etilgan ` +
+            `(integration=${input.integration.id}) — qo‘llanmaydi`,
+        );
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /** Buyurtmaga bog'lanmagan to'lovni ham yozib qo'yish (pul kuzatilishi shart). */
+  private async recordPaymentTxn(input: {
+    integration: ExternalIntegration;
+    txnId: string;
+    orderRef: string | null;
+    amount: number;
+    currency: string;
+    ourStatus: string;
+    providerStatus: string;
+    outcome: string;
+    webhookLogId: string | null;
+  }): Promise<void> {
+    const row = await this.claimPaymentTxn(input).catch(() => null);
+    if (row) {
+      await this.paymentTxnRepo
+        .update({ id: row.id }, { apply_outcome: input.outcome.slice(0, 32) })
+        .catch(() => undefined);
+    }
+  }
+
+  /**
+   * CRM BITIMI → BUYURTMA (audit P5/P7/EI-10).
+   *
+   * Buyurtma yaratishning O'ZI bu yerda YOZILMAYDI — `order.receive_external`
+   * ga topshiriladi. Nega: u yo'lda dublikat tekshiruvi
+   * (`external_id` + `operator`), telefon normalizatsiyasi, tuman aniqlash,
+   * mahsulot qatorlari va viloyat FK himoyasi ALLAQACHON bor va testlangan
+   * (EI-02/05/06/12 tuzatishlari). Ikkinchi nusxa yozish o'sha
+   * tuzatishlarning hammasini qaytadan takrorlashni talab qilardi va bir
+   * kuni ikkisi bir-biridan uzoqlashardi.
+   *
+   * ⚠️ HECH QACHON XATO OTMAYDI. Webhook 200 olishi kerak: non-2xx bo'lsa
+   * CRM qayta yuborishni boshlaydi, holbuki muammo sozlamada (masalan
+   * `market_id` yo'q) va qayta yuborish yordam bermaydi. Natija jurnalga
+   * yoziladi — operator shu yerdan ko'radi.
+   */
+  private async applyWebhookToInboundOrder(
+    integration: ExternalIntegration,
+    parsed: Record<string, unknown> | null,
+  ): Promise<{
+    outcome:
+      | 'inbound_disabled'
+      | 'inbound_wrong_role'
+      | 'inbound_no_gate'
+      | 'inbound_no_deal'
+      | 'inbound_other_funnel'
+      | 'inbound_no_funnel'
+      | 'inbound_no_stage'
+      | 'inbound_stage_skipped'
+      | 'inbound_no_external_id'
+      | 'inbound_race'
+      | 'inbound_timeout'
+      | 'inbound_failed'
+      | 'inbound_duplicate'
+      | 'inbound_created';
+    order_id?: string;
+    external_id?: string | null;
+    stage?: string | null;
+    reason?: string;
+  }> {
+    const cfg = integration.inbound_order_config;
+    if (!cfg?.enabled) return { outcome: 'inbound_disabled' };
+
+    /**
+     * ROL DARVOZASI (H1 naqshi). Buyurtma faqat `source` roli orqali
+     * kiradi. Kargo yoki to'lov tizimi ulanishida bu yo'l yoqilgan bo'lsa
+     * — sozlama xatosi: kargo bizga buyurtma bermaydi, biz unga beramiz.
+     */
+    if (integration.role !== 'source') {
+      this.logger.warn(
+        `inbound order SKIPPED for ${integration.slug}: role='${integration.role}', ` +
+          "faqat 'source' buyurtma yaratadi",
+      );
+      return { outcome: 'inbound_wrong_role' };
+    }
+
+    const stages = (cfg.create_on_stages ?? [])
+      .map((v) => String(v ?? '').trim())
+      .filter(Boolean);
+    const events = (cfg.create_on_events ?? [])
+      .map((v) => String(v ?? '').trim())
+      .filter(Boolean);
+
+    /**
+     * ⚠️ DARVOZASIZ YARATMAYMIZ — hatto yozish validatsiyasi o'tib ketgan
+     * bo'lsa ham (eski qator, qo'lda SQL, migratsiyadan keyingi holat).
+     * Ochiq qolgan darvoza "bitim yaratildi" hodisasidan chala buyurtma
+     * yasardi va dublikat tekshiruvi keyin to'g'ri ma'lumotni to'sardi.
+     */
+    if (!stages.length && !events.length) {
+      this.logger.warn(
+        `inbound order SKIPPED for ${integration.slug}: darvoza sozlanmagan ` +
+          "(create_on_stages/create_on_events bo'sh)",
+      );
+      return { outcome: 'inbound_no_gate' };
+    }
+
+    const dealRaw = this.extractPath(parsed, cfg.deal_path);
+    /**
+     * CRM ba'zan bitimlarni MASSIV qilib yuboradi (Bitrix batch, amoCRM
+     * `leads.status[]`). Bir elementli massivni ochib olamiz; ko'p
+     * elementli bo'lsa ham hammasini emas, BIRINCHISINI olmaymiz —
+     * jimgina yo'qotish eng yomon holat, shuning uchun rad etamiz.
+     */
+    const deal = Array.isArray(dealRaw)
+      ? dealRaw.length === 1
+        ? dealRaw[0]
+        : null
+      : dealRaw;
+
+    if (!deal || typeof deal !== 'object') {
+      this.logger.warn(
+        `inbound order SKIPPED for ${integration.slug}: bitim obyekti topilmadi ` +
+          `(deal_path='${cfg.deal_path ?? ''}'` +
+          (Array.isArray(dealRaw)
+            ? `, massivda ${dealRaw.length} element`
+            : '') +
+          ')',
+      );
+      return { outcome: 'inbound_no_deal' };
+    }
+    const dealObj = deal as Record<string, unknown>;
+
+    // Voronka darvozasi — boshqa voronkaning bitimi bizga tegishli emas.
+    if (cfg.funnel_id) {
+      const funnel = this.stringifyPath(
+        this.extractPath(dealObj, cfg.funnel_path),
+      );
+      /**
+       * ⚠️ IKKI HOLAT AJRATILADI (adversarial topilma).
+       *
+       * Qiymat UMUMAN topilmasa — bu `funnel_path` XATO yozilgani, ya'ni
+       * sozlama nuqsoni: darvoza HAR BIR bitimni to'sib turadi va jurnalda
+       * hech qanday xato ko'rinmasdi ("processed", sababsiz). Operator
+       * "nega buyurtma kelmayapti?" degan savolga javob topa olmasdi.
+       *
+       * Qiymat bor, lekin boshqa — bu KUTILGAN holat (boshqa voronkaning
+       * bitimi) va jurnalni ifloslantirmasligi kerak.
+       */
+      if (!funnel) {
+        this.logger.warn(
+          `inbound order SKIPPED for ${integration.slug}: voronka qiymati yo'q ` +
+            `(funnel_path='${cfg.funnel_path ?? ''}')`,
+        );
+        return { outcome: 'inbound_no_funnel' };
+      }
+      if (funnel !== String(cfg.funnel_id)) {
+        return { outcome: 'inbound_other_funnel', stage: null };
+      }
+    }
+
+    const stage = stages.length
+      ? this.stringifyPath(this.extractPath(dealObj, cfg.stage_path))
+      : null;
+
+    /**
+     * Darvozalar OR bilan birlashadi: bosqich mos kelsa YOKI hodisa turi
+     * mos kelsa yaratiladi. Nega OR: CRM'lar ikki xil ishlaydi — biri
+     * bosqich id'sini payload ichida beradi, ikkinchisi alohida hodisa
+     * turini yuboradi (`deal.won`). Ikkisini AND qilsak, faqat ikkisini
+     * ham yuboradigan CRM ishlardi.
+     */
+    const stageMatch = Boolean(stage && stages.includes(stage));
+    /**
+     * ⚠️ Hodisa turi TANADAN o'qiladi, sarlavhadan EMAS — sarlavha imzoga
+     * kirmaydi va uni o'zgartirib darvozani ochib yuborish mumkin edi.
+     */
+    const bodyEvent = this.extractEventTypeFromBody(parsed);
+    const eventMatch = Boolean(bodyEvent && events.includes(bodyEvent));
+
+    if (!stageMatch && !eventMatch) {
+      if (stages.length && !stage) {
+        this.logger.warn(
+          `inbound order SKIPPED for ${integration.slug}: bosqich qiymati yo'q ` +
+            `(stage_path='${cfg.stage_path ?? ''}')`,
+        );
+        return { outcome: 'inbound_no_stage' };
+      }
+      // Kutilgan holat: bitim boshqa bosqichda yurgan — shovqin qilmaymiz.
+      return { outcome: 'inbound_stage_skipped', stage };
+    }
+
+    /**
+     * ⚠️ BITIM ID'SI SHART — DUBLIKAT TO'SIG'INING YAGONA TAYANCHI.
+     *
+     * `receiveExternalOrders` dublikatni `(external_id, operator)` bo'yicha
+     * tekshiradi, LEKIN `external_id` null bo'lsa tekshiruvni butunlay
+     * o'tkazib yuboradi (`order-lifecycle.service.ts:3747` — `if (externalId)`).
+     *
+     * Tortib olish yo'lida bu chidamli edi: importni operator qo'lda ishga
+     * tushiradi. CRM webhooki esa bitim hayotining HAR qadamida keladi —
+     * ya'ni id bo'lmasa bitta bitim o'nlab buyurtma yasardi va hech kim
+     * sababini tushunmasdi.
+     *
+     * Shu bois id yo'q bo'lsa YARATMAYMIZ. Kalit nomi `field_mapping.id_field`
+     * dan olinadi — order-service'dagi AYNI sukut qiymati bilan (`'id'`),
+     * aks holda bu yerda o'tib, o'sha yerda null bo'lib qolardi.
+     */
+    const idField =
+      (integration.field_mapping as Record<string, string> | null)?.id_field ??
+      'id';
+    const dealId = this.stringifyPath(this.extractPath(dealObj, idField));
+    if (!dealId) {
+      this.logger.warn(
+        `inbound order SKIPPED for ${integration.slug}: bitim id'si yo'q ` +
+          `(id_field='${idField}') — dublikat to'sig'i ishlamaydi, ` +
+          'shuning uchun buyurtma yaratilmadi',
+      );
+      return { outcome: 'inbound_no_external_id', stage };
+    }
+
+    /**
+     * ⚠️ QAT'IY DUBLIKAT TO'SIG'I — YARATISHDAN OLDIN (adversarial topilma).
+     *
+     * `receiveExternalOrders` dublikatni O'QIB tekshiradi, keyin yaratadi;
+     * ikkisi orasida tuman aniqlash va mijoz yaratish uchun RMQ borish-
+     * kelishlari bor, ya'ni poyga oynasi yuzlab millisekund. CRM esa bitta
+     * harakat uchun bir nechta webhook yuboradi (bosqich + mas'ul + maydon
+     * o'zgardi) va hammasi AYNI bosqichni tashiydi — ya'ni hammasi
+     * darvozadan o'tadi. Ikkisi bir vaqtda kelsa ikkisi ham "yo'q" deb
+     * o'qib, IKKI buyurtma yasardi.
+     *
+     * `inbound_deal_refs` dagi UNIQUE indeks buni DB darajasida to'sadi:
+     * ikkinchi yozuv xato oladi. `orders` ustiga unique qo'yib bo'lmaydi —
+     * eski ma'lumotdagi dublikat migratsiyani yiqitardi.
+     */
+    const dealRef = await this.claimInboundDeal(
+      String(integration.id),
+      dealId,
+      stage,
+    );
+    if (!dealRef) {
+      return { outcome: 'inbound_race', external_id: dealId, stage };
+    }
+
+    /**
+     * Yaratishni order-service bajaradi. `rmqRequestStrict` — oddiy
+     * `rmqRequest` HAMMA xatoni yutib `null` qaytaradi, ya'ni "market_id
+     * sozlanmagan" kabi aniq sabab jurnalga umuman tushmasdi.
+     */
+    try {
+      const res = await this.rmqRequestStrict<{
+        data?: {
+          created?: Array<{ id: string; external_id: string | null }>;
+          skipped?: Array<{ external_id: string | null; reason: string }>;
+        };
+      }>(
+        this.orderClient,
+        { cmd: 'order.receive_external' },
+        {
+          integration_id: String(integration.id),
+          orders: [dealObj],
+          /**
+           * ⚠️ QAT'IY REJIM — CRM yo'lida TAXMIN QILISH TAQIQLANADI.
+           *
+           * Tortib olishni operator qo'lda ishga tushiradi va natijani
+           * ko'radi; CRM webhooki esa to'xtovsiz keladi va hech kim
+           * qaramaydi. Shu bois "aniqlanmasa taxmin qil" bu yerda xavfli:
+           * tuman mos kelmasa posilka jimgina boshqa viloyatga ketardi,
+           * narx kaliti mos kelmasa COD 0 bo'lib pul yo'qolardi.
+           */
+          options: { strict: true },
+        },
+        /**
+         * ⚠️ 30 SEKUND, sukutdagi 5 EMAS (adversarial topilma).
+         *
+         * Buyurtma yaratish yo'lida bir nechta RMQ borish-kelishi bor
+         * (tuman, mijoz, keyin yozish). 5 sekund yetmasa `rmqRequestStrict`
+         * `null` qaytaradi — holbuki buyurtma YARATILGAN bo'lishi mumkin.
+         */
+        30_000,
+      );
+
+      /**
+       * ⚠️ `null` = TIMEOUT (`rmqRequestStrict` shunda `null` qaytaradi).
+       *
+       * Bu "yaratilmadi" DEGANI EMAS: order-service ishni tugatgan, faqat
+       * javob yetib kelmagan bo'lishi mumkin. Shu bois:
+       *   • natija `inbound_timeout` — `inbound_failed` emas (jurnalda
+       *     "yiqildi" deb yozish noto'g'ri xulosaga olib borardi);
+       *   • band qilish BEKOR QILINMAYDI — aks holda keyingi webhook
+       *     ikkinchi buyurtma yasashi mumkin edi.
+       */
+      if (res === null) {
+        this.logger.error(
+          `inbound order TIMEOUT for ${integration.slug} (deal=${dealId}) — ` +
+            "buyurtma yaratilgan bo'lishi mumkin, band qilish saqlanadi",
+        );
+        return {
+          outcome: 'inbound_timeout',
+          external_id: dealId,
+          stage,
+          reason: 'order service javob bermadi (30s)',
+        };
+      }
+
+      const created = res?.data?.created ?? [];
+      const skipped = res?.data?.skipped ?? [];
+
+      if (created.length) {
+        // Bog'lanishni yozib qo'yamiz — keyin "qaysi bitim qaysi buyurtma"
+        // savoliga javob shu yerdan chiqadi.
+        await this.inboundDealRefRepo
+          .update({ id: dealRef.id }, { order_id: String(created[0].id) })
+          .catch(() => undefined);
+
+        await this.activityLog.log({
+          entity_type: 'Order',
+          entity_id: created[0].id,
+          action: ActivityAction.CREATED,
+          new_value: {
+            source: 'crm_webhook',
+            provider: integration.slug,
+            stage,
+            external_id: created[0].external_id,
+          },
+          metadata: { integration_id: String(integration.id) },
+        });
+        return {
+          outcome: 'inbound_created',
+          order_id: created[0].id,
+          external_id: created[0].external_id,
+          stage,
+        };
+      }
+
+      /**
+       * `already_exists` — KUTILGAN holat, xato emas: CRM bir bitimni
+       * bosqich o'zgargan sayin qayta yuboradi. Dublikat tekshiruvi
+       * (`external_id` + `operator`) aynan shuni to'sadi.
+       */
+      const reason = skipped[0]?.reason ?? 'unknown';
+      if (reason === 'already_exists') {
+        return {
+          outcome: 'inbound_duplicate',
+          external_id: skipped[0]?.external_id ?? null,
+          stage,
+        };
+      }
+
+      /**
+       * ⚠️ YARATILMADI — REF O'CHIRILADI. Aks holda bog'lanish qolib,
+       * buyurtma esa hech qachon yaratilmasdi: keyingi webhook "dublikat"
+       * deb to'silib, muammo ABADIY qotib qolardi. Sozlama tuzatilgach
+       * CRM keyingi hodisada qayta urinishi kerak.
+       */
+      await this.releaseInboundDeal(dealRef.id);
+      this.logger.warn(
+        `inbound order NOT created for ${integration.slug}: ${reason}`,
+      );
+      return { outcome: 'inbound_failed', reason, stage };
+    } catch (error) {
+      /**
+       * Sozlama xatosi (market_id yo'q, tuman topilmadi) yoki
+       * order-service yiqilgan. Webhook baribir 200 oladi — qayta
+       * yuborish yordam bermaydi, sozlamani tuzatish kerak.
+       */
+      const reason =
+        error instanceof Error ? error.message : 'order service unavailable';
+      // Yuqoridagi bilan ayni sabab: qayta urinish imkoni ochiq qolishi kerak.
+      await this.releaseInboundDeal(dealRef.id);
+      this.logger.error(
+        `inbound order FAILED for ${integration.slug}: ${reason}`,
+      );
+      return { outcome: 'inbound_failed', reason, stage };
+    }
   }
 
   /**
@@ -3647,13 +6065,48 @@ export class IntegrationServiceService {
       // receivable. Best-effort — never fail the webhook over it.
       try {
         if (mapped.action === 'sell') {
-          await this.recordProviderReceivable({
-            integration_id: String(integration.id),
-            order_id: shipment.order_id,
-            provider_slug: integration.slug,
-            external_ref: shipment.external_ref,
-            amount: Number(markResult?.data?.total_price ?? 0),
-          });
+          /**
+           * ⚠️ NOL SUMMALI QARZ YOZILMAYDI.
+           *
+           * MUAMMO. Summa `markResult?.data?.total_price` dan olinadi, lekin
+           * yuqoridagi `order.provider.mark` chaqiruvi "best-effort": xato
+           * bo'lsa `rmqRequest` uni YUTIB `null` qaytaradi va catch faqat
+           * ogohlantirish yozadi. O'sha holda `?? 0` ishga tushib, kargoning
+           * qarzi **0 so'm** bo'lib yozilardi.
+           *
+           * Nol qarz YO'Q qarzdan YOMONROQ: u "hisob yopilgan" kabi
+           * ko'rinadi, qoldiqda ko'rinmaydi va hech kim yo'qolgan pulni
+           * qidirmaydi. Order service bir zumga yiqilsa, kargo bizga
+           * qarzdorligi jimgina o'chib ketardi.
+           *
+           * Endi: summa o'qilmasa qarz YARATILMAYDI va bu ogohlantirish
+           * bilan yoziladi. Qarzni keyin solishtiruvchi yoki takroriy
+           * webhook tiklaydi — posilka statusi allaqachon saqlangan.
+           */
+          const codAmount = Number(markResult?.data?.total_price);
+          if (!Number.isFinite(codAmount) || codAmount <= 0) {
+            this.logger.warn(
+              `provider receivable SKIPPED for order ${shipment.order_id}: ` +
+                `summa o'qilmadi (total_price=${String(
+                  markResult?.data?.total_price,
+                )}). Nol summali qarz yozilmadi.`,
+            );
+            await this.activityLog.log({
+              entity_type: 'ProviderShipment',
+              entity_id: String(shipment.order_id),
+              action: ActivityAction.EXTERNAL_SYNC,
+              new_value: { receivable: 'skipped', reason: 'amount_unreadable' },
+              metadata: { provider: integration.slug },
+            });
+          } else {
+            await this.recordProviderReceivable({
+              integration_id: String(integration.id),
+              order_id: shipment.order_id,
+              provider_slug: integration.slug,
+              external_ref: shipment.external_ref,
+              amount: codAmount,
+            });
+          }
         } else {
           await this.cancelProviderReceivable(
             String(integration.id),
@@ -3675,20 +6128,217 @@ export class IntegrationServiceService {
     };
   }
 
+  /**
+   * KIRUVCHI WEBHOOK JURNALI — O'QISH (adversarial topilma, HIGH).
+   *
+   * ⚠️ NEGA KERAK BO'LDI. Butun kiruvchi diagnostika (`inbound_created`,
+   * `inbound_failed`, `no_shipment`, imzo rad etildi…) `provider_webhook_logs`
+   * ga yozilardi, lekin uni O'QIYDIGAN yo'l UMUMAN YO'Q edi — na endpoint,
+   * na UI. Ya'ni "xato jurnalda ko'rinadi" degan butun loyiha amalda
+   * ishlamasdi: operator sababni faqat DB'ga kirib yoki konteyner
+   * loglaridan topa olardi.
+   *
+   * ⚠️ TANA QAYTARILMAYDI. `raw_body` va `parsed_payload` ichida mijozning
+   * telefoni va manzili turadi. Ro'yxatda ular KERAK EMAS — savol "nima
+   * bo'ldi", "mijoz kim" emas. Shu bois maydonlar tanlab olinadi.
+   */
+  async listWebhookLogs(input: {
+    integration_id?: string;
+    status?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(1, Number(input?.page ?? 1) || 1);
+    const limit = Math.min(100, Math.max(1, Number(input?.limit ?? 20) || 20));
+
+    const where: Record<string, unknown> = {};
+    if (input?.integration_id) {
+      where.integration_id = String(input.integration_id);
+    }
+    if (input?.status) {
+      where.status = String(input.status);
+    }
+
+    const [rows, total] = await this.webhookLogRepo.findAndCount({
+      where,
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+      select: {
+        id: true,
+        createdAt: true,
+        integration_id: true,
+        provider_slug: true,
+        delivery_id: true,
+        event_type: true,
+        signature_valid: true,
+        status: true,
+        error: true,
+        processed_at: true,
+        trace_id: true,
+      },
+    });
+
+    return successRes(
+      {
+        items: rows,
+        meta: {
+          page,
+          limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+        },
+      },
+      200,
+      'webhook logs',
+    );
+  }
+
+  /**
+   * ONLAYN TO'LOVLAR RO'YXATI (7-bosqich).
+   *
+   * ⚠️ NEGA KERAK. 6-bosqichning asosiy darsi: JURNALGA YOZISH ≠ KO'RINISH.
+   * To'lov yozuvlari bazaga tushardi, lekin ularni o'qiydigan yo'l bo'lmasa
+   * "pul keldi, lekin buyurtmaga bog'lanmadi" holati hech kimga ko'rinmaydi
+   * — ya'ni yo'qolgan pul.
+   *
+   * `apply_outcome` bo'yicha filtr shuning uchun bor: operatorning birinchi
+   * savoli "qaysi to'lov qo'llanmadi?".
+   */
+  async listPaymentTransactions(input: {
+    integration_id?: string;
+    /** `recorded` dan boshqa hammasi = e'tibor talab qiladigan to'lovlar. */
+    unapplied_only?: boolean;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = Math.max(1, Number(input?.page ?? 1) || 1);
+    const limit = Math.min(100, Math.max(1, Number(input?.limit ?? 20) || 20));
+
+    /**
+     * ⚠️ `t.isDeleted` — TIRNOQSIZ. TypeORM tirnoqsiz `alias.property` ni
+     * ustun nomiga xaritalaydi; `t."isDeleted"` esa XOM SQL bo'lib ketadi va
+     * haqiqiy ustun `is_deleted` bo'lgani uchun `42703` bilan yiqilardi
+     * (`BaseEntity` da `@Column({ name: 'is_deleted' })`).
+     */
+    const qb = this.paymentTxnRepo
+      .createQueryBuilder('t')
+      .where('t.isDeleted = false');
+
+    if (input?.integration_id) {
+      qb.andWhere('t.integration_id = :iid', {
+        iid: String(input.integration_id),
+      });
+    }
+    if (input?.unapplied_only) {
+      /**
+       * `apply_outcome IS NULL` ham kiradi: yozuv band qilingan, lekin
+       * natija yozilmagan — ya'ni jarayon yarim yo'lda uzilgan. Bu aynan
+       * ko'rinishi kerak bo'lgan holat.
+       */
+      qb.andWhere('(t.apply_outcome IS NULL OR t.apply_outcome <> :ok)', {
+        ok: 'recorded',
+      });
+    }
+
+    const [rows, total] = await qb
+      .orderBy('t.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    return successRes(
+      {
+        items: rows,
+        meta: {
+          page,
+          limit,
+          total,
+          totalPages: Math.max(1, Math.ceil(total / limit)),
+        },
+      },
+      200,
+      'payment transactions',
+    );
+  }
+
   private async markWebhookProcessed(
     logId: string,
     outcome: string,
+    detail?: string,
   ): Promise<void> {
     // Surface diagnostic outcomes (couldn't attach / map) in `error` so they
     // stand out in the log; a clean apply leaves error NULL.
-    const diagnostic = ['no_paths', 'no_status', 'no_shipment', 'unmapped'];
+    /**
+     * `integration_inactive` ham diagnostika: hodisa qabul qilingan, lekin
+     * QO'LLANMAGAN. Jurnalda sababsiz "processed" bo'lib turishi chalg'itardi
+     * — operator "nega status o'zgarmadi?" degan savolga javob topolmasdi.
+     */
+    /**
+     * Kiruvchi buyurtma natijalari IKKIGA bo'linadi:
+     *
+     *   Diagnostika (sozlama xatosi — operator ko'rishi SHART):
+     *     `inbound_failed`      — yaratish yiqildi (market_id yo'q va h.k.)
+     *     `inbound_no_gate`     — darvoza sozlanmagan
+     *     `inbound_wrong_role`  — rol `source` emas
+     *     `inbound_no_deal`     — `deal_path` xato
+     *     `inbound_no_stage`    — `stage_path` xato
+     *     `inbound_no_external_id` — bitim id'si yo'q (dublikat to'sig'i
+     *                             ishlamaydi, shuning uchun yaratilmaydi)
+     *     `inbound_no_funnel`   — `funnel_path` xato (qiymat topilmadi)
+     *     `inbound_timeout`     — javob kelmadi; buyurtma YARATILGAN
+     *                             bo'lishi mumkin, tekshirish kerak
+     *
+     *   Kutilgan holat (jurnalni ifloslantirmasligi kerak):
+     *     `inbound_created`       — buyurtma yaratildi
+     *     `inbound_duplicate`     — bitim allaqachon buyurtmaga aylangan
+     *     `inbound_stage_skipped` — bitim boshqa bosqichda yuribdi
+     *     `inbound_race`          — bitim allaqachon band (bir vaqtda
+     *                             kelgan ikkinchi webhook)
+     *     `inbound_other_funnel`  — boshqa voronkaning bitimi
+     *
+     * ⚠️ Ikkinchi guruh NEGA xato emas: CRM bitimni bosqich o'zgargan sayin
+     * yuboradi, ya'ni bu hodisalar ASOSIY oqim. Ularni xato deb belgilasak
+     * jurnal soxta ogohlantirish bilan to'lib, haqiqiy xato ko'rinmay
+     * qolardi.
+     */
+    const diagnostic = [
+      'no_paths',
+      'no_status',
+      'no_shipment',
+      'unmapped',
+      'integration_inactive',
+      'inbound_failed',
+      'inbound_no_gate',
+      'inbound_wrong_role',
+      'inbound_no_deal',
+      'inbound_no_stage',
+      'inbound_no_external_id',
+      'inbound_timeout',
+      'inbound_no_funnel',
+      // To'lov: pul bilan bog'liq har qanday nomuvofiqlik KO'RINISHI shart.
+      // ⚠️ `payment_disabled` HAM diagnostika: to'lov roli ulanishiga hodisa
+      // kelgan, lekin sozlama o'chirilgan. Jurnalda "toza" ko'rinsa,
+      // operator sozlamani yoqishni unutganini bilmasdi.
+      'payment_disabled',
+      'payment_no_config',
+      'payment_no_transaction_id',
+      'payment_no_status',
+      'payment_unmapped_status',
+      'payment_no_order_ref',
+      'payment_not_applied',
+      'payment_failed',
+    ];
     try {
       await this.webhookLogRepo.update(
         { id: logId },
         {
           status: 'processed',
           processed_at: new Date(),
-          error: diagnostic.includes(outcome) ? `apply: ${outcome}` : null,
+          error: diagnostic.includes(outcome)
+            ? // Sabab bo'lsa yoniga qo'shiladi, bo'lmasa natija yolg'iz.
+              `apply: ${outcome}${detail ? ` — ${detail}` : ''}`
+            : null,
         },
       );
     } catch {
@@ -3719,7 +6369,8 @@ export class IntegrationServiceService {
     parsed_payload: Record<string, unknown> | null;
     error: string | null;
     trace_id: string | null;
-  }): Promise<ProviderWebhookLog | null> {
+    /** `'duplicate'` — bir vaqtda kelgan nusxa; chaqiruvchi to'xtashi kerak. */
+  }): Promise<ProviderWebhookLog | null | 'duplicate'> {
     try {
       const entity = this.webhookLogRepo.create({
         ...data,
@@ -3727,9 +6378,34 @@ export class IntegrationServiceService {
       });
       return await this.webhookLogRepo.save(entity);
     } catch (err) {
-      // Unique violation on (integration_id, delivery_id) = concurrent replay;
-      // not fatal. Any other failure must not break the webhook response.
-      this.logger.warn(`webhook log write failed: ${(err as Error).message}`);
+      /**
+       * ⚠️ IKKI XIL YIQILISH — IKKI XIL JAVOB (audit P1).
+       *
+       * Ilgari ikkisi ham `null` qaytarardi va `receiveWebhook` hodisani
+       * BARIBIR qo'llardi. Status yangilash uchun bu zararsiz edi (idempotent),
+       * lekin PUL uchun halokatli: bir vaqtda kelgan ikki nusxa ikki marta
+       * qo'llanardi.
+       *
+       *   `23505` (unique buzilishi) — bu AYNI `delivery_id` bilan bir vaqtda
+       *     kelgan ikkinchi nusxa. `:4875` dagi oldindan tekshiruv poyga
+       *     oynasida uni ko'rmagan. Chaqiruvchi TO'XTASHI kerak.
+       *
+       *   boshqa xato (ulanish uzildi, ustun sig'maydi) — hodisaning o'zi
+       *     haqiqiy. To'xtatsak, provayder 200 olgani uchun qayta
+       *     yubormaydi va hodisa JIMGINA yo'qolardi. Shu bois oqim davom
+       *     etadi, lekin ERROR darajasida yoziladi.
+       */
+      const code = (err as { code?: string })?.code;
+      if (code === '23505') {
+        this.logger.warn(
+          `webhook log duplicate (delivery_id=${data.delivery_id}) — ` +
+            "bir vaqtda kelgan nusxa, qo'llanmaydi",
+        );
+        return 'duplicate';
+      }
+      this.logger.error(
+        `webhook log write FAILED (audit yozuvi yo'q!): ${(err as Error).message}`,
+      );
       return null;
     }
   }
@@ -3768,6 +6444,86 @@ export class IntegrationServiceService {
     const candidate =
       parsed?.['event'] ?? parsed?.['event_type'] ?? parsed?.['type'];
     return this.stringifyPath(candidate);
+  }
+
+  /**
+   * Bitimni "band qilish" — UNIQUE indeks orqali.
+   *
+   * `null` qaytsa: bu bitim allaqachon band (boshqa webhook oldinda) —
+   * ya'ni dublikat yoki poyga. Xato OTILMAYDI: webhook 200 olishi kerak.
+   *
+   * ⚠️ Faqat unique buzilishi (`23505`) dublikat deb hisoblanadi. Boshqa
+   * DB xatosi (ulanish uzildi va h.k.) YUQORIGA otiladi — uni dublikat deb
+   * yutib yuborsak, buyurtma jimgina yaratilmay qolardi.
+   */
+  private async claimInboundDeal(
+    integrationId: string,
+    dealId: string,
+    stage: string | null,
+  ): Promise<InboundDealRef | null> {
+    try {
+      const row = this.inboundDealRefRepo.create({
+        integration_id: integrationId,
+        deal_id: dealId,
+        order_id: null,
+        stage: stage ?? null,
+      });
+      return await this.inboundDealRefRepo.save(row);
+    } catch (error) {
+      const code = (error as { code?: string })?.code;
+      if (code === '23505') {
+        this.logger.warn(
+          `inbound deal ${dealId} allaqachon band (integration=${integrationId}) — ` +
+            'dublikat yoki bir vaqtda kelgan webhook',
+        );
+        return null;
+      }
+      throw error;
+    }
+  }
+
+  /** Band qilishni bekor qilish — yaratish yiqilganda. */
+  private async releaseInboundDeal(id: string): Promise<void> {
+    /**
+     * ⚠️ HAQIQIY o'chirish (`delete`), soft-delete EMAS. Soft-delete
+     * qatorni joyida qoldiradi va UNIQUE indeks `isDeleted` ni bilmaydi —
+     * ya'ni qayta urinish o'sha to'siqqa urilib, buyurtma hech qachon
+     * yaratilmasdi.
+     */
+    await this.inboundDealRefRepo.delete({ id }).catch(() => undefined);
+  }
+
+  /**
+   * HODISA TURI — FAQAT TANADAN (imzolangan qismdan).
+   *
+   * ⚠️ NEGA ALOHIDA METOD KERAK BO'LDI. `extractEventType` sarlavhani
+   * tanadan USTUN qo'yadi (`x-event` va h.k.) — jurnal uchun bu qulay,
+   * lekin QAROR qabul qilish uchun XAVFLI: HMAC imzo faqat TANANI qamraydi
+   * (`libs/common/src/webhook/hmac.ts` — `update(rawBody)`), sarlavhalar
+   * imzoga kirmaydi va gateway ularni o'zgarishsiz uzatadi.
+   *
+   * Ya'ni to'g'ri imzolangan bitta tanani qo'lga olgan odam uni
+   * `x-event: <create_on_events dagi qiymat>` sarlavhasi bilan qayta
+   * yuborib, BOSQICH darvozasini butunlay chetlab o'tardi — va natijada
+   * manzili to'lmagan chala bitimdan buyurtma tug'ilardi. Dublikat to'sig'i
+   * esa o'sha chala yozuvni abadiy qulflab qo'yardi.
+   *
+   * Shu bois darvoza faqat imzolangan ma'lumotga qaraydi.
+   */
+  private extractEventTypeFromBody(
+    parsed: Record<string, unknown> | null,
+  ): string | null {
+    const candidate =
+      parsed?.['event'] ?? parsed?.['event_type'] ?? parsed?.['type'];
+    return this.stringifyPath(candidate);
+  }
+
+  /** Sarlavhadan kelgan qiymatni ustun sig'imiga kesish. */
+  private clampHeader(value?: string | null, max = 255): string | null {
+    if (value == null) return null;
+    const trimmed = String(value).trim();
+    if (!trimmed) return null;
+    return trimmed.length > max ? trimmed.slice(0, max) : trimmed;
   }
 
   private truncateBody(body: string, max = 20_000): string {
@@ -3891,65 +6647,6 @@ export class IntegrationServiceService {
     return null;
   }
 
-  async listShipments(input: {
-    integration_id?: string;
-    internal_status?: string;
-    limit?: number;
-    offset?: number;
-  }) {
-    const take = Math.min(Math.max(Number(input.limit ?? 50), 1), 200);
-    const skip = Math.max(Number(input.offset ?? 0), 0);
-    const where: Record<string, unknown> = { isDeleted: false };
-    if (input.integration_id)
-      where.integration_id = String(input.integration_id);
-    if (input.internal_status) where.internal_status = input.internal_status;
-
-    const [rows, total] = await this.shipmentRepo.findAndCount({
-      where,
-      order: { updatedAt: 'DESC', id: 'DESC' },
-      take,
-      skip,
-    });
-    return successRes(
-      { rows, total, limit: take, offset: skip },
-      200,
-      'shipments',
-    );
-  }
-
-  /**
-   * Map a provider's raw status string to our internal handling using the
-   * integration's inbound_status_mapping. Case-insensitive on the provider
-   * code. Returns null when the provider status isn't mapped (caller decides
-   * whether that's an intermediate status to ignore or a config gap to log).
-   */
-  mapProviderStatus(
-    integration: Pick<ExternalIntegration, 'inbound_status_mapping'>,
-    providerStatus: string,
-  ): { status?: string; action?: string } | null {
-    const mapping = integration.inbound_status_mapping ?? {};
-    if (!providerStatus) return null;
-
-    // Exact match first, then case-insensitive.
-    if (mapping[providerStatus]) return mapping[providerStatus];
-    const upper = providerStatus.toUpperCase();
-    for (const [key, value] of Object.entries(mapping)) {
-      if (key.toUpperCase() === upper) return value;
-    }
-    return null;
-  }
-
-  /**
-   * Outbound: create a shipment for an order at the provider.
-   *
-   * Provider-agnostic — the request is built from the integration's
-   * dispatch_config templates interpolated with `context` (flat order fields
-   * the caller supplies; integration-service never imports the order schema).
-   * On success we record external_ref + tracking on the shipment; on failure
-   * we stamp last_error and bump send_attempts so a retry/redispatch is
-   * visible. Idempotent at the provider via an Idempotency-Key header the
-   * caller can template in.
-   */
   async dispatchShipment(input: {
     slug?: string;
     integration_id?: string;
@@ -3966,16 +6663,151 @@ export class IntegrationServiceService {
       this.notFound('integration not found for dispatch');
     }
 
+    /**
+     * ⚠️ KILL-SWITCH VA ROL QO'RIQCHILARI (audit H1, H2).
+     *
+     * `is_active` TEKSHIRILMASDI: o'chirilgan kargoga ham posilka
+     * jo'natilardi. Ya'ni "to'xtatish" tugmasi jo'natishni to'smasdi va
+     * operator ulanish o'chiq deb o'ylab yurardi.
+     *
+     * `role` ham TEKSHIRILMASDI: to'lov tizimiga yoki ko'zguga posilka
+     * jo'natish mumkin edi. Bu nafaqat ma'nosiz — sotuvda ular uchun COD
+     * QARZI yozilardi (`recordProviderReceivable`), ya'ni soxta qarz paydo
+     * bo'lardi va hisob-kitob buzilardi.
+     */
+    if (!integration.is_active) {
+      this.badRequest(
+        `"${integration.name}" ulanishi o'chirilgan — posilka jo'natilmaydi`,
+      );
+    }
+    if (integration.role && integration.role !== 'carrier') {
+      this.badRequest(
+        `"${integration.name}" yetkazuvchi emas (roli: ${integration.role}) — ` +
+          'posilka faqat yetkazuvchiga jo‘natiladi',
+      );
+    }
+
     const cfg = integration.dispatch_config;
     if (!cfg?.endpoint) {
       this.badRequest('dispatch_config.endpoint is required for this provider');
     }
 
+    /**
+     * ⚠️ KONTEKSTNI BACKEND O'ZI YIG'ADI (audit C3).
+     *
+     * MUAMMO. Ilgari kontekst FAQAT chaqiruvchidan kelardi
+     * (`input.context`), frontend esa faqat `{ order_id }` yuborardi. Ya'ni
+     * shablondagi barcha `{{customer_name}}`, `{{cod_amount}}`, `{{address}}`
+     * BO'SH SATRGA aylanardi.
+     *
+     * Bu PUL xavfi: kargo `cod_amount` ni bo'sh/0 olsa, kuryer mijozdan
+     * HECH NARSA undirmaydi. PCS'da aynan shu turdagi xato bir marta yuz
+     * bergan va izohda yozilgan.
+     *
+     * Chaqiruvchiga ishonib bo'lmaydi: har yangi chaqiruv joyi kerakli
+     * maydonlarni bilishi kerak bo'lardi va bittasi esdan chiqsa xato
+     * JIMGINA yuz berardi. Shu bois kontekst buyurtmadan YIG'ILADI,
+     * chaqiruvchi esa faqat USTIGA yozishi mumkin.
+     */
+    const orderRes = await this.rmqRequest<Record<string, any>>(
+      this.orderClient,
+      { cmd: 'order.find_by_id_enriched' },
+      { id: orderId },
+      8000,
+    );
+    const order = (orderRes?.data ?? orderRes ?? {}) as Record<string, any>;
+    const customer = (order.customer ?? {}) as Record<string, any>;
+
+    /**
+     * Bo'sh/null qiymat kontekstga QO'SHILMAYDI.
+     *
+     * ⚠️ Lekin bu o'zi yetarli EMAS: `interpolate` yo'q kalitni BO'SH SATR
+     * bilan almashtiradi (`:2450` — `ctx[key] ?? ''`). Ya'ni maydon
+     * jimgina bo'sh ketadi. Shu bois pastda ALOHIDA tekshiruv bor: qaysi
+     * o'rin egallari to'ldirilmaganini ogohlantirish bilan yozadi.
+     */
+    const put = (
+      target: Record<string, string>,
+      key: string,
+      value: unknown,
+    ) => {
+      if (value === null || typeof value === 'undefined') return;
+      const str = String(value).trim();
+      if (str) target[key] = str;
+    };
+
+    const fromOrder: Record<string, string> = {};
+    put(fromOrder, 'order_number', order.order_number);
+    put(fromOrder, 'customer_name', customer.name);
+    put(fromOrder, 'customer_phone', customer.phone_number);
+    put(fromOrder, 'extra_phone', customer.extra_number);
+    put(fromOrder, 'address', order.address ?? customer.address);
+    put(fromOrder, 'district', order.district?.name ?? customer.district?.name);
+    put(fromOrder, 'district_sato', order.district?.sato_code);
+    put(fromOrder, 'region', order.region?.name);
+    put(fromOrder, 'total_price', order.total_price);
+    /**
+     * `cod_amount` — mijozdan yig'ilishi kerak bo'lgan summa. Elchi'da
+     * bu `to_be_paid`, LEKIN u sotuvdan keyin boshqa ma'no oladi
+     * (`netToBePaid` bilan ustiga yoziladi — audit F2). Jo'natish esa
+     * sotuvdan OLDIN bo'ladi, shu bois bu yerda qiymat to'g'ri.
+     */
+    put(fromOrder, 'cod_amount', order.to_be_paid ?? order.total_price);
+    put(fromOrder, 'comment', order.comment);
+    put(
+      fromOrder,
+      'items',
+      Array.isArray(order.items)
+        ? order.items
+            .map(
+              (i: Record<string, any>) =>
+                `${String(i.product_name ?? i.product?.name ?? '')} x${
+                  i.quantity ?? 1
+                }`,
+            )
+            .filter((t: string) => t.trim().length > 2)
+            .join(', ')
+        : undefined,
+    );
+
     const ctx: Record<string, string> = {
       order_id: orderId,
+      ...fromOrder,
+      // Chaqiruvchi ATAYLAB oxirida — u buyurtmadan olinganini ustiga yozishi mumkin.
       ...(input.context ?? {}),
     };
     const method = (cfg.method ?? 'POST').toUpperCase() as HttpMethod;
+    /**
+     * ⚠️ TO'LDIRILMAGAN O'RIN EGALLARI — OGOHLANTIRISH.
+     *
+     * `interpolate` yo'q kalitni bo'sh satr qiladi, ya'ni shablon
+     * `{{cod_amount}}` deb yozilgan-u kontekstda qiymat bo'lmasa, kargo
+     * BO'SH summa oladi va kuryer mijozdan hech narsa undirmaydi — sabab
+     * esa hech qayerda ko'rinmasdi.
+     *
+     * Jo'natishni TO'XTATMAYMIZ: ba'zi maydon ataylab bo'sh bo'lishi
+     * mumkin (izoh, qo'shimcha telefon). Lekin ro'yxat logda va posilka
+     * yozuvida qoladi, ya'ni muammo ko'rinadi.
+     */
+    const templateText = JSON.stringify([
+      cfg.body_template ?? {},
+      cfg.query_template ?? {},
+      cfg.headers ?? {},
+    ]);
+    const missingPlaceholders = Array.from(
+      new Set(
+        [...templateText.matchAll(/\{\{\s*(\w+)\s*\}\}/g)]
+          .map((m) => m[1])
+          .filter((key) => !ctx[key]),
+      ),
+    );
+    if (missingPlaceholders.length) {
+      this.logger.warn(
+        `dispatch ${integration.slug} order ${orderId}: ` +
+          `to'ldirilmagan o'rin egallari — ${missingPlaceholders.join(', ')}`,
+      );
+    }
+
     const body = this.interpolate(cfg.body_template ?? {}, ctx) as Record<
       string,
       unknown
@@ -4206,6 +7038,174 @@ export class IntegrationServiceService {
   }
 
   /** Outstanding (pending) COD total a provider still owes. */
+  /**
+   * Map a provider's raw status string to our internal handling using the
+   * integration's inbound_status_mapping. Case-insensitive on the provider
+   * code. Returns null when the provider status isn't mapped (caller decides
+   * whether that's an intermediate status to ignore or a config gap to log).
+   */
+  mapProviderStatus(
+    integration: Pick<ExternalIntegration, 'inbound_status_mapping'>,
+    providerStatus: string,
+  ): { status?: string; action?: string } | null {
+    const mapping = integration.inbound_status_mapping ?? {};
+    if (!providerStatus) return null;
+
+    // Exact match first, then case-insensitive.
+    if (mapping[providerStatus]) return mapping[providerStatus];
+    const upper = providerStatus.toUpperCase();
+    for (const [key, value] of Object.entries(mapping)) {
+      if (key.toUpperCase() === upper) return value;
+    }
+    return null;
+  }
+
+  /**
+   * Outbound: create a shipment for an order at the provider.
+   *
+   * Provider-agnostic — the request is built from the integration's
+   * dispatch_config templates interpolated with `context` (flat order fields
+   * the caller supplies; integration-service never imports the order schema).
+   * On success we record external_ref + tracking on the shipment; on failure
+   * we stamp last_error and bump send_attempts so a retry/redispatch is
+   * visible. Idempotent at the provider via an Idempotency-Key header the
+   * caller can template in.
+   */
+  /**
+   * JO'NATMALAR RO'YXATI — tashuvchiga berilgan posilkalar.
+   *
+   * NEGA KERAK BO'LDI. `provider_shipments` jadvalida boy ma'lumot bor
+   * (tashqi raqam, kuzatuv kodi, ikki tomonning statusi, urinishlar soni,
+   * oxirgi xato), lekin uni KO'RISH yo'li yo'q edi: faqat bitta buyurtma
+   * bo'yicha olish mumkin (`GET shipments/:order_id`). Ya'ni "qaysi posilka
+   * yetmadi?" degan savolga javob topish uchun buyurtmalarni bittalab
+   * ochib chiqish kerak edi.
+   *
+   * `status` — `internal_status` bo'yicha filtr. Ataylab ichki status:
+   * tashuvchining o'z statusi har provayderda boshqacha nomlanadi va
+   * ro'yxatni filtrlash uchun yaroqsiz.
+   */
+  async listProviderShipments(query: {
+    integration_id?: string;
+    status?: string;
+    /** `true` — faqat xato bilan yiqilganlar (qayta jo'natish kerak). */
+    failed_only?: boolean;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const limit =
+      query.limit && query.limit > 0 ? Math.min(query.limit, 100) : 20;
+
+    const qb = this.shipmentRepo
+      .createQueryBuilder('s')
+      .where('s.isDeleted = :d', { d: false });
+
+    if (query.integration_id) {
+      qb.andWhere('s.integration_id = :iid', {
+        iid: String(query.integration_id),
+      });
+    }
+    if (query.status) {
+      qb.andWhere('s.internal_status = :st', { st: String(query.status) });
+    }
+    if (query.failed_only) {
+      // Xato MATNI bor qatorlar — "yiqilgan" ning yagona ishonchli belgisi.
+      qb.andWhere('s.last_error IS NOT NULL');
+    }
+
+    const [items, total] = await qb
+      .orderBy('s.createdAt', 'DESC')
+      .skip((page - 1) * limit)
+      .take(limit)
+      .getManyAndCount();
+
+    return successRes(
+      {
+        items,
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
+      },
+      200,
+      'Provider shipments',
+    );
+  }
+
+  /**
+   * HAMKORDAN KELGAN POSILKALAR — `partner_shipment_refs`.
+   *
+   * ⚠️ Bu jadval ATAYLAB yupqa: unda faqat bog'lanish bor (hamkor id,
+   * ularning buyurtma raqami, bizning buyurtma id'si). Status va summa
+   * buyurtmaning o'zida — boshqa sxemada. Ularni bu yerda qo'shish
+   * cross-schema so'rov yoki har qator uchun alohida RMQ chaqiruvi talab
+   * qilardi (N+1). Shu bois ro'yxat bog'lanishni beradi, UI esa har qatordan
+   * buyurtma sahifasiga havola qiladi.
+   */
+  async listPartnerShipments(query: {
+    partner_id?: string;
+    page?: number;
+    limit?: number;
+  }) {
+    const page = query.page && query.page > 0 ? query.page : 1;
+    const limit =
+      query.limit && query.limit > 0 ? Math.min(query.limit, 100) : 20;
+
+    const where: Record<string, unknown> = { isDeleted: false };
+    if (query.partner_id) {
+      where.partner_id = String(query.partner_id);
+    }
+
+    const [items, total] = await this.partnerShipmentRefRepo.findAndCount({
+      where,
+      order: { createdAt: 'DESC' },
+      skip: (page - 1) * limit,
+      take: limit,
+    });
+
+    return successRes(
+      {
+        items,
+        pagination: {
+          total,
+          page,
+          limit,
+          totalPages: Math.ceil(total / limit),
+        },
+      },
+      200,
+      'Partner shipments',
+    );
+  }
+
+  /**
+   * Barcha kargolarning umumiy qarzi (audit M5). Kompaniya holati formulasiga
+   * kiradi: kargo sotuvida marketga qarz darhol yoziladi, uning qarama-qarshi
+   * tomoni esa aynan shu qarz — u hisobga olinmasa balans o'sha summaga
+   * manfiyga og'ib turadi.
+   */
+  async getProviderOutstandingTotal() {
+    const raw = await this.receivableRepo
+      .createQueryBuilder('r')
+      .select('COALESCE(SUM(r.amount), 0)', 'sum')
+      .addSelect('COUNT(r.id)', 'count')
+      .where('r.is_deleted = false')
+      .andWhere('r.status = :status', { status: ReceivableStatus.PENDING })
+      .getRawOne<{ sum: string; count: string }>();
+
+    return successRes(
+      {
+        outstanding_amount: Number(raw?.sum ?? 0),
+        outstanding_count: Number(raw?.count ?? 0),
+      },
+      200,
+      'Provider outstanding total',
+    );
+  }
+
   async getProviderBalance(integration_id: string) {
     if (!integration_id) {
       this.badRequest('integration_id is required');
@@ -4339,6 +7339,60 @@ export class IntegrationServiceService {
         };
       },
     );
+
+    /**
+     * ⚠️ HISOB-KITOB ENDI KASSAGA HAM YOZILADI (audit M5).
+     *
+     * Ilgari bu metodning izohida ochiq yozilgan edi: "Reconciliation only —
+     * does not post to a cashbox". Ya'ni kargodan kelgan pul faqat
+     * `provider_receivables` jadvalida yopilardi, MAIN kassa esa o'zgarmasdi.
+     * Marketga to'lov ham qo'lda, hech qanday bog'lanishsiz qilinardi.
+     *
+     * Endi: kelgan summa MAIN kassaga kirim bo'lib yoziladi va yopilgan
+     * buyurtmalarning settlement qatorlari "HQ'ga yetdi" holatiga o'tadi —
+     * shundan keyin marketga to'lov FIFO bilan normal yopiladi.
+     *
+     * Tranzaksiyadan KEYIN, best-effort: kassa yozuvi `dedup_epoch` bilan
+     * idempotent, takroriy urinish pulni ikki marta yozmaydi.
+     */
+    try {
+      await rmqSend(
+        this.financeClient,
+        { cmd: 'finance.cashbox.fill' },
+        {
+          user_id: String(input.created_by ?? '0'),
+          cashbox_type: Cashbox_type.MAIN,
+          amount,
+          comment:
+            input.note ??
+            `Kargo (${integration.slug ?? integrationId}) hisob-kitobi`,
+          created_by: input.created_by ? String(input.created_by) : null,
+          dedup_epoch: `provider-remittance:${String(result.remittance_id)}`,
+        },
+      );
+    } catch (err) {
+      this.logger.error(
+        `provider remittance cashbox posting FAILED for remittance ` +
+          `${String(result.remittance_id)}: ${(err as Error)?.message ?? err}. ` +
+          `Pul kelgan, lekin MAIN kassaga yozilmadi — qo'lda tekshirilsin.`,
+      );
+    }
+
+    if (settledOrderIds.length) {
+      await rmqSend(
+        this.orderClient,
+        { cmd: 'order.settlement.provider_settled' },
+        {
+          order_ids: settledOrderIds,
+          requester_id: input.created_by ? String(input.created_by) : 'system',
+        },
+      ).catch((err) => {
+        this.logger.warn(
+          `provider settlement advance failed for remittance ` +
+            `${String(result.remittance_id)}: ${(err as Error)?.message ?? err}`,
+        );
+      });
+    }
 
     // Audit AFTER the transaction commits — one row per remittance (batch over
     // many receivables), collection summarised in metadata.

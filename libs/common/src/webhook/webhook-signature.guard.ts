@@ -29,6 +29,18 @@ export interface WebhookSecret {
   signaturePrefix?: string;
   /** Defaults to sha256. */
   algorithm?: HmacAlgorithm;
+  /**
+   * Vaqt tamg'asi sarlavhasi (masalan `x-timestamp`) — replay himoyasi
+   * uchun (audit S7).
+   *
+   * ⚠️ IMZONING O'ZI REPLAY'DAN HIMOYA QILMAYDI: ushlangan haqiqiy so'rov
+   * baytma-bayt qayta yuborilsa, imzo ham yaroqli bo'lib qolaveradi.
+   * Sarlavha sozlangan bo'lsa, u YETISHMASA ham rad etiladi — aks holda
+   * hujumchi uni olib tashlab, tekshiruvni chetlab o'tardi.
+   */
+  timestampHeader?: string;
+  /** Ruxsat etilgan chetlanish, sukut 300 000 ms (5 daqiqa). */
+  maxSkewMs?: number;
 }
 
 /**
@@ -97,6 +109,38 @@ export abstract class WebhookSignatureGuard implements CanActivate {
         'Webhook HMAC verification failed',
       );
       throw new UnauthorizedException();
+    }
+
+    // Replay himoyasi — imzo tasdiqlangandan KEYIN (audit S7). Vaqt tamg'asi
+    // imzolangan tanaga kirmasligi mumkin, shuning uchun avval kim
+    // yuborganiga ishonch hosil qilinadi, keyin "qachon" tekshiriladi.
+    if (cfg.timestampHeader) {
+      const headerName = cfg.timestampHeader.toLowerCase();
+      const rawTs = req.headers[headerName];
+      const value = Array.isArray(rawTs) ? rawTs[0] : rawTs;
+      const parsed = Number(String(value ?? '').trim());
+      const skewLimit = cfg.maxSkewMs ?? 300_000;
+      // Soniya ham, millisekund ham qabul qilinadi: 10 xonali qiymat —
+      // soniya (Unix epoch), undan uzuni — millisekund.
+      const timestampMs =
+        Number.isFinite(parsed) && String(Math.trunc(parsed)).length <= 10
+          ? parsed * 1000
+          : parsed;
+
+      if (!Number.isFinite(timestampMs)) {
+        this.logger.warn(
+          { path: req.originalUrl, header: headerName },
+          'Webhook timestamp missing or unparseable',
+        );
+        throw new UnauthorizedException();
+      }
+      if (Math.abs(Date.now() - timestampMs) > skewLimit) {
+        this.logger.warn(
+          { path: req.originalUrl, skewMs: Date.now() - timestampMs },
+          'Webhook timestamp outside the allowed window (replay?)',
+        );
+        throw new UnauthorizedException();
+      }
     }
 
     if (result.matchedSecret === 'previous') {
