@@ -12,13 +12,10 @@ import {
   BranchType,
   BranchUserRole,
   Cashbox_type,
-  Operation_type,
   Order_status,
   Post_status,
   Roles,
-  Source_type,
   Status,
-  Where_deliver,
 } from '@app/common';
 import { Branch } from './entities/branch.entity';
 import { BranchUser } from './entities/branch-user.entity';
@@ -2614,145 +2611,41 @@ export class BranchServiceService implements OnModuleInit {
       }),
     );
 
+    /**
+     * ⚠️ FILIAL QARZI ENDI LEDGERDAN, BAZADA HISOBLANADI (Scale 1 — 3-joy).
+     *
+     * Ilgari bu yerda HAR FILIAL uchun ikkitadan `order.find_all`
+     * (`fetch_all: true, limit: 5000`) chaqirilardi va summa JS'da
+     * hisoblanardi. 13 filialda bu ~130 000 buyurtma qatorini RabbitMQ orqali
+     * tashish demakdir. Produksiyada o'lchandi: 51 000 buyurtmali bazada
+     * `/finance/cashbox/financial-balanse` 7,2 s, `/analytics/revenue` esa
+     * umuman 504 bilan tugadi — IKKALASI HAM aynan shu chaqiruv tufayli
+     * (ikkalasi `branch.find_all` ni ishlatadi).
+     *
+     * Bazadagi o'sha yig'indi SQL bilan 17 ms oladi. Endi bitta chaqiruv:
+     * `order.settlement.financial_balance_summary` barcha filiallar kesimini
+     * bir so'rovda qaytaradi.
+     *
+     * ⚠️ FORMULA HAM TO'G'RILANDI. Eski hisob "buyurtma summasi minus manager
+     * tarifi" edi; ledger esa haqiqatan yozilgan `branch_amount` ni
+     * (`total − courierShare − branchShare`) saqlaydi va HQ'ga yetib kelgan
+     * buyurtmalar undan o'z-o'zidan chiqib ketadi. Manager paneli (C1) ham
+     * shu manbaga o'tgan — ya'ni ikkala ekran endi bitta raqamni ko'rsatadi.
+     */
     const payableToHqByBranchId = new Map<string, number>();
-    await Promise.all(
-      items.map(async (item) => {
-        const branchId = String(item.id ?? '').trim();
-        const managerId = managerByBranchId.get(branchId);
-        if (!branchId || !managerId || item.type === BranchType.HQ) {
-          payableToHqByBranchId.set(branchId, 0);
-          return;
-        }
-
-        const manager = managerUsersMap.get(managerId) as Record<
-          string,
-          unknown
-        > | null;
-        const managerTariffHome = Math.max(
-          Number(manager?.tariff_home ?? 0),
-          0,
-        );
-        const managerTariffCenter = Math.max(
-          Number(manager?.tariff_center ?? 0),
-          0,
-        );
-        const courierIds = courierIdsByBranchId.get(branchId) ?? [];
-        const soldOrderQuery = {
-          status: [
-            Order_status.SOLD,
-            Order_status.PAID,
-            Order_status.PARTLY_PAID,
-          ],
-          fetch_all: true,
-          page: 1,
-          limit: 5000,
-        };
-        const [branchOrdersResponse, courierOrdersResponse] = await Promise.all(
-          [
-            this.sendOrderCommand<any>('order.find_all', {
-              query: {
-                ...soldOrderQuery,
-                branch_id: branchId,
-              },
-            }).catch(() => null),
-            courierIds.length
-              ? this.sendOrderCommand<any>('order.find_all', {
-                  query: {
-                    ...soldOrderQuery,
-                    courier_ids: courierIds,
-                  },
-                }).catch(() => null)
-              : Promise.resolve(null),
-          ],
-        );
-
-        const extractOrders = (response: any): any[] => {
-          const candidates = [
-            response?.data?.data,
-            response?.data?.items,
-            response?.data,
-            response,
-          ];
-          return candidates.find((candidate) => Array.isArray(candidate)) ?? [];
-        };
-        const orders = Array.from(
-          new Map(
-            [
-              ...extractOrders(branchOrdersResponse),
-              ...extractOrders(courierOrdersResponse),
-            ].map((order: any) => [String(order?.id ?? ''), order]),
-          ).values(),
-        );
-        let payableToHq = 0;
-
-        const calculateAmounts = (order: any) => {
-          const totalPrice = Math.max(Number(order?.total_price ?? 0), 0);
-          const isCenter =
-            String(order?.where_deliver ?? '').toLowerCase() ===
-            String(Where_deliver.CENTER).toLowerCase();
-          const managerTariff = isCenter
-            ? managerTariffCenter
-            : managerTariffHome;
-          return {
-            // Manager payments sahifasidagi `berilishi_kerak` bilan aynan bir
-            // xil formula: order summasi minus branch manager tarifi.
-            hqPayable: Math.max(totalPrice - managerTariff, 0),
-          };
-        };
-
-        for (const order of orders) {
-          payableToHq += calculateAmounts(order).hqPayable;
-        }
-
-        let paidToHq = 0;
-        try {
-          const cashboxResponse = await this.sendFinanceCommand<{
-            data?: {
-              id?: string;
-              cashbox?: { id?: string };
-            };
-          }>('finance.cashbox.find_by_user', {
-            user_id: branchId,
-            cashbox_type: Cashbox_type.BRANCH,
-          });
-          const cashboxId = String(
-            cashboxResponse?.data?.cashbox?.id ??
-              cashboxResponse?.data?.id ??
-              '',
-          ).trim();
-
-          if (cashboxId) {
-            const historyResponse = await this.sendFinanceCommand<{
-              data?: {
-                items?: Array<{ amount?: number | string }>;
-              };
-            }>('finance.history.find_all', {
-              cashbox_id: cashboxId,
-              operation_type: Operation_type.EXPENSE,
-              source_type: Source_type.BRANCH_TO_MAIN,
-              page: 0,
-              limit: 0,
-            });
-            paidToHq = (historyResponse?.data?.items ?? []).reduce(
-              (sum, history) => {
-                const amount = Number(history?.amount ?? 0);
-                return (
-                  sum + (Number.isFinite(amount) && amount > 0 ? amount : 0)
-                );
-              },
-              0,
-            );
-          }
-        } catch {
-          paidToHq = 0;
-        }
-
+    try {
+      const summary = await this.sendOrderCommand<{
+        data?: { branches?: Array<{ branch_id: string; amount: number }> };
+      }>('order.settlement.financial_balance_summary', {});
+      for (const row of summary?.data?.branches ?? []) {
         payableToHqByBranchId.set(
-          branchId,
-          Math.max(Math.round(payableToHq) - paidToHq, 0),
+          String(row.branch_id),
+          Math.max(Number(row.amount) || 0, 0),
         );
-      }),
-    );
+      }
+    } catch {
+      // Yig'indi olinmasa nol qoladi — avvalgi xatti-harakat bilan bir xil.
+    }
 
     const enrichedItems = items.map((item) => ({
       ...item,
@@ -3065,7 +2958,10 @@ export class BranchServiceService implements OnModuleInit {
           this.orderClient
             .send<{
               data?: Array<{ branch_id: string; count: number }>;
-            }>({ cmd: 'order.analytics.count_by_branch' }, { branch_ids: branchIds, status: Order_status.NEW })
+            }>(
+              { cmd: 'order.analytics.count_by_branch' },
+              { branch_ids: branchIds, status: Order_status.NEW },
+            )
             .pipe(timeout(10000)),
         );
         for (const row of response?.data ?? []) {

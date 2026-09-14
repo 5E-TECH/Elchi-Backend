@@ -137,7 +137,8 @@ const main = async () => {
   results.push(await measure('health (bazaviy)', '/health', token));
   await sleep(GAP_MS);
   results.push(
-    await measure('orders ro`yxati (20 ta)', '/orders?page=1&limit=20', token),
+    // ⚠️ `limit` faqat 10/25/50/100 bo'lishi mumkin — boshqa qiymat 400 beradi.
+    await measure('orders ro`yxati (25 ta)', '/orders?page=1&limit=25', token),
   );
   await sleep(GAP_MS);
   results.push(
@@ -180,8 +181,16 @@ const main = async () => {
         `(bazadan ${heaviest.avg - baseline} ms ortiq = server ishi)`,
     );
     const serverMs = Math.max(heaviest.avg - baseline, 1);
+    /**
+     * ⚠️ BU KECHIKISH, O'TKAZUVCHANLIK EMAS. Node I/O ni parallel bajaradi,
+     * shuning uchun sekundiga nechta so'rov ketishini KECHIKISHDAN chiqarib
+     * bo'lmaydi — u faqat "eng yaxshi holatda bitta ketma-ket oqim nechta
+     * bajaradi" degan pastki chegarani beradi. Haqiqiy o'tkazuvchanlik
+     * `capacity.js` bilan o'lchanadi.
+     */
     console.log(
-      `  Bitta yadro shifti   : ~${Math.floor(1000 / serverMs)} shunday so'rov/soniya`,
+      `  Ketma-ket oqim       : ~${(1000 / serverMs).toFixed(1)} shunday so'rov/soniya` +
+        ' (pastki chegara — parallellik hisobga olinmagan)',
     );
   }
   console.log(

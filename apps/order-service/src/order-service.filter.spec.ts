@@ -14,6 +14,9 @@ describe('OrderServiceService filters', () => {
       orderBy: jest.fn().mockReturnThis(),
       skip: jest.fn().mockReturnThis(),
       take: jest.fn().mockReturnThis(),
+      // `findAll` hisobni join'lardan OLDIN nusxalaydi (Scale 1) — mock ham
+      // shu naqshni qo'llab-quvvatlashi kerak.
+      clone: jest.fn(() => qb),
       getRawMany: jest.fn().mockResolvedValue([]),
       getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
       getMany: jest.fn().mockResolvedValue([]),
@@ -468,6 +471,42 @@ describe('OrderServiceService filters', () => {
    * xotirasiga yuklardi (`getMany()`): kuniga 2 000 buyurtmada 180 kunlik
    * oyna ~360 ming qator. Endi bazadan bitta yig'indi qatori keladi.
    */
+  /**
+   * SCALE 1 — O'LCHOV ASOSIDA. `getManyAndCount()` join bo'lganda hisobni
+   * `COUNT(DISTINCT order.id)` qilib quradi: 501 000 buyurtmali produksiya
+   * bazasida bu **1 222 ms**, join'siz `COUNT(*)` esa **43 ms** (sahifaning
+   * o'zi 74 ms). Ya'ni ro'yxat ekranining vaqtining 90% dan ko'pi faqat
+   * "jami nechta" raqamiga ketardi.
+   */
+  describe('ro`yxat sahifalashi', () => {
+    it('hisobni join`lardan OLDIN nusxalaydi', async () => {
+      const { service, qb } = setup();
+
+      await service.findAll({ page: 1, limit: 10 });
+
+      // Nusxa olingan — ya'ni hisob alohida, join'siz qurilmadan ketadi.
+      expect(qb.clone).toHaveBeenCalled();
+      // Sahifa va hisob alohida bajariladi; birlashgan variant ishlatilmaydi.
+      expect(qb.getMany).toHaveBeenCalled();
+      expect(qb.getCount).toHaveBeenCalled();
+      expect(qb.getManyAndCount).not.toHaveBeenCalled();
+    });
+
+    it('join`lar nusxa olingandan KEYIN qo`shiladi', async () => {
+      const { service, qb } = setup();
+
+      await service.findAll({ page: 1, limit: 10 });
+
+      const cloneOrder = qb.clone.mock.invocationCallOrder[0];
+      const joinOrders = qb.leftJoinAndSelect.mock.invocationCallOrder;
+      // Barcha `leftJoinAndSelect` chaqiruvlari nusxadan keyin bo'lishi shart —
+      // aks holda hisob yana join bilan ketadi va tuzatish ma'nosini yo'qotadi.
+      for (const call of joinOrders) {
+        expect(call).toBeGreaterThan(cloneOrder);
+      }
+    });
+  });
+
   describe('analitika agregatsiyasi bazada', () => {
     it('getOverviewStats buyurtma qatorlarini umuman yuklamaydi', async () => {
       const { analytics, qb } = setup();
