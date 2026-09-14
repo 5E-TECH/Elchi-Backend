@@ -174,6 +174,8 @@ function makeService(opts: {
     noClient,
     orderClient,
     noClient,
+    // FINANCE klienti (audit M5) — kargo hisob-kitobi MAIN kassaga yoziladi.
+    noClient,
   );
   return { service, webhookLogRepo, orderSend, paymentTxnRepo, activityLog };
 }

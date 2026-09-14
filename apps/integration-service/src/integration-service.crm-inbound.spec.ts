@@ -197,6 +197,8 @@ function makeService(opts: {
     noClient,
     orderClient,
     noClient,
+    // FINANCE klienti (audit M5) — kargo hisob-kitobi MAIN kassaga yoziladi.
+    noClient,
   );
   return {
     service,
@@ -259,7 +261,7 @@ const CREATED_REPLY = {
 
 describe('CRM voronkasidan buyurtma yaratish', () => {
   describe('⭐ DARVOZA — eng xavfli nuqta', () => {
-    it('darvoza sozlanmagan bo\'lsa buyurtma YARATILMAYDI', async () => {
+    it("darvoza sozlanmagan bo'lsa buyurtma YARATILMAYDI", async () => {
       /**
        * Yozish validatsiyasi bundan qutqaradi, lekin ishlash vaqtida ham
        * tekshiriladi: eski qator, qo'lda SQL yoki migratsiyadan keyingi
@@ -278,7 +280,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       expect(orderSend).not.toHaveBeenCalled();
     });
 
-    it('bitim BOSHQA bosqichda bo\'lsa buyurtma yaratilmaydi', async () => {
+    it("bitim BOSHQA bosqichda bo'lsa buyurtma yaratilmaydi", async () => {
       const { service, orderSend } = makeService({
         integration: crmIntegration({ ...GATE, create_on_stages: ['999'] }),
         orderReply: CREATED_REPLY,
@@ -291,7 +293,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       expect(orderSend).not.toHaveBeenCalled();
     });
 
-    it('⭐ bosqich RAQAM bo\'lsa ham mos keladi', async () => {
+    it("⭐ bosqich RAQAM bo'lsa ham mos keladi", async () => {
       /**
        * CRM `status_id` ni 142 (raqam) qilib yuboradi, sozlamada esa "142"
        * (satr) turadi. Solishtirishni satr sifatida qilmasak, darvoza hech
@@ -309,7 +311,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       expect(orderSend).toHaveBeenCalledTimes(1);
     });
 
-    it('HODISA turi bo\'yicha darvoza — bosqich yo\'lisiz ham ishlaydi', async () => {
+    it("HODISA turi bo'yicha darvoza — bosqich yo'lisiz ham ishlaydi", async () => {
       /**
        * Ba'zi CRM'lar bosqich id'sini payload ichida bermaydi, o'rniga
        * alohida hodisa turini yuboradi. Shuning uchun darvozalar OR bilan
@@ -369,7 +371,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       expect(orderSend).not.toHaveBeenCalled();
     });
 
-    it('BOSHQA voronkaning bitimi o\'tmaydi', async () => {
+    it("BOSHQA voronkaning bitimi o'tmaydi", async () => {
       const { service, orderSend } = makeService({
         integration: crmIntegration({ ...GATE, funnel_id: '11111' }),
         orderReply: CREATED_REPLY,
@@ -381,7 +383,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       expect(orderSend).not.toHaveBeenCalled();
     });
 
-    it('⭐ `funnel_path` XATO bo\'lsa jurnalda KO\'RINADI', async () => {
+    it("⭐ `funnel_path` XATO bo'lsa jurnalda KO'RINADI", async () => {
       /**
        * ADVERSARIAL TOPILMA. Qiymat umuman topilmasa — bu sozlama nuqsoni:
        * darvoza HAR BIR bitimni to'sib turadi, jurnalda esa hech qanday
@@ -419,7 +421,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       expect(webhookLogRepo.update.mock.calls[0][1].error).toBeNull();
     });
 
-    it('o\'z voronkasi bo\'lsa o\'tadi', async () => {
+    it("o'z voronkasi bo'lsa o'tadi", async () => {
       const { service } = makeService({
         integration: crmIntegration({ ...GATE, funnel_id: '7482913' }),
         orderReply: CREATED_REPLY,
@@ -449,7 +451,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
   });
 
   describe('bitim obyektini topish', () => {
-    it('`deal_path` xato bo\'lsa aniq natija qaytadi', async () => {
+    it("`deal_path` xato bo'lsa aniq natija qaytadi", async () => {
       const { service, orderSend } = makeService({
         integration: crmIntegration({ ...GATE, deal_path: 'data.deal' }),
         orderReply: CREATED_REPLY,
@@ -481,7 +483,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       });
     });
 
-    it('⭐ KO\'P elementli massiv RAD ETILADI — birinchisi olinmaydi', async () => {
+    it("⭐ KO'P elementli massiv RAD ETILADI — birinchisi olinmaydi", async () => {
       /**
        * Birinchisini olib qolsak, qolgan bitimlar JIMGINA yo'qolardi —
        * eng yomon holat, chunki hech kim yo'qotishni sezmaydi. Rad etish
@@ -508,7 +510,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
     });
   });
 
-  describe('⭐ BITIM ID\'SI — dublikat to\'sig\'ining yagona tayanchi', () => {
+  describe("⭐ BITIM ID'SI — dublikat to'sig'ining yagona tayanchi", () => {
     /**
      * `receiveExternalOrders` dublikatni `(external_id, operator)` bo'yicha
      * tekshiradi, LEKIN `external_id` null bo'lsa tekshiruvni BUTUNLAY
@@ -518,7 +520,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
      * tushiradi. CRM webhooki esa bitim hayotining HAR qadamida keladi —
      * ya'ni id bo'lmasa bitta bitim o'nlab buyurtma yasardi.
      */
-    it('id yo\'q bo\'lsa buyurtma YARATILMAYDI', async () => {
+    it("id yo'q bo'lsa buyurtma YARATILMAYDI", async () => {
       const body = JSON.stringify({
         event: 'leads.status',
         data: { lead: { status_id: 142, phone: '901234567' } },
@@ -563,7 +565,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       expect(orderSend).toHaveBeenCalledTimes(1);
     });
 
-    it('id RAQAM bo\'lsa ham qabul qilinadi', async () => {
+    it("id RAQAM bo'lsa ham qabul qilinadi", async () => {
       const { service } = makeService({
         integration: crmIntegration(GATE),
         orderReply: CREATED_REPLY,
@@ -637,7 +639,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
     });
   });
 
-  describe('⭐ POYGA — bitta bitimdan ikki buyurtma bo\'lmasin', () => {
+  describe("⭐ POYGA — bitta bitimdan ikki buyurtma bo'lmasin", () => {
     /**
      * ADVERSARIAL TOPILMA (kritik). `receiveExternalOrders` dublikatni
      * O'QIB tekshiradi, keyin yaratadi; ikkisi orasida tuman aniqlash va
@@ -655,7 +657,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       code: '23505',
     });
 
-    it('bitim BAND bo\'lsa buyurtma yaratilmaydi', async () => {
+    it("bitim BAND bo'lsa buyurtma yaratilmaydi", async () => {
       const { service, orderSend } = makeService({
         integration: crmIntegration(GATE),
         orderReply: CREATED_REPLY,
@@ -670,7 +672,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       expect(orderSend).not.toHaveBeenCalled();
     });
 
-    it('band qilish YARATISHDAN OLDIN bo\'ladi', async () => {
+    it("band qilish YARATISHDAN OLDIN bo'ladi", async () => {
       /**
        * Tartib teskari bo'lsa to'siq ma'nosiz bo'lardi: ikki webhook ham
        * yaratib bo'lgandan keyin unique'ga urilardi.
@@ -687,7 +689,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       expect(claimOrder).toBeLessThan(createOrder);
     });
 
-    it('yaratilgan buyurtma REF ga bog\'lanadi', async () => {
+    it("yaratilgan buyurtma REF ga bog'lanadi", async () => {
       const { service, inboundDealRefRepo } = makeService({
         integration: crmIntegration(GATE),
         orderReply: CREATED_REPLY,
@@ -765,14 +767,18 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
   });
 
   describe('mavjud xatti-harakat buzilmaydi', () => {
-    it('⭐ posilka TOPILSA kiruvchi yo\'l ishlamaydi', async () => {
+    it("⭐ posilka TOPILSA kiruvchi yo'l ishlamaydi", async () => {
       /**
        * Aks holda kargoning har bir status webhooki yangi buyurtma
        * yasardi. Tartib ataylab shunday: avval mavjud posilka, topilmasa
        * buyurtma yaratish.
        */
       const body = JSON.stringify({
-        data: { lead: { status_id: 142 }, order_id: 'ext-1', state: 'delivered' },
+        data: {
+          lead: { status_id: 142 },
+          order_id: 'ext-1',
+          state: 'delivered',
+        },
       });
       const { service, orderSend } = makeService({
         integration: {
@@ -803,7 +809,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       expect(createCalls).toHaveLength(0);
     });
 
-    it('sozlama YO\'Q bo\'lsa javob va jurnal o\'zgarmaydi', async () => {
+    it("sozlama YO'Q bo'lsa javob va jurnal o'zgarmaydi", async () => {
       const { service, webhookLogRepo } = makeService({
         integration: crmIntegration(null),
         orderReply: CREATED_REPLY,
@@ -831,23 +837,23 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       });
     };
 
-    it('yoqilgan, lekin darvoza yo\'q → 400', async () => {
+    it("yoqilgan, lekin darvoza yo'q → 400", async () => {
       await expect(check({ enabled: true })).rejects.toThrow(/darvoza yo/);
     });
 
-    it('`create_on_stages` bor, `stage_path` yo\'q → 400', async () => {
+    it("`create_on_stages` bor, `stage_path` yo'q → 400", async () => {
       await expect(
         check({ enabled: true, create_on_stages: ['142'] }),
       ).rejects.toThrow(/stage_path/);
     });
 
-    it('`funnel_id` bor, `funnel_path` yo\'q → 400', async () => {
+    it("`funnel_id` bor, `funnel_path` yo'q → 400", async () => {
       await expect(
         check({ ...GATE, funnel_id: '7482913', funnel_path: '' }),
       ).rejects.toThrow(/funnel_path/);
     });
 
-    it('massiv ichida bo\'sh qiymat → 400', async () => {
+    it("massiv ichida bo'sh qiymat → 400", async () => {
       /** Bo'sh satr darvozani jimgina keng ochib yuborardi. */
       await expect(
         check({ ...GATE, create_on_stages: ['142', ''] }),
@@ -860,16 +866,16 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       ).rejects.toThrow(/massiv/);
     });
 
-    it('to\'g\'ri sozlama o\'tadi', async () => {
+    it("to'g'ri sozlama o'tadi", async () => {
       await expect(check(GATE)).resolves.toBeUndefined();
     });
 
-    it('o\'chirilgan sozlama tekshirilmaydi', async () => {
+    it("o'chirilgan sozlama tekshirilmaydi", async () => {
       /** `enabled: false` — hech narsa yaratilmaydi, shart ham yo'q. */
       await expect(check({ enabled: false })).resolves.toBeUndefined();
     });
 
-    it('⭐ yo\'l maydoni SATR bo\'lmasa → 400', async () => {
+    it("⭐ yo'l maydoni SATR bo'lmasa → 400", async () => {
       /**
        * ADVERSARIAL TOPILMA. `@IsObject()` faqat "obyektmi" deb qaraydi,
        * ICHINI tekshirmaydi. `stage_path: 123` bazaga tushsa, webhook
@@ -900,7 +906,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       return (service as any).assertInboundOrderPrereqs(row);
     };
 
-    it('rol `source` bo\'lmasa → 400', () => {
+    it("rol `source` bo'lmasa → 400", () => {
       expect(() =>
         prereq({
           role: 'carrier',
@@ -910,7 +916,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       ).toThrow(/source/);
     });
 
-    it('market bog\'lanishi yo\'q bo\'lsa → 400', () => {
+    it("market bog'lanishi yo'q bo'lsa → 400", () => {
       expect(() =>
         prereq({
           role: 'source',
@@ -920,7 +926,7 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       ).toThrow(/market/);
     });
 
-    it('to\'g\'ri holat o\'tadi', () => {
+    it("to'g'ri holat o'tadi", () => {
       expect(() =>
         prereq({
           role: 'source',
@@ -930,11 +936,15 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
       ).not.toThrow();
     });
 
-    it('yo\'l o\'chirilgan bo\'lsa shart qo\'yilmaydi', () => {
+    it("yo'l o'chirilgan bo'lsa shart qo'yilmaydi", () => {
       // Kargo ulanishida `inbound_order_config: null` — hech narsa talab
       // qilinmaydi, aks holda mavjud ulanishlarni tahrirlash to'silardi.
       expect(() =>
-        prereq({ role: 'carrier', market_id: null, inbound_order_config: null }),
+        prereq({
+          role: 'carrier',
+          market_id: null,
+          inbound_order_config: null,
+        }),
       ).not.toThrow();
     });
   });

@@ -155,6 +155,9 @@ function makeService(manager: MockManager) {
   const identityClient: any = {};
   const outbox: any = { enqueue: jest.fn().mockResolvedValue(undefined) };
 
+  const integrationClient: any = {
+    send: jest.fn(() => ({ subscribe: jest.fn() })),
+  };
   const service = new FinanceServiceService(
     cashboxRepo,
     historyRepo,
@@ -166,6 +169,8 @@ function makeService(manager: MockManager) {
     dataSource,
     activityLog,
     orderClient,
+    // INTEGRATION klienti (audit M5) — kargo qarzi holat formulasiga kiradi.
+    integrationClient,
     identityClient,
     outbox,
   );
@@ -430,8 +435,48 @@ describe('FinanceServiceService.financialBalance', () => {
     expect(response.data.couriers.couriersTotalBalanse).toBe(400000);
     expect(response.data.branches.branchCashboxTotal).toBe(100000);
     expect(response.data.formula).toBe(
-      'main_cashbox + chain_receivable - market_cashbox_payable',
+      'main_cashbox + chain_receivable + provider_receivable - market_cashbox_payable',
     );
+  });
+
+  /**
+   * AUDIT M5. Kargo orqali sotilgan buyurtmada marketga qarz darhol
+   * yoziladi, naqd esa kargoda qoladi. Kargoning qarzi hisobga olinmasa
+   * balans aynan o'sha summaga manfiyga og'ib turardi.
+   */
+  it('kargo qarzini ham hisobga oladi', async () => {
+    const manager = makeManager();
+    const { service, cashboxRepo } = makeService(manager);
+    cashboxRepo.findOne.mockResolvedValue({
+      id: 'main-1',
+      user_id: '0',
+      cashbox_type: 'main',
+      balance: 0,
+    });
+    cashboxRepo.createQueryBuilder = jest.fn().mockReturnValue({
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getRawOne: jest
+        .fn()
+        .mockResolvedValueOnce({ total: '475000' })
+        .mockResolvedValue({ total: '0' }),
+    });
+    rmqSendMock.mockImplementation((_client: unknown, pattern: any) => {
+      if (pattern?.cmd === 'integration.receivable.outstanding_total') {
+        return Promise.resolve({ data: { outstanding_amount: 500000 } });
+      }
+      return Promise.resolve({
+        data: { chain_receivable: 0, market_payable: 475000 },
+      });
+    });
+
+    const response: any = await service.financialBalance();
+
+    // 0 (MAIN) + 0 (zanjir) + 500 000 (kargo) − 475 000 (market) = 25 000
+    // — ya'ni aynan market tarifi, kutilgan foyda.
+    expect(response.data.chain.providerReceivable).toBe(500000);
+    expect(response.data.currentSituation).toBe(25000);
   });
 
   it('eski javobga (chain_receivable yo`q) ham chidaydi', async () => {

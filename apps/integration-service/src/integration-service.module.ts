@@ -40,6 +40,8 @@ import { SyncQueueScheduler } from './sync-queue.scheduler';
     RmqModule.register({ name: 'CATALOG' }),
     RmqModule.register({ name: 'ORDER' }),
     RmqModule.register({ name: 'NOTIFICATION' }),
+    // Kargo hisob-kitobi endi MAIN kassaga kirim yozadi (audit M5).
+    RmqModule.register({ name: 'FINANCE' }),
     DatabaseModule,
     ScheduleModule.forRoot(),
     ActivityLogModule.forService('integration-service'),

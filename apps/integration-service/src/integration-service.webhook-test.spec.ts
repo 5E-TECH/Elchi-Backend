@@ -81,7 +81,10 @@ describe('Sinov webhooki', () => {
     const { svc } = makeSvc(PARTNER);
     global.fetch = jest
       .fn()
-      .mockResolvedValue({ status: 401, text: async () => 'imzo yaroqsiz' }) as any;
+      .mockResolvedValue({
+        status: 401,
+        text: async () => 'imzo yaroqsiz',
+      }) as any;
 
     const res: any = await svc.testPartnerWebhook('7');
 
@@ -92,7 +95,9 @@ describe('Sinov webhooki', () => {
 
   it('TC4: tarmoq xatosi -> ok:false va sabab qaytadi', async () => {
     const { svc } = makeSvc(PARTNER);
-    global.fetch = jest.fn().mockRejectedValue(new Error('ECONNREFUSED')) as any;
+    global.fetch = jest
+      .fn()
+      .mockRejectedValue(new Error('ECONNREFUSED')) as any;
 
     const res: any = await svc.testPartnerWebhook('7');
 

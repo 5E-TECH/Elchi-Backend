@@ -170,6 +170,8 @@ function makeService(integration: Record<string, unknown> | null) {
     noClient,
     noClient,
     noClient,
+    // FINANCE klienti (audit M5) — kargo hisob-kitobi MAIN kassaga yoziladi.
+    noClient,
   );
   return {
     service,
@@ -795,10 +797,9 @@ describe("⭐ BIR VAQTDA kelgan nusxa — hodisa QO'LLANMAYDI (audit P1)", () =>
     code: '23505',
   });
 
-  it('unique buzilishida hodisa qo\'llanmaydi va 200 qaytadi', async () => {
-    const { service, shipmentRepo, webhookLogRepo } = makeService(
-      baseIntegration(),
-    );
+  it("unique buzilishida hodisa qo'llanmaydi va 200 qaytadi", async () => {
+    const { service, shipmentRepo, webhookLogRepo } =
+      makeService(baseIntegration());
     webhookLogRepo.save.mockRejectedValueOnce(uniqueViolation);
     const sig = computeHmacSignature(BODY, SECRET);
 

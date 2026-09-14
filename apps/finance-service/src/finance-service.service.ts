@@ -76,6 +76,7 @@ export class FinanceServiceService implements OnModuleInit {
     private readonly dataSource: DataSource,
     private readonly activityLog: ActivityLogService,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
+    @Inject('INTEGRATION') private readonly integrationClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     private readonly outbox: OutboxService,
   ) {}
@@ -2724,6 +2725,23 @@ export class FinanceServiceService implements OnModuleInit {
       const chainReceivable = Number(
         settlement.chain_receivable ?? settlement.branch_receivable ?? 0,
       );
+
+      /**
+       * Kargolarning qarzi (audit M5). Kargo orqali sotilgan buyurtmada
+       * marketga qarz darhol yoziladi, naqd esa kargoda qoladi — uning
+       * qarama-qarshi tomoni aynan shu qarz. Hisobga olinmasa balans o'sha
+       * summaga manfiyga og'ib turardi. Integration servisi javob bermasa 0
+       * olinadi: bu ko'rsatkich hisobotni to'xtatib qo'ymasligi kerak.
+       */
+      const providerReceivable = await rmqSend<{
+        data?: { outstanding_amount?: number };
+      }>(
+        this.integrationClient,
+        { cmd: 'integration.receivable.outstanding_total' },
+        {},
+      )
+        .then((res) => Number(res?.data?.outstanding_amount ?? 0) || 0)
+        .catch(() => 0);
       const branchReceivable = Number(settlement.branch_receivable ?? 0);
       const hqReceivable = Number(settlement.hq_receivable ?? 0);
       const [courierCashboxTotal, branchCashboxTotal] = await Promise.all([
@@ -2731,7 +2749,7 @@ export class FinanceServiceService implements OnModuleInit {
         this.sumCashboxBalanceByType(Cashbox_type.BRANCH),
       ]);
       const marketPayable = marketCashboxTotal;
-      const difference = chainReceivable - marketPayable;
+      const difference = chainReceivable + providerReceivable - marketPayable;
       const currentSituation = Number(mainCashbox.balance) + difference;
 
       return this.successRes(
@@ -2742,6 +2760,8 @@ export class FinanceServiceService implements OnModuleInit {
             chainReceivable,
             branchReceivable,
             hqReceivable,
+            // Kargolar qo'lidagi, hali hisob-kitob qilinmagan naqd.
+            providerReceivable,
           },
           branches: {
             branchReceivable,
@@ -2762,7 +2782,8 @@ export class FinanceServiceService implements OnModuleInit {
             couriersTotalBalanse: courierCashboxTotal,
           },
           difference,
-          formula: 'main_cashbox + chain_receivable - market_cashbox_payable',
+          formula:
+            'main_cashbox + chain_receivable + provider_receivable - market_cashbox_payable',
         },
         200,
         'Financial balance infos',
@@ -2964,7 +2985,9 @@ export class FinanceServiceService implements OnModuleInit {
       }).catch(async (error) => {
         // Kassa harakati o'tmasa to'lov qatori ham qolmasin — aks holda
         // "to'landi" deb ko'rinadi, pul esa chiqmagan bo'ladi.
-        await this.paymentRepo.softDelete({ id: saved.id }).catch(() => undefined);
+        await this.paymentRepo
+          .softDelete({ id: saved.id })
+          .catch(() => undefined);
         throw error;
       });
 

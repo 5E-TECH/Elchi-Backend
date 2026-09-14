@@ -591,6 +591,20 @@ export class OrderServiceController {
     );
   }
 
+  /**
+   * Kargo hisob-kitob qilgan buyurtmalarni HQ'ga yetgan deb belgilash
+   * (audit M5).
+   */
+  @MessagePattern({ cmd: 'order.settlement.provider_settled' })
+  settlementProviderSettled(
+    @Payload() data: { order_ids?: string[]; requester_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.settlementService.markProviderSettledToHq(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.initiate_return' })
   initiateReturn(
     @Payload()

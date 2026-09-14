@@ -47,16 +47,20 @@ type ProfitQuery = {
 @Injectable()
 export class InvestorServiceService {
   constructor(
-    @InjectRepository(Investor) private readonly investorRepo: Repository<Investor>,
-    @InjectRepository(Investment) private readonly investmentRepo: Repository<Investment>,
-    @InjectRepository(ProfitShare) private readonly profitShareRepo: Repository<ProfitShare>,
+    @InjectRepository(Investor)
+    private readonly investorRepo: Repository<Investor>,
+    @InjectRepository(Investment)
+    private readonly investmentRepo: Repository<Investment>,
+    @InjectRepository(ProfitShare)
+    private readonly profitShareRepo: Repository<ProfitShare>,
     private readonly activityLog: ActivityLogService,
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
   ) {}
 
-  private auditActor(
-    requester?: { id?: string; roles?: string[] } | null,
-  ): { user_id: string | null; user_role: string | null } {
+  private auditActor(requester?: { id?: string; roles?: string[] } | null): {
+    user_id: string | null;
+    user_role: string | null;
+  } {
     const roles = requester?.roles ?? [];
     return {
       user_id: requester?.id ? String(requester.id) : null,
@@ -68,7 +72,11 @@ export class InvestorServiceService {
     return this.activityLog.query(q ?? {});
   }
 
-  async auditLogByEntity(entity_type: string, entity_id: string, limit?: number) {
+  async auditLogByEntity(
+    entity_type: string,
+    entity_id: string,
+    limit?: number,
+  ) {
     return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
   }
 
@@ -90,7 +98,10 @@ export class InvestorServiceService {
     };
   }
 
-  private parseDate(value: string | undefined, fieldName: string): Date | undefined {
+  private parseDate(
+    value: string | undefined,
+    fieldName: string,
+  ): Date | undefined {
     if (!value) {
       return undefined;
     }
@@ -173,7 +184,10 @@ export class InvestorServiceService {
 
   async findAllInvestors(query: InvestorQuery) {
     const { search, status } = query ?? {};
-    const { page, limit, skip } = this.normalizePagination(query?.page, query?.limit);
+    const { page, limit, skip } = this.normalizePagination(
+      query?.page,
+      query?.limit,
+    );
 
     const where: any = { isDeleted: false };
     if (status) {
@@ -209,14 +223,17 @@ export class InvestorServiceService {
         })
       : [];
 
-    const investmentsMap = investments.reduce<Record<string, Investment[]>>((acc, row) => {
-      const key = String(row.investor_id);
-      if (!acc[key]) {
-        acc[key] = [];
-      }
-      acc[key].push(row);
-      return acc;
-    }, {});
+    const investmentsMap = investments.reduce<Record<string, Investment[]>>(
+      (acc, row) => {
+        const key = String(row.investor_id);
+        if (!acc[key]) {
+          acc[key] = [];
+        }
+        acc[key].push(row);
+        return acc;
+      },
+      {},
+    );
 
     const data = items.map((item) => ({
       ...item,
@@ -287,7 +304,9 @@ export class InvestorServiceService {
       investor.phone_number = phoneNumber;
     }
     if (dto.description !== undefined) {
-      investor.description = dto.description ? String(dto.description).trim() : null;
+      investor.description = dto.description
+        ? String(dto.description).trim()
+        : null;
     }
     if (dto.status !== undefined) {
       if (![Status.ACTIVE, Status.INACTIVE].includes(dto.status as Status)) {
@@ -344,10 +363,7 @@ export class InvestorServiceService {
       this.badRequest('amount must be greater than 0');
     }
 
-    const investedAt = this.parseDate(
-      dto.invested_at,
-      'invested_at',
-    );
+    const investedAt = this.parseDate(dto.invested_at, 'invested_at');
     if (!investedAt) {
       this.badRequest('invested_at is required');
     }
@@ -379,7 +395,10 @@ export class InvestorServiceService {
   }
 
   async findAllInvestments(query: InvestmentQuery) {
-    const { page, limit, skip } = this.normalizePagination(query?.page, query?.limit);
+    const { page, limit, skip } = this.normalizePagination(
+      query?.page,
+      query?.limit,
+    );
     const where: any = { isDeleted: false };
 
     if (query?.investor_id) {
@@ -410,9 +429,14 @@ export class InvestorServiceService {
       .createQueryBuilder('investment')
       .select('COALESCE(SUM(investment.amount), 0)', 'total')
       .where('investment.isDeleted = :isDeleted', { isDeleted: false })
-      .andWhere(query?.investor_id ? 'investment.investor_id = :investor_id' : '1=1', {
-        investor_id: query?.investor_id ? String(query.investor_id) : undefined,
-      })
+      .andWhere(
+        query?.investor_id ? 'investment.investor_id = :investor_id' : '1=1',
+        {
+          investor_id: query?.investor_id
+            ? String(query.investor_id)
+            : undefined,
+        },
+      )
       .getRawOne<{ total: string }>();
 
     return successRes({
@@ -429,7 +453,10 @@ export class InvestorServiceService {
     });
   }
 
-  async findInvestmentsByInvestor(investor_id: string, query?: Pick<InvestmentQuery, 'page' | 'limit'>) {
+  async findInvestmentsByInvestor(
+    investor_id: string,
+    query?: Pick<InvestmentQuery, 'page' | 'limit'>,
+  ) {
     await this.getInvestorOrThrow(investor_id);
     return this.findAllInvestments({
       investor_id,
@@ -461,7 +488,9 @@ export class InvestorServiceService {
     }
 
     if (dto.branch_id !== undefined) {
-      investment.branch_id = dto.branch_id ? String(dto.branch_id).trim() : null;
+      investment.branch_id = dto.branch_id
+        ? String(dto.branch_id).trim()
+        : null;
     }
 
     if (dto.amount !== undefined) {
@@ -473,10 +502,7 @@ export class InvestorServiceService {
     }
 
     if (dto.invested_at !== undefined) {
-      const investedAt = this.parseDate(
-        dto.invested_at,
-        'invested_at',
-      );
+      const investedAt = this.parseDate(dto.invested_at, 'invested_at');
       if (!investedAt) {
         this.badRequest('invested_at is required');
       }
@@ -484,7 +510,9 @@ export class InvestorServiceService {
     }
 
     if (dto.description !== undefined) {
-      investment.description = dto.description ? String(dto.description).trim() : null;
+      investment.description = dto.description
+        ? String(dto.description).trim()
+        : null;
     }
 
     const saved = await this.investmentRepo.save(investment);
@@ -609,13 +637,18 @@ export class InvestorServiceService {
             from: new Date(0),
             to: period_end,
           })
-          .andWhere('investment.investor_id IN (:...investorIds)', { investorIds })
+          .andWhere('investment.investor_id IN (:...investorIds)', {
+            investorIds,
+          })
           .groupBy('investment.investor_id')
           .getRawMany<{ investor_id: string; total_amount: string }>()
       : [];
 
     const totalsMap = new Map(
-      totalsRaw.map((row) => [String(row.investor_id), Number(row.total_amount)]),
+      totalsRaw.map((row) => [
+        String(row.investor_id),
+        Number(row.total_amount),
+      ]),
     );
 
     const result: ProfitShare[] = [];
@@ -648,7 +681,9 @@ export class InvestorServiceService {
         period_end,
         is_paid: false,
         paid_at: null,
-        description: input?.description ? String(input.description).trim() : null,
+        description: input?.description
+          ? String(input.description).trim()
+          : null,
       });
       const savedRow = await this.profitShareRepo.save(row);
       result.push(savedRow);
@@ -679,7 +714,10 @@ export class InvestorServiceService {
     );
   }
 
-  async findProfitByInvestor(investor_id: string, query?: Pick<ProfitQuery, 'is_paid' | 'page' | 'limit'>) {
+  async findProfitByInvestor(
+    investor_id: string,
+    query?: Pick<ProfitQuery, 'is_paid' | 'page' | 'limit'>,
+  ) {
     await this.getInvestorOrThrow(investor_id);
     return this.findAllProfits({
       investor_id,
@@ -690,7 +728,10 @@ export class InvestorServiceService {
   }
 
   async findAllProfits(query?: ProfitQuery) {
-    const { page, limit, skip } = this.normalizePagination(query?.page, query?.limit);
+    const { page, limit, skip } = this.normalizePagination(
+      query?.page,
+      query?.limit,
+    );
     const where: any = { isDeleted: false };
     if (query?.investor_id) {
       where.investor_id = String(query.investor_id);
@@ -711,18 +752,28 @@ export class InvestorServiceService {
         .createQueryBuilder('profit')
         .select('COALESCE(SUM(profit.amount), 0)', 'total')
         .where('profit.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere(query?.investor_id ? 'profit.investor_id = :investor_id' : '1=1', {
-          investor_id: query?.investor_id ? String(query.investor_id) : undefined,
-        })
+        .andWhere(
+          query?.investor_id ? 'profit.investor_id = :investor_id' : '1=1',
+          {
+            investor_id: query?.investor_id
+              ? String(query.investor_id)
+              : undefined,
+          },
+        )
         .andWhere('profit.is_paid = :is_paid', { is_paid: true })
         .getRawOne<{ total: string }>(),
       this.profitShareRepo
         .createQueryBuilder('profit')
         .select('COALESCE(SUM(profit.amount), 0)', 'total')
         .where('profit.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere(query?.investor_id ? 'profit.investor_id = :investor_id' : '1=1', {
-          investor_id: query?.investor_id ? String(query.investor_id) : undefined,
-        })
+        .andWhere(
+          query?.investor_id ? 'profit.investor_id = :investor_id' : '1=1',
+          {
+            investor_id: query?.investor_id
+              ? String(query.investor_id)
+              : undefined,
+          },
+        )
         .andWhere('profit.is_paid = :is_paid', { is_paid: false })
         .getRawOne<{ total: string }>(),
     ]);

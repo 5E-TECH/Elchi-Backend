@@ -33,8 +33,9 @@ function makeService(
    * hisoblaymiz; egalik YO'Q holati alohida specda tekshiriladi
    * (`integration-service.partner-guards.spec.ts`).
    */
-  svc.partnerMarketRefRepo =
-    over.marketRefRepo ?? { findOne: jest.fn().mockResolvedValue({ id: '1' }) };
+  svc.partnerMarketRefRepo = over.marketRefRepo ?? {
+    findOne: jest.fn().mockResolvedValue({ id: '1' }),
+  };
   svc.identityClient = { send: identitySend };
   svc.orderClient = { send: orderSend };
   return {

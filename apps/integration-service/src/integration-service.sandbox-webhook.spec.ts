@@ -150,7 +150,7 @@ describe("Sandbox ko'zgusi", () => {
     expect(svc.logger.warn).toHaveBeenCalled();
   });
 
-  it("TC5: ASOSIY yiqilsa xato tashlanadi (sandbox uni yashirmaydi)", async () => {
+  it('TC5: ASOSIY yiqilsa xato tashlanadi (sandbox uni yashirmaydi)', async () => {
     const svc = makeSvc({
       id: '7',
       webhook_url: MAIN,
@@ -191,7 +191,7 @@ describe("Sandbox ko'zgusi", () => {
     expect(sbSig).not.toBe(mainSig);
   });
 
-  it("TC7: sandbox sozlanmagan -> FAQAT asosiy manzil", async () => {
+  it('TC7: sandbox sozlanmagan -> FAQAT asosiy manzil', async () => {
     const svc = makeSvc({
       id: '7',
       webhook_url: MAIN,

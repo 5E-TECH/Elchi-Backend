@@ -47,24 +47,24 @@ function svc(over: Record<string, unknown> = {}) {
       // `findActiveBySlug` EMAS.
       integrationRepo: {
         findOne: jest.fn().mockResolvedValue({
-        id: '5',
-        slug: 'ldg',
-        name: 'LDG',
-        // Yangi qo'riqchilar: o'chirilgan yoki kargo bo'lmagan ulanishga
-        // posilka jo'natilmaydi (audit H1, H2).
-        is_active: true,
-        role: 'carrier',
-        dispatch_config: {
-          endpoint: '/v1/orders',
-          method: 'POST',
-          body_template: {
-            receiver: '{{customer_name}}',
-            phone: '{{customer_phone}}',
-            cod: '{{cod_amount}}',
-            addr: '{{address}}',
-            note: '{{items}}',
+          id: '5',
+          slug: 'ldg',
+          name: 'LDG',
+          // Yangi qo'riqchilar: o'chirilgan yoki kargo bo'lmagan ulanishga
+          // posilka jo'natilmaydi (audit H1, H2).
+          is_active: true,
+          role: 'carrier',
+          dispatch_config: {
+            endpoint: '/v1/orders',
+            method: 'POST',
+            body_template: {
+              receiver: '{{customer_name}}',
+              phone: '{{customer_phone}}',
+              cod: '{{cod_amount}}',
+              addr: '{{address}}',
+              note: '{{items}}',
+            },
           },
-        },
         }),
       },
       orderClient: { send: jest.fn() },
@@ -87,20 +87,23 @@ function svc(over: Record<string, unknown> = {}) {
   return { s, calls };
 }
 
-const dispatch = async (over: Record<string, unknown> = {}, ctx?: Record<string, string>) => {
+const dispatch = async (
+  over: Record<string, unknown> = {},
+  ctx?: Record<string, string>,
+) => {
   const { s, calls } = svc(over);
   await (s as any).dispatchShipment({ order_id: '1001', context: ctx });
   return calls[0]?.body as Record<string, unknown>;
 };
 
-describe('C3 — kontekst buyurtmadan yig\'iladi', () => {
+describe("C3 — kontekst buyurtmadan yig'iladi", () => {
   it('⭐ mijoz ismi va telefoni shablonga tushadi', async () => {
     const body = await dispatch();
     expect(body.receiver).toBe('Ali Valiyev');
     expect(body.phone).toBe('+998901112233');
   });
 
-  it('⭐ `cod_amount` TO\'LDIRILADI — eng muhim maydon', async () => {
+  it("⭐ `cod_amount` TO'LDIRILADI — eng muhim maydon", async () => {
     /**
      * Bo'sh qolsa kargo mijozdan hech narsa undirmaydi. Jo'natish sotuvdan
      * OLDIN bo'ladi, shu bois `to_be_paid` bu yerda to'g'ri ma'noda.
@@ -109,7 +112,7 @@ describe('C3 — kontekst buyurtmadan yig\'iladi', () => {
     expect(body.cod).toBe('450000');
   });
 
-  it('manzil va mahsulot ro\'yxati ham ketadi', async () => {
+  it("manzil va mahsulot ro'yxati ham ketadi", async () => {
     const body = await dispatch();
     expect(body.addr).toBe('Chilonzor 5');
     expect(body.note).toBe('Telefon x2, Quloqchin x1');
@@ -120,7 +123,7 @@ describe('C3 — kontekst buyurtmadan yig\'iladi', () => {
     expect(body.receiver).toBe('Boshqa Ism');
   });
 
-  it('⭐ to\'ldirilmagan o\'rin egallari OGOHLANTIRISH bilan yoziladi', async () => {
+  it("⭐ to'ldirilmagan o'rin egallari OGOHLANTIRISH bilan yoziladi", async () => {
     /**
      * `interpolate` yo'q kalitni BO'SH SATR qiladi (`:2450`), ya'ni maydon
      * jimgina bo'sh ketadi. Birinchi yozganimda "`{{...}}` o'z holida
@@ -139,19 +142,23 @@ describe('C3 — kontekst buyurtmadan yig\'iladi', () => {
     const body = calls[0]?.body as Record<string, unknown>;
     expect(body.receiver).toBe('');
 
-    const warned = String((s.logger.warn as jest.Mock).mock.calls[0]?.[0] ?? '');
+    const warned = String(
+      (s.logger.warn as jest.Mock).mock.calls[0]?.[0] ?? '',
+    );
     expect(warned).toMatch(/to'ldirilmagan o'rin egallari/);
     expect(warned).toMatch(/customer_name/);
     expect(warned).toMatch(/cod_amount/);
   });
 
-  it('buyurtma o\'qilmasa ham yiqilmaydi (order_id qoladi)', async () => {
+  it("buyurtma o'qilmasa ham yiqilmaydi (order_id qoladi)", async () => {
     // `rmqRequest` xatoni yutib null qaytaradi — dispatch to'xtamasligi kerak.
-    const body = await dispatch({ rmqRequest: jest.fn().mockResolvedValue(null) });
+    const body = await dispatch({
+      rmqRequest: jest.fn().mockResolvedValue(null),
+    });
     expect(body).toBeDefined();
   });
 
-  it('`dispatch_config.endpoint` bo\'lmasa 400', async () => {
+  it("`dispatch_config.endpoint` bo'lmasa 400", async () => {
     await expect(
       dispatch({
         integrationRepo: {
@@ -224,7 +231,7 @@ describe("H1 / H2 — kill-switch va rol qo'riqchilari", () => {
     await expect(withIntegration({ role: null })).resolves.toBeDefined();
   });
 
-  it("faol yetkazuvchi avvalgidek ishlaydi", async () => {
+  it('faol yetkazuvchi avvalgidek ishlaydi', async () => {
     await expect(
       withIntegration({ is_active: true, role: 'carrier' }),
     ).resolves.toBeDefined();

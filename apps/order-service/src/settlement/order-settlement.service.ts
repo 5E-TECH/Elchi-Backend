@@ -288,6 +288,51 @@ export class OrderSettlementService {
     );
   }
 
+  /**
+   * Kargo hisob-kitob qilganda uning buyurtmalarini "HQ'ga yetib keldi"
+   * holatiga o'tkazadi (audit M5).
+   *
+   * FIFO emas, ANIQ RO'YXAT bo'yicha: remittance qaysi buyurtmalarni
+   * yopganini `provider_receivables` allaqachon biladi, shuning uchun taxmin
+   * qilishning keragi yo'q. Faqat kuryersiz va filialsiz (ya'ni haqiqatan
+   * kargo yo'lidan kelgan) PENDING qatorlar o'zgaradi — ichki sotuvga
+   * tegib ketmasligi uchun.
+   */
+  async markProviderSettledToHq(data: {
+    order_ids?: string[];
+    requester_id?: string;
+  }) {
+    const orderIds = (data?.order_ids ?? [])
+      .map((id) => String(id ?? '').trim())
+      .filter(Boolean);
+    if (!orderIds.length) {
+      return successRes({ settled_order_ids: [] }, 200, 'Nothing to settle');
+    }
+
+    const now = new Date();
+    const result = await this.orderSettlementRepo
+      .createQueryBuilder()
+      .update(OrderSettlement)
+      .set({
+        status: SettlementStatus.BRANCH_SETTLED,
+        courier_to_branch_at: now,
+        branch_to_hq_at: now,
+        branch_to_hq_by: String(data?.requester_id ?? 'system'),
+      })
+      .where('order_id IN (:...orderIds)', { orderIds })
+      .andWhere('status = :status', { status: SettlementStatus.PENDING })
+      .andWhere('courier_id IS NULL')
+      .andWhere('branch_id IS NULL')
+      .andWhere('is_deleted = :isDeleted', { isDeleted: false })
+      .execute();
+
+    return successRes(
+      { settled_order_ids: orderIds, affected: result.affected ?? 0 },
+      200,
+      'Provider settlement advanced',
+    );
+  }
+
   private static readonly MAIN_CASHBOX_USER_ID = '0';
 
   /** Ensure the singleton MAIN (HQ) cashbox exists before posting to it. */

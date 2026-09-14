@@ -778,6 +778,13 @@ export class OrderLifecycleService {
       branch_amount: number;
       market_amount: number;
       hasCourier: boolean;
+      /**
+       * Naqd UCHINCHI TOMONDA (kargoda) — audit M5. Kuryer ham, filial ham
+       * yo'q, lekin pul HQ'ga yetib kelmagan: u kargo hisob-kitob qilgandan
+       * keyin keladi. Bunday qator PENDING bo'lib turadi va remittance
+       * kelganda BRANCH_SETTLED ga o'tkaziladi.
+       */
+      cashHeldByProvider?: boolean;
     },
   ): Promise<void> {
     const repo = manager.getRepository(OrderSettlement);
@@ -787,7 +794,7 @@ export class OrderLifecycleService {
     let status = SettlementStatus.PENDING;
     let courier_to_branch_at: Date | null = null;
     let branch_to_hq_at: Date | null = null;
-    if (!data.hasCourier) {
+    if (!data.hasCourier && !data.cashHeldByProvider) {
       courier_to_branch_at = now;
       if (isBranchSale) {
         status = SettlementStatus.COURIER_SETTLED;
@@ -5684,6 +5691,25 @@ export class OrderLifecycleService {
       `Provider ${input.provider_slug ?? 'external'} → ${input.action}` +
       (input.external_ref ? ` (ref: ${input.external_ref})` : '');
 
+    // Kargo sotuvi uchun pul summalari (audit M5). Tranzaksiyadan OLDIN
+    // hisoblanadi: market ma'lumoti tashqi (RMQ) chaqiruv talab qiladi.
+    let providerMarketTariff = 0;
+    let providerMarketAmount = 0;
+    const providerTotal = Number(order.total_price ?? 0);
+    if (input.action === 'sell' && order.market_id) {
+      const market = await this.lookup
+        .getMarketsByIds([String(order.market_id)])
+        .then((rows) => rows[0])
+        .catch(() => undefined);
+      providerMarketTariff = resolveOrderTariff({
+        snapshot: order.market_tariff,
+        isCenter: order.where_deliver === Where_deliver.CENTER,
+        centerTariff: market?.tariff_center,
+        homeTariff: market?.tariff_home,
+      });
+      providerMarketAmount = providerTotal - providerMarketTariff;
+    }
+
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
@@ -5694,8 +5720,92 @@ export class OrderLifecycleService {
       order.status = targetStatus;
       if (input.action === 'sell') {
         order.sold_at = order.sold_at ?? String(Date.now());
+        // Tariflar sotuv paytida qotiriladi — keyin tarif o'zgarsa ham
+        // hisob-kitob va rollback aynan shu qiymatlar bilan ishlaydi.
+        order.market_tariff = order.market_tariff ?? providerMarketTariff;
+        order.courier_share = 0;
+        order.branch_share = 0;
+        order.to_be_paid = providerMarketAmount;
       }
       await orderRepo.save(order);
+
+      /**
+       * ⚠️ KARGO SOTUVI ENDI KASSAGA HAM YOZILADI (audit M5).
+       *
+       * Ilgari bu yo'l ATAYLAB "status-only" edi: marketga qarz yozilmasdi,
+       * `order_settlement` qatori yaratilmasdi, `sell_profit` va operator
+       * komissiyasi ham yo'q edi. Kargoning qarzi esa butunlay boshqa
+       * jadvalda (`provider_receivables`) turardi va kassaga umuman
+       * bog'lanmasdi. Natijada marketga to'lov qo'lda, hech qanday
+       * bog'lanishsiz qilinardi — ikki marta to'lash yoki umuman to'lamaslik
+       * daftarda ko'rinmasdi.
+       *
+       * Model: kargo mijozdan naqdni yig'adi (shuning uchun settlement qatori
+       * PENDING bo'lib turadi), Elchi esa marketga `total − market_tariff`
+       * qarzdor bo'lib qoladi. Kargo hisob-kitob qilganda
+       * (`integration.provider.remittance`) MAIN kassaga kirim yoziladi va
+       * qator BRANCH_SETTLED ga o'tadi.
+       *
+       * ⚠️ KARGONING O'Z HAQI HALI MODELLASHTIRILMAGAN: kodda kargo uchun
+       * tarif maydoni yo'q. U kelguncha kargoga to'lov qo'lda chiqim sifatida
+       * yoziladi va bu yerdagi foyda faqat market tarifi bo'lib qoladi.
+       */
+      if (input.action === 'sell') {
+        const pay = (
+          data: Parameters<typeof this.updateCashboxBalance>[0],
+        ): Promise<void> =>
+          this.updateCashboxBalance(
+            { ...data, dedup_epoch: `provider-sell:${String(order.id)}` },
+            queryRunner.manager,
+          );
+
+        if (order.market_id) {
+          if (providerMarketAmount > 0) {
+            await pay({
+              user_id: String(order.market_id),
+              cashbox_type: Cashbox_type.FOR_MARKET,
+              amount: providerMarketAmount,
+              operation_type: Operation_type.INCOME,
+              source_type: Source_type.SELL,
+              source_id: String(order.id),
+              created_by: 'system',
+              comment: note,
+            });
+          } else if (providerMarketAmount < 0) {
+            await pay({
+              user_id: String(order.market_id),
+              cashbox_type: Cashbox_type.FOR_MARKET,
+              amount: -providerMarketAmount,
+              operation_type: Operation_type.EXPENSE,
+              source_type: Source_type.SELL,
+              source_id: String(order.id),
+              created_by: 'system',
+              comment: note,
+            });
+          }
+        }
+
+        await this.recordSaleSettlement(queryRunner.manager, {
+          order_id: String(order.id),
+          courier_id: null,
+          branch_id: null,
+          market_id: order.market_id ? String(order.market_id) : null,
+          courier_amount: 0,
+          branch_amount: providerTotal,
+          market_amount: providerMarketAmount,
+          hasCourier: false,
+          // Naqd kargoda — HQ'ga hali yetib kelmagan.
+          cashHeldByProvider: true,
+        });
+
+        // Foyda + operator komissiyasi. `orderRepo.save` `updateFull` dan
+        // o'tmagani uchun bu ilgak qo'lda chaqiriladi.
+        await this.enqueueFinanceOnStatusChange(
+          order,
+          oldStatus,
+          queryRunner.manager,
+        );
+      }
 
       await this.custody.createTrackingEvent(
         {

@@ -104,7 +104,9 @@ describe('integrationMetrics — hamkor (inbound)', () => {
     });
 
     // 90 / (90+10) = 90%, navbatdagi 50 ta hisobga OLINMAYDI
-    expect(unwrap(await svc.integrationMetrics()).connections[0].success_rate).toBe(90);
+    expect(
+      unwrap(await svc.integrationMetrics()).connections[0].success_rate,
+    ).toBe(90);
   });
 
   it("TC5: ⭐ yakunlangan hodisa YO'Q -> foiz `null` (0% EMAS)", async () => {
@@ -115,28 +117,48 @@ describe('integrationMetrics — hamkor (inbound)', () => {
       ],
     });
 
-    expect(unwrap(await svc.integrationMetrics()).connections[0].success_rate).toBeNull();
+    expect(
+      unwrap(await svc.integrationMetrics()).connections[0].success_rate,
+    ).toBeNull();
   });
 
   it("TC6: ⭐ javob vaqti o'lchanmagan -> `null` (0 EMAS)", async () => {
     // 0 ms "bir zumda javob berdi" degan yolg'on bo'lardi.
     const svc = makeSvc({
       partnerRows: [
-        { id: '7', events: '2', delivered: '2', failed: '0', queued: '0', avg_ms: null },
+        {
+          id: '7',
+          events: '2',
+          delivered: '2',
+          failed: '0',
+          queued: '0',
+          avg_ms: null,
+        },
       ],
     });
 
-    expect(unwrap(await svc.integrationMetrics()).connections[0].avg_ms).toBeNull();
+    expect(
+      unwrap(await svc.integrationMetrics()).connections[0].avg_ms,
+    ).toBeNull();
   });
 
   it("TC7: hodisa yo'q -> last_event_at `null`", async () => {
     const svc = makeSvc({
       partnerRows: [
-        { id: '7', events: '0', delivered: '0', failed: '0', queued: '0', last_at: null },
+        {
+          id: '7',
+          events: '0',
+          delivered: '0',
+          failed: '0',
+          queued: '0',
+          last_at: null,
+        },
       ],
     });
 
-    expect(unwrap(await svc.integrationMetrics()).connections[0].last_event_at).toBeNull();
+    expect(
+      unwrap(await svc.integrationMetrics()).connections[0].last_event_at,
+    ).toBeNull();
   });
 });
 
@@ -161,16 +183,20 @@ describe('integrationMetrics — integratsiya (outbound)', () => {
       queueRows: [],
     });
 
-    expect(unwrap(await svc.integrationMetrics()).connections[0].queued).toBe(0);
+    expect(unwrap(await svc.integrationMetrics()).connections[0].queued).toBe(
+      0,
+    );
   });
 
-  it("TC10: ⭐ outbound javob vaqti HAMISHA `null`", async () => {
+  it('TC10: ⭐ outbound javob vaqti HAMISHA `null`', async () => {
     // `sync_history` da bunday ustun yo'q. 0 yozish yolg'on bo'lardi.
     const svc = makeSvc({
       historyRows: [{ id: '12', events: '3', delivered: '3', failed: '0' }],
     });
 
-    expect(unwrap(await svc.integrationMetrics()).connections[0].avg_ms).toBeNull();
+    expect(
+      unwrap(await svc.integrationMetrics()).connections[0].avg_ms,
+    ).toBeNull();
   });
 });
 
@@ -180,9 +206,7 @@ describe('integrationMetrics — jami', () => {
       partnerRows: [
         { id: '7', events: '100', delivered: '97', failed: '3', queued: '7' },
       ],
-      historyRows: [
-        { id: '12', events: '28', delivered: '28', failed: '0' },
-      ],
+      historyRows: [{ id: '12', events: '28', delivered: '28', failed: '0' }],
       queueRows: [{ id: '12', queued: '2' }],
     });
 

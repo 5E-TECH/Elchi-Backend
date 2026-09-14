@@ -143,7 +143,9 @@ describe('InvestorServiceService.calculateProfit', () => {
     const res = (await service.calculateProfit({
       ...period,
       percentage: 10,
-    } as never)) as { data?: { calculated_count?: number; skipped_count?: number } };
+    } as never)) as {
+      data?: { calculated_count?: number; skipped_count?: number };
+    };
 
     // No new obligation created — the re-run is a no-op for this investor.
     expect(savedRows).toHaveLength(0);
