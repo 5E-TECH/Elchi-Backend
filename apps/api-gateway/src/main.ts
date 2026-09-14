@@ -232,6 +232,11 @@ async function bootstrap() {
         urls: [process.env.RABBITMQ_URI!],
         queue: gatewayQueue,
         noAssert: true,
+        // TCP_NODELAY — Nagle + delayed ACK har borib-kelishga ~43 ms
+        // qo'shadi (o'lchangan: 45,4 → 2,6 ms). Batafsil: libs/common/rmq.
+        socketOptions: {
+          connectionOptions: { noDelay: true },
+        },
         queueOptions: { durable: true },
       },
     });

@@ -186,6 +186,16 @@ export class RmqService {
       options: {
         urls: [this.configService.get<string>('RABBITMQ_URI')!],
         queue: main,
+        /**
+         * ⚠️ TCP_NODELAY — har bir RMQ borib-kelishidan ~43 ms olib
+         * tashlaydi. Produksiyada o'lchangan: 45,4 ms → 2,6 ms (17×).
+         * Sabab: Nagle algoritmi + delayed ACK kichik AMQP kadrini ~40 ms
+         * ushlab turadi. Mijoz tomoni `rmq.module.ts` da, izoh ham o'sha
+         * yerda batafsil.
+         */
+        socketOptions: {
+          connectionOptions: { noDelay: true },
+        },
         prefetchCount:
           Number.isFinite(prefetch) && prefetch > 0 ? prefetch : 20,
         isGlobalPrefetchCount: false,

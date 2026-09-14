@@ -53,7 +53,8 @@ export async function rmqSend<T = unknown>(
   const ms = options?.timeoutMs ?? RMQ_SERVICE_TIMEOUT;
   const maxRetries = options?.retries ?? 2;
   const baseDelay = options?.retryBaseDelayMs ?? 200;
-  const payload = options?.attachRequestId === false ? data : withRequestId(data);
+  const payload =
+    options?.attachRequestId === false ? data : withRequestId(data);
 
   return firstValueFrom(
     client.send<T>(pattern, payload).pipe(
