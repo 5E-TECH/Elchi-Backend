@@ -49,7 +49,8 @@ function makeSvc(rows: OrderRow[]) {
     }),
     findOne: jest.fn((opts: any) =>
       Promise.resolve(
-        rows.find((r) => r.qr_code_token === opts?.where?.qr_code_token) ?? null,
+        rows.find((r) => r.qr_code_token === opts?.where?.qr_code_token) ??
+          null,
       ),
     ),
   };
@@ -77,14 +78,14 @@ const row = (over: Partial<OrderRow> = {}): OrderRow => ({
 });
 
 describe('K2 — oddiy qabul TASHQI posilkani rad etadi', () => {
-  it('⭐ tashqi manbali buyurtma oddiy yo\'ldan QABUL QILINMAYDI', async () => {
+  it("⭐ tashqi manbali buyurtma oddiy yo'ldan QABUL QILINMAYDI", async () => {
     const { svc } = makeSvc([row({ source: Order_source.EXTERNAL })]);
-    await expect(
-      (svc as any).receiveNewOrders(['1']),
-    ).rejects.toThrow(/skanerlab qabul qilinadi/);
+    await expect((svc as any).receiveNewOrders(['1'])).rejects.toThrow(
+      /skanerlab qabul qilinadi/,
+    );
   });
 
-  it('⭐ ARALASH to\'da bo\'lsa BUTUN so\'rov rad etiladi', async () => {
+  it("⭐ ARALASH to'da bo'lsa BUTUN so'rov rad etiladi", async () => {
     /**
      * Qolganini jimgina qabul qilmaymiz — aks holda operator hammasini
      * qabul qildim deb o'ylardi va tashqi posilka jimgina qolib ketardi.
@@ -93,12 +94,12 @@ describe('K2 — oddiy qabul TASHQI posilkani rad etadi', () => {
       row({ id: '1', source: Order_source.INTERNAL }),
       row({ id: '2', source: Order_source.EXTERNAL, qr_code_token: 'tok-2' }),
     ]);
-    await expect(
-      (svc as any).receiveNewOrders(['1', '2']),
-    ).rejects.toThrow(/tashqi manbadan/);
+    await expect((svc as any).receiveNewOrders(['1', '2'])).rejects.toThrow(
+      /tashqi manbadan/,
+    );
   });
 
-  it('⭐ `scanVerified` bayrog\'i bilan o\'tadi (ichki chaqiruv)', async () => {
+  it("⭐ `scanVerified` bayrog'i bilan o'tadi (ichki chaqiruv)", async () => {
     /**
      * Bayroq message payload'idan KELMAYDI — faqat
      * `receiveExternalByScan` beradi, u tokenni allaqachon tekshirgan.
@@ -122,15 +123,15 @@ describe('K2 — oddiy qabul TASHQI posilkani rad etadi', () => {
   });
 });
 
-describe('receiveExternalByScan — token qo\'riqchisi', () => {
-  it('token bo\'sh bo\'lsa 400', async () => {
+describe("receiveExternalByScan — token qo'riqchisi", () => {
+  it("token bo'sh bo'lsa 400", async () => {
     const { svc } = makeSvc([]);
     await expect(
       (svc as any).receiveExternalByScan({ tokens: [] }),
     ).rejects.toThrow(/tokens is required/);
   });
 
-  it('⭐ 200 dan ko\'p token rad etiladi', async () => {
+  it("⭐ 200 dan ko'p token rad etiladi", async () => {
     // Mingtalik so'rov tranzaksiyani uzoq ushlab turardi.
     const { svc } = makeSvc([]);
     const many = Array.from({ length: 201 }, (_, i) => `t${i}`);
@@ -142,7 +143,18 @@ describe('receiveExternalByScan — token qo\'riqchisi', () => {
   it('takroriy token bir marta hisoblanadi', async () => {
     const { svc, orderRepo } = makeSvc([]);
     await (svc as any).receiveExternalByScan({ tokens: ['a', 'a', 'a'] });
-    const where = orderRepo.find.mock.calls[0][0].where;
+    /**
+     * ⚠️ INDEKSGA BOG'LANMAYDI. Ilgari `calls[0]` yozilgan edi, keyin metod
+     * oldiga QOP a'zolarini izlash so'rovi qo'shildi va test jimgina
+     * BOSHQA so'rovni tekshirib qoldi (`qr_code_token` undefined). Endi
+     * kerakli so'rov MAZMUNI bo'yicha topiladi.
+     */
+    const parcelCall = orderRepo.find.mock.calls.find(
+      (c: any[]) => c[0]?.where?.qr_code_token !== undefined,
+    );
+    // Jest da expect ikkinchi argument (xabar) qabul QILMAYDI — u vitest xususiyati.
+    expect(parcelCall).toBeDefined();
+    const where = parcelCall![0].where;
     const vals = where.qr_code_token?._value ?? where.qr_code_token?.value;
     expect(vals).toEqual(['a']);
   });
@@ -165,7 +177,12 @@ describe('receiveExternalByScan — token qo\'riqchisi', () => {
 
     const res = (await (svc as any).receiveExternalByScan({
       tokens: ['ichki', 'allaqachon', 'yoq'],
-    })) as { data: { received: number; unmatched: Array<{ token: string; reason: string }> } };
+    })) as {
+      data: {
+        received: number;
+        unmatched: Array<{ token: string; reason: string }>;
+      };
+    };
 
     expect(res.data.received).toBe(0);
     const byToken = Object.fromEntries(
@@ -176,7 +193,7 @@ describe('receiveExternalByScan — token qo\'riqchisi', () => {
     expect(byToken['yoq']).toMatch(/topilmadi/);
   });
 
-  it('⭐ faqat NEW + EXTERNAL qatorlar so\'raladi', async () => {
+  it("⭐ faqat NEW + EXTERNAL qatorlar so'raladi", async () => {
     const { svc, orderRepo } = makeSvc([]);
     await (svc as any).receiveExternalByScan({ tokens: ['a'] });
     const where = orderRepo.find.mock.calls[0][0].where;

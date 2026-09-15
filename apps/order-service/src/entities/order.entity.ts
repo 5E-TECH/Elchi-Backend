@@ -317,6 +317,32 @@ export class Order extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   external_id!: string | null;
 
+  /**
+   * KIRUVCHI QOP — hamkor bir qopda yuborgan posilkalar guruhi.
+   *
+   * ⚠️ NEGA KERAK. Hamkor posilkalari bittalab keladi va kiruvchi ekranda
+   * tekis ro'yxat bo'lib turardi. Operator "12 posilka kelayotgan edi,
+   * 11 tasi yetdi" degan holatni KO'RMASDI, va 12 posilkani bittalab
+   * skanerlashga majbur edi.
+   *
+   * `external_batch_ref`   — hamkor tomonidagi qop id'si (guruhlash uchun)
+   * `external_batch_token` — QOP USTIDAGI QR (bitta skan, butun qop)
+   * `external_batch_size`  — hamkor AYTGAN son
+   *
+   * ⚠️ `external_batch_size` biz sanagan son EMAS. Ikkisi farq qilsa qop
+   * to'liq yetib kelmagan degani — biz sanagan son bilan almashtirish bu
+   * farqni YASHIRARDI.
+   */
+  @Column({ type: 'varchar', nullable: true })
+  external_batch_ref!: string | null;
+
+  @Index('IDX_ORDER_EXTERNAL_BATCH_TOKEN', { where: 'is_deleted = false' })
+  @Column({ type: 'varchar', nullable: true })
+  external_batch_token!: string | null;
+
+  @Column({ type: 'int', nullable: true })
+  external_batch_size!: number | null;
+
   @Column({ type: 'enum', enum: Order_source, default: Order_source.INTERNAL })
   source!: Order_source;
 

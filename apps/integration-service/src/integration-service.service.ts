@@ -65,6 +65,17 @@ import { errorRes, successRes } from '../../../libs/common/helpers/response';
  * Ikkisini aralashtirish hamkor tomonida jim pul xatosiga olib keladi
  * (aynan `cod_collected` bilan bo'lgan hol — audit M2).
  */
+/**
+ * Bo'sh satrni `null` ga aylantiradi.
+ *
+ * ⚠️ Bo'sh satr bilan `null` FARQ QILADI: bo'sh satr bo'yicha guruhlash
+ * barcha qopsiz posilkalarni bitta soxta qopga yig'ib qo'yardi.
+ */
+const nullableText = (value: unknown): string | null => {
+  const text = String(value ?? '').trim();
+  return text || null;
+};
+
 const nullableMoney = (value: unknown): number | null => {
   if (value === null || value === undefined) return null;
   const n = Number(value);
@@ -1140,6 +1151,16 @@ export class IntegrationServiceService {
     subtotal?: number;
     /** Hamkor yorlig'idagi QR qiymati (K3). */
     label_token?: string | null;
+    /**
+     * KIRUVCHI QOP (batch) — hamkor bir qopda yuborgan posilkalar guruhi.
+     *
+     * `batch_ref`         — hamkor tomonidagi qop id'si (guruhlash)
+     * `batch_label_token` — QOP USTIDAGI QR (bitta skan bilan butun qop)
+     * `batch_size`        — hamkor AYTGAN son (biz sanagan son emas)
+     */
+    batch_ref?: string | null;
+    batch_label_token?: string | null;
+    batch_size?: number | null;
   }) {
     const partnerId = String(dto?.partner_id ?? '').trim();
     const externalOrderId = String(dto?.external_order_id ?? '').trim();
@@ -1291,6 +1312,15 @@ export class IntegrationServiceService {
           address: dto.address ?? null,
           total_price: totalPrice,
           to_be_paid: cod,
+          /**
+           * QOP MA'LUMOTI — kiruvchi ekranda guruhlash va qop yorlig'ini
+           * skanerlash uchun. Bo'sh satr `null` ga aylantiriladi: bo'sh
+           * satr bo'yicha guruhlash barcha qopsiz posilkalarni BITTA
+           * soxta qopga yig'ib qo'yardi.
+           */
+          external_batch_ref: nullableText(dto.batch_ref),
+          external_batch_token: nullableText(dto.batch_label_token),
+          external_batch_size: nullableMoney(dto.batch_size),
           /**
            * ⚠️ PREPAID POSILKA — OLDINDAN TO'LANGAN QISM (topilma).
            *

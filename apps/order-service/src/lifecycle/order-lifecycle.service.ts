@@ -3106,6 +3106,10 @@ export class OrderLifecycleService {
       qr_code_token?: string | null;
       parent_order_id?: string | null;
       external_id?: string | null;
+      /** Kiruvchi qop (batch) — hamkor yuborgan guruh ma'lumoti. */
+      external_batch_ref?: string | null;
+      external_batch_token?: string | null;
+      external_batch_size?: number | null;
       source?: Order_source;
       items?: Array<{
         product_id?: string | null;
@@ -3177,6 +3181,13 @@ export class OrderLifecycleService {
         qr_code_token: dto.qr_code_token ?? this.generateCustomToken(),
         parent_order_id: dto.parent_order_id ?? null,
         external_id: dto.external_id ?? null,
+        /**
+         * KIRUVCHI QOP — hamkor bir qopda yuborgan posilkalar guruhi.
+         * Kiruvchi ekranda guruhlash va qop yorlig'ini skanerlash uchun.
+         */
+        external_batch_ref: dto.external_batch_ref ?? null,
+        external_batch_token: dto.external_batch_token ?? null,
+        external_batch_size: dto.external_batch_size ?? null,
         source: dto.source ?? Order_source.INTERNAL,
         isDeleted: false,
       });
@@ -3823,9 +3834,50 @@ export class OrderLifecycleService {
       this.badRequest('bir so‘rovda 200 tadan ko‘p token yuborib bo‘lmaydi');
     }
 
+    /**
+     * QOP YORLIG'I — BITTA SKAN, BUTUN QOP.
+     *
+     * ⚠️ NEGA KERAK. Hamkor 12 posilkani bitta qopda yuboradi va qop ustida
+     * UMUMIY yorliq bo'ladi. Ilgari operator 12 posilkani BITTALAB
+     * skanerlashi kerak edi — sekin, va bittasi o'tkazib yuborilsa
+     * jimgina qabul qilinmay qolardi.
+     *
+     * Endi skanerlangan token QOP yorlig'i bo'lsa, u o'sha qopdagi BARCHA
+     * posilka tokenlariga ochiladi va qolgan mantiq (javobgarlik, filial,
+     * pochtaga ajratish) O'ZGARISHSIZ ishlaydi.
+     *
+     * ⚠️ FAQAT `NEW` va `EXTERNAL` olinadi. Qopning bir qismi avval
+     * bittalab skanerlangan bo'lishi mumkin — ularni qayta olish
+     * `receiveNewOrders` ni ikki marta chaqirib javobgarlik yozuvini
+     * IKKILANTIRARDI.
+     */
+    const batchMembers = await this.orderRepo.find({
+      where: {
+        external_batch_token: In(tokens),
+        isDeleted: false,
+        status: Order_status.NEW,
+        source: Order_source.EXTERNAL,
+      },
+      select: ['qr_code_token', 'external_batch_token'],
+    });
+    /** Qaysi skanerlangan token QOP bo'lib chiqdi — javobda aytiladi. */
+    const batchTokens = new Set(
+      batchMembers
+        .map((o) => String(o.external_batch_token ?? ''))
+        .filter(Boolean),
+    );
+    const expandedTokens = Array.from(
+      new Set([
+        ...tokens,
+        ...batchMembers
+          .map((o) => String(o.qr_code_token ?? ''))
+          .filter(Boolean),
+      ]),
+    );
+
     const orders = await this.orderRepo.find({
       where: {
-        qr_code_token: In(tokens),
+        qr_code_token: In(expandedTokens),
         isDeleted: false,
         status: Order_status.NEW,
         source: Order_source.EXTERNAL,
@@ -3842,6 +3894,13 @@ export class OrderLifecycleService {
     const unmatched: Array<{ token: string; reason: string }> = [];
     for (const token of tokens) {
       if (matched.has(token)) continue;
+      /**
+       * ⚠️ QOP TOKENI "topilmadi" EMAS. U posilka tokeni bo'lmagani uchun
+       * `matched` da yo'q, lekin o'z qopidagi posilkalarni ochib berdi —
+       * ya'ni skan MUVAFFAQIYATLI. Bu tekshiruvsiz operator har qop
+       * skanidan keyin "topilmadi" xatosini ko'rardi.
+       */
+      if (batchTokens.has(token)) continue;
       const anyOrder = await this.orderRepo.findOne({
         where: { qr_code_token: token, isDeleted: false },
       });
@@ -3886,6 +3945,11 @@ export class OrderLifecycleService {
       {
         received: orders.length,
         unmatched,
+        /**
+         * Qaysi skan QOP bo'lib chiqdi — operator "bitta skanerlaganimda
+         * 12 ta qabul qilindi" degan natijani TUSHUNISHI kerak.
+         */
+        batch_tokens: Array.from(batchTokens),
         detail: (result as { data?: unknown })?.data ?? null,
       },
       200,
