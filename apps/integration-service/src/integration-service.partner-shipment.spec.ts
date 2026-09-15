@@ -324,6 +324,17 @@ describe('IntegrationServiceService — get/cancel PartnerShipment (C2.2)', () =
       status: 'on the road',
       cod_amount: 50000,
       cod_collected: 12000,
+      /**
+       * ⚠️ SOTILMAGAN BUYURTMADA `null`, 0 EMAS (audit M2).
+       *
+       * Bu buyurtma yo'lda (`on the road`) — hali sotilmagan, ya'ni naqd
+       * yig'ilmagan va tarif snapshoti ham yo'q. 0 yuborilsa hamkor
+       * "yig'ildi, hech narsa chiqmadi" deb o'qib, qarz hisobiga
+       * qo'shardi — aynan `cod_collected` bilan bo'lgan xato.
+       */
+      collected_from_customer: null,
+      elchi_fee: null,
+      market_amount: null,
       total_price: 65000,
       // Kuryer yozgan xarajat — hamkor ham o'z marketidan yechishi kerak,
       // aks holda ikki daftar shunga ajralib qoladi.
@@ -334,6 +345,80 @@ describe('IntegrationServiceService — get/cancel PartnerShipment (C2.2)', () =
       { cmd: 'order.find_by_id' },
       { id: '900' },
     );
+  });
+
+  it("⭐ TC1b: SOTILGAN buyurtmada haqiqiy pul maydonlari to'ldiriladi (M2)", async () => {
+    /**
+     * M2 NING TUZATILISHI. Ilgari hamkorga faqat `cod_collected` borardi va
+     * u `order.paid_amount` edi — market qarzining avto-to'langan qismi,
+     * oddiy sotuvda 0. BeePost uni "Elchi yig'gan pul" deb o'qib, panelida
+     * uch xato ko'rsatkich chiqargan ("Elchi bizga qarz" MANFIY, "Elchi
+     * ushlagan" tarif o'rniga BUTUN COD).
+     *
+     * Endi qiymatlar SNAPSHOTDAN keladi va ma'nosi aniq:
+     *   collected_from_customer = kuryer yig'gan naqd
+     *   elchi_fee               = Elchi ushlagan tarif
+     *   market_amount           = Elchi hamkorga qarzi
+     */
+    const { svc } = makeShipmentSvc({
+      order: {
+        id: '901',
+        status: 'sold',
+        to_be_paid: 485000,
+        paid_amount: 0,
+        total_price: 500000,
+        extra_cost: 0,
+        sale_collectible_amount: 500000,
+        market_tariff: 15000,
+        qr_code_token: 'qr-sold',
+      },
+    });
+
+    const res: any = await svc.getPartnerShipment({
+      partner_id: '7',
+      shipment_id: '901',
+    });
+
+    expect(res.data.collected_from_customer).toBe(500000);
+    expect(res.data.elchi_fee).toBe(15000);
+    // Elchi 500 000 yig'di, 15 000 ni ushlab qoldi -> 485 000 qarz.
+    expect(res.data.market_amount).toBe(485000);
+    /**
+     * Eski maydon 0 bo'lib qoladi — aynan shu uning yolg'on ekanini
+     * ko'rsatadi. U `@deprecated`, lekin kontraktda e'lon qilingani uchun
+     * olib tashlanmaydi.
+     */
+    expect(res.data.cod_collected).toBe(0);
+  });
+
+  it("⭐ ONLAYN to'langan buyurtmada yig'ilgan naqd 0, qarz esa MANFIY (M2 + M3)", async () => {
+    /**
+     * Mijoz onlayn to'lagan: pul MARKETDA, kuryer naqd yig'MAGAN. Bizning
+     * kitobimizda market bizga tarifni QARZDOR — ya'ni `market_amount`
+     * manfiy chiqishi TO'G'RI va hamkor shuni ko'rishi kerak.
+     */
+    const { svc } = makeShipmentSvc({
+      order: {
+        id: '902',
+        status: 'sold',
+        to_be_paid: 0,
+        paid_amount: 0,
+        total_price: 500000,
+        extra_cost: 0,
+        sale_collectible_amount: 0,
+        market_tariff: 15000,
+        qr_code_token: 'qr-online',
+      },
+    });
+
+    const res: any = await svc.getPartnerShipment({
+      partner_id: '7',
+      shipment_id: '902',
+    });
+
+    expect(res.data.collected_from_customer).toBe(0);
+    expect(res.data.elchi_fee).toBe(15000);
+    expect(res.data.market_amount).toBe(-15000);
   });
 
   it('GET — boshqa hamkor/mavjud emas -> 404 (order servisiga bormaydi)', async () => {

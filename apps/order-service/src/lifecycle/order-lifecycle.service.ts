@@ -3360,6 +3360,30 @@ export class OrderLifecycleService {
     // U `to_be_paid` (= total_price − market_tariff) QARZINING allaqachon
     // to'langan qismi; oddiy sotuvda 0 bo'lib qoladi. Hamkorga `cod_collected`
     // nomi bilan boradi — nom tarixiy, semantikasi shu.
+    /**
+     * HAMKORGA YUBORILADIGAN HAQIQIY PUL QIYMATLARI (audit M2).
+     *
+     * Uchalasi SNAPSHOTDAN olinadi, qayta hisoblanmaydi: sotuvdan keyin
+     * `paid_online_amount` (qaytarish webhooki) yoki tarif o'zgarishi
+     * mumkin, qayta hisob esa hamkorga BOSHQA raqam yuborardi va ikki
+     * daftar jimgina ajralib qolardi.
+     *
+     * `null` — buyurtma hali sotilmagan (yoki rollback qilingan). Bu
+     * ATAYLAB: 0 yuborish "yig'ildi, lekin hech narsa emas" degan ma'noli
+     * da'vo bo'lardi va hamkor uni qarz hisobiga qo'shardi.
+     */
+    const collectedFromCustomer =
+      order.sale_collectible_amount != null
+        ? Number(order.sale_collectible_amount)
+        : null;
+    const elchiFee =
+      order.market_tariff != null ? Number(order.market_tariff) : null;
+    /** Elchi hamkorga qarzi: yig'ilgan naqd minus bizning tarifimiz. */
+    const marketAmount =
+      collectedFromCustomer != null && elchiFee != null
+        ? collectedFromCustomer - elchiFee
+        : null;
+
     if (order.external_id) {
       await rmqSend(
         this.integrationClient,
@@ -3400,6 +3424,27 @@ export class OrderLifecycleService {
             `cod_amount`ni biladi; bizda esa uni ishonchli saqlaydigan joy
             yo'q. Bu audit F2 ning bir qismi va alohida qaror talab qiladi.
           */
+          /**
+           * HAQIQIY PUL MAYDONLARI (audit M2).
+           *
+           * ⚠️ NEGA KERAK BO'LDI. Yuqoridagi `cod_collected` nomi yolg'on va
+           * hamkor tomonida JIM buzilish keltirgan: BeePost uni "Elchi
+           * yig'gan pul" deb o'qib, hisob-kitob panelida uch xato
+           * ko'rsatkich chiqargan — "Elchi bizga qarz" MANFIY, "Elchi
+           * ushlagan" esa tarif o'rniga BUTUN COD.
+           *
+           * Endi uchta ANIQ maydon yuboriladi. Ularning manbasi taxmin emas:
+           *   `sale_collectible_amount` — sotuvda kuryer yig'gan naqd
+           *     (snapshot, `total_price − paid_online_amount`);
+           *   `market_tariff` — sotuvda ishlatilgan tarif snapshoti.
+           *
+           * ⚠️ SOTILMAGAN BUYURTMADA `null`, 0 EMAS. 0 — "hech narsa
+           * yig'ilmadi" degan MA'NOLI da'vo va hamkor uni qarz hisobiga
+           * qo'shib yuborardi. `null` esa "hali hisoblanmagan" deydi.
+           */
+          collected_from_customer: collectedFromCustomer,
+          elchi_fee: elchiFee,
+          market_amount: marketAmount,
           // Hamkor o'z tomonida ham narx/xarajatni qo'llashi uchun.
           total_price: Number(order.total_price ?? 0),
           extra_cost: Number(order.extra_cost ?? 0),

@@ -57,6 +57,20 @@ import { errorRes, successRes } from '../../../libs/common/helpers/response';
  * qiymat 0 bo'lishi kerak — aks holda hamkor bekor qilingan buyurtma uchun
  * pul olgandek yozib qo'yardi.
  */
+/**
+ * Pul maydonini hamkor payloadiga tayyorlaydi.
+ *
+ * ⚠️ `null` NI 0 GA AYLANTIRMAYDI. Bu ataylab: 0 — "hisoblandi va hech
+ * narsa chiqmadi" degan ma'noli da'vo, `null` esa "hali hisoblanmagan".
+ * Ikkisini aralashtirish hamkor tomonida jim pul xatosiga olib keladi
+ * (aynan `cod_collected` bilan bo'lgan hol — audit M2).
+ */
+const nullableMoney = (value: unknown): number | null => {
+  if (value === null || value === undefined) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
 const PAID_STATUSES = new Set<string>([
   Order_status.SOLD,
   Order_status.PAID,
@@ -1455,7 +1469,26 @@ export class IntegrationServiceService {
         external_order_id: ref.external_order_id,
         status: this.pluck(order, 'status'),
         cod_amount: Number(this.pluck(order, 'to_be_paid') ?? 0),
+        /** @deprecated Nomi yolg'on — `collected_from_customer` ishlatilsin. */
         cod_collected: Number(this.pluck(order, 'paid_amount') ?? 0),
+        /**
+         * HAQIQIY PUL MAYDONLARI (audit M2) — webhook payloadi bilan AYNI.
+         *
+         * ⚠️ Tortib olish (bu yer) va webhook BIR XIL raqam berishi SHART.
+         * Ikkisi ajralsa, hamkor qaysi biriga ishonishni bilmaydi va
+         * solishtiruv har safar "nomuvofiqlik" chiqaradi.
+         */
+        collected_from_customer: nullableMoney(
+          this.pluck(order, 'sale_collectible_amount'),
+        ),
+        elchi_fee: nullableMoney(this.pluck(order, 'market_tariff')),
+        market_amount: (() => {
+          const collected = nullableMoney(
+            this.pluck(order, 'sale_collectible_amount'),
+          );
+          const fee = nullableMoney(this.pluck(order, 'market_tariff'));
+          return collected != null && fee != null ? collected - fee : null;
+        })(),
         total_price: Number(this.pluck(order, 'total_price') ?? 0),
         /**
          * Kuryer yozgan qo'shimcha xarajat. Hamkor buni o'z tomonida ham
@@ -1584,6 +1617,12 @@ export class IntegrationServiceService {
     old_status?: string;
     new_status?: string;
     cod_collected?: number;
+    /** Sotuvda kuryer yig'gan naqd (snapshot). `null` = hali sotilmagan. */
+    collected_from_customer?: number | null;
+    /** Elchi ushlab qolgan tarif (snapshot). */
+    elchi_fee?: number | null;
+    /** Elchi hamkorga qarzi: yig'ilgan naqd minus tarif. */
+    market_amount?: number | null;
     market_paid_amount?: number;
     cod_amount?: number;
     total_price?: number;
@@ -1641,6 +1680,18 @@ export class IntegrationServiceService {
         PAID_STATUSES.has(newStatus) && Number.isFinite(codCollected)
           ? codCollected
           : 0,
+      /**
+       * HAQIQIY PUL MAYDONLARI (audit M2) — `cod_collected` nomi yolg'on
+       * bo'lgani uchun qo'shildi. Manbasi buyurtmadagi SNAPSHOT, ya'ni
+       * sotuvdan keyin tarif yoki onlayn to'lov o'zgarsa ham qiymat
+       * o'zgarmaydi.
+       *
+       * ⚠️ `null` MA'NOLI: "hali sotilmagan / hisoblanmagan". 0 ga
+       * aylantirilmaydi, aks holda hamkor uni qarz hisobiga qo'shardi.
+       */
+      collected_from_customer: nullableMoney(dto?.collected_from_customer),
+      elchi_fee: nullableMoney(dto?.elchi_fee),
+      market_amount: nullableMoney(dto?.market_amount),
       /*
         ⚠️ `cod_amount` FAQAT chaqiruvchi uni ANIQ uzatganda qo'shiladi.
  
