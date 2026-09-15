@@ -153,10 +153,24 @@ describe('PartnerGatewayController — POST /partner/markets (C1.5)', () => {
     );
     const ctrl = makeController(jest.fn(), jest.fn(), integration);
 
+    /**
+     * ⚠️ `httpRes` — HTTP holat kodi TANADAGI `statusCode` ga moslanishini
+     * tekshirish uchun. NestJS `@Post` uchun sukut bo'yicha 201 beradi, ya'ni
+     * idempotent takror (tana 200) ham 201 bo'lib ketardi va marketplace
+     * "yaratildi" bilan "allaqachon bor" ni HTTP darajasida ajratib
+     * bo'lmasdi (lokal sinovda topildi).
+     */
+    const statuses: number[] = [];
+    const httpRes: any = { status: (c: number) => statuses.push(c) };
+
     const res: any = await ctrl.provisionMarket(
       { partner: { id: '7', name: 'Acme' } },
       { external_seller_id: 'shop-9', name: 'Zamon', phone: '+998901234567' },
+      httpRes,
     );
+
+    // Tanada 201 -> HTTP ham 201.
+    expect(statuses).toEqual([201]);
 
     expect(integration).toHaveBeenCalledWith(
       { cmd: 'integration.partner.provision_market' },
@@ -169,5 +183,58 @@ describe('PartnerGatewayController — POST /partner/markets (C1.5)', () => {
       },
     );
     expect(res.data.elchi_market_id).toBe('500');
+  });
+});
+
+/**
+ * HTTP KODI TANADAGI `statusCode` GA MOSLASHADI (lokal sinovda topilgan).
+ *
+ * Marketplace ularning HTTP mijozi ko'rgan kodga qaraydi. Har bir POST 201
+ * qaytarsa, "yaratildi" va "allaqachon bor" HTTP darajasida ajralmaydi va
+ * hujjatdagi kod jadvali yolg'on bo'ladi.
+ */
+describe('⭐ PartnerGateway — HTTP kodi tana bilan MOS', () => {
+  const run = async (bodyStatus: unknown) => {
+    const integration = jest.fn(() =>
+      of({ statusCode: bodyStatus, data: { shipment_id: '900' } }),
+    );
+    const ctrl = makeController(jest.fn(), jest.fn(), integration);
+    const statuses: number[] = [];
+    const httpRes: any = { status: (c: number) => statuses.push(c) };
+    const body: any = await ctrl.provisionShipment(
+      { partner: { id: '7', name: 'Acme' } },
+      { external_order_id: 'o-1' } as never,
+      httpRes,
+    );
+    return { statuses, body };
+  };
+
+  it('⭐ YANGI posilka: tana 201 -> HTTP 201', async () => {
+    const { statuses } = await run(201);
+    expect(statuses).toEqual([201]);
+  });
+
+  it('⭐ IDEMPOTENT takror: tana 200 -> HTTP 200 (201 EMAS)', async () => {
+    const { statuses } = await run(200);
+    expect(statuses).toEqual([200]);
+  });
+
+  it('tana kodi yaroqsiz bo`lsa HTTP kodga TEGILMAYDI', async () => {
+    /**
+     * Ishonchsiz qiymat bilan `res.status()` chaqirish Express da xato
+     * beradi. Shu bois faqat 2xx butun son qabul qilinadi.
+     */
+    for (const bad of [undefined, null, 'ok', 500, 0, 1.5]) {
+      const { statuses } = await run(bad);
+      expect(statuses).toEqual([]);
+    }
+  });
+
+  it('javob tanasi O`ZGARMAYDI — faqat HTTP kodi qo`yiladi', async () => {
+    const { body } = await run(200);
+    expect(body).toMatchObject({
+      statusCode: 200,
+      data: { shipment_id: '900' },
+    });
   });
 });
