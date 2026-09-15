@@ -133,6 +133,33 @@ export class Order extends BaseEntity {
   branch_cashbox_amount!: number | null;
 
   /**
+   * SOTUV PAYTIDA MIJOZDAN YIG'ILGAN NAQD (snapshot).
+   *
+   * `total_price − paid_online_amount` — ya'ni kuryer haqiqatan qo'liga
+   * olgan pul. Naqd sotuvda u `total_price` ga teng, onlayn to'langan
+   * buyurtmada 0, qisman to'langanda oradagi farq.
+   *
+   * ⚠️ NEGA SNAPSHOT, NEGA QAYTA HISOBLANMAYDI. Rollback sotuvni AYNAN
+   * teskari yozishi kerak. `paid_online_amount` esa sotuvdan KEYIN ham
+   * o'zgarishi mumkin (qaytarish webhooki uni kamaytiradi). Qayta
+   * hisoblansa rollback boshqa summani teskari yozardi va kassada farq
+   * qolardi — `courier_share`/`branch_cashbox_amount` aynan shu sababdan
+   * snapshot qilingan.
+   *
+   * `null` — sotuvdan oldin yoki bu ustun paydo bo'lishidan oldin sotilgan
+   * eski buyurtmalar. Rollback bunda `total_price` ga qaytadi, ya'ni eski
+   * ma'lumot bugungidek ishlaydi.
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  sale_collectible_amount!: number | null;
+
+  /**
    * Sotuv/bekor qilishda kuryer yozgan qo'shimcha xarajat.
    *
    * Ilgari bu summa HECH QAYERDA buyurtmada saqlanmasdi — faqat kassa

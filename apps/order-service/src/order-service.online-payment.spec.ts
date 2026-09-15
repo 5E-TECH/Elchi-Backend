@@ -44,7 +44,10 @@ function svc(
   const rows = opts.matches ?? (order ? [order] : []);
 
   const makeQb = () => {
-    const state = { sql: [] as string[], params: {} as Record<string, unknown> };
+    const state = {
+      sql: [] as string[],
+      params: {} as Record<string, unknown>,
+    };
     const qb: any = {
       update: () => qb,
       set: (values: Record<string, () => string>) => {
@@ -447,124 +450,185 @@ describe('⭐ ADVERSARIAL TEKSHIRUVDAN kelgan tuzatishlar', () => {
   });
 });
 
-describe("⭐ SOTUV OQIMI onlayn to'langan buyurtmani RAD ETADI", () => {
+describe("⭐ SOTUV OQIMI — onlayn to'langan buyurtma NAQD OQIMIDAN o'tmaydi", () => {
   /**
-   * Butun kassa matematikasi kuryer MIJOZDAN NAQD YIG'GANIGA tayanadi:
+   * PUL MODELI (foydalanuvchi qarori 2026-09-14): ONLAYN PULNI MARKET OLADI,
+   * pochta unga aralashmaydi.
    *
-   *   courierIncome = total_price − courierShare   ← topshiriladigan naqd
-   *   market        = total_price − market_tariff
-   *   branchNet     = total_price − courierShare − branchShare
+   * Demak bizning kitobimizda bunday buyurtma 0 so'mlik buyurtma bilan AYNI:
+   * kuryer naqd yig'maydi, lekin ikki majburiyat qoladi —
    *
-   * Mijoz onlayn to'lagan bo'lsa naqd YO'Q, lekin formulalar o'zgarmaydi —
-   * kuryer yig'MAGAN pulni topshirgandek yozilardi va kassa balansi
-   * JIMGINA buzilardi. Bu turdagi xato eng qimmat: xato chiqmaydi, faqat
-   * raqamlar noto'g'ri bo'ladi.
+   *   market bizga yetkazish haqini QARZDOR  (`marketExpense`)
+   *   kuryerga ulushini HQ TO'LAYDI          (`courierExpense`)
    *
-   * Shu bois to'xtatiladi. Bugun holat yuzaga kelmaydi (provayder
-   * ulanmagan), darvoza esa provayder ulangan KUNI ishlaydi.
+   * Ilgari bu yerda DARVOZA turardi: sotuv butunlay rad etilardi va
+   * buyurtma `WAITING` da qotardi. U ataylab qo'yilgan edi — model
+   * kelishilmaguncha noto'g'ri hisoblashdan ko'ra to'xtash xavfsizroq.
+   * Model kelishilgach darvoza olib tashlandi, o'rniga naqd oyoqlari
+   * `total_price − paid_online_amount` ga o'tkazildi.
    */
-  const sellSvc = (order: Record<string, unknown>) => {
-    const s = Object.create(
-      OrderLifecycleService.prototype,
-    ) as OrderLifecycleService & Record<string, any>;
-    Object.assign(s, {
-      findById: jest.fn().mockResolvedValue(order),
-      hasRole: () => false,
-      badRequest: (m: string) => {
-        throw Object.assign(new Error(m), { statusCode: 400 });
-      },
-    });
-    return s;
-  };
+  const svc = () =>
+    Object.create(OrderLifecycleService.prototype) as OrderLifecycleService &
+      Record<string, any>;
 
-  const WAITING = {
-    id: '4021',
-    status: Order_status.WAITING,
-    post_id: '7',
-    total_price: 250000,
-  };
+  describe('yig`iladigan naqd', () => {
+    const collectible = (order: Record<string, unknown>) =>
+      (svc() as any).resolveCollectibleAmount(order);
 
-  it('`paid` holatida sotuv to`xtaydi', async () => {
-    const s = sellSvc({
-      ...WAITING,
-      payment_status: 'paid',
-      paid_online_amount: 250000,
+    it('oddiy COD buyurtmasi — to`liq narx', () => {
+      expect(collectible({ total_price: 250000 })).toBe(250000);
     });
 
-    await expect(
-      s.sellOrder({ id: 'u1' }, '4021', {}),
-    ).rejects.toThrow(/onlayn to‘langan/);
+    it('⭐ to`liq onlayn to`langan — 0', () => {
+      expect(
+        collectible({ total_price: 250000, paid_online_amount: 250000 }),
+      ).toBe(0);
+    });
+
+    it('⭐ qisman to`langan — farqi', () => {
+      /**
+       * Market provayderdan 100 000 oldi, qolgan 150 000 ni kuryer naqd
+       * yig'adi. Marketga qoladigan summa esa `150000 − tarif` bo'ladi —
+       * ular allaqachon olgan 100 000 ustiga qo'shilib, jami to'g'ri
+       * chiqadi.
+       */
+      expect(
+        collectible({ total_price: 250000, paid_online_amount: 100000 }),
+      ).toBe(150000);
+    });
+
+    it('⭐ MANFIY chiqmaydi — ortiqcha to`lovda ham 0', () => {
+      /**
+       * Provayder ortiqcha yozib yuborgan bo'lsa manfiy naqd "kuryer
+       * mijozga pul berdi" degan ma'no berardi va kassani buzardi.
+       * Ortiqchasini MARKET mijozga qaytaradi — pul ularda.
+       */
+      expect(
+        collectible({ total_price: 250000, paid_online_amount: 400000 }),
+      ).toBe(0);
+    });
+
+    it('maydonlar yo`q bo`lsa 0 va yiqilmaydi', () => {
+      expect(collectible({})).toBe(0);
+    });
   });
 
-  it('⭐ QISMAN to`lovda ham to`xtaydi', async () => {
+  describe('⭐ DARVOZA OLIB TASHLANDI — sotuv to`xtamaydi', () => {
     /**
-     * Qisman to'lov eng chalkash holat: kuryer qolgan qismini yig'adi,
-     * lekin oyoqlar to'liq narxdan hisoblanadi. Ya'ni bu ham buziladi.
+     * Regressiya qo'riqchisi: darvoza qaytarilsa bu testlar yiqiladi.
+     * `findById` dan keyin sotuv post izlashga o'tadi, ya'ni bu yerda
+     * faqat "onlayn to'langan" sababi bilan RAD ETILMASLIGINI
+     * tekshiramiz — chuqurroq borish uchun butun kassa mock'i kerak.
      */
-    const s = sellSvc({
-      ...WAITING,
-      payment_status: 'partly',
-      paid_online_amount: 100000,
+    const sellSvc = (order: Record<string, unknown>) => {
+      const s = svc();
+      Object.assign(s, {
+        findById: jest.fn().mockResolvedValue(order),
+        hasRole: () => false,
+        badRequest: (m: string) => {
+          throw Object.assign(new Error(m), { statusCode: 400 });
+        },
+      });
+      return s;
+    };
+
+    const WAITING = {
+      id: '4021',
+      status: Order_status.WAITING,
+      post_id: '7',
+      total_price: 250000,
+    };
+
+    it('`paid` holatida sotuv RAD ETILMAYDI', async () => {
+      const s = sellSvc({
+        ...WAITING,
+        payment_status: 'paid',
+        paid_online_amount: 250000,
+      });
+      await expect(s.sellOrder({ id: 'u1' }, '4021', {})).rejects.not.toThrow(
+        /onlayn to‘langan/,
+      );
     });
 
-    await expect(s.sellOrder({ id: 'u1' }, '4021', {})).rejects.toThrow(
-      /onlayn to‘langan/,
-    );
-  });
-
-  it('xabar SABABNI va summani aytadi', async () => {
-    // Operator "nega sotib bo'lmayapti?" degan savolga javob olishi kerak.
-    const s = sellSvc({
-      ...WAITING,
-      payment_status: 'paid',
-      paid_online_amount: 250000,
+    it('⭐ QISMAN SOTUV yo`li ham rad etmaydi', async () => {
+      const s = sellSvc({
+        ...WAITING,
+        payment_status: 'paid',
+        paid_online_amount: 250000,
+      });
+      await expect(
+        s.partlySellOrder({ id: 'u1' }, '4021', {
+          order_item_info: [],
+          totalPrice: 100000,
+        }),
+      ).rejects.not.toThrow(/onlayn to‘langan/);
     });
 
-    await expect(s.sellOrder({ id: 'u1' }, '4021', {})).rejects.toThrow(
-      /250000 so‘m/,
-    );
+    it('⭐ ODDIY (COD) buyurtma ta`sirlanmaydi', async () => {
+      const s = sellSvc({ ...WAITING, payment_status: null });
+      await expect(s.sellOrder({ id: 'u1' }, '4021', {})).rejects.not.toThrow(
+        /onlayn to‘langan/,
+      );
+    });
   });
 
-  it('⭐ QISMAN SOTUV ham to`xtaydi', async () => {
+  describe('⭐ ROLLBACK snapshotga tayanadi, qayta hisoblamaydi', () => {
     /**
-     * ADVERSARIAL TOPILMA (kritik). Darvoza faqat `sellOrder` da bor edi,
-     * `partlySellOrder` esa AYNI kassa matematikasini bajaradi — ya'ni
-     * darvozani chetlab o'tishning tayyor yo'li qolgan edi.
+     * ENG NOZIK JOY. Sotuv `total_price − paid_online_amount` bilan
+     * yozilgan. Agar rollback o'sha ifodani QAYTA hisoblasa, oradagi
+     * qaytarish webhooki `paid_online_amount` ni kamaytirgan bo'lsa
+     * rollback BOSHQA summani teskari yozardi va kassada farq qolardi.
+     *
+     * Shu bois sotuvda `sale_collectible_amount` SNAPSHOT qilinadi va
+     * rollback faqat undan o'qiydi — `courier_share` va
+     * `branch_cashbox_amount` allaqachon shu naqshda.
      */
-    const s = sellSvc({
-      ...WAITING,
-      payment_status: 'paid',
-      paid_online_amount: 250000,
+    const resolve = (order: Record<string, unknown>) =>
+      order.sale_collectible_amount != null
+        ? Number(order.sale_collectible_amount)
+        : Number(order.total_price ?? 0);
+
+    it('⭐ qaytarish snapshotni O`ZGARTIRMAYDI', () => {
+      const atSale = { total_price: 250000, paid_online_amount: 250000 };
+      const collectibleAtSale = Math.max(
+        atSale.total_price - atSale.paid_online_amount,
+        0,
+      );
+      expect(collectibleAtSale).toBe(0);
+
+      // Sotuvdan keyin provayder 250 000 ni qaytardi.
+      const afterRefund = {
+        ...atSale,
+        paid_online_amount: 0,
+        sale_collectible_amount: collectibleAtSale,
+      };
+
+      // Snapshot bo'lgani uchun rollback hamon 0 ni teskari qiladi.
+      expect(resolve(afterRefund)).toBe(0);
+      // Qayta hisoblansa 250000 chiqardi — aynan shu kassani buzardi.
+      expect(afterRefund.total_price - afterRefund.paid_online_amount).toBe(
+        250000,
+      );
     });
 
-    await expect(
-      s.partlySellOrder({ id: 'u1' }, '4021', {
-        order_item_info: [],
-        totalPrice: 100000,
-      }),
-    ).rejects.toThrow(/onlayn to‘langan/);
-  });
+    it('⭐ ESKI buyurtma (snapshot yo`q) — `total_price` ga qaytadi', () => {
+      /**
+       * Bu ustundan OLDIN sotilgan buyurtmalar naqd oyoqlarini
+       * `total_price` bilan yozgan. Zaxira ham aynan o'sha bo'lishi kerak,
+       * aks holda eski buyurtmani qaytarish kassani buzardi. Shu bois
+       * migratsiyada `DEFAULT` ham, backfill ham ATAYLAB yo'q.
+       */
+      expect(resolve({ total_price: 180000 })).toBe(180000);
+      expect(
+        resolve({ total_price: 180000, sale_collectible_amount: null }),
+      ).toBe(180000);
+    });
 
-  it('⭐ BO`SH SATR "to`lov yo`q" deb qabul qilinadi', async () => {
-    /**
-     * Bo'sh satrni "to'langan" deb o'qish BARCHA oddiy buyurtmalarni to'sib
-     * qo'yardi — ya'ni tizim ishdan chiqardi.
-     */
-    const s = sellSvc({ ...WAITING, payment_status: '   ' });
-    await expect(s.sellOrder({ id: 'u1' }, '4021', {})).rejects.not.toThrow(
-      /onlayn to‘langan/,
-    );
-  });
-
-  it('⭐ ODDIY (COD) buyurtma ta`sirlanmaydi', async () => {
-    /**
-     * Eng muhim tekshiruv: darvoza mavjud oqimga tegmasligi kerak.
-     * `payment_status: null` → sotuv davom etadi (keyingi qadamda post
-     * izlaydi, bu test uni u yergacha olib boradi).
-     */
-    const s = sellSvc({ ...WAITING, payment_status: null });
-    await expect(s.sellOrder({ id: 'u1' }, '4021', {})).rejects.not.toThrow(
-      /onlayn to‘langan/,
-    );
+    it('0 snapshot `null` bilan ARALASHTIRILMAYDI', () => {
+      // `?? ` emas, `!= null` ishlatilgani shuning uchun.
+      expect(resolve({ total_price: 180000, sale_collectible_amount: 0 })).toBe(
+        0,
+      );
+    });
   });
 });

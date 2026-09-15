@@ -1261,6 +1261,18 @@ export class IntegrationServiceService {
           address: dto.address ?? null,
           total_price: totalPrice,
           to_be_paid: cod,
+          /**
+           * ⚠️ PREPAID POSILKA — OLDINDAN TO'LANGAN QISM (topilma).
+           *
+           * Hamkor `cod_amount: 0` (yoki `subtotal` dan kichik COD) yuborsa,
+           * farq mijoz TOMONIDAN ALLAQACHON to'langan degani. Bu maydonsiz
+           * sotuv `total_price` ni naqd deb hisoblardi: kuryer qo'liga
+           * olMAGAN pulni topshirgandek, biz esa olMAGAN pulni marketga
+           * qarzdek yozardik. Sotuv oqimi endi `total_price − bu maydon`
+           * bo'yicha ishlaydi, ya'ni bitta tushuncha ikkala yo'lni ham
+           * qamrab oladi (onlayn to'lov webhooki ham shu maydonni oshiradi).
+           */
+          paid_online_amount: Math.max(totalPrice - cod, 0),
           source: 'external',
           external_id: externalOrderId,
           items: orderItems,
@@ -6747,12 +6759,39 @@ export class IntegrationServiceService {
     put(fromOrder, 'region', order.region?.name);
     put(fromOrder, 'total_price', order.total_price);
     /**
-     * `cod_amount` — mijozdan yig'ilishi kerak bo'lgan summa. Elchi'da
-     * bu `to_be_paid`, LEKIN u sotuvdan keyin boshqa ma'no oladi
-     * (`netToBePaid` bilan ustiga yoziladi — audit F2). Jo'natish esa
-     * sotuvdan OLDIN bo'ladi, shu bois bu yerda qiymat to'g'ri.
+     * `cod_amount` — mijozdan yig'ilishi kerak bo'lgan summa.
+     *
+     * ⚠️ ILGARI `order.to_be_paid ?? order.total_price` edi va bu IKKI
+     * sababdan noto'g'ri:
+     *
+     *  1. `to_be_paid` NULLABLE EMAS (`default: 0`), ya'ni `??` hech qachon
+     *     ishlamaydi. Oddiy Elchi buyurtmasida sotuvdan oldin u 0 — demak
+     *     kargoga `cod_amount: 0` ketardi va ularning kuryeri mijozdan
+     *     HECH NARSA yig'masdi.
+     *  2. `to_be_paid` sotuvdan keyin MARKET QARZI ma'nosini oladi
+     *     (`netToBePaid`), ya'ni bitta maydon ikki xil narsani anglatadi.
+     *
+     * Endi qiymat aniq: `total_price` dan mijoz oldindan to'lagan qismi
+     * ayiriladi. Onlayn to'langan buyurtmada 0 chiqadi — kargo mijozdan
+     * ikkinchi marta pul so'ramaydi.
+     *
+     * ⚠️ `total_price` YO'Q bo'lsa qiymat QO'YILMAYDI, 0 ham emas: 0 yozish
+     * "mijozdan hech narsa olinmasin" degan MA'NOLI buyruq. Buzuq
+     * ma'lumotda bo'sh qoldirilsa quyidagi "to'ldirilmagan o'rin egallari"
+     * ogohlantirishi ishlaydi.
      */
-    put(fromOrder, 'cod_amount', order.to_be_paid ?? order.total_price);
+    const rawTotal = order.total_price;
+    const hasTotal =
+      rawTotal !== null &&
+      rawTotal !== undefined &&
+      Number.isFinite(Number(rawTotal));
+    put(
+      fromOrder,
+      'cod_amount',
+      hasTotal
+        ? Math.max(Number(rawTotal) - Number(order.paid_online_amount ?? 0), 0)
+        : undefined,
+    );
     put(fromOrder, 'comment', order.comment);
     put(
       fromOrder,

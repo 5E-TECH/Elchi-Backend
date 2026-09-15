@@ -137,6 +137,85 @@ describe('IntegrationServiceService.createPartnerShipment (C2.1)', () => {
     );
   });
 
+  describe('⭐ PREPAID POSILKA — naqd yig`ilmagani BUYURTMADA qoladi', () => {
+    /**
+     * TOPILGAN XATO. `cod_amount: 0` "mijoz allaqachon to'lagan" degani va
+     * bu hujjatlashtirilgan holat. Lekin sotuv oqimi `to_be_paid` ga
+     * UMUMAN QARAMASDI — u `total_price` ni naqd deb hisoblardi:
+     *
+     *   kuryerga  `total_price − ulush`  topshirilishi kerakdek yozilardi
+     *   marketga  `total_price − tarif`  qarzdek yozilardi
+     *
+     * Ikkalasi ham YOLG'ON: kuryer qo'liga hech narsa olmagan, biz ham
+     * hech narsa olmaganmiz. Xato jimgina bo'lardi — hech qanday
+     * ogohlantirish yo'q, faqat raqamlar noto'g'ri.
+     *
+     * Endi farq `paid_online_amount` ga yoziladi va sotuv
+     * `total_price − paid_online_amount` bo'yicha ishlaydi. Ya'ni hamkor
+     * prepaid posilkasi va onlayn to'lov webhooki BITTA tushunchaga
+     * tayanadi.
+     */
+    it('⭐ cod=0, subtotal=200000 -> paid_online_amount=200000', async () => {
+      const { svc, orderSend } = makeService();
+      await svc.createPartnerShipment({
+        ...baseDto,
+        cod_amount: 0,
+        subtotal: 200000,
+      });
+      expect(orderSend).toHaveBeenCalledWith(
+        { cmd: 'order.create' },
+        expect.objectContaining({
+          dto: expect.objectContaining({
+            total_price: 200000,
+            to_be_paid: 0,
+            paid_online_amount: 200000,
+          }),
+        }),
+      );
+    });
+
+    it('⭐ QISMAN prepaid: subtotal=200000, cod=50000 -> 150000', async () => {
+      const { svc, orderSend } = makeService();
+      await svc.createPartnerShipment({
+        ...baseDto,
+        cod_amount: 50000,
+        subtotal: 200000,
+      });
+      expect(orderSend).toHaveBeenCalledWith(
+        { cmd: 'order.create' },
+        expect.objectContaining({
+          dto: expect.objectContaining({ paid_online_amount: 150000 }),
+        }),
+      );
+    });
+
+    it('oddiy COD (subtotal yo`q) -> 0, mavjud oqim TEGILMAYDI', async () => {
+      const { svc, orderSend } = makeService();
+      await svc.createPartnerShipment({ ...baseDto, cod_amount: 50000 });
+      expect(orderSend).toHaveBeenCalledWith(
+        { cmd: 'order.create' },
+        expect.objectContaining({
+          dto: expect.objectContaining({ paid_online_amount: 0 }),
+        }),
+      );
+    });
+
+    it('cod subtotal`dan KATTA bo`lsa manfiy chiqmaydi', async () => {
+      const { svc, orderSend } = makeService();
+      await svc.createPartnerShipment({
+        ...baseDto,
+        cod_amount: 90000,
+        subtotal: 50000,
+      });
+      expect(orderSend).toHaveBeenCalledWith(
+        { cmd: 'order.create' },
+        expect.objectContaining({
+          dto: expect.objectContaining({ paid_online_amount: 0 }),
+        }),
+      );
+    });
+  });
+
   it('TC3: cod_amount=50000 -> to_be_paid=50000 (COD)', async () => {
     const { svc, orderSend } = makeService();
     await svc.createPartnerShipment({ ...baseDto, cod_amount: 50000 });

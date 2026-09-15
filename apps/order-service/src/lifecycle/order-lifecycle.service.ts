@@ -2121,11 +2121,33 @@ export class OrderLifecycleService {
         const branchShareRb =
           order.branch_share != null ? Number(order.branch_share) : 0;
 
-        const saleMarketIncome = Math.max(totalPrice - marketTariff, 0);
-        const saleMarketExpense = Math.max(marketTariff - totalPrice, 0);
-        const saleCourierIncome = Math.max(totalPrice - courierShareRb, 0);
-        const saleCourierExpense = Math.max(courierShareRb - totalPrice, 0);
-        const saleBranchNet = totalPrice - courierShareRb - branchShareRb;
+        /**
+         * ⚠️ SOTUVDA ISHLATILGAN NAQD — SNAPSHOTDAN, QAYTA HISOBLANMAYDI.
+         *
+         * Sotuv oyoqlari `total_price − paid_online_amount` bo'yicha yozilgan.
+         * `paid_online_amount` esa sotuvdan KEYIN ham o'zgaradi: qaytarish
+         * webhooki uni kamaytiradi. Shu bois bu yerda qayta hisoblansa
+         * rollback BOSHQA summani teskari yozardi va kassada farq qolardi —
+         * aynan `courier_share` va `branch_cashbox_amount` snapshot qilingan
+         * sabab.
+         *
+         * `null` — bu ustundan OLDIN sotilgan buyurtma. Unda naqd oyoqlari
+         * `total_price` bilan yozilgan, ya'ni zaxira ham aynan o'sha bo'lishi
+         * kerak. Aks holda eski buyurtmani qaytarish kassani buzardi.
+         */
+        const saleCollectible =
+          order.sale_collectible_amount != null
+            ? Number(order.sale_collectible_amount)
+            : totalPrice;
+
+        const saleMarketIncome = Math.max(saleCollectible - marketTariff, 0);
+        const saleMarketExpense = Math.max(marketTariff - saleCollectible, 0);
+        const saleCourierIncome = Math.max(saleCollectible - courierShareRb, 0);
+        const saleCourierExpense = Math.max(
+          courierShareRb - saleCollectible,
+          0,
+        );
+        const saleBranchNet = saleCollectible - courierShareRb - branchShareRb;
         const saleBranchCashboxAmount =
           order.branch_cashbox_amount != null
             ? Number(order.branch_cashbox_amount)
@@ -2308,7 +2330,14 @@ export class OrderLifecycleService {
         finalStatus = Order_status.WAITING;
         await this.updateFull(
           id,
-          { status: Order_status.WAITING, to_be_paid: 0, sold_at: null },
+          {
+            status: Order_status.WAITING,
+            to_be_paid: 0,
+            sold_at: null,
+            // Sotuv bekor qilindi — snapshot ham tozalanadi. Qolsa, keyingi
+            // sotuvda ESKI naqd bilan rollback qilinardi.
+            sale_collectible_amount: null,
+          },
           {
             id: requester.id,
             roles: requester.roles,
@@ -3837,30 +3866,27 @@ export class OrderLifecycleService {
    * sabab bilan tushadi va webhook jurnalida ko'rinadi.
    */
   /**
-   * ONLAYN TO'LANGAN BUYURTMA NAQD OQIMIDAN O'TMAYDI (7-bosqich).
+   * MIJOZDAN YIG'ILADIGAN NAQD.
    *
-   * ⚠️ NEGA ALOHIDA METOD. Darvoza IKKI joyda kerak: `sellOrder` va
-   * `partlySellOrder`. Ikkinchisi ayni kassa matematikasini bajaradi va
-   * ilgari tekshirilmagani uchun darvozani chetlab o'tishning tayyor yo'li
-   * bo'lgan (adversarial topilma). Bitta joyda yozilsa, keyingi sotuv
-   * yo'li qo'shilganda ham unutilishi ehtimoli kamayadi.
+   * Kassa matematikasining BIRINCHI raqami. Shu paytgacha uning o'rnida
+   * `total_price` turardi, ya'ni "mijoz qancha to'lasa kuryer shuncha naqd
+   * yig'di" deb hisoblanardi. Ikki holatda bu yolg'on:
    *
-   * ⚠️ Bo'sh satr ham `null` kabi "to'lov yo'q" deb qabul qilinadi —
-   * `if (order.payment_status)` allaqachon shunday ishlaydi, lekin buni
-   * ATAYLAB ekanini yozib qo'yish kerak: bo'sh satrni "to'langan" deb
-   * o'qish barcha oddiy buyurtmalarni to'sib qo'yardi.
+   *   • mijoz onlayn to'lagan (`paid_online_amount > 0`) — pul MARKETGA
+   *     tushadi, pochta unga aralashmaydi (foydalanuvchi qarori 2026-09-14);
+   *   • hamkor `cod_amount: 0` bilan prepaid posilka yuborgan — bu
+   *     `createPartnerShipment` da hujjatlashtirilgan holat.
+   *
+   * Ikkalasida ham kuryer NAQD YIG'MAYDI, lekin majburiyatlar qoladi:
+   * marketdan yetkazish haqi olinishi, kuryerga ulushi to'lanishi kerak.
+   * `total_price − paid_online_amount` aynan shuni beradi va qolgan
+   * formulalar (`marketExpense`, `courierExpense`) o'zgarishsiz to'g'ri
+   * ishlaydi — ular allaqachon 0 so'mlik buyurtma uchun yozilgan.
    */
-  private assertNotOnlinePaid(order: Order): void {
-    const state = String(order.payment_status ?? '').trim();
-    if (!state) return;
-
-    this.badRequest(
-      `Bu buyurtma onlayn to‘langan (${state}, ` +
-        `${Number(order.paid_online_amount ?? 0)} so‘m) — naqd sotuv oqimi ` +
-        'undan pul yig‘ilgandek hisoblaydi va kassa balansini buzadi. ' +
-        'Onlayn to‘lov uchun pul modeli hali kelishilmagan: marketga qarz, ' +
-        'kuryer tarifi va kompaniya kirimi qanday yozilishi aniqlanishi kerak.',
-    );
+  private resolveCollectibleAmount(order: Order): number {
+    const total = Number(order.total_price ?? 0);
+    const online = Number(order.paid_online_amount ?? 0);
+    return Math.max(total - online, 0);
   }
 
   /**
@@ -4658,34 +4684,25 @@ export class OrderLifecycleService {
     }
 
     /**
-     * ⚠️ ONLAYN TO'LANGAN BUYURTMA ODDIY SOTUV OQIMIDAN O'TMAYDI (7-bosqich).
+     * ONLAYN TO'LANGAN BUYURTMA — NAQD YIG'ILMAYDI, LEKIN SOTUV O'TADI.
      *
-     * NEGA RAD ETILADI, NEGA "JIMGINA HISOBLAB" O'TMAYDI. Butun kassa
-     * matematikasi kuryer MIJOZDAN NAQD YIG'GANIGA tayanadi:
+     * Ilgari bu yerda darvoza turardi va bunday buyurtmani sotib
+     * BO'LMASDI: kuryer yetkazib berardi, "Sotildi" bosganda xato olardi,
+     * buyurtma `WAITING` da qotardi. Darvoza ataylab qo'yilgan edi — pul
+     * modeli kelishilmaguncha noto'g'ri hisoblashdan ko'ra to'xtash
+     * xavfsizroq edi.
      *
-     *   courierIncome = total_price − courierShare   ← kuryer topshiradigan naqd
-     *   market        = total_price − market_tariff  ← marketga qoladigan
-     *   branchNet     = total_price − courierShare − branchShare
+     * Model kelishildi (foydalanuvchi qarori 2026-09-14): ONLAYN PULNI
+     * MARKET OLADI, pochta unga aralashmaydi. Demak bizning kitobimizda
+     * bunday buyurtma 0 so'mlik buyurtma bilan AYNI:
      *
-     * Mijoz onlayn to'lagan bo'lsa naqd YO'Q, lekin bu formulalar o'zgarmaydi
-     * — ya'ni kuryer yig'MAGAN pulni topshirgandek yozilardi va kassa
-     * balansi jimgina buzilardi. Aynan shu turdagi xato eng qimmat: hech
-     * qanday xato chiqmaydi, faqat raqamlar noto'g'ri bo'ladi.
+     *   market bizga yetkazish haqini qarzdor  (`marketExpense`)
+     *   kuryerga ulushini HQ to'laydi          (`courierExpense`)
+     *   kompaniya tarif − ulush foyda ko'radi
      *
-     * ⚠️ TO'LIQ PUL MODELI HALI QAROR QILINMAGAN. Foydalanuvchi qarori
-     * (2026-09-13): onlayn pul kassaga yozilmaydi, marketga qarz
-     * yozilmaydi, kuryer tarifini esa HQ to'laydi. Bu uchtasi birgalikda
-     * HQ uchun ZARAR keltiradi (kirim yozilmaydi, chiqim yoziladi) va
-     * marketdan yetkazish haqini undiradigan maydon kodda YO'Q. Shu bois
-     * oyoqlarni yozib qo'yishdan ko'ra TO'XTATISH to'g'ri: xato ko'rinadi
-     * va tuzatiladi.
-     *
-     * BUGUN BU HOLAT YUZAGA KELMAYDI — hech bir to'lov provayderi
-     * ulanmagan, ya'ni `payment_status` hech qachon to'lmaydi. Darvoza
-     * provayder ulangan KUNI ishlaydi va noto'g'ri hisob-kitobni oldini
-     * oladi.
+     * Shuning uchun darvoza OLIB TASHLANDI va uning o'rniga naqd oyoqlari
+     * `collectible` ga o'tkazildi (pastda).
      */
-    this.assertNotOnlinePaid(order);
 
     const postRes = await rmqSend<{
       data?: { id: string; courier_id?: string | null };
@@ -4847,16 +4864,30 @@ export class OrderLifecycleService {
     //   courier: courier owes branch (total − courierShare); HQ tops up if total < courierShare
     //   branch payable: branch owes HQ (total − courierShare − branchShare)
     //   branch cashbox: branch receives its tariff-adjusted payable share
-    const marketIncome = Math.max(totalPrice - marketTariff, 0);
-    const marketExpense = Math.max(marketTariff - totalPrice, 0);
-    const courierIncome = Math.max(totalPrice - courierShare, 0);
-    const courierExpense = Math.max(courierShare - totalPrice, 0);
-    const branchNet = totalPrice - courierShare - branchShare;
+    /**
+     * ⚠️ NAQD OYOQLARI `totalPrice` DAN EMAS, YIG'ILGAN NAQDDAN hisoblanadi.
+     *
+     * Mijoz onlayn to'lagan bo'lsa pul MARKETGA tushadi va kuryer qo'liga
+     * hech narsa olmaydi. `totalPrice` bilan hisoblansa kuryer yig'MAGAN
+     * pulni topshirgandek, biz esa olMAGAN pulni marketga qarzdek yozardik.
+     *
+     * Qolgan formulalar o'zgarmadi: ular `collectible < tarif` holatini
+     * allaqachon to'g'ri ishlaydi (0 so'mlik buyurtma yo'li) — market
+     * bizga qarzdor bo'ladi, kuryer ulushini esa HQ to'laydi.
+     */
+    const collectible = this.resolveCollectibleAmount(order);
+    const marketIncome = Math.max(collectible - marketTariff, 0);
+    const marketExpense = Math.max(marketTariff - collectible, 0);
+    const courierIncome = Math.max(collectible - courierShare, 0);
+    const courierExpense = Math.max(courierShare - collectible, 0);
+    const branchNet = collectible - courierShare - branchShare;
     const saleComment =
-      totalPrice === 0
-        ? "0 so'mlik mahsulot sotuvi"
-        : totalPrice < marketTariff
-          ? `${totalPrice} so'mlik mahsulot sotuvi`
+      collectible === 0
+        ? totalPrice > 0
+          ? `${totalPrice} so'mlik buyurtma — mijoz oldindan to'lagan, naqd yig'ilmadi`
+          : "0 so'mlik mahsulot sotuvi"
+        : collectible < marketTariff
+          ? `${collectible} so'mlik mahsulot sotuvi`
           : finalComment;
 
     const toBePaid = marketIncome;
@@ -5043,6 +5074,11 @@ export class OrderLifecycleService {
           // qaytariladigan summa ham 0. Eski buyurtmalarda bu ustun real
           // qiymat bilan to'lgan va rollback o'shani aynan teskari qiladi.
           branch_cashbox_amount: 0,
+          // Naqd oyoqlari AYNAN shu summa bilan yozildi. Rollback uni qayta
+          // hisoblamasligi kerak: `paid_online_amount` sotuvdan keyin ham
+          // o'zgaradi (qaytarish webhooki), ya'ni qayta hisob boshqa raqam
+          // berardi va kassada farq qolardi.
+          sale_collectible_amount: collectible,
           comment: finalComment || null,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
         },
@@ -5062,9 +5098,12 @@ export class OrderLifecycleService {
         // ko'rmasdi va solishtirish skripti farqni "extra-cost shovqini" deb
         // kechirardi — ya'ni haqiqiy nomuvofiqlik ham o'sha bag'rikenglik
         // ichida yashirinardi.
-        courier_amount: totalPrice - courierShare,
+        // ⚠️ `collectible`, `totalPrice` EMAS — daftar kassa bilan AYNI
+        // summalarni ko'rsatishi kerak. Aks holda onlayn to'langan har bir
+        // buyurtma solishtiruv skriptida "nomuvofiqlik" bo'lib chiqardi.
+        courier_amount: collectible - courierShare,
         branch_amount: branchNet,
-        market_amount: totalPrice - marketTariff - extraCost,
+        market_amount: collectible - marketTariff - extraCost,
         hasCourier: Boolean(courierCashbox),
       });
 
@@ -5880,7 +5919,6 @@ export class OrderLifecycleService {
      * AYNI kassa matematikasini bajaradi (kuryer, market, filial oyoqlari)
      * — ya'ni darvozani chetlab o'tishning tayyor yo'li qolgan edi.
      */
-    this.assertNotOnlinePaid(order);
     const oldTotalPrice = Number(order.total_price ?? 0);
     if (order.status !== Order_status.WAITING) {
       this.badRequest('Order not found or not in waiting status');
@@ -6127,16 +6165,35 @@ export class OrderLifecycleService {
 
     // Decoupled COD legs (partial price as the operation total). See sellOrder
     // for the model: market / courier / branch each settle independently.
-    const marketIncome = Math.max(price - marketTariff, 0);
-    const marketExpense = Math.max(marketTariff - price, 0);
-    const courierIncome = Math.max(price - courierShare, 0);
-    const courierExpense = Math.max(courierShare - price, 0);
-    const branchNet = price - courierShare - branchShare;
+    /**
+     * ⚠️ QISMAN SOTUVDA HAM NAQD — `price` DAN EMAS, YIG'ILGANIDAN.
+     *
+     * Mijoz to'liq summani oldindan to'lagan, kuryer esa faqat bir qismini
+     * sotgan bo'lishi mumkin. Bunda kuryer HECH NARSA yig'maydi, ortiqcha
+     * to'lovni esa MARKET mijozga qaytaradi — pul ularda (foydalanuvchi
+     * qarori 2026-09-14). Bizning kitobimizda faqat ikki narsa qoladi:
+     * market yetkazish haqini qarzdor, kuryer ulushini HQ to'laydi.
+     *
+     * Bu yo'l `sellOrder` dan ALOHIDA e'tibor talab qiladi: ilgari darvoza
+     * faqat `sellOrder` da bo'lgani uchun uni chetlab o'tish yo'li qolgan
+     * edi (adversarial topilma). Endi ikkala yo'l ayni formulani ishlatadi.
+     */
+    const collectible = Math.max(
+      price - Number(order.paid_online_amount ?? 0),
+      0,
+    );
+    const marketIncome = Math.max(collectible - marketTariff, 0);
+    const marketExpense = Math.max(marketTariff - collectible, 0);
+    const courierIncome = Math.max(collectible - courierShare, 0);
+    const courierExpense = Math.max(courierShare - collectible, 0);
+    const branchNet = collectible - courierShare - branchShare;
     const saleComment =
-      price === 0
-        ? "0 so'mlik mahsulot qisman sotuvi"
-        : price < marketTariff
-          ? `${price} so'mlik mahsulot qisman sotuvi`
+      collectible === 0
+        ? price > 0
+          ? `${price} so'mlik qisman sotuv — mijoz oldindan to'lagan, naqd yig'ilmadi`
+          : "0 so'mlik mahsulot qisman sotuvi"
+        : collectible < marketTariff
+          ? `${collectible} so'mlik mahsulot qisman sotuvi`
           : finalComment;
 
     const toBePaid = marketIncome;
@@ -6324,6 +6381,10 @@ export class OrderLifecycleService {
           // qaytariladigan summa ham 0. Eski buyurtmalarda bu ustun real
           // qiymat bilan to'lgan va rollback o'shani aynan teskari qiladi.
           branch_cashbox_amount: 0,
+          // Qisman sotuvda ham naqd oyoqlari AYNAN shu summa bilan yozildi —
+          // rollback qayta hisoblamasligi uchun snapshot qilinadi
+          // (`sellOrder` dagi bilan bir xil sabab).
+          sale_collectible_amount: collectible,
           return_requested: false,
           comment: finalComment || null,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
@@ -6346,9 +6407,12 @@ export class OrderLifecycleService {
         market_id: order.market_id ? String(order.market_id) : null,
         // Ishorali summalar + extra_cost ayirmasi — sellOrder bilan bir xil
         // (audit M8/M10).
-        courier_amount: price - courierShare,
+        // ⚠️ `collectible` — kassa oyoqlari bilan AYNI summa (sellOrder'dagi
+        // kabi). `price` bilan yozilsa onlayn to'langan qisman sotuv daftarda
+        // kassadan farq qilardi.
+        courier_amount: collectible - courierShare,
         branch_amount: branchNet,
-        market_amount: price - marketTariff - extraCost,
+        market_amount: collectible - marketTariff - extraCost,
         hasCourier: Boolean(courierCashbox),
       });
 
@@ -6495,6 +6559,8 @@ export class OrderLifecycleService {
       courier_share?: number | null;
       branch_share?: number | null;
       branch_cashbox_amount?: number | null;
+      /** Sotuvda mijozdan yig'ilgan naqd (snapshot) — rollback shunga tayanadi. */
+      sale_collectible_amount?: number | null;
       to_be_paid?: number;
       paid_amount?: number;
       status?: Order_status;
@@ -6534,6 +6600,8 @@ export class OrderLifecycleService {
       courier_share?: number | null;
       branch_share?: number | null;
       branch_cashbox_amount?: number | null;
+      /** Sotuvda mijozdan yig'ilgan naqd (snapshot) — rollback shunga tayanadi. */
+      sale_collectible_amount?: number | null;
       to_be_paid?: number;
       paid_amount?: number;
       /** Kuryer yozgan qo'shimcha xarajat — buyurtmada saqlanadi. */
