@@ -954,11 +954,24 @@ export class IntegrationServiceService {
        * muzlatilsin" degani EMAS. Shu bois identity'dagi market yozuvi
        * yangilanadi va javobda `tariff_updated` qaytadi.
        */
-      const nextHome = Number(dto.tariff_home ?? 0);
-      const nextCenter = Number(dto.tariff_center ?? 0);
+      /**
+       * ⚠️ QISMAN YANGILASH YUBORILMAGAN TARIFNI NOLGA TUSHIRMAYDI.
+       *
+       * Ilgari `Number(dto.tariff_home ?? 0)` edi. Hamkor FAQAT
+       * `tariff_center` yuborsa (masalan markaz kelishuvi o'zgargan),
+       * `tariff_home` jimgina 0 ga tushardi — ya'ni UYGA YETKAZISH BEPUL
+       * bo'lib qolardi. Hech qanday xato chiqmasdi.
+       *
+       * Endi yuborilmagan maydon MAVJUD qiymatida qoladi. Shu bois hozirgi
+       * tarif QIYOSDAN OLDIN o'qiladi.
+       */
+      const sentHome =
+        dto.tariff_home !== undefined && dto.tariff_home !== null;
+      const sentCenter =
+        dto.tariff_center !== undefined && dto.tariff_center !== null;
       let tariffUpdated = false;
 
-      if (nextHome > 0 || nextCenter > 0) {
+      if (sentHome || sentCenter) {
         const current = await this.rmqRequest<{
           data?: { tariff_home?: number; tariff_center?: number } | null;
         }>(
@@ -970,6 +983,9 @@ export class IntegrationServiceService {
 
         const curHome = Number(current?.data?.tariff_home ?? 0);
         const curCenter = Number(current?.data?.tariff_center ?? 0);
+
+        const nextHome = sentHome ? Number(dto.tariff_home) : curHome;
+        const nextCenter = sentCenter ? Number(dto.tariff_center) : curCenter;
 
         if (curHome !== nextHome || curCenter !== nextCenter) {
           await this.rmqRequest(
