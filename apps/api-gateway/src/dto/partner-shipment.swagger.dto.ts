@@ -10,6 +10,8 @@ import {
   IsOptional,
   IsString,
   Matches,
+  Max,
+  MaxLength,
   Min,
   ValidateNested,
 } from 'class-validator';
@@ -125,7 +127,7 @@ export class CreatePartnerShipmentRequestDto {
     description:
       "Hamkor YORLIG'IDAGI QR qiymati. Berilsa Elchi shu tokenni buyurtmaga " +
       "yozadi va posilkani skanerlash ishlaydi. Berilmasa Elchi o'z tokenini " +
-      'yaratadi va hamkor yorlig\'i skanerda TOPILMAYDI.',
+      "yaratadi va hamkor yorlig'i skanerda TOPILMAYDI.",
   })
   @IsOptional()
   @IsString()
@@ -135,4 +137,54 @@ export class CreatePartnerShipmentRequestDto {
       'saqlashi kerak',
   })
   label_token?: string;
+
+  /**
+   * KIRUVCHI QOP (batch) — bitta qopda ketayotgan posilkalar guruhi.
+   *
+   * ⚠️ BU MAYDONLAR SHU YERDA E'LON QILINISHI SHART. Gateway
+   * `ValidationPipe({ whitelist: true, forbidNonWhitelisted: true })` bilan
+   * ishlaydi — DTO da yo'q maydon 400 bilan RAD ETILADI. Men aynan shu
+   * tuzoqqa tushdim: maydonlarni ichki servis tipiga qo'shdim-u DTO ga
+   * qo'shmadim, va butun jo'natish yo'li "property batch_ref should not
+   * exist" bilan yiqildi.
+   *
+   * `batch_label_token` — QOP USTIDAGI QR. Elchi operatori uni bitta marta
+   * skanerlaganda qopdagi BARCHA posilka qabul qilinadi.
+   */
+  @ApiPropertyOptional({
+    description:
+      "Hamkor tomonidagi qop/pochta id'si — kiruvchi ekranda guruhlash uchun.",
+    example: 'post-77',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(128)
+  batch_ref?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'QOP USTIDAGI QR token. Elchi operatori bitta skan bilan butun qopni ' +
+      'qabul qiladi. Formati `label_token` bilan bir xil.',
+    example: 'BAG-2026-0915-77',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^[A-Za-z0-9_-]{8,128}$/, {
+    message:
+      'batch_label_token 8-128 belgidan iborat bo‘lishi va faqat ' +
+      'harf/raqam/_/- saqlashi kerak',
+  })
+  batch_label_token?: string;
+
+  @ApiPropertyOptional({
+    description:
+      'Shu qopda ketayotgan posilka soni — HAMKOR aytgan son. Elchi uni ' +
+      'o‘zi sanagan son bilan solishtiradi (qop to‘liq yetib keldimi).',
+    example: 12,
+  })
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  @Max(10000)
+  batch_size?: number;
 }
