@@ -1,9 +1,17 @@
 /**
  * Money-conservation property test (Faza 3).
  *
- * The COD money model must conserve EXACTLY: every som a customer pays on
+ * The COD money model must conserve EXACTLY: every som the courier COLLECTS on
  * delivery is fully accounted for across the four parties, with no leak and no
- * double-count. This test fuzzes the model and asserts the conservation
+ * double-count.
+ *
+ * ⚠️ `total` = YIG'ILGAN NAQD, buyurtma narxi EMAS. Ular odatda teng, lekin
+ * mijoz onlayn to'lagan bo'lsa pul MARKETGA tushadi va kuryer qo'liga hech
+ * narsa olmaydi. Shunda `total = total_price − paid_online_amount` (ishlab
+ * chiqarishda `sale_collectible_amount` ga snapshot qilinadi) va identiklik
+ * o'zgarishsiz saqlanadi: `total = 0` bo'lganda market bizga QARZDOR
+ * (`marketReceivable` manfiy), kuryer ulushini HQ to'laydi, HQ foydasi esa
+ * `marketTariff − courierShare − branchShare` bo'lib qolaveradi. This test fuzzes the model and asserts the conservation
  * identity, so any future change to a leg/share formula that breaks the balance
  * fails loudly.
  *
@@ -139,5 +147,75 @@ describe('order-money share/profit primitives', () => {
         5000,
       ),
     ).toBe(0);
+  });
+});
+
+/**
+ * ONLAYN TO'LANGAN BUYURTMA — IDENTIKLIK SHU YERDA HAM SAQLANADI.
+ *
+ * Pul modeli (foydalanuvchi qarori 2026-09-14): onlayn pulni MARKET oladi,
+ * pochta unga aralashmaydi. Kitobimizda bunday buyurtma 0 so'mlik buyurtma
+ * bilan ayni — ya'ni `total = 0`, lekin tarif va ulushlar o'z joyida.
+ */
+describe("⭐ onlayn to'langan buyurtma (yig'ilgan naqd = 0)", () => {
+  const marketTariff = 30000;
+  const courierShare = 15000;
+  const branchShare = 0;
+
+  it('⭐ market BIZGA qarzdor bo`ladi, biz marketga emas', () => {
+    const legs = computeSaleLegs({
+      total: 0,
+      marketTariff,
+      courierShare,
+      branchShare,
+    });
+    // Manfiy `marketReceivable` = "market bizga qarz".
+    expect(legs.marketReceivable).toBe(-30000);
+  });
+
+  it('⭐ HQ foydasi naqd yig`ilmagani uchun O`ZGARMAYDI', () => {
+    const legs = computeSaleLegs({
+      total: 0,
+      marketTariff,
+      courierShare,
+      branchShare,
+    });
+    expect(legs.hqProfit).toBe(15000);
+  });
+
+  it('⭐ saqlanish identikligi buzilmaydi', () => {
+    const legs = computeSaleLegs({
+      total: 0,
+      marketTariff,
+      courierShare,
+      branchShare,
+    });
+    expect(
+      round2(
+        legs.marketReceivable +
+          legs.courierKept +
+          legs.branchKept +
+          legs.hqProfit,
+      ),
+    ).toBe(0);
+  });
+
+  it('qisman onlayn to`lovda ham saqlanadi', () => {
+    // 250 000 buyurtma, 100 000 oldindan to'langan -> 150 000 naqd yig'iladi.
+    const total = 150000;
+    const legs = computeSaleLegs({
+      total,
+      marketTariff,
+      courierShare,
+      branchShare,
+    });
+    expect(
+      round2(
+        legs.marketReceivable +
+          legs.courierKept +
+          legs.branchKept +
+          legs.hqProfit,
+      ),
+    ).toBe(total);
   });
 });

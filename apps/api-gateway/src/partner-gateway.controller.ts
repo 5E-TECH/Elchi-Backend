@@ -3,14 +3,17 @@ import {
   Body,
   Controller,
   Get,
+  HttpCode,
   Inject,
   NotFoundException,
   Param,
   Post,
   Query,
   Req,
+  Res,
   UseGuards,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
 import { successRes } from '../../../libs/common/helpers/response';
@@ -64,6 +67,44 @@ const PARTNER_THROTTLE = {
 // for the same external_order_id before the idempotency ref is persisted. Give
 // it the provider-tier ceiling instead.
 const PARTNER_SHIPMENT_TIMEOUT_MS = 65_000;
+
+/**
+ * HTTP KODINI TANADAGI `statusCode` BILAN MOSLASHTIRISH.
+ *
+ * ⚠️ NIMA BUZILGAN EDI (lokal sinovda topildi). NestJS `@Post` uchun sukut
+ * bo'yicha HTTP 201 qaytaradi. Servis esa tanada aniq kod beradi:
+ *
+ *   yangi posilka          -> 201 (to'g'ri)
+ *   idempotent takror      -> tana 200, HTTP esa 201  ← nomuvofiq
+ *   bekor qilish           -> tana 200, HTTP esa 201  ← hech narsa yaratilmadi
+ *   allaqachon bekor       -> tana 200, HTTP esa 201  ← nomuvofiq
+ *
+ * Marketplace HTTP KODIGA qaraydi — ularning HTTP mijozi shuni ko'radi.
+ * Har bir POST 201 qaytarsa, "yaratildi" va "allaqachon bor" ni HTTP
+ * darajasida ajratib bo'lmaydi va hujjatdagi kod jadvali yolg'on bo'ladi.
+ *
+ * Qoida ODDIY va hujjatlashtiriladi: HTTP kodi HAR DOIM tanadagi
+ * `statusCode` ga teng.
+ *
+ * ⚠️ PCS (BeePost) uchun xavfsiz: u HTTP kodini faqat XATO uchun ishlatadi
+ * (axios >=400 da otadi), 200/201 ikkisi ham muvaffaqiyat deb o'qiladi.
+ */
+const syncHttpStatus = (
+  res: { status?: (code: number) => unknown } | undefined,
+  body: unknown,
+): unknown => {
+  const code = Number((body as { statusCode?: unknown } | null)?.statusCode);
+  /**
+   * `res?.status` — himoyalangan chaqiruv. Ishlab chiqarishda Nest `res` ni
+   * har doim inject qiladi; u YO'Q bo'lishi faqat kontroller metodi to'g'ridan
+   * to'g'ri chaqirilganda (unit test) yuz beradi. Himoyasiz bo'lsa test
+   * yiqilardi, kod esa to'g'ri.
+   */
+  if (Number.isInteger(code) && code >= 200 && code < 300) {
+    res?.status?.(code);
+  }
+  return body;
+};
 
 /**
  * Partner API javob qobig'i.
@@ -144,13 +185,15 @@ export class PartnerGatewayController {
     >
   > {
     const res = await firstValueFrom(
-      this.logisticsClient.send<{
-        data?: Array<{
-          id: string | number;
-          name: string;
-          sato_code?: string | null;
-        }>;
-      }>({ cmd: 'logistics.region.find_all' }, {}).pipe(timeout(8000)),
+      this.logisticsClient
+        .send<{
+          data?: Array<{
+            id: string | number;
+            name: string;
+            sato_code?: string | null;
+          }>;
+        }>({ cmd: 'logistics.region.find_all' }, {})
+        .pipe(timeout(8000)),
     );
     // Qobiq birxil (ping izohiga qara).
     return successRes(
@@ -179,9 +222,7 @@ export class PartnerGatewayController {
     description:
       '{ statusCode, message, data: [{ id, name, region_id, sato_code }] }',
   })
-  async getDistricts(
-    @Query('region_id') regionId?: string,
-  ): Promise<
+  async getDistricts(@Query('region_id') regionId?: string): Promise<
     PartnerEnvelope<
       Array<{
         id: string;
@@ -192,14 +233,16 @@ export class PartnerGatewayController {
     >
   > {
     const res = await firstValueFrom(
-      this.logisticsClient.send<{
-        data?: Array<{
-          id: string | number;
-          name: string;
-          region_id: string | number;
-          sato_code?: string | null;
-        }>;
-      }>({ cmd: 'logistics.district.find_all' }, { region_id: regionId }).pipe(timeout(8000)),
+      this.logisticsClient
+        .send<{
+          data?: Array<{
+            id: string | number;
+            name: string;
+            region_id: string | number;
+            sato_code?: string | null;
+          }>;
+        }>({ cmd: 'logistics.district.find_all' }, { region_id: regionId })
+        .pipe(timeout(8000)),
     );
     return successRes(
       (res?.data ?? []).map((d) => ({
@@ -247,13 +290,15 @@ export class PartnerGatewayController {
     }
     const mode = whereDeliver === 'center' ? 'center' : 'address';
     const res = await firstValueFrom(
-      this.identityClient.send<{
-        data?: Array<{
-          id: string | number;
-          tariff_home?: number;
-          tariff_center?: number;
-        }>;
-      }>({ cmd: 'identity.market.find_by_ids' }, { ids: [elchiMarketId] }).pipe(timeout(8000)),
+      this.identityClient
+        .send<{
+          data?: Array<{
+            id: string | number;
+            tariff_home?: number;
+            tariff_center?: number;
+          }>;
+        }>({ cmd: 'identity.market.find_by_ids' }, { ids: [elchiMarketId] })
+        .pipe(timeout(8000)),
     );
     const market = (res?.data ?? [])[0];
     if (!market) {
@@ -283,20 +328,24 @@ export class PartnerGatewayController {
   @ApiOperation({ summary: 'Sotuvchi uchun Elchi market ochish (idempotent)' })
   @ApiBody({ type: CreatePartnerMarketRequestDto })
   @ApiCreatedResponse({ description: '{ elchi_market_id }' })
-  provisionMarket(
+  async provisionMarket(
     @Req() request: { partner: PartnerPrincipal },
     @Body() dto: CreatePartnerMarketRequestDto,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return firstValueFrom(
-      this.integrationClient.send(
-        { cmd: 'integration.partner.provision_market' },
-        {
-          ...dto,
-          partner_id: request.partner.id,
-          requester: { id: `partner:${request.partner.id}` },
-        },
-      ).pipe(timeout(8000)),
+    const body = await firstValueFrom(
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.provision_market' },
+          {
+            ...dto,
+            partner_id: request.partner.id,
+            requester: { id: `partner:${request.partner.id}` },
+          },
+        )
+        .pipe(timeout(8000)),
     );
+    return syncHttpStatus(res, body);
   }
 
   /**
@@ -309,16 +358,20 @@ export class PartnerGatewayController {
   @ApiCreatedResponse({
     description: '{ shipment_id, order_status, qr_code_token, to_be_paid }',
   })
-  provisionShipment(
+  async provisionShipment(
     @Req() request: { partner: PartnerPrincipal },
     @Body() dto: CreatePartnerShipmentRequestDto,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return firstValueFrom(
-      this.integrationClient.send(
-        { cmd: 'integration.partner.create_shipment' },
-        { ...dto, partner_id: request.partner.id },
-      ).pipe(timeout(PARTNER_SHIPMENT_TIMEOUT_MS)),
+    const body = await firstValueFrom(
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.create_shipment' },
+          { ...dto, partner_id: request.partner.id },
+        )
+        .pipe(timeout(PARTNER_SHIPMENT_TIMEOUT_MS)),
     );
+    return syncHttpStatus(res, body);
   }
 
   /**
@@ -330,7 +383,7 @@ export class PartnerGatewayController {
   @ApiOkResponse({
     description:
       '{ shipment_id, external_order_id, status, cod_amount, cod_collected, total_price, tracking }. ' +
-      '`cod_amount` = to\'lanishi kerak summa; `cod_collected` = kuryer mijozdan ' +
+      "`cod_amount` = to'lanishi kerak summa; `cod_collected` = kuryer mijozdan " +
       'HAQIQATAN yiqqan pul (sotuvgacha 0) — pul solishtiruvi uchun.',
   })
   @ApiNotFoundResponse({ description: 'Shipment topilmadi' })
@@ -339,10 +392,12 @@ export class PartnerGatewayController {
     @Param('id') id: string,
   ) {
     return firstValueFrom(
-      this.integrationClient.send(
-        { cmd: 'integration.partner.get_shipment' },
-        { shipment_id: id, partner_id: request.partner.id },
-      ).pipe(timeout(8000)),
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.get_shipment' },
+          { shipment_id: id, partner_id: request.partner.id },
+        )
+        .pipe(timeout(8000)),
     );
   }
 
@@ -350,8 +405,20 @@ export class PartnerGatewayController {
    * Posilkani bekor qilish. Yetkazib bo'lingan posilkani bekor qilib bo'lmaydi
    * (409). Faqat hamkorning o'z posilkasi.
    */
+  /**
+   * ⚠️ `@HttpCode(200)` ATAYLAB. Bekor qilish HECH NARSA YARATMAYDI, lekin
+   * NestJS `@Post` uchun sukut bo'yicha 201 beradi. Takroriy bekor qilish
+   * ham idempotent 200 qaytaradi (409 EMAS — allaqachon bekor qilingan
+   * posilkani yana bekor qilish xato holat emas). 409 faqat YETKAZILGAN
+   * posilkani bekor qilishga urinishda chiqadi.
+   */
   @Post('shipments/:id/cancel')
-  @ApiOperation({ summary: 'Shipment bekor qilish (yetkazilgan → 409)' })
+  @HttpCode(200)
+  @ApiOperation({
+    summary:
+      'Shipment bekor qilish. Sotilganni bekor qilish -> 409. ' +
+      'Allaqachon bekor qilinganni qayta bekor qilish -> 200 (idempotent).',
+  })
   @ApiOkResponse({ description: '{ shipment_id, status: "cancelled" }' })
   @ApiNotFoundResponse({ description: 'Shipment topilmadi' })
   cancelShipment(
@@ -359,10 +426,12 @@ export class PartnerGatewayController {
     @Param('id') id: string,
   ) {
     return firstValueFrom(
-      this.integrationClient.send(
-        { cmd: 'integration.partner.cancel_shipment' },
-        { shipment_id: id, partner_id: request.partner.id },
-      ).pipe(timeout(10000)),
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.cancel_shipment' },
+          { shipment_id: id, partner_id: request.partner.id },
+        )
+        .pipe(timeout(10000)),
     );
   }
 }

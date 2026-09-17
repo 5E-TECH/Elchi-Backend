@@ -57,6 +57,31 @@ import { errorRes, successRes } from '../../../libs/common/helpers/response';
  * qiymat 0 bo'lishi kerak — aks holda hamkor bekor qilingan buyurtma uchun
  * pul olgandek yozib qo'yardi.
  */
+/**
+ * Pul maydonini hamkor payloadiga tayyorlaydi.
+ *
+ * ⚠️ `null` NI 0 GA AYLANTIRMAYDI. Bu ataylab: 0 — "hisoblandi va hech
+ * narsa chiqmadi" degan ma'noli da'vo, `null` esa "hali hisoblanmagan".
+ * Ikkisini aralashtirish hamkor tomonida jim pul xatosiga olib keladi
+ * (aynan `cod_collected` bilan bo'lgan hol — audit M2).
+ */
+/**
+ * Bo'sh satrni `null` ga aylantiradi.
+ *
+ * ⚠️ Bo'sh satr bilan `null` FARQ QILADI: bo'sh satr bo'yicha guruhlash
+ * barcha qopsiz posilkalarni bitta soxta qopga yig'ib qo'yardi.
+ */
+const nullableText = (value: unknown): string | null => {
+  const text = String(value ?? '').trim();
+  return text || null;
+};
+
+const nullableMoney = (value: unknown): number | null => {
+  if (value === null || value === undefined) return null;
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+};
+
 const PAID_STATUSES = new Set<string>([
   Order_status.SOLD,
   Order_status.PAID,
@@ -940,11 +965,24 @@ export class IntegrationServiceService {
        * muzlatilsin" degani EMAS. Shu bois identity'dagi market yozuvi
        * yangilanadi va javobda `tariff_updated` qaytadi.
        */
-      const nextHome = Number(dto.tariff_home ?? 0);
-      const nextCenter = Number(dto.tariff_center ?? 0);
+      /**
+       * ⚠️ QISMAN YANGILASH YUBORILMAGAN TARIFNI NOLGA TUSHIRMAYDI.
+       *
+       * Ilgari `Number(dto.tariff_home ?? 0)` edi. Hamkor FAQAT
+       * `tariff_center` yuborsa (masalan markaz kelishuvi o'zgargan),
+       * `tariff_home` jimgina 0 ga tushardi — ya'ni UYGA YETKAZISH BEPUL
+       * bo'lib qolardi. Hech qanday xato chiqmasdi.
+       *
+       * Endi yuborilmagan maydon MAVJUD qiymatida qoladi. Shu bois hozirgi
+       * tarif QIYOSDAN OLDIN o'qiladi.
+       */
+      const sentHome =
+        dto.tariff_home !== undefined && dto.tariff_home !== null;
+      const sentCenter =
+        dto.tariff_center !== undefined && dto.tariff_center !== null;
       let tariffUpdated = false;
 
-      if (nextHome > 0 || nextCenter > 0) {
+      if (sentHome || sentCenter) {
         const current = await this.rmqRequest<{
           data?: { tariff_home?: number; tariff_center?: number } | null;
         }>(
@@ -956,6 +994,9 @@ export class IntegrationServiceService {
 
         const curHome = Number(current?.data?.tariff_home ?? 0);
         const curCenter = Number(current?.data?.tariff_center ?? 0);
+
+        const nextHome = sentHome ? Number(dto.tariff_home) : curHome;
+        const nextCenter = sentCenter ? Number(dto.tariff_center) : curCenter;
 
         if (curHome !== nextHome || curCenter !== nextCenter) {
           await this.rmqRequest(
@@ -1110,6 +1151,16 @@ export class IntegrationServiceService {
     subtotal?: number;
     /** Hamkor yorlig'idagi QR qiymati (K3). */
     label_token?: string | null;
+    /**
+     * KIRUVCHI QOP (batch) — hamkor bir qopda yuborgan posilkalar guruhi.
+     *
+     * `batch_ref`         — hamkor tomonidagi qop id'si (guruhlash)
+     * `batch_label_token` — QOP USTIDAGI QR (bitta skan bilan butun qop)
+     * `batch_size`        — hamkor AYTGAN son (biz sanagan son emas)
+     */
+    batch_ref?: string | null;
+    batch_label_token?: string | null;
+    batch_size?: number | null;
   }) {
     const partnerId = String(dto?.partner_id ?? '').trim();
     const externalOrderId = String(dto?.external_order_id ?? '').trim();
@@ -1261,6 +1312,27 @@ export class IntegrationServiceService {
           address: dto.address ?? null,
           total_price: totalPrice,
           to_be_paid: cod,
+          /**
+           * QOP MA'LUMOTI — kiruvchi ekranda guruhlash va qop yorlig'ini
+           * skanerlash uchun. Bo'sh satr `null` ga aylantiriladi: bo'sh
+           * satr bo'yicha guruhlash barcha qopsiz posilkalarni BITTA
+           * soxta qopga yig'ib qo'yardi.
+           */
+          external_batch_ref: nullableText(dto.batch_ref),
+          external_batch_token: nullableText(dto.batch_label_token),
+          external_batch_size: nullableMoney(dto.batch_size),
+          /**
+           * ⚠️ PREPAID POSILKA — OLDINDAN TO'LANGAN QISM (topilma).
+           *
+           * Hamkor `cod_amount: 0` (yoki `subtotal` dan kichik COD) yuborsa,
+           * farq mijoz TOMONIDAN ALLAQACHON to'langan degani. Bu maydonsiz
+           * sotuv `total_price` ni naqd deb hisoblardi: kuryer qo'liga
+           * olMAGAN pulni topshirgandek, biz esa olMAGAN pulni marketga
+           * qarzdek yozardik. Sotuv oqimi endi `total_price − bu maydon`
+           * bo'yicha ishlaydi, ya'ni bitta tushuncha ikkala yo'lni ham
+           * qamrab oladi (onlayn to'lov webhooki ham shu maydonni oshiradi).
+           */
+          paid_online_amount: Math.max(totalPrice - cod, 0),
           source: 'external',
           external_id: externalOrderId,
           items: orderItems,
@@ -1443,7 +1515,26 @@ export class IntegrationServiceService {
         external_order_id: ref.external_order_id,
         status: this.pluck(order, 'status'),
         cod_amount: Number(this.pluck(order, 'to_be_paid') ?? 0),
+        /** @deprecated Nomi yolg'on — `collected_from_customer` ishlatilsin. */
         cod_collected: Number(this.pluck(order, 'paid_amount') ?? 0),
+        /**
+         * HAQIQIY PUL MAYDONLARI (audit M2) — webhook payloadi bilan AYNI.
+         *
+         * ⚠️ Tortib olish (bu yer) va webhook BIR XIL raqam berishi SHART.
+         * Ikkisi ajralsa, hamkor qaysi biriga ishonishni bilmaydi va
+         * solishtiruv har safar "nomuvofiqlik" chiqaradi.
+         */
+        collected_from_customer: nullableMoney(
+          this.pluck(order, 'sale_collectible_amount'),
+        ),
+        elchi_fee: nullableMoney(this.pluck(order, 'market_tariff')),
+        market_amount: (() => {
+          const collected = nullableMoney(
+            this.pluck(order, 'sale_collectible_amount'),
+          );
+          const fee = nullableMoney(this.pluck(order, 'market_tariff'));
+          return collected != null && fee != null ? collected - fee : null;
+        })(),
         total_price: Number(this.pluck(order, 'total_price') ?? 0),
         /**
          * Kuryer yozgan qo'shimcha xarajat. Hamkor buni o'z tomonida ham
@@ -1572,6 +1663,12 @@ export class IntegrationServiceService {
     old_status?: string;
     new_status?: string;
     cod_collected?: number;
+    /** Sotuvda kuryer yig'gan naqd (snapshot). `null` = hali sotilmagan. */
+    collected_from_customer?: number | null;
+    /** Elchi ushlab qolgan tarif (snapshot). */
+    elchi_fee?: number | null;
+    /** Elchi hamkorga qarzi: yig'ilgan naqd minus tarif. */
+    market_amount?: number | null;
     market_paid_amount?: number;
     cod_amount?: number;
     total_price?: number;
@@ -1629,6 +1726,18 @@ export class IntegrationServiceService {
         PAID_STATUSES.has(newStatus) && Number.isFinite(codCollected)
           ? codCollected
           : 0,
+      /**
+       * HAQIQIY PUL MAYDONLARI (audit M2) — `cod_collected` nomi yolg'on
+       * bo'lgani uchun qo'shildi. Manbasi buyurtmadagi SNAPSHOT, ya'ni
+       * sotuvdan keyin tarif yoki onlayn to'lov o'zgarsa ham qiymat
+       * o'zgarmaydi.
+       *
+       * ⚠️ `null` MA'NOLI: "hali sotilmagan / hisoblanmagan". 0 ga
+       * aylantirilmaydi, aks holda hamkor uni qarz hisobiga qo'shardi.
+       */
+      collected_from_customer: nullableMoney(dto?.collected_from_customer),
+      elchi_fee: nullableMoney(dto?.elchi_fee),
+      market_amount: nullableMoney(dto?.market_amount),
       /*
         ⚠️ `cod_amount` FAQAT chaqiruvchi uni ANIQ uzatganda qo'shiladi.
 
@@ -6747,12 +6856,39 @@ export class IntegrationServiceService {
     put(fromOrder, 'region', order.region?.name);
     put(fromOrder, 'total_price', order.total_price);
     /**
-     * `cod_amount` — mijozdan yig'ilishi kerak bo'lgan summa. Elchi'da
-     * bu `to_be_paid`, LEKIN u sotuvdan keyin boshqa ma'no oladi
-     * (`netToBePaid` bilan ustiga yoziladi — audit F2). Jo'natish esa
-     * sotuvdan OLDIN bo'ladi, shu bois bu yerda qiymat to'g'ri.
+     * `cod_amount` — mijozdan yig'ilishi kerak bo'lgan summa.
+     *
+     * ⚠️ ILGARI `order.to_be_paid ?? order.total_price` edi va bu IKKI
+     * sababdan noto'g'ri:
+     *
+     *  1. `to_be_paid` NULLABLE EMAS (`default: 0`), ya'ni `??` hech qachon
+     *     ishlamaydi. Oddiy Elchi buyurtmasida sotuvdan oldin u 0 — demak
+     *     kargoga `cod_amount: 0` ketardi va ularning kuryeri mijozdan
+     *     HECH NARSA yig'masdi.
+     *  2. `to_be_paid` sotuvdan keyin MARKET QARZI ma'nosini oladi
+     *     (`netToBePaid`), ya'ni bitta maydon ikki xil narsani anglatadi.
+     *
+     * Endi qiymat aniq: `total_price` dan mijoz oldindan to'lagan qismi
+     * ayiriladi. Onlayn to'langan buyurtmada 0 chiqadi — kargo mijozdan
+     * ikkinchi marta pul so'ramaydi.
+     *
+     * ⚠️ `total_price` YO'Q bo'lsa qiymat QO'YILMAYDI, 0 ham emas: 0 yozish
+     * "mijozdan hech narsa olinmasin" degan MA'NOLI buyruq. Buzuq
+     * ma'lumotda bo'sh qoldirilsa quyidagi "to'ldirilmagan o'rin egallari"
+     * ogohlantirishi ishlaydi.
      */
-    put(fromOrder, 'cod_amount', order.to_be_paid ?? order.total_price);
+    const rawTotal = order.total_price;
+    const hasTotal =
+      rawTotal !== null &&
+      rawTotal !== undefined &&
+      Number.isFinite(Number(rawTotal));
+    put(
+      fromOrder,
+      'cod_amount',
+      hasTotal
+        ? Math.max(Number(rawTotal) - Number(order.paid_online_amount ?? 0), 0)
+        : undefined,
+    );
     put(fromOrder, 'comment', order.comment);
     put(
       fromOrder,

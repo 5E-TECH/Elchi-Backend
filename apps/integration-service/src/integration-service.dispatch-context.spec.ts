@@ -18,7 +18,17 @@ const ORDER = {
     id: '1001',
     order_number: 100042,
     total_price: 500000,
-    to_be_paid: 450000,
+    /**
+     * ⚠️ HAQIQIY BUYURTMADAGIDEK: `to_be_paid` sotuvdan OLDIN 0.
+     *
+     * Ilgari bu fixture'da 450000 turardi va aynan shuning uchun xato
+     * tutilmagan: kod `order.to_be_paid ?? order.total_price` deb o'qirdi,
+     * `to_be_paid` esa NULLABLE EMAS (`default: 0`) — ya'ni `??` hech
+     * qachon ishlamaydi va real buyurtmada kargoga `cod_amount: 0`
+     * ketardi. Fixture soxta qiymat berib turgani uchun test yashil edi.
+     */
+    to_be_paid: 0,
+    paid_online_amount: 0,
     address: 'Chilonzor 5',
     comment: 'Eshik oldida',
     customer: {
@@ -105,11 +115,13 @@ describe("C3 — kontekst buyurtmadan yig'iladi", () => {
 
   it("⭐ `cod_amount` TO'LDIRILADI — eng muhim maydon", async () => {
     /**
-     * Bo'sh qolsa kargo mijozdan hech narsa undirmaydi. Jo'natish sotuvdan
-     * OLDIN bo'ladi, shu bois `to_be_paid` bu yerda to'g'ri ma'noda.
+     * Bo'sh qolsa kargo mijozdan hech narsa undirmaydi.
+     *
+     * Qiymat `total_price − paid_online_amount` — ya'ni mijoz oldindan
+     * to'lamagan bo'lsa to'liq narx.
      */
     const body = await dispatch();
-    expect(body.cod).toBe('450000');
+    expect(body.cod).toBe('500000');
   });
 
   it("manzil va mahsulot ro'yxati ham ketadi", async () => {

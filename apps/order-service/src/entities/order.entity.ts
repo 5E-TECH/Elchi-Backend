@@ -133,6 +133,33 @@ export class Order extends BaseEntity {
   branch_cashbox_amount!: number | null;
 
   /**
+   * SOTUV PAYTIDA MIJOZDAN YIG'ILGAN NAQD (snapshot).
+   *
+   * `total_price − paid_online_amount` — ya'ni kuryer haqiqatan qo'liga
+   * olgan pul. Naqd sotuvda u `total_price` ga teng, onlayn to'langan
+   * buyurtmada 0, qisman to'langanda oradagi farq.
+   *
+   * ⚠️ NEGA SNAPSHOT, NEGA QAYTA HISOBLANMAYDI. Rollback sotuvni AYNAN
+   * teskari yozishi kerak. `paid_online_amount` esa sotuvdan KEYIN ham
+   * o'zgarishi mumkin (qaytarish webhooki uni kamaytiradi). Qayta
+   * hisoblansa rollback boshqa summani teskari yozardi va kassada farq
+   * qolardi — `courier_share`/`branch_cashbox_amount` aynan shu sababdan
+   * snapshot qilingan.
+   *
+   * `null` — sotuvdan oldin yoki bu ustun paydo bo'lishidan oldin sotilgan
+   * eski buyurtmalar. Rollback bunda `total_price` ga qaytadi, ya'ni eski
+   * ma'lumot bugungidek ishlaydi.
+   */
+  @Column({
+    type: 'numeric',
+    precision: 14,
+    scale: 2,
+    nullable: true,
+    transformer: numericTransformer,
+  })
+  sale_collectible_amount!: number | null;
+
+  /**
    * Sotuv/bekor qilishda kuryer yozgan qo'shimcha xarajat.
    *
    * Ilgari bu summa HECH QAYERDA buyurtmada saqlanmasdi — faqat kassa
@@ -289,6 +316,32 @@ export class Order extends BaseEntity {
 
   @Column({ type: 'varchar', nullable: true })
   external_id!: string | null;
+
+  /**
+   * KIRUVCHI QOP — hamkor bir qopda yuborgan posilkalar guruhi.
+   *
+   * ⚠️ NEGA KERAK. Hamkor posilkalari bittalab keladi va kiruvchi ekranda
+   * tekis ro'yxat bo'lib turardi. Operator "12 posilka kelayotgan edi,
+   * 11 tasi yetdi" degan holatni KO'RMASDI, va 12 posilkani bittalab
+   * skanerlashga majbur edi.
+   *
+   * `external_batch_ref`   — hamkor tomonidagi qop id'si (guruhlash uchun)
+   * `external_batch_token` — QOP USTIDAGI QR (bitta skan, butun qop)
+   * `external_batch_size`  — hamkor AYTGAN son
+   *
+   * ⚠️ `external_batch_size` biz sanagan son EMAS. Ikkisi farq qilsa qop
+   * to'liq yetib kelmagan degani — biz sanagan son bilan almashtirish bu
+   * farqni YASHIRARDI.
+   */
+  @Column({ type: 'varchar', nullable: true })
+  external_batch_ref!: string | null;
+
+  @Index('IDX_ORDER_EXTERNAL_BATCH_TOKEN', { where: 'is_deleted = false' })
+  @Column({ type: 'varchar', nullable: true })
+  external_batch_token!: string | null;
+
+  @Column({ type: 'int', nullable: true })
+  external_batch_size!: number | null;
 
   @Column({ type: 'enum', enum: Order_source, default: Order_source.INTERNAL })
   source!: Order_source;
