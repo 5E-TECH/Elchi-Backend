@@ -30,6 +30,8 @@ import { FinancialBalanceHistory } from './entities/financial-balance-history.en
     RmqModule,
     RmqModule.register({ name: 'ORDER' }),
     RmqModule.register({ name: 'IDENTITY' }),
+    // Kargo qarzi kompaniya holati formulasiga kiradi (audit M5).
+    RmqModule.register({ name: 'INTEGRATION' }),
     DatabaseModule,
     // Transactional outbox: finance publishes `order.settlement.advance` to
     // order-service inside the cashbox-move transaction (Faza 2a). Reliable,

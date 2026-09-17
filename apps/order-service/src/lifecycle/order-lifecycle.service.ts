@@ -43,8 +43,9 @@ import {
 } from '../domain/order-status.machine';
 import {
   computeSellProfit,
+  computeTariffShortfall,
+  resolveOrderTariff,
   resolveSaleActorShare as resolveSaleActorShareAmount,
-  resolveBranchCashboxSaleAmount as resolveBranchCashboxSaleAmountValue,
 } from '../domain/order-money';
 import { OrderLookupService } from '../lookup/order-lookup.service';
 import { OrderCustodyService } from '../custody/order-custody.service';
@@ -102,6 +103,20 @@ export class OrderLifecycleService {
 
   private notFound(message: string): never {
     throw new RpcException({ statusCode: 404, message });
+  }
+
+  /**
+   * Tashqi manbadan kelgan `region` qiymatini XAVFSIZ o'qish.
+   *
+   * `region_id` — bigint FK. Sayt u yerga matn yuborsa Postgres tip xatosi
+   * beradi va import partiyasi yarim yo'lda uziladi. Shu bois faqat butun
+   * son qabul qilinadi.
+   */
+  private numericRegionId(value: unknown): string | null {
+    if (value === null || typeof value === 'undefined') return null;
+    const raw = String(value).trim();
+    if (!raw) return null;
+    return /^\d+$/.test(raw) ? raw : null;
   }
 
   private badRequest(message: string): never {
@@ -217,6 +232,28 @@ export class OrderLifecycleService {
       this.notFound(`Order #${id} topilmadi`);
     }
     return order;
+  }
+
+  /**
+   * `last_handover_by` uchun aktyor id'si — FAQAT raqamli bo'lsa.
+   *
+   * ⚠️ NEGA KERAK. Ustun `bigint`, lekin aktyor har doim ham haqiqiy
+   * foydalanuvchi emas: hamkor (Partner API) oqimi sun'iy id yuboradi
+   * (`partner:1`), chunki uning ortida foydalanuvchi turmaydi. Bunday satr
+   * bigint ustunga yozilganda Postgres `22P02` beradi va BUTUN buyurtma
+   * yaratish tranzaksiyasi qaytadi.
+   *
+   * Aynan shu sabab hamkordan kelgan birinchi posilka yaratilmadi: xato
+   * "ID qiymatlari raqam ko'rinishida bo'lishi kerak" bo'lib chiqardi va
+   * qaysi maydon aybdor ekani ko'rinmasdi.
+   *
+   * Audit izi YO'QOLMAYDI: `order_tracking.changed_by` va
+   * `order_custody_events.changed_by` — `varchar`, ular sun'iy id'ni o'z
+   * holicha saqlaydi. Bu yerda esa "foydalanuvchi yo'q" degani `null`.
+   */
+  private numericActorId(actorId?: string | number | null): string | null {
+    const raw = String(actorId ?? '').trim();
+    return /^\d+$/.test(raw) ? raw : null;
   }
 
   private async resolveBranchIdForOrder(
@@ -404,6 +441,69 @@ export class OrderLifecycleService {
     ) {
       this.forbidden('Faqat HQga tegishli registrator QR scan qila oladi');
     }
+  }
+
+  /**
+   * QABUL QILISH uchun FILIAL DOIRASI.
+   *
+   * Qoida (foydalanuvchi qarori 2026-09-10): menejer va registrator faqat
+   * O'Z filialidagi buyurtmalar ustida amal bajaradi. superadmin/admin —
+   * cheklovsiz.
+   *
+   * Qaytaradi: cheklov uchun `branch_id`, yoki cheklovsiz bo'lsa `null`.
+   *
+   * ⚠️ FAIL-CLOSED. Filiali aniqlanmagan menejer/registrator hech nima qabul
+   * qila olmaydi. Aks holda "filiali yo'q" foydalanuvchi CHEKLOVSIZ bo'lib
+   * qolardi — ya'ni tekshiruvni chetlab o'tishning eng oson yo'li filialni
+   * o'chirib qo'yish bo'lardi.
+   */
+  private async resolveReceiveBranchScope(
+    requester?: {
+      id?: string;
+      roles?: string[];
+    } | null,
+  ): Promise<string | null> {
+    const roles = new Set(
+      (requester?.roles ?? []).map((role) =>
+        String(role ?? '')
+          .trim()
+          .toLowerCase(),
+      ),
+    );
+
+    if (roles.has(Roles.SUPERADMIN) || roles.has(Roles.ADMIN)) {
+      return null;
+    }
+
+    if (!roles.has(Roles.MANAGER) && !roles.has(Roles.REGISTRATOR)) {
+      this.forbidden('Buyurtmani qabul qilishga ruxsat yo‘q');
+    }
+
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId) {
+      this.forbidden('Foydalanuvchi aniqlanmadi');
+    }
+
+    const response = await rmqSend<{
+      data?: { branch_id?: string | null } | null;
+    }>(
+      this.branchClient,
+      { cmd: 'branch.user.find_by_user' },
+      {
+        user_id: requesterId,
+        requester: { id: requesterId, roles: requester?.roles ?? [] },
+      },
+      { attachRequestId: false, retries: 1 },
+    );
+
+    const branchId = String(response?.data?.branch_id ?? '').trim();
+    if (!branchId) {
+      this.forbidden(
+        'Sizga filial biriktirilmagan — buyurtma qabul qilib bo‘lmaydi',
+      );
+    }
+
+    return branchId;
   }
 
   // Status-transition rules live in ./domain/order-status.machine (pure &
@@ -615,15 +715,47 @@ export class OrderLifecycleService {
     return resolveSaleActorShareAmount(isManagerSale, financialActor, tariff);
   }
 
-  private resolveBranchCashboxSaleAmount(
-    totalPrice: number,
-    branchPayable: number,
-    isManagerSale: boolean,
-  ): number {
-    return resolveBranchCashboxSaleAmountValue(
-      totalPrice,
-      branchPayable,
-      isManagerSale,
+  /**
+   * TARIF QO'RIQCHISI: market tarifi kuryer (+ hamkor filial) ulushini qoplashi
+   * SHART, aks holda sotuv rad etiladi.
+   *
+   * NEGA BLOKLANADI. COD zanjiri marketga `total − marketTariff` to'laydi,
+   * lekin yuqoriga faqat `total − courierShare − branchShare` ko'tariladi.
+   * Market tarifi ikki ulushni qoplamasa, HQ marketga OLGANIDAN KO'P to'lashga
+   * majbur bo'ladi — 500 000 so'mlik buyurtmada kuryer 25 000 ni o'ziga oladi,
+   * 475 000 topshiradi, market tarifi 20 000 bo'lsa marketga 480 000 to'lanadi,
+   * ya'ni har buyurtmada 5 000 so'm HQ kissasidan ketadi. Bu xato hech qanday
+   * xatolik chiqarmasdi: faqat `sell_profit` manfiy bo'lib yozilardi va
+   * raqamlar jimgina buzilardi (aynan shu turdagi xato eng qimmat).
+   *
+   * Odatiy sabab — marketning `tariff_home`/`tariff_center`idan biri 0 yoki
+   * kuryer tarifidan kichik, buyurtma esa aynan shu `where_deliver` bilan
+   * kelgan. Yechim tarifni to'g'rilash, shuning uchun xato xabari raqamlarni
+   * ko'rsatadi.
+   */
+  private assertTariffCoversShares(params: {
+    marketTariff: number;
+    courierShare: number;
+    branchShare: number;
+  }): void {
+    const shortfall = computeTariffShortfall(
+      params.marketTariff,
+      params.courierShare,
+      params.branchShare,
+    );
+    if (shortfall <= 0) {
+      return;
+    }
+    const branchPart =
+      params.branchShare > 0
+        ? ` va filial ulushi (${params.branchShare} so'm)`
+        : '';
+    this.badRequest(
+      `Market tarifi (${params.marketTariff} so'm) kuryer ulushi ` +
+        `(${params.courierShare} so'm)${branchPart}ni qoplamaydi: ` +
+        `bu buyurtmada kompaniya ${shortfall} so'm zarar ko'radi va marketga ` +
+        `olgan puldan ko'p to'lashga majbur bo'ladi. Sotuv to'xtatildi — ` +
+        `market yoki kuryer tarifini to'g'rilab, so'ng qaytadan urinib ko'ring.`,
     );
   }
 
@@ -646,6 +778,13 @@ export class OrderLifecycleService {
       branch_amount: number;
       market_amount: number;
       hasCourier: boolean;
+      /**
+       * Naqd UCHINCHI TOMONDA (kargoda) — audit M5. Kuryer ham, filial ham
+       * yo'q, lekin pul HQ'ga yetib kelmagan: u kargo hisob-kitob qilgandan
+       * keyin keladi. Bunday qator PENDING bo'lib turadi va remittance
+       * kelganda BRANCH_SETTLED ga o'tkaziladi.
+       */
+      cashHeldByProvider?: boolean;
     },
   ): Promise<void> {
     const repo = manager.getRepository(OrderSettlement);
@@ -655,7 +794,7 @@ export class OrderLifecycleService {
     let status = SettlementStatus.PENDING;
     let courier_to_branch_at: Date | null = null;
     let branch_to_hq_at: Date | null = null;
-    if (!data.hasCourier) {
+    if (!data.hasCourier && !data.cashHeldByProvider) {
       courier_to_branch_at = now;
       if (isBranchSale) {
         status = SettlementStatus.COURIER_SETTLED;
@@ -670,9 +809,18 @@ export class OrderLifecycleService {
       courier_id: data.courier_id ? String(data.courier_id) : null,
       branch_id: data.branch_id ? String(data.branch_id) : null,
       market_id: data.market_id ? String(data.market_id) : null,
-      courier_amount: Math.max(data.courier_amount, 0),
-      branch_amount: Math.max(data.branch_amount, 0),
-      market_amount: Math.max(data.market_amount, 0),
+      /**
+       * ISHORALI (signed) saqlanadi — audit M10. Ilgari uchala summa ham
+       * `Math.max(x, 0)` bilan qirqilardi, ya'ni arzon mahsulot holatida
+       * (masalan 5 000 so'mlik buyurtma, kuryer tarifi 25 000) ledger 0 yozar,
+       * kassa esa teskari yo'nalishda real oyoq yozardi: HQ'ning kuryerga
+       * ustama to'lovi va marketning HQ oldidagi qarzi ledgerdan butunlay
+       * tushib qolardi. FIFO hisob-kitobi manfiy oyoqni "qarz yo'q" deb
+       * bepul o'tkazadi, shuning uchun qirqishning keragi yo'q.
+       */
+      courier_amount: data.courier_amount,
+      branch_amount: data.branch_amount,
+      market_amount: data.market_amount,
       status,
       courier_to_branch_at,
       courier_to_branch_by: null,
@@ -1003,9 +1151,7 @@ export class OrderLifecycleService {
     return keys;
   }
 
-  private isExtraCostApprovalRequired(params: {
-    extraCost: number;
-  }) {
+  private isExtraCostApprovalRequired(params: { extraCost: number }) {
     return params.extraCost > 0;
   }
 
@@ -1052,14 +1198,7 @@ export class OrderLifecycleService {
     proofFiles: string[];
     dto: Record<string, unknown>;
   }) {
-    const {
-      order,
-      requester,
-      action,
-      extraCost,
-      proofFiles,
-      dto,
-    } = params;
+    const { order, requester, action, extraCost, proofFiles, dto } = params;
     if (
       Boolean(dto.extraCostApproved) ||
       !this.isExtraCostApprovalRequired({ extraCost })
@@ -1257,6 +1396,85 @@ export class OrderLifecycleService {
     );
   }
 
+  /**
+   * QO'SHIMCHA XARAJAT SUMMASI CHEGARASI.
+   *
+   * Ilgari Elchi'da faqat "KIM yozishi mumkin" tekshirilardi
+   * (`assertCanAddExtraCost`), "QANCHA" esa UMUMAN tekshirilmasdi — kuryer
+   * istagan summani yozib market kassasidan shuncha pul yechib olardi.
+   * Yetkazish turi ham hisobga olinmasdi.
+   *
+   * QOIDA BeePost bilan bir xil (`server/src/api/order/utils/
+   * extra-cost-limit.util.ts`) — ikki tizim ajralsa, kuryer eng bo'sh yo'lni
+   * topib ishlatadi va chegara amalda eng bo'sh joyi bo'yicha ishlaydi.
+   *
+   * SOTUV (va qisman sotuv):
+   *   1. UYGA yetkazishda xarajat YOZILMAYDI — uy tarifi allaqachon yuqori,
+   *      ustiga xarajat yozish ikki marta to'lash bo'lardi.
+   *   2. MARKAZGA: xarajat + markaz tarifi UY tarifidan oshmasin, ya'ni
+   *      maksimum `tariff_home − tariff_center`. Kuryer markazga olib borib
+   *      ustiga xarajat yozsa ham, uyga yetkazishdan qimmatga tushmasin.
+   *   3. Tariflar TENG bo'lsa 2-qoida 0 beradi va bunday kuryer umuman
+   *      xarajat yoza olmasdi. Bunda maksimum — o'z tarifining 50%i (to'liq
+   *      tarif ruxsat etilsa xizmat haqi ikki baravar bo'lib ketardi).
+   *
+   * BEKOR QILISH — ataylab boshqa qoida: kuryer borib qaytdi, vaqt-yoqilg'i
+   * sarfladi, lekin yetkazmadi. Maksimum = o'sha buyurtma kuryer tarifi,
+   * uyga/markazga ajratilmaydi.
+   */
+  private assertExtraCostWithinLimit(params: {
+    extraCost: number;
+    mode: 'sell' | 'cancel';
+    whereDeliver: Where_deliver | null | undefined;
+    tariffCenter: number;
+    tariffHome: number;
+    /**
+     * Manager kuryer emas — unda tarif tushunchasi YO'Q (`tariff_*` = 0).
+     * Tarifga asoslangan chegarani unga qo'llasak, maksimum 0 chiqib manager
+     * umuman xarajat yoza olmasdi. Manager uchun nazorat boshqa: uning
+     * xarajati TASDIQLASH oqimidan o'tadi
+     * (`requestExtraCostApprovalIfNeeded`).
+     */
+    isManager?: boolean;
+  }): void {
+    const { extraCost, mode, whereDeliver } = params;
+    if (!(extraCost > 0)) return;
+    if (params.isManager) return;
+
+    const center = Math.max(0, Number(params.tariffCenter) || 0);
+    const home = Math.max(0, Number(params.tariffHome) || 0);
+
+    if (mode === 'cancel') {
+      const tariff = whereDeliver === Where_deliver.CENTER ? center : home;
+      const max = Math.floor(tariff);
+      if (extraCost > max) {
+        this.badRequest(
+          `Qo'shimcha xarajat o'z xizmat haqqingizdan (${max} so'm) ` +
+            `oshmasligi kerak`,
+        );
+      }
+      return;
+    }
+
+    if (whereDeliver !== Where_deliver.CENTER) {
+      this.badRequest(
+        "Uyga yetkaziladigan buyurtmalarda qo'shimcha xarajat yozish mumkin " +
+          'emas — uy tarifi allaqachon yuqori',
+      );
+    }
+
+    const diff = home - center;
+    // `Math.floor` — chegara butun so'm bo'lsin, kasrli chegara xato
+    // xabarida tushunarsiz ko'rinadi.
+    const max = diff > 0 ? Math.floor(diff) : Math.floor(center / 2);
+    if (extraCost > max) {
+      this.badRequest(
+        `Qo'shimcha xarajat maksimal ${max} so'm bo'lishi mumkin ` +
+          `(markaz tarifi: ${center}, uy tarifi: ${home})`,
+      );
+    }
+  }
+
   private async assertCanAddExtraCost(params: {
     actor: { can_add_extra_cost?: boolean | null } | undefined;
     requester: { id: string; roles?: string[]; branch_id?: string | null };
@@ -1324,16 +1542,25 @@ export class OrderLifecycleService {
    * On rollback to WAITING:
    *   - operator earning removal
    *
-   * finance-service dedupes both on order_id, so re-delivery or a status
-   * bounce is safe. We deliberately do NOT auto-reverse SELL_PROFIT on
-   * rollback — the ledger is append-only and the SELL_PROFIT row is recorded
-   * once per order; an operator can post a manual CORRECTION if a confirmed
-   * sale is undone.
+   * finance-service dedupes on (source_type, order_id, dedup_key), so
+   * re-delivery or a status bounce is safe.
+   *
+   * ⚠️ ROLLBACKDA FOYDA ENDI QAYTARILADI (audit M4). Ilgari `sell_profit`
+   * ataylab qaytarilmasdi ("daftar append-only"), lekin yozuv
+   * `(source_type, order_id)` bo'yicha yagona edi — ya'ni ikki xato birga
+   * yurardi: (a) buyurtma qaytarilib boshqa sotilmasa, olinmagan foyda
+   * daftarda abadiy qolardi; (b) boshqa narxda qayta sotilsa, ESKI foyda
+   * qolib, yangisi jimgina o'tkazib yuborilardi. Endi rollback teskari
+   * CORRECTION yozuvini qo'yadi, har sotuv urinishi esa o'z `dedup_key`si
+   * bilan keladi (`sold_at` — urinish boshiga yangi), shuning uchun qayta
+   * sotuvning foydasi to'g'ri yoziladi.
    */
   private async enqueueFinanceOnStatusChange(
     order: Order,
     oldStatus: Order_status,
     manager: EntityManager,
+    /** Rollbackdan OLDINGI `sold_at` — qaytariladigan sotuvning tokeni. */
+    previousSoldAt?: string | null,
   ): Promise<void> {
     const soldStates = [
       Order_status.SOLD,
@@ -1382,18 +1609,59 @@ export class OrderLifecycleService {
             order_id: String(order.id),
             related_user_id: order.market_id ? String(order.market_id) : null,
             comment: `Order #${order.id} sell profit`,
+            // Urinish tokeni: `sold_at` har sotuvda yangidan yoziladi, ya'ni
+            // qayta sotuv yangi yozuv ochadi, takroriy yetkazish esa ayni
+            // token bilan kelib bir marta yoziladi.
+            dedup_key: this.saleLedgerKey(order.sold_at),
           },
           { manager },
         );
       }
-    } else if (leftSold && order.operator_id) {
-      await this.outbox.enqueue(
-        'FINANCE',
-        'finance.operator.earning.remove',
-        { order_id: String(order.id) },
-        { manager },
+    } else if (leftSold) {
+      if (order.operator_id) {
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.operator.earning.remove',
+          { order_id: String(order.id) },
+          { manager },
+        );
+      }
+
+      // Sotuv foydasini teskari qilish. Summalar buyurtmadagi snapshotlardan
+      // olinadi (rollback ularni o'chirmaydi), ya'ni tarif keyin o'zgargan
+      // bo'lsa ham aynan yozilgani qaytariladi.
+      const rolledBackProfit = computeSellProfit(
+        Number(order.market_tariff ?? 0),
+        Number(order.courier_share ?? order.courier_tariff ?? 0),
+        Number(order.branch_share ?? 0),
       );
+      if (rolledBackProfit !== 0) {
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.financial_balance.record',
+          {
+            amount: -rolledBackProfit,
+            source_type: 'correction',
+            order_id: String(order.id),
+            related_user_id: order.market_id ? String(order.market_id) : null,
+            comment: `Order #${order.id} sell profit rollback`,
+            dedup_key: `rollback:${this.saleLedgerKey(previousSoldAt)}`,
+          },
+          { manager },
+        );
+      }
     }
+  }
+
+  /**
+   * Sotuv urinishining daftar tokeni. `sold_at` har sotuvda yangidan yoziladi
+   * (wall-clock), shuning uchun u urinishlarni ajratish uchun yetarli. Qiymat
+   * bo'lmasa (juda eski buyurtmalar) bo'sh token qaytadi — u holda eski,
+   * "buyurtma boshiga bitta yozuv" qoidasi ishlaydi.
+   */
+  private saleLedgerKey(soldAt?: string | null): string {
+    const value = String(soldAt ?? '').trim();
+    return value ? `sale:${value}` : '';
   }
 
   private hasRole(requester: { roles?: string[] } | undefined, role: Roles) {
@@ -1660,18 +1928,18 @@ export class OrderLifecycleService {
     // mirrors the original sale exactly, even if the market/courier tariff has
     // since changed. Fall back to live tariffs for orders sold before snapshots
     // were recorded.
-    const marketTariff =
-      order.market_tariff != null
-        ? Number(order.market_tariff)
-        : order.where_deliver === Where_deliver.CENTER
-          ? Number(market.tariff_center ?? 0)
-          : Number(market.tariff_home ?? 0);
-    const courierTariff =
-      order.courier_tariff != null
-        ? Number(order.courier_tariff)
-        : order.where_deliver === Where_deliver.CENTER
-          ? Number(financialActor?.tariff_center ?? 0)
-          : Number(financialActor?.tariff_home ?? 0);
+    const marketTariff = resolveOrderTariff({
+      snapshot: order.market_tariff,
+      isCenter: order.where_deliver === Where_deliver.CENTER,
+      centerTariff: market.tariff_center,
+      homeTariff: market.tariff_home,
+    });
+    const courierTariff = resolveOrderTariff({
+      snapshot: order.courier_tariff,
+      isCenter: order.where_deliver === Where_deliver.CENTER,
+      centerTariff: financialActor?.tariff_center,
+      homeTariff: financialActor?.tariff_home,
+    });
     const rollbackComment = `[ROLLBACK] ${order.comment || ''}`.trim();
     const totalPrice = Number(order.total_price ?? 0);
     const actorExpenseUserId = isManagerRequester
@@ -2872,7 +3140,7 @@ export class OrderLifecycleService {
         holder_branch_id: resolvedHolder.holder_branch_id,
         holder_courier_id: resolvedHolder.holder_courier_id,
         last_handover_at: new Date(),
-        last_handover_by: requester?.id ? String(requester.id) : null,
+        last_handover_by: this.numericActorId(requester?.id),
         return_reason: dto.return_reason ?? null,
         district_id: dto.district_id ?? null,
         region_id: dto.region_id ?? null,
@@ -3023,6 +3291,27 @@ export class OrderLifecycleService {
     return token;
   }
 
+  /**
+   * Tashqi tizimdan kelgan pul qiymatini XAVFSIZ o'qish.
+   *
+   * `null` qaytsa — qiymat SON EMAS va qator tashlanishi kerak.
+   * Berilmagan (`null`/`undefined`/bo'sh satr) esa 0 — bu qonuniy holat
+   * (bepul yoki oldindan to'langan posilka).
+   *
+   * ⚠️ `Number('250 000')` → `NaN`, `Number('')` → `0`, `Number([])` → `0`.
+   * Oxirgi ikkisi tuzoq: bo'sh massiv "narx yo'q" degani, 0 emas — shu
+   * bois faqat son va satr qabul qilinadi.
+   */
+  private safeExternalAmount(value: unknown): number | null {
+    if (value == null || value === '') return 0;
+    if (typeof value === 'number') {
+      return Number.isFinite(value) ? value : null;
+    }
+    if (typeof value !== 'string') return null;
+    const parsed = Number(value.trim());
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+
   private getFieldValue(obj: any, fieldPath?: string | null): any {
     if (!obj || !fieldPath) return undefined;
     return fieldPath.split('.').reduce((acc, key) => acc?.[key], obj);
@@ -3038,7 +3327,10 @@ export class OrderLifecycleService {
     // shartiga bog'liq EMAS (partner order'larda operator boshqacha) — barcha
     // external_id'li order uchun signal yuboriladi; integration-service
     // partner_shipment_ref bo'yicha filtrlaydi (partner emas → no-op).
-    // `paid_amount` = "sold"da kuryer yig'gan pul (cod_collected).
+    // ⚠️ `paid_amount` — "kuryer yig'gan pul" EMAS (avval shunday yozilgan edi).
+    // U `to_be_paid` (= total_price − market_tariff) QARZINING allaqachon
+    // to'langan qismi; oddiy sotuvda 0 bo'lib qoladi. Hamkorga `cod_collected`
+    // nomi bilan boradi — nom tarixiy, semantikasi shu.
     if (order.external_id) {
       await rmqSend(
         this.integrationClient,
@@ -3049,7 +3341,39 @@ export class OrderLifecycleService {
           action,
           old_status,
           new_status,
+          /**
+           * ⚠️ NOMI TARIXIY VA CHALG'ITADI (audit F1).
+           *
+           * `paid_amount` — MIJOZDAN yig'ilgan pul EMAS. U market qarzining
+           * (`total_price − market_tariff`) darhol to'langan qismi. Oddiy
+           * sotuvda u 0 bo'lib qoladi.
+           *
+           * Nom hamkor kontraktida allaqachon e'lon qilingan, shuning uchun
+           * uni olib tashlamaymiz — lekin yoniga ANIQ NOMLI maydonlar
+           * qo'shildi (`market_paid_amount`, `cod_amount`).
+           */
           cod_collected: Number(order.paid_amount ?? 0),
+          /** Yuqoridagi qiymatning to'g'ri nomi. */
+          market_paid_amount: Number(order.paid_amount ?? 0),
+          /*
+            ⚠️ `cod_amount` ATAYLAB YUBORILMAYDI.
+
+            Uni `order.to_be_paid` dan olish MANTIQIY ko'rinadi, lekin bu
+            ustun IKKI XIL ma'noda ishlatiladi:
+              • hamkor posilkasi yaratilganda — mijozdan yig'ilishi kerak
+                bo'lgan COD (`createPartnerShipment` shunday yozadi);
+              • ichki buyurtmada sukut bo'yicha 0, va SOTUVDAN KEYIN
+                `netToBePaid` (= total_price − market_tariff) bilan ustiga
+                yoziladi (`:4081`, `:4153`, `:5200`).
+
+            Ya'ni sotuvdan keyin qiymat butunlay boshqa narsani bildiradi va
+            hamkorga yuborilsa YOLG'ON bo'lardi. Hamkor o'zi yuborgan
+            `cod_amount`ni biladi; bizda esa uni ishonchli saqlaydigan joy
+            yo'q. Bu audit F2 ning bir qismi va alohida qaror talab qiladi.
+          */
+          // Hamkor o'z tomonida ham narx/xarajatni qo'llashi uchun.
+          total_price: Number(order.total_price ?? 0),
+          extra_cost: Number(order.extra_cost ?? 0),
         },
       ).catch(() => undefined);
     }
@@ -3131,13 +3455,27 @@ export class OrderLifecycleService {
     return null;
   }
 
-  async receiveNewOrders(orderIds: string[], search?: string) {
+  async receiveNewOrders(
+    orderIds: string[],
+    search?: string,
+    requester?: { id?: string; roles?: string[] } | null,
+    /**
+     * ⚠️ FAQAT ICHKI CHAQIRUV UCHUN. `order.receive` message pattern'i bu
+     * argumentni UZATMAYDI (`order-service.controller.ts`), ya'ni tashqaridan
+     * berib bo'lmaydi. Uni faqat `receiveExternalByScan` beradi — u tokenni
+     * allaqachon tekshirgan bo'ladi.
+     */
+    internal?: { scanVerified?: boolean },
+  ) {
     const uniqueOrderIds = Array.from(
       new Set((orderIds ?? []).filter(Boolean)),
     );
     if (!uniqueOrderIds.length) {
       this.badRequest('order_ids is required');
     }
+
+    // 0. Filial doirasi — menejer/registrator faqat o'z filialida ishlaydi.
+    const scopeBranchId = await this.resolveReceiveBranchScope(requester);
 
     // 1. Fetch orders from own schema only (no cross-schema queries)
     let orders = await this.orderRepo.find({
@@ -3150,6 +3488,55 @@ export class OrderLifecycleService {
 
     if (!orders.length) {
       this.notFound('No orders found!');
+    }
+
+    /**
+     * ⚠️ TASHQI POSILKA FAQAT SKANERLAB QABUL QILINADI (audit K2).
+     *
+     * MUAMMO. Bu metod faqat `status = NEW` va filial doirasini tekshirardi —
+     * `source` haqida shart YO'Q edi. Natijada hamkor/sayt posilkalari oddiy
+     * "Marketlar" ro'yxatida market buyurtmalari bilan ARALASH turardi va
+     * operator ularni bitta tugma bilan OMMAVIY qabul qilardi.
+     *
+     * Oqibati javobgarlik (custody) buzilishi: posilka hali hamkor omborida
+     * bo'lishi mumkin, Elchi esa uni "qabul qildim" deb yozib qo'yadi.
+     * Yo'qolsa kim aybdor — aniqlanmaydi.
+     *
+     * Skan darvozasi ILGARI FAQAT FRONTENDDA edi, ya'ni boshqa ekrandan
+     * yoki to'g'ridan-to'g'ri API'dan chetlab o'tish mumkin edi. Endi
+     * chegara SERVERDA.
+     *
+     * Butun so'rov rad etiladi, qolganini jimgina qabul qilmaymiz — aks
+     * holda operator hammasini qabul qildim deb o'ylardi.
+     */
+    if (!internal?.scanVerified) {
+      const externalOrders = orders.filter(
+        (order) => order.source === Order_source.EXTERNAL,
+      );
+      if (externalOrders.length) {
+        this.badRequest(
+          `${externalOrders.length} ta posilka tashqi manbadan keldi — ` +
+            'ular faqat skanerlab qabul qilinadi (Kiruvchi posilkalar ekrani)',
+        );
+      }
+    }
+
+    /**
+     * Begona filial buyurtmasi bo'lsa BUTUN so'rov rad etiladi — jimgina
+     * filtrlab qolganini qabul qilmaymiz. Sabab: operator tanlaganini qabul
+     * qildim deb o'ylaydi, aslida bir qismi tushib qolgan bo'lardi va
+     * farqni hech kim sezmasdi.
+     */
+    if (scopeBranchId) {
+      const foreign = orders.filter(
+        (order) => String(order.branch_id ?? '') !== scopeBranchId,
+      );
+      if (foreign.length) {
+        this.forbidden(
+          `${foreign.length} ta buyurtma boshqa filialga tegishli — ` +
+            'faqat o‘z filialingiz buyurtmalarini qabul qila olasiz',
+        );
+      }
     }
 
     // 2. Validate customers via RMQ (batch)
@@ -3325,7 +3712,619 @@ export class OrderLifecycleService {
     return successRes({}, 200, 'Orders received');
   }
 
-  async receiveExternalOrders(dto: { integration_id: string; orders: any[] }) {
+  /**
+   * TASHQI POSILKANI SKANERLAB QABUL QILISH.
+   *
+   * Operator posilkani qo'lida ushlab yorliqdagi QR'ni skanerlaydi. Server
+   * tokenni BUYURTMAGA moslaydi — ya'ni "qabul qildim" degan yozuv faqat
+   * jismonan qo'lda bo'lgan posilka uchun paydo bo'ladi.
+   *
+   * NEGA TOKEN, ID EMAS. Ilgari frontend skanerlagan tokenni o'zi
+   * buyurtmaga moslab, serverga `order_ids` yuborardi. Ya'ni server
+   * skanerlash bo'lgan-bo'lmaganini BILMASDI va darvozani chetlab o'tish
+   * mumkin edi (audit K2). Token serverga kelganda dalil serverda bo'ladi.
+   *
+   * ⚠️ TOPILMAGAN TOKENLAR JIMGINA TASHLANMAYDI — javobda qaytadi.
+   * Operator nechta posilka qabul qilinmaganini va nima uchun bilishi kerak,
+   * aks holda qolib ketgan posilkani hech kim sezmaydi.
+   */
+  async receiveExternalByScan(input: {
+    tokens: string[];
+    requester?: { id?: string; roles?: string[] } | null;
+  }) {
+    const tokens = Array.from(
+      new Set(
+        (input.tokens ?? []).map((t) => String(t ?? '').trim()).filter(Boolean),
+      ),
+    );
+    if (!tokens.length) {
+      this.badRequest('tokens is required');
+    }
+    /**
+     * Bir so'rovda qabul qilinadigan posilka soni chegaralangan: skaner
+     * sessiyasi odatda o'nlab posilka, mingtalik so'rov esa tranzaksiyani
+     * uzoq ushlab turardi.
+     */
+    if (tokens.length > 200) {
+      this.badRequest('bir so‘rovda 200 tadan ko‘p token yuborib bo‘lmaydi');
+    }
+
+    const orders = await this.orderRepo.find({
+      where: {
+        qr_code_token: In(tokens),
+        isDeleted: false,
+        status: Order_status.NEW,
+        source: Order_source.EXTERNAL,
+      },
+    });
+
+    /**
+     * Topilmagan tokenlar SABABI bilan ajratiladi. Bitta umumiy "topilmadi"
+     * xabari operatorni ko'r qoldirardi: token boshqa manbadan bo'lishi,
+     * allaqachon qabul qilingan bo'lishi yoki umuman tizimda bo'lmasligi
+     * mumkin — bular uch xil harakat talab qiladi.
+     */
+    const matched = new Map(orders.map((o) => [String(o.qr_code_token), o]));
+    const unmatched: Array<{ token: string; reason: string }> = [];
+    for (const token of tokens) {
+      if (matched.has(token)) continue;
+      const anyOrder = await this.orderRepo.findOne({
+        where: { qr_code_token: token, isDeleted: false },
+      });
+      if (!anyOrder) {
+        unmatched.push({ token, reason: 'tizimda topilmadi' });
+      } else if (anyOrder.source !== Order_source.EXTERNAL) {
+        unmatched.push({ token, reason: 'tashqi posilka emas' });
+      } else if (anyOrder.status !== Order_status.NEW) {
+        unmatched.push({
+          token,
+          reason: `allaqachon '${anyOrder.status}' holatida`,
+        });
+      } else {
+        unmatched.push({ token, reason: 'qabul qilib bo‘lmadi' });
+      }
+    }
+
+    if (!orders.length) {
+      return successRes(
+        { received: 0, unmatched },
+        200,
+        'No scannable parcels matched',
+      );
+    }
+
+    /**
+     * Qabul qilishning O'ZI mavjud yo'ldan o'tadi — filial doirasi, mijoz
+     * tekshiruvi, tuman→viloyat xaritasi va POCHTAGA AJRATISH allaqachon
+     * o'sha yerda. Nusxa ko'chirsak ikki yo'l asta bir-biridan farq qila
+     * boshlardi.
+     *
+     * `scanVerified` — skanerlash DALILI serverda tekshirilgani belgisi.
+     */
+    const result = await this.receiveNewOrders(
+      orders.map((o) => o.id),
+      undefined,
+      input.requester,
+      { scanVerified: true },
+    );
+
+    return successRes(
+      {
+        received: orders.length,
+        unmatched,
+        detail: (result as { data?: unknown })?.data ?? null,
+      },
+      200,
+      'Scanned parcels received',
+    );
+  }
+
+  /**
+   * TASHQI BUYURTMANI QABUL QILISH.
+   *
+   * `options.strict` — CHAQIRUVCHI TAXMIN QILISHNI TAQIQLAYDI.
+   *
+   * ⚠️ NEGA KERAK BO'LDI (adversarial tekshiruv). Tortib olish yo'lida
+   * importni operator qo'lda ishga tushiradi va natijani ko'radi. CRM
+   * webhooki esa to'xtovsiz keladi va hech kim qaramaydi — shu bois
+   * "aniqlanmasa taxmin qil" xatti-harakati o'sha yerda xavfli:
+   *
+   *   • tuman mos kelmasa zaxira = JADVALDAGI BIRINCHI tuman, ya'ni posilka
+   *     jimgina boshqa viloyatga ketardi (tuman tarifni ham belgilaydi);
+   *   • narx kaliti mos kelmasa 0, ya'ni COD 0 bo'lib pul yo'qolardi.
+   *
+   * `strict: true` bo'lsa bunday qator YARATILMAYDI — `skipped` ga aniq
+   * sabab bilan tushadi va webhook jurnalida ko'rinadi.
+   */
+  /**
+   * ONLAYN TO'LANGAN BUYURTMA NAQD OQIMIDAN O'TMAYDI (7-bosqich).
+   *
+   * ⚠️ NEGA ALOHIDA METOD. Darvoza IKKI joyda kerak: `sellOrder` va
+   * `partlySellOrder`. Ikkinchisi ayni kassa matematikasini bajaradi va
+   * ilgari tekshirilmagani uchun darvozani chetlab o'tishning tayyor yo'li
+   * bo'lgan (adversarial topilma). Bitta joyda yozilsa, keyingi sotuv
+   * yo'li qo'shilganda ham unutilishi ehtimoli kamayadi.
+   *
+   * ⚠️ Bo'sh satr ham `null` kabi "to'lov yo'q" deb qabul qilinadi —
+   * `if (order.payment_status)` allaqachon shunday ishlaydi, lekin buni
+   * ATAYLAB ekanini yozib qo'yish kerak: bo'sh satrni "to'langan" deb
+   * o'qish barcha oddiy buyurtmalarni to'sib qo'yardi.
+   */
+  private assertNotOnlinePaid(order: Order): void {
+    const state = String(order.payment_status ?? '').trim();
+    if (!state) return;
+
+    this.badRequest(
+      `Bu buyurtma onlayn to‘langan (${state}, ` +
+        `${Number(order.paid_online_amount ?? 0)} so‘m) — naqd sotuv oqimi ` +
+        'undan pul yig‘ilgandek hisoblaydi va kassa balansini buzadi. ' +
+        'Onlayn to‘lov uchun pul modeli hali kelishilmagan: marketga qarz, ' +
+        'kuryer tarifi va kompaniya kirimi qanday yozilishi aniqlanishi kerak.',
+    );
+  }
+
+  /**
+   * ONLAYN TO'LOVNI BUYURTMAGA QAYD ETISH (7-bosqich).
+   *
+   * ⚠️ PULNI KASSAGA KO'CHIRMAYDI. Foydalanuvchi qarori (2026-09-13):
+   * onlayn pul hozircha kassaga yozilmaydi, faqat daftarga. Bu metod
+   * buyurtmadagi IKKI maydonni yangilaydi va shu bilan tugaydi —
+   * `markByProvider` dagi ayni naqsh ("status-only, moliya emitsiz").
+   *
+   * ⚠️ NEGA BITTA METOD. Buyurtmani topish, summani tekshirish va yozish —
+   * uchalasi ayni yerda, order-service ichida. Ular integration-service'ga
+   * bo'linsa, "topdim → boshqa jarayon o'zgartirdi → yozdim" poygasi
+   * paydo bo'lardi. Dublikatning qat'iy to'sig'i esa chaqiruvchida
+   * (`payment_transactions` UNIQUE).
+   */
+  async recordOnlinePayment(input: {
+    integration_slug?: string;
+    provider_transaction_id?: string;
+    /**
+     * Ulanish bog'langan market (bo'lsa). Berilgan bo'lsa buyurtma AYNI
+     * marketga tegishli bo'lishi shart — aks holda bir marketning to'lov
+     * tizimi boshqa marketning buyurtmasini "to'langan" deb belgilay olardi.
+     */
+    integration_market_id?: string | null;
+    order_ref?: string;
+    /** Havola qaysi maydonga tegishli. Sukut: buyurtma raqami. */
+    /**
+     * Havola qaysi maydonga tegishli.
+     *
+     * ⚠️ ELCHI'DA `order_number` USTUNI YO'Q — buyurtma raqami `id`ning
+     * O'ZI (`order-service.service.ts` — `order_number: String(order.id)`).
+     * PCS/BeePost'da alohida `order_number` ketma-ketligi bor, bu yerda
+     * esa yo'q; ikkisini aralashtirmaslik kerak.
+     */
+    order_ref_field?: 'id' | 'external_id' | 'qr_code_token';
+    amount?: unknown;
+    currency?: string;
+    /** BIZNING holat: provayderning xom holati chaqiruvchida xaritalanadi. */
+    status?: string;
+  }) {
+    const ref = String(input?.order_ref ?? '').trim();
+    if (!ref) {
+      return successRes(
+        { outcome: 'order_ref_missing' },
+        200,
+        'to‘lov havolasi yo‘q',
+      );
+    }
+
+    /**
+     * FAQAT `succeeded` va `refunded` buyurtmaga tegadi.
+     *
+     * `pending` — pul hali kelmagan (to'lov tizimi tranzaksiyani band
+     * qilgan). Uni "to'langan" deb belgilash eng xavfli xato bo'lardi:
+     * kuryer naqd yig'masdi, pul esa kelmasdi.
+     * `failed` — yozuv sifatida saqlanadi, lekin qo'llanmaydi.
+     */
+    const status = String(input?.status ?? '').toLowerCase();
+    if (status !== 'succeeded' && status !== 'refunded') {
+      return successRes(
+        { outcome: 'ignored_status', status },
+        200,
+        'to‘lov holati qo‘llanmadi',
+      );
+    }
+
+    const amount = this.safeExternalAmount(input?.amount);
+    if (amount === null || amount <= 0) {
+      this.logger.warn(
+        `online payment REFUSED: summa yaroqsiz (${String(input?.amount)})`,
+      );
+      return successRes(
+        { outcome: 'amount_invalid' },
+        200,
+        'to‘lov summasi yaroqsiz',
+      );
+    }
+
+    const field = input?.order_ref_field ?? 'id';
+    /**
+     * ⚠️ Maydon nomi FOYDALANUVCHI SOZLAMASIDAN keladi — uni
+     * to'g'ridan-to'g'ri `where` ga qo'yish mumkin emas. Faqat oq ro'yxat.
+     */
+    const where: Record<string, unknown> = { isDeleted: false };
+    if (field === 'external_id') {
+      where.external_id = ref;
+    } else if (field === 'qr_code_token') {
+      where.qr_code_token = ref;
+    } else {
+      /**
+       * `id` — bigint. Son bo'lmagan havolani `where` ga qo'ysak Postgres
+       * `22P02` tip xatosi beradi va webhook 500 bilan yiqilardi; provayder
+       * esa qayta-qayta yuborishni boshlardi.
+       */
+      if (!/^\d+$/.test(ref)) {
+        return successRes(
+          { outcome: 'order_not_found', reason: 'id son emas' },
+          200,
+          'buyurtma topilmadi',
+        );
+      }
+      where.id = ref;
+    }
+
+    /**
+     * ⚠️ IKKITA QATOR TOPILSA RAD ETILADI (adversarial topilma).
+     *
+     * `external_id` va `qr_code_token` ustunlari UNIQUE EMAS
+     * (`order.entity.ts` — indeks ataylab unique qilinmagan, chunki eski
+     * ma'lumotda dublikat bor). `findOne` esa tartibsiz BITTASINI oladi —
+     * ya'ni to'lov BOSHQA mijozning buyurtmasiga yozilishi mumkin edi va
+     * u posilka "to'langan" bo'lib ketardi.
+     *
+     * Ikkitani so'raymiz: bittadan ko'p bo'lsa qaysi biri ekani NOMA'LUM
+     * va taxmin qilish pul bilan qilinadigan eng yomon ish.
+     */
+    const matches = await this.orderRepo.find({ where, take: 2 });
+    if (matches.length > 1) {
+      this.logger.warn(
+        `online payment REFUSED: ${field}=${ref} bo‘yicha ${matches.length} ` +
+          'buyurtma topildi — qaysi biri ekani noma‘lum',
+      );
+      return successRes(
+        { outcome: 'order_ref_ambiguous', matches: matches.length },
+        200,
+        'havola bir nechta buyurtmaga mos keldi',
+      );
+    }
+    const order = matches[0];
+    if (!order) {
+      this.logger.warn(
+        `online payment: buyurtma topilmadi (${field}=${ref}) — ` +
+          'pul keldi, lekin bog‘lanmadi',
+      );
+      return successRes(
+        { outcome: 'order_not_found' },
+        200,
+        'buyurtma topilmadi',
+      );
+    }
+
+    /**
+     * ⚠️ YOPILGAN BUYURTMAGA QO'LLANMAYDI.
+     *
+     * Buyurtma allaqachon sotilgan bo'lsa, kuryer naqd pulni YIG'IB
+     * BO'LGAN. Ustiga onlayn to'lovni qo'shsak, mijoz IKKI MARTA to'lagan
+     * bo'lib chiqadi va tizim buni "hammasi joyida" deb ko'rsatardi.
+     * Bu holat qaytarish (refund) talab qiladi — bu ODAM qarori, avtomatik
+     * hal qilinmaydi. Shu bois natija KO'RINADIGAN qilinadi.
+     */
+    /**
+     * ⚠️ TENANT DARVOZASI (adversarial topilma).
+     *
+     * Ulanish ma'lum bir marketga bog'langan bo'lsa (`market_id`), to'lov
+     * FAQAT o'sha marketning buyurtmasiga yozilishi mumkin. Busiz bir
+     * marketning to'lov tizimi (yoki uning kaliti qo'lga tushgan odam)
+     * tizimdagi ISTALGAN buyurtmani "to'langan" deb belgilab, kuryerni
+     * naqd yig'ishdan to'sib qo'yardi.
+     *
+     * Ulanishda market bog'lanmagan bo'lsa (kompaniya umumiy merchant
+     * akkaunti) tekshiruv o'tkazib yuboriladi — bu qonuniy holat.
+     */
+    const tenantMarket = String(input?.integration_market_id ?? '').trim();
+    if (tenantMarket && String(order.market_id) !== tenantMarket) {
+      this.logger.warn(
+        `online payment REFUSED for order ${order.id}: ulanish marketi ` +
+          `${tenantMarket}, buyurtma marketi ${order.market_id}`,
+      );
+      await this.activityLog.log({
+        entity_type: 'Order',
+        entity_id: String(order.id),
+        action: ActivityAction.PAYMENT,
+        new_value: {
+          outcome: 'market_mismatch',
+          integration_market_id: tenantMarket,
+          order_market_id: String(order.market_id),
+          provider: input?.integration_slug ?? null,
+        },
+      });
+      return successRes(
+        {
+          outcome: 'market_mismatch',
+          order_id: String(order.id),
+        },
+        200,
+        'to‘lov boshqa marketning buyurtmasiga tegishli',
+      );
+    }
+
+    /**
+     * ⚠️ QAYTARISH YOPILGAN BUYURTMADA HAM QAYD ETILADI (adversarial topilma).
+     *
+     * Ilgari "yopilgan" darvozasi qaytarishdan OLDIN turardi, ya'ni bekor
+     * qilingan yoki qaytarilgan buyurtmaning qaytarilgan puli
+     * STRUKTURAVIY ravishda yozib bo'lmasdi — aynan eng kerakli holat.
+     *
+     * Qaytarish majburiyat YARATMAYDI, u `paid_online_amount` ni
+     * KAMAYTIRADI; shu bois yopilgan buyurtmada ham xavfsiz.
+     */
+    const isRefund = status === 'refunded';
+
+    const CLOSED_STATES: string[] = [
+      Order_status.SOLD,
+      Order_status.PAID,
+      Order_status.PARTLY_PAID,
+      Order_status.CANCELLED,
+      Order_status.CANCELLED_SENT,
+      Order_status.RETURNED_TO_MARKET,
+      Order_status.CLOSED,
+    ];
+    if (!isRefund && CLOSED_STATES.includes(order.status)) {
+      this.logger.warn(
+        `online payment REFUSED for order ${order.id}: ` +
+          `status=${order.status} — kuryer naqd yig‘gan bo‘lishi mumkin, ` +
+          'qo‘lda ko‘rib chiqish kerak',
+      );
+      await this.activityLog.log({
+        entity_type: 'Order',
+        entity_id: String(order.id),
+        action: ActivityAction.PAYMENT,
+        new_value: {
+          outcome: 'order_already_closed',
+          order_status: order.status,
+          amount,
+          provider: input?.integration_slug ?? null,
+          provider_transaction_id: input?.provider_transaction_id ?? null,
+        },
+      });
+      return successRes(
+        {
+          outcome: 'order_already_closed',
+          order_id: String(order.id),
+          order_number: order.id,
+          order_status: order.status,
+        },
+        200,
+        'buyurtma yopilgan — to‘lov qo‘llanmadi',
+      );
+    }
+
+    const before = Number(order.paid_online_amount ?? 0);
+    const total = Number(order.total_price ?? 0);
+
+    if (isRefund) {
+      /**
+       * Qaytarish — `paid_online_amount` kamayadi, 0 dan pastga tushmaydi.
+       * Manfiy qoldiq "biz mijozga qarzdormiz" degan MA'NOSI boshqa narsa
+       * va u bu maydonda ifodalanmasligi kerak.
+       */
+      const after = Math.max(before - amount, 0);
+      await this.applyOnlinePaymentToOrder(order, after, total, {
+        status,
+        amount,
+        input,
+        before,
+      });
+      return successRes(
+        {
+          outcome: 'recorded',
+          order_id: String(order.id),
+          order_number: order.id,
+          paid_online_amount: after,
+          payment_status: this.derivePaymentState(after, total),
+        },
+        200,
+        'qaytarish qayd etildi',
+      );
+    }
+
+    const after = before + amount;
+    /**
+     * ⚠️ ORTIQCHA TO'LOV QO'LLANMAYDI.
+     *
+     * Summa buyurtma narxidan oshsa, eng ehtimolli sabab — to'lov
+     * NOTO'G'RI buyurtmaga moslashtirilgan (havola takrorlangan yoki
+     * provayder boshqa raqam yubordi). Uni qabul qilsak, mijoz to'lamagan
+     * buyurtma "to'langan" bo'lib qolardi va kuryer puldan qaytardi.
+     *
+     * 1 so'm bag'rikenglik — tiyin yumaloqlanishi uchun.
+     */
+    if (after > total + 1) {
+      this.logger.warn(
+        `online payment REFUSED for order ${order.id}: ` +
+          `${after} > total ${total} — noto‘g‘ri moslashtirish ehtimoli`,
+      );
+      await this.activityLog.log({
+        entity_type: 'Order',
+        entity_id: String(order.id),
+        action: ActivityAction.PAYMENT,
+        new_value: {
+          outcome: 'amount_exceeds_total',
+          amount,
+          already_paid_online: before,
+          total_price: total,
+          provider: input?.integration_slug ?? null,
+          provider_transaction_id: input?.provider_transaction_id ?? null,
+        },
+      });
+      return successRes(
+        {
+          outcome: 'amount_exceeds_total',
+          order_id: String(order.id),
+          order_number: order.id,
+          total_price: total,
+          already_paid_online: before,
+        },
+        200,
+        'to‘lov summasi buyurtma narxidan oshdi',
+      );
+    }
+
+    const applied = await this.applyOnlinePaymentToOrder(order, after, total, {
+      status,
+      amount,
+      input,
+      before,
+    });
+    /**
+     * Poygada chegara buzilgan — boshqa to'lov bir vaqtda o'tib ketgan.
+     * Natija ortiqcha to'lov bilan AYNI: summa sig'maydi.
+     */
+    if (!applied) {
+      return successRes(
+        {
+          outcome: 'amount_exceeds_total',
+          order_id: String(order.id),
+          order_number: order.id,
+          total_price: total,
+          already_paid_online: before,
+          race: true,
+        },
+        200,
+        'to‘lov summasi buyurtma narxidan oshdi (poyga)',
+      );
+    }
+
+    return successRes(
+      {
+        outcome: 'recorded',
+        order_id: String(order.id),
+        order_number: order.id,
+        paid_online_amount: after,
+        payment_status: this.derivePaymentState(after, total),
+      },
+      200,
+      'to‘lov qayd etildi',
+    );
+  }
+
+  /**
+   * Onlayn to'lov holatini summadan kelib chiqib aniqlash.
+   *
+   * ⚠️ `Order_status.PAID`/`PARTLY_PAID` BILAN ARALASHTIRMANG — ular market
+   * bilan hisob-kitob haqida, bu esa MIJOZNING to'lovi haqida.
+   */
+  private derivePaymentState(paidOnline: number, total: number): string | null {
+    if (paidOnline <= 0) return null;
+    // 1 so'm bag'rikenglik — tiyin yumaloqlanishi uchun.
+    return paidOnline + 1 >= total ? 'paid' : 'partly';
+  }
+
+  /**
+   * To'lovni buyurtmaga ATOMIK yozish.
+   *
+   * ⚠️ NEGA `update({ paid_online_amount: after })` YETMAYDI (adversarial
+   * topilma). U "o'qi → hisobla → yoz" ketma-ketligi: bir buyurtmaga ikki
+   * to'lov bir vaqtda kelsa (qismiy to'lovlar, turli tranzaksiyalar)
+   * ikkisi ham ayni `before` ni o'qib, biri ikkinchisini USTIGA yozardi —
+   * ya'ni bitta to'lov JIMGINA yo'qolardi.
+   *
+   * Endi qiymat SQL ichida oshiriladi (`paid_online_amount + :amt`) va
+   * chegara `WHERE` ichida tekshiriladi — ya'ni tekshiruv va yozish bitta
+   * atomik amalda. `affected === 0` bo'lsa chegara buzilgan (poyga ichida
+   * boshqa to'lov o'tib ketgan).
+   *
+   * `payment_status` ham SQL ichida hisoblanadi: uni JS'da hisoblab
+   * yuborsak, yana eskirgan qiymatga tayangan bo'lardik.
+   */
+  private async applyOnlinePaymentToOrder(
+    order: Order,
+    after: number,
+    total: number,
+    ctx: {
+      status: string;
+      amount: number;
+      before: number;
+      input: { integration_slug?: string; provider_transaction_id?: string };
+    },
+  ): Promise<boolean> {
+    const isRefund = ctx.status === 'refunded';
+    const nextState = this.derivePaymentState(after, total);
+
+    /**
+     * Yangi qiymat ifodasi. Qaytarishda 0 dan pastga tushmaydi
+     * (`GREATEST`), to'lovda esa oddiy qo'shish.
+     */
+    const nextAmountSql = isRefund
+      ? 'GREATEST("paid_online_amount" - :amt, 0)'
+      : '"paid_online_amount" + :amt';
+
+    /**
+     * Holat AYNI ifodadan hisoblanadi. 1 so'm bag'rikenglik tiyin
+     * yumaloqlanishi uchun — `derivePaymentState` bilan bir xil qoida.
+     */
+    const nextStateSql =
+      `CASE WHEN ${nextAmountSql} <= 0 THEN NULL ` +
+      `WHEN ${nextAmountSql} + 1 >= "total_price" THEN 'paid' ` +
+      `ELSE 'partly' END`;
+
+    const qb = this.orderRepo
+      .createQueryBuilder()
+      .update(Order)
+      .set({
+        paid_online_amount: () => nextAmountSql,
+        payment_status: () => nextStateSql,
+      })
+      .where('id = :id', { id: order.id })
+      .setParameter('amt', ctx.amount);
+
+    /**
+     * ⚠️ CHEGARA FAQAT TO'LOVDA. Qaytarish summani kamaytiradi — u yerda
+     * "narxdan oshmasin" sharti ma'nosiz va qaytarishni bloklardi.
+     */
+    if (!isRefund) {
+      qb.andWhere('"paid_online_amount" + :amt <= "total_price" + 1');
+    }
+
+    const result = await qb.execute();
+    if (!result.affected) {
+      this.logger.warn(
+        `online payment LOST RACE for order ${order.id}: chegara buzilgan ` +
+          '(bir vaqtda boshqa to‘lov o‘tib ketgan)',
+      );
+      return false;
+    }
+
+    await this.activityLog.log({
+      entity_type: 'Order',
+      entity_id: String(order.id),
+      action: ActivityAction.PAYMENT,
+      old_value: {
+        paid_online_amount: ctx.before,
+        payment_status: order.payment_status ?? null,
+      },
+      new_value: {
+        paid_online_amount: after,
+        payment_status: nextState,
+        event: ctx.status,
+        amount: ctx.amount,
+        provider: ctx.input.integration_slug ?? null,
+        provider_transaction_id: ctx.input.provider_transaction_id ?? null,
+      },
+      metadata: { order_number: order.id },
+    });
+    return true;
+  }
+
+  async receiveExternalOrders(dto: {
+    integration_id: string;
+    orders: any[];
+    options?: { strict?: boolean };
+  }) {
+    const strict = Boolean(dto?.options?.strict);
     const integration = await this.lookup.getIntegrationById(
       String(dto.integration_id),
     );
@@ -3400,14 +4399,60 @@ export class OrderLifecycleService {
         continue;
       }
 
+      /**
+       * Tashqi yozuvdan mahsulot qatorlarini o'qish.
+       *
+       * `items_field` — massiv qaysi maydonda; `item_name_field` /
+       * `item_qty_field` — massiv ichidagi element maydonlari. Uchalasi ham
+       * sozlanadi, chunki har sayt boshqacha nomlaydi.
+       *
+       * Massiv bo'lmasa yoki nom bo'sh bo'lsa qator TASHLANADI — yarim
+       * to'ldirilgan qator buyurtmani buzardi.
+       */
+      const rawItems = this.getFieldValue(
+        ext,
+        fieldMapping.items_field ?? 'items',
+      );
+      const mappedItems = (Array.isArray(rawItems) ? rawItems : [])
+        .map((row: unknown) => {
+          const name = String(
+            this.getFieldValue(row, fieldMapping.item_name_field ?? 'name') ??
+              '',
+          ).trim();
+          const qtyRaw = Number(
+            this.getFieldValue(
+              row,
+              fieldMapping.item_qty_field ?? 'quantity',
+            ) ?? 1,
+          );
+          return {
+            product_id: null,
+            product_name: name,
+            quantity: Number.isFinite(qtyRaw) && qtyRaw > 0 ? qtyRaw : 1,
+          };
+        })
+        .filter((item) => item.product_name.length > 0);
+
       const districtExternal = this.getFieldValue(
         ext,
         fieldMapping.district_code_field ?? 'district',
       );
-      const districtId = await this.lookup.resolveDistrictId(
-        districtExternal,
-        fallbackDistrictId,
-      );
+      /**
+       * ⚠️ Qat'iy rejimda ANIQLANGAN tuman talab qilinadi. Moslik faqat
+       * SOATO kodi yoki ichki ID bo'yicha izlanadi — NOM bo'yicha emas,
+       * ya'ni "Chilonzor" deb yuborgan tizim hech qachon mos kelmaydi va
+       * zaxira tuman ishlatilardi.
+       */
+      const resolvedDistrict =
+        await this.lookup.resolveDistrictIdOrNull(districtExternal);
+      if (strict && !resolvedDistrict) {
+        skipped.push({
+          external_id: externalId,
+          reason: 'district_unresolved',
+        });
+        continue;
+      }
+      const districtId = resolvedDistrict ?? fallbackDistrictId;
       const regionExternal = this.getFieldValue(
         ext,
         fieldMapping.region_code_field ?? 'region',
@@ -3447,22 +4492,69 @@ export class OrderLifecycleService {
         continue;
       }
 
-      const totalPrice = Number(
-        this.getFieldValue(
-          ext,
-          fieldMapping.total_price_field ?? 'total_price',
-        ) ?? 0,
+      /**
+       * ⚠️ NARX — `Number()` NI XOM ISHLATISH MUMKIN EMAS (adversarial
+       * tekshiruv, kritik).
+       *
+       * `Number('250 000')` → `NaN`, `Math.max(NaN, 0)` → `NaN`. Postgres
+       * `numeric` ustuni `NaN` ni QABUL QILADI, ya'ni xato chiqmaydi:
+       * buyurtma yaratiladi va undan keyin market hisobi, kassa yig'indisi,
+       * dashboard — hammasi `NaN` bo'lib qoladi. Bu eng yomon turdagi
+       * xato: jimgina va butun moliyani zaharlaydi.
+       *
+       * Endi son bo'lmagan qiymat qatorni TASHLAYDI (har qanday
+       * chaqiruvchida — `NaN` narx hech kim uchun to'g'ri emas).
+       */
+      const priceRaw = this.getFieldValue(
+        ext,
+        fieldMapping.total_price_field ?? 'total_price',
       );
-      const deliveryPrice = Number(
-        this.getFieldValue(
-          ext,
-          fieldMapping.delivery_price_field ?? 'delivery_price',
-        ) ?? 0,
+      const deliveryRaw = this.getFieldValue(
+        ext,
+        fieldMapping.delivery_price_field ?? 'delivery_price',
       );
+      const totalPrice = this.safeExternalAmount(priceRaw);
+      const deliveryPrice = this.safeExternalAmount(deliveryRaw);
+      if (totalPrice === null || deliveryPrice === null) {
+        skipped.push({ external_id: externalId, reason: 'price_invalid' });
+        continue;
+      }
+      /**
+       * Qat'iy rejimda NARX BERILGAN bo'lishi shart. Kalit mos kelmasa
+       * `undefined` → 0 bo'lib ketardi, ya'ni COD 0: kuryer puldan
+       * qaytardi va hech kim sababini bilmasdi.
+       */
+      if (strict && (priceRaw == null || priceRaw === '')) {
+        skipped.push({ external_id: externalId, reason: 'price_missing' });
+        continue;
+      }
       const finalPrice = Math.max(totalPrice, 0) + Math.max(deliveryPrice, 0);
-      const qrCode =
-        this.getFieldValue(ext, fieldMapping.qr_code_field ?? 'qr_code') ??
-        this.generateCustomToken();
+
+      /**
+       * SKAN TOKENI — TO'QNASHUV TEKSHIRUVI (adversarial tekshiruv).
+       *
+       * `qr_code_field` ATAYLAB qoladi: tashqi sayt o'z shtrix-kodini
+       * posilkaga bosib chiqaradi va pochta AYNI o'sha kodni skaner qiladi
+       * (foydalanuvchi so'ragan oqim). Lekin token skanerlab qabul qilish
+       * darvozasining KALITI — dublikat bo'lsa skanerlash BOSHQA
+       * buyurtmaga tushib ketardi.
+       */
+      const qrRaw = this.getFieldValue(
+        ext,
+        fieldMapping.qr_code_field ?? 'qr_code',
+      );
+      const providedQr = qrRaw == null ? '' : String(qrRaw).trim();
+      if (providedQr) {
+        const clash = await this.orderRepo.findOne({
+          where: { qr_code_token: providedQr, isDeleted: false },
+          select: { id: true },
+        });
+        if (clash) {
+          skipped.push({ external_id: externalId, reason: 'qr_code_conflict' });
+          continue;
+        }
+      }
+      const qrCode = providedQr || this.generateCustomToken();
 
       const createdOrder = await this.create({
         market_id: marketId,
@@ -3471,19 +4563,55 @@ export class OrderLifecycleService {
         total_price: finalPrice,
         to_be_paid: 0,
         paid_amount: 0,
-        status: Order_status.RECEIVED,
+        /**
+         * ⚠️ ILGARI `RECEIVED` EDI va bu buyurtmani ORALIQDA qoldirardi
+         * (audit EI-05): "Kiruvchi posilkalar" ekrani `NEW` so'raydi, ya'ni
+         * import qilingan buyurtma skanerlash ro'yxatida KO'RINMASDI; pochta
+         * ham tayinlanmasdi (bu metod post yozmaydi). Natijada buyurtma
+         * bazada bor, operator uchun esa mavjud emas.
+         *
+         * Endi `NEW`: posilka jismonan kelganda skanerlanadi va aynan
+         * o'shanda pochtaga ajratiladi (`receiveNewOrders` → post assign).
+         */
+        status: Order_status.NEW,
         comment:
           this.getFieldValue(ext, fieldMapping.comment_field ?? 'comment') ??
           null,
         operator,
         district_id: districtId,
-        region_id: regionExternal == null ? null : String(regionExternal),
+        /**
+         * ⚠️ ILGARI TASHQI QIYMAT XOM YOZILARDI va bu 500 berardi (audit
+         * EI-06): `region_id` — bigint FK, sayt esa u yerga "Toshkent" yoki
+         * "TSH" kabi matn yuborishi mumkin. Postgres tip xatosi
+         * (`22P02`) chiqarardi va import BITTALAB ketgani uchun partiya
+         * YARIM YO'LDA uzilardi — bir qismi yaratilib, qolgani yo'q.
+         *
+         * Endi faqat SON qabul qilinadi. Matn bo'lsa `null`: bu xavfsiz,
+         * chunki marshrutlash `order.region_id` ga TAYANMAYDI — pochtaga
+         * ajratish tumandan olingan `assigned_region` bo'yicha ishlaydi
+         * (`receiveNewOrders` → `logistics.district.find_by_ids`).
+         */
+        region_id: this.numericRegionId(regionExternal),
         address:
           this.getFieldValue(ext, fieldMapping.address_field ?? 'address') ??
           null,
         qr_code_token: qrCode == null ? null : String(qrCode),
         external_id: externalId,
         source: Order_source.EXTERNAL,
+        /**
+         * MAHSULOT QATORLARI (audit EI-12).
+         *
+         * Ilgari import qilingan buyurtmada item UMUMAN yo'q edi: operator
+         * narxi bor, lekin ichida NIMA borligi ko'rinmaydigan posilkani
+         * ko'rardi. Qisman sotishda esa qatorsiz buyurtma bilan ishlab
+         * bo'lmaydi.
+         *
+         * ⚠️ KATALOGGA BOG'LANMAYDI (`product_id: null`). Kichik saytlar
+         * uchun ataylab shunday: ularning mahsulot id'lari bizning
+         * katalogimizga mos kelmaydi va har nomni katalogda yaratish
+         * katalogni axlatga to'ldirardi. Nom va soni yetarli.
+         */
+        items: mappedItems,
       });
 
       created.push({
@@ -3528,6 +4656,36 @@ export class OrderLifecycleService {
     if (!order.post_id) {
       this.badRequest('Order has no post');
     }
+
+    /**
+     * ⚠️ ONLAYN TO'LANGAN BUYURTMA ODDIY SOTUV OQIMIDAN O'TMAYDI (7-bosqich).
+     *
+     * NEGA RAD ETILADI, NEGA "JIMGINA HISOBLAB" O'TMAYDI. Butun kassa
+     * matematikasi kuryer MIJOZDAN NAQD YIG'GANIGA tayanadi:
+     *
+     *   courierIncome = total_price − courierShare   ← kuryer topshiradigan naqd
+     *   market        = total_price − market_tariff  ← marketga qoladigan
+     *   branchNet     = total_price − courierShare − branchShare
+     *
+     * Mijoz onlayn to'lagan bo'lsa naqd YO'Q, lekin bu formulalar o'zgarmaydi
+     * — ya'ni kuryer yig'MAGAN pulni topshirgandek yozilardi va kassa
+     * balansi jimgina buzilardi. Aynan shu turdagi xato eng qimmat: hech
+     * qanday xato chiqmaydi, faqat raqamlar noto'g'ri bo'ladi.
+     *
+     * ⚠️ TO'LIQ PUL MODELI HALI QAROR QILINMAGAN. Foydalanuvchi qarori
+     * (2026-09-13): onlayn pul kassaga yozilmaydi, marketga qarz
+     * yozilmaydi, kuryer tarifini esa HQ to'laydi. Bu uchtasi birgalikda
+     * HQ uchun ZARAR keltiradi (kirim yozilmaydi, chiqim yoziladi) va
+     * marketdan yetkazish haqini undiradigan maydon kodda YO'Q. Shu bois
+     * oyoqlarni yozib qo'yishdan ko'ra TO'XTATISH to'g'ri: xato ko'rinadi
+     * va tuzatiladi.
+     *
+     * BUGUN BU HOLAT YUZAGA KELMAYDI — hech bir to'lov provayderi
+     * ulanmagan, ya'ni `payment_status` hech qachon to'lmaydi. Darvoza
+     * provayder ulangan KUNI ishlaydi va noto'g'ri hisob-kitobni oldini
+     * oladi.
+     */
+    this.assertNotOnlinePaid(order);
 
     const postRes = await rmqSend<{
       data?: { id: string; courier_id?: string | null };
@@ -3600,20 +4758,32 @@ export class OrderLifecycleService {
 
     const marketBalanceBefore = Number(marketCashbox.balance ?? 0);
 
-    const marketTariff =
-      order.where_deliver === Where_deliver.CENTER
-        ? Number(market.tariff_center ?? 0)
-        : Number(market.tariff_home ?? 0);
-    const courierTariff =
-      order.where_deliver === Where_deliver.CENTER
-        ? Number(financialActor?.tariff_center ?? 0)
-        : Number(financialActor?.tariff_home ?? 0);
+    // Tariflar `resolveOrderTariff` orqali — buyurtmadagi override birinchi
+    // o'rinda. Ilgari AYNAN bu yo'l override'ni inkor qilib faqat live profildan
+    // olardi (partlySell va rollback esa snapshotni ustun qo'yardi), ya'ni kassa
+    // oyog'i bir tarif bilan, `sell_profit` va rollback boshqa tarif bilan
+    // hisoblanardi.
+    const marketTariff = resolveOrderTariff({
+      snapshot: order.market_tariff,
+      isCenter: order.where_deliver === Where_deliver.CENTER,
+      centerTariff: market.tariff_center,
+      homeTariff: market.tariff_home,
+    });
+    const courierTariff = resolveOrderTariff({
+      snapshot: order.courier_tariff,
+      isCenter: order.where_deliver === Where_deliver.CENTER,
+      centerTariff: financialActor?.tariff_center,
+      homeTariff: financialActor?.tariff_home,
+    });
     // courierShare = what the courier keeps (0 for salary-only couriers).
     const courierShare = this.resolveSaleActorShare(
       isManagerRequester,
       financialActor,
       courierTariff,
     );
+    // Tarif qoplamasa sotuv shu yerda to'xtaydi — tranzaksiyadan OLDIN, ya'ni
+    // hech bir kassa oyog'i yozilmaydi.
+    this.assertTariffCoversShares({ marketTariff, courierShare, branchShare });
     const actorExpenseUserId = isManagerRequester
       ? String(requester.branch_id ?? '')
       : actorCourierId;
@@ -3631,6 +4801,18 @@ export class OrderLifecycleService {
         actor: financialActor,
         requester,
         order,
+      });
+      // Ruxsatdan KEYIN summa chegarasi: "kim yozadi" va "qancha yozadi" —
+      // ikki xil savol, ikkinchisi ilgari umuman tekshirilmasdi.
+      this.assertExtraCostWithinLimit({
+        extraCost,
+        mode: 'sell',
+        whereDeliver: order.where_deliver,
+        tariffCenter: Number(financialActor?.tariff_center ?? 0),
+        tariffHome: Number(financialActor?.tariff_home ?? 0),
+        isManager:
+          this.hasRole(requester, Roles.MANAGER) &&
+          !this.hasRole(requester, Roles.COURIER),
       });
     }
     // Reject up front (before the transaction) if this market's proof policy is
@@ -3670,11 +4852,6 @@ export class OrderLifecycleService {
     const courierIncome = Math.max(totalPrice - courierShare, 0);
     const courierExpense = Math.max(courierShare - totalPrice, 0);
     const branchNet = totalPrice - courierShare - branchShare;
-    const branchCashboxAmount = this.resolveBranchCashboxSaleAmount(
-      totalPrice,
-      branchNet,
-      isManagerRequester,
-    );
     const saleComment =
       totalPrice === 0
         ? "0 so'mlik mahsulot sotuvi"
@@ -3784,32 +4961,24 @@ export class OrderLifecycleService {
         }
       }
 
-      // ---- Branch leg (branch ↔ HQ) — only for non-HQ branch sales ----
-      if (branchCashbox && settlementBranchId) {
-        if (branchCashboxAmount > 0) {
-          await pay({
-            user_id: settlementBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount: branchCashboxAmount,
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: saleComment,
-          });
-        } else if (branchCashboxAmount < 0) {
-          await pay({
-            user_id: settlementBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount: -branchCashboxAmount,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: saleComment,
-          });
-        }
-      }
+      /**
+       * ---- Filial oyog'i SOTUVDA YOZILMAYDI (audit M3) ----
+       *
+       * Ilgari bu yerda filial kassasiga `total − courierShare − branchShare`
+       * INCOME qilib yozilardi. Ayni summa kuryer kassasiga ham yozilardi, va
+       * keyin manager kuryerdan naqdni qabul qilganda filialga YANA yozilardi
+       * (`finance.cashbox.payment_courier`, qabul qiluvchi = BRANCH) — hech
+       * qanday kompensatsiya oyog'isiz. Natijada bitta pul filial kassasida
+       * ikki marta turardi: yo filial qarzi cheksiz shishardi, yo
+       * "filial → MAIN" o'tkazmasi MAIN'ga mavjud bo'lmagan pulni yozardi.
+       *
+       * Endi ma'no bitta: BRANCH kassa qoldig'i = FILIAL JISMONAN USHLAB
+       * TURGAN NAQD. U faqat kuryerdan pul qabul qilinganda ko'payadi va
+       * HQ'ga topshirilganda kamayadi — ya'ni managerning sanab topshiradigan
+       * pulini bildiradi. "Filial HQ'ga qancha qarz" degan savolga esa
+       * `order_settlement.branch_amount` javob beradi (buyurtma boshiga bir
+       * marta, qaysi bo'g'inda turganidan qat'i nazar).
+       */
 
       if (extraCost > 0) {
         await pay({
@@ -3857,14 +5026,23 @@ export class OrderLifecycleService {
           status: nextStatus,
           to_be_paid: netToBePaid,
           paid_amount: paidAfter,
+          // Buyurtmada SAQLANADI: ilgari faqat kassa tarixida qolardi va
+          // hamkorga (BeePost) umuman yetib bormasdi.
+          extra_cost: extraCost,
           sold_at: soldAt,
           // Snapshot tariffs + the actually-kept shares so SELL_PROFIT
           // (marketTariff − courierShare − branchShare) and rollback are exact.
-          market_tariff: order.market_tariff ?? marketTariff,
-          courier_tariff: order.courier_tariff ?? courierTariff,
+          // AYNAN kassa oyoqlarida ishlatilgan qiymat yoziladi (override bo'lsa
+          // `marketTariff` allaqachon undan olingan) — snapshot va yozilgan oyoq
+          // har doim bitta tarifga tayanadi.
+          market_tariff: marketTariff,
+          courier_tariff: courierTariff,
           courier_share: courierShare,
           branch_share: branchShare,
-          branch_cashbox_amount: branchCashboxAmount,
+          // Sotuvda filial kassasiga oyoq yozilmaydi (audit M3), shu bois
+          // qaytariladigan summa ham 0. Eski buyurtmalarda bu ustun real
+          // qiymat bilan to'lgan va rollback o'shani aynan teskari qiladi.
+          branch_cashbox_amount: 0,
           comment: finalComment || null,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
         },
@@ -3878,9 +5056,15 @@ export class OrderLifecycleService {
         courier_id: courierCashbox ? actorCourierId : null,
         branch_id: settlementBranchId,
         market_id: order.market_id ? String(order.market_id) : null,
-        courier_amount: courierIncome,
-        branch_amount: Math.max(branchNet, 0),
-        market_amount: marketIncome,
+        // Ishorali summalar (audit M10) + marketning qo'shimcha xarajati
+        // (audit M8): u sotuvda market kassasidan yechiladi, demak marketga
+        // qoladigan haqiqiy summa aynan shuncha kam. Ilgari ledger buni
+        // ko'rmasdi va solishtirish skripti farqni "extra-cost shovqini" deb
+        // kechirardi — ya'ni haqiqiy nomuvofiqlik ham o'sha bag'rikenglik
+        // ichida yashirinardi.
+        courier_amount: totalPrice - courierShare,
+        branch_amount: branchNet,
+        market_amount: totalPrice - marketTariff - extraCost,
         hasCourier: Boolean(courierCashbox),
       });
 
@@ -4006,6 +5190,18 @@ export class OrderLifecycleService {
         actor: financialActor,
         requester,
         order,
+      });
+      // Ruxsatdan KEYIN summa chegarasi: "kim yozadi" va "qancha yozadi" —
+      // ikki xil savol, ikkinchisi ilgari umuman tekshirilmasdi.
+      this.assertExtraCostWithinLimit({
+        extraCost,
+        mode: 'cancel',
+        whereDeliver: order.where_deliver,
+        tariffCenter: Number(financialActor?.tariff_center ?? 0),
+        tariffHome: Number(financialActor?.tariff_home ?? 0),
+        isManager:
+          this.hasRole(requester, Roles.MANAGER) &&
+          !this.hasRole(requester, Roles.COURIER),
       });
     }
 
@@ -4251,6 +5447,136 @@ export class OrderLifecycleService {
   }
 
   /**
+   * YETKAZISHDAN OLDIN bekor qilish — hamkor (Partner API) uchun tor yo'l.
+   *
+   * MUAMMO (audit F4). `cancelOrder` `WAITING` holat va `post_id` ni TALAB
+   * qiladi (`:4167`, `:4170`), chunki u pochta/kuryer/kassa qaytarishini
+   * bajaradi. Hamkor posilkasi esa yaratilgandan keyin `NEW` da turadi
+   * (skanerlanmaguncha) va mijoz aynan shu oynada buyurtmani bekor qiladi.
+   * O'sha holda `cancelOrder` xato berardi, `rmqRequest` esa uni yutib
+   * hamkorga **502** qaytarardi — ya'ni bekor qilishning eng ko'p
+   * uchraydigan holati umuman ishlamasdi.
+   *
+   * NEGA ALOHIDA METOD. `cancelOrder`ni yumshatish butun ilovaga ta'sir
+   * qiladi: u pochta soni, kuryer qarzi va kassa harakati bilan bog'langan.
+   * Bu metod esa FAQAT pul va pochta hali tegmagan holatlarda ishlaydi,
+   * shuning uchun qaytariladigan hech narsa yo'q.
+   *
+   * ⚠️ RUXSAT ETILGAN HOLATLAR ATAYLAB `CREATED` va `NEW` bilan
+   * CHEKLANGAN. `RECEIVED` bo'lsa buyurtma allaqachon POCHTAGA qo'shilgan
+   * (`receiveNewOrders` `post_id` yozadi) va uni bekor qilish pochta sonini
+   * ham tuzatishni talab qiladi — bu boshqa ish. Shu bois `RECEIVED` va
+   * undan keyingi holatlarda bu metod ATAYLAB rad etadi va chaqiruvchi
+   * hamkorga aniq sabab qaytaradi.
+   *
+   * Idempotent: allaqachon bekor qilingan bo'lsa xato bermaydi.
+   */
+  async cancelPreDeliveryOrder(input: {
+    order_id: string;
+    reason?: string | null;
+    /** Jurnalda kim bekor qilganini ko'rsatish uchun. */
+    actor?: string | null;
+  }) {
+    const order = await this.findById(String(input.order_id));
+    const oldStatus = order.status;
+
+    // Idempotentlik — qayta chaqirilsa muvaffaqiyat qaytadi.
+    if (
+      oldStatus === Order_status.CANCELLED ||
+      oldStatus === Order_status.CANCELLED_SENT
+    ) {
+      return successRes(
+        { id: order.id, status: order.status, idempotent: true },
+        200,
+        'Order already cancelled',
+      );
+    }
+
+    const allowed = [Order_status.CREATED, Order_status.NEW];
+    if (!allowed.includes(oldStatus)) {
+      /**
+       * 409 — "holat mos emas", 400 emas: so'rov to'g'ri, lekin buyurtma
+       * boshqa bosqichda. Hamkor shu farqni ko'rishi kerak, aks holda
+       * so'rovni takrorlab yurardi.
+       */
+      throw new RpcException({
+        statusCode: 409,
+        message:
+          `Buyurtma '${oldStatus}' holatida — yetkazishdan oldin bekor ` +
+          'qilish faqat qabul qilinmagan posilkada mumkin',
+      });
+    }
+
+    const note =
+      `Yetkazishdan oldin bekor qilindi` +
+      (input.reason ? `: ${input.reason}` : '') +
+      (input.actor ? ` (${input.actor})` : '');
+
+    const queryRunner = this.dataSource.createQueryRunner();
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+    try {
+      const orderRepo = queryRunner.manager.getRepository(Order);
+      const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+
+      order.status = Order_status.CANCELLED;
+      /**
+       * ⚠️ PUL VA POCHTA TEGILMAYDI va bu ataylab: `CREATED`/`NEW` holatda
+       * na kassa harakati, na `post_id` mavjud. Moliya emit yo'li ham
+       * chaqirilmaydi — qaytariladigan harakat yo'q.
+       */
+      await orderRepo.save(order);
+
+      await this.custody.createTrackingEvent(
+        {
+          order_id: order.id,
+          from_status: oldStatus,
+          to_status: Order_status.CANCELLED,
+          changed_by: 'system',
+          changed_by_role: 'system',
+          note,
+        },
+        trackingRepo,
+      );
+
+      await this.syncOrderToSearch(order, queryRunner.manager);
+      await queryRunner.commitTransaction();
+    } catch (error) {
+      await queryRunner.rollbackTransaction();
+      this.handleDbError(error);
+    } finally {
+      await queryRunner.release();
+    }
+
+    await this.activityLog.log({
+      entity_type: 'Order',
+      entity_id: String(order.id),
+      action: ActivityAction.STATUS_CHANGE,
+      old_value: { status: oldStatus },
+      new_value: { status: Order_status.CANCELLED },
+      metadata: { reason: input.reason ?? null, actor: input.actor ?? null },
+    });
+
+    /**
+     * Tashqi tizimga signal — hamkor o'z tomonida ham bekor qilganini
+     * ko'rishi kerak. `queueExternalStatusSync` `external_id` bo'lmasa
+     * o'zi hech narsa qilmaydi.
+     */
+    await this.queueExternalStatusSync(
+      order,
+      'canceled',
+      oldStatus,
+      Order_status.CANCELLED,
+    ).catch(() => undefined);
+
+    return successRes(
+      { id: order.id, status: Order_status.CANCELLED },
+      200,
+      'Order cancelled',
+    );
+  }
+
+  /**
    * Apply a terminal status reported by an external delivery provider.
    *
    * STATUS-ONLY by design: this moves the order to the mapped status and
@@ -4306,9 +5632,83 @@ export class OrderLifecycleService {
       );
     }
 
+    /**
+     * ⚠️ SOTILGAN BUYURTMANI KARGO WEBHOOKI BEKOR QILA OLMAYDI (audit C5).
+     *
+     * MUAMMO. `cancelStates` ro'yxatida `SOLD`/`PAID`/`PARTLY_PAID` YO'Q,
+     * ya'ni ichki oqimda sotilgan buyurtma uchun kechikkan yoki takroriy
+     * `cancel` webhooki `alreadyApplied` ni false qoldirib statusni
+     * `CANCELLED` ga o'zgartirardi.
+     *
+     * Bu metod esa ATAYLAB status-only: kassani qaytarmaydi. Natijada
+     * buyurtma "bekor qilingan" bo'lib turadi, pul esa sotuv sifatida
+     * kassada qoladi — status va daftar JIMGINA ajraladi va farqni hech
+     * narsa ko'rsatmaydi.
+     *
+     * ⚠️ XATO TASHLAMAYMIZ: chaqiruvchi (`applyWebhookToShipment`) bu
+     * chaqiruvni "best-effort" qiladi va xato webhookni yiqitmaydi —
+     * ya'ni tashlangan xato JIMGINA yutilardi. Shu bois status
+     * O'ZGARTIRILMAYDI, hodisa esa audit jurnaliga ANIQ sabab bilan
+     * yoziladi: farqni odam ko'rib qaror qilishi kerak.
+     *
+     * Nega avtomatik qaytarmaymiz: pulni teskari aylantirish kassa, kuryer
+     * qarzi va operator daromadiga tegadi — buni webhook qaroriga
+     * qoldirish xavfli.
+     */
+    if (input.action === 'cancel' && soldStates.includes(oldStatus)) {
+      this.logger.warn(
+        `provider cancel REFUSED for order ${order.id}: ` +
+          `buyurtma '${oldStatus}' holatida (sotilgan). Status o'zgartirilmadi.`,
+      );
+      await this.activityLog.log({
+        entity_type: 'Order',
+        entity_id: String(order.id),
+        action: ActivityAction.EXTERNAL_SYNC,
+        old_value: { status: oldStatus },
+        new_value: { status: oldStatus, provider_action: 'cancel_refused' },
+        metadata: {
+          provider_slug: input.provider_slug ?? null,
+          external_ref: input.external_ref ?? null,
+          reason:
+            'sotilgan buyurtmani kargo webhooki bekor qila olmaydi — ' +
+            "pul qaytarish qo'lda ko'rib chiqilishi kerak",
+        },
+      });
+      return successRes(
+        {
+          id: order.id,
+          status: oldStatus,
+          skipped: true,
+          refused: true,
+          reason: 'sold_cannot_be_cancelled_by_provider',
+        },
+        200,
+        'provider cancel refused: order already sold',
+      );
+    }
+
     const note =
       `Provider ${input.provider_slug ?? 'external'} → ${input.action}` +
       (input.external_ref ? ` (ref: ${input.external_ref})` : '');
+
+    // Kargo sotuvi uchun pul summalari (audit M5). Tranzaksiyadan OLDIN
+    // hisoblanadi: market ma'lumoti tashqi (RMQ) chaqiruv talab qiladi.
+    let providerMarketTariff = 0;
+    let providerMarketAmount = 0;
+    const providerTotal = Number(order.total_price ?? 0);
+    if (input.action === 'sell' && order.market_id) {
+      const market = await this.lookup
+        .getMarketsByIds([String(order.market_id)])
+        .then((rows) => rows[0])
+        .catch(() => undefined);
+      providerMarketTariff = resolveOrderTariff({
+        snapshot: order.market_tariff,
+        isCenter: order.where_deliver === Where_deliver.CENTER,
+        centerTariff: market?.tariff_center,
+        homeTariff: market?.tariff_home,
+      });
+      providerMarketAmount = providerTotal - providerMarketTariff;
+    }
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -4320,8 +5720,92 @@ export class OrderLifecycleService {
       order.status = targetStatus;
       if (input.action === 'sell') {
         order.sold_at = order.sold_at ?? String(Date.now());
+        // Tariflar sotuv paytida qotiriladi — keyin tarif o'zgarsa ham
+        // hisob-kitob va rollback aynan shu qiymatlar bilan ishlaydi.
+        order.market_tariff = order.market_tariff ?? providerMarketTariff;
+        order.courier_share = 0;
+        order.branch_share = 0;
+        order.to_be_paid = providerMarketAmount;
       }
       await orderRepo.save(order);
+
+      /**
+       * ⚠️ KARGO SOTUVI ENDI KASSAGA HAM YOZILADI (audit M5).
+       *
+       * Ilgari bu yo'l ATAYLAB "status-only" edi: marketga qarz yozilmasdi,
+       * `order_settlement` qatori yaratilmasdi, `sell_profit` va operator
+       * komissiyasi ham yo'q edi. Kargoning qarzi esa butunlay boshqa
+       * jadvalda (`provider_receivables`) turardi va kassaga umuman
+       * bog'lanmasdi. Natijada marketga to'lov qo'lda, hech qanday
+       * bog'lanishsiz qilinardi — ikki marta to'lash yoki umuman to'lamaslik
+       * daftarda ko'rinmasdi.
+       *
+       * Model: kargo mijozdan naqdni yig'adi (shuning uchun settlement qatori
+       * PENDING bo'lib turadi), Elchi esa marketga `total − market_tariff`
+       * qarzdor bo'lib qoladi. Kargo hisob-kitob qilganda
+       * (`integration.provider.remittance`) MAIN kassaga kirim yoziladi va
+       * qator BRANCH_SETTLED ga o'tadi.
+       *
+       * ⚠️ KARGONING O'Z HAQI HALI MODELLASHTIRILMAGAN: kodda kargo uchun
+       * tarif maydoni yo'q. U kelguncha kargoga to'lov qo'lda chiqim sifatida
+       * yoziladi va bu yerdagi foyda faqat market tarifi bo'lib qoladi.
+       */
+      if (input.action === 'sell') {
+        const pay = (
+          data: Parameters<typeof this.updateCashboxBalance>[0],
+        ): Promise<void> =>
+          this.updateCashboxBalance(
+            { ...data, dedup_epoch: `provider-sell:${String(order.id)}` },
+            queryRunner.manager,
+          );
+
+        if (order.market_id) {
+          if (providerMarketAmount > 0) {
+            await pay({
+              user_id: String(order.market_id),
+              cashbox_type: Cashbox_type.FOR_MARKET,
+              amount: providerMarketAmount,
+              operation_type: Operation_type.INCOME,
+              source_type: Source_type.SELL,
+              source_id: String(order.id),
+              created_by: 'system',
+              comment: note,
+            });
+          } else if (providerMarketAmount < 0) {
+            await pay({
+              user_id: String(order.market_id),
+              cashbox_type: Cashbox_type.FOR_MARKET,
+              amount: -providerMarketAmount,
+              operation_type: Operation_type.EXPENSE,
+              source_type: Source_type.SELL,
+              source_id: String(order.id),
+              created_by: 'system',
+              comment: note,
+            });
+          }
+        }
+
+        await this.recordSaleSettlement(queryRunner.manager, {
+          order_id: String(order.id),
+          courier_id: null,
+          branch_id: null,
+          market_id: order.market_id ? String(order.market_id) : null,
+          courier_amount: 0,
+          branch_amount: providerTotal,
+          market_amount: providerMarketAmount,
+          hasCourier: false,
+          // Naqd kargoda — HQ'ga hali yetib kelmagan.
+          cashHeldByProvider: true,
+        });
+
+        // Foyda + operator komissiyasi. `orderRepo.save` `updateFull` dan
+        // o'tmagani uchun bu ilgak qo'lda chaqiriladi.
+        await this.enqueueFinanceOnStatusChange(
+          order,
+          oldStatus,
+          queryRunner.manager,
+        );
+      }
 
       await this.custody.createTrackingEvent(
         {
@@ -4389,6 +5873,14 @@ export class OrderLifecycleService {
       this.hasRole(requester, Roles.MANAGER) &&
       !this.hasRole(requester, Roles.COURIER);
     const order = await this.findById(id);
+    /**
+     * ⚠️ QISMAN SOTUV HAM TO'SILADI (adversarial topilma, kritik).
+     *
+     * Ilgari darvoza faqat `sellOrder` da bor edi, `partlySellOrder` esa
+     * AYNI kassa matematikasini bajaradi (kuryer, market, filial oyoqlari)
+     * — ya'ni darvozani chetlab o'tishning tayyor yo'li qolgan edi.
+     */
+    this.assertNotOnlinePaid(order);
     const oldTotalPrice = Number(order.total_price ?? 0);
     if (order.status !== Order_status.WAITING) {
       this.badRequest('Order not found or not in waiting status');
@@ -4469,23 +5961,27 @@ export class OrderLifecycleService {
       : 0;
 
     const marketBalanceBefore = Number(marketCashbox.balance ?? 0);
-    const marketTariff =
-      order.market_tariff != null
-        ? Number(order.market_tariff)
-        : order.where_deliver === Where_deliver.CENTER
-          ? Number(market.tariff_center ?? 0)
-          : Number(market.tariff_home ?? 0);
-    const courierTariff =
-      order.courier_tariff != null
-        ? Number(order.courier_tariff)
-        : order.where_deliver === Where_deliver.CENTER
-          ? Number(financialActor?.tariff_center ?? 0)
-          : Number(financialActor?.tariff_home ?? 0);
+    const marketTariff = resolveOrderTariff({
+      snapshot: order.market_tariff,
+      isCenter: order.where_deliver === Where_deliver.CENTER,
+      centerTariff: market.tariff_center,
+      homeTariff: market.tariff_home,
+    });
+    const courierTariff = resolveOrderTariff({
+      snapshot: order.courier_tariff,
+      isCenter: order.where_deliver === Where_deliver.CENTER,
+      centerTariff: financialActor?.tariff_center,
+      homeTariff: financialActor?.tariff_home,
+    });
     const courierShare = this.resolveSaleActorShare(
       isManagerRequester,
       financialActor,
       courierTariff,
     );
+    // Qisman sotuvda ham kuryer to'liq tarifini oladi va market to'liq tarif
+    // bilan hisoblanadi, ya'ni tarif qoplamaslik zarari bu yo'lda ham xuddi
+    // shunday yuzaga keladi — sellOrder bilan bir xil qo'riqchi.
+    this.assertTariffCoversShares({ marketTariff, courierShare, branchShare });
     const actorExpenseUserId = isManagerRequester
       ? String(requester.branch_id ?? '')
       : actorCourierId;
@@ -4502,6 +5998,18 @@ export class OrderLifecycleService {
         actor: financialActor,
         requester,
         order,
+      });
+      // Ruxsatdan KEYIN summa chegarasi: "kim yozadi" va "qancha yozadi" —
+      // ikki xil savol, ikkinchisi ilgari umuman tekshirilmasdi.
+      this.assertExtraCostWithinLimit({
+        extraCost,
+        mode: 'sell',
+        whereDeliver: order.where_deliver,
+        tariffCenter: Number(financialActor?.tariff_center ?? 0),
+        tariffHome: Number(financialActor?.tariff_home ?? 0),
+        isManager:
+          this.hasRole(requester, Roles.MANAGER) &&
+          !this.hasRole(requester, Roles.COURIER),
       });
     }
     // Partly-sell is a sell variant → evaluated against SELL_* conditions, with
@@ -4624,11 +6132,6 @@ export class OrderLifecycleService {
     const courierIncome = Math.max(price - courierShare, 0);
     const courierExpense = Math.max(courierShare - price, 0);
     const branchNet = price - courierShare - branchShare;
-    const branchCashboxAmount = this.resolveBranchCashboxSaleAmount(
-      price,
-      branchNet,
-      isManagerRequester,
-    );
     const saleComment =
       price === 0
         ? "0 so'mlik mahsulot qisman sotuvi"
@@ -4746,32 +6249,24 @@ export class OrderLifecycleService {
         }
       }
 
-      // ---- Branch leg (non-HQ branch only) ----
-      if (branchCashbox && settlementBranchId) {
-        if (branchCashboxAmount > 0) {
-          await pay({
-            user_id: settlementBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount: branchCashboxAmount,
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: saleComment,
-          });
-        } else if (branchCashboxAmount < 0) {
-          await pay({
-            user_id: settlementBranchId,
-            cashbox_type: Cashbox_type.BRANCH,
-            amount: -branchCashboxAmount,
-            operation_type: Operation_type.EXPENSE,
-            source_type: Source_type.SELL,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: saleComment,
-          });
-        }
-      }
+      /**
+       * ---- Filial oyog'i SOTUVDA YOZILMAYDI (audit M3) ----
+       *
+       * Ilgari bu yerda filial kassasiga `total − courierShare − branchShare`
+       * INCOME qilib yozilardi. Ayni summa kuryer kassasiga ham yozilardi, va
+       * keyin manager kuryerdan naqdni qabul qilganda filialga YANA yozilardi
+       * (`finance.cashbox.payment_courier`, qabul qiluvchi = BRANCH) — hech
+       * qanday kompensatsiya oyog'isiz. Natijada bitta pul filial kassasida
+       * ikki marta turardi: yo filial qarzi cheksiz shishardi, yo
+       * "filial → MAIN" o'tkazmasi MAIN'ga mavjud bo'lmagan pulni yozardi.
+       *
+       * Endi ma'no bitta: BRANCH kassa qoldig'i = FILIAL JISMONAN USHLAB
+       * TURGAN NAQD. U faqat kuryerdan pul qabul qilinganda ko'payadi va
+       * HQ'ga topshirilganda kamayadi — ya'ni managerning sanab topshiradigan
+       * pulini bildiradi. "Filial HQ'ga qancha qarz" degan savolga esa
+       * `order_settlement.branch_amount` javob beradi (buyurtma boshiga bir
+       * marta, qaysi bo'g'inda turganidan qat'i nazar).
+       */
 
       if (extraCost > 0) {
         await pay({
@@ -4821,11 +6316,14 @@ export class OrderLifecycleService {
           paid_amount: paidAfter,
           sold_at: order.sold_at ?? soldAt,
           total_price: price,
-          market_tariff: order.market_tariff ?? marketTariff,
-          courier_tariff: order.courier_tariff ?? courierTariff,
+          market_tariff: marketTariff,
+          courier_tariff: courierTariff,
           courier_share: courierShare,
           branch_share: branchShare,
-          branch_cashbox_amount: branchCashboxAmount,
+          // Sotuvda filial kassasiga oyoq yozilmaydi (audit M3), shu bois
+          // qaytariladigan summa ham 0. Eski buyurtmalarda bu ustun real
+          // qiymat bilan to'lgan va rollback o'shani aynan teskari qiladi.
+          branch_cashbox_amount: 0,
           return_requested: false,
           comment: finalComment || null,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
@@ -4846,9 +6344,11 @@ export class OrderLifecycleService {
         courier_id: courierCashbox ? actorCourierId : null,
         branch_id: settlementBranchId,
         market_id: order.market_id ? String(order.market_id) : null,
-        courier_amount: courierIncome,
-        branch_amount: Math.max(branchNet, 0),
-        market_amount: marketIncome,
+        // Ishorali summalar + extra_cost ayirmasi — sellOrder bilan bir xil
+        // (audit M8/M10).
+        courier_amount: price - courierShare,
+        branch_amount: branchNet,
+        market_amount: price - marketTariff - extraCost,
         hasCourier: Boolean(courierCashbox),
       });
 
@@ -4880,7 +6380,7 @@ export class OrderLifecycleService {
           holder_branch_id: cancelledHolder.holder_branch_id,
           holder_courier_id: cancelledHolder.holder_courier_id,
           last_handover_at: new Date(),
-          last_handover_by: String(requester.id),
+          last_handover_by: this.numericActorId(requester.id),
           district_id: order.district_id ?? null,
           region_id: order.region_id ?? null,
           address: order.address ?? null,
@@ -5036,6 +6536,8 @@ export class OrderLifecycleService {
       branch_cashbox_amount?: number | null;
       to_be_paid?: number;
       paid_amount?: number;
+      /** Kuryer yozgan qo'shimcha xarajat — buyurtmada saqlanadi. */
+      extra_cost?: number;
       status?: Order_status;
       return_requested?: boolean;
       comment?: string | null;
@@ -5074,6 +6576,10 @@ export class OrderLifecycleService {
       await this.assertDeliveryDetailsEditable(order, dto);
     }
     const oldStatus = order.status;
+    // Rollback `sold_at` ni null qiladi, foydani teskari yozish esa
+    // qaytarilayotgan sotuvning tokenini talab qiladi — shuning uchun
+    // o'zgarishlar qo'llanishidan OLDIN saqlab qo'yamiz (audit M4).
+    const previousSoldAt = order.sold_at;
     const previousCanceledPostId = order.canceled_post_id;
     const previousHolderType = order.holder_type;
     const previousHolderBranchId = order.holder_branch_id;
@@ -5174,7 +6680,7 @@ export class OrderLifecycleService {
 
     if (custodyChanged) {
       order.last_handover_at = new Date();
-      order.last_handover_by = requester?.id ? String(requester.id) : null;
+      order.last_handover_by = this.numericActorId(requester?.id);
     }
 
     if (
@@ -5308,7 +6814,12 @@ export class OrderLifecycleService {
       // rollback. Enqueued in this transaction so events are durable iff the
       // order change commits; finance-service dedupes on order_id.
       if (oldStatus !== order.status) {
-        await this.enqueueFinanceOnStatusChange(order, oldStatus, manager);
+        await this.enqueueFinanceOnStatusChange(
+          order,
+          oldStatus,
+          manager,
+          previousSoldAt,
+        );
       }
     };
 

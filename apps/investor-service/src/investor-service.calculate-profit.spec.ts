@@ -1,3 +1,4 @@
+import { of } from 'rxjs';
 import { InvestorServiceService } from './investor-service.service';
 
 /**
@@ -44,13 +45,22 @@ function makeService(opts: {
     findByEntity: jest.fn().mockResolvedValue([]),
     findByUser: jest.fn().mockResolvedValue([]),
   };
+  // Finance klienti: `markProfitPaid` MAIN kassadan pul yechadi (audit M6).
+  const financeSent: Array<{ cmd: string; payload: any }> = [];
+  const financeClient: any = {
+    send: jest.fn((pattern: any, payload: any) => {
+      financeSent.push({ cmd: pattern?.cmd, payload });
+      return of({ data: {} });
+    }),
+  };
   const service = new InvestorServiceService(
     investorRepo,
     investmentRepo,
     profitShareRepo,
     activityLog,
+    financeClient,
   );
-  return { service, profitShareRepo, savedRows };
+  return { service, profitShareRepo, savedRows, financeSent, financeClient };
 }
 
 function statusOf(err: unknown): number | undefined {
@@ -133,11 +143,64 @@ describe('InvestorServiceService.calculateProfit', () => {
     const res = (await service.calculateProfit({
       ...period,
       percentage: 10,
-    } as never)) as { data?: { calculated_count?: number; skipped_count?: number } };
+    } as never)) as {
+      data?: { calculated_count?: number; skipped_count?: number };
+    };
 
     // No new obligation created — the re-run is a no-op for this investor.
     expect(savedRows).toHaveLength(0);
     expect(res?.data?.calculated_count).toBe(0);
     expect(res?.data?.skipped_count).toBe(1);
+  });
+});
+
+/**
+ * AUDIT M6. Investor foydasini to'lash faqat `is_paid` bayrog'ini qo'yardi:
+ * MAIN kassa ham, P&L daftari ham tegilmasdi — ya'ni kompaniyadan chiqqan
+ * pul hisobotda umuman ko'rinmasdi.
+ */
+describe('markProfitPaid', () => {
+  it('MAIN kassadan pul yechadi va daftarga chiqim yozadi', async () => {
+    const { service, profitShareRepo, financeSent } = makeService({});
+    profitShareRepo.findOne.mockResolvedValue({
+      id: 'ps9',
+      investor_id: '42',
+      amount: 250000,
+      is_paid: false,
+      isDeleted: false,
+    });
+
+    await service.markProfitPaid('ps9', { id: '1', roles: ['superadmin'] });
+
+    const spend = financeSent.find((m) => m.cmd === 'finance.cashbox.spend');
+    expect(spend).toBeDefined();
+    expect(spend?.payload).toEqual(
+      expect.objectContaining({
+        amount: 250000,
+        cashbox_type: 'main',
+        dedup_epoch: 'investor-profit:ps9',
+      }),
+    );
+    const ledger = financeSent.find(
+      (m) => m.cmd === 'finance.financial_balance.record',
+    );
+    expect(ledger?.payload).toEqual(
+      expect.objectContaining({ amount: -250000 }),
+    );
+  });
+
+  it('allaqachon to`langan qatorni ikkinchi marta yechmaydi', async () => {
+    const { service, profitShareRepo, financeSent } = makeService({});
+    profitShareRepo.findOne.mockResolvedValue({
+      id: 'ps9',
+      investor_id: '42',
+      amount: 250000,
+      is_paid: true,
+      isDeleted: false,
+    });
+
+    await service.markProfitPaid('ps9', { id: '1', roles: ['superadmin'] });
+
+    expect(financeSent).toHaveLength(0);
   });
 });

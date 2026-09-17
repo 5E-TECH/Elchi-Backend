@@ -12,13 +12,10 @@ import {
   BranchType,
   BranchUserRole,
   Cashbox_type,
-  Operation_type,
   Order_status,
   Post_status,
   Roles,
-  Source_type,
   Status,
-  Where_deliver,
 } from '@app/common';
 import { Branch } from './entities/branch.entity';
 import { BranchUser } from './entities/branch-user.entity';
@@ -41,15 +38,31 @@ type BranchAccessScope = {
   managerReadableBranchIds: Set<string>;
 };
 
-type OrderAnalyticsRow = {
-  id: string;
-  branch_id: string | null;
-  market_id: string | null;
-  status: string | null;
-  total_price: number;
-  current_batch_id: string | null;
-  courier_id: string | null;
-  createdAt: Date | null;
+/**
+ * Filial paneli raqamlari — order-service'da SQL bilan hisoblanadi
+ * (Scale 1-bosqich). Ilgari bu yerga buyurtma QATORLARI kelardi
+ * Ilgari bu yerga buyurtma QATORLARI kelardi, endi tayyor yig'indilar.
+ */
+type BranchDashboardStats = {
+  today_orders_count: number;
+  week_orders_count: number;
+  selected_orders_count: number;
+  active_batches_count: number;
+  orders_card: {
+    total: number;
+    new: number;
+    on_the_road: number;
+    delivered: number;
+    returned: number;
+  };
+  markets: Array<{
+    market_id: string;
+    orders_count: number;
+    delivered_count: number;
+    total_price: number;
+  }>;
+  packages: { on_the_way: number; waiting_for_acceptance: number };
+  active_couriers: number;
 };
 
 type BranchDashboardFilter = {
@@ -720,74 +733,60 @@ export class BranchServiceService implements OnModuleInit {
     return { start: this.toTashkentStartOfDay(now), end: now };
   }
 
-  private extractOrderRows(payload: unknown): OrderAnalyticsRow[] {
-    const source = payload as any;
-    const candidates = [source?.data?.data, source?.data, source];
+  /**
+   * Filial paneli raqamlari — order-service'da SQL bilan hisoblanadi
+   * (Scale 1-bosqich).
+   *
+   * ⚠️ BU METOD `getOrdersByBranchIds` NING O'RNINI OLDI. Eskisi har filial
+   * uchun alohida `order.find_all` ni `fetch_all: true, limit: 5000` bilan
+   * chaqirib, buyurtmalarni mahsulotlari bilan tortib olardi va ularni JS'da
+   * sanardi. Jamlanma hajm 5 000 dan oshgan filialda statistika jimgina kam
+   * ko'rsata boshlardi — endi bunday chegara yo'q.
+   */
+  private async fetchBranchDashboardStats(payload: {
+    branch_ids: string[];
+    courier_ids: string[];
+    start: string | null;
+    end: string | null;
+    today_start: string;
+    week_start: string;
+  }): Promise<BranchDashboardStats> {
+    const empty: BranchDashboardStats = {
+      today_orders_count: 0,
+      week_orders_count: 0,
+      selected_orders_count: 0,
+      active_batches_count: 0,
+      orders_card: {
+        total: 0,
+        new: 0,
+        on_the_road: 0,
+        delivered: 0,
+        returned: 0,
+      },
+      markets: [],
+      packages: { on_the_way: 0, waiting_for_acceptance: 0 },
+      active_couriers: 0,
+    };
 
-    for (const candidate of candidates) {
-      if (!Array.isArray(candidate)) {
-        continue;
-      }
-      return candidate.map((row: any) => {
-        const createdValue = row?.createdAt ?? row?.created_at ?? null;
-        const createdAt = createdValue ? new Date(createdValue) : null;
-        return {
-          id: String(row?.id ?? ''),
-          branch_id: row?.branch_id ? String(row.branch_id) : null,
-          market_id: row?.market_id ? String(row.market_id) : null,
-          status: row?.status ? String(row.status) : null,
-          total_price: Number(row?.total_price ?? 0) || 0,
-          current_batch_id: row?.current_batch_id
-            ? String(row.current_batch_id)
-            : null,
-          courier_id: row?.courier_id ? String(row.courier_id) : null,
-          createdAt:
-            createdAt && !Number.isNaN(createdAt.getTime()) ? createdAt : null,
-        };
-      });
+    if (!payload.branch_ids.length && !payload.courier_ids.length) {
+      return empty;
     }
 
-    return [];
-  }
-
-  private async getOrdersByBranchIds(
-    branchIds: string[],
-  ): Promise<OrderAnalyticsRow[]> {
-    const courierIds = await this.getCourierIdsByBranchIds(branchIds);
-
-    const rows = await Promise.all(
-      [
-        ...branchIds.map((branchId) => ({
-          branch_id: branchId,
-          fetch_all: true,
-          limit: 5000,
-        })),
-        ...(courierIds.length
-          ? [
-              {
-                courier_ids: courierIds,
-                fetch_all: true,
-                limit: 5000,
-              },
-            ]
-          : []),
-      ].map(async (query) => {
-        try {
-          const response = await lastValueFrom(
-            this.orderClient
-              .send({ cmd: 'order.find_all' }, { query })
-              .pipe(timeout(10000)),
-          );
-          return this.extractOrderRows(response);
-        } catch {
-          return [];
-        }
-      }),
-    );
-
-    return Array.from(
-      new Map(rows.flat().map((order) => [String(order.id), order])).values(),
-    );
+    try {
+      const response = await lastValueFrom(
+        this.orderClient
+          .send<
+            { data?: BranchDashboardStats } | BranchDashboardStats
+          >({ cmd: 'order.analytics.branch_dashboard' }, payload)
+          .pipe(timeout(10000)),
+      );
+      const data =
+        (response as { data?: BranchDashboardStats })?.data ??
+        (response as BranchDashboardStats);
+      return data ?? empty;
+    } catch {
+      return empty;
+    }
   }
 
   private async getCourierIdsByBranchIds(
@@ -2612,145 +2611,41 @@ export class BranchServiceService implements OnModuleInit {
       }),
     );
 
+    /**
+     * ⚠️ FILIAL QARZI ENDI LEDGERDAN, BAZADA HISOBLANADI (Scale 1 — 3-joy).
+     *
+     * Ilgari bu yerda HAR FILIAL uchun ikkitadan `order.find_all`
+     * (`fetch_all: true, limit: 5000`) chaqirilardi va summa JS'da
+     * hisoblanardi. 13 filialda bu ~130 000 buyurtma qatorini RabbitMQ orqali
+     * tashish demakdir. Produksiyada o'lchandi: 51 000 buyurtmali bazada
+     * `/finance/cashbox/financial-balanse` 7,2 s, `/analytics/revenue` esa
+     * umuman 504 bilan tugadi — IKKALASI HAM aynan shu chaqiruv tufayli
+     * (ikkalasi `branch.find_all` ni ishlatadi).
+     *
+     * Bazadagi o'sha yig'indi SQL bilan 17 ms oladi. Endi bitta chaqiruv:
+     * `order.settlement.financial_balance_summary` barcha filiallar kesimini
+     * bir so'rovda qaytaradi.
+     *
+     * ⚠️ FORMULA HAM TO'G'RILANDI. Eski hisob "buyurtma summasi minus manager
+     * tarifi" edi; ledger esa haqiqatan yozilgan `branch_amount` ni
+     * (`total − courierShare − branchShare`) saqlaydi va HQ'ga yetib kelgan
+     * buyurtmalar undan o'z-o'zidan chiqib ketadi. Manager paneli (C1) ham
+     * shu manbaga o'tgan — ya'ni ikkala ekran endi bitta raqamni ko'rsatadi.
+     */
     const payableToHqByBranchId = new Map<string, number>();
-    await Promise.all(
-      items.map(async (item) => {
-        const branchId = String(item.id ?? '').trim();
-        const managerId = managerByBranchId.get(branchId);
-        if (!branchId || !managerId || item.type === BranchType.HQ) {
-          payableToHqByBranchId.set(branchId, 0);
-          return;
-        }
-
-        const manager = managerUsersMap.get(managerId) as Record<
-          string,
-          unknown
-        > | null;
-        const managerTariffHome = Math.max(
-          Number(manager?.tariff_home ?? 0),
-          0,
-        );
-        const managerTariffCenter = Math.max(
-          Number(manager?.tariff_center ?? 0),
-          0,
-        );
-        const courierIds = courierIdsByBranchId.get(branchId) ?? [];
-        const soldOrderQuery = {
-          status: [
-            Order_status.SOLD,
-            Order_status.PAID,
-            Order_status.PARTLY_PAID,
-          ],
-          fetch_all: true,
-          page: 1,
-          limit: 5000,
-        };
-        const [branchOrdersResponse, courierOrdersResponse] = await Promise.all(
-          [
-            this.sendOrderCommand<any>('order.find_all', {
-              query: {
-                ...soldOrderQuery,
-                branch_id: branchId,
-              },
-            }).catch(() => null),
-            courierIds.length
-              ? this.sendOrderCommand<any>('order.find_all', {
-                  query: {
-                    ...soldOrderQuery,
-                    courier_ids: courierIds,
-                  },
-                }).catch(() => null)
-              : Promise.resolve(null),
-          ],
-        );
-
-        const extractOrders = (response: any): any[] => {
-          const candidates = [
-            response?.data?.data,
-            response?.data?.items,
-            response?.data,
-            response,
-          ];
-          return candidates.find((candidate) => Array.isArray(candidate)) ?? [];
-        };
-        const orders = Array.from(
-          new Map(
-            [
-              ...extractOrders(branchOrdersResponse),
-              ...extractOrders(courierOrdersResponse),
-            ].map((order: any) => [String(order?.id ?? ''), order]),
-          ).values(),
-        );
-        let payableToHq = 0;
-
-        const calculateAmounts = (order: any) => {
-          const totalPrice = Math.max(Number(order?.total_price ?? 0), 0);
-          const isCenter =
-            String(order?.where_deliver ?? '').toLowerCase() ===
-            String(Where_deliver.CENTER).toLowerCase();
-          const managerTariff = isCenter
-            ? managerTariffCenter
-            : managerTariffHome;
-          return {
-            // Manager payments sahifasidagi `berilishi_kerak` bilan aynan bir
-            // xil formula: order summasi minus branch manager tarifi.
-            hqPayable: Math.max(totalPrice - managerTariff, 0),
-          };
-        };
-
-        for (const order of orders) {
-          payableToHq += calculateAmounts(order).hqPayable;
-        }
-
-        let paidToHq = 0;
-        try {
-          const cashboxResponse = await this.sendFinanceCommand<{
-            data?: {
-              id?: string;
-              cashbox?: { id?: string };
-            };
-          }>('finance.cashbox.find_by_user', {
-            user_id: branchId,
-            cashbox_type: Cashbox_type.BRANCH,
-          });
-          const cashboxId = String(
-            cashboxResponse?.data?.cashbox?.id ??
-              cashboxResponse?.data?.id ??
-              '',
-          ).trim();
-
-          if (cashboxId) {
-            const historyResponse = await this.sendFinanceCommand<{
-              data?: {
-                items?: Array<{ amount?: number | string }>;
-              };
-            }>('finance.history.find_all', {
-              cashbox_id: cashboxId,
-              operation_type: Operation_type.EXPENSE,
-              source_type: Source_type.BRANCH_TO_MAIN,
-              page: 0,
-              limit: 0,
-            });
-            paidToHq = (historyResponse?.data?.items ?? []).reduce(
-              (sum, history) => {
-                const amount = Number(history?.amount ?? 0);
-                return (
-                  sum + (Number.isFinite(amount) && amount > 0 ? amount : 0)
-                );
-              },
-              0,
-            );
-          }
-        } catch {
-          paidToHq = 0;
-        }
-
+    try {
+      const summary = await this.sendOrderCommand<{
+        data?: { branches?: Array<{ branch_id: string; amount: number }> };
+      }>('order.settlement.financial_balance_summary', {});
+      for (const row of summary?.data?.branches ?? []) {
         payableToHqByBranchId.set(
-          branchId,
-          Math.max(Math.round(payableToHq) - paidToHq, 0),
+          String(row.branch_id),
+          Math.max(Number(row.amount) || 0, 0),
         );
-      }),
-    );
+      }
+    } catch {
+      // Yig'indi olinmasa nol qoladi — avvalgi xatti-harakat bilan bir xil.
+    }
 
     const enrichedItems = items.map((item) => ({
       ...item,
@@ -2928,13 +2823,23 @@ export class BranchServiceService implements OnModuleInit {
     return successRes(descendants, 200, 'Branch descendants');
   }
 
+  /**
+   * ⚠️ AGREGATSIYA BAZADA (Scale 1-bosqich).
+   *
+   * Ilgari bu metod `getOrdersByBranchIds` orqali har filial uchun 5 000
+   * tagacha buyurtmani (mahsulotlari bilan) RabbitMQ orqali tortib olib,
+   * barcha hisoblarni JS'da `filter().length` bilan chiqarardi. Uch oqibati:
+   * har ochilishda bir necha MB trafik, order-service event loop'ining band
+   * bo'lishi (sotuv kechikadi), va 5 000 dan oshganda statistikaning jimgina
+   * KAM ko'rsatishi. Endi hammasi bitta chaqiruv va bir necha o'nlab qator.
+   */
   async getBranchStats(
     id: string,
     requester?: RequesterContext,
     filter: BranchDashboardFilter = {},
   ) {
     const targetBranchIds = await this.resolveAnalyticsBranchIds(id, requester);
-    const orders = await this.getOrdersByBranchIds(targetBranchIds);
+    const courierIds = await this.getCourierIdsByBranchIds(targetBranchIds);
     const requesterBranchRole = await this.resolveRequesterBranchRole(
       targetBranchIds,
       requester,
@@ -2944,152 +2849,50 @@ export class BranchServiceService implements OnModuleInit {
     const selectedRange = this.resolveBranchDashboardRange(filter);
     const todayStart = this.toTashkentStartOfDay(now);
     const weekStart = this.toTashkentStartOfWeek(now);
-    const selectedOrders = selectedRange.start
-      ? orders.filter(
-          (order) =>
-            order.createdAt &&
-            order.createdAt >= selectedRange.start! &&
-            order.createdAt <= selectedRange.end,
-        )
-      : orders;
-    const todayAcceptedOrdersCount = orders.filter(
-      (order) =>
-        order.createdAt &&
-        order.createdAt >= todayStart &&
-        order.createdAt <= now,
-    ).length;
-    const weekAcceptedOrdersCount = orders.filter(
-      (order) =>
-        order.createdAt &&
-        order.createdAt >= weekStart &&
-        order.createdAt <= now,
-    ).length;
-    const selectedAcceptedOrdersCount = selectedOrders.length;
 
-    const activeBatchStatuses = new Set<string>([
-      Order_status.CREATED,
-      Order_status.NEW,
-      Order_status.RECEIVED,
-      Order_status.ON_THE_ROAD,
-      Order_status.WAITING,
-      Order_status.WAITING_CUSTOMER,
-      Order_status.PARTLY_PAID,
-    ]);
+    const stats = await this.fetchBranchDashboardStats({
+      branch_ids: targetBranchIds,
+      courier_ids: courierIds,
+      start: selectedRange.start?.toISOString() ?? null,
+      end: selectedRange.end.toISOString(),
+      today_start: todayStart.toISOString(),
+      week_start: weekStart.toISOString(),
+    });
 
-    const activeBatchesCount = new Set(
-      orders
-        .filter(
-          (order) =>
-            order.current_batch_id &&
-            order.status &&
-            activeBatchStatuses.has(order.status),
-        )
-        .map((order) => String(order.current_batch_id)),
-    ).size;
-
-    const couriersCount = (await this.getCourierIdsByBranchIds(targetBranchIds))
-      .length;
-
-    const deliveredStatuses = new Set<string>([
-      Order_status.SOLD,
-      Order_status.PAID,
-      Order_status.PARTLY_PAID,
-    ]);
-
-    const returnedStatuses = new Set<string>([Order_status.RETURNED_TO_MARKET]);
-
-    const ordersCard = {
-      total: selectedAcceptedOrdersCount,
-      new: selectedOrders.filter((order) => order.status === Order_status.NEW)
-        .length,
-      on_the_road: selectedOrders.filter(
-        (order) => order.status === Order_status.ON_THE_ROAD,
-      ).length,
-      delivered: selectedOrders.filter(
-        (order) => order.status && deliveredStatuses.has(order.status),
-      ).length,
-      returned: selectedOrders.filter(
-        (order) => order.status && returnedStatuses.has(order.status),
-      ).length,
-    };
-
-    const marketMap = new Map<
-      string,
-      { market_id: string; orders_count: number; total_price: number }
-    >();
-    for (const order of selectedOrders) {
-      const marketId = String(order.market_id ?? '').trim();
-      if (!marketId) continue;
-      const current = marketMap.get(marketId) ?? {
-        market_id: marketId,
-        orders_count: 0,
-        total_price: 0,
-      };
-      current.orders_count += 1;
-      current.total_price += Number(order.total_price ?? 0) || 0;
-      marketMap.set(marketId, current);
-    }
-
-    const marketsCard = Array.from(marketMap.values()).sort(
-      (left, right) => right.orders_count - left.orders_count,
-    );
-
-    const packagesOnTheWay = new Set(
-      selectedOrders
-        .filter(
-          (order) =>
-            order.current_batch_id && order.status === Order_status.ON_THE_ROAD,
-        )
-        .map((order) => String(order.current_batch_id)),
-    ).size;
-
-    const waitingForAcceptance = new Set(
-      selectedOrders
-        .filter(
-          (order) =>
-            order.current_batch_id && order.status === Order_status.RECEIVED,
-        )
-        .map((order) => String(order.current_batch_id)),
-    ).size;
-
-    const packagesCard = {
-      on_the_way: packagesOnTheWay,
-      waiting_for_acceptance: waitingForAcceptance,
-    };
-
-    const activeTodayCouriersCount = new Set(
-      selectedOrders
-        .map((order) => String(order.courier_id ?? '').trim())
-        .filter((courierId) => Boolean(courierId)),
-    ).size;
-
-    const couriersCard = {
-      branch_couriers: couriersCount,
-      active_today: activeTodayCouriersCount,
-    };
-
+    const couriersCount = courierIds.length;
     const canSeeAll =
       requesterBranchRole === 'SUPER' ||
       requesterBranchRole === BranchUserRole.MANAGER;
     const canSeeMarkets = canSeeAll;
 
+    const marketsCard = stats.markets.map((row) => ({
+      market_id: row.market_id,
+      orders_count: row.orders_count,
+      total_price: row.total_price,
+    }));
+
     return successRes(
       {
-        today_orders_count: todayAcceptedOrdersCount,
-        week_orders_count: weekAcceptedOrdersCount,
-        selected_orders_count: selectedAcceptedOrdersCount,
+        today_orders_count: stats.today_orders_count,
+        week_orders_count: stats.week_orders_count,
+        selected_orders_count: stats.selected_orders_count,
         selected_range: {
           startDate: selectedRange.start?.toISOString() ?? null,
           endDate: selectedRange.end.toISOString(),
         },
-        active_batches_count: activeBatchesCount,
+        active_batches_count: stats.active_batches_count,
         couriers_count: couriersCount,
         role: requesterBranchRole,
         cards: {
-          orders: ordersCard,
+          orders: stats.orders_card,
           markets: canSeeMarkets ? marketsCard : null,
-          packages: packagesCard,
-          couriers: canSeeAll ? couriersCard : null,
+          packages: stats.packages,
+          couriers: canSeeAll
+            ? {
+                branch_couriers: couriersCount,
+                active_today: stats.active_couriers,
+              }
+            : null,
         },
         visibility: {
           orders: true,
@@ -3103,53 +2906,21 @@ export class BranchServiceService implements OnModuleInit {
     );
   }
 
+  /** Market kesimi — bazadagi `GROUP BY market_id` (Scale 1-bosqich). */
   async getBranchMarketsAnalytics(id: string, requester?: RequesterContext) {
     const targetBranchIds = await this.resolveAnalyticsBranchIds(id, requester);
-    const orders = await this.getOrdersByBranchIds(targetBranchIds);
+    const courierIds = await this.getCourierIdsByBranchIds(targetBranchIds);
 
-    const deliveredStatuses = new Set<string>([
-      Order_status.SOLD,
-      Order_status.PAID,
-      Order_status.PARTLY_PAID,
-    ]);
+    const stats = await this.fetchBranchDashboardStats({
+      branch_ids: targetBranchIds,
+      courier_ids: courierIds,
+      start: null,
+      end: null,
+      today_start: new Date().toISOString(),
+      week_start: new Date().toISOString(),
+    });
 
-    const marketMap = new Map<
-      string,
-      {
-        market_id: string;
-        orders_count: number;
-        delivered_count: number;
-        total_price: number;
-      }
-    >();
-
-    for (const order of orders) {
-      const marketId = String(order.market_id ?? '').trim();
-      if (!marketId) {
-        continue;
-      }
-
-      const current = marketMap.get(marketId) ?? {
-        market_id: marketId,
-        orders_count: 0,
-        delivered_count: 0,
-        total_price: 0,
-      };
-
-      current.orders_count += 1;
-      current.total_price += Number(order.total_price ?? 0) || 0;
-      if (order.status && deliveredStatuses.has(order.status)) {
-        current.delivered_count += 1;
-      }
-
-      marketMap.set(marketId, current);
-    }
-
-    const items = Array.from(marketMap.values()).sort(
-      (left, right) => right.orders_count - left.orders_count,
-    );
-
-    return successRes(items, 200, 'Branch market analytics');
+    return successRes(stats.markets, 200, 'Branch market analytics');
   }
 
   async getBranchesWithNewOrders(requester?: RequesterContext) {
@@ -3170,50 +2941,47 @@ export class BranchServiceService implements OnModuleInit {
       select: ['id', 'name', 'type', 'level', 'parent_id', 'code', 'status'],
     });
 
-    const items = await Promise.all(
-      branches.map(async (branch) => {
-        try {
-          const response = await lastValueFrom(
-            this.orderClient
-              .send(
-                { cmd: 'order.find_all' },
-                {
-                  query: {
-                    branch_id: String(branch.id),
-                    status: Order_status.NEW,
-                    fetch_all: true,
-                    limit: 5000,
-                  },
-                },
-              )
-              .pipe(timeout(10000)),
-          );
-
-          const orders = this.extractOrderRows(response);
-          return {
-            id: branch.id,
-            name: branch.name,
-            type: branch.type,
-            level: branch.level,
-            parent_id: branch.parent_id,
-            code: branch.code,
-            status: branch.status,
-            new_orders_count: orders.length,
-          };
-        } catch {
-          return {
-            id: branch.id,
-            name: branch.name,
-            type: branch.type,
-            level: branch.level,
-            parent_id: branch.parent_id,
-            code: branch.code,
-            status: branch.status,
-            new_orders_count: 0,
-          };
+    /**
+     * ⚠️ BITTA SO'ROV, FILIAL BOSHIGA EMAS (Scale 1-bosqich).
+     *
+     * Ilgari bu yerda har filial uchun alohida `order.find_all` chaqirilardi
+     * (`fetch_all: true, limit: 5000`) va natijadagi QATORLAR sanalardi —
+     * ya'ni faqat "nechta yangi buyurtma bor" degan raqam uchun minglab
+     * qator tashilardi. 20 filialda bu 20 ta RMQ chaqiruvi va o'n minglab
+     * qator demakdir. Endi bitta `GROUP BY` so'rovi.
+     */
+    const branchIds = branches.map((branch) => String(branch.id));
+    const countsByBranch = new Map<string, number>();
+    if (branchIds.length) {
+      try {
+        const response = await lastValueFrom(
+          this.orderClient
+            .send<{
+              data?: Array<{ branch_id: string; count: number }>;
+            }>(
+              { cmd: 'order.analytics.count_by_branch' },
+              { branch_ids: branchIds, status: Order_status.NEW },
+            )
+            .pipe(timeout(10000)),
+        );
+        for (const row of response?.data ?? []) {
+          countsByBranch.set(String(row.branch_id), Number(row.count) || 0);
         }
-      }),
-    );
+      } catch {
+        // Hisob olinmasa ro'yxat bo'sh qaytadi — avvalgi xatti-harakat.
+      }
+    }
+
+    const items = branches.map((branch) => ({
+      id: branch.id,
+      name: branch.name,
+      type: branch.type,
+      level: branch.level,
+      parent_id: branch.parent_id,
+      code: branch.code,
+      status: branch.status,
+      new_orders_count: countsByBranch.get(String(branch.id)) ?? 0,
+    }));
 
     return successRes(
       items.filter((item) => item.new_orders_count > 0),

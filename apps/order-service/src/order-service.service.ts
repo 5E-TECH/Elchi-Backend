@@ -487,10 +487,24 @@ export class OrderServiceService {
       .map((value) => this.normalizeSourceFilter(value))
       .filter((value): value is Order_source => Boolean(value));
 
+    /**
+     * ⚠️ JOIN'LAR ATAYLAB OXIRIDA QO'SHILADI (Scale 1 — o'lchov asosida).
+     *
+     * `getManyAndCount()` bitta qurilmadan ikkita so'rov yasaydi va join
+     * bo'lsa hisobni `COUNT(DISTINCT order.id)` ko'rinishida quradi — ya'ni
+     * `orders ⋈ order_items` ni to'liq skanerlab, takrorlarni yo'q qilishi
+     * kerak bo'ladi. Produksiyada 501 000 buyurtmali bazada o'lchandi:
+     *
+     *     COUNT(DISTINCT ...) join bilan : 1 222 ms
+     *     COUNT(*)            join'siz   :    43 ms
+     *
+     * Sahifaning O'ZI esa 74 ms. Ya'ni ro'yxat ekranining vaqtining 90% dan
+     * ko'pi faqat "jami nechta" degan raqamga ketardi. Filtrlarning
+     * BIRORTASI ham `items`/`branch` aliasiga tayanmaydi (tekshirilgan),
+     * shuning uchun hisobni join'siz bajarish natijani o'zgartirmaydi.
+     */
     const qb = this.orderRepo
       .createQueryBuilder('order')
-      .leftJoinAndSelect('order.items', 'items')
-      .leftJoinAndSelect('order.branch', 'branch')
       .where('order.isDeleted = :isDeleted', { isDeleted: false });
 
     if (market_id) {
@@ -649,7 +663,13 @@ export class OrderServiceService {
       qb.andWhere('order.createdAt <= :endDate', { endDate });
     }
 
-    qb.orderBy('order.createdAt', 'DESC');
+    // Hisob join'lardan OLDIN nusxalanadi — shunda u oddiy `COUNT(*)`
+    // bo'lib qoladi (yuqoridagi izohga qarang).
+    const countQb = qb.clone();
+
+    qb.leftJoinAndSelect('order.items', 'items')
+      .leftJoinAndSelect('order.branch', 'branch')
+      .orderBy('order.createdAt', 'DESC');
     if (!disable_pagination) {
       qb.skip((pagination.page - 1) * pagination.limit).take(pagination.limit);
     }
@@ -657,7 +677,7 @@ export class OrderServiceService {
     let data: Order[];
     let total: number;
     try {
-      [data, total] = await qb.getManyAndCount();
+      [data, total] = await Promise.all([qb.getMany(), countQb.getCount()]);
     } catch (error) {
       this.handleDbError(error);
     }
@@ -842,6 +862,66 @@ export class OrderServiceService {
   }
 
   /**
+   * Dalil faylining EGASINI topadi (audit S5).
+   *
+   * ⚠️ NEGA KERAK. Fayl kaliti — o'zi bir "bearer" imkoniyat: kalitni bilgan
+   * har kim signed URL so'ray olardi. Himoya faqat prefiks + rol evristikasi
+   * edi, ya'ni bitta market boshqa marketning moliyaviy dalilini, bitta
+   * kuryer boshqa kuryerning isbotini bemalol ochishi mumkin edi — rol
+   * "market"/"courier" bo'lishining o'zi yetarli edi.
+   *
+   * Haqiqiy egalik munosabati allaqachon bazada bor: dalil fayllari
+   * buyurtmaning `proof_files` ro'yxatida saqlanadi. Shu bois yangi jadval
+   * kerak emas — kalit bo'yicha buyurtmani topib, so'rovchi o'sha buyurtmani
+   * ko'rish huquqiga egami degan savolga javob beriladi.
+   */
+  async findOwnerByProofFile(key: string) {
+    const objectKey = String(key ?? '').trim();
+    if (!objectKey) {
+      return successRes(null, 200, 'Proof file owner');
+    }
+
+    const order = await this.orderRepo
+      .createQueryBuilder('order')
+      .select([
+        'order.id',
+        'order.market_id',
+        'order.courier_id',
+        'order.holder_courier_id',
+        'order.branch_id',
+        'order.holder_branch_id',
+        'order.home_branch_id',
+      ])
+      .where('order.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('order.proof_files @> :key::jsonb', {
+        key: JSON.stringify([objectKey]),
+      })
+      .getOne();
+
+    return successRes(
+      order
+        ? {
+            order_id: String(order.id),
+            market_id: order.market_id ? String(order.market_id) : null,
+            courier_id: order.courier_id ? String(order.courier_id) : null,
+            holder_courier_id: order.holder_courier_id
+              ? String(order.holder_courier_id)
+              : null,
+            branch_id: order.branch_id ? String(order.branch_id) : null,
+            holder_branch_id: order.holder_branch_id
+              ? String(order.holder_branch_id)
+              : null,
+            home_branch_id: order.home_branch_id
+              ? String(order.home_branch_id)
+              : null,
+          }
+        : null,
+      200,
+      'Proof file owner',
+    );
+  }
+
+  /**
    * Check whether a branch is safe to soft-delete from order-service's perspective:
    * counts active (non-closed) orders and active transfer batches that reference it.
    * branch-service consults this before allowing deleteBranch to proceed.
@@ -1016,7 +1096,11 @@ export class OrderServiceService {
         description:
           row.description ??
           noteDescription ??
-          this.custody.describeTrackingAction(action, row.from_status, row.to_status),
+          this.custody.describeTrackingAction(
+            action,
+            row.from_status,
+            row.to_status,
+          ),
         changed_by: row.changed_by,
         changed_by_role: changedByRole,
         actor,
@@ -1356,6 +1440,110 @@ export class OrderServiceService {
       ]),
     );
 
+    return rows.map((row) => ({
+      ...row,
+      market: marketMap.get(row.market_id) ?? null,
+    }));
+  }
+
+  /**
+   * KIRUVCHI POSILKALARNING MANBALARI — qabul qilishni kutayotgan tashqi
+   * buyurtmalar manba bo'yicha guruhlangan.
+   *
+   * NEGA KERAK BO'LDI. "Kiruvchi posilkalar" ekrani BARCHA tashqi buyurtmani
+   * bitta ro'yxatda ko'rsatardi. Amalda faqat bitta hamkor (BeePost) yuborgani
+   * uchun ekran o'sha hamkorga moslangandek ko'rinardi, lekin ikkinchi manba
+   * qo'shilishi bilan ikki xil joydan kelgan posilkalar aralashib ketardi:
+   * operator qo'lida BeePost qopi turib, ro'yxatda Uzum posilkasini ham
+   * ko'rardi va qaysi biri qo'lida borligini faqat skanerlab bilardi.
+   *
+   * Endi avval MANBA tanlanadi, keyin o'sha manbaning posilkalari skanerlanadi.
+   *
+   * ⚠️ GURUHLASH KALITI — `market_id`, va bu tasodif emas: hamkor posilka
+   * yaratganda `elchi_market_id` MAJBURIY (`createPartnerShipment`), ya'ni
+   * Elchi modelida kiruvchi buyurtma aynan shu marketning buyurtmasi bo'ladi
+   * va puli ham shu marketga hisoblanadi. Buyurtma yozuvida "qaysi tashqi
+   * tizimdan keldi" degan alohida maydon YO'Q (`source` faqat
+   * internal/external/branch, hamkor buyurtmalarida `operator` esa null).
+   *
+   * ⚠️ CHEKLOV — AGAR ikki hamkor AYNI Elchi marketiga bog'langan bo'lsa,
+   * ular bu ro'yxatda BITTA guruh bo'lib ko'rinadi. Hozircha bunday sozlama
+   * yo'q; aniq hamkor bog'lanishi `partner_shipment_ref` da va uni bu yerda
+   * ishlatish integration-service'ga cross-schema so'rov talab qiladi (order
+   * service faqat o'z sxemasidan o'qiydi). Qabul skaneri ishida bu aniq
+   * bog'lanish qo'shiladi — reja: docs/integrations/08-qabul-skaneri.md.
+   *
+   * `oldest_at` — eng eski kutayotgan posilka sanasi. Uni qo'shdim, chunki
+   * unutilib qolgan manba aks holda hech qayerda ko'rinmaydi: soni kichik
+   * bo'lsa ro'yxat oxirida turib e'tibordan chetda qolardi.
+   */
+  async findExternalSources(branch_id?: string) {
+    const qb = this.orderRepo
+      .createQueryBuilder('order')
+      .select('order.market_id', 'market_id')
+      .addSelect('COUNT(order.id)', 'orders_count')
+      .addSelect('COALESCE(SUM(order.total_price), 0)', 'total_price_sum')
+      .addSelect('MIN(order.createdAt)', 'oldest_at')
+      .where('order.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('order.status = :status', { status: Order_status.NEW })
+      .andWhere('order.source = :source', { source: Order_source.EXTERNAL })
+      // Pochtaga qo'shilgan posilka qabul qilishni kutmaydi — `findNewMarkets`
+      // bilan ayni shart, aks holda ikki ekran boshqa son ko'rsatardi.
+      .andWhere('order.current_batch_id IS NULL')
+      .groupBy('order.market_id')
+      .orderBy('orders_count', 'DESC');
+
+    if (branch_id) {
+      qb.andWhere('order.branch_id = :branch_id', { branch_id });
+    }
+
+    let rows: Array<{
+      market_id: string;
+      orders_count: string;
+      total_price_sum: string;
+      oldest_at: Date | null;
+    }>;
+    try {
+      rows = await qb.getRawMany();
+    } catch (error) {
+      this.handleDbError(error);
+    }
+
+    return rows.map((row) => ({
+      market_id: row.market_id,
+      orders_count: Number(row.orders_count),
+      total_price_sum: Number(row.total_price_sum),
+      oldest_at: row.oldest_at ? new Date(row.oldest_at).toISOString() : null,
+    }));
+  }
+
+  /** Yuqoridagi ro'yxat + market nomlari (ekranda nom ko'rsatiladi). */
+  async findExternalSourcesEnriched(branch_id?: string) {
+    const rows = await this.findExternalSources(branch_id);
+    const marketIds = rows.map((r) => r.market_id).filter(Boolean);
+
+    if (!marketIds.length) return rows;
+
+    const marketsRes = await rmqSend<{
+      data: Array<{ id: string; [key: string]: any }>;
+    }>(
+      this.identityClient,
+      { cmd: 'identity.market.find_by_ids' },
+      { ids: marketIds },
+    ).catch(() => ({ data: [] as Array<{ id: string; [key: string]: any }> }));
+
+    const marketMap = new Map(
+      (marketsRes?.data ?? []).map((m): [string, typeof m] => [
+        String(m.id),
+        m,
+      ]),
+    );
+
+    /**
+     * Nom topilmasa ham qator TUSHIB QOLMAYDI (`market: null`). Posilkalar
+     * haqiqatan kutib turadi — nomi yechilmagani uchun ularni yashirish
+     * qabul qilishni imkonsiz qilardi va sababi ko'rinmasdi.
+     */
     return rows.map((row) => ({
       ...row,
       market: marketMap.get(row.market_id) ?? null,

@@ -65,14 +65,43 @@ describe('IntegrationServiceService.provisionPartnerMarket (C1.5)', () => {
     expect(log).toHaveBeenCalled();
   });
 
-  it('TC2: idempotent — mavjud ref bo‘lsa yangi market ochilmaydi, tarif yangilanadi', async () => {
+  it('TC2: idempotent — mavjud ref bo‘lsa yangi market ochilmaydi', async () => {
     const refRepo = {
       findOne: jest.fn(() => Promise.resolve({ elchi_market_id: '500' })),
       create: jest.fn(),
       save: jest.fn(),
     };
-    const identity = jest.fn(() => of({ data: { id: '500' } }));
+    const identity = jest.fn();
     const svc = makeService(refRepo, identity, jest.fn());
+
+    const res: any = await svc.provisionPartnerMarket({ ...baseDto });
+
+    expect(res.statusCode).toBe(200);
+    // `tariff_updated` 2026-09-11 da qo'shildi: takroriy chaqiruv endi tarifni
+    // yangilay oladi (hamkor integratsiyani buzmasdan tarifni o'zgartirsin).
+    // Bu yerda dto'da tarif YO'Q, shuning uchun hech nima yangilanmaydi.
+    expect(res.data).toEqual({
+      elchi_market_id: '500',
+      idempotent: true,
+      tariff_updated: false,
+    });
+    expect(identity).not.toHaveBeenCalled(); // market.create YO'Q
+    expect(refRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('C1.46: mavjud marketning uy va markaz tarifi yangilanadi', async () => {
+    const refRepo = {
+      findOne: jest.fn(() => Promise.resolve({ elchi_market_id: '500' })),
+      create: jest.fn(),
+      save: jest.fn(),
+    };
+    const identity = jest.fn((pattern: { cmd: string }) =>
+      pattern.cmd === 'identity.market.find_by_id'
+        ? of({ data: { tariff_home: 0, tariff_center: 0 } })
+        : of({ data: { id: '500' } }),
+    );
+    const log = jest.fn(() => Promise.resolve(undefined));
+    const svc = makeService(refRepo, identity, log);
 
     const res: any = await svc.provisionPartnerMarket({
       ...baseDto,
@@ -80,8 +109,11 @@ describe('IntegrationServiceService.provisionPartnerMarket (C1.5)', () => {
       tariff_center: 15000,
     });
 
-    expect(res.statusCode).toBe(200);
-    expect(res.data).toEqual({ elchi_market_id: '500', idempotent: true });
+    expect(res.data).toEqual({
+      elchi_market_id: '500',
+      idempotent: true,
+      tariff_updated: true,
+    });
     expect(identity).toHaveBeenCalledWith(
       { cmd: 'identity.market.update' },
       expect.objectContaining({
@@ -93,7 +125,12 @@ describe('IntegrationServiceService.provisionPartnerMarket (C1.5)', () => {
       { cmd: 'identity.market.create' },
       expect.anything(),
     );
-    expect(refRepo.save).not.toHaveBeenCalled();
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        old_value: { tariff_home: 0, tariff_center: 0 },
+        new_value: { tariff_home: 25000, tariff_center: 15000 },
+      }),
+    );
   });
 
   it('external_seller_id yo‘q -> 400 (RpcException)', async () => {

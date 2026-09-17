@@ -39,6 +39,7 @@ import {
   CreateProductRequestDto,
   UpdateProductRequestDto,
 } from './dto/catalog.swagger.dto';
+import { matchesDeclaredType } from '@app/common';
 
 interface JwtUser {
   sub: string;
@@ -94,6 +95,13 @@ export class CatalogGatewayController {
     if (!this.allowedMime.has(file.mimetype)) {
       throw new BadRequestException('Unsupported file type');
     }
+    // E'lon qilingan tur faylning haqiqiy imzosiga mos kelishi shart —
+    // `mimetype` ni mijoz yozadi, unga yolg'iz ishonib bo'lmaydi (audit S8).
+    if (!matchesDeclaredType(file.buffer, file.mimetype)) {
+      throw new BadRequestException(
+        "Fayl mazmuni e'lon qilingan turga mos kelmadi",
+      );
+    }
 
     const uploadResponse = await firstValueFrom(
       this.fileClient
@@ -122,7 +130,9 @@ export class CatalogGatewayController {
   @Get('health')
   @ApiOperation({ summary: 'Catalog service health check' })
   health() {
-    return this.catalogClient.send({ cmd: 'catalog.health' }, {}).pipe(timeout(8000));
+    return this.catalogClient
+      .send({ cmd: 'catalog.health' }, {})
+      .pipe(timeout(8000));
   }
 
   @Post()
@@ -214,17 +224,19 @@ export class CatalogGatewayController {
   ) {
     const resolvedUserId = market_id ?? user_id;
 
-    return this.catalogClient.send(
-      { cmd: 'catalog.product.find_all' },
-      {
-        query: {
-          user_id: resolvedUserId,
-          search,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
+    return this.catalogClient
+      .send(
+        { cmd: 'catalog.product.find_all' },
+        {
+          query: {
+            user_id: resolvedUserId,
+            search,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('market/:marketId')
@@ -240,10 +252,12 @@ export class CatalogGatewayController {
   @ApiOperation({ summary: 'Get products by market id' })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
   getByMarketId(@Param('marketId') marketId: string) {
-    return this.catalogClient.send(
-      { cmd: 'catalog.product.find_all' },
-      { query: { user_id: marketId } },
-    ).pipe(timeout(8000));
+    return this.catalogClient
+      .send(
+        { cmd: 'catalog.product.find_all' },
+        { query: { user_id: marketId } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('my-products')
@@ -252,10 +266,12 @@ export class CatalogGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get my products (market role)' })
   getMyProducts(@Req() req: { user: JwtUser }) {
-    return this.catalogClient.send(
-      { cmd: 'catalog.product.find_all' },
-      { query: { user_id: req.user.sub } },
-    ).pipe(timeout(8000));
+    return this.catalogClient
+      .send(
+        { cmd: 'catalog.product.find_all' },
+        { query: { user_id: req.user.sub } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Get(':id')
@@ -264,10 +280,9 @@ export class CatalogGatewayController {
   @ApiOperation({ summary: 'Get product by ID' })
   @ApiParam({ name: 'id', description: 'Product ID (id)' })
   findById(@Param('id') id: string) {
-    return this.catalogClient.send(
-      { cmd: 'catalog.product.find_by_id' },
-      { id },
-    ).pipe(timeout(8000));
+    return this.catalogClient
+      .send({ cmd: 'catalog.product.find_by_id' }, { id })
+      .pipe(timeout(8000));
   }
 
   @Patch(':id')
@@ -306,10 +321,12 @@ export class CatalogGatewayController {
     }
     const { image: _ignoredImage, ...safeDto } = dto;
 
-    return this.catalogClient.send(
-      { cmd: 'catalog.product.update' },
-      { id, dto: { ...safeDto, image_url: imageUrl } },
-    ).pipe(timeout(8000));
+    return this.catalogClient
+      .send(
+        { cmd: 'catalog.product.update' },
+        { id, dto: { ...safeDto, image_url: imageUrl } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Delete(':id')
@@ -324,10 +341,12 @@ export class CatalogGatewayController {
   @ApiOperation({ summary: 'Delete product (soft delete)' })
   @ApiParam({ name: 'id', description: 'Product ID (id)' })
   remove(@Param('id') id: string, @Req() req: { user: JwtUser }) {
-    return this.catalogClient.send(
-      { cmd: 'catalog.product.delete' },
-      { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    ).pipe(timeout(8000));
+    return this.catalogClient
+      .send(
+        { cmd: 'catalog.product.delete' },
+        { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Patch('my/:id')
@@ -366,9 +385,11 @@ export class CatalogGatewayController {
     }
     const { image: _ignoredImage, ...safeDto } = dto;
 
-    return this.catalogClient.send(
-      { cmd: 'catalog.product.update_own' },
-      { id, user_id: req.user.sub, dto: { ...safeDto, image_url: imageUrl } },
-    ).pipe(timeout(8000));
+    return this.catalogClient
+      .send(
+        { cmd: 'catalog.product.update_own' },
+        { id, user_id: req.user.sub, dto: { ...safeDto, image_url: imageUrl } },
+      )
+      .pipe(timeout(8000));
   }
 }

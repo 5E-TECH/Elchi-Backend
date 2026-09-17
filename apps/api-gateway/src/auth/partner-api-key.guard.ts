@@ -8,6 +8,7 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
+import { isIpAllowed, normalizeIp } from './ip-allowlist.util';
 
 /**
  * Elchi Partner API autentifikatsiyasi (JWT EMAS).
@@ -29,6 +30,8 @@ export interface PartnerPrincipal {
 /** integration.partner.validate_key javobi (guard qaror qabul qiladi). */
 interface PartnerValidation extends PartnerPrincipal {
   is_active: boolean;
+  /** Ruxsat etilgan IP/CIDR ro'yxati. Bo'sh/null — cheklov yo'q. */
+  ip_allowlist?: string[] | null;
 }
 
 @Injectable()
@@ -41,6 +44,12 @@ export class PartnerApiKeyGuard implements CanActivate {
     const request = context.switchToHttp().getRequest<{
       headers: Record<string, unknown>;
       partner?: PartnerPrincipal;
+      /**
+       * `main.ts` da `trust proxy` yoqilgan, shuning uchun `req.ip` tunnel
+       * konteyneri emas, HAQIQIY mijoz IP'sini beradi.
+       */
+      ip?: string;
+      ips?: string[];
     }>();
     const apiKey = this.extractApiKey(request);
     if (!apiKey) {
@@ -68,6 +77,24 @@ export class PartnerApiKeyGuard implements CanActivate {
     if (!partner.is_active) {
       // Kalit to'g'ri, lekin hamkor o'chirilgan — autentifikatsiya bor, ruxsat yo'q.
       throw new ForbiddenException('Hamkor faol emas');
+    }
+
+    /**
+     * IP ALLOWLIST.
+     *
+     * ⚠️ Ilgari bu tekshiruv UMUMAN YO'Q EDI: `ip_allowlist` bazada, admin
+     * API'da va UI'da bor edi, lekin hech qayerda o'qilmasdi. Operator uni
+     * to'ldirib kirish cheklangan deb o'ylardi — aslida har qanday IP'dan
+     * ishlardi. Yolg'on xavfsizlik hissi yo'qligidan yomonroq, chunki u
+     * boshqa choralar ko'rishni to'sadi.
+     *
+     * Ro'yxat bo'sh bo'lsa cheklov yo'q (mavjud hamkorlar buzilmasin).
+     */
+    const clientIp = request.ip ?? request.ips?.[0];
+    if (!isIpAllowed(clientIp, partner.ip_allowlist)) {
+      throw new ForbiddenException(
+        `IP ruxsat etilmagan: ${normalizeIp(clientIp) || 'aniqlanmadi'}`,
+      );
     }
 
     request.partner = { id: partner.id, name: partner.name };

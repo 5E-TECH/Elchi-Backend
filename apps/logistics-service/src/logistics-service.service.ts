@@ -949,37 +949,38 @@ export class LogisticsServiceService implements OnModuleInit {
     }
   }
 
+  /**
+   * Hudud seedi.
+   *
+   * ⚠️ SOXTA SOATO YASALMAYDI. Avval kodlar massiv indeksidan tuzilardi
+   * (`REG-01`, `REG-01-DIS-01`) va bu jimgina zarar keltirardi: hamkor
+   * tizimlar SOATO bo'yicha avtomatik moslashga uringanda hech narsa mos
+   * kelmasdi, chunki bir tomonda haqiqiy `1703224`, bizda esa o'ylab
+   * topilgan satr turardi.
+   *
+   * Endi kod FAQAT ma'lumot faylidan olinadi. Noma'lum bo'lsa `null`
+   * qoladi — bu halol holat va uni panelda ko'rish mumkin; soxta kod esa
+   * haqiqiydek ko'rinib, xatoni yashirardi.
+   */
   async onModuleInit() {
-    for (const [regionIndex, regionData] of regions.entries()) {
+    for (const regionData of regions) {
       const regionName = regionData.name.trim();
       let regionEntity = await this.regionRepo.findOne({
         where: { name: regionName },
       });
 
       if (!regionEntity) {
-        const generatedSato = `REG-${String(regionIndex + 1).padStart(2, '0')}`;
-        let satoCode = generatedSato;
-        const satoExists = await this.regionRepo.findOne({
-          where: { sato_code: generatedSato },
-        });
-        if (satoExists) {
-          satoCode = `${generatedSato}-${Date.now()}`;
-        }
-
         regionEntity = await this.regionRepo.save(
           this.regionRepo.create({
             name: regionName,
-            sato_code: satoCode,
+            sato_code: regionData.sato_code,
           }),
         );
         void this.syncRegionToSearch(regionEntity);
       }
 
-      for (const [
-        districtIndex,
-        districtNameRaw,
-      ] of regionData.districts.entries()) {
-        const districtName = districtNameRaw.trim();
+      for (const districtData of regionData.districts) {
+        const districtName = districtData.name.trim();
         const exists = await this.districtRepo.findOne({
           where: { name: districtName, region_id: regionEntity.id },
         });
@@ -990,7 +991,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
         const district = this.districtRepo.create({
           name: districtName,
-          sato_code: `REG-${String(regionIndex + 1).padStart(2, '0')}-DIS-${String(districtIndex + 1).padStart(2, '0')}`,
+          sato_code: districtData.sato_code,
           region_id: regionEntity.id,
           assigned_region: regionEntity.id,
         });

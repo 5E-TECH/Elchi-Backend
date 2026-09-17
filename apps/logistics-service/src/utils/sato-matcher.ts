@@ -192,7 +192,7 @@ export interface MatchResult {
  * Viloyatlarni SATO kodlari bilan moslashtirish
  */
 export function matchRegions(
-  dbRegions: { id: string; name: string; sato_code?: string }[],
+  dbRegions: { id: string; name: string; sato_code?: string | null }[],
 ): MatchResult {
   const result: MatchResult = {
     matched: [],
@@ -305,7 +305,7 @@ export function matchDistricts(
   dbDistricts: {
     id: string;
     name: string;
-    sato_code?: string;
+    sato_code?: string | null;
     region?: { id: string; name: string };
   }[],
 ): MatchResult {

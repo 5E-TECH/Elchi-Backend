@@ -39,7 +39,7 @@ import {
   GenerateQrRequestDto,
 } from './dto/file.swagger.dto';
 import type { Response } from 'express';
-
+import { matchesDeclaredType } from '@app/common';
 
 // RPC ceiling: this downstream can legitimately run long (base64/provider
 // fetch up to ~60s); an 8s ceiling would premature-fail a working call. See
@@ -61,7 +61,11 @@ export class FileGatewayController {
     'video/webm',
   ]);
 
-  constructor(@Inject('FILE') private readonly fileClient: ClientProxy) {}
+  constructor(
+    @Inject('FILE') private readonly fileClient: ClientProxy,
+    // Dalil faylining egasini aniqlash uchun (audit S5).
+    @Inject('ORDER') private readonly orderClient: ClientProxy,
+  ) {}
 
   @Post('files/upload')
   @UseGuards(JwtAuthGuard)
@@ -103,18 +107,29 @@ export class FileGatewayController {
     if (!this.allowedMime.has(file.mimetype)) {
       throw new BadRequestException('Unsupported file type');
     }
+    // E'lon qilingan tur faylning haqiqiy imzosiga mos kelishi shart —
+    // `mimetype` ni mijoz yozadi, unga yolg'iz ishonib bo'lmaydi (audit S8).
+    if (!matchesDeclaredType(file.buffer, file.mimetype)) {
+      throw new BadRequestException(
+        "Fayl mazmuni e'lon qilingan turga mos kelmadi",
+      );
+    }
 
     return firstValueFrom(
-      this.fileClient.send(
-        { cmd: 'file.upload' },
-        {
-          file_name: file.originalname,
-          mime_type: file.mimetype,
-          file_base64: file.buffer.toString('base64'),
-          folder:
-            typeof req?.body?.folder === 'string' ? req.body.folder : undefined,
-        },
-      ).pipe(timeout(FILE_RPC_TIMEOUT_MS)),
+      this.fileClient
+        .send(
+          { cmd: 'file.upload' },
+          {
+            file_name: file.originalname,
+            mime_type: file.mimetype,
+            file_base64: file.buffer.toString('base64'),
+            folder:
+              typeof req?.body?.folder === 'string'
+                ? req.body.folder
+                : undefined,
+          },
+        )
+        .pipe(timeout(FILE_RPC_TIMEOUT_MS)),
     );
   }
 
@@ -155,7 +170,18 @@ export class FileGatewayController {
     );
   }
 
-  private assertCanAccessPrivateKey(key: string, roles: string[]): void {
+  /** Faylni faqat o'z buyurtmasi doirasida ko'ra oladigan rollar. */
+  private static readonly SCOPED_FILE_ROLES = new Set<string>([
+    RoleEnum.MARKET,
+    RoleEnum.MARKET_OPERATOR,
+    RoleEnum.COURIER,
+  ]);
+
+  private async assertCanAccessPrivateKey(
+    key: string,
+    req: { user?: { sub?: string; roles?: string[]; branch_id?: string } },
+  ): Promise<void> {
+    const roles = this.rolesOf(req);
     const safeKey = String(key ?? '');
     const isPrivate = FileGatewayController.PRIVATE_KEY_PREFIXES.some(
       (prefix) => safeKey.startsWith(prefix),
@@ -171,6 +197,54 @@ export class FileGatewayController {
         'Bu maxfiy faylga (moliyaviy dalil) kirish uchun ruxsatingiz yetarli emas',
       );
     }
+
+    /**
+     * ⚠️ PER-OBYEKT EGALIK TEKSHIRUVI (audit S5).
+     *
+     * Rol tekshiruvining o'zi "market rolidagi HAR KIM — HAR QANDAY
+     * marketning dalilini" ochishga yo'l qo'yardi (kuryerlar uchun ham
+     * xuddi shunday). Fayl kaliti o'zi bir bearer imkoniyat bo'lgani uchun
+     * bu haqiqiy IDOR edi.
+     *
+     * Egalik munosabati allaqachon bazada: dalil fayllari buyurtmaning
+     * `proof_files` ro'yxatida turadi. Shu bois yangi jadval kerak emas —
+     * kalit bo'yicha buyurtma topiladi va so'rovchi o'sha buyurtmaga
+     * tegishlimi degan savolga javob beriladi. Xodim rollari (admin,
+     * manager, operator, registrator) avvalgidek ishlaydi: ular allaqachon
+     * butun oqimni ko'radi.
+     */
+    const isScoped = roles.some((role) =>
+      FileGatewayController.SCOPED_FILE_ROLES.has(role),
+    );
+    if (!isScoped) {
+      return;
+    }
+
+    const sub = String(req?.user?.sub ?? '');
+    const owner = await firstValueFrom(
+      this.orderClient
+        .send<{
+          data?: {
+            market_id?: string | null;
+            courier_id?: string | null;
+            holder_courier_id?: string | null;
+          } | null;
+        }>({ cmd: 'order.find_owner_by_proof_file' }, { key: safeKey })
+        .pipe(timeout(FILE_RPC_TIMEOUT_MS)),
+    ).catch(() => null);
+
+    const ownerData = owner?.data ?? null;
+    const belongsToRequester =
+      Boolean(ownerData) &&
+      (String(ownerData?.market_id ?? '') === sub ||
+        String(ownerData?.courier_id ?? '') === sub ||
+        String(ownerData?.holder_courier_id ?? '') === sub);
+
+    if (!belongsToRequester) {
+      throw new ForbiddenException(
+        'Bu fayl sizning buyurtmangizga tegishli emas',
+      );
+    }
   }
 
   @Get('files/:key')
@@ -183,14 +257,18 @@ export class FileGatewayController {
     type: Number,
     example: 3600,
   })
-  getFileUrl(
+  async getFileUrl(
     @Param('key') key: string,
-    @Req() req: { user?: { roles?: string[] } },
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
     @Query('expires_in', new ParseIntPipe({ optional: true }))
     expires_in?: number,
   ) {
-    this.assertCanAccessPrivateKey(key, this.rolesOf(req));
-    return this.fileClient.send({ cmd: 'file.get_url' }, { key, expires_in }).pipe(timeout(FILE_RPC_TIMEOUT_MS));
+    await this.assertCanAccessPrivateKey(key, req);
+    return firstValueFrom(
+      this.fileClient
+        .send({ cmd: 'file.get_url' }, { key, expires_in })
+        .pipe(timeout(FILE_RPC_TIMEOUT_MS)),
+    );
   }
 
   // Object-key prefixes that may be served UNAUTHENTICATED (so plain <img src>
@@ -219,9 +297,11 @@ export class FileGatewayController {
       );
     }
     const response = await firstValueFrom(
-      this.fileClient.send<{
-        data?: { body_base64?: string; mime_type?: string };
-      }>({ cmd: 'file.read' }, { key }).pipe(timeout(FILE_RPC_TIMEOUT_MS)),
+      this.fileClient
+        .send<{
+          data?: { body_base64?: string; mime_type?: string };
+        }>({ cmd: 'file.read' }, { key })
+        .pipe(timeout(FILE_RPC_TIMEOUT_MS)),
     );
 
     const bodyBase64 = response?.data?.body_base64;
@@ -247,7 +327,9 @@ export class FileGatewayController {
   @ApiOperation({ summary: 'Delete file by key (admin only)' })
   @ApiParam({ name: 'key', description: 'Object key in MinIO' })
   deleteFile(@Param('key') key: string) {
-    return this.fileClient.send({ cmd: 'file.delete' }, { key }).pipe(timeout(FILE_RPC_TIMEOUT_MS));
+    return this.fileClient
+      .send({ cmd: 'file.delete' }, { key })
+      .pipe(timeout(FILE_RPC_TIMEOUT_MS));
   }
 
   @Post('files/qr')
@@ -255,7 +337,9 @@ export class FileGatewayController {
   @ApiOperation({ summary: 'Generate QR and upload to MinIO' })
   @ApiBody({ type: GenerateQrRequestDto })
   generateQr(@Body() dto: GenerateQrRequestDto) {
-    return this.fileClient.send({ cmd: 'file.generate_qr' }, dto).pipe(timeout(FILE_RPC_TIMEOUT_MS));
+    return this.fileClient
+      .send({ cmd: 'file.generate_qr' }, dto)
+      .pipe(timeout(FILE_RPC_TIMEOUT_MS));
   }
 
   @Post('files/pdf')
@@ -263,6 +347,8 @@ export class FileGatewayController {
   @ApiOperation({ summary: 'Generate PDF and upload to MinIO' })
   @ApiBody({ type: GeneratePdfRequestDto })
   generatePdf(@Body() dto: GeneratePdfRequestDto) {
-    return this.fileClient.send({ cmd: 'file.generate_pdf' }, dto).pipe(timeout(FILE_RPC_TIMEOUT_MS));
+    return this.fileClient
+      .send({ cmd: 'file.generate_pdf' }, dto)
+      .pipe(timeout(FILE_RPC_TIMEOUT_MS));
   }
 }

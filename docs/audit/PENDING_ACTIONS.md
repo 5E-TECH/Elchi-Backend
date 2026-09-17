@@ -97,3 +97,47 @@ separate infra investment, fine for the current scale.
 Three existing collisions (unrelated tables, already ran in prod) are grandfathered
 by `migration-timestamp.guard.spec.ts`. Renumbering is cosmetic and only safe on a
 fresh environment.
+
+---
+
+## 🔴 INFRA — navbat argumentini o'zgartirish tartibi
+
+**2026-09-14 hodisasi.** `RMQ_RPC_TTL_MS` sukuti 10 000 → 60 000 ga
+o'zgartirildi va deploy'dan keyin **14 ta servis ham navbatga ulana olmadi**:
+RabbitMQ mavjud navbatni boshqa argument bilan qayta e'lon qilishga ruxsat
+bermaydi —
+
+```
+PRECONDITION_FAILED: inequivalent arg 'x-message-ttl' for queue 'order_queue':
+received '60000' but current is '10000'
+```
+
+Xato KANAL darajasida yuzaga keladi, servis jurnaliga tushmaydi: konteynerlar
+"Up (unhealthy)" bo'lib turadi, navbatlarda **iste'molchi 0**, har bir so'rov
+**504**. Ya'ni nosozlik belgisiz.
+
+**Navbat argumentini (TTL, DLX, prefetch emas) o'zgartirish tartibi:**
+
+1. Navbatlar BO'SH ekanini tekshiring (DLQ'larga tegilmaydi — ularda tarixiy
+   xabarlar bor):
+   ```bash
+   docker exec elchi-rabbitmq rabbitmqctl list_queues name messages consumers
+   ```
+2. Faqat ASOSIY navbatlarni o'chiring:
+   ```bash
+   for q in identity order catalog logistics finance notification \
+            integration analytics branch investor file c2c search; do
+     docker exec elchi-rabbitmq rabbitmqctl delete_queue ${q}_queue
+   done
+   ```
+3. Servislarni qayta ishga tushiring — navbatlar yangi argument bilan
+   avtomatik qayta yaratiladi:
+   ```bash
+   cd ~/apps/backend && docker compose -f docker-compose.prod.yml restart
+   ```
+4. Tekshiring: `curl -s https://api.elchipochta.uz/health` → 200.
+
+**Kod tomonidan qo'yilgan himoya:** `RmqService.setupDlqTopology` endi startda
+mavjud navbat argumentlarini tekshiradi va nomuvofiqlikda ANIQ xato + yuqoridagi
+`delete_queue` buyrug'ini jurnalga yozadi. U nosozlikni to'sa olmaydi (navbatni
+e'lon qilish transportning ishi), lekin sababni bir zumda ko'rsatadi.

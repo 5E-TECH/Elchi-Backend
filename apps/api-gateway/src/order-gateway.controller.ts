@@ -44,6 +44,7 @@ import {
   CreateOrderRequestDto,
   HandoverCancelledOrdersToMarketRequestDto,
   OrdersArrayDto,
+  ReceiveByScanDto,
   PartlySellOrderRequestDto,
   RollbackOrderRequestDto,
   ScanAssignOrderRequestDto,
@@ -960,15 +961,32 @@ export class OrderGatewayController {
     return this.create(mappedDto, req);
   }
 
+  /**
+   * Buyurtmalarni qabul qilish.
+   *
+   * MANAGER 2026-09-10 da qo'shildi: hamkordan (BeePost) kelgan posilkalar
+   * HQ da qabul qilinadi va buni HQ menejeri bajaradi.
+   *
+   * ⚠️ Rol o'zi yetarli EMAS — menejer va registrator faqat O'Z filialidagi
+   * buyurtmani qabul qila oladi. Chegara order-service ichida qo'yiladi
+   * (`resolveReceiveBranchScope`), shu bois bu yerda `requester` uzatiladi.
+   * Filialsiz foydalanuvchi hech nima qabul qila olmaydi (fail-closed).
+   */
   @Post('receive')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Receive new orders' })
+  @ApiOperation({ summary: 'Receive new orders (branch-scoped for staff)' })
   @ApiQuery({ name: 'search', required: false, type: String })
   @ApiBody({ type: OrdersArrayDto })
   receiveNewOrders(
     @Body() dto: OrdersArrayDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
     @Query('search') search?: string,
   ) {
     return firstValueFrom(
@@ -978,9 +996,60 @@ export class OrderGatewayController {
           {
             order_ids: dto.order_ids,
             search,
+            requester: {
+              id: req.user?.sub,
+              roles: req.user?.roles ?? [],
+            },
           },
         )
         .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+  }
+
+  /**
+   * TASHQI POSILKANI SKANERLAB QABUL QILISH (audit K2).
+   *
+   * Operator yorliqdagi QR'ni skanerlaydi, server tokenni buyurtmaga
+   * MOSLAYDI. Ilgari frontend tokenni o'zi moslab serverga `order_ids`
+   * yuborardi — ya'ni server skanerlash bo'lgan-bo'lmaganini bilmasdi va
+   * darvozani boshqa ekrandan yoki to'g'ridan-to'g'ri API'dan chetlab
+   * o'tish mumkin edi.
+   *
+   * ⚠️ ROLLAR `/orders/receive` BILAN BIR XIL (MANAGER bor, MARKET yo'q) —
+   * market posilka qabul qilmaydi.
+   */
+  @Post('external/receive-by-scan')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Receive external parcels by scanned label tokens',
+  })
+  @ApiBody({ type: ReceiveByScanDto })
+  receiveExternalByScan(
+    @Body() dto: ReceiveByScanDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.receive_by_scan' },
+          {
+            tokens: dto.tokens,
+            requester: { id: req.user?.sub, roles: req.user?.roles ?? [] },
+          },
+        )
+        .pipe(timeout(15000)),
     ).catch((error: unknown) => {
       if (error instanceof TimeoutError) {
         throw new GatewayTimeoutException('Order service response timeout');
@@ -1008,12 +1077,91 @@ export class OrderGatewayController {
     });
   }
 
+  /**
+   * KIRUVCHI POSILKALARNING MANBALARI.
+   *
+   * "Kiruvchi posilkalar" ekrani ilgari BARCHA tashqi buyurtmani bitta
+   * ro'yxatda ko'rsatardi. Ikkinchi manba qo'shilishi bilan operator qo'lida
+   * bir manbaning qopi turib, ro'yxatda boshqasining posilkasini ham
+   * ko'rardi. Endi avval manba tanlanadi.
+   *
+   * ⚠️ ROLLAR `/orders/receive` BILAN BIR XIL (MANAGER bor, MARKET yo'q).
+   * `/orders/external` da MARKET ham bor, lekin market posilka QABUL
+   * QILMAYDI — unga manba tanlagichini ko'rsatish hech qayerga olib
+   * bormaydigan ekran bo'lardi.
+   *
+   * ⚠️ FILIAL DOIRASI `markets/new` BILAN AYNI. Buni tushirib qoldirib
+   * bo'lmaydi: `order.receive` ichida `resolveReceiveBranchScope` begona
+   * filial buyurtmasi bo'lsa BUTUN so'rovni rad etadi. Ya'ni doirasiz
+   * sanalgan son menejerga "12 posilka bor" deb ko'rsatib, qabul qilishda
+   * to'liq xato berardi — va sabab ekranda ko'rinmasdi.
+   */
+  @Get('external/sources')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Incoming parcel sources (grouped external NEW orders)',
+  })
+  async findExternalSources(@Req() req?: { user: JwtUser }) {
+    const roles = req?.user?.roles ?? [];
+    const normalizedRoles = this.normalizeRoles(roles);
+    const isBranchScopedRequester =
+      normalizedRoles.includes(RoleEnum.BRANCH) ||
+      normalizedRoles.includes(RoleEnum.MANAGER) ||
+      normalizedRoles.includes(RoleEnum.REGISTRATOR);
+
+    let resolvedBranchId: string | undefined;
+    if (isBranchScopedRequester && req?.user) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
+        throw new BadRequestException('Branch user branchga biriktirilmagan');
+      }
+      resolvedBranchId = String(assignment.branch_id);
+    }
+
+    const result = await firstValueFrom(
+      this.orderClient
+        .send(
+          { cmd: 'order.find_external_sources' },
+          { branch_id: resolvedBranchId },
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
+
+    // Order service nomni o'zi qo'shadi; qo'shmagan bo'lsa (eski versiya)
+    // gateway to'ldiradi — ekran nomsiz qolmasin.
+    if (!Array.isArray(result)) {
+      return result;
+    }
+    return this.enrichMarketRows(result);
+  }
+
+  /**
+   * ⚠️ MANAGER 2026-09-13 da QO'SHILDI (audit K1).
+   *
+   * `external/sources` MANAGER'ga ruxsat berardi, bu ro'yxat esa BERMASDI:
+   * menejer manba kartasini ko'rib, ustiga bosib 403 olardi — ekran esa
+   * xatoni ko'rsatmaydigan shox tanlab "posilka yo'q" deb yozardi. Ya'ni
+   * HQ menejeri uchun butun oqim ishlamasdi, sababi ham ko'rinmasdi.
+   */
   @Get('external')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
     RoleEnum.SUPERADMIN,
     RoleEnum.ADMIN,
     RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
     RoleEnum.MARKET,
   )
   @ApiBearerAuth()
@@ -1046,7 +1194,7 @@ export class OrderGatewayController {
     enum: [10, 25, 50, 100],
     schema: { default: 10 } as any,
   })
-  findAllExternal(
+  async findAllExternal(
     @Query('market_id') market_id?: string,
     @Query('status') status?: string | string[],
     @Query('date') date?: string,
@@ -1077,6 +1225,33 @@ export class OrderGatewayController {
 
     const statuses = this.parseStatusQuery(status);
 
+    /**
+     * ⚠️ FILIAL DOIRASI (audit K8).
+     *
+     * Manba KARTALARI (`external/sources`) filial bo'yicha sanaladi, bu
+     * ro'yxat esa cheklanmagan edi: menejer 12 posilka ko'rsatilgan kartani
+     * ochib, ichida BEGONA filial posilkalarini ham ko'rardi. Ularni
+     * skanerlab qabul qilmoqchi bo'lsa `receiveNewOrders` BUTUN so'rovni rad
+     * etadi (`resolveReceiveBranchScope`) — ya'ni bitta begona posilka
+     * butun sessiyani buzardi va sabab ekranda ko'rinmasdi.
+     *
+     * Doira `markets/new` va `external/sources` bilan AYNI qoidada.
+     */
+    const normalizedRoles = this.normalizeRoles(roles);
+    const isBranchScoped =
+      normalizedRoles.includes(RoleEnum.BRANCH) ||
+      normalizedRoles.includes(RoleEnum.MANAGER) ||
+      normalizedRoles.includes(RoleEnum.REGISTRATOR);
+
+    let resolvedBranchId: string | undefined;
+    if (isBranchScoped && req?.user) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
+        throw new BadRequestException('Branch user branchga biriktirilmagan');
+      }
+      resolvedBranchId = String(assignment.branch_id);
+    }
+
     return firstValueFrom(
       this.orderClient
         .send(
@@ -1084,6 +1259,7 @@ export class OrderGatewayController {
           {
             query: {
               market_id: resolvedMarketId,
+              branch_id: resolvedBranchId,
               status: statuses,
               start_day: resolvedStartDay,
               end_day: resolvedEndDay,

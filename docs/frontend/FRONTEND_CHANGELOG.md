@@ -23,6 +23,39 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-09-14 — pul/sig'im/xavfsizlik auditi tuzatishlari
+
+- ✏️ **kontrakt** [finance] **`GET .../financial-balance` javobi to'ldirildi.** Formula
+  `main + chain_receivable + provider_receivable − market_payable` bo'ldi. Yangi bandlar:
+  `chain: { chainReceivable, branchReceivable, hqReceivable, providerReceivable }`,
+  `branches.branchCashboxTotal`. `formula` matni ham o'zgardi.
+  → **Frontendda:** eski `branches.branchReceivable` saqlanib qoldi, ya'ni buzilmaydi;
+  lekin "kompaniya holati" ekranida endi kuryerlar/kargo qismini ham ko'rsatish tavsiya
+  etiladi. `couriers.couriersTotalBalanse` ilgari **doim 0** edi — endi haqiqiy yig'indi
+  qaytaradi, ya'ni "0" deb qotirilgan joy bo'lsa olib tashlansin.
+- ✏️ **kontrakt** [finance] **Manager paneli (`berilishi_kerak`) endi ledgerdan keladi.**
+  Ilgari u "sotilgan buyurtmalar yig'indisi − davrda to'langan" edi va 5 000 qatordan
+  keyin jimgina qirqilardi. Endi `order_settlement` dan olinadi va HQ'ga topshirilgani
+  o'z-o'zidan chiqib ketadi. `hq_ga_tollangan` ma'lumot uchun qoladi.
+  → **Frontendda:** o'zgarish shart emas; raqam kattaroq/aniqroq bo'lishi mumkin.
+- 🟢 **info** [order] **Sotuvda filial kassasiga oyoq yozilmaydi.** BRANCH kassa qoldig'i endi
+  "filial jismonan ushlab turgan naqd" ma'nosini beradi (kuryerdan qabul qilinganda
+  ko'payadi, HQ'ga topshirilganda kamayadi). "Filial HQ'ga qancha qarz" degan raqam
+  manager panelidan olinadi.
+- ⚠️ **breaking** [order] **Tarif qo'riqchisi.** Market tarifi kuryer (+ hamkor filial)
+  ulushini qoplamasa, sotuv **400** bilan rad etiladi va xabar yetishmagan summani
+  ko'rsatadi. → **Frontendda:** bu xatoni kuryerga tushunarli ko'rsatish kerak
+  (tarifni to'g'rilash kerakligi aytilsin).
+- ⚠️ **breaking** [file] **Maxfiy fayl (proof-/expense-/cod-/receipt-) endi egasi bo'yicha
+  tekshiriladi.** `market`/`market_operator`/`courier` rollari faqat O'Z buyurtmasining
+  dalilini ocha oladi (ilgari o'sha roldagi har kim har qanday faylni ochardi).
+  → **Frontendda:** 403 holatini ko'rsatish; boshqa marketning fayliga havola bo'lsa
+  ishlamaydi.
+- 🟢 **info** [finance] **Marketga ortiqcha to'lov endi 400 qaytaradi** (qarzdan ko'p summa).
+- 🟢 **info** [finance] **Smena yopilishi** endi faqat o'z kassasi bo'yicha hisoblaydi;
+  `POST .../shift/open` ixtiyoriy `cashbox_user_id` qabul qiladi (berilmasa MAIN).
+
+
 ### 2026-06-06 — identity-service auditi
 
 - 🟢 **info** [identity] **Manager cashbox = `FOR_COURIER` (tasdiqlandi).** Manager (menejer)

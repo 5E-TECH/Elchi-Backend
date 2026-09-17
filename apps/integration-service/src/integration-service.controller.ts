@@ -1,5 +1,10 @@
 import { Controller } from '@nestjs/common';
-import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
+import {
+  Ctx,
+  MessagePattern,
+  Payload,
+  RmqContext,
+} from '@nestjs/microservices';
 import { RmqService, executeAndAck } from '@app/common';
 import { IntegrationServiceService } from './integration-service.service';
 
@@ -44,6 +49,8 @@ export class IntegrationServiceController {
       name?: string;
       webhook_url?: string | null;
       webhook_secret?: string | null;
+      sandbox_webhook_url?: string | null;
+      sandbox_webhook_secret?: string | null;
       ip_allowlist?: string[] | null;
       requester?: { id?: string; roles?: string[] } | null;
     },
@@ -51,6 +58,78 @@ export class IntegrationServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.integrationService.createPartner(data ?? {}),
+    );
+  }
+
+  /** Hamkor sozlamalari (webhook manzili/sekreti, IP ro'yxati, nom). */
+  /**
+   * Sinov webhooki — hamkor manzilini haqiqiy buyurtmaga tegmasdan tekshiradi.
+   * `url` berilsa saqlanganidan ustun turadi (yangi manzilni saqlashdan
+   * OLDIN sinash uchun).
+   */
+  /**
+   * Integratsiya paneli uchun metrika (hodisa, xato, navbat, javob vaqti).
+   * Ikki manbadan yig'iladi: hamkor webhook outbox'i va sinxron tarixi.
+   */
+  @MessagePattern({ cmd: 'integration.metrics' })
+  integrationMetrics(
+    @Payload() data: { hours?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.integrationMetrics(data?.hours),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.partner.webhook.test' })
+  testPartnerWebhook(
+    @Payload()
+    data: {
+      id?: string;
+      url?: string | null;
+      requester?: { id?: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.testPartnerWebhook(
+        String(data?.id ?? ''),
+        { url: data?.url ?? null },
+        data?.requester ?? null,
+      ),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.partner.update' })
+  updatePartner(
+    @Payload()
+    data: {
+      id?: string;
+      name?: string;
+      webhook_url?: string | null;
+      webhook_secret?: string | null;
+      sandbox_webhook_url?: string | null;
+      sandbox_webhook_secret?: string | null;
+      sandbox_enabled?: boolean;
+      ip_allowlist?: string[] | null;
+      requester?: { id?: string; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.updatePartner(
+        String(data?.id ?? ''),
+        {
+          name: data?.name,
+          webhook_url: data?.webhook_url,
+          webhook_secret: data?.webhook_secret,
+          sandbox_webhook_url: data?.sandbox_webhook_url,
+          sandbox_webhook_secret: data?.sandbox_webhook_secret,
+          sandbox_enabled: data?.sandbox_enabled,
+          ip_allowlist: data?.ip_allowlist,
+        },
+        data?.requester,
+      ),
     );
   }
 
@@ -157,7 +236,11 @@ export class IntegrationServiceController {
       region_id?: string | null;
       district_id?: string | null;
       where_deliver?: string;
-      items?: Array<{ name?: string; quantity?: number }>;
+      items?: Array<{
+        name?: string;
+        quantity?: number;
+        external_product_id?: string | null;
+      }>;
       cod_amount?: number;
       subtotal?: number;
     },
@@ -200,6 +283,8 @@ export class IntegrationServiceController {
       old_status?: string;
       new_status?: string;
       cod_collected?: number;
+      total_price?: number;
+      extra_cost?: number;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -233,14 +318,20 @@ export class IntegrationServiceController {
   @MessagePattern({ cmd: 'integration.update' })
   update(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.integrationService.updateIntegration(String(data?.id), data?.dto ?? {}),
+      this.integrationService.updateIntegration(
+        String(data?.id),
+        data?.dto ?? {},
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'integration.delete' })
   remove(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.integrationService.deleteIntegration(String(data?.id), data?.requester),
+      this.integrationService.deleteIntegration(
+        String(data?.id),
+        data?.requester,
+      ),
     );
   }
 
@@ -277,6 +368,22 @@ export class IntegrationServiceController {
   syncHistory(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.integrationService.getSyncHistory(data?.query ?? data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.payment.list' })
+  listPaymentTransactions(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listPaymentTransactions(
+        data?.query ?? data ?? {},
+      ),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.webhook.logs' })
+  listWebhookLogs(@Payload() data: any, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listWebhookLogs(data?.query ?? data ?? {}),
     );
   }
 
@@ -373,19 +480,22 @@ export class IntegrationServiceController {
     );
   }
 
-  @MessagePattern({ cmd: 'integration.shipment.list' })
-  listShipments(
+  /**
+   * Kichik sayt uchun ODDIY qabul yo'li: QR → saytning API'si → buyurtma.
+   * Ilgari zanjir uzuq edi (audit EI-01).
+   */
+  @MessagePattern({ cmd: 'integration.scan_intake' })
+  scanIntake(
     @Payload()
     data: {
-      integration_id?: string;
-      internal_status?: string;
-      limit?: number;
-      offset?: number;
+      slug: string;
+      qr_code: string;
+      requester?: { id?: string; roles?: string[] };
     },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.integrationService.listShipments(data),
+      this.integrationService.scanIntake(data),
     );
   }
 
@@ -406,6 +516,46 @@ export class IntegrationServiceController {
   }
 
   // ===== Provider COD reconciliation =====
+
+  /**
+   * ⚠️ BU NAQSH ILGARI IKKI MARTA RO'YXATDAN O'TGAN EDI (audit M1) — bu
+   * mening o'z xatom: jo'natmalar ro'yxatini qo'shganda mavjud
+   * `listShipments` handlerini sezmadim. Ikki handler bir naqshda bo'lsa
+   * bittasi SOYA ostida qoladi va qaysi biri ishlashi implementatsiyaga
+   * bog'liq — ya'ni gateway mening filtrlarimni (`status`, `failed_only`,
+   * `page`) yuborardi-yu, eski handler ularni E'TIBORSIZ qoldirishi mumkin
+   * edi va panel filtrlanmagan ma'lumot ko'rsatardi.
+   *
+   * Eski handler va uning `listShipments` metodi o'lik edi (hech bir
+   * gateway marshruti chaqirmasdi, testda ham ishlatilmasdi) — ikkisi ham
+   * olib tashlandi.
+   */
+  @MessagePattern({ cmd: 'integration.shipment.list' })
+  listProviderShipments(
+    @Payload()
+    data: {
+      integration_id?: string;
+      status?: string;
+      failed_only?: boolean;
+      page?: number;
+      limit?: number;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listProviderShipments(data ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.partner.shipment.list' })
+  listPartnerShipments(
+    @Payload() data: { partner_id?: string; page?: number; limit?: number },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.listPartnerShipments(data ?? {}),
+    );
+  }
 
   @MessagePattern({ cmd: 'integration.receivable.list' })
   listReceivables(
@@ -430,6 +580,17 @@ export class IntegrationServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.integrationService.getProviderBalance(data.integration_id),
+    );
+  }
+
+  /**
+   * Barcha kargolarning umumiy qarzi — moliyaviy balans formulasi uchun
+   * (audit M5).
+   */
+  @MessagePattern({ cmd: 'integration.receivable.outstanding_total' })
+  getProviderOutstandingTotal(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.getProviderOutstandingTotal(),
     );
   }
 

@@ -76,6 +76,7 @@ export class FinanceServiceService implements OnModuleInit {
     private readonly dataSource: DataSource,
     private readonly activityLog: ActivityLogService,
     @Inject('ORDER') private readonly orderClient: ClientProxy,
+    @Inject('INTEGRATION') private readonly integrationClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     private readonly outbox: OutboxService,
   ) {}
@@ -1176,6 +1177,12 @@ export class FinanceServiceService implements OnModuleInit {
         opening_balance_cash: Number(dto.opening_balance_cash ?? 0),
         opening_balance_card: Number(dto.opening_balance_card ?? 0),
         comment: dto.comment ?? null,
+        // Smena qaysi kassaga tegishli (audit M7). Berilmasa — markaziy MAIN
+        // kassa: smena ochish huquqi bor rollar (superadmin/admin/registrator)
+        // aynan shu kassani boshqaradi.
+        cashbox_user_id: String(
+          dto.cashbox_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        ),
       });
 
       try {
@@ -1259,30 +1266,61 @@ export class FinanceServiceService implements OnModuleInit {
         }
 
         const closeTime = new Date();
-        const histories = await queryRunner.manager.find(CashboxHistory, {
-          where: {
-            createdAt: Between(shift.opened_at, closeTime),
-          },
-        });
+
+        /**
+         * ⚠️ SMENA YIG'INDISI FAQAT O'Z KASSASI BO'YICHA (audit M7).
+         *
+         * Ilgari bu yerda oraliqdagi BARCHA `cashbox_history` qatorlari
+         * yuklanardi — kassa filtri ham, `is_deleted` filtri ham yo'q edi.
+         * Ya'ni bitta operator smenasining "kirim/chiqim" raqami butun
+         * kompaniyaning (barcha kuryer, market, filial va MAIN kassalari)
+         * yig'indisi bo'lardi. Natijada sanab topshirilgan naqdni tizim
+         * raqami bilan solishtirib bo'lmasdi — kassadagi kamomadni
+         * aniqlaydigan yagona nazorat ishlamasdi. Yon ta'siri: uzoq turgan
+         * smena yuz minglab qatorni xotiraga yuklardi.
+         *
+         * Endi yig'indi SQL'da, faqat smenaga biriktirilgan kassa bo'yicha
+         * olinadi (sukut — markaziy MAIN kassa).
+         */
+        const shiftCashboxUserId = String(
+          shift.cashbox_user_id ?? FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        );
+        const totalsRows = await queryRunner.manager
+          .createQueryBuilder(CashboxHistory, 'h')
+          .innerJoin(Cashbox, 'cb', 'cb.id = h.cashbox_id')
+          .select('h.operation_type', 'operation_type')
+          .addSelect('h.payment_method', 'payment_method')
+          .addSelect('COALESCE(SUM(h.amount), 0)', 'total')
+          .where('h.isDeleted = :active', { active: false })
+          .andWhere('cb.isDeleted = :active', { active: false })
+          .andWhere('cb.user_id = :ownerId', { ownerId: shiftCashboxUserId })
+          .andWhere('h.createdAt BETWEEN :from AND :to', {
+            from: shift.opened_at,
+            to: closeTime,
+          })
+          .groupBy('h.operation_type')
+          .addGroupBy('h.payment_method')
+          .getRawMany<{
+            operation_type: string;
+            payment_method: string | null;
+            total: string;
+          }>();
 
         let totalIncomeCash = 0;
         let totalIncomeCard = 0;
         let totalExpenseCash = 0;
         let totalExpenseCard = 0;
 
-        for (const h of histories) {
-          if (h.operation_type === Operation_type.INCOME) {
-            if (h.payment_method === PaymentMethod.CASH) {
-              totalIncomeCash += Number(h.amount);
-            } else {
-              totalIncomeCard += Number(h.amount);
-            }
-          } else if (h.operation_type === Operation_type.EXPENSE) {
-            if (h.payment_method === PaymentMethod.CASH) {
-              totalExpenseCash += Number(h.amount);
-            } else {
-              totalExpenseCard += Number(h.amount);
-            }
+        for (const row of totalsRows) {
+          const total = Number(row.total) || 0;
+          // Eski xatti-harakat bilan bir xil: CASH bo'lmagani — karta.
+          const isCash = row.payment_method === PaymentMethod.CASH;
+          if (row.operation_type === Operation_type.INCOME) {
+            if (isCash) totalIncomeCash += total;
+            else totalIncomeCard += total;
+          } else if (row.operation_type === Operation_type.EXPENSE) {
+            if (isCash) totalExpenseCash += total;
+            else totalExpenseCard += total;
           }
         }
 
@@ -2397,6 +2435,25 @@ export class FinanceServiceService implements OnModuleInit {
         );
       }
 
+      /**
+       * ORTIQCHA TO'LOV QO'RIQCHISI (audit M9).
+       *
+       * Kuryerdan pul qabul qilishda bunday tekshiruv bor edi
+       * (`paymentsFromCourier`), marketga to'lashda esa yo'q: operator xato
+       * raqam kiritsa market kassasi jimgina manfiyga ketardi (FOR_MARKET
+       * manfiy balansga ruxsat beradi), ya'ni "market bizga qarzdor" degan
+       * soxta holat paydo bo'lardi va uni hech narsa ko'rsatmasdi.
+       *
+       * Tekshiruv idempotentlik qisqa tutashuvidan KEYIN turadi, shunda
+       * haqiqiy takroriy so'rov baribir `idempotent` javobini oladi.
+       */
+      const marketPayable = Number(marketCashbox.balance ?? 0);
+      if (Number(data.amount) > marketPayable) {
+        throw new BadRequestException(
+          `To'lov miqdori marketga qarzdan oshib ketdi (qarz: ${marketPayable})`,
+        );
+      }
+
       this.updateBalancesByMethod(
         mainCashbox,
         Number(data.amount),
@@ -2627,7 +2684,9 @@ export class FinanceServiceService implements OnModuleInit {
       );
       const settlementResponse = await rmqSend<{
         data?: {
+          chain_receivable?: number;
           branch_receivable?: number;
+          hq_receivable?: number;
           market_payable?: number;
           branches?: Array<{ branch_id: string; amount: number }>;
           markets?: Array<{ market_id: string; amount: number }>;
@@ -2638,20 +2697,78 @@ export class FinanceServiceService implements OnModuleInit {
         {},
       );
       const settlement = settlementResponse?.data ?? {};
-      const branchReceivable = Math.max(
-        Number(settlement.branch_receivable ?? 0),
-        0,
+
+      /**
+       * ⚠️ AUDIT M1 — KOMPANIYA HOLATI FORMULASI.
+       *
+       * Eski formula: `main + branch_receivable − market_payable`. Ikki xato
+       * bor edi: (1) `branch_receivable` faqat filialga bog'langan
+       * buyurtmalarni hisoblardi, HQ kuryerlaridagi pul esa umuman
+       * ko'rinmasdi; (2) `couriersTotalBalanse` javobda 0 deb qotib qolgan
+       * edi. Marketga qarz esa sotuv paytida darhol yozilgani uchun, natija
+       * har bir "yo'ldagi" buyurtma qiymatiga manfiyga og'ardi — ya'ni
+       * kompaniya o'zini yo'q qarz bilan ko'rsatardi.
+       *
+       * Yangi formula har somni AYNAN BIR MARTA sanaydi:
+       *
+       *   holat = MAIN + zanjirdagi qarz − marketga qarz
+       *
+       * `zanjirdagi qarz` (`chain_receivable`) — sotilgan, lekin hali HQ'ga
+       * yetib kelmagan pul: kuryerda ham, filialda ham bo'lishi mumkin, lekin
+       * buyurtma boshiga bir marta hisoblanadi (`order_settlement.branch_amount`,
+       * holati PENDING yoki COURIER_SETTLED). Shu bois kassa yig'indilari
+       * (kuryer/filial) bu yerga QO'SHILMAYDI — ular ayni pulning ikkinchi
+       * ko'rinishi.
+       *
+       * Kassa yig'indilari operatsion ko'rinish sifatida javobda qoladi.
+       */
+      const chainReceivable = Number(
+        settlement.chain_receivable ?? settlement.branch_receivable ?? 0,
       );
-      const marketPayable = Math.max(marketCashboxTotal, 0);
-      const difference = branchReceivable - marketPayable;
+
+      /**
+       * Kargolarning qarzi (audit M5). Kargo orqali sotilgan buyurtmada
+       * marketga qarz darhol yoziladi, naqd esa kargoda qoladi — uning
+       * qarama-qarshi tomoni aynan shu qarz. Hisobga olinmasa balans o'sha
+       * summaga manfiyga og'ib turardi. Integration servisi javob bermasa 0
+       * olinadi: bu ko'rsatkich hisobotni to'xtatib qo'ymasligi kerak.
+       */
+      const providerReceivable = await rmqSend<{
+        data?: { outstanding_amount?: number };
+      }>(
+        this.integrationClient,
+        { cmd: 'integration.receivable.outstanding_total' },
+        {},
+      )
+        .then((res) => Number(res?.data?.outstanding_amount ?? 0) || 0)
+        .catch(() => 0);
+      const branchReceivable = Number(settlement.branch_receivable ?? 0);
+      const hqReceivable = Number(settlement.hq_receivable ?? 0);
+      const [courierCashboxTotal, branchCashboxTotal] = await Promise.all([
+        this.sumCashboxBalanceByType(Cashbox_type.FOR_COURIER),
+        this.sumCashboxBalanceByType(Cashbox_type.BRANCH),
+      ]);
+      const marketPayable = marketCashboxTotal;
+      const difference = chainReceivable + providerReceivable - marketPayable;
       const currentSituation = Number(mainCashbox.balance) + difference;
 
       return this.successRes(
         {
           currentSituation,
           main: mainCashbox,
+          chain: {
+            chainReceivable,
+            branchReceivable,
+            hqReceivable,
+            // Kargolar qo'lidagi, hali hisob-kitob qilinmagan naqd.
+            providerReceivable,
+          },
           branches: {
             branchReceivable,
+            // Filiallar JISMONAN ushlab turgan naqd (kuryerdan qabul qilingan,
+            // HQ'ga hali topshirilmagan). Holat formulasiga kirmaydi —
+            // u allaqachon `chainReceivable` ichida.
+            branchCashboxTotal,
             items: settlement.branches ?? [],
           },
           markets: {
@@ -2660,10 +2777,13 @@ export class FinanceServiceService implements OnModuleInit {
           },
           couriers: {
             allCourierCashboxes: [],
-            couriersTotalBalanse: 0,
+            // Kuryerlar qo'lidagi yig'indi qarz — ma'lumot uchun (ilgari
+            // 0 deb qotib qolgan edi).
+            couriersTotalBalanse: courierCashboxTotal,
           },
           difference,
-          formula: 'main_cashbox + branch_receivable - market_cashbox_payable',
+          formula:
+            'main_cashbox + chain_receivable + provider_receivable - market_cashbox_payable',
         },
         200,
         'Financial balance infos',
@@ -2837,6 +2957,49 @@ export class FinanceServiceService implements OnModuleInit {
         note: input.note ?? null,
       });
       const saved = await this.paymentRepo.save(entity);
+
+      /**
+       * ⚠️ PUL ENDI KASSADAN HAM YECHILADI (audit M6).
+       *
+       * Ilgari operator komissiyasini to'lash faqat `operator_payments`
+       * jadvaliga yozilardi: MAIN kassa tegilmasdi, P&L daftariga ham
+       * tushmasdi. Ya'ni kompaniyadan haqiqatan chiqqan pul hisobotda
+       * ko'rinmasdi — MAIN qoldig'i doimiy ravishda haqiqiy naqddan ko'p,
+       * foyda esa haqiqiy foydadan yuqori bo'lib turardi. Ikkisi birga
+       * bo'lgani uchun xato o'zini yashirardi: "bor" pul asosida yangi to'lov
+       * qilinardi.
+       *
+       * Idempotentlik: `source_id` = to'lov qatori ID'si, ya'ni takroriy
+       * yetkazish/qayta bosish pulni ikki marta yechmaydi.
+       */
+      await this.updateBalance({
+        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+        cashbox_type: Cashbox_type.MAIN,
+        amount,
+        operation_type: Operation_type.EXPENSE,
+        source_type: Source_type.SALARY,
+        source_id: String(saved.id),
+        source_user_id: String(input.operator_id),
+        comment: input.note ?? `Operator #${String(input.operator_id)} to'lovi`,
+        created_by: input.paid_by_id ? String(input.paid_by_id) : undefined,
+      }).catch(async (error) => {
+        // Kassa harakati o'tmasa to'lov qatori ham qolmasin — aks holda
+        // "to'landi" deb ko'rinadi, pul esa chiqmagan bo'ladi.
+        await this.paymentRepo
+          .softDelete({ id: saved.id })
+          .catch(() => undefined);
+        throw error;
+      });
+
+      await this.recordFinancialBalance({
+        amount: -amount,
+        source_type: FinancialSource_type.SALARY,
+        related_user_id: String(input.operator_id),
+        comment: `Operator #${String(input.operator_id)} komissiya to'lovi`,
+        created_by: input.paid_by_id ? String(input.paid_by_id) : null,
+        dedup_key: `operator-payment:${String(saved.id)}`,
+      });
+
       await this.activityLog.log({
         entity_type: 'OperatorPayment',
         entity_id: saved.id,
@@ -3020,6 +3183,13 @@ export class FinanceServiceService implements OnModuleInit {
     related_user_id?: string | null;
     comment?: string | null;
     created_by?: string | null;
+    /**
+     * Urinish tokeni (audit M4). Bo'sh bo'lsa — eski xatti-harakat: buyurtma
+     * boshiga bitta yozuv. To'lgan bo'lsa — ayni token bilan kelgan takroriy
+     * so'rov bir marta yoziladi, boshqa token esa yangi yozuv ochadi (sotuv →
+     * rollback → qayta sotuv zanjiri uchun).
+     */
+    dedup_key?: string | null;
   }) {
     const amount = Number(input.amount);
     if (!Number.isFinite(amount) || amount === 0) {
@@ -3035,14 +3205,23 @@ export class FinanceServiceService implements OnModuleInit {
         FinanceServiceService.FBH_ADVISORY_LOCK_KEY.toString(),
       ]);
 
-      // Idempotency for order-linked sources.
-      if (input.order_id) {
+      /**
+       * Idempotentlik. Buyurtmaga bog'langan yozuvlar (source_type, order_id,
+       * dedup_key) bo'yicha; buyurtmasiz yozuvlar (investor foydasi, operator
+       * to'lovi kabi) esa (source_type, dedup_key) bo'yicha — ilgari ular
+       * umuman dedup qilinmasdi va ikki marta bosilgan tugma daftarga ikkita
+       * chiqim yozib qo'yishi mumkin edi. Yuqoridagi advisory qulf barcha FBH
+       * yozuvlarini ketma-ketlashtirgani uchun bu tekshiruv poygaga chidamli.
+       */
+      const dedupKey = String(input.dedup_key ?? '');
+      if (input.order_id || dedupKey) {
         const existing = await queryRunner.manager.findOne(
           FinancialBalanceHistory,
           {
             where: {
-              order_id: String(input.order_id),
+              order_id: input.order_id ? String(input.order_id) : IsNull(),
               source_type: input.source_type,
+              dedup_key: dedupKey,
             },
           },
         );
@@ -3068,6 +3247,7 @@ export class FinanceServiceService implements OnModuleInit {
         balance_before: balanceBefore,
         balance_after: balanceAfter,
         source_type: input.source_type,
+        dedup_key: dedupKey,
         order_id: input.order_id ? String(input.order_id) : null,
         related_user_id: input.related_user_id
           ? String(input.related_user_id)

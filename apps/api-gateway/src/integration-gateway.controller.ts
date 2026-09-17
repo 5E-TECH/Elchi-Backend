@@ -17,6 +17,7 @@ import { Roles as RoleEnum } from '@app/common';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiQuery,
@@ -64,6 +65,17 @@ export class IntegrationGatewayController {
   @ApiOperation({ summary: 'List integrations' })
   @ApiQuery({ name: 'is_active', required: false, type: String })
   @ApiQuery({ name: 'status', required: false, enum: ['active', 'inactive'] })
+  @ApiQuery({
+    name: 'role',
+    required: false,
+    enum: ['carrier', 'source', 'payment', 'mirror'],
+    description: 'Rol bo‘yicha filtr — UI ulanishlarni rol guruhlariga ajratadi',
+  })
+  @ApiQuery({
+    name: 'category',
+    required: false,
+    enum: ['marketplace', 'crm', 'cargo', 'payment', 'spreadsheet', 'other'],
+  })
   @ApiQuery({ name: 'market_id', required: false, type: String })
   @ApiQuery({
     name: 'from_date',
@@ -82,6 +94,8 @@ export class IntegrationGatewayController {
   findAll(
     @Query('is_active') is_active?: string,
     @Query('status') status?: string,
+    @Query('role') role?: string,
+    @Query('category') category?: string,
     @Query('market_id') market_id?: string,
     @Query('from_date') from_date?: string,
     @Query('to_date') to_date?: string,
@@ -106,6 +120,8 @@ export class IntegrationGatewayController {
               ? ['true', '1', 'yes'].includes(is_active.toLowerCase())
               : statusToIsActive,
           status: normalizedStatus,
+          role,
+          category,
           market_id,
           from_date,
           to_date,
@@ -114,6 +130,125 @@ export class IntegrationGatewayController {
         },
       },
     ).pipe(timeout(8000));
+  }
+
+  /**
+   * INTEGRATSIYA METRIKASI — panel uchun jonli raqamlar.
+   *
+   * ⚠️ `:id` marshrutlaridan OLDIN e'lon qilingan bo'lishi kerak, aks holda
+   * "metrics" integratsiya id'si deb o'qilardi (bu tuzoqqa `partners/webhooks`
+   * bilan bir marta tushilgan).
+   */
+  @Get('metrics')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      'Integratsiya paneli metrikasi — hodisa, yetmagan, navbat, javob vaqti',
+  })
+  @ApiQuery({
+    name: 'hours',
+    required: false,
+    type: Number,
+    description: 'Oyna (soat). Standart 24, maksimum 168',
+  })
+  @ApiOkResponse({
+    description:
+      '{ statusCode, message, data: { window_hours, totals, connections[] } }',
+  })
+  integrationMetrics(@Query('hours') hours?: string) {
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.metrics' },
+        { hours: hours ? Number(hours) : undefined },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+  }
+
+  /**
+   * KIRUVCHI WEBHOOK JURNALI (adversarial topilma, HIGH).
+   *
+   * ⚠️ `:id` marshrutlaridan OLDIN — aks holda "webhook-logs" integratsiya
+   * id'si deb o'qilardi (bu tuzoqqa `partners/webhooks` bilan bir marta
+   * tushilgan).
+   *
+   * ⚠️ TANA QAYTARILMAYDI: `raw_body` ichida mijozning telefoni va manzili
+   * turadi, ro'yxatda esa savol "nima bo'ldi", "mijoz kim" emas.
+   */
+  /**
+   * ONLAYN TO'LOVLAR (7-bosqich).
+   *
+   * ⚠️ `:id` marshrutlaridan OLDIN — aks holda "payments" integratsiya
+   * id'si deb o'qilardi.
+   *
+   * `unapplied_only=true` — buyurtmaga qo'llanmagan to'lovlar. Operatorning
+   * birinchi savoli aynan shu: qaysi pul kelib, hech qayerga yozilmadi?
+   */
+  @Get('payments')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      "Onlayn to'lov tranzaksiyalari — summa, holat, buyurtmaga qo'llanish natijasi",
+  })
+  @ApiQuery({ name: 'integration_id', required: false, type: String })
+  @ApiQuery({
+    name: 'unapplied_only',
+    required: false,
+    type: Boolean,
+    description: "Faqat buyurtmaga qo'llanmagan to'lovlar",
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  paymentTransactions(
+    @Query('integration_id') integrationId?: string,
+    @Query('unapplied_only') unappliedOnly?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.payment.list' },
+        {
+          integration_id: integrationId,
+          unapplied_only: unappliedOnly === 'true' || unappliedOnly === '1',
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+        },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+  }
+
+  @Get('webhook-logs')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      "Kiruvchi webhook jurnali — imzo, natija, xato sababi (tana qaytarilmaydi)",
+  })
+  @ApiQuery({ name: 'integration_id', required: false, type: String })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    type: String,
+    description: 'rejected | verified | processed',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  webhookLogs(
+    @Query('integration_id') integrationId?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.webhook.logs' },
+        {
+          integration_id: integrationId,
+          status,
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+        },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Get('sync/history')
@@ -263,6 +398,44 @@ export class IntegrationGatewayController {
     ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
+  /**
+   * SKANERLAB QABUL QILISH — kichik saytlar uchun oddiy yo'l (audit EI-01).
+   *
+   * Operator posilkadagi QR'ni skanerlaydi, Elchi saytning API'sidan
+   * buyurtmani so'rab oladi va tizimga yozadi. `search-by-qr` dan farqi:
+   * u FAQAT ma'lumot qaytaradi, bu esa buyurtma YARATADI.
+   *
+   * ⚠️ MANAGER ham kiradi: posilkalarni HQ menejeri qabul qiladi.
+   */
+  @Post(':slug/scan-intake')
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
+  @ApiOperation({
+    summary: 'Scan a parcel QR and import the order from the site',
+  })
+  @ApiParam({ name: 'slug' })
+  @ApiBody({ type: QrSearchRequestDto })
+  scanIntake(
+    @Param('slug') slug: string,
+    @Body() dto: QrSearchRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.scan_intake' },
+        {
+          slug,
+          qr_code: dto.qr_code,
+          requester: { id: req.user?.sub, roles: req.user?.roles ?? [] },
+        },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+  }
+
   @Post(':slug/search-by-qr')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiOperation({ summary: 'Universal QR search via integration config' })
@@ -308,6 +481,44 @@ export class IntegrationGatewayController {
       { cmd: 'integration.shipment.dispatch' },
       { slug, order_id: dto.order_id, context: dto.context },
     ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+  }
+
+  /**
+   * Bitta ulanishning jo'natmalari.
+   *
+   * ⚠️ `@Get('shipments/:order_id')` bilan TO'QNASHMAYDI: u yerda ikkinchi
+   * segment ixtiyoriy qiymat, bu yerda esa literal `shipments`. Ya'ni
+   * `/integrations/5/shipments` faqat shu marshrutga, `/integrations/shipments/5`
+   * faqat unisiga tushadi.
+   */
+  @Get(':id/shipments')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'List provider shipments for an integration' })
+  @ApiParam({ name: 'id', description: 'Integration id' })
+  @ApiQuery({ name: 'status', required: false, type: String })
+  @ApiQuery({ name: 'failed_only', required: false, type: Boolean })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  listProviderShipments(
+    @Param('id') id: string,
+    @Query('status') status?: string,
+    @Query('failed_only') failedOnly?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.shipment.list' },
+        {
+          integration_id: id,
+          status,
+          // Query satr bo'lib keladi — `'false'` ham rost bo'lib qolmasin.
+          failed_only: failedOnly === 'true' || failedOnly === '1',
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+        },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Get('shipments/:order_id')

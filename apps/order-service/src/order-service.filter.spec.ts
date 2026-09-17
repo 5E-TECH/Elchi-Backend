@@ -14,6 +14,9 @@ describe('OrderServiceService filters', () => {
       orderBy: jest.fn().mockReturnThis(),
       skip: jest.fn().mockReturnThis(),
       take: jest.fn().mockReturnThis(),
+      // `findAll` hisobni join'lardan OLDIN nusxalaydi (Scale 1) — mock ham
+      // shu naqshni qo'llab-quvvatlashi kerak.
+      clone: jest.fn(() => qb),
       getRawMany: jest.fn().mockResolvedValue([]),
       getManyAndCount: jest.fn().mockResolvedValue([[], 0]),
       getMany: jest.fn().mockResolvedValue([]),
@@ -360,30 +363,6 @@ describe('OrderServiceService filters', () => {
     expect(qb.andWhere).toHaveBeenCalledWith('order.canceled_post_id IS NULL');
   });
 
-  it('credits the tariff-adjusted branch payable for manager-direct sales', () => {
-    const { lifecycle } = setup();
-
-    const amount = (lifecycle as any).resolveBranchCashboxSaleAmount(
-      1_000_000,
-      950_000,
-      true,
-    );
-
-    expect(amount).toBe(950_000);
-  });
-
-  it('keeps the existing tariff-adjusted branch amount for courier sales', () => {
-    const { lifecycle } = setup();
-
-    const amount = (lifecycle as any).resolveBranchCashboxSaleAmount(
-      1_000_000,
-      940_000,
-      false,
-    );
-
-    expect(amount).toBe(940_000);
-  });
-
   it('always deducts manager tariff from the amount payable to HQ', () => {
     const { lifecycle } = setup();
 
@@ -487,12 +466,120 @@ describe('OrderServiceService filters', () => {
     );
   });
 
+  /**
+   * SCALE 1-BOSQICH. Analitika ilgari oynadagi HAR BIR buyurtmani JS
+   * xotirasiga yuklardi (`getMany()`): kuniga 2 000 buyurtmada 180 kunlik
+   * oyna ~360 ming qator. Endi bazadan bitta yig'indi qatori keladi.
+   */
+  /**
+   * SCALE 1 — O'LCHOV ASOSIDA. `getManyAndCount()` join bo'lganda hisobni
+   * `COUNT(DISTINCT order.id)` qilib quradi: 501 000 buyurtmali produksiya
+   * bazasida bu **1 222 ms**, join'siz `COUNT(*)` esa **43 ms** (sahifaning
+   * o'zi 74 ms). Ya'ni ro'yxat ekranining vaqtining 90% dan ko'pi faqat
+   * "jami nechta" raqamiga ketardi.
+   */
+  describe('ro`yxat sahifalashi', () => {
+    it('hisobni join`lardan OLDIN nusxalaydi', async () => {
+      const { service, qb } = setup();
+
+      await service.findAll({ page: 1, limit: 10 });
+
+      // Nusxa olingan — ya'ni hisob alohida, join'siz qurilmadan ketadi.
+      expect(qb.clone).toHaveBeenCalled();
+      // Sahifa va hisob alohida bajariladi; birlashgan variant ishlatilmaydi.
+      expect(qb.getMany).toHaveBeenCalled();
+      expect(qb.getCount).toHaveBeenCalled();
+      expect(qb.getManyAndCount).not.toHaveBeenCalled();
+    });
+
+    it('join`lar nusxa olingandan KEYIN qo`shiladi', async () => {
+      const { service, qb } = setup();
+
+      await service.findAll({ page: 1, limit: 10 });
+
+      const cloneOrder = qb.clone.mock.invocationCallOrder[0];
+      const joinOrders = qb.leftJoinAndSelect.mock.invocationCallOrder;
+      // Barcha `leftJoinAndSelect` chaqiruvlari nusxadan keyin bo'lishi shart —
+      // aks holda hisob yana join bilan ketadi va tuzatish ma'nosini yo'qotadi.
+      for (const call of joinOrders) {
+        expect(call).toBeGreaterThan(cloneOrder);
+      }
+    });
+  });
+
+  describe('analitika agregatsiyasi bazada', () => {
+    it('getOverviewStats buyurtma qatorlarini umuman yuklamaydi', async () => {
+      const { analytics, qb } = setup();
+      qb.getRawOne.mockResolvedValue({
+        sold_count: '120',
+        revenue: '54000000',
+        profit: '3000000',
+      });
+
+      const res: any = await analytics.getOverviewStats(
+        '2026-01-01',
+        '2026-01-31',
+      );
+
+      expect(qb.getMany).not.toHaveBeenCalled();
+      expect(res.soldAndPaid).toBe(120);
+      expect(res.totalRevenue).toBe(54000000);
+      expect(res.profit).toBe(3000000);
+    });
+
+    it('foyda daftardagi formuladan (snapshotlardan) olinadi', () => {
+      const { analytics } = setup();
+      const sql = (analytics.constructor as any).PROFIT_SQL as string;
+
+      // sell_profit = market_tariff − courier_share − branch_share
+      expect(sql).toContain('o.market_tariff');
+      expect(sql).toContain('o.courier_share');
+      expect(sql).toContain('o.branch_share');
+    });
+
+    it('daromad bandlari Toshkent kuni bo`yicha kesiladi', () => {
+      const { analytics } = setup();
+      const daily = (analytics as any).tashkentPeriodKeySql('daily') as string;
+      const weekly = (analytics as any).tashkentPeriodKeySql(
+        'weekly',
+      ) as string;
+
+      // Ilgari kun SERVER vaqtida (UTC) kesilardi, kalit esa Toshkentda
+      // formatlanardi — ertalab 05:00 gacha sotilgan buyurtma oldingi kunga
+      // tushardi.
+      expect(daily).toContain("AT TIME ZONE 'Asia/Tashkent'");
+      expect(daily).toContain("date_trunc('day'");
+      expect(weekly).toContain("date_trunc('week'");
+    });
+
+    it('getRevenueStats bandlarni bazadan oladi', async () => {
+      const { analytics, qb } = setup();
+      qb.getRawMany.mockResolvedValue([
+        { period_key: '2026-01-05', orders_count: '7', revenue: '3500000' },
+      ]);
+
+      const res: any = await analytics.getRevenueStats(
+        '2026-01-01',
+        '2026-01-31',
+        'daily',
+      );
+
+      expect(qb.getMany).not.toHaveBeenCalled();
+      expect(res.summary.totalOrders).toBe(7);
+      expect(res.summary.totalRevenue).toBe(3500000);
+      const filled = res.data.find((row: any) => row.ordersCount > 0);
+      expect(filled.period).toBe('2026-01-05');
+    });
+  });
+
   // Audit (unbounded query): getRevenueStats/getMarketStat load individual
   // order rows for the range and aggregate in JS. analyticsDateRange must cap
   // the span so a pathologically-wide range can't pull the whole orders table.
   describe('analytics date-span cap', () => {
     const DAY = 24 * 60 * 60 * 1000;
-    const MAX_SPAN = 768 * DAY;
+    // Audit C3: oyna 768 kundan 180 kunga tushirildi — 768 kun kuniga 1 000
+    // buyurtmada ~770 ming qatorni JS xotirasiga yuklash degani edi.
+    const MAX_SPAN = 180 * DAY;
 
     const revenueSpanMs = (qb: any): number => {
       const call = qb.andWhere.mock.calls.find(
