@@ -89,6 +89,50 @@ describe('IntegrationServiceService.provisionPartnerMarket (C1.5)', () => {
     expect(refRepo.save).not.toHaveBeenCalled();
   });
 
+  it('C1.46: mavjud marketning uy va markaz tarifi yangilanadi', async () => {
+    const refRepo = {
+      findOne: jest.fn(() => Promise.resolve({ elchi_market_id: '500' })),
+      create: jest.fn(),
+      save: jest.fn(),
+    };
+    const identity = jest.fn((pattern: { cmd: string }) =>
+      pattern.cmd === 'identity.market.find_by_id'
+        ? of({ data: { tariff_home: 0, tariff_center: 0 } })
+        : of({ data: { id: '500' } }),
+    );
+    const log = jest.fn(() => Promise.resolve(undefined));
+    const svc = makeService(refRepo, identity, log);
+
+    const res: any = await svc.provisionPartnerMarket({
+      ...baseDto,
+      tariff_home: 25000,
+      tariff_center: 15000,
+    });
+
+    expect(res.data).toEqual({
+      elchi_market_id: '500',
+      idempotent: true,
+      tariff_updated: true,
+    });
+    expect(identity).toHaveBeenCalledWith(
+      { cmd: 'identity.market.update' },
+      expect.objectContaining({
+        id: '500',
+        dto: { tariff_home: 25000, tariff_center: 15000 },
+      }),
+    );
+    expect(identity).not.toHaveBeenCalledWith(
+      { cmd: 'identity.market.create' },
+      expect.anything(),
+    );
+    expect(log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        old_value: { tariff_home: 0, tariff_center: 0 },
+        new_value: { tariff_home: 25000, tariff_center: 15000 },
+      }),
+    );
+  });
+
   it('external_seller_id yo‘q -> 400 (RpcException)', async () => {
     const svc = makeService(
       { findOne: jest.fn() } as any,

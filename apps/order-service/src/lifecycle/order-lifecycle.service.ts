@@ -3357,7 +3357,7 @@ export class OrderLifecycleService {
           market_paid_amount: Number(order.paid_amount ?? 0),
           /*
             ⚠️ `cod_amount` ATAYLAB YUBORILMAYDI.
- 
+
             Uni `order.to_be_paid` dan olish MANTIQIY ko'rinadi, lekin bu
             ustun IKKI XIL ma'noda ishlatiladi:
               • hamkor posilkasi yaratilganda — mijozdan yig'ilishi kerak
@@ -3365,7 +3365,7 @@ export class OrderLifecycleService {
               • ichki buyurtmada sukut bo'yicha 0, va SOTUVDAN KEYIN
                 `netToBePaid` (= total_price − market_tariff) bilan ustiga
                 yoziladi (`:4081`, `:4153`, `:5200`).
- 
+
             Ya'ni sotuvdan keyin qiymat butunlay boshqa narsani bildiradi va
             hamkorga yuborilsa YOLG'ON bo'lardi. Hamkor o'zi yuborgan
             `cod_amount`ni biladi; bizda esa uni ishonchli saqlaydigan joy

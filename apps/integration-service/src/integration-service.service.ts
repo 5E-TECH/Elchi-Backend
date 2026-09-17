@@ -1631,7 +1631,7 @@ export class IntegrationServiceService {
           : 0,
       /*
         ⚠️ `cod_amount` FAQAT chaqiruvchi uni ANIQ uzatganda qo'shiladi.
- 
+
         Uni buyurtmadan olish MUMKIN EMAS: `order.to_be_paid` ikki xil
         ma'noda ishlatiladi va sotuvdan keyin `netToBePaid` bilan ustiga
         yoziladi (`order-lifecycle.service.ts:4081`). Ya'ni buyurtmadan
