@@ -587,6 +587,34 @@ export class IntegrationServiceService {
       },
     });
     if (existing) {
+      // Idempotent provisioning mavjud marketni qayta yaratmaydi, ammo hamkor
+      // yuborgan tariflarni sinxronlaydi. Marketplace tarifni keyin o'zgartirsa
+      // ham delivery preview Elchi'dagi eski (yoki 0) qiymatda qolib ketmaydi.
+      if (
+        typeof dto.tariff_home !== 'undefined' ||
+        typeof dto.tariff_center !== 'undefined'
+      ) {
+        await this.rmqRequest(
+          this.identityClient,
+          { cmd: 'identity.market.update' },
+          {
+            id: String(existing.elchi_market_id),
+            dto: {
+              ...(typeof dto.tariff_home === 'undefined'
+                ? {}
+                : { tariff_home: Number(dto.tariff_home) }),
+              ...(typeof dto.tariff_center === 'undefined'
+                ? {}
+                : { tariff_center: Number(dto.tariff_center) }),
+            },
+            requester: {
+              id: `partner:${partnerId}`,
+              roles: [Roles.SUPERADMIN],
+            },
+          },
+          8000,
+        );
+      }
       return successRes(
         { elchi_market_id: existing.elchi_market_id, idempotent: true },
         200,
