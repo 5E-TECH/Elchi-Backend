@@ -43,12 +43,10 @@ import {
   UpdateIntegrationRequestDto,
 } from './dto/integration.swagger.dto';
 
-
 // RPC ceiling: this downstream can legitimately run long (base64/provider
 // fetch up to ~60s); an 8s ceiling would premature-fail a working call. See
 // integration-service AbortSignal.timeout / file base64 transfer.
 const PROVIDER_RPC_TIMEOUT_MS = 65_000;
-
 
 /**
  * Integratsiya id'si — `bigint` (BaseEntity: `@PrimaryGeneratedColumn('bigint')`),
@@ -450,7 +448,10 @@ export class IntegrationGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Start sync processing for integration' })
   @ApiBody({ type: StartSyncRequestDto, required: false })
-  startSync(@Param('id', ParseIntegrationIdPipe) id: string, @Body() dto: StartSyncRequestDto = {}) {
+  startSync(
+    @Param('id', ParseIntegrationIdPipe) id: string,
+    @Body() dto: StartSyncRequestDto = {},
+  ) {
     return this.integrationClient.send(
       { cmd: 'integration.sync.process' },
       { integration_id: id, limit: dto.limit ?? 20 },
@@ -475,7 +476,10 @@ export class IntegrationGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Retry failed sync jobs for integration' })
   @ApiBody({ type: RetrySyncRequestDto, required: false })
-  retrySync(@Param('id', ParseIntegrationIdPipe) id: string, @Body() dto: RetrySyncRequestDto = {}) {
+  retrySync(
+    @Param('id', ParseIntegrationIdPipe) id: string,
+    @Body() dto: RetrySyncRequestDto = {},
+  ) {
     return this.integrationClient.send(
       { cmd: 'integration.sync.retry' },
       { integration_id: id, queue_id: dto.queue_id },

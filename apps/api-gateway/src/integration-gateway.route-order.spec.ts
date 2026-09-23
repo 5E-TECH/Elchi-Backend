@@ -42,17 +42,21 @@ describe('IntegrationGatewayController — marshrut tartibi', () => {
     if (app) await app.close();
   });
 
+  /** `getHttpServer()` `any` qaytaradi — supertest kutgan tipga bir joyda keltiramiz. */
+  const http = () => app.getHttpServer() as Parameters<typeof request>[0];
+
   beforeEach(() => {
     send.mockReset();
     send.mockReturnValue(of({ data: [] }));
   });
 
-  const cmdOf = () => send.mock.calls.at(-1)?.[0]?.cmd;
+  /** Oxirgi RPC chaqiruvi — `jest.fn()` `any` qaytargani uchun tiplab olamiz. */
+  type RpcCall = [{ cmd: string }, Record<string, unknown>];
+  const lastCall = () => send.mock.calls.at(-1) as RpcCall | undefined;
+  const cmdOf = () => lastCall()?.[0].cmd;
 
-  it("TC1: /integrations/receivables -> `:id` ga TUSHMAYDI", async () => {
-    const res = await request(app.getHttpServer()).get(
-      '/integrations/receivables',
-    );
+  it('TC1: /integrations/receivables -> `:id` ga TUSHMAYDI', async () => {
+    const res = await request(http()).get('/integrations/receivables');
 
     expect(res.status).toBe(200);
     expect(cmdOf()).toBe('integration.receivable.list');
@@ -63,33 +67,29 @@ describe('IntegrationGatewayController — marshrut tartibi', () => {
   it('TC2: /integrations/shipments/:order_id -> shipment.get', async () => {
     send.mockReturnValue(of({ data: null }));
 
-    const res = await request(app.getHttpServer()).get(
-      '/integrations/shipments/5',
-    );
+    const res = await request(http()).get('/integrations/shipments/5');
 
     expect(res.status).toBe(200);
     expect(cmdOf()).toBe('integration.shipment.get');
-    expect(send.mock.calls.at(-1)?.[1]).toEqual({ order_id: '5' });
+    expect(lastCall()?.[1]).toEqual({ order_id: '5' });
   });
 
-  it("TC3: haqiqiy raqamli id hamon `:id` ga boradi (regressiya emas)", async () => {
-    const res = await request(app.getHttpServer()).get('/integrations/42');
+  it('TC3: haqiqiy raqamli id hamon `:id` ga boradi (regressiya emas)', async () => {
+    const res = await request(http()).get('/integrations/42');
 
     expect(res.status).toBe(200);
     expect(cmdOf()).toBe('integration.find_by_id');
-    expect(send.mock.calls.at(-1)?.[1]).toEqual({ id: '42' });
+    expect(lastCall()?.[1]).toEqual({ id: '42' });
   });
 
   it('TC4: `:id/shipments` hamon ishlaydi (tartib buzilmadi)', async () => {
-    await request(app.getHttpServer()).get('/integrations/42/shipments');
+    await request(http()).get('/integrations/42/shipments');
 
     expect(cmdOf()).toBe('integration.shipment.list');
   });
 
   it('TC5: `:id/receivable-balance` hamon ishlaydi', async () => {
-    await request(app.getHttpServer()).get(
-      '/integrations/42/receivable-balance',
-    );
+    await request(http()).get('/integrations/42/receivable-balance');
 
     expect(cmdOf()).toBe('integration.receivable.balance');
   });
@@ -125,13 +125,16 @@ describe('IntegrationGatewayController — id shakli', () => {
     if (app) await app.close();
   });
 
+  /** `getHttpServer()` `any` qaytaradi — supertest kutgan tipga bir joyda keltiramiz. */
+  const http = () => app.getHttpServer() as Parameters<typeof request>[0];
+
   beforeEach(() => {
     send.mockReset();
     send.mockReturnValue(of({ data: null }));
   });
 
   it('TC6: harfli id -> 400, quyi servisga UMUMAN bormaydi', async () => {
-    const res = await request(app.getHttpServer()).get('/integrations/abc');
+    const res = await request(http()).get('/integrations/abc');
 
     expect(res.status).toBe(400);
     // Eng muhimi: yaroqsiz qiymat bilan RPC yuborilmadi.
@@ -139,16 +142,14 @@ describe('IntegrationGatewayController — id shakli', () => {
   });
 
   it('TC7: SQL-ga o‘xshash id ham 400', async () => {
-    const res = await request(app.getHttpServer()).get(
-      "/integrations/1' OR '1'='1",
-    );
+    const res = await request(http()).get("/integrations/1' OR '1'='1");
 
     expect(res.status).toBe(400);
     expect(send).not.toHaveBeenCalled();
   });
 
   it('TC8: raqamli id 400 BERMAYDI (yolg‘on ijobiy yo‘q)', async () => {
-    const res = await request(app.getHttpServer()).get('/integrations/7');
+    const res = await request(http()).get('/integrations/7');
 
     expect(res.status).toBe(200);
     expect(send).toHaveBeenCalled();
