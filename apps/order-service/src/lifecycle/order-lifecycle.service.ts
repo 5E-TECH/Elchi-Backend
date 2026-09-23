@@ -760,12 +760,48 @@ export class OrderLifecycleService {
   }
 
   /**
+   * Qo'shimcha xarajat settlement daftariga QANCHA kamaytirish yozishini
+   * hisoblaydi.
+   *
+   * ⚠️ NEGA KERAK BO'LDI (jonli E2E, Andijon). Qo'shimcha xarajat KASSANI
+   * kamaytiradi (kuryer yoki filial kassasidan EXPENSE), lekin `order_settlement`
+   * ga tegmasdi. Natijada ikki daftar ajralib ketardi: kuryer kassasida
+   * 205 000 so'm, ledger esa 210 000 talab qilardi — FIFO birinchi ikkita
+   * buyurtmani yopib, uchinchisiga AYNAN 5 000 so'm yetmay, buyurtma abadiy
+   * PENDING bo'lib qotib qolardi.
+   *
+   * Qoida: xarajat QAYSI kassadan yechilgan bo'lsa, o'sha bo'g'in va undan
+   * YUQORIDAGI bo'g'inlar daftarda shuncha kam qarzdor bo'ladi — chunki naqd
+   * zanjir bo'ylab aynan shuncha kam ko'tariladi. `market_amount` bu ayirmani
+   * allaqachon hisobga olgan (audit M8), bu yerda qolgan ikki oyoq tenglashadi.
+   */
+  private resolveExtraCostSettlementLegs(params: {
+    extraCost: number;
+    /** Xarajat AYNAN yozilgan kassa turi; yozilmagan bo'lsa `null`. */
+    chargedCashboxType: Cashbox_type | null;
+  }): { courier: number; branch: number } {
+    const amount = Math.max(Number(params.extraCost) || 0, 0);
+    if (amount <= 0 || !params.chargedCashboxType) {
+      return { courier: 0, branch: 0 };
+    }
+    // Kuryer to'lagan bo'lsa: kuryer filialga, filial HQ'ga shuncha kam
+    // ko'taradi. Filial (manager sotuvi) to'lagan bo'lsa kuryer oyog'i
+    // umuman yo'q, faqat filial oyog'i kamayadi.
+    return params.chargedCashboxType === Cashbox_type.FOR_COURIER
+      ? { courier: amount, branch: amount }
+      : { courier: 0, branch: amount };
+  }
+
+  /**
    * Create/refresh the per-order settlement row at sale time (inside the sale
    * transaction). Status starts at PENDING, but legs with no participant are
    * auto-advanced: a branch-direct sale (no courier) starts COURIER_SETTLED
    * (cash already at the branch); an HQ-direct sale (no courier, no branch)
    * starts BRANCH_SETTLED (cash already at HQ). BRANCH_SETTLED uniformly means
    * "money has reached HQ" — the point past which rollback is forbidden.
+   *
+   * Bekor qilingan buyurtma uchun ham chaqiriladi: unda faqat qo'shimcha
+   * xarajat KREDITI yoziladi (manfiy oyoqlar) — `cancelOrder` ga qarang.
    */
   private async recordSaleSettlement(
     manager: EntityManager,
@@ -4968,6 +5004,13 @@ export class OrderLifecycleService {
       extraCost,
     );
 
+    // Qo'shimcha xarajat AYNAN qaysi kassadan yechiladi — daftar oyoqlari ham
+    // shuncha kamayadi (pastda `recordSaleSettlement` ga uzatiladi).
+    const extraCostLegs = this.resolveExtraCostSettlementLegs({
+      extraCost,
+      chargedCashboxType: actorExpenseCashbox ? actorExpenseCashboxType : null,
+    });
+
     // Decoupled COD legs — each independent of the others' thresholds:
     //   market : HQ owes market (total − marketTariff); reversed if total < marketTariff
     //   courier: courier owes branch (total − courierShare); HQ tops up if total < courierShare
@@ -5210,8 +5253,11 @@ export class OrderLifecycleService {
         // ⚠️ `collectible`, `totalPrice` EMAS — daftar kassa bilan AYNI
         // summalarni ko'rsatishi kerak. Aks holda onlayn to'langan har bir
         // buyurtma solishtiruv skriptida "nomuvofiqlik" bo'lib chiqardi.
-        courier_amount: collectible - courierShare,
-        branch_amount: branchNet,
+        // ⚠️ Qo'shimcha xarajat kuryer/filial kassasidan ham yechiladi, demak
+        // o'sha bo'g'inlar zanjir bo'ylab shuncha kam naqd ko'taradi — aks
+        // holda FIFO daftardan ko'p pul talab qilib qotib qolardi.
+        courier_amount: collectible - courierShare - extraCostLegs.courier,
+        branch_amount: branchNet - extraCostLegs.branch,
         market_amount: collectible - marketTariff - extraCost,
         hasCourier: Boolean(courierCashbox),
       });
@@ -5415,6 +5461,15 @@ export class OrderLifecycleService {
       actorExpenseCashbox = fetchedActorExpenseCashbox;
     }
 
+    // Qo'shimcha xarajat daftar oyoqlari + bekor qilingan buyurtma zanjirdagi
+    // qaysi filialga tegishli ekani (kredit qatorini ochish uchun).
+    const extraCostLegs = this.resolveExtraCostSettlementLegs({
+      extraCost,
+      chargedCashboxType: actorExpenseCashbox ? actorExpenseCashboxType : null,
+    });
+    const settlementBranchId =
+      extraCost > 0 ? await this.lookup.resolveSettlementBranchId(order) : null;
+
     // Atomic block: the extra-cost cashbox movements (outbox enqueues) and the
     // status flip to CANCELLED must commit together — otherwise a crash could
     // charge the extra cost while leaving the order in WAITING.
@@ -5472,6 +5527,31 @@ export class OrderLifecycleService {
           },
           { manager: tx },
         );
+
+        /**
+         * ⚠️ KREDIT QATORI — SETTLEMENT DAFTARI KASSA BILAN TENGLASHADI.
+         *
+         * Bekor qilingan buyurtmada sotuv yo'q, demak daftarda qator ham
+         * yo'q edi. Lekin qo'shimcha xarajat kuryer (yoki filial) kassasidan
+         * YECHILADI — ya'ni u topshiradigan naqd aynan shuncha kam bo'ladi,
+         * daftar esa to'liq summani talab qilaverardi. Jonli E2E'da aynan
+         * shu 5 000 so'm yetmay, uchinchi buyurtma abadiy PENDING bo'lib
+         * qotib qolgan edi.
+         *
+         * Endi bekor qilingan buyurtma uchun ham qator ochiladi, faqat
+         * MANFIY (kredit) oyoqlar bilan: FIFO uni kerak bo'lganda lump-sum
+         * ustiga qo'shadi va ikki daftar bir-biriga mos keladi.
+         */
+        await this.recordSaleSettlement(tx, {
+          order_id: String(order.id),
+          courier_id: extraCostLegs.courier > 0 ? actorCourierId : null,
+          branch_id: settlementBranchId,
+          market_id: order.market_id ? String(order.market_id) : null,
+          courier_amount: extraCostLegs.courier ? -extraCostLegs.courier : 0,
+          branch_amount: extraCostLegs.branch ? -extraCostLegs.branch : 0,
+          market_amount: -extraCost,
+          hasCourier: extraCostLegs.courier > 0,
+        });
       }
 
       await this.updateFull(
@@ -6187,6 +6267,13 @@ export class OrderLifecycleService {
       ['Buyurtma arzonroqqa sotildi!'],
     );
 
+    // Qo'shimcha xarajat AYNAN qaysi kassadan yechiladi — daftar oyoqlari ham
+    // shuncha kamayadi (`sellOrder` bilan bir xil).
+    const extraCostLegs = this.resolveExtraCostSettlementLegs({
+      extraCost,
+      chargedCashboxType: actorExpenseCashbox ? actorExpenseCashboxType : null,
+    });
+
     const existingItems = await this.orderItemRepo.find({
       where: { order_id: String(order.id) },
       order: { createdAt: 'ASC' },
@@ -6519,8 +6606,8 @@ export class OrderLifecycleService {
         // ⚠️ `collectible` — kassa oyoqlari bilan AYNI summa (sellOrder'dagi
         // kabi). `price` bilan yozilsa onlayn to'langan qisman sotuv daftarda
         // kassadan farq qilardi.
-        courier_amount: collectible - courierShare,
-        branch_amount: branchNet,
+        courier_amount: collectible - courierShare - extraCostLegs.courier,
+        branch_amount: branchNet - extraCostLegs.branch,
         market_amount: collectible - marketTariff - extraCost,
         hasCourier: Boolean(courierCashbox),
       });
