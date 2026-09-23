@@ -1,3 +1,4 @@
+import { RpcException } from '@nestjs/microservices';
 import { IntegrationServiceService } from './integration-service.service';
 
 /**
@@ -91,6 +92,55 @@ describe('webhook_url sozlanmagan -> awaiting_config', () => {
   });
 });
 
+/**
+ * `webhook_secret` SOZLANMAGAN holat — `webhook_url` bor.
+ *
+ * ⚠️ ILGARI imzo BO'SH kalit bilan qo'yilib yuborilardi (`?? ''`). Qabul
+ * qiluvchi 401 qaytarardi, tizim esa buni oddiy tarmoq xatosi deb 4 marta
+ * qayta urinib `permanently_failed` qilardi — sabab hech qaysi ekranda
+ * ko'rinmasdi. Endi sozlama yo'qligi SOZLAMA xatosi sifatida qaraladi.
+ */
+describe('webhook_secret sozlanmagan -> awaiting_config', () => {
+  function makeSecretlessSvc() {
+    const { svc, updates } = makeSvc({
+      partner: {
+        id: '7',
+        webhook_url: 'https://beepost.example.com/api/v1/elchi/webhook',
+        webhook_secret: null,
+      },
+    });
+    // SSRF guard tarmoqqa chiqadi — test undan mustaqil bo'lsin.
+    svc.assertOutboundUrlSafe = jest.fn().mockResolvedValue(undefined);
+    return { svc, updates };
+  }
+
+  it('TC7: yuborilmaydi, qator kutish holatiga tushadi', async () => {
+    const { svc, updates } = makeSecretlessSvc();
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    const ok = await svc.deliverPartnerWebhookRow({ ...ROW });
+
+    expect(ok).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(updates.at(-1).patch.status).toBe('awaiting_config');
+  });
+
+  it('TC8: sabab AYNAN sekret yo‘qligini ko‘rsatadi', async () => {
+    const { svc, updates } = makeSecretlessSvc();
+    global.fetch = jest.fn() as unknown as typeof fetch;
+
+    await svc.deliverPartnerWebhookRow({ ...ROW, attempts: 3 });
+
+    const last = updates.at(-1).patch;
+    // "HTTP 401" emas — operator sababni o'qiy olsin.
+    expect(String(last.last_error)).toMatch(/webhook_secret/);
+    // Urinish HISOBLANMAYDI: yuborishga harakat ham qilinmadi.
+    expect(last.attempts).toBe(3);
+    expect(last.next_retry_at).toBeNull();
+  });
+});
+
 describe('webhook_url sozlanganda kutayotganlar navbatga qaytadi', () => {
   function makeUpdateSvc(webhookUrl: string | null, affected: number) {
     const calls: any[] = [];
@@ -103,6 +153,9 @@ describe('webhook_url sozlanganda kutayotganlar navbatga qaytadi', () => {
         id: '7',
         name: 'BeePost',
         webhook_url: null,
+        // Sekret ALLAQACHON sozlangan — aks holda manzil qo'yish
+        // "manzil bor, sekret yo'q" holatini yaratib, rad etilardi.
+        webhook_secret: 'enc:stored',
         is_active: true,
       }),
       save: jest.fn(async (x: any) => x),
@@ -148,5 +201,46 @@ describe('webhook_url sozlanganda kutayotganlar navbatga qaytadi', () => {
 
     expect(calls).toHaveLength(0);
     expect(svc.processPendingPartnerWebhooks).not.toHaveBeenCalled();
+  });
+
+  /**
+   * "Manzil bor, sekret yo'q" holati SAQLANMAYDI: bunday hamkor
+   * sozlangandek ko'rinadi, amalda esa har hodisa imzosiz qoladi va
+   * qabul qiluvchida 401 bo'ladi.
+   */
+  it('TC9: sekretsiz url QO‘SHIB bo‘lmaydi', async () => {
+    const { svc } = makeUpdateSvc(null, 3);
+    svc.partnerRepo.findOne.mockResolvedValue({
+      id: '7',
+      name: 'BeePost',
+      webhook_url: null,
+      webhook_secret: null,
+      is_active: true,
+    });
+
+    await expect(
+      svc.updatePartner('7', {
+        webhook_url: 'https://beepost.example.com/api/v1/elchi/webhook',
+      }),
+    ).rejects.toBeInstanceOf(RpcException);
+
+    expect(svc.partnerRepo.save).not.toHaveBeenCalled();
+  });
+
+  it('TC10: url turganda sekretni O‘CHIRIB bo‘lmaydi', async () => {
+    const { svc } = makeUpdateSvc(null, 3);
+    svc.partnerRepo.findOne.mockResolvedValue({
+      id: '7',
+      name: 'BeePost',
+      webhook_url: 'https://beepost.example.com/api/v1/elchi/webhook',
+      webhook_secret: 'enc:stored',
+      is_active: true,
+    });
+
+    await expect(
+      svc.updatePartner('7', { webhook_secret: null }),
+    ).rejects.toBeInstanceOf(RpcException);
+
+    expect(svc.partnerRepo.save).not.toHaveBeenCalled();
   });
 });

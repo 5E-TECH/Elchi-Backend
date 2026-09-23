@@ -204,6 +204,31 @@ class PartnerWebhookNotConfiguredError extends Error {
   }
 }
 
+/**
+ * Hamkorda `webhook_secret` yo'q (yoki deshifrlanmadi) — IMZOLASH MUMKIN
+ * EMAS degan signal.
+ *
+ * ⚠️ NEGA ALOHIDA XATO, NEGA BO'SH KALIT EMAS. Ilgari bu yerda `?? ''`
+ * turardi: sekret bo'lmasa imzo BO'SH kalit bilan hisoblanib yuborilardi.
+ * Qabul qiluvchi uni yaroqsiz deb 401 qaytarardi, Elchi esa 401'ni oddiy
+ * yetkazish xatosi deb bilib qayta urinardi — ya'ni sozlama yo'qligi
+ * "tarmoq muammosi"dek ko'rinardi va hech qayerda to'g'ri sabab yozilmasdi.
+ * Jonli E2E'da aynan shu bo'ldi: qaytgan imzo `hmac('', body)` bilan mos
+ * keldi va pul ma'lumoti BeePostga yetmadi.
+ *
+ * `PartnerWebhookNotConfiguredError` dan MEROS: sozlama yo'qligi baribir
+ * hodisaning aybi emas — qator `awaiting_config`da kutadi, urinish
+ * hisoblanmaydi (yuqoridagi izohga qarang).
+ */
+class PartnerWebhookSecretMissingError extends PartnerWebhookNotConfiguredError {
+  constructor(
+    message = "hamkorda webhook_secret sozlanmagan — imzo qo'yib bo'lmaydi",
+  ) {
+    super(message);
+    this.name = 'PartnerWebhookSecretMissingError';
+  }
+}
+
 @Injectable()
 export class IntegrationServiceService {
   private readonly logger = new Logger(IntegrationServiceService.name);
@@ -356,6 +381,24 @@ export class IntegrationServiceService {
       await this.assertOutboundUrlSafe(dto.webhook_url);
     }
     /**
+     * ⚠️ MANZIL BOR, SEKRET YO'Q — BU HOLAT SAQLANMAYDI.
+     *
+     * Bunday hamkor "sozlangandek" ko'rinadi, amalda esa har hodisa
+     * imzosiz qoladi: qabul qiluvchi 401 qaytaradi va qator sozlama
+     * yo'qligi sababli emas, "yetkazib bo'lmadi" deb aylanaveradi.
+     * Shart YOZISH vaqtida tekshiriladi — o'shanda operator ekranda
+     * sababni ko'radi.
+     */
+    if (
+      String(dto.webhook_url ?? '').trim() &&
+      !String(dto.webhook_secret ?? '').trim()
+    ) {
+      this.badRequest(
+        '`webhook_url` berilgan bo‘lsa `webhook_secret` ham shart — ' +
+          'imzosiz (bo‘sh kalitli) webhook qabul qiluvchida 401 bo‘ladi.',
+      );
+    }
+    /**
      * ⚠️ SANDBOX MAYDONLARI YARATISHDA HAM SAQLANADI.
      *
      * Ilgari bu metod ularni UMUMAN o'qimasdi — ya'ni gateway DTO'si
@@ -482,6 +525,27 @@ export class IntegrationServiceService {
       partner.webhook_secret = secret ? this.encryptCredential(secret) : null;
       // Sir QIYMATI hech qachon loglanmaydi — faqat o'zgargani.
       changed.webhook_secret_changed = true;
+    }
+
+    /**
+     * ⚠️ YAKUNIY HOLAT TEKSHIRILADI, ALOHIDA MAYDON EMAS.
+     *
+     * "Manzil bor, sekret yo'q" ikki yo'l bilan yuzaga keladi: manzil
+     * QO'SHILADI (sekretsiz) yoki sekret O'CHIRILADI (manzil qolib).
+     * Ikkalasi ham imzosiz webhookka olib keladi — 401 va cheksiz qayta
+     * urinish. Shu bois shart ikkala maydon qo'llangandan KEYIN, saqlashdan
+     * OLDIN tekshiriladi.
+     */
+    if (
+      (dto.webhook_url !== undefined || dto.webhook_secret !== undefined) &&
+      partner.webhook_url &&
+      !partner.webhook_secret
+    ) {
+      this.badRequest(
+        '`webhook_url` bor hamkorda `webhook_secret` ham bo‘lishi shart — ' +
+          'imzosiz (bo‘sh kalitli) webhook qabul qiluvchida 401 bo‘ladi. ' +
+          'Webhookni butunlay o‘chirish uchun `webhook_url` ni tozalang.',
+      );
     }
 
     if (dto.sandbox_webhook_url !== undefined) {
@@ -1892,8 +1956,10 @@ export class IntegrationServiceService {
             next_retry_at: null,
           },
         );
+        // Sabab XATODAN olinadi: sozlanmagani `webhook_url` ham,
+        // `webhook_secret` ham bo'lishi mumkin — logda ular farq qilsin.
         this.logger.warn(
-          `partner webhook ${row.id}: webhook_url sozlanmagan — ` +
+          `partner webhook ${row.id}: ${message} — ` +
             `kutish holatiga o'tdi (partner=${row.partner_id})`,
         );
         return false;
@@ -1990,7 +2056,15 @@ export class IntegrationServiceService {
     await this.assertOutboundUrlSafe(partner.webhook_url);
 
     const rawBody = JSON.stringify(row.payload ?? {});
-    const secret = this.decryptCredential(partner.webhook_secret) ?? '';
+    /**
+     * ⚠️ BO'SH KALIT BILAN IMZOLANMAYDI. Ilgari shu yerda `?? ''` turardi:
+     * sekret yo'q bo'lsa ham imzo hisoblanib yuborilardi va qabul qiluvchi
+     * 401 qaytarardi — Elchi buni oddiy tarmoq xatosi deb qayta urinardi.
+     */
+    const secret = this.resolvePartnerWebhookSecret(partner.webhook_secret);
+    if (!secret) {
+      throw new PartnerWebhookSecretMissingError();
+    }
     const signature = computeHmacSignature(rawBody, secret, 'sha256', 'hex');
 
     const res = await fetch(partner.webhook_url, {
@@ -2145,7 +2219,19 @@ export class IntegrationServiceService {
     // bo'lmasligi kerak, aks holda "sinov o'tdi, real yiqildi" bo'lardi.
     await this.assertOutboundUrlSafe(target);
 
-    const secret = this.decryptCredential(partner.webhook_secret) ?? '';
+    /**
+     * ⚠️ HAQIQIY YUBORISH BILAN AYNI QOIDA: sekret yo'q bo'lsa BO'SH kalit
+     * bilan imzolanmaydi. Aks holda sinov "HTTP 401" ko'rsatib, operator
+     * sababni qabul qiluvchi tomondan izlardi — holbuki nuqson Elchida.
+     */
+    const secret = this.resolvePartnerWebhookSecret(partner.webhook_secret);
+    if (!secret) {
+      this.badRequest(
+        "Hamkorda `webhook_secret` yo'q — imzo qo'yib bo'lmaydi. Bo'sh " +
+          'kalit bilan imzolangan so‘rovni qabul qiluvchi 401 qaytaradi; ' +
+          'avval sekretni sozlang.',
+      );
+    }
 
     /**
      * Sinov yuki haqiqiy hodisa SHAKLIDA, lekin `event` boshqa
@@ -3324,6 +3410,26 @@ export class IntegrationServiceService {
     // Both keys failed — leave value untouched; an audit script can re-key it
     // manually once the right secret is known.
     return value;
+  }
+
+  /**
+   * Hamkor webhook sekretini OCHIQ ko'rinishda qaytaradi, bo'lmasa `null`.
+   *
+   * ⚠️ NEGA `decryptCredential` O'ZI YETARLI EMAS. U kalitlar mos kelmasa
+   * qiymatni O'ZGARTIRMAY qaytaradi (`enc:` prefiksi saqlanib qoladi) — bu
+   * ochiq sekret emas, shifrmatn. U bilan imzolash ham, bo'sh kalit bilan
+   * imzolash ham bir xil natija beradi: qabul qiluvchi uchun YAROQSIZ imzo
+   * va 401. Ikkala holat ham "sekret yo'q" deb qaraladi, chunki imzoni
+   * TO'G'RI qo'yib bo'lmaydi.
+   */
+  private resolvePartnerWebhookSecret(
+    encrypted?: string | null,
+  ): string | null {
+    const secret = this.decryptCredential(encrypted);
+    if (!secret || secret.startsWith('enc:')) {
+      return null;
+    }
+    return secret;
   }
 
   private async getProductsCountByMarket(marketId: string): Promise<number> {
