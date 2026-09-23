@@ -39,7 +39,10 @@ const ROW = {
   attempts: 2,
   max_attempts: 4,
   status: 'pending',
-  payload: { event: 'shipment.status_changed' },
+  // `external_order_id` haqiqiy qatorda HAR DOIM bor (ustun NOT NULL) va
+  // yetkazuvchi uni shakl bo'yicha tekshiradi (F5) — fikstura ham shunday.
+  external_order_id: 'ord-9',
+  payload: { event: 'shipment.status_changed', external_order_id: 'ord-9' },
 };
 
 describe('webhook_url sozlanmagan -> awaiting_config', () => {

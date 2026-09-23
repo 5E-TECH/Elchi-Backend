@@ -89,6 +89,46 @@ const PAID_STATUSES = new Set<string>([
 ]);
 
 /**
+ * `external_order_id` uchun KELISHILGAN SHAKL (kontrakt: docs/PARTNER_API.md §4).
+ *
+ * NEGA TEKSHIRILADI. Qiymat hamkorda odatda UUID ustuniga yoziladi. Shakli
+ * buzilgan qiymat (bo'sh joy, satr ko'chirish, qo'shtirnoq, juda uzun matn)
+ * tushsa, qabul qiluvchi tomonda Postgres `22P02` beradi va so'rov **500**
+ * bilan tugaydi. Elchi 500 ni VAQTINCHALIK xato deb hisoblaydi: 4 marta
+ * qayta uradi, so'ng qator `permanently_failed` bo'lib hodisa yo'qoladi —
+ * ya'ni pul ma'lumoti hamkorga umuman yetmaydi (jonli E2E testda aynan shu
+ * bo'lgan: jo'natish 6/6 ishlagan, pul ma'lumoti yetmagan).
+ *
+ * Shakl UUIDdan KENGROQ ataylab: hamkorlarning bir qismi raqamli yoki
+ * `ord-9` ko'rinishidagi id ishlatadi va ular muammosiz yetib boradi.
+ * Rad etilayotgani — HECH QAYSI qabul qiluvchida ishlamaydigan qiymat.
+ */
+const EXTERNAL_ORDER_ID_MAX_LEN = 64;
+const EXTERNAL_ORDER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
+/**
+ * Shakl buzilgan bo'lsa SABABNI qaytaradi, to'g'ri bo'lsa `null`.
+ *
+ * Sabab matn bo'lib qaytadi — u jurnalga va outbox qatoridagi `last_error`ga
+ * tushadi, ya'ni admin nima noto'g'ri ekanini "HTTP 500" o'rniga aniq ko'radi.
+ */
+const externalOrderIdRejection = (
+  value: string | null | undefined,
+): string | null => {
+  const raw = value ?? '';
+  if (!raw.trim()) return "bo'sh";
+  // Chekka bo'sh joy ham nosozlik: qabul qiluvchi uni trim qilmasligi mumkin.
+  if (raw !== raw.trim()) return "chekkasida bo'sh joy bor";
+  if (raw.length > EXTERNAL_ORDER_ID_MAX_LEN) {
+    return `uzunligi ${EXTERNAL_ORDER_ID_MAX_LEN} belgidan oshdi (${raw.length})`;
+  }
+  if (!EXTERNAL_ORDER_ID_RE.test(raw)) {
+    return 'ruxsat etilmagan belgi bor (faqat harf, raqam va `.` `_` `:` `-`)';
+  }
+  return null;
+};
+
+/**
  * Posilka natijasi SHULARDAN biri bo'lsa, kiruvchi buyurtma yo'li sinaladi.
  *
  * Uchalasi ham "bu hodisa mavjud posilkaga tegishli emas" degani:
@@ -228,6 +268,35 @@ class PartnerWebhookSecretMissingError extends PartnerWebhookNotConfiguredError 
     this.name = 'PartnerWebhookSecretMissingError';
   }
 }
+
+/**
+ * Xato DOIMIY — ayni tanani qayta yuborish ayni javobni beradi.
+ *
+ * Ilgari yetkazuvchi hamma xatoni bir xil ko'rardi va har birini 4 marta
+ * qayta urardi. Vaqtinchalik xato (tarmoq, hamkor serveri yiqilgan — 5xx)
+ * uchun bu to'g'ri, lekin 4xx uchun BEKOR: qabul qiluvchi "bu so'rov
+ * noto'g'ri" deyapti, kutish uni to'g'rilamaydi. Natijada nosozlik 4
+ * urinish + 21 daqiqa backoff davomida yashirinib turardi, monitorda esa
+ * hammasi `pending` bo'lib ko'rinardi.
+ *
+ * Shuning uchun 4xx darhol `permanently_failed` bo'ladi — aniq sabab bilan,
+ * admin monitoriga ko'rinadigan holda (qo'lda "retry" yo'li ochiq qoladi).
+ */
+class PartnerWebhookPermanentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PartnerWebhookPermanentError';
+  }
+}
+
+/**
+ * 4xx ichidagi ISTISNOLAR — bular vaqtinchalik va qayta urinishga arziydi:
+ *   408 Request Timeout · 425 Too Early · 429 Too Many Requests
+ *
+ * 429 ni doimiy deb belgilash ayniqsa xato bo'lardi: hamkor "hozir emas,
+ * keyinroq" deyapti, biz esa hodisani butunlay tashlab yuborardik.
+ */
+const RETRYABLE_4XX = new Set<number>([408, 425, 429]);
 
 @Injectable()
 export class IntegrationServiceService {
@@ -1830,6 +1899,22 @@ export class IntegrationServiceService {
       occurred_at: new Date().toISOString(),
     };
 
+    /**
+     * ⚠️ SHAKL TEKSHIRUVI — YUBORISHDAN OLDIN.
+     *
+     * Yaroqsiz `external_order_id` qabul qiluvchida Postgres xatosi (`22P02`)
+     * → 500 beradi; 500 esa "vaqtinchalik" deb 4 marta qayta uriladi va
+     * hodisa oxirida butunlay yo'qoladi. Bu yerda sabab ANIQ ma'lum, ya'ni
+     * urinishning o'zi ortiqcha.
+     *
+     * ⚠️ QATOR BARIBIR YOZILADI — `permanently_failed` holatida. Jimgina
+     * tashlab yuborish bu kodda allaqachon bir marta og'riq bergan
+     * (`awaiting_config` izohiga qarang): nosozlik hech qaysi ekranda
+     * ko'rinmasdi. Endi u outbox monitorida sababi bilan turadi va
+     * `partner_shipment_ref` tuzatilgach "retry" bilan yuboriladi.
+     */
+    const idRejection = externalOrderIdRejection(ref.external_order_id);
+
     try {
       const saved = await this.partnerWebhookOutboxRepo.save(
         this.partnerWebhookOutboxRepo.create({
@@ -1839,11 +1924,30 @@ export class IntegrationServiceService {
           event_type: 'shipment.status_changed',
           new_status: newStatus,
           payload,
-          status: 'pending',
+          status: idRejection ? 'permanently_failed' : 'pending',
           attempts: 0,
           max_attempts: 4,
+          last_error: idRejection
+            ? `external_order_id yaroqsiz: ${idRejection}`
+            : null,
         }),
       );
+      if (idRejection) {
+        this.logger.error(
+          `partner webhook ${saved.id}: external_order_id yaroqsiz ` +
+            `(${idRejection}) — yuborilmadi. partner=${ref.partner_id} ` +
+            `order=${orderId} status=${newStatus}`,
+        );
+        return successRes(
+          {
+            outbox_id: saved.id,
+            rejected: 'invalid external_order_id',
+            reason: idRejection,
+          },
+          200,
+          'partner webhook rejected',
+        );
+      }
       // Darhol bir marta urinib ko'ramiz (scheduler ham keyingi tick'da oladi).
       void this.processPendingPartnerWebhooks(1).catch(() => undefined);
       return successRes(
@@ -1973,6 +2077,29 @@ export class IntegrationServiceService {
        */
       const durationMs = Date.now() - startedAt;
 
+      /**
+       * DOIMIY xato (4xx yoki yaroqsiz `external_order_id`) — backoff
+       * BERILMAYDI: ayni tana ayni javobni oladi. Qator darhol yopiladi,
+       * lekin monitorda sababi bilan ko'rinadi va sabab tuzatilgach qo'lda
+       * "retry" qilish mumkin.
+       */
+      if (error instanceof PartnerWebhookPermanentError) {
+        await this.partnerWebhookOutboxRepo.update(
+          { id: row.id },
+          {
+            status: 'permanently_failed',
+            last_error: message,
+            next_retry_at: null,
+            duration_ms: durationMs,
+          },
+        );
+        this.logger.error(
+          `partner webhook ${row.id}: DOIMIY xato — qayta urinilmaydi ` +
+            `(partner=${row.partner_id}): ${message}`,
+        );
+        return false;
+      }
+
       if (attempts < Number(row.max_attempts ?? 4)) {
         await this.partnerWebhookOutboxRepo.update(
           { id: row.id },
@@ -2013,6 +2140,24 @@ export class IntegrationServiceService {
      */
     attempt = 1,
   ): Promise<Record<string, any>> {
+    /**
+     * ⚠️ IKKINCHI DARVOZA. Shakl `enqueuePartnerWebhook`da ham tekshiriladi,
+     * lekin qator bu yerga BOSHQA yo'l bilan ham keladi: admin monitoridagi
+     * "retry" eski qatorni qayta navbatga qo'yadi. Tekshiruvsiz o'sha tugma
+     * yaroqsiz id'ni yana yuborib, yana 500 olardi.
+     *
+     * Sandbox nusxasi ham yuborilmaydi (shu satr `fetch`largacha turadi):
+     * buzuq hodisaning nusxasi sinov muhitini ham chalg'itadi.
+     */
+    const idRejection = externalOrderIdRejection(
+      String(row.payload?.external_order_id ?? row.external_order_id ?? ''),
+    );
+    if (idRejection) {
+      throw new PartnerWebhookPermanentError(
+        `external_order_id yaroqsiz: ${idRejection} — qayta urinish foyda bermaydi`,
+      );
+    }
+
     const partner = await this.partnerRepo.findOne({
       where: { id: String(row.partner_id), isDeleted: false },
     });
@@ -2078,9 +2223,47 @@ export class IntegrationServiceService {
     });
 
     if (!res.ok) {
-      throw new Error(`partner webhook HTTP ${res.status}`);
+      /**
+       * Javob tanasi (qisqartirilgan) xabarga QO'SHILADI. "HTTP 400" o'zi
+       * hech narsa aytmaydi; qabul qiluvchining "invalid input syntax for
+       * type uuid" degan javobi esa sababni bir qarashda ko'rsatadi.
+       */
+      const snippet = await this.readResponseSnippet(res);
+      const detail =
+        `partner webhook HTTP ${res.status}` + (snippet ? `: ${snippet}` : '');
+
+      /**
+       * 4xx — SO'ROV noto'g'ri, kutish uni to'g'rilamaydi → doimiy xato.
+       * 5xx va tarmoq xatolari esa vaqtinchalik: ular eski yo'l bilan
+       * backoff orqali qayta uriladi.
+       */
+      if (
+        res.status >= 400 &&
+        res.status < 500 &&
+        !RETRYABLE_4XX.has(res.status)
+      ) {
+        throw new PartnerWebhookPermanentError(detail);
+      }
+      throw new Error(detail);
     }
     return { http_status: res.status };
+  }
+
+  /**
+   * Xato javobining tanasini diagnostika uchun qisqartirib o'qiydi.
+   *
+   * Hech qachon otmaydi: tana o'qilmasligi (stream yopilgan, matn emas)
+   * asosiy xato xabarini yo'qotishga sabab bo'lmasligi kerak.
+   */
+  private async readResponseSnippet(res: Response): Promise<string> {
+    try {
+      const text = await res.text();
+      return String(text ?? '')
+        .trim()
+        .slice(0, 300);
+    } catch {
+      return '';
+    }
   }
 
   /**
