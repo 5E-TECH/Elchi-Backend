@@ -321,6 +321,69 @@ describe('Order tracking lifecycle', () => {
     );
   });
 
+  /**
+   * SOTUV SNAPSHOTI ENTITY'GA YOZILADI.
+   *
+   * ⚠️ `sale_collectible_amount` va `extra_cost` DTO'da e'lon qilingan edi,
+   * `sellOrder` ularni uzatardi ham — lekin `updateFull` ning `Object.assign`
+   * bloki ularni ko'chirmasdi va qiymat jimgina yo'qolardi.
+   *
+   * Jonli E2E (BeePost↔Elchi, Andijon): hamkor API `collected_from_customer` ni
+   * aynan `sale_collectible_amount` ustunidan oladi — u doim `null` bo'lgani
+   * uchun BeePost paneli "Elchi bizga qarz: 0" deb turardi.
+   */
+  it('updateFull sale_collectible_amount va extra_cost ni entityga yozadi', async () => {
+    const { lifecycle, orderRepo } = createService();
+    jest.spyOn(lifecycle, 'findById').mockResolvedValue({
+      id: 'snap-1',
+      status: Order_status.SOLD,
+      sale_collectible_amount: null,
+      extra_cost: 0,
+      items: [],
+    } as any);
+    orderRepo.save.mockResolvedValue(undefined);
+
+    await lifecycle.updateFull('snap-1', {
+      sale_collectible_amount: 375_000,
+      extra_cost: 5_000,
+    } as any);
+
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sale_collectible_amount: 375_000,
+        extra_cost: 5_000,
+      }),
+    );
+  });
+
+  /**
+   * `0` — HAQIQIY qiymat. `??` ishlatilsa `0` o'tardi, lekin `null` eskisiga
+   * almashardi; `typeof` darvozasi ikkalasini ham to'g'ri o'tkazadi.
+   */
+  it('updateFull sale_collectible_amount uchun null ni ham yozadi', async () => {
+    const { lifecycle, orderRepo } = createService();
+    jest.spyOn(lifecycle, 'findById').mockResolvedValue({
+      id: 'snap-2',
+      status: Order_status.SOLD,
+      sale_collectible_amount: 120_000,
+      extra_cost: 7_000,
+      items: [],
+    } as any);
+    orderRepo.save.mockResolvedValue(undefined);
+
+    await lifecycle.updateFull('snap-2', {
+      sale_collectible_amount: null,
+      extra_cost: 0,
+    } as any);
+
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sale_collectible_amount: null,
+        extra_cost: 0,
+      }),
+    );
+  });
+
   it('received order total_price cannot be edited', async () => {
     const { lifecycle } = createService();
     jest.spyOn(lifecycle, 'findById').mockResolvedValue({

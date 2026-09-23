@@ -6874,6 +6874,29 @@ export class OrderLifecycleService {
         typeof dto.branch_cashbox_amount !== 'undefined'
           ? dto.branch_cashbox_amount
           : order.branch_cashbox_amount,
+      /**
+       * ⚠️ BU IKKI MAYDON DTO'DA BOR EDI, LEKIN BU YERGA KO'CHIRILMASDI —
+       * ya'ni `sellOrder`/`partlySellOrder` ularni uzatardi, `updateFull` esa
+       * jimgina tashlab yuborardi va entity'ga hech qachon yozilmasdi.
+       *
+       * Oqibati jonli E2E'da (BeePost↔Elchi, Andijon) ko'rindi: hamkor API
+       * `collected_from_customer` ni aynan `sale_collectible_amount` ustunidan
+       * oladi (integration-service.service.ts), u esa DOIM `null` bo'lardi —
+       * natijada BeePost hisob-kitob paneli "Elchi bizga qarz: 0" deb turardi,
+       * aslida pul yig'ilgan bo'lsa ham. `extra_cost` ham xuddi shunday: kassada
+       * ko'rinardi, buyurtmada `0` bo'lib qolardi.
+       *
+       * `??` EMAS, `typeof` ishlatiladi: `0` va `null` HAQIQIY qiymat —
+       * `??` ularning birini (0 ni emas, null ni) jimgina eskisiga almashtirardi.
+       */
+      sale_collectible_amount:
+        typeof dto.sale_collectible_amount !== 'undefined'
+          ? dto.sale_collectible_amount
+          : order.sale_collectible_amount,
+      extra_cost:
+        typeof dto.extra_cost !== 'undefined'
+          ? dto.extra_cost
+          : order.extra_cost,
       to_be_paid: dto.to_be_paid ?? order.to_be_paid,
       paid_amount: dto.paid_amount ?? order.paid_amount,
       status: dto.status ?? order.status,
