@@ -329,4 +329,68 @@ describe('IntegrationServiceService — partner outbound webhook (C2.3)', () => 
 
     expect(fetchMock).not.toHaveBeenCalled();
   });
+
+  /**
+   * ⚠️ BO'SH KALIT BILAN IMZOLASH — JONLI NUQSON.
+   *
+   * Ilgari `decryptCredential(...) ?? ''` turardi: sekret bo'lmasa imzo
+   * BO'SH kalit bilan hisoblanib yuborilardi. Qabul qiluvchi uni yaroqsiz
+   * deb 401 qaytarardi, Elchi esa 401'ni oddiy yetkazish xatosi deb qayta
+   * urinardi — sozlama yo'qligi hech qayerda ko'rinmasdi.
+   *
+   * Jonli E2E'da qaytgan imzo AYNAN `hmac('', body)` bilan mos keldi va
+   * pul ma'lumoti BeePostga yetmadi. Quyidagi ikki test shu imzo endi
+   * hisoblanmasligini ham, umuman yuborilmasligini ham qamrab oladi.
+   */
+  it('webhook_secret yo‘q partner -> BO‘SH kalit bilan imzolanmaydi', async () => {
+    const svc: any = makeSvc({
+      partnerFindOne: jest.fn(() =>
+        Promise.resolve({
+          id: '7',
+          webhook_url: 'https://mp.example.com/webhooks/elchi',
+          webhook_secret: null,
+        }),
+      ),
+    });
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      svc.dispatchPartnerWebhook({
+        id: '1',
+        partner_id: '7',
+        payload: SOLD_PAYLOAD,
+      }),
+    ).rejects.toThrow(/webhook_secret/);
+
+    // Hech narsa yuborilmadi — ya'ni `hmac('', body)` imzosi ham ketmadi.
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('webhook_secret DESHIFRLANMASA ham yuborilmaydi', async () => {
+    // Noto'g'ri kalit bilan shifrlangan qiymat: `decryptCredential` uni
+    // OCHA OLMAY, `enc:` prefiksi bilan qaytaradi. Shifrmatn bilan
+    // imzolash ham yaroqsiz imzo beradi — "sekret yo'q" bilan bir xil.
+    const svc: any = makeSvc({
+      partnerFindOne: jest.fn(() =>
+        Promise.resolve({
+          id: '7',
+          webhook_url: 'https://mp.example.com/webhooks/elchi',
+          webhook_secret: `enc:${'0'.repeat(32)}:${'0'.repeat(32)}`,
+        }),
+      ),
+    });
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as unknown as typeof fetch;
+
+    await expect(
+      svc.dispatchPartnerWebhook({
+        id: '1',
+        partner_id: '7',
+        payload: SOLD_PAYLOAD,
+      }),
+    ).rejects.toThrow(/webhook_secret/);
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

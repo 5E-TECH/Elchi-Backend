@@ -6954,6 +6954,93 @@
         ]
       }
     },
+    "/integrations/receivables": {
+      "get": {
+        "operationId": "IntegrationGatewayController_listReceivables",
+        "parameters": [
+          {
+            "name": "integration_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "pending",
+                "settled",
+                "cancelled"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List provider COD receivables",
+        "tags": [
+          "Integrations"
+        ]
+      }
+    },
+    "/integrations/shipments/{order_id}": {
+      "get": {
+        "operationId": "IntegrationGatewayController_getShipment",
+        "parameters": [
+          {
+            "name": "order_id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get the provider shipment for an order",
+        "tags": [
+          "Integrations"
+        ]
+      }
+    },
     "/integrations/{id}": {
       "get": {
         "operationId": "IntegrationGatewayController_findById",
@@ -7544,93 +7631,6 @@
           }
         ],
         "summary": "List provider shipments for an integration",
-        "tags": [
-          "Integrations"
-        ]
-      }
-    },
-    "/integrations/shipments/{order_id}": {
-      "get": {
-        "operationId": "IntegrationGatewayController_getShipment",
-        "parameters": [
-          {
-            "name": "order_id",
-            "required": true,
-            "in": "path",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Get the provider shipment for an order",
-        "tags": [
-          "Integrations"
-        ]
-      }
-    },
-    "/integrations/receivables": {
-      "get": {
-        "operationId": "IntegrationGatewayController_listReceivables",
-        "parameters": [
-          {
-            "name": "integration_id",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "status",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "enum": [
-                "pending",
-                "settled",
-                "cancelled"
-              ],
-              "type": "string"
-            }
-          },
-          {
-            "name": "page",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "number"
-            }
-          },
-          {
-            "name": "limit",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "type": "number"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "List provider COD receivables",
         "tags": [
           "Integrations"
         ]
