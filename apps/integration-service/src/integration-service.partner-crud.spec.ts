@@ -77,6 +77,29 @@ describe('IntegrationServiceService — Partner CRUD (C1.3)', () => {
     expect(repo.save).not.toHaveBeenCalled();
   });
 
+  /**
+   * ⚠️ MANZIL BOR, SEKRET YO'Q — bunday hamkor YARATILMAYDI.
+   *
+   * Aks holda u faol bo'lib turardi, hodisalar esa imzosiz (bo'sh kalitli)
+   * ketib qabul qiluvchida 401 bo'lardi — jonli E2E'dagi nuqson aynan shu.
+   */
+  it('TC1c: webhook_url bor, webhook_secret yo‘q -> rad etiladi', async () => {
+    const repo = { create: jest.fn(), save: jest.fn() };
+    const log = jest.fn(() => Promise.resolve(undefined));
+    const svc: any = makeService(repo, log);
+    // SSRF guard tarmoqqa chiqadi — test undan mustaqil bo'lsin.
+    svc.assertOutboundUrlSafe = jest.fn(() => Promise.resolve());
+
+    await expect(
+      svc.createPartner({
+        name: 'BeePost',
+        webhook_url: 'https://beepost.example.com/api/v1/elchi/webhook',
+      }),
+    ).rejects.toBeInstanceOf(RpcException);
+
+    expect(repo.save).not.toHaveBeenCalled();
+  });
+
   it('TC2: rotate -> saqlangan hash yangilanadi (eski kalit endi mos kelmaydi)', async () => {
     const partner: any = {
       id: '1',

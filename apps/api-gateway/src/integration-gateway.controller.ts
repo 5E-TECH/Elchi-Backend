@@ -1,11 +1,14 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
   Get,
   Inject,
+  Injectable,
   Param,
   Patch,
+  PipeTransform,
   Post,
   Query,
   Req,
@@ -40,11 +43,37 @@ import {
   UpdateIntegrationRequestDto,
 } from './dto/integration.swagger.dto';
 
-
 // RPC ceiling: this downstream can legitimately run long (base64/provider
 // fetch up to ~60s); an 8s ceiling would premature-fail a working call. See
 // integration-service AbortSignal.timeout / file base64 transfer.
 const PROVIDER_RPC_TIMEOUT_MS = 65_000;
+
+/**
+ * Integratsiya id'si — `bigint` (BaseEntity: `@PrimaryGeneratedColumn('bigint')`),
+ * ya'ni O'NLIK RAQAMLAR qatori. UUID EMAS: bu yerga `ParseUUIDPipe` qo'yilsa
+ * har bitta haqiqiy id rad etilardi.
+ *
+ * ⚠️ `Number()`/`ParseIntPipe` ishlatilmaydi: bigint 2^53 dan oshsa aniqlik
+ * yo'qoladi va id JIMGINA boshqasiga aylanadi. Shakl regex bilan tekshirilib,
+ * qiymat SATR holida uzatiladi — quyi servis uni o'zi bigint sifatida o'qiydi.
+ *
+ * Tekshiruvsiz `GET /integrations/<harf>` quyi servisda Postgres'ning
+ * `invalid input syntax for type bigint` xatosiga aylanib, mijozga 500
+ * qaytarardi — aslida bu mijoz so'rovining xatosi, ya'ni 400.
+ */
+const INTEGRATION_ID_RE = /^[0-9]{1,19}$/;
+
+@Injectable()
+export class ParseIntegrationIdPipe implements PipeTransform<string, string> {
+  transform(value: string): string {
+    if (!INTEGRATION_ID_RE.test(String(value ?? ''))) {
+      throw new BadRequestException(
+        `Integration id must be a positive integer, got: ${String(value)}`,
+      );
+    }
+    return String(value);
+  }
+}
 
 @ApiTags('Integrations')
 @ApiBearerAuth()
@@ -277,10 +306,63 @@ export class IntegrationGatewayController {
     ).pipe(timeout(8000));
   }
 
+  /**
+   * ⚠️ TARTIB MUHIM: STATIK segmentlar `:id` dan OLDIN turishi SHART.
+   *
+   * NestJS marshrutni E'LON TARTIBIDA moslaydi. `@Get(':id')` yuqorida
+   * tursa, `GET /integrations/receivables` so'rovi unga `id='receivables'`
+   * bilan tushadi va provayder COD debitorligi endpointi HECH QACHON
+   * ishga tushmaydi — jonli E2E (BeePost↔Elchi) da pul ma'lumoti aynan shu
+   * sababdan yetib bormagan.
+   *
+   * Xuddi shu xato bu repoda allaqachon bir marta uchragan:
+   * partner-admin-gateway.controller.ts — `/admin/partners/webhooks`
+   * "webhooks" nomli hamkor id'si deb o'qilardi.
+   */
+  // ===== Provider COD reconciliation =====
+
+  @Get('receivables')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({ summary: 'List provider COD receivables' })
+  @ApiQuery({ name: 'integration_id', required: false, type: String })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['pending', 'settled', 'cancelled'],
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  listReceivables(
+    @Query('integration_id') integration_id?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.integrationClient.send(
+      { cmd: 'integration.receivable.list' },
+      {
+        integration_id,
+        status,
+        page: page ? Number(page) : undefined,
+        limit: limit ? Number(limit) : undefined,
+      },
+    ).pipe(timeout(8000));
+  }
+
+  @Get('shipments/:order_id')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiOperation({ summary: 'Get the provider shipment for an order' })
+  getShipment(@Param('order_id') orderId: string) {
+    return this.integrationClient.send(
+      { cmd: 'integration.shipment.get' },
+      { order_id: orderId },
+    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+  }
+
   @Get(':id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Get integration by id' })
-  findById(@Param('id') id: string) {
+  findById(@Param('id', ParseIntegrationIdPipe) id: string) {
     return this.integrationClient.send(
       { cmd: 'integration.find_by_id' },
       { id },
@@ -292,7 +374,7 @@ export class IntegrationGatewayController {
   @ApiOperation({ summary: 'Update integration' })
   @ApiBody({ type: UpdateIntegrationRequestDto })
   update(
-    @Param('id') id: string,
+    @Param('id', ParseIntegrationIdPipe) id: string,
     @Body() dto: UpdateIntegrationRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
@@ -306,7 +388,7 @@ export class IntegrationGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Delete integration' })
   remove(
-    @Param('id') id: string,
+    @Param('id', ParseIntegrationIdPipe) id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return this.integrationClient.send(
@@ -320,7 +402,7 @@ export class IntegrationGatewayController {
   @ApiOperation({ summary: 'Integration connection test (ping/healthcheck)' })
   @ApiBody({ type: IntegrationHealthcheckRequestDto, required: false })
   healthcheck(
-    @Param('id') id: string,
+    @Param('id', ParseIntegrationIdPipe) id: string,
     @Body() dto: IntegrationHealthcheckRequestDto = {},
   ) {
     return this.integrationClient.send(
@@ -337,7 +419,7 @@ export class IntegrationGatewayController {
   @ApiOperation({ summary: 'Integration connection test alias endpoint' })
   @ApiBody({ type: IntegrationHealthcheckRequestDto, required: false })
   testConnection(
-    @Param('id') id: string,
+    @Param('id', ParseIntegrationIdPipe) id: string,
     @Body() dto: IntegrationHealthcheckRequestDto = {},
   ) {
     return this.integrationClient.send(
@@ -353,7 +435,7 @@ export class IntegrationGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Sync history by integration id' })
   syncHistoryByIntegration(
-    @Param('id') id: string,
+    @Param('id', ParseIntegrationIdPipe) id: string,
     @Query() query: FilterSyncHistoryQueryDto,
   ) {
     return this.integrationClient.send(
@@ -366,7 +448,10 @@ export class IntegrationGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Start sync processing for integration' })
   @ApiBody({ type: StartSyncRequestDto, required: false })
-  startSync(@Param('id') id: string, @Body() dto: StartSyncRequestDto = {}) {
+  startSync(
+    @Param('id', ParseIntegrationIdPipe) id: string,
+    @Body() dto: StartSyncRequestDto = {},
+  ) {
     return this.integrationClient.send(
       { cmd: 'integration.sync.process' },
       { integration_id: id, limit: dto.limit ?? 20 },
@@ -378,7 +463,7 @@ export class IntegrationGatewayController {
   @ApiOperation({ summary: 'Create sync queue item' })
   @ApiBody({ type: CreateSyncQueueRequestDto })
   createSyncQueue(
-    @Param('id') id: string,
+    @Param('id', ParseIntegrationIdPipe) id: string,
     @Body() dto: CreateSyncQueueRequestDto,
   ) {
     return this.integrationClient.send(
@@ -391,7 +476,10 @@ export class IntegrationGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Retry failed sync jobs for integration' })
   @ApiBody({ type: RetrySyncRequestDto, required: false })
-  retrySync(@Param('id') id: string, @Body() dto: RetrySyncRequestDto = {}) {
+  retrySync(
+    @Param('id', ParseIntegrationIdPipe) id: string,
+    @Body() dto: RetrySyncRequestDto = {},
+  ) {
     return this.integrationClient.send(
       { cmd: 'integration.sync.retry' },
       { integration_id: id, queue_id: dto.queue_id },
@@ -500,7 +588,7 @@ export class IntegrationGatewayController {
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   listProviderShipments(
-    @Param('id') id: string,
+    @Param('id', ParseIntegrationIdPipe) id: string,
     @Query('status') status?: string,
     @Query('failed_only') failedOnly?: string,
     @Query('page') page?: string,
@@ -521,51 +609,11 @@ export class IntegrationGatewayController {
       .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
-  @Get('shipments/:order_id')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
-  @ApiOperation({ summary: 'Get the provider shipment for an order' })
-  getShipment(@Param('order_id') orderId: string) {
-    return this.integrationClient.send(
-      { cmd: 'integration.shipment.get' },
-      { order_id: orderId },
-    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
-  }
-
-  // ===== Provider COD reconciliation =====
-
-  @Get('receivables')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiOperation({ summary: 'List provider COD receivables' })
-  @ApiQuery({ name: 'integration_id', required: false, type: String })
-  @ApiQuery({
-    name: 'status',
-    required: false,
-    enum: ['pending', 'settled', 'cancelled'],
-  })
-  @ApiQuery({ name: 'page', required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  listReceivables(
-    @Query('integration_id') integration_id?: string,
-    @Query('status') status?: string,
-    @Query('page') page?: string,
-    @Query('limit') limit?: string,
-  ) {
-    return this.integrationClient.send(
-      { cmd: 'integration.receivable.list' },
-      {
-        integration_id,
-        status,
-        page: page ? Number(page) : undefined,
-        limit: limit ? Number(limit) : undefined,
-      },
-    ).pipe(timeout(8000));
-  }
-
   @Get(':id/receivable-balance')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: "Provider's outstanding COD balance" })
   @ApiParam({ name: 'id', description: 'Integration id' })
-  getReceivableBalance(@Param('id') id: string) {
+  getReceivableBalance(@Param('id', ParseIntegrationIdPipe) id: string) {
     return this.integrationClient.send(
       { cmd: 'integration.receivable.balance' },
       { integration_id: id },
@@ -580,7 +628,7 @@ export class IntegrationGatewayController {
   @ApiParam({ name: 'id', description: 'Integration id' })
   @ApiBody({ type: CreateRemittanceRequestDto })
   createRemittance(
-    @Param('id') id: string,
+    @Param('id', ParseIntegrationIdPipe) id: string,
     @Body() dto: CreateRemittanceRequestDto,
     @Req() req: { user?: { sub?: string } },
   ) {

@@ -39,7 +39,14 @@ function makeSvc(partner: Record<string, unknown>) {
 const ROW = {
   id: 'w-1',
   partner_id: '7',
-  payload: { event: 'shipment.status_changed', status: 'sold' },
+  // `external_order_id` haqiqiy qatorda HAR DOIM bor (ustun NOT NULL) va
+  // yetkazuvchi uni shakl bo'yicha tekshiradi (F5) — fikstura ham shunday.
+  external_order_id: 'ord-9',
+  payload: {
+    event: 'shipment.status_changed',
+    external_order_id: 'ord-9',
+    status: 'sold',
+  },
 };
 
 const MAIN = 'https://prod.example.com/hook';

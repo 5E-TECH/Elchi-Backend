@@ -353,6 +353,9 @@ export class OrderSettlementService {
    * posting its cashbox movements (atomic with the status update via outbox).
    * Whole-order allocation: an order is only settled when the remaining lump-sum
    * covers its full leg amount; the unallocated remainder is reported back.
+   * Manfiy (kredit) oyoqlar lump-sum'ni OSHIRADI — naqd u bo'g'indan allaqachon
+   * chiqib ketgan (qo'shimcha xarajat / onlayn to'lov) — va faqat kerak
+   * bo'lganda tortiladi (pastdagi izohga qarang).
    */
   private async runFifoSettlement(params: {
     matchColumn: 'courier_id' | 'branch_id' | 'market_id';
@@ -405,30 +408,69 @@ export class OrderSettlementService {
 
       let remaining = lumpSum;
       const now = new Date();
-      for (const settlement of candidates) {
-        const legAmount = Math.max(
-          Number(settlement[params.amountField] ?? 0),
-          0,
+      const advanceRow = async (row: OrderSettlement): Promise<void> => {
+        await repo.update(
+          { id: row.id },
+          { status: params.toStatus(row), ...params.stamp(now) },
         );
+        settledOrderIds.push(String(row.order_id));
+      };
+      /**
+       * MANFIY OYOQ = KREDIT, "qarz yo'q" EMAS (audit: qo'shimcha xarajat).
+       *
+       * Manfiy oyoq bu bo'g'indan naqd ALLAQACHON chiqib ketganini bildiradi:
+       * bekor qilingan buyurtmaga yozilgan qo'shimcha xarajat, yoki onlayn
+       * to'langan buyurtmada HQ qoplagan kuryer ulushi. Ya'ni topshiriladigan
+       * lump-sum aynan shuncha KAM bo'ladi, daftar esa to'liq summani talab
+       * qiladi. Ilgari bunday qator bepul o'tkazilar, lekin lump-sum'ga
+       * QO'SHILMASDI — natijada eng eski to'lanmagan buyurtma ayni shu farq
+       * tufayli abadiy PENDING bo'lib qotib qolardi (jonli misol: kuryer
+       * kassasi 205 000, daftar 210 000 talab qildi, uchinchi buyurtmaga
+       * AYNAN 5 000 so'm yetmadi).
+       *
+       * Kredit KECHIKTIRIB qo'llanadi: faqat eng eski to'lanmagan buyurtma
+       * sig'masa, eng eskisidan boshlab tortiladi. Shu bois qisman to'lovda
+       * kerak bo'lmagan kredit `leftover` ichida yonib ketmaydi — u keyingi
+       * to'lovgacha o'z holicha turadi.
+       *
+       * ⚠️ Kreditlar yurishdan OLDIN ajratiladi. Xarajat odatda sotuvlardan
+       * KEYIN yoziladi, ya'ni kredit qatori eng oxirgi bo'ladi — agar u faqat
+       * navbat kelganda ko'rilsa, uni to'sib turgan buyurtmaga hech qachon
+       * yetib bormasdi (jonli holat aynan shunday edi).
+       */
+      const legOf = (row: OrderSettlement): number =>
+        Number(row[params.amountField] ?? 0) || 0;
+      const credits = candidates.filter((row) => legOf(row) < 0);
+      const payables = candidates.filter((row) => legOf(row) >= 0);
+      for (const settlement of payables) {
+        const legAmount = legOf(settlement);
         // Strict FIFO (Faza 4 / Audit I16): if the OLDEST still-unsettled order's
         // leg does not fully fit in the remaining lump-sum, STOP — never skip
         // ahead to settle a newer, smaller order before an older one. Skipping
         // violates oldest-first accounting and lets a deliberate resubmit
         // over-allocate to the next orders. Zero-amount legs (nothing owed at
         // this hop) still advance for free without consuming the lump-sum.
+        const pulled: OrderSettlement[] = [];
+        while (legAmount > remaining && credits.length) {
+          const credit = credits.shift() as OrderSettlement;
+          pulled.push(credit);
+          remaining -= legOf(credit);
+        }
         if (legAmount > remaining && legAmount > 0) {
+          // Tortilgan kreditlar YOZILMAYDI: bu qator baribir sig'madi, demak
+          // kredit sarflanmagan holicha qolishi kerak.
           break;
         }
-        await repo.update(
-          { id: settlement.id },
-          { status: params.toStatus(settlement), ...params.stamp(now) },
-        );
+        for (const credit of pulled) {
+          await advanceRow(credit);
+          allocated += legOf(credit);
+        }
+        await advanceRow(settlement);
         if (legAmount > 0) {
           await params.postLeg(tx, settlement, legAmount);
           remaining -= legAmount;
           allocated += legAmount;
         }
-        settledOrderIds.push(String(settlement.order_id));
       }
 
       await queryRunner.commitTransaction();

@@ -152,4 +152,22 @@ describe('Sinov webhooki', () => {
     expect(dumped).toContain('webhook_test');
     expect(dumped).not.toContain('top-secret');
   });
+
+  /**
+   * ⚠️ SEKRET YO'Q BO'LSA SINOV HAM YUBORILMAYDI.
+   *
+   * Ilgari bo'sh kalit bilan imzolanardi va sinov "HTTP 401" ko'rsatardi —
+   * operator sababni qabul qiluvchi tomondan izlardi, holbuki nuqson
+   * Elchida edi. Haqiqiy yuborish bilan AYNI qoida.
+   */
+  it('TC9: webhook_secret yo‘q -> imzolanmaydi, so‘rov ketmaydi', async () => {
+    const { svc } = makeSvc({ ...PARTNER, webhook_secret: null });
+    svc.decryptCredential = jest.fn(() => null);
+    const fetchMock = jest.fn();
+    global.fetch = fetchMock as any;
+
+    await expect(svc.testPartnerWebhook('7')).rejects.toThrow();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
 });

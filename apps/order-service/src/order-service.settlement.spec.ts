@@ -8,6 +8,11 @@ import { OrderSettlement } from './entities/order-settlement.entity';
  * (captured here via the outbox mock). Whole-order allocation — an order is only
  * settled when the remaining lump-sum covers its full leg amount.
  */
+/** `advanceSettlement` javobining tekshiriladigan qismi. */
+type AdvanceResult = {
+  data: { settled_order_ids: string[]; allocated: number; leftover: number };
+};
+
 describe('OrderSettlementService settlement (FIFO)', () => {
   function makeService(rows: Partial<OrderSettlement>[]) {
     // Mutable in-memory settlement rows.
@@ -165,6 +170,116 @@ describe('OrderSettlementService settlement (FIFO)', () => {
     expect(res.data.settled_order_ids).toEqual([]);
     expect(res.data.allocated).toBe(0);
     expect(res.data.leftover).toBe(50);
+    expect(store[0].status).toBe(SettlementStatus.PENDING);
+    expect(store[1].status).toBe(SettlementStatus.PENDING);
+  });
+
+  /**
+   * ⭐ JONLI HOLAT (BeePost↔Elchi E2E, Andijon) — QO'SHIMCHA XARAJAT KREDITI.
+   *
+   * Kuryer kassasi: +30 000 +110 000 +70 000 = 210 000 kirim, so'ng BEKOR
+   * qilingan buyurtmaga yozilgan −5 000 qo'shimcha xarajat → qoldiq 205 000.
+   * Ledger esa 210 000 talab qilardi: FIFO birinchi ikkitasini yopib,
+   * uchinchisiga AYNAN 5 000 so'm yetmay to'xtardi va buyurtma abadiy
+   * PENDING bo'lib qotib qolardi. Endi bekor qilingan buyurtma daftarga
+   * MANFIY (kredit) qator sifatida tushadi va lump-sum ustiga qo'shiladi.
+   */
+  it('⭐ bekor qilingan buyurtmaning extra_cost krediti FIFO`ni qotirmaydi', async () => {
+    const { service, store } = makeService([
+      {
+        order_id: '401',
+        courier_id: '7',
+        branch_id: '10',
+        courier_amount: 30000,
+      },
+      {
+        order_id: '402',
+        courier_id: '7',
+        branch_id: '10',
+        courier_amount: 110000,
+      },
+      {
+        order_id: '403',
+        courier_id: '7',
+        branch_id: '10',
+        courier_amount: 70000,
+      },
+      // Bekor qilingan buyurtma — faqat kredit oyog'i, eng OXIRGI qator.
+      {
+        order_id: '404',
+        courier_id: '7',
+        branch_id: '10',
+        courier_amount: -5000,
+      },
+    ]);
+
+    const res = (await service.advanceSettlement({
+      level: 'courier_to_branch',
+      match_value: '7',
+      amount: 205000, // kuryer kassasidagi haqiqiy qoldiq
+      requester_id: '1',
+    })) as AdvanceResult;
+
+    // Uchala sotuv ham yopiladi; kredit kerak bo'lgan payt (403 dan oldin)
+    // tortiladi, shuning uchun ro'yxatda 404 aynan 403 dan oldin turadi.
+    expect(res.data.settled_order_ids).toEqual(['401', '402', '404', '403']);
+    expect(res.data.allocated).toBe(205000);
+    expect(res.data.leftover).toBe(0);
+    for (const row of store) {
+      expect(row.status).toBe(SettlementStatus.COURIER_SETTLED);
+    }
+  });
+
+  /**
+   * Kredit KECHIKTIRIB tortiladi: qisman to'lovda kerak bo'lmasa PENDING
+   * bo'lib qoladi va keyingi to'lovda ishlatiladi. Aks holda u yo'qolib
+   * ketadigan `leftover` ichida yonib ketardi va FIFO yana qotib qolardi.
+   */
+  it('kredit faqat KERAK bo`lganda sarflanadi (qisman to`lovda yonib ketmaydi)', async () => {
+    const { service, store } = makeService([
+      { order_id: '501', courier_id: '7', courier_amount: 100 },
+      { order_id: '502', courier_id: '7', courier_amount: 50 },
+      { order_id: '503', courier_id: '7', courier_amount: -20 },
+    ]);
+
+    const first = (await service.advanceSettlement({
+      level: 'courier_to_branch',
+      match_value: '7',
+      amount: 100,
+      requester_id: '1',
+    })) as AdvanceResult;
+    expect(first.data.settled_order_ids).toEqual(['501']);
+    // Kredit hali ishlatilmadi — 502 sig'masa ham u PENDING bo'lib qoladi.
+    expect(store[2].status).toBe(SettlementStatus.PENDING);
+
+    const second = (await service.advanceSettlement({
+      level: 'courier_to_branch',
+      match_value: '7',
+      amount: 30, // kassada qolgan haqiqiy summa (150 − 20 − 100)
+      requester_id: '1',
+    })) as AdvanceResult;
+    expect(second.data.settled_order_ids).toEqual(['503', '502']);
+    expect(second.data.allocated).toBe(30);
+    // Filialsiz (HQ) qatorlar — kuryer topshirishi bilan darhol HQ'da.
+    expect(store[1].status).toBe(SettlementStatus.BRANCH_SETTLED);
+    expect(store[2].status).toBe(SettlementStatus.BRANCH_SETTLED);
+  });
+
+  it('kredit yetmasa hech narsa o`zgarmaydi — kredit sarflanmay qoladi', async () => {
+    const { service, store } = makeService([
+      { order_id: '601', courier_id: '7', courier_amount: 100 },
+      { order_id: '602', courier_id: '7', courier_amount: -20 },
+    ]);
+
+    const res = (await service.advanceSettlement({
+      level: 'courier_to_branch',
+      match_value: '7',
+      amount: 50, // 50 + 20 = 70 < 100
+      requester_id: '1',
+    })) as AdvanceResult;
+
+    expect(res.data.settled_order_ids).toEqual([]);
+    expect(res.data.allocated).toBe(0);
     expect(store[0].status).toBe(SettlementStatus.PENDING);
     expect(store[1].status).toBe(SettlementStatus.PENDING);
   });

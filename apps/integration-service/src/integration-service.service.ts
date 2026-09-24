@@ -89,6 +89,46 @@ const PAID_STATUSES = new Set<string>([
 ]);
 
 /**
+ * `external_order_id` uchun KELISHILGAN SHAKL (kontrakt: docs/PARTNER_API.md §4).
+ *
+ * NEGA TEKSHIRILADI. Qiymat hamkorda odatda UUID ustuniga yoziladi. Shakli
+ * buzilgan qiymat (bo'sh joy, satr ko'chirish, qo'shtirnoq, juda uzun matn)
+ * tushsa, qabul qiluvchi tomonda Postgres `22P02` beradi va so'rov **500**
+ * bilan tugaydi. Elchi 500 ni VAQTINCHALIK xato deb hisoblaydi: 4 marta
+ * qayta uradi, so'ng qator `permanently_failed` bo'lib hodisa yo'qoladi —
+ * ya'ni pul ma'lumoti hamkorga umuman yetmaydi (jonli E2E testda aynan shu
+ * bo'lgan: jo'natish 6/6 ishlagan, pul ma'lumoti yetmagan).
+ *
+ * Shakl UUIDdan KENGROQ ataylab: hamkorlarning bir qismi raqamli yoki
+ * `ord-9` ko'rinishidagi id ishlatadi va ular muammosiz yetib boradi.
+ * Rad etilayotgani — HECH QAYSI qabul qiluvchida ishlamaydigan qiymat.
+ */
+const EXTERNAL_ORDER_ID_MAX_LEN = 64;
+const EXTERNAL_ORDER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:-]*$/;
+
+/**
+ * Shakl buzilgan bo'lsa SABABNI qaytaradi, to'g'ri bo'lsa `null`.
+ *
+ * Sabab matn bo'lib qaytadi — u jurnalga va outbox qatoridagi `last_error`ga
+ * tushadi, ya'ni admin nima noto'g'ri ekanini "HTTP 500" o'rniga aniq ko'radi.
+ */
+const externalOrderIdRejection = (
+  value: string | null | undefined,
+): string | null => {
+  const raw = value ?? '';
+  if (!raw.trim()) return "bo'sh";
+  // Chekka bo'sh joy ham nosozlik: qabul qiluvchi uni trim qilmasligi mumkin.
+  if (raw !== raw.trim()) return "chekkasida bo'sh joy bor";
+  if (raw.length > EXTERNAL_ORDER_ID_MAX_LEN) {
+    return `uzunligi ${EXTERNAL_ORDER_ID_MAX_LEN} belgidan oshdi (${raw.length})`;
+  }
+  if (!EXTERNAL_ORDER_ID_RE.test(raw)) {
+    return 'ruxsat etilmagan belgi bor (faqat harf, raqam va `.` `_` `:` `-`)';
+  }
+  return null;
+};
+
+/**
  * Posilka natijasi SHULARDAN biri bo'lsa, kiruvchi buyurtma yo'li sinaladi.
  *
  * Uchalasi ham "bu hodisa mavjud posilkaga tegishli emas" degani:
@@ -203,6 +243,60 @@ class PartnerWebhookNotConfiguredError extends Error {
     this.name = 'PartnerWebhookNotConfiguredError';
   }
 }
+
+/**
+ * Hamkorda `webhook_secret` yo'q (yoki deshifrlanmadi) — IMZOLASH MUMKIN
+ * EMAS degan signal.
+ *
+ * ⚠️ NEGA ALOHIDA XATO, NEGA BO'SH KALIT EMAS. Ilgari bu yerda `?? ''`
+ * turardi: sekret bo'lmasa imzo BO'SH kalit bilan hisoblanib yuborilardi.
+ * Qabul qiluvchi uni yaroqsiz deb 401 qaytarardi, Elchi esa 401'ni oddiy
+ * yetkazish xatosi deb bilib qayta urinardi — ya'ni sozlama yo'qligi
+ * "tarmoq muammosi"dek ko'rinardi va hech qayerda to'g'ri sabab yozilmasdi.
+ * Jonli E2E'da aynan shu bo'ldi: qaytgan imzo `hmac('', body)` bilan mos
+ * keldi va pul ma'lumoti BeePostga yetmadi.
+ *
+ * `PartnerWebhookNotConfiguredError` dan MEROS: sozlama yo'qligi baribir
+ * hodisaning aybi emas — qator `awaiting_config`da kutadi, urinish
+ * hisoblanmaydi (yuqoridagi izohga qarang).
+ */
+class PartnerWebhookSecretMissingError extends PartnerWebhookNotConfiguredError {
+  constructor(
+    message = "hamkorda webhook_secret sozlanmagan — imzo qo'yib bo'lmaydi",
+  ) {
+    super(message);
+    this.name = 'PartnerWebhookSecretMissingError';
+  }
+}
+
+/**
+ * Xato DOIMIY — ayni tanani qayta yuborish ayni javobni beradi.
+ *
+ * Ilgari yetkazuvchi hamma xatoni bir xil ko'rardi va har birini 4 marta
+ * qayta urardi. Vaqtinchalik xato (tarmoq, hamkor serveri yiqilgan — 5xx)
+ * uchun bu to'g'ri, lekin 4xx uchun BEKOR: qabul qiluvchi "bu so'rov
+ * noto'g'ri" deyapti, kutish uni to'g'rilamaydi. Natijada nosozlik 4
+ * urinish + 21 daqiqa backoff davomida yashirinib turardi, monitorda esa
+ * hammasi `pending` bo'lib ko'rinardi.
+ *
+ * Shuning uchun 4xx darhol `permanently_failed` bo'ladi — aniq sabab bilan,
+ * admin monitoriga ko'rinadigan holda (qo'lda "retry" yo'li ochiq qoladi).
+ */
+class PartnerWebhookPermanentError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PartnerWebhookPermanentError';
+  }
+}
+
+/**
+ * 4xx ichidagi ISTISNOLAR — bular vaqtinchalik va qayta urinishga arziydi:
+ *   408 Request Timeout · 425 Too Early · 429 Too Many Requests
+ *
+ * 429 ni doimiy deb belgilash ayniqsa xato bo'lardi: hamkor "hozir emas,
+ * keyinroq" deyapti, biz esa hodisani butunlay tashlab yuborardik.
+ */
+const RETRYABLE_4XX = new Set<number>([408, 425, 429]);
 
 @Injectable()
 export class IntegrationServiceService {
@@ -356,6 +450,24 @@ export class IntegrationServiceService {
       await this.assertOutboundUrlSafe(dto.webhook_url);
     }
     /**
+     * ⚠️ MANZIL BOR, SEKRET YO'Q — BU HOLAT SAQLANMAYDI.
+     *
+     * Bunday hamkor "sozlangandek" ko'rinadi, amalda esa har hodisa
+     * imzosiz qoladi: qabul qiluvchi 401 qaytaradi va qator sozlama
+     * yo'qligi sababli emas, "yetkazib bo'lmadi" deb aylanaveradi.
+     * Shart YOZISH vaqtida tekshiriladi — o'shanda operator ekranda
+     * sababni ko'radi.
+     */
+    if (
+      String(dto.webhook_url ?? '').trim() &&
+      !String(dto.webhook_secret ?? '').trim()
+    ) {
+      this.badRequest(
+        '`webhook_url` berilgan bo‘lsa `webhook_secret` ham shart — ' +
+          'imzosiz (bo‘sh kalitli) webhook qabul qiluvchida 401 bo‘ladi.',
+      );
+    }
+    /**
      * ⚠️ SANDBOX MAYDONLARI YARATISHDA HAM SAQLANADI.
      *
      * Ilgari bu metod ularni UMUMAN o'qimasdi — ya'ni gateway DTO'si
@@ -482,6 +594,27 @@ export class IntegrationServiceService {
       partner.webhook_secret = secret ? this.encryptCredential(secret) : null;
       // Sir QIYMATI hech qachon loglanmaydi — faqat o'zgargani.
       changed.webhook_secret_changed = true;
+    }
+
+    /**
+     * ⚠️ YAKUNIY HOLAT TEKSHIRILADI, ALOHIDA MAYDON EMAS.
+     *
+     * "Manzil bor, sekret yo'q" ikki yo'l bilan yuzaga keladi: manzil
+     * QO'SHILADI (sekretsiz) yoki sekret O'CHIRILADI (manzil qolib).
+     * Ikkalasi ham imzosiz webhookka olib keladi — 401 va cheksiz qayta
+     * urinish. Shu bois shart ikkala maydon qo'llangandan KEYIN, saqlashdan
+     * OLDIN tekshiriladi.
+     */
+    if (
+      (dto.webhook_url !== undefined || dto.webhook_secret !== undefined) &&
+      partner.webhook_url &&
+      !partner.webhook_secret
+    ) {
+      this.badRequest(
+        '`webhook_url` bor hamkorda `webhook_secret` ham bo‘lishi shart — ' +
+          'imzosiz (bo‘sh kalitli) webhook qabul qiluvchida 401 bo‘ladi. ' +
+          'Webhookni butunlay o‘chirish uchun `webhook_url` ni tozalang.',
+      );
     }
 
     if (dto.sandbox_webhook_url !== undefined) {
@@ -1766,6 +1899,22 @@ export class IntegrationServiceService {
       occurred_at: new Date().toISOString(),
     };
 
+    /**
+     * ⚠️ SHAKL TEKSHIRUVI — YUBORISHDAN OLDIN.
+     *
+     * Yaroqsiz `external_order_id` qabul qiluvchida Postgres xatosi (`22P02`)
+     * → 500 beradi; 500 esa "vaqtinchalik" deb 4 marta qayta uriladi va
+     * hodisa oxirida butunlay yo'qoladi. Bu yerda sabab ANIQ ma'lum, ya'ni
+     * urinishning o'zi ortiqcha.
+     *
+     * ⚠️ QATOR BARIBIR YOZILADI — `permanently_failed` holatida. Jimgina
+     * tashlab yuborish bu kodda allaqachon bir marta og'riq bergan
+     * (`awaiting_config` izohiga qarang): nosozlik hech qaysi ekranda
+     * ko'rinmasdi. Endi u outbox monitorida sababi bilan turadi va
+     * `partner_shipment_ref` tuzatilgach "retry" bilan yuboriladi.
+     */
+    const idRejection = externalOrderIdRejection(ref.external_order_id);
+
     try {
       const saved = await this.partnerWebhookOutboxRepo.save(
         this.partnerWebhookOutboxRepo.create({
@@ -1775,11 +1924,30 @@ export class IntegrationServiceService {
           event_type: 'shipment.status_changed',
           new_status: newStatus,
           payload,
-          status: 'pending',
+          status: idRejection ? 'permanently_failed' : 'pending',
           attempts: 0,
           max_attempts: 4,
+          last_error: idRejection
+            ? `external_order_id yaroqsiz: ${idRejection}`
+            : null,
         }),
       );
+      if (idRejection) {
+        this.logger.error(
+          `partner webhook ${saved.id}: external_order_id yaroqsiz ` +
+            `(${idRejection}) — yuborilmadi. partner=${ref.partner_id} ` +
+            `order=${orderId} status=${newStatus}`,
+        );
+        return successRes(
+          {
+            outbox_id: saved.id,
+            rejected: 'invalid external_order_id',
+            reason: idRejection,
+          },
+          200,
+          'partner webhook rejected',
+        );
+      }
       // Darhol bir marta urinib ko'ramiz (scheduler ham keyingi tick'da oladi).
       void this.processPendingPartnerWebhooks(1).catch(() => undefined);
       return successRes(
@@ -1892,8 +2060,10 @@ export class IntegrationServiceService {
             next_retry_at: null,
           },
         );
+        // Sabab XATODAN olinadi: sozlanmagani `webhook_url` ham,
+        // `webhook_secret` ham bo'lishi mumkin — logda ular farq qilsin.
         this.logger.warn(
-          `partner webhook ${row.id}: webhook_url sozlanmagan — ` +
+          `partner webhook ${row.id}: ${message} — ` +
             `kutish holatiga o'tdi (partner=${row.partner_id})`,
         );
         return false;
@@ -1906,6 +2076,29 @@ export class IntegrationServiceService {
        * qanchalik yaqin kelganini ko'rsatadi.
        */
       const durationMs = Date.now() - startedAt;
+
+      /**
+       * DOIMIY xato (4xx yoki yaroqsiz `external_order_id`) — backoff
+       * BERILMAYDI: ayni tana ayni javobni oladi. Qator darhol yopiladi,
+       * lekin monitorda sababi bilan ko'rinadi va sabab tuzatilgach qo'lda
+       * "retry" qilish mumkin.
+       */
+      if (error instanceof PartnerWebhookPermanentError) {
+        await this.partnerWebhookOutboxRepo.update(
+          { id: row.id },
+          {
+            status: 'permanently_failed',
+            last_error: message,
+            next_retry_at: null,
+            duration_ms: durationMs,
+          },
+        );
+        this.logger.error(
+          `partner webhook ${row.id}: DOIMIY xato — qayta urinilmaydi ` +
+            `(partner=${row.partner_id}): ${message}`,
+        );
+        return false;
+      }
 
       if (attempts < Number(row.max_attempts ?? 4)) {
         await this.partnerWebhookOutboxRepo.update(
@@ -1947,6 +2140,24 @@ export class IntegrationServiceService {
      */
     attempt = 1,
   ): Promise<Record<string, any>> {
+    /**
+     * ⚠️ IKKINCHI DARVOZA. Shakl `enqueuePartnerWebhook`da ham tekshiriladi,
+     * lekin qator bu yerga BOSHQA yo'l bilan ham keladi: admin monitoridagi
+     * "retry" eski qatorni qayta navbatga qo'yadi. Tekshiruvsiz o'sha tugma
+     * yaroqsiz id'ni yana yuborib, yana 500 olardi.
+     *
+     * Sandbox nusxasi ham yuborilmaydi (shu satr `fetch`largacha turadi):
+     * buzuq hodisaning nusxasi sinov muhitini ham chalg'itadi.
+     */
+    const idRejection = externalOrderIdRejection(
+      String(row.payload?.external_order_id ?? row.external_order_id ?? ''),
+    );
+    if (idRejection) {
+      throw new PartnerWebhookPermanentError(
+        `external_order_id yaroqsiz: ${idRejection} — qayta urinish foyda bermaydi`,
+      );
+    }
+
     const partner = await this.partnerRepo.findOne({
       where: { id: String(row.partner_id), isDeleted: false },
     });
@@ -1990,7 +2201,15 @@ export class IntegrationServiceService {
     await this.assertOutboundUrlSafe(partner.webhook_url);
 
     const rawBody = JSON.stringify(row.payload ?? {});
-    const secret = this.decryptCredential(partner.webhook_secret) ?? '';
+    /**
+     * ⚠️ BO'SH KALIT BILAN IMZOLANMAYDI. Ilgari shu yerda `?? ''` turardi:
+     * sekret yo'q bo'lsa ham imzo hisoblanib yuborilardi va qabul qiluvchi
+     * 401 qaytarardi — Elchi buni oddiy tarmoq xatosi deb qayta urinardi.
+     */
+    const secret = this.resolvePartnerWebhookSecret(partner.webhook_secret);
+    if (!secret) {
+      throw new PartnerWebhookSecretMissingError();
+    }
     const signature = computeHmacSignature(rawBody, secret, 'sha256', 'hex');
 
     const res = await fetch(partner.webhook_url, {
@@ -2004,9 +2223,47 @@ export class IntegrationServiceService {
     });
 
     if (!res.ok) {
-      throw new Error(`partner webhook HTTP ${res.status}`);
+      /**
+       * Javob tanasi (qisqartirilgan) xabarga QO'SHILADI. "HTTP 400" o'zi
+       * hech narsa aytmaydi; qabul qiluvchining "invalid input syntax for
+       * type uuid" degan javobi esa sababni bir qarashda ko'rsatadi.
+       */
+      const snippet = await this.readResponseSnippet(res);
+      const detail =
+        `partner webhook HTTP ${res.status}` + (snippet ? `: ${snippet}` : '');
+
+      /**
+       * 4xx — SO'ROV noto'g'ri, kutish uni to'g'rilamaydi → doimiy xato.
+       * 5xx va tarmoq xatolari esa vaqtinchalik: ular eski yo'l bilan
+       * backoff orqali qayta uriladi.
+       */
+      if (
+        res.status >= 400 &&
+        res.status < 500 &&
+        !RETRYABLE_4XX.has(res.status)
+      ) {
+        throw new PartnerWebhookPermanentError(detail);
+      }
+      throw new Error(detail);
     }
     return { http_status: res.status };
+  }
+
+  /**
+   * Xato javobining tanasini diagnostika uchun qisqartirib o'qiydi.
+   *
+   * Hech qachon otmaydi: tana o'qilmasligi (stream yopilgan, matn emas)
+   * asosiy xato xabarini yo'qotishga sabab bo'lmasligi kerak.
+   */
+  private async readResponseSnippet(res: Response): Promise<string> {
+    try {
+      const text = await res.text();
+      return String(text ?? '')
+        .trim()
+        .slice(0, 300);
+    } catch {
+      return '';
+    }
   }
 
   /**
@@ -2145,7 +2402,19 @@ export class IntegrationServiceService {
     // bo'lmasligi kerak, aks holda "sinov o'tdi, real yiqildi" bo'lardi.
     await this.assertOutboundUrlSafe(target);
 
-    const secret = this.decryptCredential(partner.webhook_secret) ?? '';
+    /**
+     * ⚠️ HAQIQIY YUBORISH BILAN AYNI QOIDA: sekret yo'q bo'lsa BO'SH kalit
+     * bilan imzolanmaydi. Aks holda sinov "HTTP 401" ko'rsatib, operator
+     * sababni qabul qiluvchi tomondan izlardi — holbuki nuqson Elchida.
+     */
+    const secret = this.resolvePartnerWebhookSecret(partner.webhook_secret);
+    if (!secret) {
+      this.badRequest(
+        "Hamkorda `webhook_secret` yo'q — imzo qo'yib bo'lmaydi. Bo'sh " +
+          'kalit bilan imzolangan so‘rovni qabul qiluvchi 401 qaytaradi; ' +
+          'avval sekretni sozlang.',
+      );
+    }
 
     /**
      * Sinov yuki haqiqiy hodisa SHAKLIDA, lekin `event` boshqa
@@ -3324,6 +3593,26 @@ export class IntegrationServiceService {
     // Both keys failed — leave value untouched; an audit script can re-key it
     // manually once the right secret is known.
     return value;
+  }
+
+  /**
+   * Hamkor webhook sekretini OCHIQ ko'rinishda qaytaradi, bo'lmasa `null`.
+   *
+   * ⚠️ NEGA `decryptCredential` O'ZI YETARLI EMAS. U kalitlar mos kelmasa
+   * qiymatni O'ZGARTIRMAY qaytaradi (`enc:` prefiksi saqlanib qoladi) — bu
+   * ochiq sekret emas, shifrmatn. U bilan imzolash ham, bo'sh kalit bilan
+   * imzolash ham bir xil natija beradi: qabul qiluvchi uchun YAROQSIZ imzo
+   * va 401. Ikkala holat ham "sekret yo'q" deb qaraladi, chunki imzoni
+   * TO'G'RI qo'yib bo'lmaydi.
+   */
+  private resolvePartnerWebhookSecret(
+    encrypted?: string | null,
+  ): string | null {
+    const secret = this.decryptCredential(encrypted);
+    if (!secret || secret.startsWith('enc:')) {
+      return null;
+    }
+    return secret;
   }
 
   private async getProductsCountByMarket(marketId: string): Promise<number> {
