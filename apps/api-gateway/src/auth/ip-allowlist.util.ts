@@ -42,7 +42,9 @@ function ipv4ToInt(value: string): number | null {
  * allowlist ham hamkorni bloklab qo'yardi.
  */
 export function normalizeIp(value: unknown): string {
-  const raw = String(value ?? '').trim().toLowerCase();
+  const raw = String(value ?? '')
+    .trim()
+    .toLowerCase();
   if (!raw) return '';
   const mapped = raw.startsWith('::ffff:') ? raw.slice(7) : raw;
   // Portli shakl ("1.2.3.4:5678") — faqat IPv4 uchun xavfsiz kesiladi.

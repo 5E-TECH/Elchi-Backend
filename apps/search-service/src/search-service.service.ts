@@ -43,8 +43,16 @@ export class SearchServiceService {
   ) {}
 
   async upsert(payload: UpsertPayload) {
-    if (!payload.source || !payload.type || !payload.sourceId || !payload.title) {
-      throw new RpcException({ statusCode: 400, message: 'Invalid search upsert payload' });
+    if (
+      !payload.source ||
+      !payload.type ||
+      !payload.sourceId ||
+      !payload.title
+    ) {
+      throw new RpcException({
+        statusCode: 400,
+        message: 'Invalid search upsert payload',
+      });
     }
 
     let doc = await this.docs.findOne({
@@ -98,7 +106,8 @@ export class SearchServiceService {
 
   async query(payload: QueryPayload) {
     const page = payload.page && payload.page > 0 ? payload.page : 1;
-    const limit = payload.limit && payload.limit > 0 ? Math.min(payload.limit, 50) : 10;
+    const limit =
+      payload.limit && payload.limit > 0 ? Math.min(payload.limit, 50) : 10;
     const skip = (page - 1) * limit;
     const q = payload.q?.trim();
 
@@ -106,9 +115,7 @@ export class SearchServiceService {
       String(r ?? '').toLowerCase(),
     );
     const requesterId = String(payload.requester?.id ?? '').trim();
-    const isPrivileged = roles.some((r) =>
-      PRIVILEGED_SEARCH_ROLES.includes(r),
-    );
+    const isPrivileged = roles.some((r) => PRIVILEGED_SEARCH_ROLES.includes(r));
 
     const qb = this.docs
       .createQueryBuilder('doc')

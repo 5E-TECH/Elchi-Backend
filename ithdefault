@@ -1,0 +1,41 @@
+      address: dto.address ?? order.address,
+      qr_code_token: dto.qr_code_token ?? order.qr_code_token,
+      external_id:
+        typeof dto.external_id !== 'undefined'
+          ? dto.external_id
+          : order.external_id,
+      source: dto.source ?? order.source ?? Order_source.INTERNAL,
+      proof_files:
+        typeof dto.proof_files !== 'undefined'
+          ? dto.proof_files
+          : order.proof_files,
+    });
+
+    const shouldRecalculateHolder =
+      typeof dto.branch_id !== 'undefined' ||
+      typeof dto.courier_id !== 'undefined';
+    if (shouldRecalculateHolder) {
+      const resolvedHolder = await this.resolveHolderFromState(
+        order.branch_id,
+        order.courier_id,
+      );
+      order.holder_type = resolvedHolder.holder_type;
+      order.holder_branch_id = resolvedHolder.holder_branch_id;
+      order.holder_courier_id = resolvedHolder.holder_courier_id;
+    }
+
+    const custodyChanged =
+      previousHolderType !== order.holder_type ||
+      String(previousHolderBranchId ?? '') !==
+        String(order.holder_branch_id ?? '') ||
+      String(previousHolderCourierId ?? '') !==
+        String(order.holder_courier_id ?? '');
+
+    if (custodyChanged) {
+      order.last_handover_at = new Date();
+      order.last_handover_by = this.numericActorId(requester?.id);
+    }
+
+    if (
+      oldStatus !== order.status &&
+      !this.isValidStatusTransition(oldStatus, order.status)

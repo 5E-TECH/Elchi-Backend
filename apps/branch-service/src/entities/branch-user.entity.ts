@@ -12,7 +12,11 @@ export class BranchUser extends BaseEntity {
   @Column({ type: 'bigint' })
   user_id!: string;
 
-  @Column({ type: 'enum', enum: BranchUserRole, default: BranchUserRole.REGISTRATOR })
+  @Column({
+    type: 'enum',
+    enum: BranchUserRole,
+    default: BranchUserRole.REGISTRATOR,
+  })
   role!: BranchUserRole;
 
   @ManyToOne(() => Branch, { onDelete: 'CASCADE' })

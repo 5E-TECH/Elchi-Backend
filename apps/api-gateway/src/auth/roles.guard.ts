@@ -15,7 +15,9 @@ export class RolesGuard implements CanActivate {
   private normalizeRoles(roles?: string[]) {
     const normalized = new Set<string>();
     for (const rawRole of roles ?? []) {
-      const role = String(rawRole ?? '').trim().toLowerCase();
+      const role = String(rawRole ?? '')
+        .trim()
+        .toLowerCase();
       if (!role) {
         continue;
       }
@@ -25,10 +27,10 @@ export class RolesGuard implements CanActivate {
   }
 
   canActivate(context: ExecutionContext): boolean {
-    const requiredRoles = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
-      context.getHandler(),
-      context.getClass(),
-    ]);
+    const requiredRoles = this.reflector.getAllAndOverride<string[]>(
+      ROLES_KEY,
+      [context.getHandler(), context.getClass()],
+    );
 
     if (!requiredRoles || requiredRoles.length === 0) {
       return true;
@@ -45,6 +47,8 @@ export class RolesGuard implements CanActivate {
     user.roles = normalizedUserRoles;
     const normalizedRequiredRoles = this.normalizeRoles(requiredRoles);
 
-    return normalizedRequiredRoles.some((role) => normalizedUserRoles.includes(role));
+    return normalizedRequiredRoles.some((role) =>
+      normalizedUserRoles.includes(role),
+    );
   }
 }

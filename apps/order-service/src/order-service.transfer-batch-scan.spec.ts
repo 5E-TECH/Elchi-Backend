@@ -44,10 +44,16 @@ describe('BranchTransferBatchService transfer batch scan', () => {
       source_branch_id: '10',
     });
     transferBatchItemRepo.find.mockResolvedValue([
-      { id: '1', order_id: '900', snapshot_price: 120000, snapshot_market_id: '11' },
+      {
+        id: '1',
+        order_id: '900',
+        snapshot_price: 120000,
+        snapshot_market_id: '11',
+      },
     ]);
 
-    const res: any = await service.findBranchTransferBatchByQrToken('BTB-token');
+    const res: any =
+      await service.findBranchTransferBatchByQrToken('BTB-token');
 
     expect(res.statusCode).toBe(200);
     expect(res.data.id).toBe('700');
@@ -58,8 +64,8 @@ describe('BranchTransferBatchService transfer batch scan', () => {
     const { service, transferBatchRepo } = setup();
     transferBatchRepo.findOne.mockResolvedValue(null);
 
-    await expect(service.findBranchTransferBatchByQrToken('BTB-missing')).rejects.toBeInstanceOf(
-      RpcException,
-    );
+    await expect(
+      service.findBranchTransferBatchByQrToken('BTB-missing'),
+    ).rejects.toBeInstanceOf(RpcException);
   });
 });

@@ -128,13 +128,19 @@ export class ActivityLogService {
 
     const qb = this.repo.createQueryBuilder('a');
 
-    if (q.entity_type) qb.andWhere('a.entity_type = :et', { et: q.entity_type });
-    if (q.entity_id !== undefined && q.entity_id !== null && `${q.entity_id}` !== '') {
+    if (q.entity_type)
+      qb.andWhere('a.entity_type = :et', { et: q.entity_type });
+    if (
+      q.entity_id !== undefined &&
+      q.entity_id !== null &&
+      `${q.entity_id}` !== ''
+    ) {
       qb.andWhere('a.entity_id = :eid', { eid: String(q.entity_id) });
     }
     if (q.action) qb.andWhere('a.action = :act', { act: q.action });
     if (q.user_id) qb.andWhere('a.user_id = :uid', { uid: String(q.user_id) });
-    if (q.user_role) qb.andWhere('a.user_role ILIKE :urole', { urole: `%${q.user_role}%` });
+    if (q.user_role)
+      qb.andWhere('a.user_role ILIKE :urole', { urole: `%${q.user_role}%` });
     if (q.trace_id) qb.andWhere('a.trace_id = :tid', { tid: q.trace_id });
     // Parse date bounds defensively — an invalid value must be IGNORED, never
     // forwarded to the driver (which would throw and silently empty the feed).
@@ -170,7 +176,12 @@ export class ActivityLogService {
     const [items, total] = await qb.getManyAndCount();
     return {
       items,
-      meta: { page, limit, total, totalPages: Math.max(1, Math.ceil(total / limit)) },
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
     };
   }
 

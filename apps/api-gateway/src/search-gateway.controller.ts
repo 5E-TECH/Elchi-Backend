@@ -26,7 +26,9 @@ export class SearchGatewayController {
   @Get('health')
   @ApiOperation({ summary: 'Search service health check' })
   health() {
-    return this.searchClient.send({ cmd: 'search.health' }, {}).pipe(timeout(8000));
+    return this.searchClient
+      .send({ cmd: 'search.health' }, {})
+      .pipe(timeout(8000));
   }
 
   @Get()
@@ -46,20 +48,22 @@ export class SearchGatewayController {
     @Query('limit') limit?: string,
     @Req() req?: { user: JwtUser },
   ) {
-    return this.searchClient.send(
-      { cmd: 'search.query' },
-      {
-        q,
-        type,
-        source,
-        page: page ? Number(page) : undefined,
-        limit: limit ? Number(limit) : undefined,
-        // Scope results to the caller so the index cannot be harvested for PII.
-        requester: {
-          id: req?.user?.sub,
-          roles: req?.user?.roles ?? [],
+    return this.searchClient
+      .send(
+        { cmd: 'search.query' },
+        {
+          q,
+          type,
+          source,
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+          // Scope results to the caller so the index cannot be harvested for PII.
+          requester: {
+            id: req?.user?.sub,
+            roles: req?.user?.roles ?? [],
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 }

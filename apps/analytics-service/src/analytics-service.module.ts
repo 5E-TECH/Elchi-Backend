@@ -2,7 +2,11 @@ import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { AnalyticsServiceController } from './analytics-service.controller';
 import { AnalyticsServiceService } from './analytics-service.service';
-import { AppLoggerModule, RmqModule, analyticsValidationSchema } from '@app/common';
+import {
+  AppLoggerModule,
+  RmqModule,
+  analyticsValidationSchema,
+} from '@app/common';
 
 @Module({
   imports: [

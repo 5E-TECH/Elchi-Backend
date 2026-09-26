@@ -255,11 +255,7 @@ export class IdentityController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.userService.updateMarket(
-        payload.id,
-        payload.dto,
-        payload.requester,
-      ),
+      this.userService.updateMarket(payload.id, payload.dto, payload.requester),
     );
   }
 

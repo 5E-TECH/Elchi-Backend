@@ -1,4 +1,11 @@
-import { IsEnum, IsNumberString, IsOptional, IsString, Matches, MinLength } from 'class-validator';
+import {
+  IsEnum,
+  IsNumberString,
+  IsOptional,
+  IsString,
+  Matches,
+  MinLength,
+} from 'class-validator';
 import { BranchType } from '@app/common';
 
 export class UpdateBranchDto {

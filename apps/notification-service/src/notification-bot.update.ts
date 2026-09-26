@@ -1,4 +1,9 @@
-import { Injectable, Logger, OnModuleDestroy, OnModuleInit } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  OnModuleDestroy,
+  OnModuleInit,
+} from '@nestjs/common';
 import { NotificationServiceService } from './notification-service.service';
 
 interface TelegramApiResponse<T> {
@@ -15,20 +20,26 @@ interface TelegramUpdate {
 }
 
 @Injectable()
-export class NotificationBotUpdateService implements OnModuleInit, OnModuleDestroy {
+export class NotificationBotUpdateService
+  implements OnModuleInit, OnModuleDestroy
+{
   private readonly logger = new Logger(NotificationBotUpdateService.name);
   private readonly token: string;
   private offset = 0;
   private timer: NodeJS.Timeout | null = null;
   private running = false;
 
-  constructor(private readonly notificationService: NotificationServiceService) {
+  constructor(
+    private readonly notificationService: NotificationServiceService,
+  ) {
     this.token = process.env.TELEGRAM_BOT_TOKEN ?? '';
   }
 
   onModuleInit() {
     if (!this.token) {
-      this.logger.warn('TELEGRAM_BOT_TOKEN is not set. Telegram listener is disabled.');
+      this.logger.warn(
+        'TELEGRAM_BOT_TOKEN is not set. Telegram listener is disabled.',
+      );
       return;
     }
 
@@ -66,7 +77,9 @@ export class NotificationBotUpdateService implements OnModuleInit, OnModuleDestr
         return;
       }
 
-      const body = (await response.json()) as TelegramApiResponse<TelegramUpdate[]>;
+      const body = (await response.json()) as TelegramApiResponse<
+        TelegramUpdate[]
+      >;
       if (!body?.ok) {
         this.logger.error('getUpdates returned ok=false');
         this.scheduleNext(3000);
@@ -80,7 +93,9 @@ export class NotificationBotUpdateService implements OnModuleInit, OnModuleDestr
 
       this.scheduleNext(200);
     } catch (error) {
-      this.logger.error(error instanceof Error ? error.message : 'polling error');
+      this.logger.error(
+        error instanceof Error ? error.message : 'polling error',
+      );
       this.scheduleNext(3000);
     }
   }
@@ -108,13 +123,16 @@ export class NotificationBotUpdateService implements OnModuleInit, OnModuleDestr
       await this.notificationService.sendDirectToGroup({
         group_id: groupId,
         message:
-          "Mavjud komandalar: /start, /help. Ulanish uchun: group_token-<marketId> yoki group_token-<marketId>-<group_type>.",
+          'Mavjud komandalar: /start, /help. Ulanish uchun: group_token-<marketId> yoki group_token-<marketId>-<group_type>.',
       });
       return;
     }
 
     if (/^group_token-.+/i.test(text)) {
-      const result = await this.notificationService.connectGroupByTokenText(text, groupId);
+      const result = await this.notificationService.connectGroupByTokenText(
+        text,
+        groupId,
+      );
       await this.notificationService.sendDirectToGroup({
         group_id: groupId,
         message: result.message,

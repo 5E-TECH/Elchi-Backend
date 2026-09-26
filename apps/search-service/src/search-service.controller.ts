@@ -1,5 +1,10 @@
 import { Controller } from '@nestjs/common';
-import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
+import {
+  Ctx,
+  MessagePattern,
+  Payload,
+  RmqContext,
+} from '@nestjs/microservices';
 import { RmqService, executeAndAck } from '@app/common';
 import { SearchServiceService } from './search-service.service';
 
@@ -10,7 +15,10 @@ export class SearchServiceController {
     private readonly searchService: SearchServiceService,
   ) {}
 
-  private executeAndAck<T>(context: RmqContext, handler: () => Promise<T> | T): Promise<T> {
+  private executeAndAck<T>(
+    context: RmqContext,
+    handler: () => Promise<T> | T,
+  ): Promise<T> {
     return executeAndAck(this.rmqService, context, handler);
   }
 
@@ -25,7 +33,8 @@ export class SearchServiceController {
 
   @MessagePattern({ cmd: 'search.index.upsert' })
   upsert(
-    @Payload() payload: {
+    @Payload()
+    payload: {
       source: string;
       type: string;
       sourceId: string;
@@ -36,7 +45,9 @@ export class SearchServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.searchService.upsert(payload));
+    return this.executeAndAck(context, () =>
+      this.searchService.upsert(payload),
+    );
   }
 
   @MessagePattern({ cmd: 'search.index.remove' })
@@ -44,12 +55,21 @@ export class SearchServiceController {
     @Payload() payload: { source: string; type: string; sourceId: string },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.searchService.remove(payload));
+    return this.executeAndAck(context, () =>
+      this.searchService.remove(payload),
+    );
   }
 
   @MessagePattern({ cmd: 'search.query' })
   query(
-    @Payload() payload: { q?: string; type?: string; source?: string; page?: number; limit?: number },
+    @Payload()
+    payload: {
+      q?: string;
+      type?: string;
+      source?: string;
+      page?: number;
+      limit?: number;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () => this.searchService.query(payload));

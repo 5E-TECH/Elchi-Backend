@@ -4,7 +4,10 @@ import { Order } from './entities/order.entity';
 import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.entity';
 
 describe('BranchTransferBatchService bulk batch handlers', () => {
-  function createSetup(options?: { affected?: number; duplicateMessage?: boolean }) {
+  function createSetup(options?: {
+    affected?: number;
+    duplicateMessage?: boolean;
+  }) {
     const affected = options?.affected ?? 2;
     const duplicateMessage = options?.duplicateMessage ?? false;
 
@@ -102,7 +105,9 @@ describe('BranchTransferBatchService bulk batch handlers', () => {
   });
 
   it('bulkAssignBatch ignores duplicated message id (idempotent)', async () => {
-    const { service, queryRunner, orderRepo } = createSetup({ duplicateMessage: true });
+    const { service, queryRunner, orderRepo } = createSetup({
+      duplicateMessage: true,
+    });
 
     const res: any = await service.bulkAssignBatch({
       batch_id: '100',
@@ -171,7 +176,9 @@ describe('BranchTransferBatchService bulk batch handlers', () => {
     // The guard is registered via andWhere(). Inspect all andWhere calls
     // for the NULL clause specifically.
     const andWhereArgs = updateQb.andWhere.mock.calls.map((c) => String(c[0]));
-    const hasNullGuard = andWhereArgs.some((q) => q.includes('current_batch_id IS NULL'));
+    const hasNullGuard = andWhereArgs.some((q) =>
+      q.includes('current_batch_id IS NULL'),
+    );
     expect(hasNullGuard).toBe(true);
   });
 

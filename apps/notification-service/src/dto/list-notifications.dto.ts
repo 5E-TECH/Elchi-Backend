@@ -1,8 +1,11 @@
+import { NotificationCategory, NotificationPriority } from '@app/common';
 import {
-  NotificationCategory,
-  NotificationPriority,
-} from '@app/common';
-import { IsBoolean, IsEnum, IsOptional, IsString, Matches } from 'class-validator';
+  IsBoolean,
+  IsEnum,
+  IsOptional,
+  IsString,
+  Matches,
+} from 'class-validator';
 
 /** Query a single user's inbox. `recipient_id` is set by the gateway from the JWT. */
 export class ListNotificationsDto {

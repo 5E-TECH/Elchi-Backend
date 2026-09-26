@@ -1,5 +1,10 @@
 import { Controller } from '@nestjs/common';
-import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
+import {
+  Ctx,
+  MessagePattern,
+  Payload,
+  RmqContext,
+} from '@nestjs/microservices';
 import {
   RmqService,
   Group_type,
@@ -109,13 +114,17 @@ export class NotificationServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.notificationService.connectGroupByTokenText(data.text, data.group_id),
+      this.notificationService.connectGroupByTokenText(
+        data.text,
+        data.group_id,
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'notification.telegram.delete' })
   deleteTelegramMarket(
-    @Payload() data: { id?: string; market_id?: string; group_type?: Group_type },
+    @Payload()
+    data: { id?: string; market_id?: string; group_type?: Group_type },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -141,16 +150,11 @@ export class NotificationServiceController {
     @Payload() data: DispatchNotificationDto,
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () =>
-      this.inboxService.dispatch(data),
-    );
+    return this.executeAndAck(context, () => this.inboxService.dispatch(data));
   }
 
   @MessagePattern({ cmd: 'notification.inbox.list' })
-  listInbox(
-    @Payload() data: ListNotificationsDto,
-    @Ctx() context: RmqContext,
-  ) {
+  listInbox(@Payload() data: ListNotificationsDto, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.inboxService.list(data));
   }
 

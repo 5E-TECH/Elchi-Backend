@@ -196,10 +196,10 @@ export class AuthGatewayController {
     @Body() dto: LoginRequestDto,
     @Res({ passthrough: true }) res: Response,
   ) {
-    const response = (await this.sendIdentity(
+    const response = await this.sendIdentity<Record<string, unknown>>(
       { cmd: 'identity.login' },
       dto,
-    )) as Record<string, unknown>;
+    );
 
     const refreshToken =
       typeof response.refreshToken === 'string' ? response.refreshToken : null;
@@ -240,10 +240,10 @@ export class AuthGatewayController {
       throw new UnauthorizedException('Refresh token not found');
     }
 
-    const response = (await this.sendIdentity(
+    const response = await this.sendIdentity<Record<string, unknown>>(
       { cmd: 'identity.refresh' },
       { refreshToken },
-    )) as Record<string, unknown>;
+    );
 
     const nextRefreshToken =
       typeof response.refreshToken === 'string' ? response.refreshToken : null;

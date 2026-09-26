@@ -7,4 +7,3 @@ export class RemoveBranchUserDto {
   @IsNumberString()
   user_id!: string;
 }
-

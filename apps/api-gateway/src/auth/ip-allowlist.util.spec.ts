@@ -10,7 +10,7 @@ import { isIpAllowed, normalizeIp } from './ip-allowlist.util';
  * ko'rishni to'sadi.
  */
 describe('normalizeIp', () => {
-  it("TC1: IPv4-mapped IPv6 prefiksi kesiladi", () => {
+  it('TC1: IPv4-mapped IPv6 prefiksi kesiladi', () => {
     /**
      * ⭐ Node `::ffff:203.0.113.10` shaklida berishi mumkin. Xom holda
      * solishtirilsa ro'yxatdagi `203.0.113.10` bilan MOS KELMASDI — ya'ni
@@ -30,7 +30,7 @@ describe('normalizeIp', () => {
     expect(normalizeIp('2001:db8::1')).toBe('2001:db8::1');
   });
 
-  it("TC4: bo‘sh qiymat bo‘sh satr", () => {
+  it('TC4: bo‘sh qiymat bo‘sh satr', () => {
     expect(normalizeIp(undefined)).toBe('');
     expect(normalizeIp(null)).toBe('');
     expect(normalizeIp('   ')).toBe('');
@@ -38,7 +38,7 @@ describe('normalizeIp', () => {
 });
 
 describe('isIpAllowed', () => {
-  it("TC5: ⭐ ro‘yxat BO‘SH -> RUXSAT (mavjud hamkorlar buzilmasin)", () => {
+  it('TC5: ⭐ ro‘yxat BO‘SH -> RUXSAT (mavjud hamkorlar buzilmasin)', () => {
     /**
      * Ataylab: hamkorlarning ko'pchiligida statik IP bo'lmaydi va bo'sh
      * ro'yxatni "hech kimga ruxsat yo'q" deb tushunish barcha mavjud
@@ -55,9 +55,9 @@ describe('isIpAllowed', () => {
   });
 
   it('TC7: ro‘yxatdagi BIRORTASI mos kelsa yetarli', () => {
-    expect(
-      isIpAllowed('198.51.100.7', ['203.0.113.10', '198.51.100.7']),
-    ).toBe(true);
+    expect(isIpAllowed('198.51.100.7', ['203.0.113.10', '198.51.100.7'])).toBe(
+      true,
+    );
   });
 
   it('TC8: CIDR diapazoni', () => {
@@ -75,7 +75,7 @@ describe('isIpAllowed', () => {
     expect(isIpAllowed('1.2.3.4', ['0.0.0.0/0'])).toBe(true);
   });
 
-  it("TC10: ⭐ IP ANIQLANMASA va ro‘yxat BOR -> RAD", () => {
+  it('TC10: ⭐ IP ANIQLANMASA va ro‘yxat BOR -> RAD', () => {
     /**
      * Ataylab: cheklov qo'yilgan joyda "IP'ni bilmadim, o'tkazib yuboraman"
      * degan xulq cheklovni ma'nosiz qilardi.

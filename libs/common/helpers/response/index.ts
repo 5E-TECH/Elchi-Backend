@@ -10,10 +10,7 @@ export const catchError = (error: any) => {
       error?.response?.statusCode || error?.response?.status || 500;
     const message =
       error?.response?.message || error?.message || 'Internal server error';
-    throw new HttpException(
-      message,
-      statusCode,
-    );
+    throw new HttpException(message, statusCode);
   }
 
   if (typeof error === 'string') {

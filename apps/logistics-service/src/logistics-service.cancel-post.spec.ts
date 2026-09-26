@@ -167,9 +167,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       save: jest.fn(async (post) => ({ ...post, id: post.id ?? '55' })),
     };
     const branchClient = {
-      send: jest.fn(() =>
-        of({ data: { branch_id: '10', role: 'COURIER' } }),
-      ),
+      send: jest.fn(() => of({ data: { branch_id: '10', role: 'COURIER' } })),
     };
     const service = new LogisticsServiceService(
       postRepo as any,
@@ -503,9 +501,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
       save: jest.fn(async (post) => ({ ...post, id: post.id ?? '55' })),
     };
     const branchClient = {
-      send: jest.fn(() =>
-        of({ data: { branch_id: '10', role: 'COURIER' } }),
-      ),
+      send: jest.fn(() => of({ data: { branch_id: '10', role: 'COURIER' } })),
     };
     const service = new LogisticsServiceService(
       postRepo as any,

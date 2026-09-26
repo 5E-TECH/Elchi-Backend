@@ -70,7 +70,13 @@ function setup(options: {
   const item =
     options.item === null
       ? null
-      : { id: 'i1', batch_id: '700', order_id: '900', sent_at: new Date(), ...options.item };
+      : {
+          id: 'i1',
+          batch_id: '700',
+          order_id: '900',
+          sent_at: new Date(),
+          ...options.item,
+        };
 
   const orderQb = chainableQb();
   const itemQb = chainableQb();
@@ -137,7 +143,16 @@ function setup(options: {
     custody as any,
   );
 
-  return { service, orderRepo, batchRepo, itemRepo, orderQb, itemQb, custody, queryRunner };
+  return {
+    service,
+    orderRepo,
+    batchRepo,
+    itemRepo,
+    orderQb,
+    itemQb,
+    custody,
+    queryRunner,
+  };
 }
 
 const CALL = {

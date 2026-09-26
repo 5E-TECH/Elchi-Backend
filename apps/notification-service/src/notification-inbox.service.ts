@@ -66,7 +66,8 @@ export class NotificationInboxService {
   async dispatch(dto: DispatchNotificationDto) {
     try {
       if (!dto.type?.trim()) throw new BadRequestException('type is required');
-      if (!dto.title?.trim()) throw new BadRequestException('title is required');
+      if (!dto.title?.trim())
+        throw new BadRequestException('title is required');
 
       const channels =
         dto.channels && dto.channels.length
@@ -181,7 +182,7 @@ export class NotificationInboxService {
     map: Map<string, ResolvedRecipient>,
   ) {
     let page = 1;
-    // eslint-disable-next-line no-constant-condition
+
     while (true) {
       if (map.size >= MAX_FANOUT) return;
       const res = await rmqSend<any>(
@@ -323,7 +324,8 @@ export class NotificationInboxService {
     try {
       this.assertId(dto.recipient_id, 'recipient_id');
       const page = Number(dto.page) > 0 ? Number(dto.page) : 1;
-      const limit = Number(dto.limit) > 0 ? Math.min(Number(dto.limit), 100) : 20;
+      const limit =
+        Number(dto.limit) > 0 ? Math.min(Number(dto.limit), 100) : 20;
 
       const where: FindOptionsWhere<Notification> = {
         recipient_id: dto.recipient_id,
@@ -342,7 +344,11 @@ export class NotificationInboxService {
       });
 
       const unread = await this.repo.count({
-        where: { recipient_id: dto.recipient_id, isDeleted: false, is_read: false },
+        where: {
+          recipient_id: dto.recipient_id,
+          isDeleted: false,
+          is_read: false,
+        },
       });
 
       return successRes(
@@ -395,7 +401,11 @@ export class NotificationInboxService {
       row.is_read = read;
       row.read_at = read ? new Date() : null;
       const saved = await this.repo.save(row);
-      return successRes(this.toPublic(saved), 200, read ? 'Marked read' : 'Marked unread');
+      return successRes(
+        this.toPublic(saved),
+        200,
+        read ? 'Marked read' : 'Marked unread',
+      );
     } catch (error) {
       this.toRpcError(error);
     }
@@ -408,7 +418,11 @@ export class NotificationInboxService {
         { recipient_id: recipientId, isDeleted: false, is_read: false },
         { is_read: true, read_at: new Date() },
       );
-      return successRes({ updated: result.affected ?? 0 }, 200, 'All marked read');
+      return successRes(
+        { updated: result.affected ?? 0 },
+        200,
+        'All marked read',
+      );
     } catch (error) {
       this.toRpcError(error);
     }
@@ -431,11 +445,16 @@ export class NotificationInboxService {
 
   private assertId(value: string | undefined, field: string) {
     if (!value || !/^\d+$/.test(String(value))) {
-      throw new BadRequestException(`${field} must be a bigint-like numeric string`);
+      throw new BadRequestException(
+        `${field} must be a bigint-like numeric string`,
+      );
     }
   }
 
-  private async requireOwned(recipientId: string, id: string): Promise<Notification> {
+  private async requireOwned(
+    recipientId: string,
+    id: string,
+  ): Promise<Notification> {
     const row = await this.repo.findOne({
       where: { id, recipient_id: recipientId, isDeleted: false },
     });

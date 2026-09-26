@@ -1,5 +1,10 @@
 import { Controller } from '@nestjs/common';
-import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
+import {
+  Ctx,
+  MessagePattern,
+  Payload,
+  RmqContext,
+} from '@nestjs/microservices';
 import { ActivityLogQuery, RmqService, executeAndAck } from '@app/common';
 import { InvestorServiceService } from './investor-service.service';
 import { CreateInvestorDto } from './dto/create-investor.dto';
@@ -24,7 +29,11 @@ export class InvestorServiceController {
   }
 
   private unwrapDto<T>(payload: T | { dto: T }): T {
-    if (payload && typeof payload === 'object' && 'dto' in (payload as { dto?: T })) {
+    if (
+      payload &&
+      typeof payload === 'object' &&
+      'dto' in (payload as { dto?: T })
+    ) {
       return (payload as { dto: T }).dto;
     }
     return payload as T;
@@ -44,7 +53,10 @@ export class InvestorServiceController {
   create(
     @Payload()
     data:
-      | { dto: CreateInvestorDto; requester?: { id?: string; roles?: string[] } }
+      | {
+          dto: CreateInvestorDto;
+          requester?: { id?: string; roles?: string[] };
+        }
       | CreateInvestorDto,
     @Ctx() context: RmqContext,
   ) {
@@ -66,18 +78,28 @@ export class InvestorServiceController {
   @MessagePattern({ cmd: 'investor.find_by_id' })
   findById(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
-      this.investorService.findInvestorById(String(data?.id ?? data?.investor_id)),
+      this.investorService.findInvestorById(
+        String(data?.id ?? data?.investor_id),
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'investor.update' })
   update(
     @Payload()
-    data: { id: string; dto: UpdateInvestorDto; requester?: { id?: string; roles?: string[] } },
+    data: {
+      id: string;
+      dto: UpdateInvestorDto;
+      requester?: { id?: string; roles?: string[] };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.investorService.updateInvestor(String(data?.id), data?.dto ?? {}, data?.requester),
+      this.investorService.updateInvestor(
+        String(data?.id),
+        data?.dto ?? {},
+        data?.requester,
+      ),
     );
   }
 
@@ -96,7 +118,10 @@ export class InvestorServiceController {
   createInvestment(
     @Payload()
     data:
-      | { dto: CreateInvestmentDto; requester?: { id?: string; roles?: string[] } }
+      | {
+          dto: CreateInvestmentDto;
+          requester?: { id?: string; roles?: string[] };
+        }
       | CreateInvestmentDto,
     @Ctx() context: RmqContext,
   ) {
@@ -126,7 +151,10 @@ export class InvestorServiceController {
   }
 
   @MessagePattern({ cmd: 'investor.investment.find_by_id' })
-  findInvestmentById(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
+  findInvestmentById(
+    @Payload() data: { id: string },
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.investorService.findInvestmentById(String(data?.id)),
     );
@@ -135,11 +163,19 @@ export class InvestorServiceController {
   @MessagePattern({ cmd: 'investor.investment.update' })
   updateInvestment(
     @Payload()
-    data: { id: string; dto: UpdateInvestmentDto; requester?: { id?: string; roles?: string[] } },
+    data: {
+      id: string;
+      dto: UpdateInvestmentDto;
+      requester?: { id?: string; roles?: string[] };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.investorService.updateInvestment(String(data?.id), data?.dto ?? {}, data?.requester),
+      this.investorService.updateInvestment(
+        String(data?.id),
+        data?.dto ?? {},
+        data?.requester,
+      ),
     );
   }
 
@@ -155,7 +191,10 @@ export class InvestorServiceController {
   createProfit(
     @Payload()
     data:
-      | { dto: CreateProfitShareDto; requester?: { id?: string; roles?: string[] } }
+      | {
+          dto: CreateProfitShareDto;
+          requester?: { id?: string; roles?: string[] };
+        }
       | CreateProfitShareDto,
     @Ctx() context: RmqContext,
   ) {
@@ -171,7 +210,10 @@ export class InvestorServiceController {
   calculateProfit(
     @Payload()
     data:
-      | { dto: CalculateProfitDto; requester?: { id?: string; roles?: string[] } }
+      | {
+          dto: CalculateProfitDto;
+          requester?: { id?: string; roles?: string[] };
+        }
       | CalculateProfitDto,
     @Ctx() context: RmqContext,
   ) {

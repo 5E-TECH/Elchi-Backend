@@ -82,7 +82,11 @@ describe('NotificationInboxService', () => {
   });
 
   it('dispatch dedupes by group_key (updates existing row)', async () => {
-    repo.findOne.mockResolvedValue({ id: '7', recipient_id: '42', is_read: true });
+    repo.findOne.mockResolvedValue({
+      id: '7',
+      recipient_id: '42',
+      is_read: true,
+    });
 
     const res = await service.dispatch({
       recipient_id: '42',
@@ -101,7 +105,13 @@ describe('NotificationInboxService', () => {
 
   it('dispatch resolves roles via identity and fans out', async () => {
     rmqSendMock.mockResolvedValueOnce({
-      data: { items: [{ id: '101', role: 'courier' }, { id: '102', role: 'courier' }], meta: { total: 2 } },
+      data: {
+        items: [
+          { id: '101', role: 'courier' },
+          { id: '102', role: 'courier' },
+        ],
+        meta: { total: 2 },
+      },
     });
 
     const res = await service.dispatch({
@@ -113,7 +123,9 @@ describe('NotificationInboxService', () => {
     expect(rmqSendMock).toHaveBeenCalledWith(
       identityClient,
       { cmd: 'identity.user.find_all' },
-      expect.objectContaining({ query: expect.objectContaining({ role: 'courier' }) }),
+      expect.objectContaining({
+        query: expect.objectContaining({ role: 'courier' }),
+      }),
     );
     expect(res.data.dispatched).toBe(2);
     expect(repo.save).toHaveBeenCalledTimes(2);
@@ -121,7 +133,16 @@ describe('NotificationInboxService', () => {
 
   it('list returns items, unread count and pagination meta', async () => {
     repo.findAndCount.mockResolvedValue([
-      [{ id: '1', recipient_id: '42', type: 'order.sold', title: 't', is_read: false, createdAt: new Date() }],
+      [
+        {
+          id: '1',
+          recipient_id: '42',
+          type: 'order.sold',
+          title: 't',
+          is_read: false,
+          createdAt: new Date(),
+        },
+      ],
       1,
     ]);
     repo.count.mockResolvedValue(1);
@@ -135,7 +156,9 @@ describe('NotificationInboxService', () => {
   });
 
   it('list throws 400 on invalid recipient_id', async () => {
-    await expect(service.list({ recipient_id: 'abc' } as any)).rejects.toBeInstanceOf(RpcException);
+    await expect(
+      service.list({ recipient_id: 'abc' } as any),
+    ).rejects.toBeInstanceOf(RpcException);
   });
 
   it('markAllRead reports how many were updated', async () => {
@@ -152,7 +175,9 @@ describe('NotificationInboxService', () => {
 
   it('markRead 404s when the notification is not owned by the user', async () => {
     repo.findOne.mockResolvedValue(null);
-    await expect(service.markRead('42', '999')).rejects.toBeInstanceOf(RpcException);
+    await expect(service.markRead('42', '999')).rejects.toBeInstanceOf(
+      RpcException,
+    );
   });
 
   it('unreadCount returns the count for the user', async () => {

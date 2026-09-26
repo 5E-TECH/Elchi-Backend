@@ -1507,7 +1507,7 @@ export class BranchServiceService implements OnModuleInit {
       return remainingResponse;
     }
 
-    const batchRecord = batchData as Record<string, unknown>;
+    const batchRecord = batchData;
     const regionId = String(batchRecord?.target_region_id ?? '').trim();
     const regionMap = await this.getRegionsByIds(regionId ? [regionId] : []);
     const rawItems = Array.isArray(batchRecord?.items)
@@ -1799,7 +1799,7 @@ export class BranchServiceService implements OnModuleInit {
       return response;
     }
 
-    const batchRecord = batchData as Record<string, unknown>;
+    const batchRecord = batchData;
     const regionId = String(batchRecord?.target_region_id ?? '').trim();
     const regionMap = await this.getRegionsByIds(regionId ? [regionId] : []);
     const rawItems = Array.isArray(batchRecord?.items)

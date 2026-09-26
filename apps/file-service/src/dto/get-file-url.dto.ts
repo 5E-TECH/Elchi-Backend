@@ -8,4 +8,3 @@ export class GetFileUrlDto {
   @IsOptional()
   expires_in?: number;
 }
-

@@ -10,7 +10,7 @@ import { IntegrationServiceService } from './integration-service.service';
  * umuman joy yo'q edi.
  */
 function svc() {
-  return Object.create(IntegrationServiceService.prototype) as any;
+  return Object.create(IntegrationServiceService.prototype);
 }
 
 describe('Rol normalizatori', () => {

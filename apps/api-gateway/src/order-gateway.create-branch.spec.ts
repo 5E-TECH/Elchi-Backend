@@ -18,7 +18,8 @@ describe('OrderGatewayController create with branch auto binding', () => {
   };
 
   it('filial REGISTRATOR create qilsa branch_id va source=branch avtomatik bo‘ladi', async () => {
-    const { controller, orderClient, identityClient, branchClient } = makeController();
+    const { controller, orderClient, identityClient, branchClient } =
+      makeController();
 
     // Filialda faqat REGISTRATOR ishlaydi (operator — market xodimi, filial roli emas).
     branchClient.send.mockReturnValue(
@@ -26,8 +27,12 @@ describe('OrderGatewayController create with branch auto binding', () => {
         data: { branch_id: '12', role: 'REGISTRATOR' },
       }),
     );
-    identityClient.send.mockReturnValue(of({ data: { id: 'reg1', market_id: '77', name: 'Registrator 1' } }));
-    orderClient.send.mockReturnValue(of({ statusCode: 201, data: { id: '100' } }));
+    identityClient.send.mockReturnValue(
+      of({ data: { id: 'reg1', market_id: '77', name: 'Registrator 1' } }),
+    );
+    orderClient.send.mockReturnValue(
+      of({ statusCode: 201, data: { id: '100' } }),
+    );
 
     await controller.create(
       {
@@ -46,7 +51,9 @@ describe('OrderGatewayController create with branch auto binding', () => {
     const { controller, orderClient, branchClient } = makeController();
 
     branchClient.send.mockReturnValue(of({ data: null }));
-    orderClient.send.mockReturnValue(of({ statusCode: 201, data: { id: '101' } }));
+    orderClient.send.mockReturnValue(
+      of({ statusCode: 201, data: { id: '101' } }),
+    );
 
     await controller.create(
       {

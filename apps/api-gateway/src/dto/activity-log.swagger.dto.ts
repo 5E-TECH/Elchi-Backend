@@ -1,6 +1,12 @@
 import { ApiPropertyOptional } from '@nestjs/swagger';
 import { Type } from 'class-transformer';
-import { IsDateString, IsInt, IsOptional, IsString, Min } from 'class-validator';
+import {
+  IsDateString,
+  IsInt,
+  IsOptional,
+  IsString,
+  Min,
+} from 'class-validator';
 
 /**
  * Query filters for the admin audit-log viewer (GET /activity-logs).
@@ -24,7 +30,17 @@ export class ActivityLogQueryDto {
 
   @ApiPropertyOptional({
     description: 'Restrict to one service schema',
-    enum: ['identity', 'order', 'finance', 'branch', 'integration', 'logistics', 'catalog', 'investor', 'notification'],
+    enum: [
+      'identity',
+      'order',
+      'finance',
+      'branch',
+      'integration',
+      'logistics',
+      'catalog',
+      'investor',
+      'notification',
+    ],
   })
   @IsOptional()
   @IsString()
@@ -60,17 +76,23 @@ export class ActivityLogQueryDto {
   @IsString()
   trace_id?: string;
 
-  @ApiPropertyOptional({ description: 'created_at lower bound (ISO date or datetime)' })
+  @ApiPropertyOptional({
+    description: 'created_at lower bound (ISO date or datetime)',
+  })
   @IsOptional()
   @IsDateString()
   from?: string;
 
-  @ApiPropertyOptional({ description: 'created_at upper bound (ISO date or datetime)' })
+  @ApiPropertyOptional({
+    description: 'created_at upper bound (ISO date or datetime)',
+  })
   @IsOptional()
   @IsDateString()
   to?: string;
 
-  @ApiPropertyOptional({ description: 'Free-text across type/id/action/actor name' })
+  @ApiPropertyOptional({
+    description: 'Free-text across type/id/action/actor name',
+  })
   @IsOptional()
   @IsString()
   search?: string;

@@ -437,13 +437,13 @@ describe('AnalyticsServiceService', () => {
     ['getOrderReport'],
   ])('%s forbids a non-admin requester (403)', async (method) => {
     const courier = { id: 'c1', roles: ['courier'] };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     await (service as any)
       [method](courier, {})
       .then(() => {
         throw new Error('expected 403');
       })
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
       .catch((e: any) => {
         expect(e?.getError?.()?.statusCode).toBe(403);
       });
@@ -453,7 +453,7 @@ describe('AnalyticsServiceService', () => {
   it('financial reports allow an admin requester (no 403)', async () => {
     rmqSendMock.mockResolvedValue({ data: {} });
     const admin = { id: 'a', roles: ['admin'] };
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+
     const res = await service.getFinanceReport(admin as any, {} as any);
     expect(res.statusCode).toBe(200);
   });

@@ -38,9 +38,10 @@ export class NotificationServiceService {
    * activity-log expects. `user_name` is not carried in `requester`, so it is
    * left null; the user_id + role pair is enough to attribute every action.
    */
-  private auditActor(
-    requester?: { id?: string; roles?: string[] } | null,
-  ): { user_id: string | null; user_role: string | null } {
+  private auditActor(requester?: { id?: string; roles?: string[] } | null): {
+    user_id: string | null;
+    user_role: string | null;
+  } {
     const roles = requester?.roles ?? [];
     return {
       user_id: requester?.id ? String(requester.id) : null,
@@ -89,7 +90,9 @@ export class NotificationServiceService {
 
   private assertBigIntId(value: string | undefined, fieldName: string) {
     if (!value || !/^\d+$/.test(String(value))) {
-      throw new BadRequestException(`${fieldName} must be a bigint-like numeric string`);
+      throw new BadRequestException(
+        `${fieldName} must be a bigint-like numeric string`,
+      );
     }
   }
 
@@ -110,7 +113,9 @@ export class NotificationServiceService {
     }
 
     if (!data.market_id || !data.group_type) {
-      throw new BadRequestException('id OR (market_id + group_type) is required');
+      throw new BadRequestException(
+        'id OR (market_id + group_type) is required',
+      );
     }
 
     this.assertBigIntId(data.market_id, 'market_id');
@@ -130,7 +135,10 @@ export class NotificationServiceService {
     return byMarketType;
   }
 
-  private resolveBotToken(tokenFromPayload?: string | null, tokenFromDb?: string | null) {
+  private resolveBotToken(
+    tokenFromPayload?: string | null,
+    tokenFromDb?: string | null,
+  ) {
     const envToken = this.configService.get<string>('TELEGRAM_BOT_TOKEN');
     const token = tokenFromPayload || tokenFromDb || envToken;
 
@@ -176,7 +184,8 @@ export class NotificationServiceService {
       { market_tg_token: value },
     ).catch(() => null);
 
-    const marketByToken = marketByTokenResponse?.data ?? marketByTokenResponse ?? null;
+    const marketByToken =
+      marketByTokenResponse?.data ?? marketByTokenResponse ?? null;
     if (marketByToken?.id) {
       return {
         market_id: String(marketByToken.id),
@@ -231,11 +240,17 @@ export class NotificationServiceService {
       }
 
       const existsByGroup = await this.tgMarketRepo.findOne({
-        where: { group_id: groupId, group_type: parsed.group_type, isDeleted: false },
+        where: {
+          group_id: groupId,
+          group_type: parsed.group_type,
+          isDeleted: false,
+        },
       });
 
       if (existsByGroup) {
-        throw new BadRequestException('This group is already connected for this group type');
+        throw new BadRequestException(
+          'This group is already connected for this group type',
+        );
       }
 
       const existsByMarketType = await this.tgMarketRepo.findOne({
@@ -261,7 +276,11 @@ export class NotificationServiceService {
           metadata: { group_id: groupId, market_id: parsed.market_id },
         });
 
-        return this.successRes(updated, 200, `${market.name ?? 'Market'} uchun telegram group yangilandi`);
+        return this.successRes(
+          updated,
+          200,
+          `${market.name ?? 'Market'} uchun telegram group yangilandi`,
+        );
       }
 
       const created = this.tgMarketRepo.create({
@@ -283,7 +302,11 @@ export class NotificationServiceService {
         metadata: { group_id: groupId, market_id: parsed.market_id },
       });
 
-      return this.successRes(saved, 201, `${market.name ?? 'Market'} uchun telegram group ulandi`);
+      return this.successRes(
+        saved,
+        201,
+        `${market.name ?? 'Market'} uchun telegram group ulandi`,
+      );
     } catch (error) {
       const message =
         error instanceof Error ? error.message : 'Noma’lum xatolik yuz berdi';
@@ -305,7 +328,9 @@ export class NotificationServiceService {
       });
 
       if (existing) {
-        throw new BadRequestException('Telegram market for this market_id and group_type already exists');
+        throw new BadRequestException(
+          'Telegram market for this market_id and group_type already exists',
+        );
       }
 
       const entity = this.tgMarketRepo.create({
@@ -323,7 +348,9 @@ export class NotificationServiceService {
         entity_type: 'TelegramMarket',
         entity_id: saved.id,
         action: ActivityAction.CREATED,
-        ...this.auditActor((dto as { requester?: { id?: string; roles?: string[] } }).requester),
+        ...this.auditActor(
+          (dto as { requester?: { id?: string; roles?: string[] } }).requester,
+        ),
         metadata: {
           market_id: saved.market_id,
           group_type: saved.group_type,
@@ -451,7 +478,9 @@ export class NotificationServiceService {
       });
 
       if (duplicate && duplicate.id !== target.id) {
-        throw new BadRequestException('Telegram market for this market_id and group_type already exists');
+        throw new BadRequestException(
+          'Telegram market for this market_id and group_type already exists',
+        );
       }
 
       const saved = await this.tgMarketRepo.save(target);
@@ -469,7 +498,9 @@ export class NotificationServiceService {
           group_type: saved.group_type,
           is_active: saved.is_active,
         },
-        ...this.auditActor((dto as { requester?: { id?: string; roles?: string[] } }).requester),
+        ...this.auditActor(
+          (dto as { requester?: { id?: string; roles?: string[] } }).requester,
+        ),
         metadata: {
           market_id: saved.market_id,
           token_changed: dto.token !== undefined,
@@ -498,7 +529,9 @@ export class NotificationServiceService {
         entity_type: 'TelegramMarket',
         entity_id: target.id,
         action: ActivityAction.DELETED,
-        ...this.auditActor((data as { requester?: { id?: string; roles?: string[] } }).requester),
+        ...this.auditActor(
+          (data as { requester?: { id?: string; roles?: string[] } }).requester,
+        ),
         metadata: { market_id: marketId },
       });
 
@@ -517,20 +550,23 @@ export class NotificationServiceService {
   }) {
     let response: Response;
     try {
-      response = await fetch(`https://api.telegram.org/bot${data.token}/sendMessage`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          chat_id: data.group_id,
-          text: data.message,
-          parse_mode: data.parse_mode,
-          disable_web_page_preview: data.disable_web_page_preview,
-        }),
-        // Bound the outbound call: this runs inside an RMQ handler, and Node's
-        // fetch has no default timeout — a stalled Telegram API would leave the
-        // message unacked and, with prefetch, wedge the consumer.
-        signal: AbortSignal.timeout(10_000),
-      });
+      response = await fetch(
+        `https://api.telegram.org/bot${data.token}/sendMessage`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            chat_id: data.group_id,
+            text: data.message,
+            parse_mode: data.parse_mode,
+            disable_web_page_preview: data.disable_web_page_preview,
+          }),
+          // Bound the outbound call: this runs inside an RMQ handler, and Node's
+          // fetch has no default timeout — a stalled Telegram API would leave the
+          // message unacked and, with prefetch, wedge the consumer.
+          signal: AbortSignal.timeout(10_000),
+        },
+      );
     } catch (error) {
       this.logger.error(
         `Telegram HTTP request failed for chat_id=${data.group_id}: ${
@@ -543,8 +579,11 @@ export class NotificationServiceService {
     const body = await response.json().catch(() => null);
 
     if (!response.ok || (body && body.ok === false)) {
-      const description = body?.description || `Telegram API error (${response.status})`;
-      this.logger.error(`Telegram API sendMessage error for chat_id=${data.group_id}: ${description}`);
+      const description =
+        body?.description || `Telegram API error (${response.status})`;
+      this.logger.error(
+        `Telegram API sendMessage error for chat_id=${data.group_id}: ${description}`,
+      );
       throw new BadRequestException(description);
     }
 
@@ -603,7 +642,9 @@ export class NotificationServiceService {
         const rows = await this.tgMarketRepo.find({ where });
 
         if (!rows.length) {
-          throw new NotFoundException('Telegram target group not found for market');
+          throw new NotFoundException(
+            'Telegram target group not found for market',
+          );
         }
 
         targets = rows.map((row) => ({

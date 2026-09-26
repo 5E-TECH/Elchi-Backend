@@ -233,12 +233,43 @@ describe("bekor qilingan buyurtmaning qo'shimcha xarajati", () => {
     expect(settlement.status).toBe(SettlementStatus.PENDING);
   });
 
+  it('⭐ extra_cost buyurtma ENTITY`siga ham yoziladi (updateFull orqali)', async () => {
+    // Regressiya: ilgari bekor yo'li xarajatni kassadan yechib, daftarga
+    // yozardi, LEKIN order entity'siga `extra_cost`ni umuman yozmasdi —
+    // shu bois GET /partner/shipments/:id 0 qaytarib, BeePost bekor
+    // xarajatini ko'rmasdi. Jonli E2E (1251174/1251175) shuni ochgan.
+    const { s, requester } = makeService();
+
+    await s.cancelOrder(requester, '7001', {
+      extraCost: 5000,
+      extraCostApproved: true,
+      comment: 'Mijoz olmadi',
+    });
+
+    expect(s.updateFull).toHaveBeenCalledWith(
+      '7001',
+      expect.objectContaining({
+        status: Order_status.CANCELLED,
+        extra_cost: 5000,
+      }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
   it('xarajatsiz bekor qilishda daftarga hech narsa yozilmaydi', async () => {
     const { s, requester, saved } = makeService();
 
     await s.cancelOrder(requester, '7001', { comment: 'Mijoz olmadi' });
 
     expect(saved).toHaveLength(0);
+    // extra_cost=0 bo'lsa ham updateFull chaqiriladi, 0 bilan (default bilan bir xil).
+    expect(s.updateFull).toHaveBeenCalledWith(
+      '7001',
+      expect.objectContaining({ extra_cost: 0 }),
+      expect.anything(),
+      expect.anything(),
+    );
   });
 
   it('manager to`lasa kredit filial bo`g`inida boshlanadi', async () => {

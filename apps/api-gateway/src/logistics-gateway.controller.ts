@@ -184,7 +184,9 @@ export class LogisticsGatewayController {
   @Get('health')
   @ApiOperation({ summary: 'Logistics service health check' })
   health() {
-    return this.logisticsClient.send({ cmd: 'logistics.health' }, {}).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.health' }, {})
+      .pipe(timeout(8000));
   }
 
   // ---------- Post ----------
@@ -213,18 +215,20 @@ export class LogisticsGatewayController {
     @Query('branch_id') branchId?: string,
     @Req() req?: { user?: JwtUser },
   ) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.find_all' },
-      {
-        query: {
-          page: page ? Number(page) : 1,
-          limit: limit ? Number(limit) : 8,
-          status: status ? String(status).trim().toLowerCase() : undefined,
-          branch_id: branchId ? String(branchId).trim() : undefined,
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.post.find_all' },
+        {
+          query: {
+            page: page ? Number(page) : 1,
+            limit: limit ? Number(limit) : 8,
+            status: status ? String(status).trim().toLowerCase() : undefined,
+            branch_id: branchId ? String(branchId).trim() : undefined,
+          },
+          requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
         },
-        requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('post/new')
@@ -248,15 +252,17 @@ export class LogisticsGatewayController {
     @Query('search') search?: string,
     @Req() req?: { user?: JwtUser },
   ) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.new' },
-      {
-        requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
-        query: {
-          search,
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.post.new' },
+        {
+          requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
+          query: {
+            search,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('post/rejected')
@@ -271,16 +277,18 @@ export class LogisticsGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List rejected posts' })
   getRejectedPosts(@Req() req?: { user?: JwtUser }) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.rejected' },
-      {
-        requester: {
-          id: req?.user?.sub,
-          roles: req?.user?.roles ?? [],
-          branch_id: req?.user?.branch_id ?? null,
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.post.rejected' },
+        {
+          requester: {
+            id: req?.user?.sub,
+            roles: req?.user?.roles ?? [],
+            branch_id: req?.user?.branch_id ?? null,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('post/on-the-road')
@@ -289,10 +297,12 @@ export class LogisticsGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Courier on-the-road posts' })
   getOnTheRoadPosts(@Req() req: { user: JwtUser }) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.on_the_road' },
-      { requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.post.on_the_road' },
+        { requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('post/courier/old-posts')
@@ -305,14 +315,16 @@ export class LogisticsGatewayController {
     @Query('limit') limit = '8',
     @Req() req: { user: JwtUser },
   ) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.old_for_courier' },
-      {
-        page: Number(page),
-        limit: Number(limit),
-        requester: { id: req.user.sub, roles: req.user.roles ?? [] },
-      },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.post.old_for_courier' },
+        {
+          page: Number(page),
+          limit: Number(limit),
+          requester: { id: req.user.sub, roles: req.user.roles ?? [] },
+        },
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('post/courier/rejected')
@@ -321,10 +333,12 @@ export class LogisticsGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Courier rejected posts' })
   getRejectedPostsForCourier(@Req() req: { user: JwtUser }) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.rejected_for_courier' },
-      { requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.post.rejected_for_courier' },
+        { requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('post/:id')
@@ -341,10 +355,15 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Get post by id' })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   getPostById(@Param('id') id: string, @Req() req?: { user?: JwtUser }) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.find_by_id' },
-      { id, requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] } },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.post.find_by_id' },
+        {
+          id,
+          requester: { id: req?.user?.sub, roles: req?.user?.roles ?? [] },
+        },
+      )
+      .pipe(timeout(8000));
   }
 
   @Delete('post/:id')
@@ -354,7 +373,9 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Delete post by id (superadmin only)' })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   deletePost(@Param('id') id: string) {
-    return this.logisticsClient.send({ cmd: 'logistics.post.delete' }, { id }).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.post.delete' }, { id })
+      .pipe(timeout(8000));
   }
 
   @Patch('post/:id')
@@ -369,10 +390,16 @@ export class LogisticsGatewayController {
     @Body() dto: SendPostRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.update' },
-      { id, dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.post.update' },
+        {
+          id,
+          dto,
+          requester: { id: req.user.sub, roles: req.user.roles ?? [] },
+        },
+      )
+      .pipe(timeout(8000));
   }
 
   @Patch('post/reassign/:id')
@@ -383,10 +410,9 @@ export class LogisticsGatewayController {
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   @ApiBody({ type: ReassignPostRequestDto })
   reassignPost(@Param('id') id: string, @Body() dto: ReassignPostRequestDto) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.reassign' },
-      { id, dto },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.post.reassign' }, { id, dto })
+      .pipe(timeout(8000));
   }
 
   @Get('post/scan/:id')
@@ -403,10 +429,9 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Get post by scanner' })
   @ApiParam({ name: 'id', description: 'Post QR token' })
   getPostByScan(@Param('id') id: string) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.find_by_scan' },
-      { id },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.post.find_by_scan' }, { id })
+      .pipe(timeout(8000));
   }
 
   @Post('post/courier/:id')
@@ -416,10 +441,9 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Get couriers by post id' })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   getCouriersByPost(@Param('id') id: string) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.couriers_by_post' },
-      { id },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.post.couriers_by_post' }, { id })
+      .pipe(timeout(8000));
   }
 
   @Get('post/orders/:id')
@@ -495,10 +519,9 @@ export class LogisticsGatewayController {
   @ApiParam({ name: 'id', description: 'Order QR token' })
   @ApiBody({ type: PostIdRequestDto })
   checkPost(@Param('id') id: string, @Body() dto: PostIdRequestDto) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.check' },
-      { id, dto },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.post.check' }, { id, dto })
+      .pipe(timeout(8000));
   }
 
   @Post('post/check/cancel/:id')
@@ -509,10 +532,9 @@ export class LogisticsGatewayController {
   @ApiParam({ name: 'id', description: 'Order QR token' })
   @ApiBody({ type: PostIdRequestDto })
   checkCancelPost(@Param('id') id: string, @Body() dto: PostIdRequestDto) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.check_cancel' },
-      { id, dto },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.post.check_cancel' }, { id, dto })
+      .pipe(timeout(8000));
   }
 
   @Patch('post/receive/:id')
@@ -534,18 +556,20 @@ export class LogisticsGatewayController {
     @Body() dto: ReceivePostRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.receive' },
-      {
-        id,
-        dto,
-        requester: {
-          id: req.user.sub,
-          roles: req.user.roles ?? [],
-          branch_id: req.user.branch_id ?? null,
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.post.receive' },
+        {
+          id,
+          dto,
+          requester: {
+            id: req.user.sub,
+            roles: req.user.roles ?? [],
+            branch_id: req.user.branch_id ?? null,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Patch('post/receive/scan/:id')
@@ -555,10 +579,12 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Receive post with scanner (courier)' })
   @ApiParam({ name: 'id', description: 'Post QR token' })
   receivePostWithScan(@Param('id') id: string, @Req() req: { user: JwtUser }) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.receive_scan' },
-      { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.post.receive_scan' },
+        { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Patch('post/receive/order/:id')
@@ -568,10 +594,12 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Receive order (courier)' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
   receiveOrder(@Param('id') id: string, @Req() req: { user: JwtUser }) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.receive_order' },
-      { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.post.receive_order' },
+        { id, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Post('post/cancel')
@@ -586,17 +614,19 @@ export class LogisticsGatewayController {
     @Body() dto: ReceivePostRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.cancel.create' },
-      {
-        dto,
-        requester: {
-          id: req.user.sub,
-          roles: req.user.roles ?? [],
-          branch_id: req.user.branch_id ?? null,
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.post.cancel.create' },
+        {
+          dto,
+          requester: {
+            id: req.user.sub,
+            roles: req.user.roles ?? [],
+            branch_id: req.user.branch_id ?? null,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Post('post/cancel/receive/:id')
@@ -636,10 +666,9 @@ export class LogisticsGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List return requests grouped by courier' })
   getReturnRequests() {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.return_requests' },
-      {},
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.post.return_requests' }, {})
+      .pipe(timeout(8000));
   }
 
   @Post('post/return-requests/approve')
@@ -652,10 +681,12 @@ export class LogisticsGatewayController {
     @Body() dto: ReturnRequestsActionRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.return_requests.approve' },
-      { dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.post.return_requests.approve' },
+        { dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Post('post/return-requests/reject')
@@ -668,10 +699,12 @@ export class LogisticsGatewayController {
     @Body() dto: ReturnRequestsActionRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.post.return_requests.reject' },
-      { dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.post.return_requests.reject' },
+        { dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
+      )
+      .pipe(timeout(8000));
   }
 
   // ---------- Region ----------
@@ -723,10 +756,9 @@ export class LogisticsGatewayController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
   ) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.region.stats_all' },
-      { startDate, endDate },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.region.stats_all' }, { startDate, endDate })
+      .pipe(timeout(8000));
   }
 
   @Get('region/stats/:id')
@@ -759,10 +791,9 @@ export class LogisticsGatewayController {
     @Query('startDate') startDate?: string,
     @Query('endDate') endDate?: string,
   ) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.region.stats_by_id' },
-      { id, startDate, endDate },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.region.stats_by_id' }, { id, startDate, endDate })
+      .pipe(timeout(8000));
   }
 
   @Post('region')
@@ -773,10 +804,9 @@ export class LogisticsGatewayController {
   @ApiBody({ type: CreateRegionRequestDto })
   @ApiCreatedResponse({ description: 'Region created' })
   createRegion(@Body() dto: CreateRegionRequestDto) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.region.create' },
-      { dto },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.region.create' }, { dto })
+      .pipe(timeout(8000));
   }
 
   @Get('region/:id')
@@ -807,10 +837,9 @@ export class LogisticsGatewayController {
   @ApiParam({ name: 'id', description: 'Region ID (id)' })
   @ApiBody({ type: UpdateRegionRequestDto })
   updateRegion(@Param('id') id: string, @Body() dto: UpdateRegionRequestDto) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.region.update' },
-      { id, dto },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.region.update' }, { id, dto })
+      .pipe(timeout(8000));
   }
 
   @Delete('region/:id')
@@ -820,10 +849,9 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Delete region' })
   @ApiParam({ name: 'id', description: 'Region ID (id)' })
   deleteRegion(@Param('id') id: string) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.region.delete' },
-      { id },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.region.delete' }, { id })
+      .pipe(timeout(8000));
   }
 
   // ---------- District ----------
@@ -855,10 +883,9 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Create district' })
   @ApiBody({ type: CreateDistrictRequestDto })
   create(@Body() dto: CreateDistrictRequestDto) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.district.create' },
-      { dto },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.district.create' }, { dto })
+      .pipe(timeout(8000));
   }
 
   @Get('district/sato/:satoCode')
@@ -875,10 +902,9 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Get district by sato_code' })
   @ApiParam({ name: 'satoCode', description: 'District SATO code' })
   getDistrictBySato(@Param('satoCode') satoCode: string) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.district.find_by_sato' },
-      { sato_code: satoCode },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.district.find_by_sato' }, { sato_code: satoCode })
+      .pipe(timeout(8000));
   }
 
   @Get('district/:id')
@@ -895,10 +921,9 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Get district by id' })
   @ApiParam({ name: 'id', description: 'District ID (id)' })
   getById(@Param('id') id: string) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.district.find_by_id' },
-      { id },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.district.find_by_id' }, { id })
+      .pipe(timeout(8000));
   }
 
   @Patch('district/:id')
@@ -909,10 +934,9 @@ export class LogisticsGatewayController {
   @ApiParam({ name: 'id', description: 'District ID (id)' })
   @ApiBody({ type: UpdateDistrictRequestDto })
   update(@Param('id') id: string, @Body() dto: UpdateDistrictRequestDto) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.district.update' },
-      { id, dto },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.district.update' }, { id, dto })
+      .pipe(timeout(8000));
   }
 
   @Patch('district/name/:id')
@@ -926,10 +950,9 @@ export class LogisticsGatewayController {
     @Param('id') id: string,
     @Body() dto: UpdateDistrictNameRequestDto,
   ) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.district.update_name' },
-      { id, dto },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.district.update_name' }, { id, dto })
+      .pipe(timeout(8000));
   }
 
   @Patch('district/sato/:id')
@@ -943,10 +966,9 @@ export class LogisticsGatewayController {
     @Param('id') id: string,
     @Body() dto: UpdateDistrictSatoCodeRequestDto,
   ) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.district.update_sato' },
-      { id, dto },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.district.update_sato' }, { id, dto })
+      .pipe(timeout(8000));
   }
 
   @Get('district/sato-match/preview')
@@ -955,10 +977,9 @@ export class LogisticsGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Preview district sato_code matching' })
   previewDistrictSatoMatch() {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.district.sato_match_preview' },
-      {},
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.district.sato_match_preview' }, {})
+      .pipe(timeout(8000));
   }
 
   @Post('district/sato-match/apply')
@@ -967,10 +988,9 @@ export class LogisticsGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Apply matched district sato_codes' })
   applyDistrictSatoMatch() {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.district.sato_match_apply' },
-      {},
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.district.sato_match_apply' }, {})
+      .pipe(timeout(8000));
   }
 
   @Delete('district/:id')
@@ -980,9 +1000,8 @@ export class LogisticsGatewayController {
   @ApiOperation({ summary: 'Delete district' })
   @ApiParam({ name: 'id', description: 'District ID (id)' })
   deleteDistrict(@Param('id') id: string) {
-    return this.logisticsClient.send(
-      { cmd: 'logistics.district.delete' },
-      { id },
-    ).pipe(timeout(8000));
+    return this.logisticsClient
+      .send({ cmd: 'logistics.district.delete' }, { id })
+      .pipe(timeout(8000));
   }
 }

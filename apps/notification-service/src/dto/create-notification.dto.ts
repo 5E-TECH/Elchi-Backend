@@ -1,5 +1,11 @@
 import { Group_type } from '@app/common';
-import { IsBoolean, IsEnum, IsOptional, IsString, Matches } from 'class-validator';
+import {
+  IsBoolean,
+  IsEnum,
+  IsOptional,
+  IsString,
+  Matches,
+} from 'class-validator';
 
 export class CreateNotificationDto {
   @IsString()

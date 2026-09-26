@@ -45,7 +45,10 @@ export class CreateManagerDto {
   @Max(30)
   payment_day?: number;
 
-  @ApiProperty({ example: '1', description: 'Branch ID (gateway assignment uchun)' })
+  @ApiProperty({
+    example: '1',
+    description: 'Branch ID (gateway assignment uchun)',
+  })
   @IsNotEmpty()
   @IsString()
   branch_id: string;

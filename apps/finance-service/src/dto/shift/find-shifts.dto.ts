@@ -1,4 +1,11 @@
-import { IsEnum, IsNumber, IsOptional, IsString, Matches, Min } from 'class-validator';
+import {
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Matches,
+  Min,
+} from 'class-validator';
 import { ShiftStatus } from '../../entities/shift.entity';
 
 export class FindShiftsDto {

@@ -1,5 +1,10 @@
 import { Controller } from '@nestjs/common';
-import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
+import {
+  Ctx,
+  MessagePattern,
+  Payload,
+  RmqContext,
+} from '@nestjs/microservices';
 import { RmqService, executeAndAck } from '@app/common';
 import { FileServiceService } from './file-service.service';
 import { UploadFileDto } from './dto/upload-file.dto';
@@ -64,6 +69,8 @@ export class FileServiceController {
 
   @MessagePattern({ cmd: 'file.generate_pdf' })
   generatePdf(@Payload() data: GeneratePdfDto, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.fileService.generatePdf(data));
+    return this.executeAndAck(context, () =>
+      this.fileService.generatePdf(data),
+    );
   }
 }

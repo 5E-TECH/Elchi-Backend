@@ -51,7 +51,11 @@ jest.mock('../../../../libs/common/helpers/bcrypt', () => ({
 
 jest.mock('../../../../libs/common/helpers/response', () => ({
   errorRes: (message: string, statusCode: number) => ({ message, statusCode }),
-  successRes: (data: any, statusCode: number, message: string) => ({ data, statusCode, message }),
+  successRes: (data: any, statusCode: number, message: string) => ({
+    data,
+    statusCode,
+    message,
+  }),
 }));
 
 function sha256(token: string): string {
@@ -74,9 +78,14 @@ function buildService(user: MockUser | null) {
   };
 
   const jwtService: any = {
-    verifyAsync: jest.fn().mockResolvedValue({ sub: user?.id ?? 'unknown', username: user?.username ?? 'unknown' }),
+    verifyAsync: jest.fn().mockResolvedValue({
+      sub: user?.id ?? 'unknown',
+      username: user?.username ?? 'unknown',
+    }),
     signAsync: jest.fn().mockResolvedValue('new-jwt'),
-    decode: jest.fn().mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 3600 }),
+    decode: jest
+      .fn()
+      .mockReturnValue({ exp: Math.floor(Date.now() / 1000) + 3600 }),
   };
 
   const configService: any = {
@@ -123,7 +132,10 @@ describe('AuthService.refresh', () => {
     jwtService.signAsync = jest.fn().mockResolvedValue('new-access-token');
     const refreshExpirySeconds = Math.floor(Date.now() / 1000) + 3600;
     jwtService.decode = jest.fn().mockImplementation((token: string) => ({
-      exp: token === VALID_TOKEN ? refreshExpirySeconds : refreshExpirySeconds - 1800,
+      exp:
+        token === VALID_TOKEN
+          ? refreshExpirySeconds
+          : refreshExpirySeconds - 1800,
     }));
 
     const res = await service.refresh({ refreshToken: VALID_TOKEN } as any);
@@ -132,7 +144,9 @@ describe('AuthService.refresh', () => {
     expect(res.accessToken).toBe('new-access-token');
     expect(res).not.toHaveProperty('refreshToken');
     expect(res.refreshTokenExpiresAt).toBe(refreshExpirySeconds * 1000);
-    expect(res.refreshTokenWarnAt).toBe(refreshExpirySeconds * 1000 - 15 * 60 * 1000);
+    expect(res.refreshTokenWarnAt).toBe(
+      refreshExpirySeconds * 1000 - 15 * 60 * 1000,
+    );
     expect(usersRepo.update).not.toHaveBeenCalled();
     expect(jwtService.signAsync).toHaveBeenCalledTimes(1);
   });
@@ -215,7 +229,9 @@ describe('AuthService.refresh', () => {
       isDeleted: false,
     };
     const { service, jwtService } = buildService(user);
-    jwtService.verifyAsync = jest.fn().mockRejectedValue(new Error('jwt malformed'));
+    jwtService.verifyAsync = jest
+      .fn()
+      .mockRejectedValue(new Error('jwt malformed'));
 
     await expect(
       service.refresh({ refreshToken: VALID_TOKEN } as any),

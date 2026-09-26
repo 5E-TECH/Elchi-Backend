@@ -1,5 +1,10 @@
 import { Controller } from '@nestjs/common';
-import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
+import {
+  Ctx,
+  MessagePattern,
+  Payload,
+  RmqContext,
+} from '@nestjs/microservices';
 import { RmqService, executeAndAck } from '@app/common';
 import { LogisticsServiceService } from './logistics-service.service';
 import { CreateDistrictDto } from './dto/create-district.dto';
@@ -47,36 +52,62 @@ export class LogisticsServiceController {
 
   // --- Post ---
   @MessagePattern({ cmd: 'logistics.post.create' })
-  createPost(@Payload() data: { dto: CreatePostDto }, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.logisticsService.createPost(data.dto));
+  createPost(
+    @Payload() data: { dto: CreatePostDto },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.createPost(data.dto),
+    );
   }
 
   @MessagePattern({ cmd: 'logistics.post.find_all' })
   findAllPosts(
-    @Payload() data: {
-      query: { page?: number; limit?: number; branch_id?: string; status?: string };
+    @Payload()
+    data: {
+      query: {
+        page?: number;
+        limit?: number;
+        branch_id?: string;
+        status?: string;
+      };
       requester?: { id?: string; roles?: string[] };
     },
     @Ctx() context: RmqContext,
   ) {
     const requester = data?.requester
-      ? { id: String(data.requester.id ?? ''), roles: data.requester.roles ?? [] }
+      ? {
+          id: String(data.requester.id ?? ''),
+          roles: data.requester.roles ?? [],
+        }
       : undefined;
     return this.executeAndAck(context, () =>
-      this.logisticsService.findAllPosts(data?.query?.page, data?.query?.limit, {
-        branch_id: data?.query?.branch_id,
-        status: data?.query?.status,
-      }, requester),
+      this.logisticsService.findAllPosts(
+        data?.query?.page,
+        data?.query?.limit,
+        {
+          branch_id: data?.query?.branch_id,
+          status: data?.query?.status,
+        },
+        requester,
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'logistics.post.new' })
   newPosts(
-    @Payload() data: { query?: { search?: string }; requester?: { id?: string; roles?: string[] } },
+    @Payload()
+    data: {
+      query?: { search?: string };
+      requester?: { id?: string; roles?: string[] };
+    },
     @Ctx() context: RmqContext,
   ) {
     const requester = data?.requester
-      ? { id: String(data.requester.id ?? ''), roles: data.requester.roles ?? [] }
+      ? {
+          id: String(data.requester.id ?? ''),
+          roles: data.requester.roles ?? [],
+        }
       : undefined;
     return this.executeAndAck(context, () =>
       this.logisticsService.newPosts(data?.query, requester),
@@ -89,9 +120,14 @@ export class LogisticsServiceController {
     @Ctx() context: RmqContext,
   ) {
     const requester = data?.requester
-      ? { id: String(data.requester.id ?? ''), roles: data.requester.roles ?? [] }
+      ? {
+          id: String(data.requester.id ?? ''),
+          roles: data.requester.roles ?? [],
+        }
       : undefined;
-    return this.executeAndAck(context, () => this.logisticsService.rejectedPosts(requester));
+    return this.executeAndAck(context, () =>
+      this.logisticsService.rejectedPosts(requester),
+    );
   }
 
   @MessagePattern({ cmd: 'logistics.post.on_the_road' })
@@ -106,11 +142,20 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.old_for_courier' })
   oldPostsForCourier(
-    @Payload() data: { page?: number; limit?: number; requester: { id: string; roles?: string[] } },
+    @Payload()
+    data: {
+      page?: number;
+      limit?: number;
+      requester: { id: string; roles?: string[] };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.logisticsService.oldPostsForCourier(data.page ?? 1, data.limit ?? 8, data.requester),
+      this.logisticsService.oldPostsForCourier(
+        data.page ?? 1,
+        data.limit ?? 8,
+        data.requester,
+      ),
     );
   }
 
@@ -126,32 +171,52 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.my_for_courier' })
   myPostsForCourier(
-    @Payload() data: { page?: number; limit?: number; requester: { id: string; roles?: string[] } },
+    @Payload()
+    data: {
+      page?: number;
+      limit?: number;
+      requester: { id: string; roles?: string[] };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.logisticsService.myPostsForCourier(data.page ?? 1, data.limit ?? 8, data.requester),
+      this.logisticsService.myPostsForCourier(
+        data.page ?? 1,
+        data.limit ?? 8,
+        data.requester,
+      ),
     );
   }
 
   @MessagePattern({ cmd: 'logistics.post.find_by_id' })
   findPostById(
-    @Payload() data: { id: string; requester?: { id?: string; roles?: string[] } },
+    @Payload()
+    data: { id: string; requester?: { id?: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
     const requester = data?.requester
-      ? { id: String(data.requester.id ?? ''), roles: data.requester.roles ?? [] }
+      ? {
+          id: String(data.requester.id ?? ''),
+          roles: data.requester.roles ?? [],
+        }
       : undefined;
-    return this.executeAndAck(context, () => this.logisticsService.findPostById(data.id, requester));
+    return this.executeAndAck(context, () =>
+      this.logisticsService.findPostById(data.id, requester),
+    );
   }
 
   @MessagePattern({ cmd: 'logistics.post.delete' })
   deletePost(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.logisticsService.deletePost(data.id));
+    return this.executeAndAck(context, () =>
+      this.logisticsService.deletePost(data.id),
+    );
   }
 
   @MessagePattern({ cmd: 'logistics.post.find_by_ids' })
-  findPostsByIds(@Payload() data: { ids: string[] }, @Ctx() context: RmqContext) {
+  findPostsByIds(
+    @Payload() data: { ids: string[] },
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.logisticsService.findPostsByIds(data.ids ?? []),
     );
@@ -159,7 +224,9 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.find_by_scan' })
   findPostByScan(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.logisticsService.findPostWithQr(data.id));
+    return this.executeAndAck(context, () =>
+      this.logisticsService.findPostWithQr(data.id),
+    );
   }
 
   @MessagePattern({ cmd: 'logistics.post.couriers_by_post' })
@@ -171,7 +238,8 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.orders_by_post' })
   ordersByPost(
-    @Payload() data: { id: string; requester: { id: string; roles?: string[] } },
+    @Payload()
+    data: { id: string; requester: { id: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -181,7 +249,8 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.courier_orders_by_post' })
   courierOrdersByPost(
-    @Payload() data: { id: string; requester: { id: string; roles?: string[] } },
+    @Payload()
+    data: { id: string; requester: { id: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -191,11 +260,15 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.rejected_orders_by_post' })
   rejectedOrdersByPost(
-    @Payload() data: { id: string; requester?: { id?: string; roles?: string[] } },
+    @Payload()
+    data: { id: string; requester?: { id?: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
     const requester = data?.requester
-      ? { id: String(data.requester.id ?? ''), roles: data.requester.roles ?? [] }
+      ? {
+          id: String(data.requester.id ?? ''),
+          roles: data.requester.roles ?? [],
+        }
       : undefined;
     return this.executeAndAck(context, () =>
       this.logisticsService.getRejectedPostOrders(data.id, requester),
@@ -203,7 +276,10 @@ export class LogisticsServiceController {
   }
 
   @MessagePattern({ cmd: 'logistics.post.check' })
-  checkPost(@Payload() data: { id: string; dto: PostIdDto }, @Ctx() context: RmqContext) {
+  checkPost(
+    @Payload() data: { id: string; dto: PostIdDto },
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.logisticsService.checkPost(data.id, data.dto),
     );
@@ -221,7 +297,12 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.update' })
   updatePost(
-    @Payload() data: { id: string; dto: SendPostDto; requester?: { id: string; roles?: string[] } },
+    @Payload()
+    data: {
+      id: string;
+      dto: SendPostDto;
+      requester?: { id: string; roles?: string[] };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -241,7 +322,12 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.receive' })
   receivePost(
-    @Payload() data: { id: string; dto: ReceivePostDto; requester: { id: string; roles?: string[] } },
+    @Payload()
+    data: {
+      id: string;
+      dto: ReceivePostDto;
+      requester: { id: string; roles?: string[] };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -251,7 +337,8 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.receive_scan' })
   receivePostScan(
-    @Payload() data: { id: string; requester: { id: string; roles?: string[] } },
+    @Payload()
+    data: { id: string; requester: { id: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -261,11 +348,15 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.receive_order' })
   receiveOrder(
-    @Payload() data: { id: string; requester: { id: string; roles?: string[] } },
+    @Payload()
+    data: { id: string; requester: { id: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.logisticsService.receiveOrderWithScannerCourier(data.requester, data.id),
+      this.logisticsService.receiveOrderWithScannerCourier(
+        data.requester,
+        data.id,
+      ),
     );
   }
 
@@ -332,12 +423,15 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.return_requests' })
   getReturnRequests(@Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.logisticsService.getReturnRequests());
+    return this.executeAndAck(context, () =>
+      this.logisticsService.getReturnRequests(),
+    );
   }
 
   @MessagePattern({ cmd: 'logistics.post.return_requests.approve' })
   approveReturnRequests(
-    @Payload() data: { dto: ReceivePostDto; requester?: { id: string; roles?: string[] } },
+    @Payload()
+    data: { dto: ReceivePostDto; requester?: { id: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -347,7 +441,8 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.post.return_requests.reject' })
   rejectReturnRequests(
-    @Payload() data: { dto: ReceivePostDto; requester?: { id: string; roles?: string[] } },
+    @Payload()
+    data: { dto: ReceivePostDto; requester?: { id: string; roles?: string[] } },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -368,7 +463,9 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.region.find_all' })
   findAllRegions(@Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.logisticsService.findAllRegions());
+    return this.executeAndAck(context, () =>
+      this.logisticsService.findAllRegions(),
+    );
   }
 
   @MessagePattern({ cmd: 'logistics.region.stats_all' })
@@ -377,7 +474,10 @@ export class LogisticsServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.logisticsService.getAllRegionsStats(payload?.startDate, payload?.endDate),
+      this.logisticsService.getAllRegionsStats(
+        payload?.startDate,
+        payload?.endDate,
+      ),
     );
   }
 
@@ -396,8 +496,13 @@ export class LogisticsServiceController {
   }
 
   @MessagePattern({ cmd: 'logistics.region.find_by_id' })
-  findRegionById(@Payload() payload: { id: string }, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.logisticsService.findRegionById(payload.id));
+  findRegionById(
+    @Payload() payload: { id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.findRegionById(payload.id),
+    );
   }
 
   @MessagePattern({ cmd: 'logistics.region.update' })
@@ -412,7 +517,9 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.region.delete' })
   deleteRegion(@Payload() payload: { id: string }, @Ctx() context: RmqContext) {
-    return this.executeAndAck(context, () => this.logisticsService.deleteRegion(payload.id));
+    return this.executeAndAck(context, () =>
+      this.logisticsService.deleteRegion(payload.id),
+    );
   }
 
   // --- District ---
@@ -437,7 +544,10 @@ export class LogisticsServiceController {
   }
 
   @MessagePattern({ cmd: 'logistics.district.find_by_id' })
-  findDistrictById(@Payload() payload: { id: string }, @Ctx() context: RmqContext) {
+  findDistrictById(
+    @Payload() payload: { id: string },
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.logisticsService.findDistrictById(payload.id),
     );
@@ -498,7 +608,10 @@ export class LogisticsServiceController {
   }
 
   @MessagePattern({ cmd: 'logistics.district.delete' })
-  deleteDistrict(@Payload() payload: { id: string }, @Ctx() context: RmqContext) {
+  deleteDistrict(
+    @Payload() payload: { id: string },
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
       this.logisticsService.deleteDistrict(payload.id),
     );
@@ -562,7 +675,11 @@ export class LogisticsServiceController {
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.logisticsService.auditLogByEntity(data.entity_type, data.entity_id, data.limit),
+      this.logisticsService.auditLogByEntity(
+        data.entity_type,
+        data.entity_id,
+        data.limit,
+      ),
     );
   }
 }

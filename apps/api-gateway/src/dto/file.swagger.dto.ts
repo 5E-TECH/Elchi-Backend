@@ -1,8 +1,19 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsIn, IsInt, IsOptional, IsString, Max, Min, MinLength } from 'class-validator';
+import {
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Max,
+  Min,
+  MinLength,
+} from 'class-validator';
 
 export class GetFileUrlQueryDto {
-  @ApiPropertyOptional({ example: 3600, description: 'Signed URL expiration seconds (max 86400)' })
+  @ApiPropertyOptional({
+    example: 3600,
+    description: 'Signed URL expiration seconds (max 86400)',
+  })
   @IsOptional()
   @IsInt()
   @Min(1)
@@ -43,7 +54,9 @@ export class GeneratePdfRequestDto {
   @IsString()
   title?: string;
 
-  @ApiProperty({ example: 'Customer: Ali Valiyev\nAmount: 120000\nStatus: paid' })
+  @ApiProperty({
+    example: 'Customer: Ali Valiyev\nAmount: 120000\nStatus: paid',
+  })
   @IsString()
   @MinLength(1)
   content!: string;

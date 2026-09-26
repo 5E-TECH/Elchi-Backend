@@ -9,10 +9,13 @@ import { Dispute } from './entities/dispute.entity';
 @Injectable()
 export class C2cServiceService {
   constructor(
-    @InjectRepository(Listing) private readonly listingRepo: Repository<Listing>,
-    @InjectRepository(C2COrder) private readonly c2cOrderRepo: Repository<C2COrder>,
+    @InjectRepository(Listing)
+    private readonly listingRepo: Repository<Listing>,
+    @InjectRepository(C2COrder)
+    private readonly c2cOrderRepo: Repository<C2COrder>,
     @InjectRepository(Review) private readonly reviewRepo: Repository<Review>,
-    @InjectRepository(Dispute) private readonly disputeRepo: Repository<Dispute>,
+    @InjectRepository(Dispute)
+    private readonly disputeRepo: Repository<Dispute>,
   ) {}
 
   // TODO: Listing CRUD + search

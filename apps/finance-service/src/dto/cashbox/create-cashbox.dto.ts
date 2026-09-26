@@ -1,5 +1,11 @@
 import { Cashbox_type } from '@app/common';
-import { IsEnum, IsNumber, IsOptional, IsString, Matches } from 'class-validator';
+import {
+  IsEnum,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Matches,
+} from 'class-validator';
 
 export class CreateCashboxDto {
   @IsString()

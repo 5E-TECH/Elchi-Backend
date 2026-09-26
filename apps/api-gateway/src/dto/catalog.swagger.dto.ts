@@ -5,7 +5,8 @@ export class CreateProductRequestDto {
   @ApiPropertyOptional({
     type: 'string',
     format: 'binary',
-    description: "Product rasmi. Berilsa gateway uni avtomatik yuklab, `image_url`ni o'zi to'ldiradi.",
+    description:
+      "Product rasmi. Berilsa gateway uni avtomatik yuklab, `image_url`ni o'zi to'ldiradi.",
   })
   @IsOptional()
   @IsString()
@@ -17,7 +18,8 @@ export class CreateProductRequestDto {
 
   @ApiPropertyOptional({
     example: 'https://cdn.example.com/product.png',
-    description: "Ixtiyoriy. Agar `image` yuborilsa bu maydonni yuborish shart emas.",
+    description:
+      'Ixtiyoriy. Agar `image` yuborilsa bu maydonni yuborish shart emas.',
   })
   @IsOptional()
   @IsString()
@@ -25,7 +27,8 @@ export class CreateProductRequestDto {
 
   @ApiPropertyOptional({
     example: '1',
-    description: 'Admin/Superadmin yuboradi. MARKET role uchun token sub ishlatiladi.',
+    description:
+      'Admin/Superadmin yuboradi. MARKET role uchun token sub ishlatiladi.',
   })
   @IsOptional()
   @IsString()
@@ -36,7 +39,8 @@ export class UpdateProductRequestDto {
   @ApiPropertyOptional({
     type: 'string',
     format: 'binary',
-    description: "Product rasmi. Berilsa gateway uni avtomatik yuklab, `image_url`ni o'zi to'ldiradi.",
+    description:
+      "Product rasmi. Berilsa gateway uni avtomatik yuklab, `image_url`ni o'zi to'ldiradi.",
   })
   @IsOptional()
   @IsString()
@@ -49,7 +53,8 @@ export class UpdateProductRequestDto {
 
   @ApiPropertyOptional({
     example: 'https://cdn.example.com/product-new.png',
-    description: "Ixtiyoriy. Agar `image` yuborilsa bu maydonni yuborish shart emas.",
+    description:
+      'Ixtiyoriy. Agar `image` yuborilsa bu maydonni yuborish shart emas.',
   })
   @IsOptional()
   @IsString()

@@ -78,7 +78,7 @@ describe('rollbackOrderToWaiting PARTLY_PAID guard', () => {
     // empty mocks — it must NOT be the PARTLY_PAID superadmin-only message.
     const message =
       err instanceof RpcException
-        ? JSON.stringify((err as RpcException).getError())
+        ? JSON.stringify(err.getError())
         : String(err ?? '');
     expect(message).not.toContain('faqat superadmin WAITING');
   });

@@ -1141,7 +1141,7 @@ export class OrderLifecycleService {
     );
 
     const enabled = Array.isArray(market?.expense_proof_conditions)
-      ? market!.expense_proof_conditions!
+      ? market.expense_proof_conditions
       : [];
     if (enabled.length === 0 && !forceRequired) {
       // Market never requires proof; still persist any keys the courier sent.
@@ -2927,9 +2927,8 @@ export class OrderLifecycleService {
       if (isQrRequired) {
         session = await sessionRepo.findOne({
           where: {
-            authorization_token_hash: this.hashHandoverToken(
-              authorizationToken!,
-            ),
+            authorization_token_hash:
+              this.hashHandoverToken(authorizationToken),
             isDeleted: false,
           },
           lock: { mode: 'pessimistic_write' },
@@ -5560,6 +5559,27 @@ export class OrderLifecycleService {
           status: Order_status.CANCELLED,
           comment: finalComment || null,
           sold_at: null,
+          /**
+           * ⚠️ `extra_cost` BEKOR YO'LIDA ENTITY'GA YOZILISHI SHART.
+           *
+           * Ilgari bu yo'q edi: `cancelOrder` qo'shimcha xarajatni kassadan
+           * yechardi va `order_settlement`ga MANFIY oyoq yozardi (yuqoriga
+           * qarang), LEKIN buyurtma entity'siga `extra_cost`ni umuman
+           * yozmasdi — natijada bekor qilingan buyurtmada `extra_cost=0`
+           * qolardi. `sellOrder` esa uni yozardi (assimetriya).
+           *
+           * Oqibati integration yo'lida ko'rinardi: `GET /partner/shipments/:id`
+           * `extra_cost`ni order entity'sidan o'qiydi — 0 bo'lgani uchun BeePost
+           * bekor qilingan buyurtmaning qo'shimcha xarajatini HECH QACHON
+           * ko'rmasdi. Jonli E2E (1251174 extra=5000, 1251175 extra=4000) da
+           * kassadan pul yechilgan, settlement daftariga tushgan, lekin
+           * GET /orders/:id.extra_cost=0 edi.
+           *
+           * `updateFull` whitelist'i (2093e41) `extra_cost`ni `typeof` bilan
+           * o'tkazadi, shuning uchun uni bu yerda uzatish yetarli. `extraCost`
+           * bu yerda 0 bo'lsa ham xavfsiz: 0 yozadi (default bilan bir xil).
+           */
+          extra_cost: extraCost,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
         },
         { id: requester.id, roles: requester.roles, note: 'Order canceled' },

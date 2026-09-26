@@ -38,7 +38,9 @@ describe('migration timestamps are collision-free', () => {
     }
 
     const newCollisions = [...byTimestamp.entries()]
-      .filter(([ts, files]) => files.length > 1 && !GRANDFATHERED_COLLISIONS.has(ts))
+      .filter(
+        ([ts, files]) => files.length > 1 && !GRANDFATHERED_COLLISIONS.has(ts),
+      )
       .map(([ts, files]) => `${ts}: ${files.sort().join(', ')}`);
 
     expect(newCollisions).toEqual([]);

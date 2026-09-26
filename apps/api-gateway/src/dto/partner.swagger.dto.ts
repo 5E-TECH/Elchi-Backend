@@ -41,7 +41,7 @@ export class CreatePartnerRequestDto {
   @ApiPropertyOptional({
     example: 'https://dev.marketplace.example.uz/webhooks/elchi',
     description:
-      "Sinov muhitining manzili. Nusxa yuborish `sandbox_enabled` kaliti " +
+      'Sinov muhitining manzili. Nusxa yuborish `sandbox_enabled` kaliti ' +
       'bilan boshqariladi — manzilning o‘zi oqimni yoqmaydi.',
   })
   @IsOptional()
@@ -50,7 +50,7 @@ export class CreatePartnerRequestDto {
 
   @ApiPropertyOptional({
     description:
-      "Sinov muhitining ALOHIDA HMAC sekreti. Prodakshn sekreti sinov " +
+      'Sinov muhitining ALOHIDA HMAC sekreti. Prodakshn sekreti sinov ' +
       'muhitiga yuborilmaydi.',
   })
   @IsOptional()

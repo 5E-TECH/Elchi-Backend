@@ -11,7 +11,10 @@ import {
 import { BranchTransferBatch } from './branch-transfer-batch.entity';
 
 @Entity({ name: 'branch_transfer_batch_history' })
-@Index('IDX_BRANCH_TRANSFER_BATCH_HISTORY_BATCH_ID_CREATED_AT', ['batch_id', 'created_at'])
+@Index('IDX_BRANCH_TRANSFER_BATCH_HISTORY_BATCH_ID_CREATED_AT', [
+  'batch_id',
+  'created_at',
+])
 export class BranchTransferBatchHistory {
   @PrimaryGeneratedColumn({ type: 'bigint' })
   id!: string;
@@ -19,7 +22,9 @@ export class BranchTransferBatchHistory {
   @Column({ type: 'bigint' })
   batch_id!: string;
 
-  @ManyToOne(() => BranchTransferBatch, (batch) => batch.history, { onDelete: 'CASCADE' })
+  @ManyToOne(() => BranchTransferBatch, (batch) => batch.history, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'batch_id' })
   batch!: BranchTransferBatch;
 

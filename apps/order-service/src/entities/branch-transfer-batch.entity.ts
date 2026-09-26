@@ -1,19 +1,31 @@
-import { BaseEntity, BranchTransferBatchStatus, BranchTransferDirection } from '@app/common';
+import {
+  BaseEntity,
+  BranchTransferBatchStatus,
+  BranchTransferDirection,
+} from '@app/common';
 import { Check, Column, Entity, Index, OneToMany } from 'typeorm';
 import { BranchTransferBatchHistory } from './branch-transfer-batch-history.entity';
 import { BranchTransferBatchItem } from './branch-transfer-batch-item.entity';
 
 @Entity({ name: 'branch_transfer_batches' })
 @Index('IDX_BRANCH_TRANSFER_BATCHES_SOURCE_BRANCH_ID', ['source_branch_id'])
-@Index('IDX_BRANCH_TRANSFER_BATCHES_DESTINATION_BRANCH_ID', ['destination_branch_id'])
+@Index('IDX_BRANCH_TRANSFER_BATCHES_DESTINATION_BRANCH_ID', [
+  'destination_branch_id',
+])
 @Index('IDX_BRANCH_TRANSFER_BATCHES_TARGET_REGION_ID', ['target_region_id'])
 @Index('IDX_BRANCH_TRANSFER_BATCHES_STATUS', ['status'])
 @Index('IDX_BRANCH_TRANSFER_BATCHES_DIRECTION', ['direction'])
 @Index('IDX_BRANCH_TRANSFER_BATCHES_REQUEST_KEY', ['request_key'])
-@Index('UQ_BRANCH_TRANSFER_BATCHES_SOURCE_REQUEST_KEY', ['source_branch_id', 'request_key'], {
+@Index(
+  'UQ_BRANCH_TRANSFER_BATCHES_SOURCE_REQUEST_KEY',
+  ['source_branch_id', 'request_key'],
+  {
+    unique: true,
+  },
+)
+@Index('UQ_BRANCH_TRANSFER_BATCHES_QR_CODE_TOKEN', ['qr_code_token'], {
   unique: true,
 })
-@Index('UQ_BRANCH_TRANSFER_BATCHES_QR_CODE_TOKEN', ['qr_code_token'], { unique: true })
 @Check(
   'CHK_BRANCH_TRANSFER_BATCH_QR_TOKEN_DIRECTION',
   `(

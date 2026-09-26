@@ -1,5 +1,11 @@
 import { Controller } from '@nestjs/common';
-import { Ctx, MessagePattern, Payload, RmqContext, RpcException } from '@nestjs/microservices';
+import {
+  Ctx,
+  MessagePattern,
+  Payload,
+  RmqContext,
+  RpcException,
+} from '@nestjs/microservices';
 import { RmqService, executeAndAck } from '@app/common';
 import { errorRes } from '../../../libs/common/helpers/response';
 import { C2cServiceService } from './c2c-service.service';

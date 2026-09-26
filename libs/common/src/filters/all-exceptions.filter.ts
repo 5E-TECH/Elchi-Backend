@@ -90,7 +90,7 @@ export class AllExceptionsFilter implements ExceptionFilter {
     }
 
     if (isUpstreamTimeout) {
-      message = "Yuqori oqim xizmati vaqtida javob bermadi (timeout)";
+      message = 'Yuqori oqim xizmati vaqtida javob bermadi (timeout)';
     }
 
     const traceId = requestContext.get()?.traceId;

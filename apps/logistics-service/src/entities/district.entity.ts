@@ -25,7 +25,9 @@ export class District extends BaseEntity {
   @Column({ type: 'bigint', nullable: true })
   assigned_region!: string | null;
 
-  @ManyToOne(() => Region, (region) => region.districts, { onDelete: 'CASCADE' })
+  @ManyToOne(() => Region, (region) => region.districts, {
+    onDelete: 'CASCADE',
+  })
   @JoinColumn({ name: 'region_id' })
   region!: Region;
 

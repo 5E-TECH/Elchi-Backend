@@ -38,14 +38,18 @@ import {
 @Controller()
 @UseGuards(JwtAuthGuard, RolesGuard)
 export class InvestorGatewayController {
-  constructor(@Inject('INVESTOR') private readonly investorClient: ClientProxy) {}
+  constructor(
+    @Inject('INVESTOR') private readonly investorClient: ClientProxy,
+  ) {}
 
   @Post('investors')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Create investor' })
   @ApiBody({ type: CreateInvestorDto })
   createInvestor(@Body() dto: CreateInvestorDto) {
-    return this.investorClient.send({ cmd: 'investor.create' }, { dto }).pipe(timeout(8000));
+    return this.investorClient
+      .send({ cmd: 'investor.create' }, { dto })
+      .pipe(timeout(8000));
   }
 
   @Get('investors')
@@ -61,17 +65,19 @@ export class InvestorGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.investorClient.send(
-      { cmd: 'investor.find_all' },
-      {
-        query: {
-          search,
-          status,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
+    return this.investorClient
+      .send(
+        { cmd: 'investor.find_all' },
+        {
+          query: {
+            search,
+            status,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('investors/:id')
@@ -79,7 +85,9 @@ export class InvestorGatewayController {
   @ApiOperation({ summary: 'Find investor by id (with investments/profits)' })
   @ApiParam({ name: 'id' })
   findInvestorById(@Param('id') id: string) {
-    return this.investorClient.send({ cmd: 'investor.find_by_id' }, { id }).pipe(timeout(8000));
+    return this.investorClient
+      .send({ cmd: 'investor.find_by_id' }, { id })
+      .pipe(timeout(8000));
   }
 
   @Patch('investors/:id')
@@ -88,7 +96,9 @@ export class InvestorGatewayController {
   @ApiParam({ name: 'id' })
   @ApiBody({ type: UpdateInvestorDto })
   updateInvestor(@Param('id') id: string, @Body() dto: UpdateInvestorDto) {
-    return this.investorClient.send({ cmd: 'investor.update' }, { id, dto }).pipe(timeout(8000));
+    return this.investorClient
+      .send({ cmd: 'investor.update' }, { id, dto })
+      .pipe(timeout(8000));
   }
 
   @Delete('investors/:id')
@@ -96,7 +106,9 @@ export class InvestorGatewayController {
   @ApiOperation({ summary: 'Delete investor (soft delete)' })
   @ApiParam({ name: 'id' })
   deleteInvestor(@Param('id') id: string) {
-    return this.investorClient.send({ cmd: 'investor.delete' }, { id }).pipe(timeout(8000));
+    return this.investorClient
+      .send({ cmd: 'investor.delete' }, { id })
+      .pipe(timeout(8000));
   }
 
   @Post('investments')
@@ -109,10 +121,12 @@ export class InvestorGatewayController {
     @Body() dto: CreateInvestmentDto,
     @Param('investor_id') investor_id?: string,
   ) {
-    return this.investorClient.send(
-      { cmd: 'investor.investment.create' },
-      { dto: { ...dto, investor_id: investor_id ?? dto.investor_id } },
-    ).pipe(timeout(8000));
+    return this.investorClient
+      .send(
+        { cmd: 'investor.investment.create' },
+        { dto: { ...dto, investor_id: investor_id ?? dto.investor_id } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('investments')
@@ -130,18 +144,20 @@ export class InvestorGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.investorClient.send(
-      { cmd: 'investor.investment.find_all' },
-      {
-        query: {
-          investor_id,
-          from_date,
-          to_date,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
+    return this.investorClient
+      .send(
+        { cmd: 'investor.investment.find_all' },
+        {
+          query: {
+            investor_id,
+            from_date,
+            to_date,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('investors/:investor_id/investments')
@@ -155,16 +171,18 @@ export class InvestorGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.investorClient.send(
-      { cmd: 'investor.investment.find_by_investor' },
-      {
-        investor_id,
-        query: {
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
+    return this.investorClient
+      .send(
+        { cmd: 'investor.investment.find_by_investor' },
+        {
+          investor_id,
+          query: {
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('investments/:id')
@@ -172,7 +190,9 @@ export class InvestorGatewayController {
   @ApiOperation({ summary: 'Find investment by id' })
   @ApiParam({ name: 'id' })
   findInvestmentById(@Param('id') id: string) {
-    return this.investorClient.send({ cmd: 'investor.investment.find_by_id' }, { id }).pipe(timeout(8000));
+    return this.investorClient
+      .send({ cmd: 'investor.investment.find_by_id' }, { id })
+      .pipe(timeout(8000));
   }
 
   @Patch('investments/:id')
@@ -187,10 +207,12 @@ export class InvestorGatewayController {
     @Body() dto: UpdateInvestmentDto,
     @Param('investor_id') investor_id?: string,
   ) {
-    return this.investorClient.send(
-      { cmd: 'investor.investment.update' },
-      { id, dto: { ...dto, investor_id: investor_id ?? dto.investor_id } },
-    ).pipe(timeout(8000));
+    return this.investorClient
+      .send(
+        { cmd: 'investor.investment.update' },
+        { id, dto: { ...dto, investor_id: investor_id ?? dto.investor_id } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Delete('investments/:id')
@@ -200,7 +222,9 @@ export class InvestorGatewayController {
   @ApiParam({ name: 'id' })
   @ApiParam({ name: 'investor_id', required: false })
   deleteInvestment(@Param('id') id: string) {
-    return this.investorClient.send({ cmd: 'investor.investment.delete' }, { id }).pipe(timeout(8000));
+    return this.investorClient
+      .send({ cmd: 'investor.investment.delete' }, { id })
+      .pipe(timeout(8000));
   }
 
   @Post('profits')
@@ -213,10 +237,12 @@ export class InvestorGatewayController {
     @Body() dto: CreateProfitShareDto,
     @Param('investor_id') investor_id?: string,
   ) {
-    return this.investorClient.send(
-      { cmd: 'investor.profit.create' },
-      { dto: { ...dto, investor_id: investor_id ?? dto.investor_id } },
-    ).pipe(timeout(8000));
+    return this.investorClient
+      .send(
+        { cmd: 'investor.profit.create' },
+        { dto: { ...dto, investor_id: investor_id ?? dto.investor_id } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Post('profits/calculate')
@@ -229,10 +255,12 @@ export class InvestorGatewayController {
     @Body() dto: CalculateProfitDto,
     @Param('investor_id') investor_id?: string,
   ) {
-    return this.investorClient.send(
-      { cmd: 'investor.profit.calculate' },
-      { dto: { ...dto, investor_id: investor_id ?? dto.investor_id } },
-    ).pipe(timeout(8000));
+    return this.investorClient
+      .send(
+        { cmd: 'investor.profit.calculate' },
+        { dto: { ...dto, investor_id: investor_id ?? dto.investor_id } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('profits')
@@ -248,27 +276,34 @@ export class InvestorGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.investorClient.send(
-      { cmd: 'investor.profit.find_all' },
-      {
-        query: {
-          investor_id,
-          is_paid:
-            typeof is_paid === 'string'
-              ? ['true', '1', 'yes'].includes(is_paid.toLowerCase())
-              : undefined,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
+    return this.investorClient
+      .send(
+        { cmd: 'investor.profit.find_all' },
+        {
+          query: {
+            investor_id,
+            is_paid:
+              typeof is_paid === 'string'
+                ? ['true', '1', 'yes'].includes(is_paid.toLowerCase())
+                : undefined,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('investors/:investor_id/profits')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'List profit shares by investor' })
   @ApiParam({ name: 'investor_id' })
-  @ApiQuery({ name: 'is_paid', required: false, type: String, example: 'false' })
+  @ApiQuery({
+    name: 'is_paid',
+    required: false,
+    type: String,
+    example: 'false',
+  })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   findProfitByInvestor(
@@ -277,20 +312,22 @@ export class InvestorGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.investorClient.send(
-      { cmd: 'investor.profit.find_by_investor' },
-      {
-        investor_id,
-        query: {
-          is_paid:
-            typeof is_paid === 'string'
-              ? ['true', '1', 'yes'].includes(is_paid.toLowerCase())
-              : undefined,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
+    return this.investorClient
+      .send(
+        { cmd: 'investor.profit.find_by_investor' },
+        {
+          investor_id,
+          query: {
+            is_paid:
+              typeof is_paid === 'string'
+                ? ['true', '1', 'yes'].includes(is_paid.toLowerCase())
+                : undefined,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Patch('profits/:id/mark-paid')
@@ -298,6 +335,8 @@ export class InvestorGatewayController {
   @ApiOperation({ summary: 'Mark profit share as paid' })
   @ApiParam({ name: 'id' })
   markProfitPaid(@Param('id') id: string) {
-    return this.investorClient.send({ cmd: 'investor.profit.mark_paid' }, { id }).pipe(timeout(8000));
+    return this.investorClient
+      .send({ cmd: 'investor.profit.mark_paid' }, { id })
+      .pipe(timeout(8000));
   }
 }

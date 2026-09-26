@@ -65,7 +65,6 @@ export class OrderCustodyService {
     return byTarget[toStatus] ?? 'status_change';
   }
 
-
   describeTrackingAction(
     action: string,
     fromStatus: Order_status | null,
@@ -94,7 +93,6 @@ export class OrderCustodyService {
       `${fromStatus ?? 'empty'} holatidan ${toStatus} holatiga o'zgartirildi`
     );
   }
-
 
   describeTrackingNote(note?: string | null): string | null {
     const normalized = String(note ?? '')
@@ -127,7 +125,6 @@ export class OrderCustodyService {
 
     return descriptions[normalized] ?? note ?? null;
   }
-
 
   // ===== lifecycle mutation surface (moved verbatim) =====
   /**
@@ -184,7 +181,6 @@ export class OrderCustodyService {
     );
   }
 
-
   async createTrackingEvent(
     data: {
       order_id: string;
@@ -226,7 +222,6 @@ export class OrderCustodyService {
     await repo.save(entity);
   }
 
-
   async createCustodyEvent(
     data: {
       order_id: string;
@@ -257,5 +252,4 @@ export class OrderCustodyService {
     });
     await repo.save(entity);
   }
-
 }
