@@ -34,6 +34,7 @@ import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
 import {
   AssignOrdersToCourierRequestDto,
   CouldNotDeliverOrderRequestDto,
@@ -90,6 +91,9 @@ class ReceiveExternalOrdersDto {
 
 @ApiTags('Orders')
 @Controller('orders')
+// Javob tanasidagi statusCode (masalan 202 — market tasdig'i kutilmoqda) HTTP
+// holatiga ham chiqsin; aks holda POST doim 201 qaytarardi.
+@UseInterceptors(BodyStatusCodeInterceptor)
 export class OrderGatewayController {
   constructor(
     @Inject('ORDER') private readonly orderClient: ClientProxy,
@@ -1380,7 +1384,9 @@ export class OrderGatewayController {
     name: 'search',
     required: false,
     type: String,
-    description: 'Customer name/family/phone search',
+    description:
+      'Customer name/phone search, or order number (order id, e.g. 1251175). ' +
+      'Response has search_truncated=true when more than 1000 customers match.',
   })
   @ApiQuery({
     name: 'start_day',
@@ -1408,6 +1414,20 @@ export class OrderGatewayController {
     name: 'where_deliver',
     required: false,
     enum: Where_deliver,
+  })
+  @ApiQuery({
+    name: 'sort_by',
+    required: false,
+    enum: ['created_at', 'total_price', 'status'],
+    description:
+      'Server-side sort across all pages (default created_at desc). ' +
+      'status sorts by lifecycle order, not alphabetically.',
+  })
+  @ApiQuery({
+    name: 'sort_dir',
+    required: false,
+    enum: ['asc', 'desc'],
+    description: 'Default desc',
   })
   @ApiQuery({
     name: 'source',
@@ -1446,6 +1466,8 @@ export class OrderGatewayController {
     @Req() req?: { user: JwtUser },
     @Query('courier_id') courier_id?: string,
     @Query('where_deliver') where_deliver?: string,
+    @Query('sort_by') sort_by?: string,
+    @Query('sort_dir') sort_dir?: string,
   ) {
     const roles = req?.user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
@@ -1581,6 +1603,8 @@ export class OrderGatewayController {
         canceled_post_unassigned:
           isHqCancelledTab || isBranchCancelledTab ? true : undefined,
         source,
+        sort_by,
+        sort_dir,
         page: pagination.page,
         limit: pagination.limit,
       },

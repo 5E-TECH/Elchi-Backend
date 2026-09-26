@@ -11,6 +11,7 @@ import {
   IsOptional,
   IsString,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
@@ -580,10 +581,30 @@ export class CouldNotDeliverOrderRequestDto {
 }
 
 export class PartlySoldItemDto {
-  @ApiProperty({ example: '1' })
+  @ApiPropertyOptional({
+    example: '5501',
+    description:
+      "Buyurtma qatorining id'si (GET /orders/:id → items[].id). Katalogsiz " +
+      '(hamkor) qatorlarda product_id null — ular faqat shu id bilan topiladi. ' +
+      'Berilsa qator avval shu bo‘yicha moslanadi.',
+  })
+  @IsOptional()
   @IsNotEmpty()
   @IsString()
-  product_id!: string;
+  order_item_id?: string;
+
+  @ApiPropertyOptional({
+    // `string | null` tipini Swagger o'zi `object` deb o'qiydi.
+    type: String,
+    example: '1',
+    nullable: true,
+    description:
+      'Katalog mahsuloti id. order_item_id berilmasa majburiy (eski usul).',
+  })
+  @ValidateIf((item: PartlySoldItemDto) => !item.order_item_id)
+  @IsNotEmpty()
+  @IsString()
+  product_id?: string | null;
 
   @ApiProperty({ example: 1, minimum: 0 })
   @IsNumber()

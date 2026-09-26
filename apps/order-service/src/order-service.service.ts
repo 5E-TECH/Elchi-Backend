@@ -7,6 +7,7 @@ import {
   In,
   QueryFailedError,
   Repository,
+  SelectQueryBuilder,
 } from 'typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
 import { Order } from './entities/order.entity';
@@ -33,6 +34,83 @@ import { successRes } from '../../../libs/common/helpers/response';
 import { resolveCourierShare as resolveCourierShareShare } from './domain/order-money';
 import { OrderLookupService } from './lookup/order-lookup.service';
 import { OrderCustodyService } from './custody/order-custody.service';
+
+/** Qidiruvda identity-service'dan olinadigan mijozlar chegarasi. */
+const CUSTOMER_SEARCH_LIMIT = 1000;
+
+/**
+ * Qidiruv matni buyurtma raqamimi (Elchida buyurtma raqami = `id`)? Faqat
+ * raqamlar; bigint chegarasidan uzuni — yo'q (so'rov bazada yiqilmasin).
+ */
+export const parseOrderNumberSearch = (search: string): string | null =>
+  /^\d{1,18}$/.test(search) ? search : null;
+
+/**
+ * GET /orders SARALASHI. Ilgari ro'yxat doim `createdAt DESC` edi va frontend
+ * faqat ochilgan sahifa ichida saralardi — 2-sahifadagi eng qimmat buyurtma
+ * 1-sahifaga chiqmasdi.
+ *
+ * SQL'ga foydalanuvchi matni TUSHMAYDI: kalit faqat shu oq ro'yxatdan olinadi.
+ */
+export const ORDER_LIST_SORT_FIELDS = [
+  'created_at',
+  'total_price',
+  'status',
+] as const;
+export type OrderListSortField = (typeof ORDER_LIST_SORT_FIELDS)[number];
+export type OrderListSort = {
+  field: OrderListSortField;
+  dir: 'ASC' | 'DESC';
+};
+
+/**
+ * Holat bo'yicha saralash — alifbo emas, hayot tsikli tartibi (frontenddagi
+ * `ORDER_STATUS_RANK` bilan bir xil). Ro'yxatda yo'q holatlar oxirida.
+ */
+const ORDER_STATUS_SORT_ORDER: Order_status[] = [
+  Order_status.CREATED,
+  Order_status.NEW,
+  Order_status.RECEIVED,
+  Order_status.ON_THE_ROAD,
+  Order_status.WAITING,
+  Order_status.SOLD,
+  Order_status.PAID,
+  Order_status.PARTLY_PAID,
+  Order_status.CLOSED,
+  Order_status.CANCELLED,
+  Order_status.CANCELLED_SENT,
+];
+const ORDER_STATUS_SORT_SQL = `CASE order.status ${ORDER_STATUS_SORT_ORDER.map(
+  (status, rank) => `WHEN '${status}' THEN ${rank}`,
+).join(' ')} ELSE ${ORDER_STATUS_SORT_ORDER.length} END`;
+const ORDER_STATUS_SORT_ALIAS = 'order_status_rank';
+
+/**
+ * `sort_by`/`sort_dir` ni tekshiradi. Parametr berilmasa — `null` (avvalgidek
+ * createdAt DESC). Oq ro'yxatda yo'q qiymat — 400.
+ */
+export const parseOrderListSort = (
+  sort_by?: string,
+  sort_dir?: string,
+): OrderListSort | null => {
+  if (!sort_by && !sort_dir) return null;
+  if (!ORDER_LIST_SORT_FIELDS.includes(sort_by as OrderListSortField)) {
+    throw new RpcException({
+      statusCode: 400,
+      message: `sort_by faqat ${ORDER_LIST_SORT_FIELDS.join(', ')} bo'lishi mumkin`,
+    });
+  }
+  if (sort_dir && sort_dir !== 'asc' && sort_dir !== 'desc') {
+    throw new RpcException({
+      statusCode: 400,
+      message: "sort_dir faqat asc yoki desc bo'lishi mumkin",
+    });
+  }
+  return {
+    field: sort_by as OrderListSortField,
+    dir: sort_dir === 'asc' ? 'ASC' : 'DESC',
+  };
+};
 
 @Injectable()
 export class OrderServiceService {
@@ -318,6 +396,35 @@ export class OrderServiceService {
       .replace('Z', '+05:00');
   }
 
+  /**
+   * Ro'yxat tartibi. Saralashda ikkinchi kalit `order.id` — barqaror tartib.
+   *
+   * ⚠️ Holat CASE ifodasi `addSelect` + alias orqali saralanadi: skip/take
+   * join bilan birga kelganda TypeORM DISTINCT ichki so'rov quradi va
+   * orderBy'dagi xom ifodani u yerga ko'chira olmaydi, alias'ni esa ko'chiradi.
+   */
+  private applyOrderListSort(
+    qb: SelectQueryBuilder<Order>,
+    sort: OrderListSort | null,
+  ) {
+    if (!sort) {
+      qb.orderBy('order.createdAt', 'DESC');
+      return;
+    }
+    if (sort.field === 'status') {
+      qb.addSelect(ORDER_STATUS_SORT_SQL, ORDER_STATUS_SORT_ALIAS).orderBy(
+        ORDER_STATUS_SORT_ALIAS,
+        sort.dir,
+      );
+    } else {
+      qb.orderBy(
+        sort.field === 'total_price' ? 'order.total_price' : 'order.createdAt',
+        sort.dir,
+      );
+    }
+    qb.addOrderBy('order.id', sort.dir);
+  }
+
   private normalizePagination(
     page?: number,
     limit?: number,
@@ -410,6 +517,8 @@ export class OrderServiceService {
     market_id?: string;
     customer_id?: string;
     customer_ids?: string[];
+    /** Qidiruvdagi buyurtma raqami — mijoz qidiruvi bilan OR qilinadi. */
+    search_order_id?: string;
     post_id?: string;
     post_ids?: string[];
     exclude_statuses?: Order_status[];
@@ -435,6 +544,9 @@ export class OrderServiceService {
     fetch_all?: boolean | string;
     fetchAll?: boolean | string;
     disable_pagination?: boolean;
+    /** GET /orders saralashi — `parseOrderListSort` oq ro'yxati. */
+    sort_by?: string;
+    sort_dir?: string;
     page?: number;
     limit?: number;
   }) {
@@ -442,6 +554,7 @@ export class OrderServiceService {
       market_id,
       customer_id,
       customer_ids,
+      search_order_id,
       post_id,
       post_ids,
       exclude_statuses,
@@ -467,9 +580,13 @@ export class OrderServiceService {
       fetch_all,
       fetchAll,
       disable_pagination,
+      sort_by,
+      sort_dir,
       page,
       limit,
     } = query;
+    // So'rov qurilishidan OLDIN — noto'g'ri qiymat bazaga yetib bormaydi.
+    const sort = parseOrderListSort(sort_by, sort_dir);
 
     const useFetchAll =
       fetch_all === true ||
@@ -510,7 +627,20 @@ export class OrderServiceService {
     if (market_id) {
       qb.andWhere('order.market_id = :market_id', { market_id });
     }
-    if (customer_ids?.length) {
+    if (search_order_id) {
+      // Qidiruv: buyurtma raqami YOKI mos mijozlarning buyurtmalari. Boshqa
+      // filtrlar (market, filial, status...) baribir AND bilan qo'llanadi.
+      qb.andWhere(
+        new Brackets((w) => {
+          w.where('order.id = :search_order_id', { search_order_id });
+          if (customer_ids?.length) {
+            w.orWhere('order.customer_id IN (:...customer_ids)', {
+              customer_ids,
+            });
+          }
+        }),
+      );
+    } else if (customer_ids?.length) {
       qb.andWhere('order.customer_id IN (:...customer_ids)', { customer_ids });
     } else if (customer_id) {
       qb.andWhere('order.customer_id = :customer_id', { customer_id });
@@ -667,9 +797,11 @@ export class OrderServiceService {
     // bo'lib qoladi (yuqoridagi izohga qarang).
     const countQb = qb.clone();
 
-    qb.leftJoinAndSelect('order.items', 'items')
-      .leftJoinAndSelect('order.branch', 'branch')
-      .orderBy('order.createdAt', 'DESC');
+    qb.leftJoinAndSelect('order.items', 'items').leftJoinAndSelect(
+      'order.branch',
+      'branch',
+    );
+    this.applyOrderListSort(qb, sort);
     if (!disable_pagination) {
       qb.skip((pagination.page - 1) * pagination.limit).take(pagination.limit);
     }
@@ -1369,22 +1501,33 @@ export class OrderServiceService {
     include_courier_history?: boolean | string;
     region_id?: string;
     district_id?: string;
+    sort_by?: string;
+    sort_dir?: string;
     page?: number;
     limit?: number;
   }) {
     const { search, ...orderQuery } = query;
+    const trimmedSearch = search?.trim() ?? '';
 
-    // If search is provided, find matching customer IDs via identity-service
+    // Qidiruv: (1) mijoz ismi/telefoni — identity-service orqali; (2) buyurtma
+    // raqami (id). Ilgari faqat (1) bor edi va raqam bilan hech narsa
+    // topilmasdi.
     let customer_ids: string[] | undefined;
-    if (search?.trim()) {
+    let search_truncated = false;
+    const search_order_id = parseOrderNumberSearch(trimmedSearch);
+    if (trimmedSearch) {
+      // Bittasini ortiqcha so'raymiz: chegaradan oshgani shundan bilinadi.
+      // Ilgari 1000 tadan keyingi mijozlar JIMGINA tushib qolardi.
       const searchRes = await rmqSend<{ data: Array<{ id: string }> }>(
         this.identityClient,
         { cmd: 'identity.customer.search' },
-        { search: search.trim(), limit: 1000 },
+        { search: trimmedSearch, limit: CUSTOMER_SEARCH_LIMIT + 1 },
       ).catch(() => ({ data: [] }));
 
-      customer_ids = (searchRes?.data ?? []).map((c) => String(c.id));
-      if (!customer_ids.length) {
+      const ids = (searchRes?.data ?? []).map((c) => String(c.id));
+      search_truncated = ids.length > CUSTOMER_SEARCH_LIMIT;
+      customer_ids = ids.slice(0, CUSTOMER_SEARCH_LIMIT);
+      if (!customer_ids.length && !search_order_id) {
         const pagination = this.normalizePagination(query.page, query.limit);
         return {
           data: [],
@@ -1393,11 +1536,16 @@ export class OrderServiceService {
           limit: pagination.limit,
           total_pages: 0,
           totalPages: 0,
+          search_truncated,
         };
       }
     }
 
-    const result = await this.findAll({ ...orderQuery, customer_ids });
+    const result = await this.findAll({
+      ...orderQuery,
+      customer_ids,
+      search_order_id: search_order_id ?? undefined,
+    });
     const enriched = await this.enrichOrders(result.data);
 
     return {
@@ -1407,6 +1555,7 @@ export class OrderServiceService {
       limit: result.limit,
       total_pages: result.total_pages ?? 0,
       totalPages: result.totalPages ?? result.total_pages ?? 0,
+      search_truncated,
     };
   }
 
