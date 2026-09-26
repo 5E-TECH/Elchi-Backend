@@ -587,10 +587,7 @@ export class OrderSettlementService {
    * PENDING orders (courier → branch). Only reduces the courier's owed balance;
    * the branch was already credited at sale time.
    */
-  async settleCourierToBranch(
-    _requester: { id: string; roles?: string[] },
-    _dto: { courier_id: string; amount: number },
-  ) {
+  settleCourierToBranch(): never {
     return this.deprecatedSettlementPath('courier_to_branch');
   }
 
@@ -598,10 +595,7 @@ export class OrderSettlementService {
    * Branch remits a lump sum to HQ — FIFO-settles the branch's oldest
    * COURIER_SETTLED orders (branch → HQ): branch owed-balance down, MAIN up.
    */
-  async settleBranchToHq(
-    _requester: { id: string; roles?: string[] },
-    _dto: { branch_id: string; amount: number },
-  ) {
+  settleBranchToHq(): never {
     return this.deprecatedSettlementPath('branch_to_hq');
   }
 
@@ -609,10 +603,7 @@ export class OrderSettlementService {
    * HQ pays a market a lump sum — FIFO-settles the market's oldest
    * BRANCH_SETTLED orders (HQ → market): MAIN down, market owed-balance down.
    */
-  async settleHqToMarket(
-    _requester: { id: string; roles?: string[] },
-    _dto: { market_id: string; amount: number },
-  ) {
+  settleHqToMarket(): never {
     return this.deprecatedSettlementPath('hq_to_market');
   }
 }

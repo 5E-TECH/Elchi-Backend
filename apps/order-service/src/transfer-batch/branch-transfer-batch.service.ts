@@ -1379,7 +1379,7 @@ export class BranchTransferBatchService {
 
   async findBranchesWithSentTransferBatches(input?: {
     direction?: string;
-    side?: 'source' | 'destination' | string;
+    side?: string;
   }) {
     const directionRaw = String(input?.direction ?? '')
       .trim()
@@ -1805,7 +1805,7 @@ export class BranchTransferBatchService {
       }
       if (batch.status !== BranchTransferBatchStatus.SENT) {
         this.badRequest(
-          `Paketni qabul qilib bo'lmaydi. Current status: ${batch.status}`,
+          `Paketni qabul qilib bo'lmaydi. Current status: ${String(batch.status)}`,
         );
       }
 
@@ -2058,7 +2058,7 @@ export class BranchTransferBatchService {
       }
       if (batch.status !== BranchTransferBatchStatus.SENT) {
         this.badRequest(
-          `Paketdan qabul qilib bo'lmaydi. Current status: ${batch.status}`,
+          `Paketdan qabul qilib bo'lmaydi. Current status: ${String(batch.status)}`,
         );
       }
 
@@ -2664,7 +2664,7 @@ export class BranchTransferBatchService {
         batch.status !== BranchTransferBatchStatus.SENT
       ) {
         this.badRequest(
-          `Paketni bekor qilib bo'lmaydi. Current status: ${batch.status}`,
+          `Paketni bekor qilib bo'lmaydi. Current status: ${String(batch.status)}`,
         );
       }
 

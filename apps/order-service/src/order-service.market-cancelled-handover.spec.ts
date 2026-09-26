@@ -48,8 +48,8 @@ describe('OrderServiceService market cancelled handover', () => {
         execute: jest.fn().mockResolvedValue({ affected: 0 }),
       })),
       create: jest.fn((value) => ({ id: '1', ...value })),
-      save: jest.fn(async (value) => value),
-      findOne: jest.fn(async ({ where }: any) => {
+      save: jest.fn((value) => value),
+      findOne: jest.fn(({ where }: any) => {
         if (where?.authorization_token_hash) {
           return {
             ...session,
@@ -66,15 +66,15 @@ describe('OrderServiceService market cancelled handover', () => {
     };
     const orderRepo = {
       find: jest.fn().mockResolvedValue([order]),
-      save: jest.fn(async (value) => value),
+      save: jest.fn((value) => value),
     };
     const trackingRepo = {
       create: jest.fn((value) => value),
-      save: jest.fn(async (value) => value),
+      save: jest.fn((value) => value),
     };
     const custodyRepo = {
       create: jest.fn((value) => value),
-      save: jest.fn(async (value) => value),
+      save: jest.fn((value) => value),
     };
     const queryRunner = {
       connect: jest.fn(),
@@ -307,6 +307,30 @@ describe('OrderServiceService market cancelled handover', () => {
     );
     expect(queryRunner.commitTransaction).toHaveBeenCalled();
     expect(response.data.closed_count).toBe(1);
+  });
+
+  it('emits a returned_to_market partner signal after closing cancelled orders', async () => {
+    const { service, order } = setup({ marketQrRequired: false });
+    order.external_id = 'BP-777';
+
+    const syncSpy = jest
+      .spyOn(service as any, 'queueExternalStatusSync')
+      .mockResolvedValue(undefined);
+
+    await service.completeMarketCancelledHandover({
+      market_id: '16',
+      order_ids: ['101'],
+      requester: { id: '9', roles: ['admin'] },
+    });
+
+    // BeePost mol qaytganini bilishi uchun `returned_to_market` signali
+    // chiqishi SHART (u buni CANCELLED_SENT + 'return' ga xaritalaydi).
+    expect(syncSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ id: '101' }),
+      'canceled',
+      Order_status.CANCELLED,
+      Order_status.RETURNED_TO_MARKET,
+    );
   });
 
   it('rejects unknown manual override reasons', async () => {

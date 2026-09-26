@@ -102,7 +102,7 @@ function makeQueryRunner(manager: MockManager): MockQueryRunner {
 function makeManager(overrides: Partial<MockManager> = {}): MockManager {
   return {
     findOne: jest.fn(),
-    save: jest.fn(async (entity: any) => ({ id: '99', ...entity })),
+    save: jest.fn((entity: any) => Promise.resolve({ id: '99', ...entity })),
     create: jest.fn((_entity: any, dto: any) => dto),
     ...overrides,
   };
@@ -124,14 +124,14 @@ function makeService(manager: MockManager) {
   const salaryRepo: any = {};
   const earningRepo: any = {
     findOne: jest.fn(),
-    save: jest.fn(async (entity: any) => ({ id: 'e1', ...entity })),
+    save: jest.fn((entity: any) => Promise.resolve({ id: 'e1', ...entity })),
     create: jest.fn((dto: any) => dto),
     createQueryBuilder: jest.fn(),
     findAndCount: jest.fn(),
   };
   const paymentRepo: any = {
     findOne: jest.fn(),
-    save: jest.fn(async (entity: any) => ({ id: 'p1', ...entity })),
+    save: jest.fn((entity: any) => Promise.resolve({ id: 'p1', ...entity })),
     create: jest.fn((dto: any) => dto),
     createQueryBuilder: jest.fn(),
     findAndCount: jest.fn(),
@@ -575,15 +575,19 @@ describe('FinanceServiceService.updateBalance', () => {
       save: jest
         .fn()
         // 1st save: cashbox with updated balance
-        .mockImplementationOnce(async (entity: any) => ({
-          ...entity,
-          id: '10',
-        }))
+        .mockImplementationOnce((entity: any) =>
+          Promise.resolve({
+            ...entity,
+            id: '10',
+          }),
+        )
         // 2nd save: history row
-        .mockImplementationOnce(async (entity: any) => ({
-          ...entity,
-          id: 'h-new',
-        })),
+        .mockImplementationOnce((entity: any) =>
+          Promise.resolve({
+            ...entity,
+            id: 'h-new',
+          }),
+        ),
     });
 
     const { service, queryRunner } = makeService(manager);
@@ -1081,7 +1085,7 @@ describe('FinanceServiceService.paymentsToMarket', () => {
         .mockResolvedValueOnce(mainCashbox)
         .mockResolvedValueOnce(marketCashbox),
       create: jest.fn((_entity: any, dto: any) => dto),
-      save: jest.fn(async (entity: any) => entity),
+      save: jest.fn((entity: any) => Promise.resolve(entity)),
     });
     const { service } = makeService(manager);
     jest
@@ -1144,7 +1148,7 @@ describe('FinanceServiceService financial balance ledger', () => {
         // last row → previous balance 100000
         .mockResolvedValueOnce({ balance_after: 100000 }),
       create: jest.fn((_e: any, dto: any) => dto),
-      save: jest.fn(async (e: any) => ({ id: 'fbh1', ...e })),
+      save: jest.fn((e: any) => Promise.resolve({ id: 'fbh1', ...e })),
     });
     const { service, queryRunner, activityLog } = makeService(manager);
 
@@ -1179,7 +1183,7 @@ describe('FinanceServiceService financial balance ledger', () => {
         .mockResolvedValueOnce(null) // no order_id idempotency hit
         .mockResolvedValueOnce(null), // no previous row
       create: jest.fn((_e: any, dto: any) => dto),
-      save: jest.fn(async (e: any) => ({ id: 'fbh1', ...e })),
+      save: jest.fn((e: any) => Promise.resolve({ id: 'fbh1', ...e })),
     });
     const { service } = makeService(manager);
 
@@ -1400,7 +1404,9 @@ describe('FinanceServiceService.allCashboxesTotal', () => {
         andWhere: jest.fn().mockReturnThis(),
         getRawOne: jest
           .fn()
-          .mockImplementation(async () => ({ total: sumByType[capturedType] })),
+          .mockImplementation(() =>
+            Promise.resolve({ total: sumByType[capturedType] }),
+          ),
       };
       return qb;
     });

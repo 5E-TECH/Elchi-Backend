@@ -65,6 +65,31 @@ describe('IntegrationServiceService.provisionPartnerMarket (C1.5)', () => {
     expect(log).toHaveBeenCalled();
   });
 
+  it('mLVtpIBa: hamkor marketi cancelled_handover_qr_required=false bilan ochiladi (API-only hamkor tokensiz yopadi)', async () => {
+    const refRepo = {
+      findOne: jest.fn(() => Promise.resolve(null)),
+      create: jest.fn((x: unknown) => x),
+      save: jest.fn((x: any) => Promise.resolve({ id: '1', ...x })),
+    };
+    const identity = jest.fn(() => of({ data: { id: 501 } }));
+    const svc = makeService(
+      refRepo,
+      identity,
+      jest.fn(() => Promise.resolve(undefined)),
+    );
+
+    await svc.provisionPartnerMarket({ ...baseDto });
+
+    expect(identity).toHaveBeenCalledWith(
+      { cmd: 'identity.market.create' },
+      expect.objectContaining({
+        dto: expect.objectContaining({
+          cancelled_handover_qr_required: false,
+        }),
+      }),
+    );
+  });
+
   it('TC2: idempotent — mavjud ref bo‘lsa yangi market ochilmaydi', async () => {
     const refRepo = {
       findOne: jest.fn(() => Promise.resolve({ elchi_market_id: '500' })),

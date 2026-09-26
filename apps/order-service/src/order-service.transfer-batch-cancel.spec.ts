@@ -14,7 +14,7 @@ describe('BranchTransferBatchService transfer batch cancel', () => {
         status,
         isDeleted: false,
       }),
-      save: jest.fn().mockImplementation(async (v) => v),
+      save: jest.fn().mockImplementation((v) => v),
     };
     const historyRepo = {
       create: jest.fn((v) => v),

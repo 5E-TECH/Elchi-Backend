@@ -156,7 +156,7 @@ describe('webhook_secret — rotatsiya oynasi', () => {
     expect(saved[0].webhook_secret_previous).toBeNull();
   });
 
-  it('shifrlash TASODIFIY — ayni matn har safar boshqa natija beradi', async () => {
+  it('shifrlash TASODIFIY — ayni matn har safar boshqa natija beradi', () => {
     // Bu testning maqsadi — yuqoridagi qaror nima uchun kerakligini qulflash.
     const { svc } = makeService({});
     expect(enc(svc, 'a')).not.toBe(enc(svc, 'a'));

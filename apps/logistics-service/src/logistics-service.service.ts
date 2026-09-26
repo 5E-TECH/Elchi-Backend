@@ -4177,18 +4177,24 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const couriersRaw = await this.listCouriersByRegion(regionId);
     const couriers = couriersRaw.map((courier) => {
-      const courierId = String(courier?.id ?? '').trim();
+      const courierId = String(
+        (courier?.id as string | number | undefined) ?? '',
+      ).trim();
       const courierOrders = regionOrders.filter(
         (order) => String(order.courier_id ?? '').trim() === courierId,
       );
       const stats = summarizeOrders(courierOrders);
-      const districtId = String(courier?.district_id ?? '').trim();
+      const districtId = String(
+        (courier?.district_id as string | number | undefined) ?? '',
+      ).trim();
 
       return {
         id: courierId || null,
-        name: String(courier?.name ?? ''),
+        name: String((courier?.name as string | number | undefined) ?? ''),
         phoneNumber: String(
-          courier?.phone_number ?? courier?.phoneNumber ?? '',
+          (courier?.phone_number as string | number | undefined) ??
+            (courier?.phoneNumber as string | number | undefined) ??
+            '',
         ),
         status: courier?.status ?? null,
         districtId: districtId || null,
@@ -4231,7 +4237,10 @@ export class LogisticsServiceService implements OnModuleInit {
 
     const summary = summarizeOrders(regionOrders);
     const activeCouriers = couriers.filter(
-      (courier) => String(courier.status ?? '').toLowerCase() === 'active',
+      (courier) =>
+        String(
+          (courier.status as string | number | undefined) ?? '',
+        ).toLowerCase() === 'active',
     ).length;
 
     const topCourier = couriers

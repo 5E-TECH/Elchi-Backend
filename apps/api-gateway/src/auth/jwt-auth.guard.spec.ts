@@ -31,14 +31,15 @@ describe('JwtAuthGuard (default-deny + @Public)', () => {
   });
 
   it('reads the @Public metadata from handler + class on an HTTP route', () => {
+    const getAllAndOverride = jest.fn(() => true);
     const reflector = {
-      getAllAndOverride: jest.fn(() => true),
+      getAllAndOverride,
     } as unknown as Reflector;
     const guard = new JwtAuthGuard(reflector);
 
     expect(guard.canActivate(makeContext('http'))).toBe(true);
     // A non-public HTTP route delegates to passport (not a bare allow) — that
     // path needs a full request/response and is covered by e2e, not here.
-    expect(reflector.getAllAndOverride).toHaveBeenCalled();
+    expect(getAllAndOverride).toHaveBeenCalled();
   });
 });

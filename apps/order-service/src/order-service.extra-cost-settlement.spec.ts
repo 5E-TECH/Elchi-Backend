@@ -246,7 +246,7 @@ describe("bekor qilingan buyurtmaning qo'shimcha xarajati", () => {
       comment: 'Mijoz olmadi',
     });
 
-    expect(s.updateFull).toHaveBeenCalledWith(
+    expect((s as Record<string, jest.Mock>).updateFull).toHaveBeenCalledWith(
       '7001',
       expect.objectContaining({
         status: Order_status.CANCELLED,
@@ -264,7 +264,7 @@ describe("bekor qilingan buyurtmaning qo'shimcha xarajati", () => {
 
     expect(saved).toHaveLength(0);
     // extra_cost=0 bo'lsa ham updateFull chaqiriladi, 0 bilan (default bilan bir xil).
-    expect(s.updateFull).toHaveBeenCalledWith(
+    expect((s as Record<string, jest.Mock>).updateFull).toHaveBeenCalledWith(
       '7001',
       expect.objectContaining({ extra_cost: 0 }),
       expect.anything(),

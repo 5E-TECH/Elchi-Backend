@@ -18,15 +18,19 @@ async function bootstrap() {
   app.enableShutdownHooks();
   app.useLogger(app.get(Logger));
   app.useGlobalInterceptors(new RmqTraceInterceptor());
-  process.on('SIGTERM', async () => {
-    await flushSentry();
-    await app.close();
-    process.exit(0);
+  process.on('SIGTERM', () => {
+    void (async () => {
+      await flushSentry();
+      await app.close();
+      process.exit(0);
+    })();
   });
-  process.on('SIGINT', async () => {
-    await flushSentry();
-    await app.close();
-    process.exit(0);
+  process.on('SIGINT', () => {
+    void (async () => {
+      await flushSentry();
+      await app.close();
+      process.exit(0);
+    })();
   });
   const rmqService = app.get<RmqService>(RmqService);
   app.useGlobalPipes(

@@ -41,7 +41,7 @@ describe('Sinov webhooki', () => {
     const { svc } = makeSvc(PARTNER);
     global.fetch = jest.fn().mockResolvedValue({
       status: 200,
-      text: async () => '{"message":"Sinov webhooki qabul qilindi"}',
+      text: () => Promise.resolve('{"message":"Sinov webhooki qabul qilindi"}'),
     }) as any;
 
     const res: any = await svc.testPartnerWebhook('7');
@@ -61,7 +61,7 @@ describe('Sinov webhooki', () => {
     const { svc } = makeSvc(PARTNER);
     const fetchMock = jest
       .fn()
-      .mockResolvedValue({ status: 200, text: async () => 'ok' });
+      .mockResolvedValue({ status: 200, text: () => Promise.resolve('ok') });
     global.fetch = fetchMock as any;
 
     await svc.testPartnerWebhook('7');
@@ -81,7 +81,7 @@ describe('Sinov webhooki', () => {
     const { svc } = makeSvc(PARTNER);
     global.fetch = jest.fn().mockResolvedValue({
       status: 401,
-      text: async () => 'imzo yaroqsiz',
+      text: () => Promise.resolve('imzo yaroqsiz'),
     }) as any;
 
     const res: any = await svc.testPartnerWebhook('7');
@@ -109,7 +109,7 @@ describe('Sinov webhooki', () => {
     const { svc } = makeSvc(PARTNER);
     const fetchMock = jest
       .fn()
-      .mockResolvedValue({ status: 200, text: async () => 'ok' });
+      .mockResolvedValue({ status: 200, text: () => Promise.resolve('ok') });
     global.fetch = fetchMock as any;
 
     const res: any = await svc.testPartnerWebhook('7', {
@@ -139,9 +139,10 @@ describe('Sinov webhooki', () => {
 
   it('TC8: natija auditga yoziladi (sir sizmaydi)', async () => {
     const { svc, logs } = makeSvc(PARTNER);
-    global.fetch = jest
-      .fn()
-      .mockResolvedValue({ status: 200, text: async () => 'ok' }) as any;
+    global.fetch = jest.fn().mockResolvedValue({
+      status: 200,
+      text: () => Promise.resolve('ok'),
+    }) as any;
 
     await svc.testPartnerWebhook('7', null, { id: 'admin1', roles: ['admin'] });
 

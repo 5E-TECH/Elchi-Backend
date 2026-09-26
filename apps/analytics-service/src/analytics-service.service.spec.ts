@@ -459,29 +459,27 @@ describe('AnalyticsServiceService', () => {
   });
 
   it('getCourierReport filters only requester courier data', async () => {
-    rmqSendMock.mockImplementation(
-      (_client: any, pattern: any, payload: any) => {
-        if (pattern.cmd === 'order.analytics.courier_stats') {
-          return Promise.resolve({
-            data: [
-              {
-                courier: { id: 'c1' },
-                soldOrders: 2,
-                totalOrders: 3,
-                successRate: 66,
-              },
-            ],
-          });
-        }
-        if (pattern.cmd === 'order.analytics.top_couriers') {
-          return Promise.resolve({ data: [] });
-        }
-        if (pattern.cmd === 'order.analytics.courier_stat') {
-          return Promise.resolve({ data: { profit: 500, canceledOrders: 1 } });
-        }
-        return Promise.resolve({ data: {} });
-      },
-    );
+    rmqSendMock.mockImplementation((_client: any, pattern: any) => {
+      if (pattern.cmd === 'order.analytics.courier_stats') {
+        return Promise.resolve({
+          data: [
+            {
+              courier: { id: 'c1' },
+              soldOrders: 2,
+              totalOrders: 3,
+              successRate: 66,
+            },
+          ],
+        });
+      }
+      if (pattern.cmd === 'order.analytics.top_couriers') {
+        return Promise.resolve({ data: [] });
+      }
+      if (pattern.cmd === 'order.analytics.courier_stat') {
+        return Promise.resolve({ data: { profit: 500, canceledOrders: 1 } });
+      }
+      return Promise.resolve({ data: {} });
+    });
 
     const res = await service.getCourierReport(
       { id: 'c1', roles: ['courier'] },

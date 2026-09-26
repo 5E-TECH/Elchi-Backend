@@ -1,4 +1,4 @@
-import { satoRegions, SatoRegion } from '../data/sato-codes';
+import { satoRegions } from '../data/sato-codes';
 
 /**
  * Nomni normalizatsiya qilish (solishtirishda ishlatiladi)
@@ -229,7 +229,7 @@ export function matchRegions(
     nameCount.get(normalized)!.push({ id: region.id, name: region.name });
   }
 
-  for (const [name, entries] of nameCount) {
+  for (const [, entries] of nameCount) {
     if (entries.length > 1) {
       result.duplicates.push({
         name: entries[0].name,
@@ -353,7 +353,7 @@ export function matchDistricts(
     });
   }
 
-  for (const [key, entries] of districtNameCount) {
+  for (const [, entries] of districtNameCount) {
     if (entries.length > 1) {
       // Turli viloyatlardagi dublikatlarni ko'rsatish
       const regionNames = [...new Set(entries.map((e) => e.regionName))].join(

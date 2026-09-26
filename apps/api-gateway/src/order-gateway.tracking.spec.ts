@@ -5,7 +5,15 @@ import { OrderGatewayController } from './order-gateway.controller';
 describe('OrderGatewayController tracking access', () => {
   function setup(orderData: Record<string, unknown>) {
     const trackingResponse = {
-      data: [{ id: 'tracking-1', order_id: String(orderData.id ?? '101') }],
+      data: [
+        {
+          id: 'tracking-1',
+          order_id:
+            typeof orderData.id === 'string' || typeof orderData.id === 'number'
+              ? String(orderData.id)
+              : '101',
+        },
+      ],
       total: 1,
       page: 1,
       limit: 20,

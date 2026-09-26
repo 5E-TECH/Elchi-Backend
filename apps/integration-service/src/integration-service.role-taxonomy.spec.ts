@@ -93,7 +93,7 @@ describe('Yaratishda taksonomiya yoziladi', () => {
         created.push(x);
         return x;
       }),
-      save: jest.fn(async (x: any) => ({ id: '1', ...x })),
+      save: jest.fn((x: any) => ({ id: '1', ...x })),
     };
     s.activityLog = { log: jest.fn().mockResolvedValue(undefined) };
     s.logger = { warn: jest.fn(), error: jest.fn(), log: jest.fn() };

@@ -161,7 +161,7 @@ describe('webhook_url sozlanganda kutayotganlar navbatga qaytadi', () => {
         webhook_secret: 'enc:stored',
         is_active: true,
       }),
-      save: jest.fn(async (x: any) => x),
+      save: jest.fn((x: any) => x),
     };
     svc.partnerWebhookOutboxRepo = {
       update: jest.fn((where: any, patch: any) => {

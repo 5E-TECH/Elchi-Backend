@@ -356,7 +356,9 @@ describe('BranchServiceService', () => {
       type: 'HQ',
       isDeleted: false,
     });
-    branchRepo.save.mockImplementation(async (payload: any) => payload);
+    branchRepo.save.mockImplementation((payload: any) =>
+      Promise.resolve(payload),
+    );
 
     const res = await service.createBranch({
       name: 'Sam branch',

@@ -84,7 +84,7 @@ function makeService(integration: Record<string, unknown> | null) {
   const webhookLogRepo: any = {
     findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn((dto: any) => dto),
-    save: jest.fn(async (e: any) => ({ id: 'log1', ...e })),
+    save: jest.fn((e: any) => ({ id: 'log1', ...e })),
     update: jest.fn().mockResolvedValue(undefined),
   };
   const syncQueueRepo: any = {};
@@ -93,17 +93,17 @@ function makeService(integration: Record<string, unknown> | null) {
     findOne: jest.fn().mockResolvedValue(null),
     findAndCount: jest.fn(),
     create: jest.fn((dto: any) => ({ ...dto })),
-    save: jest.fn(async (e: any) => ({ id: 'shp1', ...e })),
+    save: jest.fn((e: any) => ({ id: 'shp1', ...e })),
   };
   const receivableRepo: any = {
     findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn((dto: any) => ({ ...dto })),
-    save: jest.fn(async (e: any) => ({ id: 'rcv1', ...e })),
+    save: jest.fn((e: any) => ({ id: 'rcv1', ...e })),
   };
   const remittanceRepo: any = {
     findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn((dto: any) => ({ ...dto })),
-    save: jest.fn(async (e: any) => ({ id: 'rem1', ...e })),
+    save: jest.fn((e: any) => ({ id: 'rem1', ...e })),
   };
   const activityLog: any = {
     log: jest.fn().mockResolvedValue(undefined),
@@ -127,24 +127,24 @@ function makeService(integration: Record<string, unknown> | null) {
   const partnerProductRefRepo: any = {
     findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn((dto: any) => ({ ...dto })),
-    save: jest.fn(async (e: any) => ({ id: 'ppr1', ...e })),
+    save: jest.fn((e: any) => ({ id: 'ppr1', ...e })),
   };
   const partnerWebhookOutboxRepo: any = {
     findOne: jest.fn().mockResolvedValue(null),
     find: jest.fn().mockResolvedValue([]),
     create: jest.fn((dto: any) => ({ ...dto })),
-    save: jest.fn(async (e: any) => ({ id: 'pwo1', ...e })),
+    save: jest.fn((e: any) => ({ id: 'pwo1', ...e })),
     update: jest.fn().mockResolvedValue({ affected: 1 }),
   };
   const inboundDealRefRepo: any = {
     create: jest.fn((dto: any) => ({ ...dto })),
-    save: jest.fn(async (e: any) => ({ id: 'idr1', ...e })),
+    save: jest.fn((e: any) => ({ id: 'idr1', ...e })),
     update: jest.fn().mockResolvedValue(undefined),
     delete: jest.fn().mockResolvedValue(undefined),
   };
   const paymentTxnRepo: any = {
     create: jest.fn((dto: any) => ({ ...dto })),
-    save: jest.fn(async (e: any) => ({ id: 'ptx1', ...e })),
+    save: jest.fn((e: any) => ({ id: 'ptx1', ...e })),
     update: jest.fn().mockResolvedValue(undefined),
     findAndCount: jest.fn().mockResolvedValue([[], 0]),
   };

@@ -194,7 +194,7 @@ describe("Onlayn to'lovni qayd etish", () => {
     });
 
     it('QISMAN to`lov `partly` bo`ladi', async () => {
-      const { s, updates } = svc(ORDER);
+      const { s } = svc(ORDER);
       const res: any = await call(s, { amount: 100000 });
 
       expect(res.data.outcome).toBe('recorded');

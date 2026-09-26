@@ -93,6 +93,31 @@ describe('OrderGatewayController pagination', () => {
     expect(res.data[0].transport_status).toBe('cancelled (sent)');
   });
 
+  it('external orders: fetch_all=true forwarded to order service', async () => {
+    const { controller, orderClient } = makeController();
+    orderClient.send.mockReturnValue(
+      of({ data: [], total: 0, page: 1, limit: 100 }),
+    );
+
+    // Andijon E2E: kiruvchi posilka ekrani butun ro'yxatni fetch_all bilan
+    // so'raydi (limit=200 emas). Gateway buni order-service'ga uzatishi shart.
+    await (controller as any).findAllExternal(
+      '121', // market_id
+      'new', // status
+      undefined, // date
+      undefined, // start_day
+      undefined, // end_day
+      '1', // page
+      '100', // limit
+      'true', // fetch_all
+      { user: { sub: '9', username: 'u', roles: ['admin'] } }, // req
+    );
+
+    expect(orderClient.send).toHaveBeenCalled();
+    const payload = orderClient.send.mock.calls[0][1];
+    expect(payload.query.fetch_all).toBe(true);
+  });
+
   it('invalid limit rejected with 400', async () => {
     const { controller } = makeController();
     // findAll — async metod: noto'g'ri limit rejected promise qaytaradi,

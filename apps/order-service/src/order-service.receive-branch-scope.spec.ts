@@ -1,4 +1,5 @@
 import { RpcException } from '@nestjs/microservices';
+import { rmqSend as rmqSendFn } from '@app/common';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 
 /**
@@ -53,7 +54,7 @@ jest.mock('@app/common', () => {
   };
 });
 
-const { rmqSend } = require('@app/common') as { rmqSend: jest.Mock };
+const rmqSend = rmqSendFn as unknown as jest.Mock;
 
 const requester = (roles: string[], id = 'u1') => ({ id, roles });
 

@@ -508,8 +508,7 @@ export class OrderServiceController {
       context,
       'order.settlement.courier_to_branch',
       data.request_id,
-      () =>
-        this.settlementService.settleCourierToBranch(data.requester, data.dto),
+      () => this.settlementService.settleCourierToBranch(),
     );
   }
 
@@ -527,7 +526,7 @@ export class OrderServiceController {
       context,
       'order.settlement.branch_to_hq',
       data.request_id,
-      () => this.settlementService.settleBranchToHq(data.requester, data.dto),
+      () => this.settlementService.settleBranchToHq(),
     );
   }
 
@@ -545,7 +544,7 @@ export class OrderServiceController {
       context,
       'order.settlement.hq_to_market',
       data.request_id,
-      () => this.settlementService.settleHqToMarket(data.requester, data.dto),
+      () => this.settlementService.settleHqToMarket(),
     );
   }
 
@@ -789,6 +788,7 @@ export class OrderServiceController {
         status?: Order_status | Order_status[] | string | string[];
         start_day?: string;
         end_day?: string;
+        fetch_all?: boolean | string;
         page?: number;
         limit?: number;
       };
@@ -1320,7 +1320,7 @@ export class OrderServiceController {
     @Payload()
     data: {
       direction?: string;
-      side?: 'source' | 'destination' | string;
+      side?: string;
     },
     @Ctx() context: RmqContext,
   ) {

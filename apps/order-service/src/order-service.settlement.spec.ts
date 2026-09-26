@@ -27,7 +27,7 @@ describe('OrderSettlementService settlement (FIFO)', () => {
     })) as OrderSettlement[];
 
     const settlementRepo = {
-      find: jest.fn(async (opts: any) => {
+      find: jest.fn((opts: any) => {
         const where = opts?.where ?? {};
         return store
           .filter((row) =>
@@ -35,7 +35,7 @@ describe('OrderSettlementService settlement (FIFO)', () => {
           )
           .sort((a, b) => Number(a.id) - Number(b.id));
       }),
-      update: jest.fn(async (criteria: any, patch: any) => {
+      update: jest.fn((criteria: any, patch: any) => {
         const row = store.find((r) => r.id === criteria.id);
         if (row) Object.assign(row, patch);
         return { affected: row ? 1 : 0 };
@@ -284,26 +284,11 @@ describe('OrderSettlementService settlement (FIFO)', () => {
     expect(store[1].status).toBe(SettlementStatus.PENDING);
   });
 
-  it('legacy cashbox-posting settle* path is retired (throws) so it cannot double-debit', async () => {
+  it('legacy cashbox-posting settle* path is retired (throws) so it cannot double-debit', () => {
     const { service } = makeService([]);
-    await expect(
-      service.settleCourierToBranch(
-        { id: '1', roles: ['manager'] },
-        { courier_id: '7', amount: 100 },
-      ),
-    ).rejects.toThrow();
-    await expect(
-      service.settleBranchToHq(
-        { id: '1', roles: ['manager'] },
-        { branch_id: '10', amount: 100 },
-      ),
-    ).rejects.toThrow();
-    await expect(
-      service.settleHqToMarket(
-        { id: '1', roles: ['manager'] },
-        { market_id: '20', amount: 100 },
-      ),
-    ).rejects.toThrow();
+    expect(() => service.settleCourierToBranch()).toThrow();
+    expect(() => service.settleBranchToHq()).toThrow();
+    expect(() => service.settleHqToMarket()).toThrow();
   });
 
   it('summarizes the whole chain receivable — HQ rows (branch_id NULL) included', async () => {

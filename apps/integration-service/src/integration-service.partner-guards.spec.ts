@@ -54,7 +54,7 @@ describe("F3 — market egaligi (IDOR qo'riqchisi)", () => {
       (svc as any).createPartnerShipment({ ...baseShipment }),
     ).rejects.toMatchObject({ error: { statusCode: 403 } });
     // Mijoz ham yaratilmasligi kerak — tekshiruv eng boshida turadi.
-    expect(svc.rmqRequest).not.toHaveBeenCalled();
+    expect((svc as any).rmqRequest).not.toHaveBeenCalled();
   });
 
   it('⭐ boshqa hamkorning marketi ham 403 — "yo\'q" bilan bir xil javob', async () => {
@@ -127,7 +127,7 @@ describe("F4 — bekor qilish holatga qarab yo'l tanlaydi", () => {
       partner_id: '7',
       shipment_id: '1001',
     });
-    expect(svc.rmqRequestStrict).toHaveBeenCalledWith(
+    expect((svc as any).rmqRequestStrict).toHaveBeenCalledWith(
       expect.anything(),
       { cmd: 'order.cancel_pre_delivery' },
       expect.objectContaining({ order_id: '1001' }),
@@ -141,7 +141,7 @@ describe("F4 — bekor qilish holatga qarab yo'l tanlaydi", () => {
       partner_id: '7',
       shipment_id: '1001',
     });
-    expect(svc.rmqRequestStrict).toHaveBeenCalledWith(
+    expect((svc as any).rmqRequestStrict).toHaveBeenCalledWith(
       expect.anything(),
       { cmd: 'order.cancel_pre_delivery' },
       expect.anything(),
@@ -155,7 +155,7 @@ describe("F4 — bekor qilish holatga qarab yo'l tanlaydi", () => {
       partner_id: '7',
       shipment_id: '1001',
     });
-    expect(svc.rmqRequestStrict).toHaveBeenCalledWith(
+    expect((svc as any).rmqRequestStrict).toHaveBeenCalledWith(
       expect.anything(),
       { cmd: 'order.cancel' },
       expect.objectContaining({ id: '1001' }),
@@ -171,7 +171,7 @@ describe("F4 — bekor qilish holatga qarab yo'l tanlaydi", () => {
         shipment_id: '1001',
       }),
     ).rejects.toMatchObject({ error: { statusCode: 409 } });
-    expect(svc.rmqRequestStrict).not.toHaveBeenCalled();
+    expect((svc as any).rmqRequestStrict).not.toHaveBeenCalled();
   });
 
   it("allaqachon bekor qilingan — idempotent, chaqiruv yo'q", async () => {
@@ -181,7 +181,7 @@ describe("F4 — bekor qilish holatga qarab yo'l tanlaydi", () => {
       shipment_id: '1001',
     })) as { data: { idempotent?: boolean } };
     expect(res.data.idempotent).toBe(true);
-    expect(svc.rmqRequestStrict).not.toHaveBeenCalled();
+    expect((svc as any).rmqRequestStrict).not.toHaveBeenCalled();
   });
 });
 
