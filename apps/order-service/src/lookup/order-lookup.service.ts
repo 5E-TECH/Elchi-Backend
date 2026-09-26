@@ -295,7 +295,12 @@ export class OrderLookupService implements OnModuleInit {
     externalDistrictValue: unknown,
   ): Promise<string | null> {
     const raw =
-      externalDistrictValue == null ? '' : String(externalDistrictValue).trim();
+      typeof externalDistrictValue === 'string' ||
+      typeof externalDistrictValue === 'number' ||
+      typeof externalDistrictValue === 'bigint' ||
+      typeof externalDistrictValue === 'boolean'
+        ? String(externalDistrictValue).trim()
+        : '';
     if (!raw) return null;
 
     const bySato = await rmqSend<{ data?: { id?: string } }>(

@@ -114,7 +114,7 @@ describe('NotificationServiceService', () => {
   it('sendNotification sends direct to group with env token', async () => {
     (global as any).fetch.mockResolvedValue({
       ok: true,
-      json: async () => ({ ok: true, result: { message_id: 1 } }),
+      json: () => Promise.resolve({ ok: true, result: { message_id: 1 } }),
     });
 
     const res = await service.sendNotification({

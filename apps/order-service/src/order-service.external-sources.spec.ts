@@ -1,4 +1,4 @@
-import { Order_status } from '@app/common';
+import { Order_status, rmqSend as rmqSendFn } from '@app/common';
 // `Order_source` `@app/common` da EMAS — u order entity'sida e'lon qilingan.
 import { Order_source } from './entities/order.entity';
 import { OrderServiceService } from './order-service.service';
@@ -16,7 +16,7 @@ jest.mock('@app/common', () => {
   return { ...actual, rmqSend: jest.fn() };
 });
 
-const { rmqSend } = require('@app/common') as { rmqSend: jest.Mock };
+const rmqSend = rmqSendFn as unknown as jest.Mock;
 
 type Cond = { sql: string; params?: Record<string, unknown> };
 

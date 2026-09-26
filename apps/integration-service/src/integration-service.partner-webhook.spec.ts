@@ -170,7 +170,11 @@ describe('IntegrationServiceService — partner outbound webhook (C2.3)', () => 
 
   it('TC3: dedup — unique violation (23505) -> skip, throw yo‘q', async () => {
     const svc: any = makeSvc({
-      outboxSave: jest.fn(() => Promise.reject({ code: '23505' })),
+      outboxSave: jest.fn(() =>
+        Promise.reject(
+          Object.assign(new Error('duplicate key'), { code: '23505' }),
+        ),
+      ),
     });
     svc.processPendingPartnerWebhooks = jest.fn(() =>
       Promise.resolve({ processed: 0, delivered: 0, failed: 0 }),

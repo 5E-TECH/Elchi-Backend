@@ -52,11 +52,11 @@ describe('scanIntake — QR dan buyurtmaga', () => {
     const s = svc();
     await (s as any).scanIntake({ slug: 'donoxon', qr_code: 'QR-1' });
 
-    expect(s.searchByQr).toHaveBeenCalledWith({
+    expect((s as any).searchByQr).toHaveBeenCalledWith({
       slug: 'donoxon',
       qr_code: 'QR-1',
     });
-    expect(s.rmqRequestStrict).toHaveBeenCalledWith(
+    expect((s as any).rmqRequestStrict).toHaveBeenCalledWith(
       expect.anything(),
       { cmd: 'order.receive_external' },
       expect.objectContaining({ integration_id: '5' }),
@@ -82,7 +82,7 @@ describe('scanIntake — QR dan buyurtmaga', () => {
       (s as any).scanIntake({ slug: 'donoxon', qr_code: 'QR-1' }),
     ).rejects.toThrow(/Donoxon.*market bog'lanmagan/);
     // Saytga so'rov ham yuborilmaydi — sozlama xato.
-    expect(s.searchByQr).not.toHaveBeenCalled();
+    expect((s as any).searchByQr).not.toHaveBeenCalled();
   });
 
   it("⭐ QR payloadda bo'lmasa SKANERLANGAN qiymat qo'shiladi", async () => {
@@ -130,7 +130,7 @@ describe('scanIntake — QR dan buyurtmaga', () => {
     await expect(
       (s as any).scanIntake({ slug: 'donoxon', qr_code: 'QR-1' }),
     ).rejects.toThrow(/topilmadi/);
-    expect(s.rmqRequestStrict).not.toHaveBeenCalled();
+    expect((s as any).rmqRequestStrict).not.toHaveBeenCalled();
   });
 
   it('bo\'sh massiv ham "topilmadi"', async () => {

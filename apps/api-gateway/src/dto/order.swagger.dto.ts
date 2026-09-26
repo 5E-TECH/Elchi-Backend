@@ -29,7 +29,7 @@ enum CancelledManualOverrideReasonDto {
   WET = 'QR namlangan yoki xiralashgan',
 }
 
-const parseFormattedNumber = (value: unknown): number | unknown => {
+const parseFormattedNumber = (value: unknown): unknown => {
   if (value === undefined || value === null || value === '') {
     return value;
   }

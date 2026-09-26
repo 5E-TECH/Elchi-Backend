@@ -29,10 +29,10 @@ function makeService(opts: {
     // simulate a re-run that should skip.
     findOne: jest.fn().mockResolvedValue(opts.existingShare ?? null),
     create: jest.fn((dto: any) => dto),
-    save: jest.fn(async (row: any) => {
+    save: jest.fn((row: any) => {
       const saved = { id: `ps${savedRows.length + 1}`, ...row };
       savedRows.push(saved);
-      return saved;
+      return Promise.resolve(saved);
     }),
   };
   const activityLog: any = {

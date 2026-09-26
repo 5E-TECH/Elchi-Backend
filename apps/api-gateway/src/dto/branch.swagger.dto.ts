@@ -1,5 +1,5 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { BranchTransferDirection, BranchType } from '@app/common';
+import { BranchType } from '@app/common';
 import {
   IsArray,
   IsEnum,

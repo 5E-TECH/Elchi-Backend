@@ -48,8 +48,8 @@ describe('OrderServiceService market cancelled handover', () => {
         execute: jest.fn().mockResolvedValue({ affected: 0 }),
       })),
       create: jest.fn((value) => ({ id: '1', ...value })),
-      save: jest.fn(async (value) => value),
-      findOne: jest.fn(async ({ where }: any) => {
+      save: jest.fn((value) => value),
+      findOne: jest.fn(({ where }: any) => {
         if (where?.authorization_token_hash) {
           return {
             ...session,
@@ -66,15 +66,15 @@ describe('OrderServiceService market cancelled handover', () => {
     };
     const orderRepo = {
       find: jest.fn().mockResolvedValue([order]),
-      save: jest.fn(async (value) => value),
+      save: jest.fn((value) => value),
     };
     const trackingRepo = {
       create: jest.fn((value) => value),
-      save: jest.fn(async (value) => value),
+      save: jest.fn((value) => value),
     };
     const custodyRepo = {
       create: jest.fn((value) => value),
-      save: jest.fn(async (value) => value),
+      save: jest.fn((value) => value),
     };
     const queryRunner = {
       connect: jest.fn(),

@@ -49,8 +49,10 @@ export class UserServiceService implements OnModuleInit {
     private readonly activityLog: ActivityLogService,
   ) {}
 
-  private sanitize(user: User) {
-    const { password, refresh_token, ...safeUser } = user;
+  private sanitize(user: User): Omit<User, 'password' | 'refresh_token'> {
+    const safeUser = { ...user };
+    delete (safeUser as { password?: unknown }).password;
+    delete (safeUser as { refresh_token?: unknown }).refresh_token;
     return safeUser;
   }
 
@@ -433,9 +435,7 @@ export class UserServiceService implements OnModuleInit {
     return new Map(resolved);
   }
 
-  private async getRegionById(
-    regionId?: string | null,
-  ): Promise<unknown | null> {
+  private async getRegionById(regionId?: string | null): Promise<unknown> {
     if (!regionId) {
       return null;
     }
@@ -491,7 +491,8 @@ export class UserServiceService implements OnModuleInit {
       return region;
     }
 
-    const { districts, ...rest } = region as Record<string, unknown>;
+    const rest = { ...(region as Record<string, unknown>) };
+    delete rest.districts;
     return rest as T;
   }
 

@@ -18,14 +18,13 @@ function makeService(opts: {
   saveRef?: (entity: any) => any;
 }) {
   const refRows = opts.refRows ?? [];
-  const saveRef =
-    opts.saveRef ?? jest.fn(async (e: any) => ({ id: '1', ...e }));
+  const saveRef = opts.saveRef ?? jest.fn((e: any) => ({ id: '1', ...e }));
 
   const svc: any = Object.create(IntegrationServiceService.prototype);
   svc.logger = { warn: jest.fn(), error: jest.fn(), log: jest.fn() };
   svc.partnerProductRefRepo = {
     findOne: jest.fn(
-      async ({ where }: any) =>
+      ({ where }: any) =>
         refRows.find(
           (r) =>
             r.partner_id === where.partner_id &&
@@ -40,16 +39,20 @@ function makeService(opts: {
   // `rmqRequest`ni to'g'ridan-to'g'ri almashtiramiz: haqiqiy versiyasi
   // HAR QANDAY xatoni `null` ga aylantiradi, mock ham shunday qiladi.
   svc.rmqRequest = jest.fn(
-    async (_client: any, pattern: { cmd: string }, payload: any) => {
+    (_client: any, pattern: { cmd: string }, payload: any) => {
       if (pattern.cmd === 'catalog.product.find_all') {
-        return opts.catalogFindAll
-          ? opts.catalogFindAll(payload)
-          : { data: [], total: 0 };
+        return Promise.resolve(
+          opts.catalogFindAll
+            ? opts.catalogFindAll(payload)
+            : { data: [], total: 0 },
+        );
       }
       if (pattern.cmd === 'catalog.product.create') {
-        return opts.catalogCreate ? opts.catalogCreate(payload) : null;
+        return Promise.resolve(
+          opts.catalogCreate ? opts.catalogCreate(payload) : null,
+        );
       }
-      return null;
+      return Promise.resolve(null);
     },
   );
 
@@ -209,7 +212,7 @@ describe('Hamkor mahsuloti → Elchi katalogi', () => {
     // Poygada g'olib oqim yozib ketgan qator: birinchi findOne null qaytardi,
     // ikkinchisi topadi.
     let findOneCalls = 0;
-    (svc as any).partnerProductRefRepo.findOne = jest.fn(async () => {
+    (svc as any).partnerProductRefRepo.findOne = jest.fn(() => {
       findOneCalls += 1;
       return findOneCalls === 1 ? null : { elchi_product_id: '901' };
     });

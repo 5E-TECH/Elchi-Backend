@@ -113,7 +113,14 @@ export class OrderLifecycleService {
    * son qabul qilinadi.
    */
   private numericRegionId(value: unknown): string | null {
-    if (value === null || typeof value === 'undefined') return null;
+    if (
+      typeof value !== 'string' &&
+      typeof value !== 'number' &&
+      typeof value !== 'bigint' &&
+      typeof value !== 'boolean'
+    ) {
+      return null;
+    }
     const raw = String(value).trim();
     if (!raw) return null;
     return /^\d+$/.test(raw) ? raw : null;

@@ -38,7 +38,7 @@ function createService() {
   const settlementRepo: any = {
     findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn((dto: any) => dto),
-    save: jest.fn(async (row: any) => row),
+    save: jest.fn((row: any) => row),
     update: jest.fn().mockResolvedValue(undefined),
   };
 
@@ -539,7 +539,7 @@ describe('Order tracking lifecycle', () => {
     const { lifecycle, orderRepo } = createService();
 
     orderRepo.create.mockImplementation((payload: any) => payload);
-    orderRepo.save.mockImplementation(async (payload: any) => ({
+    orderRepo.save.mockImplementation((payload: any) => ({
       ...payload,
       id: '404',
     }));

@@ -7,9 +7,10 @@ jest.mock('@app/common', () => {
   return { ...actual, rmqSend: jest.fn() };
 });
 
-const { rmqSend } = require('@app/common') as { rmqSend: jest.Mock };
-
+import { rmqSend as rmqSendFn } from '@app/common';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+
+const rmqSend = rmqSendFn as unknown as jest.Mock;
 
 /**
  * 3-BOSQICH: TASHQI SAYTDAN IMPORT.
@@ -302,7 +303,7 @@ describe("⭐ SKAN TOKENI — to'qnashuv darvozani zaharlaydi", () => {
       undefined,
       (svcObj) => {
         // Dublikat tekshiruvi `null`, token tekshiruvi esa mavjud qator.
-        svcObj.orderRepo.findOne = jest.fn(async (q: any) =>
+        svcObj.orderRepo.findOne = jest.fn((q: any) =>
           q?.where?.qr_code_token ? { id: '99' } : null,
         );
       },

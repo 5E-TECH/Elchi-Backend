@@ -71,8 +71,20 @@ import { errorRes, successRes } from '../../../libs/common/helpers/response';
  * ⚠️ Bo'sh satr bilan `null` FARQ QILADI: bo'sh satr bo'yicha guruhlash
  * barcha qopsiz posilkalarni bitta soxta qopga yig'ib qo'yardi.
  */
+/**
+ * Primitivni matnga aylantiradi. Obyekt yoki `null`/`undefined` → bo'sh satr.
+ *
+ * ⚠️ `String(obj)` "[object Object]" beradi — bu bir maydonni jimgina buzadi.
+ * Bu yerda obyekt matn EMAS degani, shuning uchun bo'sh satr qaytadi.
+ */
+const toText = (value: unknown): string => {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'object') return '';
+  return String(value as string | number | boolean | bigint | symbol);
+};
+
 const nullableText = (value: unknown): string | null => {
-  const text = String(value ?? '').trim();
+  const text = toText(value).trim();
   return text || null;
 };
 
@@ -223,7 +235,8 @@ type FindAllIntegrationsQuery = {
 
 type SyncHistoryQuery = {
   integration_id?: string;
-  status?: 'success' | 'failed' | string;
+  /** Odatda 'success' yoki 'failed'; erkin satr sifatida filtrlanadi. */
+  status?: string;
   from_date?: string;
   to_date?: string;
   page?: number;
@@ -2817,12 +2830,12 @@ export class IntegrationServiceService {
     const rows = this.extractRows(res);
     const match = rows.find(
       (row) =>
-        String((row as { name?: unknown })?.name ?? '')
+        toText((row as { name?: unknown })?.name)
           .trim()
           .toLowerCase() === name.toLowerCase(),
     );
     const id = (match as { id?: unknown })?.id;
-    return id === undefined || id === null ? null : String(id);
+    return id === undefined || id === null ? null : toText(id);
   }
 
   /**
@@ -2883,7 +2896,7 @@ export class IntegrationServiceService {
   }
   private pluckId(res: unknown): string | undefined {
     const id = this.pluck(res, 'id');
-    return id === undefined || id === null ? undefined : String(id);
+    return id === undefined || id === null ? undefined : toText(id);
   }
 
   private auditActor(requester?: { id?: string; roles?: string[] } | null): {
@@ -3027,7 +3040,7 @@ export class IntegrationServiceService {
         this.badRequest(`inbound_order_config.${key} massiv bo‘lishi kerak`);
       }
       const cleaned = (value as unknown[])
-        .map((v) => String(v ?? '').trim())
+        .map((v) => toText(v).trim())
         .filter(Boolean);
       if (cleaned.length !== (value as unknown[]).length) {
         this.badRequest(
@@ -3070,17 +3083,14 @@ export class IntegrationServiceService {
      * qiymat hech qachon o'qilmaydi va darvoza jimgina hamma narsani
      * o'tkazib yuborardi (ochiq qolgan darvoza eng yomon holat).
      */
-    if (stages.length && !String(cfg.stage_path ?? '').trim()) {
+    if (stages.length && !toText(cfg.stage_path).trim()) {
       this.badRequest(
         '`create_on_stages` berilgan bo‘lsa `stage_path` ham shart — ' +
           'bosqich qiymati payload‘da qayerda turganini bilmasak, ' +
           'darvoza tekshirib bo‘lmaydi.',
       );
     }
-    if (
-      String(cfg.funnel_id ?? '').trim() &&
-      !String(cfg.funnel_path ?? '').trim()
-    ) {
+    if (toText(cfg.funnel_id).trim() && !toText(cfg.funnel_path).trim()) {
       this.badRequest('`funnel_id` berilgan bo‘lsa `funnel_path` ham shart.');
     }
   }
@@ -3419,7 +3429,7 @@ export class IntegrationServiceService {
   }
 
   private normalizeStatus(value: unknown): 'active' | 'inactive' {
-    const normalized = String(value ?? 'active').toLowerCase();
+    const normalized = toText(value ?? 'active').toLowerCase();
     return normalized === 'inactive' ? 'inactive' : 'active';
   }
 
@@ -3432,16 +3442,12 @@ export class IntegrationServiceService {
    * chaqiruvchilar buzilmasin (ular `role` yubormaydi).
    */
   private normalizeRole(value: unknown): IntegrationRole {
-    const v = String(value ?? '')
-      .toLowerCase()
-      .trim();
+    const v = toText(value).toLowerCase().trim();
     return v === 'source' || v === 'payment' || v === 'mirror' ? v : 'carrier';
   }
 
   private normalizeCategory(value: unknown): IntegrationCategory {
-    const v = String(value ?? '')
-      .toLowerCase()
-      .trim();
+    const v = toText(value).toLowerCase().trim();
     const allowed: IntegrationCategory[] = [
       'marketplace',
       'crm',
@@ -3458,15 +3464,11 @@ export class IntegrationServiceService {
   private normalizeIntegrationMode(value: unknown): IntegrationMode {
     // `adapter` standart: `spec` rejimi biz kontrakt e'lon qilganimizni
     // bildiradi va bu ATAYLAB tanlanadigan holat.
-    return String(value ?? '')
-      .toLowerCase()
-      .trim() === 'spec'
-      ? 'spec'
-      : 'adapter';
+    return toText(value).toLowerCase().trim() === 'spec' ? 'spec' : 'adapter';
   }
 
   private normalizeType(value: unknown): 'api' | 'webhook' | 'ftp' {
-    const normalized = String(value ?? 'api').toLowerCase();
+    const normalized = toText(value ?? 'api').toLowerCase();
     if (normalized === 'webhook' || normalized === 'ftp') {
       return normalized;
     }
@@ -3487,11 +3489,13 @@ export class IntegrationServiceService {
       'access_token',
     ];
     for (const key of sensitiveKeys) {
-      if (
-        typeof masked[key] !== 'undefined' &&
-        masked[key] !== null &&
-        String(masked[key]).length > 0
-      ) {
+      const current = masked[key];
+      // Bo'sh satrni maskalamaymiz (sir yo'q); satr bo'lmagan har qanday
+      // to'ldirilgan qiymat (obyekt/raqam) esa maskalanadi — sir sizib
+      // chiqmasin.
+      const hasContent =
+        typeof current === 'string' ? current.length > 0 : current != null;
+      if (hasContent) {
         masked[key] = '***';
       }
     }
@@ -3714,7 +3718,7 @@ export class IntegrationServiceService {
 
   private async attachMarkets<T extends { market_id?: string | null }>(
     rows: T[],
-  ): Promise<Array<T & { market: any | null }>> {
+  ): Promise<Array<T & { market: any }>> {
     const marketIds = Array.from(
       new Set(
         rows
@@ -3732,7 +3736,7 @@ export class IntegrationServiceService {
     }));
   }
 
-  private sanitizeMarket(market: any | null): any | null {
+  private sanitizeMarket(market: any): any {
     if (!market || typeof market !== 'object') {
       return null;
     }
@@ -3775,7 +3779,7 @@ export class IntegrationServiceService {
 
   private extractMarketsFromItems(items: any[]): {
     items: any[];
-    market: any | null;
+    market: any;
     markets: any[];
   } {
     if (!Array.isArray(items) || items.length === 0) {
@@ -3841,7 +3845,7 @@ export class IntegrationServiceService {
                   if (typeof v === 'undefined' || v === null) {
                     return acc;
                   }
-                  acc[k] = String(v);
+                  acc[k] = toText(v);
                   return acc;
                 },
                 {},
@@ -4879,8 +4883,6 @@ export class IntegrationServiceService {
     const externalStatus = isGenericAction
       ? null
       : this.resolveExternalStatus(integration, input.action, input.new_status);
-    const syncConfig = this.toSyncConfig(integration);
-    const updateConfig = syncConfig.external_update ?? {};
 
     const context = {
       order_id: String(input.order_id),
@@ -7119,7 +7121,7 @@ export class IntegrationServiceService {
       value: unknown,
     ) => {
       if (value === null || typeof value === 'undefined') return;
-      const str = String(value).trim();
+      const str = toText(value).trim();
       if (str) target[key] = str;
     };
 

@@ -83,7 +83,9 @@ describe('LogisticsServiceService createCanceledPost', () => {
     const postRepo = {
       findOne: jest.fn().mockResolvedValue(null),
       create: jest.fn((payload) => payload),
-      save: jest.fn(async (post) => ({ ...post, id: post.id ?? '55' })),
+      save: jest.fn((post) =>
+        Promise.resolve({ ...post, id: post.id ?? '55' }),
+      ),
     };
     const branchClient = {
       send: jest.fn(() =>
@@ -164,7 +166,9 @@ describe('LogisticsServiceService createCanceledPost', () => {
     const postRepo = {
       findOne: jest.fn().mockResolvedValue(null),
       create: jest.fn((payload) => payload),
-      save: jest.fn(async (post) => ({ ...post, id: post.id ?? '55' })),
+      save: jest.fn((post) =>
+        Promise.resolve({ ...post, id: post.id ?? '55' }),
+      ),
     };
     const branchClient = {
       send: jest.fn(() => of({ data: { branch_id: '10', role: 'COURIER' } })),
@@ -219,7 +223,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
         post_total_price: 1_000_000,
       }),
       create: jest.fn((payload) => payload),
-      save: jest.fn(async (post) => post),
+      save: jest.fn((post) => Promise.resolve(post)),
     };
     const branchClient = {
       send: jest.fn(() =>
@@ -291,7 +295,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
         post_total_price: 1_000_000,
       }),
       create: jest.fn((payload) => payload),
-      save: jest.fn(async (post) => post),
+      save: jest.fn((post) => Promise.resolve(post)),
     };
     const branchClient = {
       send: jest.fn(() =>
@@ -366,7 +370,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
         post_total_price: 1_000_000,
       }),
       create: jest.fn((payload) => payload),
-      save: jest.fn(async (post) => post),
+      save: jest.fn((post) => Promise.resolve(post)),
     };
     const branchClient = {
       send: jest.fn(() =>
@@ -433,7 +437,9 @@ describe('LogisticsServiceService createCanceledPost', () => {
         .mockResolvedValueOnce(null)
         .mockResolvedValueOnce(null),
       create: jest.fn((payload) => payload),
-      save: jest.fn(async (post) => ({ ...post, id: post.id ?? '55' })),
+      save: jest.fn((post) =>
+        Promise.resolve({ ...post, id: post.id ?? '55' }),
+      ),
     };
     const branchClient = {
       send: jest.fn(() =>
@@ -498,7 +504,9 @@ describe('LogisticsServiceService createCanceledPost', () => {
     const postRepo = {
       findOne: jest.fn().mockResolvedValue(null),
       create: jest.fn((payload) => payload),
-      save: jest.fn(async (post) => ({ ...post, id: post.id ?? '55' })),
+      save: jest.fn((post) =>
+        Promise.resolve({ ...post, id: post.id ?? '55' }),
+      ),
     };
     const branchClient = {
       send: jest.fn(() => of({ data: { branch_id: '10', role: 'COURIER' } })),
@@ -553,7 +561,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
         order_quantity: 1,
         post_total_price: 1_000_000,
       }),
-      save: jest.fn(async (post) => post),
+      save: jest.fn((post) => Promise.resolve(post)),
     };
     const activityLog = {
       log: jest.fn().mockResolvedValue(undefined),
@@ -650,7 +658,9 @@ describe('LogisticsServiceService createCanceledPost', () => {
         .mockResolvedValueOnce(sourcePost)
         .mockResolvedValueOnce(null),
       create: jest.fn((payload) => payload),
-      save: jest.fn(async (post) => ({ ...post, id: post.id ?? '66' })),
+      save: jest.fn((post) =>
+        Promise.resolve({ ...post, id: post.id ?? '66' }),
+      ),
     };
     const branchClient = {
       send: jest.fn(() => of({ data: { id: '1', type: 'HQ' } })),
@@ -723,7 +733,9 @@ describe('LogisticsServiceService createCanceledPost', () => {
     const postRepo = {
       findOne: jest.fn().mockResolvedValue(null),
       create: jest.fn((payload) => payload),
-      save: jest.fn(async (post) => ({ ...post, id: post.id ?? '77' })),
+      save: jest.fn((post) =>
+        Promise.resolve({ ...post, id: post.id ?? '77' }),
+      ),
     };
     const activityLog = {
       log: jest.fn().mockResolvedValue(undefined),
@@ -802,7 +814,9 @@ describe('LogisticsServiceService createCanceledPost', () => {
     const postRepo = {
       findOne: jest.fn().mockResolvedValue(null),
       create: jest.fn((payload) => payload),
-      save: jest.fn(async (post) => ({ ...post, id: post.id ?? '77' })),
+      save: jest.fn((post) =>
+        Promise.resolve({ ...post, id: post.id ?? '77' }),
+      ),
     };
     const service = new LogisticsServiceService(
       postRepo as any,
@@ -858,7 +872,9 @@ describe('LogisticsServiceService createCanceledPost', () => {
     const postRepo = {
       findOne: jest.fn().mockResolvedValue(null),
       create: jest.fn((payload) => payload),
-      save: jest.fn(async (post) => ({ ...post, id: post.id ?? '77' })),
+      save: jest.fn((post) =>
+        Promise.resolve({ ...post, id: post.id ?? '77' }),
+      ),
     };
     const service = new LogisticsServiceService(
       postRepo as any,
@@ -923,7 +939,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
         post_total_price: 1_000_000,
       }),
       create: jest.fn((payload) => payload),
-      save: jest.fn(async (post) => post),
+      save: jest.fn((post) => Promise.resolve(post)),
     };
     const service = new LogisticsServiceService(
       postRepo as any,
@@ -984,7 +1000,7 @@ describe('LogisticsServiceService createCanceledPost', () => {
         order_quantity: 1,
         post_total_price: 1_000_000,
       }),
-      save: jest.fn(async (post) => post),
+      save: jest.fn((post) => Promise.resolve(post)),
     };
     const service = new LogisticsServiceService(
       postRepo as any,
@@ -1074,7 +1090,9 @@ describe('LogisticsServiceService createCanceledPost', () => {
         .mockResolvedValueOnce(sourcePost)
         .mockResolvedValueOnce(null),
       create: jest.fn((payload) => payload),
-      save: jest.fn(async (post) => ({ ...post, id: post.id ?? '88' })),
+      save: jest.fn((post) =>
+        Promise.resolve({ ...post, id: post.id ?? '88' }),
+      ),
     };
     const service = new LogisticsServiceService(
       postRepo as any,

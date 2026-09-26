@@ -35,7 +35,7 @@ describe('OrderServiceService return flow', () => {
 
     const orderRepo = {
       findOne: jest.fn().mockResolvedValue(order),
-      save: jest.fn(async (entity: any) => entity),
+      save: jest.fn((entity: any) => entity),
     };
 
     const transferBatchItemQb = {
@@ -55,12 +55,12 @@ describe('OrderServiceService return flow', () => {
 
     const trackingRepo = {
       create: jest.fn((x) => x),
-      save: jest.fn(async (x) => x),
+      save: jest.fn((x) => x),
     };
 
     const custodyRepo = {
       create: jest.fn((x) => x),
-      save: jest.fn(async (x) => x),
+      save: jest.fn((x) => x),
     };
 
     const queryRunner = {

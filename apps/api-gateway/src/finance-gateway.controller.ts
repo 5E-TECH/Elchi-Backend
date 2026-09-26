@@ -71,6 +71,23 @@ export class FinanceGatewayController {
     @Inject('ORDER') private readonly orderClient: ClientProxy,
   ) {}
 
+  /**
+   * Xom RPC yuklaridagi rol qiymati `unknown` bo'ladi va odatda matn. Obyekt
+   * kelib qolsa `String(...)` "[object Object]" beradi — shu bois faqat
+   * primitivlarni matnga aylantiramiz (xulq o'zgarmaydi).
+   */
+  private roleToString(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (
+      typeof value === 'number' ||
+      typeof value === 'bigint' ||
+      typeof value === 'boolean'
+    ) {
+      return String(value);
+    }
+    return '';
+  }
+
   private async send<T = any>(
     pattern: object,
     payload: object,
@@ -739,7 +756,7 @@ export class FinanceGatewayController {
               : [];
           isPrivilegedMarketView = targetRoles.some(
             (role: unknown) =>
-              String(role ?? '').toLowerCase() === RoleEnum.MARKET,
+              this.roleToString(role).toLowerCase() === RoleEnum.MARKET,
           );
           if (isPrivilegedMarketView) {
             requestQuery = {
@@ -952,7 +969,7 @@ export class FinanceGatewayController {
           : [];
       return !creatorRoles.some(
         (role: unknown) =>
-          String(role ?? '').toLowerCase() === RoleEnum.MANAGER,
+          this.roleToString(role).toLowerCase() === RoleEnum.MANAGER,
       );
     });
 
@@ -1149,7 +1166,7 @@ export class FinanceGatewayController {
           : [];
       const isCourier = roleList.some(
         (role: unknown) =>
-          String(role ?? '').toLowerCase() === RoleEnum.COURIER,
+          this.roleToString(role).toLowerCase() === RoleEnum.COURIER,
       );
       if (!isCourier) {
         throw new ForbiddenException('Bu foydalanuvchi courier emas');
