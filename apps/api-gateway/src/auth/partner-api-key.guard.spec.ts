@@ -136,7 +136,7 @@ describe('PartnerApiKeyGuard — IP allowlist', () => {
     );
   });
 
-  it("TC-IP4: CIDR diapazoni ishlaydi", async () => {
+  it('TC-IP4: CIDR diapazoni ishlaydi', async () => {
     const guard = makeGuard(validation(['203.0.113.0/24']));
     const { context } = makeContext({ 'x-api-key': 'elp_x' }, '203.0.113.77');
 

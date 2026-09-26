@@ -1742,7 +1742,9 @@ export class BranchTransferBatchService {
       entity_id: sentBatchId,
       action: ActivityAction.STATUS_CHANGE,
       new_value: { status: sentBatch.status },
-      ...this.custody.auditActor({ id: String(input?.requester_id ?? '').trim() }),
+      ...this.custody.auditActor({
+        id: String(input?.requester_id ?? '').trim(),
+      }),
       metadata: {
         batch_id: sentBatchId,
         source_batch_id: batchId,
@@ -2448,9 +2450,7 @@ export class BranchTransferBatchService {
 
       // Quyidagilar KURYERGA AYTILADIGAN xatolar — sababini bilishi kerak.
       if (batch.direction !== BranchTransferDirection.FORWARD) {
-        this.badRequest(
-          "Qaytarish paketini skan orqali qabul qilib bo'lmaydi",
-        );
+        this.badRequest("Qaytarish paketini skan orqali qabul qilib bo'lmaydi");
       }
       if (batch.status === BranchTransferBatchStatus.PENDING) {
         this.badRequest(
@@ -2458,7 +2458,7 @@ export class BranchTransferBatchService {
         );
       }
       if (batch.status === BranchTransferBatchStatus.CANCELLED) {
-        this.badRequest("Paket bekor qilingan");
+        this.badRequest('Paket bekor qilingan');
       }
       if (batch.status !== BranchTransferBatchStatus.SENT) {
         this.badRequest(

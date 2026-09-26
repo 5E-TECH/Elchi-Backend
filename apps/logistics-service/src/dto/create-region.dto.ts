@@ -9,4 +9,3 @@ export class CreateRegionDto {
   @IsString()
   sato_code!: string;
 }
-

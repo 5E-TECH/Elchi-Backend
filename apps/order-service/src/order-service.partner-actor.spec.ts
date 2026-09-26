@@ -12,7 +12,7 @@ import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
  *
  * Oqibati: hamkordan kelgan HECH BIR posilka yaratilmasdi.
  */
-describe('OrderLifecycleService — aktyor id raqamli bo\'lishi', () => {
+describe("OrderLifecycleService — aktyor id raqamli bo'lishi", () => {
   const svc: any = Object.create(OrderLifecycleService.prototype);
   const pick = (v: unknown) => svc.numericActorId(v);
 
@@ -42,7 +42,7 @@ describe('OrderLifecycleService — aktyor id raqamli bo\'lishi', () => {
     expect(pick('-5')).toBeNull();
   });
 
-  it('atrofdagi bo\'shliq tozalanadi', () => {
+  it("atrofdagi bo'shliq tozalanadi", () => {
     expect(pick('  77  ')).toBe('77');
   });
 });

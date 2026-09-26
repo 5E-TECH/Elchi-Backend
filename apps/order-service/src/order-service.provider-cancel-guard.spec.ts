@@ -62,7 +62,11 @@ function svc(status: Order_status) {
 const cancel = (status: Order_status) => {
   const ctx = svc(status);
   return (ctx.s as any)
-    .markByProvider({ order_id: '1001', action: 'cancel', provider_slug: 'ldg' })
+    .markByProvider({
+      order_id: '1001',
+      action: 'cancel',
+      provider_slug: 'ldg',
+    })
     .then((res: any) => ({ res, ...ctx }));
 };
 

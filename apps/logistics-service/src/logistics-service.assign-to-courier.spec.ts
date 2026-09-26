@@ -12,28 +12,26 @@ describe('LogisticsServiceService assignOrdersToCourier', () => {
     openPost?: Record<string, unknown> | null;
   }) {
     const ordersMap = new Map<string, any>();
-    const baseOrders =
-      options?.orders ??
-      [
-        {
-          id: '101',
-          branch_id: '10',
-          status: Order_status.RECEIVED,
-          courier_id: null,
-          post_id: null,
-          total_price: 100000,
-          region_id: '1',
-        },
-        {
-          id: '102',
-          branch_id: '10',
-          status: Order_status.NEW,
-          courier_id: null,
-          post_id: null,
-          total_price: 150000,
-          region_id: '1',
-        },
-      ];
+    const baseOrders = options?.orders ?? [
+      {
+        id: '101',
+        branch_id: '10',
+        status: Order_status.RECEIVED,
+        courier_id: null,
+        post_id: null,
+        total_price: 100000,
+        region_id: '1',
+      },
+      {
+        id: '102',
+        branch_id: '10',
+        status: Order_status.NEW,
+        courier_id: null,
+        post_id: null,
+        total_price: 150000,
+        region_id: '1',
+      },
+    ];
 
     for (const order of baseOrders) {
       ordersMap.set(String(order.id), { ...order });
@@ -73,12 +71,10 @@ describe('LogisticsServiceService assignOrdersToCourier', () => {
         }
         if (pattern.cmd === 'branch.user.find_by_branch') {
           return of({
-            data:
-              options?.branchUsers ??
-              [
-                { user_id: '44', role: 'COURIER' },
-                { user_id: '77', role: 'MANAGER' },
-              ],
+            data: options?.branchUsers ?? [
+              { user_id: '44', role: 'COURIER' },
+              { user_id: '77', role: 'MANAGER' },
+            ],
           });
         }
         return of({ data: null });
@@ -113,7 +109,10 @@ describe('LogisticsServiceService assignOrdersToCourier', () => {
     const activityLog = {
       log: jest.fn().mockResolvedValue(undefined),
       logChange: jest.fn().mockResolvedValue(undefined),
-      query: jest.fn().mockResolvedValue({ items: [], meta: { page: 1, limit: 50, total: 0, totalPages: 1 } }),
+      query: jest.fn().mockResolvedValue({
+        items: [],
+        meta: { page: 1, limit: 50, total: 0, totalPages: 1 },
+      }),
       findByEntity: jest.fn().mockResolvedValue([]),
       findByUser: jest.fn().mockResolvedValue([]),
     };
@@ -129,7 +128,14 @@ describe('LogisticsServiceService assignOrdersToCourier', () => {
       activityLog as any,
     );
 
-    return { service, orderClient, branchClient, postRepo, ordersMap, activityLog };
+    return {
+      service,
+      orderClient,
+      branchClient,
+      postRepo,
+      ordersMap,
+      activityLog,
+    };
   }
 
   async function expectRpcStatus(

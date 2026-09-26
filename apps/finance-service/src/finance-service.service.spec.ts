@@ -1049,7 +1049,7 @@ describe('FinanceServiceService manual branch cashbox operations', () => {
     expect(res.data.idempotent).toBe(true);
     expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
     // the pre-check matched on source_id IS NULL + the token, not a bigint value
-    const where = (manager.findOne.mock.calls[1][1] as any).where;
+    const where = manager.findOne.mock.calls[1][1].where;
     expect(where.dedup_epoch).toBe('tok-abc');
   });
 });

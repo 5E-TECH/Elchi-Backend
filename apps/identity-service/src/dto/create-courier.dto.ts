@@ -35,7 +35,11 @@ export class CreateCourierDto {
   @MinLength(4)
   password: string;
 
-  @ApiPropertyOptional({ example: 2000000, minimum: 0, description: 'Optional, default is 0' })
+  @ApiPropertyOptional({
+    example: 2000000,
+    minimum: 0,
+    description: 'Optional, default is 0',
+  })
   @IsOptional()
   @IsNumber()
   @Min(0)
@@ -54,13 +58,21 @@ export class CreateCourierDto {
   @Max(30)
   payment_day?: number;
 
-  @ApiPropertyOptional({ example: 10000, minimum: 0, description: 'Optional, default is 0' })
+  @ApiPropertyOptional({
+    example: 10000,
+    minimum: 0,
+    description: 'Optional, default is 0',
+  })
   @IsOptional()
   @IsNumber()
   @Min(0)
   tariff_home?: number;
 
-  @ApiPropertyOptional({ example: 8000, minimum: 0, description: 'Optional, default is 0' })
+  @ApiPropertyOptional({
+    example: 8000,
+    minimum: 0,
+    description: 'Optional, default is 0',
+  })
   @IsOptional()
   @IsNumber()
   @Min(0)

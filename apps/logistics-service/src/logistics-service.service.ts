@@ -379,7 +379,9 @@ export class LogisticsServiceService implements OnModuleInit {
     const requesterCourierId = String(courierId).trim();
     const holderCourierId = String(order.holder_courier_id ?? '').trim();
     const assignedCourierId = String(order.courier_id ?? '').trim();
-    const holderType = String(order.holder_type ?? '').trim().toUpperCase();
+    const holderType = String(order.holder_type ?? '')
+      .trim()
+      .toUpperCase();
 
     if (holderCourierId) {
       return (
@@ -422,7 +424,11 @@ export class LogisticsServiceService implements OnModuleInit {
       activePost &&
       String(order.canceled_post_id) === String(activePost.id)
     ) {
-      return this.isActiveCanceledPostForTarget(activePost, courierId, branchId);
+      return this.isActiveCanceledPostForTarget(
+        activePost,
+        courierId,
+        branchId,
+      );
     }
 
     const existingPost = await this.postRepo.findOne({
@@ -1148,7 +1154,9 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
-  private async repairSentPostBranchAssignments(branchId: string): Promise<void> {
+  private async repairSentPostBranchAssignments(
+    branchId: string,
+  ): Promise<void> {
     const normalizedBranchId = String(branchId ?? '').trim();
     if (!normalizedBranchId) return;
 
@@ -1171,9 +1179,7 @@ export class LogisticsServiceService implements OnModuleInit {
         limit: 1000,
       });
       const branchIds = new Set(
-        orders
-          .map((order) => this.getOrderBranchScope(order))
-          .filter(Boolean),
+        orders.map((order) => this.getOrderBranchScope(order)).filter(Boolean),
       );
 
       if (branchIds.size === 1 && branchIds.has(normalizedBranchId)) {
@@ -1380,7 +1386,7 @@ export class LogisticsServiceService implements OnModuleInit {
       order: { createdAt: 'DESC' },
     });
     const courierMap = await this.findCouriersByIds(
-      allPosts.map((post) => post.courier_id).filter(Boolean) as string[],
+      allPosts.map((post) => post.courier_id).filter(Boolean),
     );
     const enrichedPosts = await Promise.all(
       allPosts.map(async (post) => {
@@ -1449,7 +1455,7 @@ export class LogisticsServiceService implements OnModuleInit {
       order: { createdAt: 'DESC' },
     });
     const courierMap = await this.findCouriersByIds(
-      rows.map((post) => post.courier_id).filter(Boolean) as string[],
+      rows.map((post) => post.courier_id).filter(Boolean),
     );
     const enrichedRows = await Promise.all(
       rows.map(async (post) => {
@@ -1513,9 +1519,7 @@ export class LogisticsServiceService implements OnModuleInit {
         limit: 1000,
       });
       const orderBranchIds = new Set(
-        orders
-          .map((order) => this.getOrderBranchScope(order))
-          .filter(Boolean),
+        orders.map((order) => this.getOrderBranchScope(order)).filter(Boolean),
       );
       belongsToScopedBranch =
         orderBranchIds.size === 1 && orderBranchIds.has(String(scopedBranchId));
@@ -2019,9 +2023,7 @@ export class LogisticsServiceService implements OnModuleInit {
     });
     const scopedBranchId = await this.resolveScopedBranchId(requester);
     const orderBranchIds = new Set(
-      allOrders
-        .map((order) => this.getOrderBranchScope(order))
-        .filter(Boolean),
+      allOrders.map((order) => this.getOrderBranchScope(order)).filter(Boolean),
     );
     const belongsToScopedBranch =
       Boolean(scopedBranchId) &&
@@ -3225,9 +3227,7 @@ export class LogisticsServiceService implements OnModuleInit {
     for (const orderId of orderIds) {
       const order = await this.findOrderById(orderId);
       if (!this.isCancelledPostEligibleOrder(order.status)) {
-        this.badRequest(
-          'Some orders are not in CANCELED status',
-        );
+        this.badRequest('Some orders are not in CANCELED status');
       }
       if (
         this.isCancelledOrder(order.status) &&
@@ -3624,8 +3624,7 @@ export class LogisticsServiceService implements OnModuleInit {
           courier_id: savedPost.courier_id,
         },
       }),
-    )
-      .catch(() => undefined);
+    ).catch(() => undefined);
 
     return successRes(
       {
@@ -4036,7 +4035,7 @@ export class LogisticsServiceService implements OnModuleInit {
         continue;
       }
 
-      const status = order.status as Order_status | undefined;
+      const status = order.status;
       const price = Number(order.total_price ?? 0);
 
       stats.totalOrders += 1;
@@ -4146,7 +4145,7 @@ export class LogisticsServiceService implements OnModuleInit {
 
       for (const order of rows) {
         totalOrders += 1;
-        const status = order.status as Order_status | undefined;
+        const status = order.status;
         const price = Number(order.total_price ?? 0);
 
         if (status && deliveredStatuses.has(status)) {
@@ -4364,7 +4363,10 @@ export class LogisticsServiceService implements OnModuleInit {
         void this.syncPostToSearch(post);
       }
 
-      if (assignedBranch && String(post.branch_id ?? '').trim() !== assignedBranch) {
+      if (
+        assignedBranch &&
+        String(post.branch_id ?? '').trim() !== assignedBranch
+      ) {
         post.branch_id = assignedBranch;
       }
 

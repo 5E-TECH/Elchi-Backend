@@ -1,5 +1,10 @@
 import { Controller } from '@nestjs/common';
-import { Ctx, MessagePattern, Payload, RmqContext } from '@nestjs/microservices';
+import {
+  Ctx,
+  MessagePattern,
+  Payload,
+  RmqContext,
+} from '@nestjs/microservices';
 import { RmqService, executeAndAck, ActivityLogQuery } from '@app/common';
 import { CatalogServiceService } from './catalog-service.service';
 
@@ -28,26 +33,38 @@ export class CatalogServiceController {
 
   @MessagePattern({ cmd: 'catalog.product.create' })
   create(
-    @Payload() data: { dto: { name: string; user_id: string; image_url?: string } },
+    @Payload()
+    data: { dto: { name: string; user_id: string; image_url?: string } },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.catalogService.create(data.dto));
+    return this.executeAndAck(context, () =>
+      this.catalogService.create(data.dto),
+    );
   }
 
   @MessagePattern({ cmd: 'catalog.product.find_all' })
   findAll(
-    @Payload() data: { query: { user_id?: string; search?: string; page?: number; limit?: number } },
+    @Payload()
+    data: {
+      query: {
+        user_id?: string;
+        search?: string;
+        page?: number;
+        limit?: number;
+      };
+    },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.catalogService.findAll(data.query));
+    return this.executeAndAck(context, () =>
+      this.catalogService.findAll(data.query),
+    );
   }
 
   @MessagePattern({ cmd: 'catalog.product.find_by_id' })
-  findById(
-    @Payload() data: { id: string },
-    @Ctx() context: RmqContext,
-  ) {
-    return this.executeAndAck(context, () => this.catalogService.findById(data.id));
+  findById(@Payload() data: { id: string }, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.catalogService.findById(data.id),
+    );
   }
 
   @MessagePattern({ cmd: 'catalog.product.update' })
@@ -55,12 +72,19 @@ export class CatalogServiceController {
     @Payload() data: { id: string; dto: { name?: string; image_url?: string } },
     @Ctx() context: RmqContext,
   ) {
-    return this.executeAndAck(context, () => this.catalogService.update(data.id, data.dto));
+    return this.executeAndAck(context, () =>
+      this.catalogService.update(data.id, data.dto),
+    );
   }
 
   @MessagePattern({ cmd: 'catalog.product.update_own' })
   updateOwn(
-    @Payload() data: { id: string; user_id: string; dto: { name?: string; image_url?: string } },
+    @Payload()
+    data: {
+      id: string;
+      user_id: string;
+      dto: { name?: string; image_url?: string };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -70,7 +94,8 @@ export class CatalogServiceController {
 
   @MessagePattern({ cmd: 'catalog.product.delete' })
   remove(
-    @Payload() data: { id: string; requester?: { id: string; roles: string[] } },
+    @Payload()
+    data: { id: string; requester?: { id: string; roles: string[] } },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -89,10 +114,7 @@ export class CatalogServiceController {
   }
 
   @MessagePattern({ cmd: 'catalog.product.find_by_ids' })
-  findByIds(
-    @Payload() data: { ids: string[] },
-    @Ctx() context: RmqContext,
-  ) {
+  findByIds(@Payload() data: { ids: string[] }, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.catalogService.findByIds(data.ids ?? []),
     );

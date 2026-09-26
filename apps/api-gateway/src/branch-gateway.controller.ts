@@ -63,17 +63,22 @@ export class BranchGatewayController {
     };
   }
 
-  private async resolveSourceBranchIdForDispatch(
-    req: { user?: { sub?: string; roles?: string[] } },
-  ): Promise<string> {
+  private async resolveSourceBranchIdForDispatch(req: {
+    user?: { sub?: string; roles?: string[] };
+  }): Promise<string> {
     const requester = this.toRequester(req);
-    const requesterRoles = (requester.roles ?? []).map((role) => String(role ?? '').toLowerCase());
+    const requesterRoles = (requester.roles ?? []).map((role) =>
+      String(role ?? '').toLowerCase(),
+    );
     const isSystemPrivileged =
-      requesterRoles.includes(RoleEnum.SUPERADMIN) || requesterRoles.includes(RoleEnum.ADMIN);
+      requesterRoles.includes(RoleEnum.SUPERADMIN) ||
+      requesterRoles.includes(RoleEnum.ADMIN);
 
     if (isSystemPrivileged) {
       const hqResponse = await firstValueFrom(
-        this.branchClient.send({ cmd: 'branch.find_by_code' }, { code: 'HQ-TSHKNT' }).pipe(timeout(8000)),
+        this.branchClient
+          .send({ cmd: 'branch.find_by_code' }, { code: 'HQ-TSHKNT' })
+          .pipe(timeout(8000)),
       );
       const hqBranchId = String(hqResponse?.data?.id ?? '').trim();
       if (!hqBranchId) {
@@ -83,14 +88,20 @@ export class BranchGatewayController {
     }
 
     const assignmentResponse = await firstValueFrom(
-      this.branchClient.send(
-        { cmd: 'branch.user.find_by_user' },
-        { user_id: requester.id, requester },
-      ).pipe(timeout(8000)),
+      this.branchClient
+        .send(
+          { cmd: 'branch.user.find_by_user' },
+          { user_id: requester.id, requester },
+        )
+        .pipe(timeout(8000)),
     );
-    const assignedBranchId = String(assignmentResponse?.data?.branch_id ?? '').trim();
+    const assignedBranchId = String(
+      assignmentResponse?.data?.branch_id ?? '',
+    ).trim();
     if (!assignedBranchId) {
-      throw new BadRequestException('Foydalanuvchi hech qaysi branchga biriktirilmagan');
+      throw new BadRequestException(
+        'Foydalanuvchi hech qaysi branchga biriktirilmagan',
+      );
     }
 
     return assignedBranchId;
@@ -104,7 +115,9 @@ export class BranchGatewayController {
     @Body() dto: CreateBranchRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send({ cmd: 'branch.create' }, { dto, requester: this.toRequester(req) }).pipe(timeout(8000));
+    return this.branchClient
+      .send({ cmd: 'branch.create' }, { dto, requester: this.toRequester(req) })
+      .pipe(timeout(8000));
   }
 
   @Get('branches')
@@ -121,29 +134,39 @@ export class BranchGatewayController {
     @Query('limit') limit?: string,
     @Req() req?: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.find_all' },
-      {
-        requester: this.toRequester(req ?? {}),
-        query: {
-          search,
-          status,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
+    return this.branchClient
+      .send(
+        { cmd: 'branch.find_all' },
+        {
+          requester: this.toRequester(req ?? {}),
+          query: {
+            search,
+            status,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('branches/tree')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Get full branch tree (nested)' })
   findBranchTree() {
-    return this.branchClient.send({ cmd: 'branch.tree' }, {}).pipe(timeout(8000));
+    return this.branchClient
+      .send({ cmd: 'branch.tree' }, {})
+      .pipe(timeout(8000));
   }
 
   @Get('branches/with-sent-batches')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
   @ApiOperation({ summary: 'List branches that have SENT transfer batches' })
   @ApiQuery({ name: 'direction', required: false, enum: ['FORWARD', 'RETURN'] })
   @ApiQuery({ name: 'side', required: false, enum: ['source', 'destination'] })
@@ -152,13 +175,15 @@ export class BranchGatewayController {
     @Query('side') side: 'source' | 'destination' | undefined,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.transfer_batches.sent_branches' },
-      {
-        requester: this.toRequester(req),
-        query: { direction, side },
-      },
-    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.transfer_batches.sent_branches' },
+        {
+          requester: this.toRequester(req),
+          query: { direction, side },
+        },
+      )
+      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Get('branches/:id')
@@ -169,7 +194,12 @@ export class BranchGatewayController {
     @Param('id') id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send({ cmd: 'branch.find_by_id' }, { id, requester: this.toRequester(req) }).pipe(timeout(8000));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.find_by_id' },
+        { id, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('branches/:id/descendants')
@@ -177,67 +207,117 @@ export class BranchGatewayController {
   @ApiOperation({ summary: 'Get all descendants of a branch (flat list)' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   findBranchDescendants(@Param('id') id: string) {
-    return this.branchClient.send({ cmd: 'branch.descendants' }, { id }).pipe(timeout(8000));
+    return this.branchClient
+      .send({ cmd: 'branch.descendants' }, { id })
+      .pipe(timeout(8000));
   }
 
   @Get('branches/:id/analytics/markets')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
-  @ApiOperation({ summary: 'Branch market analytics (orders, delivered, total price)' })
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
+  @ApiOperation({
+    summary: 'Branch market analytics (orders, delivered, total price)',
+  })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   findBranchMarketsAnalytics(
     @Param('id') id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.analytics.markets' },
-      { id, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.analytics.markets' },
+        { id, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('branches/new-orders')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
   @ApiOperation({ summary: 'Branches that currently have NEW orders' })
   findBranchesWithNewOrders(
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.new_orders.branches' },
-      { requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.new_orders.branches' },
+        { requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
   }
 
   @Post('branches/transfer-batches')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
-  @ApiOperation({ summary: "Create transfer batches from requester's branch by order_ids" })
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
+  @ApiOperation({
+    summary: "Create transfer batches from requester's branch by order_ids",
+  })
   @ApiBody({ type: CreateBranchTransferBatchesRequestDto })
   createTransferBatches(
     @Body() dto: CreateBranchTransferBatchesRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.transfer_batches.create' },
-      { dto, requester: this.toRequester(req) },
-    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.transfer_batches.create' },
+        { dto, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Post('branches/:id/return-batches')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
-  @ApiOperation({ summary: 'Create return batches grouped by original branch (direction=RETURN, QR=BTR-*)' })
-  @ApiParam({ name: 'id', description: 'Source branch ID (HQ / current branch)' })
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
+  @ApiOperation({
+    summary:
+      'Create return batches grouped by original branch (direction=RETURN, QR=BTR-*)',
+  })
+  @ApiParam({
+    name: 'id',
+    description: 'Source branch ID (HQ / current branch)',
+  })
   @ApiBody({ type: CreateReturnBatchesRequestDto })
   createReturnBatches(
     @Param('id') id: string,
     @Body() dto: CreateReturnBatchesRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.return_batches.create' },
-      { id, dto, requester: this.toRequester(req) },
-    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.return_batches.create' },
+        { id, dto, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Patch('transfer-batches/:id/send')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
   @ApiOperation({ summary: 'Mark transfer batch as sent with vehicle info' })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   @ApiBody({ type: SendTransferBatchRequestDto })
@@ -246,21 +326,42 @@ export class BranchGatewayController {
     @Body() dto: SendTransferBatchRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.transfer_batches.send' },
-      { id, dto, requester: this.toRequester(req) },
-    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.transfer_batches.send' },
+        { id, dto, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Get('transfer-batches')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
   @ApiOperation({ summary: 'List transfer batches' })
   @ApiQuery({ name: 'source_branch_id', required: false, type: String })
   @ApiQuery({ name: 'destination_branch_id', required: false, type: String })
-  @ApiQuery({ name: 'status', required: false, enum: ['PENDING', 'SENT', 'RECEIVED', 'CANCELLED'] })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    enum: ['PENDING', 'SENT', 'RECEIVED', 'CANCELLED'],
+  })
   @ApiQuery({ name: 'direction', required: false, enum: ['FORWARD', 'RETURN'] })
-  @ApiQuery({ name: 'period', required: false, enum: ['today', 'week', 'month'] })
-  @ApiQuery({ name: 'date', required: false, type: String, description: 'YYYY-MM-DD or ISO datetime' })
+  @ApiQuery({
+    name: 'period',
+    required: false,
+    enum: ['today', 'week', 'month'],
+  })
+  @ApiQuery({
+    name: 'date',
+    required: false,
+    type: String,
+    description: 'YYYY-MM-DD or ISO datetime',
+  })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   findTransferBatches(
@@ -274,69 +375,108 @@ export class BranchGatewayController {
     @Query('limit') limit: string | undefined,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.transfer_batches.find_all' },
-      {
-        requester: this.toRequester(req),
-        query: {
-          source_branch_id: sourceBranchId,
-          destination_branch_id: destinationBranchId,
-          status,
-          direction,
-          period,
-          date,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
+    return this.branchClient
+      .send(
+        { cmd: 'branch.transfer_batches.find_all' },
+        {
+          requester: this.toRequester(req),
+          query: {
+            source_branch_id: sourceBranchId,
+            destination_branch_id: destinationBranchId,
+            status,
+            direction,
+            period,
+            date,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
         },
-      },
-    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+      )
+      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Get('transfer-batches/:id')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
   @ApiOperation({ summary: 'Get transfer batch by id' })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   findTransferBatchById(
     @Param('id') id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.transfer_batches.find_by_id' },
-      { id, requester: this.toRequester(req) },
-    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.transfer_batches.find_by_id' },
+        { id, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Get('transfer-batches/:id/remaining')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
-  @ApiOperation({ summary: 'Get remaining (not sent) items of transfer batch by id' })
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
+  @ApiOperation({
+    summary: 'Get remaining (not sent) items of transfer batch by id',
+  })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   findRemainingTransferBatchById(
     @Param('id') id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.transfer_batches.find_remaining' },
-      { id, requester: this.toRequester(req) },
-    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.transfer_batches.find_remaining' },
+        { id, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Post('transfer-batches/:id/receive')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
-  @ApiOperation({ summary: 'Receive transfer batch by destination branch staff' })
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
+  @ApiOperation({
+    summary: 'Receive transfer batch by destination branch staff',
+  })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   receiveTransferBatch(
     @Param('id') id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.transfer_batches.receive' },
-      { id, requester: this.toRequester(req) },
-    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.transfer_batches.receive' },
+        { id, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Post('transfer-batches/:id/receive-orders')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
-  @ApiOperation({ summary: 'Receive selected orders from transfer batch by destination branch staff' })
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
+  @ApiOperation({
+    summary:
+      'Receive selected orders from transfer batch by destination branch staff',
+  })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   @ApiBody({ type: ReceiveTransferBatchOrdersRequestDto })
   receiveTransferBatchOrders(
@@ -344,14 +484,22 @@ export class BranchGatewayController {
     @Body() dto: ReceiveTransferBatchOrdersRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.transfer_batches.receive_orders' },
-      { id, dto, requester: this.toRequester(req) },
-    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.transfer_batches.receive_orders' },
+        { id, dto, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Post('transfer-batches/:id/cancel')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
   @ApiOperation({ summary: 'Cancel transfer batch and unassign its orders' })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   @ApiBody({ type: CancelTransferBatchRequestDto })
@@ -360,14 +508,22 @@ export class BranchGatewayController {
     @Body() dto: CancelTransferBatchRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.transfer_batches.cancel' },
-      { id, dto, requester: this.toRequester(req) },
-    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.transfer_batches.cancel' },
+        { id, dto, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Post('branches/posts/:postId/dispatch')
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.BRANCH, RoleEnum.MANAGER, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
   @ApiOperation({ summary: 'Dispatch HQ post to destination branch' })
   @ApiParam({ name: 'postId', description: 'Logistics post ID' })
   @ApiBody({
@@ -384,7 +540,8 @@ export class BranchGatewayController {
           type: 'array',
           items: { type: 'string' },
           example: ['101', '102'],
-          description: 'Optional: only selected orders from post are dispatched',
+          description:
+            'Optional: only selected orders from post are dispatched',
         },
       },
     },
@@ -403,16 +560,18 @@ export class BranchGatewayController {
     }
 
     const sourceBranchId = await this.resolveSourceBranchIdForDispatch(req);
-    return this.branchClient.send(
-      { cmd: 'branch.post.dispatch' },
-      {
-        source_branch_id: sourceBranchId,
-        post_id: postId,
-        destination_branch_id: destinationBranchId,
-        order_ids: normalizedOrderIds,
-        requester: this.toRequester(req),
-      },
-    ).pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.post.dispatch' },
+        {
+          source_branch_id: sourceBranchId,
+          post_id: postId,
+          destination_branch_id: destinationBranchId,
+          order_ids: normalizedOrderIds,
+          requester: this.toRequester(req),
+        },
+      )
+      .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
   }
 
   @Patch('branches/:id')
@@ -425,7 +584,12 @@ export class BranchGatewayController {
     @Body() dto: UpdateBranchRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send({ cmd: 'branch.update' }, { id, dto, requester: this.toRequester(req) }).pipe(timeout(8000));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.update' },
+        { id, dto, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
   }
 
   @Delete('branches/:id')
@@ -436,7 +600,9 @@ export class BranchGatewayController {
     @Param('id') id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send({ cmd: 'branch.delete' }, { id, requester: this.toRequester(req) }).pipe(timeout(8000));
+    return this.branchClient
+      .send({ cmd: 'branch.delete' }, { id, requester: this.toRequester(req) })
+      .pipe(timeout(8000));
   }
 
   @Post('branches/:id/users')
@@ -449,10 +615,12 @@ export class BranchGatewayController {
     @Body() dto: AssignBranchUserRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.user.assign' },
-      { requester: this.toRequester(req), dto: { branch_id: id, ...dto } },
-    ).pipe(timeout(8000));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.user.assign' },
+        { requester: this.toRequester(req), dto: { branch_id: id, ...dto } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Delete('branches/:id/users/:userId')
@@ -465,10 +633,12 @@ export class BranchGatewayController {
     @Param('userId') userId: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.user.remove' },
-      { branch_id: id, user_id: userId, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.user.remove' },
+        { branch_id: id, user_id: userId, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('branches/:id/users')
@@ -479,10 +649,12 @@ export class BranchGatewayController {
     @Param('id') id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.user.find_by_branch' },
-      { branch_id: id, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.user.find_by_branch' },
+        { branch_id: id, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('branches/:id/config')
@@ -493,7 +665,12 @@ export class BranchGatewayController {
     @Param('id') id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send({ cmd: 'branch.config.get' }, { branch_id: id, requester: this.toRequester(req) }).pipe(timeout(8000));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.config.get' },
+        { branch_id: id, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
   }
 
   @Post('branches/:id/config')
@@ -506,10 +683,12 @@ export class BranchGatewayController {
     @Body() dto: SetBranchConfigRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.config.set' },
-      { requester: this.toRequester(req), dto: { branch_id: id, ...dto } },
-    ).pipe(timeout(8000));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.config.set' },
+        { requester: this.toRequester(req), dto: { branch_id: id, ...dto } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('branches/:id/config/:key')
@@ -522,10 +701,12 @@ export class BranchGatewayController {
     @Param('key') key: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.config.find_one' },
-      { branch_id: id, config_key: key, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.config.find_one' },
+        { branch_id: id, config_key: key, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
   }
 
   @Patch('branches/:id/config/:key')
@@ -540,10 +721,15 @@ export class BranchGatewayController {
     @Body() dto: UpdateBranchConfigRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.config.update' },
-      { requester: this.toRequester(req), dto: { branch_id: id, config_key: key, ...dto } },
-    ).pipe(timeout(8000));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.config.update' },
+        {
+          requester: this.toRequester(req),
+          dto: { branch_id: id, config_key: key, ...dto },
+        },
+      )
+      .pipe(timeout(8000));
   }
 
   @Delete('branches/:id/config/:key')
@@ -556,9 +742,11 @@ export class BranchGatewayController {
     @Param('key') key: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.branchClient.send(
-      { cmd: 'branch.config.delete' },
-      { branch_id: id, config_key: key, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    return this.branchClient
+      .send(
+        { cmd: 'branch.config.delete' },
+        { branch_id: id, config_key: key, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
   }
 }

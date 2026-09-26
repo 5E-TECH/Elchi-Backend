@@ -10,7 +10,12 @@ import { User } from '../entities/user.entity';
 import { BcryptEncryption } from '../../../../libs/common/helpers/bcrypt';
 import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
-import { ActivityAction, ActivityLogService, Status, rmqSend } from '@app/common';
+import {
+  ActivityAction,
+  ActivityLogService,
+  Status,
+  rmqSend,
+} from '@app/common';
 import { errorRes, successRes } from '../../../../libs/common/helpers/response';
 
 @Injectable()
@@ -82,7 +87,10 @@ export class AuthService {
       throw new RpcException(errorRes('Invalid credentials', 401));
     }
 
-    const isMatch = await this.bcryptEncryption.compare(dto.password, user.password);
+    const isMatch = await this.bcryptEncryption.compare(
+      dto.password,
+      user.password,
+    );
     if (!isMatch) {
       await this.logAuthFailure(dto.phone_number, 'bad_password', user.id);
       throw new RpcException(errorRes('Invalid credentials', 401));
@@ -135,10 +143,10 @@ export class AuthService {
 
     let payload: { sub: string; username: string };
     try {
-      payload = await this.jwtService.verifyAsync<{ sub: string; username: string }>(
-        dto.refreshToken,
-        { secret: refreshSecret },
-      );
+      payload = await this.jwtService.verifyAsync<{
+        sub: string;
+        username: string;
+      }>(dto.refreshToken, { secret: refreshSecret });
     } catch {
       throw new RpcException(errorRes('Invalid refresh token', 401));
     }
@@ -146,7 +154,11 @@ export class AuthService {
     const user = await this.users.findOne({
       where: { id: payload.sub, isDeleted: false },
     });
-    if (!user || user.username !== payload.username || user.status !== Status.ACTIVE) {
+    if (
+      !user ||
+      user.username !== payload.username ||
+      user.status !== Status.ACTIVE
+    ) {
       throw new RpcException(errorRes('Invalid refresh token', 401));
     }
 
@@ -282,7 +294,7 @@ export class AuthService {
   }
 
   private extractExpMs(token: string): number | null {
-    const decoded = this.jwtService.decode(token) as { exp?: number } | null;
+    const decoded = this.jwtService.decode(token);
     if (!decoded || typeof decoded.exp !== 'number') {
       return null;
     }

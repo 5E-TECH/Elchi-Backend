@@ -663,7 +663,11 @@ export class UserServiceService implements OnModuleInit {
       entity_type: 'User',
       entity_id: saved.id,
       action: ActivityAction.CREATED,
-      new_value: { name: saved.name, phone_number: saved.phone_number, role: saved.role },
+      new_value: {
+        name: saved.name,
+        phone_number: saved.phone_number,
+        role: saved.role,
+      },
       ...this.auditActor(requester),
     });
     return successRes(this.sanitize(saved), 201, 'Admin yaratildi');
@@ -704,7 +708,11 @@ export class UserServiceService implements OnModuleInit {
       entity_type: 'User',
       entity_id: saved.id,
       action: ActivityAction.CREATED,
-      new_value: { name: saved.name, phone_number: saved.phone_number, role: saved.role },
+      new_value: {
+        name: saved.name,
+        phone_number: saved.phone_number,
+        role: saved.role,
+      },
       ...this.auditActor(requester),
       metadata: dto.branch_id ? { branch_id: dto.branch_id } : null,
     });
@@ -1193,7 +1201,11 @@ export class UserServiceService implements OnModuleInit {
       entity_type: 'User',
       entity_id: saved.id,
       action: ActivityAction.CREATED,
-      new_value: { name: saved.name, username: saved.username, role: saved.role },
+      new_value: {
+        name: saved.name,
+        username: saved.username,
+        role: saved.role,
+      },
       ...this.auditActor(requester),
     });
     return successRes(this.sanitize(saved), 201, 'Market yaratildi');
@@ -1242,7 +1254,11 @@ export class UserServiceService implements OnModuleInit {
       entity_type: 'User',
       entity_id: saved.id,
       action: ActivityAction.CREATED,
-      new_value: { name: saved.name, phone_number: saved.phone_number, role: saved.role },
+      new_value: {
+        name: saved.name,
+        phone_number: saved.phone_number,
+        role: saved.role,
+      },
       ...this.auditActor(requester),
       metadata: dto.branch_id ? { branch_id: dto.branch_id } : null,
     });
@@ -1290,7 +1306,11 @@ export class UserServiceService implements OnModuleInit {
       entity_type: 'User',
       entity_id: saved.id,
       action: ActivityAction.CREATED,
-      new_value: { name: saved.name, phone_number: saved.phone_number, role: saved.role },
+      new_value: {
+        name: saved.name,
+        phone_number: saved.phone_number,
+        role: saved.role,
+      },
       ...this.auditActor(requester),
       metadata: dto.branch_id ? { branch_id: dto.branch_id } : null,
     });
@@ -1343,7 +1363,11 @@ export class UserServiceService implements OnModuleInit {
       entity_type: 'User',
       entity_id: saved.id,
       action: ActivityAction.CREATED,
-      new_value: { name: saved.name, phone_number: saved.phone_number, role: saved.role },
+      new_value: {
+        name: saved.name,
+        phone_number: saved.phone_number,
+        role: saved.role,
+      },
     });
     return successRes(this.sanitize(saved), 201, 'Customer yaratildi');
   }
@@ -1448,8 +1472,7 @@ export class UserServiceService implements OnModuleInit {
         tariff_center: saved.tariff_center,
         default_tariff: saved.default_tariff,
         add_order: saved.add_order,
-        cancelled_handover_qr_required:
-          saved.cancelled_handover_qr_required,
+        cancelled_handover_qr_required: saved.cancelled_handover_qr_required,
         expense_proof_conditions: saved.expense_proof_conditions,
         password_changed: Boolean(dto.password),
       },

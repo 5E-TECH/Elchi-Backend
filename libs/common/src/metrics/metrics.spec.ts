@@ -7,20 +7,26 @@ describe('registerMetrics', () => {
       (req: unknown, res: unknown, next: () => void) => void
     > = [];
     const httpAdapter = {
-      get: jest.fn((path: string, handler: (req: unknown, res: unknown) => void) => {
-        routes[path] = handler;
-      }),
+      get: jest.fn(
+        (path: string, handler: (req: unknown, res: unknown) => void) => {
+          routes[path] = handler;
+        },
+      ),
     };
     const app = {
       getHttpAdapter: () => httpAdapter,
-      use: jest.fn((m: (req: unknown, res: unknown, next: () => void) => void) =>
-        middlewares.push(m),
+      use: jest.fn(
+        (m: (req: unknown, res: unknown, next: () => void) => void) =>
+          middlewares.push(m),
       ),
     } as any;
 
     registerMetrics(app, 'api-gateway');
 
-    expect(httpAdapter.get).toHaveBeenCalledWith('/metrics', expect.any(Function));
+    expect(httpAdapter.get).toHaveBeenCalledWith(
+      '/metrics',
+      expect.any(Function),
+    );
     expect(app.use).toHaveBeenCalled();
 
     // exercise the middleware for one request so a metric is recorded

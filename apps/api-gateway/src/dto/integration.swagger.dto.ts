@@ -45,7 +45,7 @@ export class CreateIntegrationRequestDto {
   @ApiPropertyOptional({
     example: 'carrier',
     enum: ['carrier', 'source', 'payment', 'mirror'],
-    description: "Berilmasa `carrier` (mavjud ulanishlarning naqshi)",
+    description: 'Berilmasa `carrier` (mavjud ulanishlarning naqshi)',
   })
   @IsOptional()
   @IsIn(['carrier', 'source', 'payment', 'mirror'])
@@ -75,7 +75,6 @@ export class CreateIntegrationRequestDto {
   @IsOptional()
   @IsIn(['spec', 'adapter'])
   integration_mode?: string;
-
 
   @ApiProperty({ example: 'api', enum: ['api', 'webhook', 'ftp'] })
   @IsIn(['api', 'webhook', 'ftp'])
@@ -153,7 +152,6 @@ export class CreateIntegrationRequestDto {
   @IsObject()
   status_sync_config?: Record<string, unknown>;
 
-
   /* ═══════════════════════════════════════════════════════════════════════
      KIRUVCHI WEBHOOK VA JO'NATISH SOZLAMALARI
 
@@ -196,7 +194,7 @@ export class CreateIntegrationRequestDto {
 
   @ApiPropertyOptional({
     example: 'sha256=',
-    description: "Imzo qiymati oldidagi prefiks (masalan `sha256=`)",
+    description: 'Imzo qiymati oldidagi prefiks (masalan `sha256=`)',
   })
   @IsOptional()
   @IsString()
@@ -215,7 +213,7 @@ export class CreateIntegrationRequestDto {
   @ApiPropertyOptional({
     example: 'x-delivery-id',
     description:
-      "Takroriy yetkazishni aniqlash uchun hodisa id sarlavhasi (replay guard)",
+      'Takroriy yetkazishni aniqlash uchun hodisa id sarlavhasi (replay guard)',
   })
   @IsOptional()
   @IsString()
@@ -225,7 +223,7 @@ export class CreateIntegrationRequestDto {
   @ApiPropertyOptional({
     type: Object,
     example: { delivered: 'sold', canceled: 'cancelled' },
-    description: "Ularning statusi → bizning statusimiz",
+    description: 'Ularning statusi → bizning statusimiz',
   })
   @IsOptional()
   @IsObject()
@@ -252,11 +250,11 @@ export class CreateIntegrationRequestDto {
       create_on_stages: ['142'],
     },
     description:
-      "CRM voronkasidan buyurtma yaratish: qaysi voronka va BOSQICHDA " +
-      "bitim buyurtmaga aylanadi. Kamida bitta darvoza shart " +
+      'CRM voronkasidan buyurtma yaratish: qaysi voronka va BOSQICHDA ' +
+      'bitim buyurtmaga aylanadi. Kamida bitta darvoza shart ' +
       '(`create_on_stages` yoki `create_on_events`) — darvozasiz CRM ' +
-      "\"bitim yaratildi\" hodisasini manzil to'lmasdan oldin yuboradi va " +
-      'chala buyurtma tug\'ilardi.',
+      '"bitim yaratildi" hodisasini manzil to\'lmasdan oldin yuboradi va ' +
+      "chala buyurtma tug'ilardi.",
   })
   @IsOptional()
   @IsObject()
@@ -277,8 +275,8 @@ export class CreateIntegrationRequestDto {
     description:
       "Onlayn to'lov sozlamasi: tranzaksiya id, summa, holat va buyurtma " +
       "havolasi payload'da qayerda. `status_map` SHART — provayderlarning " +
-      'holat qiymatlari boshqacha va taxmin qilib bo\'lmaydi. ' +
-      "`amount_in_tiyin` — summa tiyinda kelsa (Payme/Click shunday).",
+      "holat qiymatlari boshqacha va taxmin qilib bo'lmaydi. " +
+      '`amount_in_tiyin` — summa tiyinda kelsa (Payme/Click shunday).',
   })
   @IsOptional()
   @IsObject()
@@ -331,7 +329,7 @@ export class UpdateIntegrationRequestDto {
   @ApiPropertyOptional({
     example: 'carrier',
     enum: ['carrier', 'source', 'payment', 'mirror'],
-    description: "Berilmasa `carrier` (mavjud ulanishlarning naqshi)",
+    description: 'Berilmasa `carrier` (mavjud ulanishlarning naqshi)',
   })
   @IsOptional()
   @IsIn(['carrier', 'source', 'payment', 'mirror'])
@@ -361,7 +359,6 @@ export class UpdateIntegrationRequestDto {
   @IsOptional()
   @IsIn(['spec', 'adapter'])
   integration_mode?: string;
-
 
   @ApiPropertyOptional({ example: 'api', enum: ['api', 'webhook', 'ftp'] })
   @IsOptional()
@@ -488,7 +485,7 @@ export class UpdateIntegrationRequestDto {
 
   @ApiPropertyOptional({
     example: 'sha256=',
-    description: "Imzo qiymati oldidagi prefiks (masalan `sha256=`)",
+    description: 'Imzo qiymati oldidagi prefiks (masalan `sha256=`)',
   })
   @IsOptional()
   @IsString()
@@ -507,7 +504,7 @@ export class UpdateIntegrationRequestDto {
   @ApiPropertyOptional({
     example: 'x-delivery-id',
     description:
-      "Takroriy yetkazishni aniqlash uchun hodisa id sarlavhasi (replay guard)",
+      'Takroriy yetkazishni aniqlash uchun hodisa id sarlavhasi (replay guard)',
   })
   @IsOptional()
   @IsString()
@@ -517,7 +514,7 @@ export class UpdateIntegrationRequestDto {
   @ApiPropertyOptional({
     type: Object,
     example: { delivered: 'sold', canceled: 'cancelled' },
-    description: "Ularning statusi → bizning statusimiz",
+    description: 'Ularning statusi → bizning statusimiz',
   })
   @IsOptional()
   @IsObject()
@@ -544,11 +541,11 @@ export class UpdateIntegrationRequestDto {
       create_on_stages: ['142'],
     },
     description:
-      "CRM voronkasidan buyurtma yaratish: qaysi voronka va BOSQICHDA " +
-      "bitim buyurtmaga aylanadi. Kamida bitta darvoza shart " +
+      'CRM voronkasidan buyurtma yaratish: qaysi voronka va BOSQICHDA ' +
+      'bitim buyurtmaga aylanadi. Kamida bitta darvoza shart ' +
       '(`create_on_stages` yoki `create_on_events`) — darvozasiz CRM ' +
-      "\"bitim yaratildi\" hodisasini manzil to'lmasdan oldin yuboradi va " +
-      'chala buyurtma tug\'ilardi.',
+      '"bitim yaratildi" hodisasini manzil to\'lmasdan oldin yuboradi va ' +
+      "chala buyurtma tug'ilardi.",
   })
   @IsOptional()
   @IsObject()
@@ -569,8 +566,8 @@ export class UpdateIntegrationRequestDto {
     description:
       "Onlayn to'lov sozlamasi: tranzaksiya id, summa, holat va buyurtma " +
       "havolasi payload'da qayerda. `status_map` SHART — provayderlarning " +
-      'holat qiymatlari boshqacha va taxmin qilib bo\'lmaydi. ' +
-      "`amount_in_tiyin` — summa tiyinda kelsa (Payme/Click shunday).",
+      "holat qiymatlari boshqacha va taxmin qilib bo'lmaydi. " +
+      '`amount_in_tiyin` — summa tiyinda kelsa (Payme/Click shunday).',
   })
   @IsOptional()
   @IsObject()

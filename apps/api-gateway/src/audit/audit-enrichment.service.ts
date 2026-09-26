@@ -35,17 +35,32 @@ export class AuditEnrichmentService {
 
   // id field name -> resolver category. Anything not listed is ignored.
   private static readonly USER_FIELDS = new Set([
-    'user_id', 'created_by', 'opened_by', 'closed_by', 'receiver_user_id',
-    'source_user_id', 'manager_id', 'courier_id', 'market_id', 'operator_id',
-    'requester_id', 'assigned_by',
+    'user_id',
+    'created_by',
+    'opened_by',
+    'closed_by',
+    'receiver_user_id',
+    'source_user_id',
+    'manager_id',
+    'courier_id',
+    'market_id',
+    'operator_id',
+    'requester_id',
+    'assigned_by',
   ]);
   private static readonly CUSTOMER_FIELDS = new Set(['customer_id']);
   private static readonly BRANCH_FIELDS = new Set([
-    'branch_id', 'source_branch_id', 'destination_branch_id', 'home_branch_id',
+    'branch_id',
+    'source_branch_id',
+    'destination_branch_id',
+    'home_branch_id',
   ]);
   private static readonly PRODUCT_FIELDS = new Set(['product_id']);
   private static readonly POST_FIELDS = new Set(['post_id']);
-  private static readonly ORDER_FIELDS = new Set(['order_id', 'parent_order_id']);
+  private static readonly ORDER_FIELDS = new Set([
+    'order_id',
+    'parent_order_id',
+  ]);
 
   async enrich(rows: Row[]): Promise<Row[]> {
     if (!Array.isArray(rows) || !rows.length) return rows ?? [];
@@ -64,7 +79,8 @@ export class AuditEnrichmentService {
 
     // entity_type -> the set its entity_id belongs to.
     const entityRouter: Record<string, Set<string>> = {
-      User: userIds, Auth: userIds,
+      User: userIds,
+      Auth: userIds,
       Order: orderIds,
       Branch: branchIds,
       Product: productIds,
@@ -77,11 +93,15 @@ export class AuditEnrichmentService {
         if (val === null || val === undefined) continue;
         if (Array.isArray(val) || typeof val === 'object') continue; // don't deep-walk
         if (AuditEnrichmentService.USER_FIELDS.has(key)) add(userIds, val);
-        else if (AuditEnrichmentService.CUSTOMER_FIELDS.has(key)) add(customerIds, val);
-        else if (AuditEnrichmentService.BRANCH_FIELDS.has(key)) add(branchIds, val);
-        else if (AuditEnrichmentService.PRODUCT_FIELDS.has(key)) add(productIds, val);
+        else if (AuditEnrichmentService.CUSTOMER_FIELDS.has(key))
+          add(customerIds, val);
+        else if (AuditEnrichmentService.BRANCH_FIELDS.has(key))
+          add(branchIds, val);
+        else if (AuditEnrichmentService.PRODUCT_FIELDS.has(key))
+          add(productIds, val);
         else if (AuditEnrichmentService.POST_FIELDS.has(key)) add(postIds, val);
-        else if (AuditEnrichmentService.ORDER_FIELDS.has(key)) add(orderIds, val);
+        else if (AuditEnrichmentService.ORDER_FIELDS.has(key))
+          add(orderIds, val);
       }
     };
 
@@ -97,9 +117,21 @@ export class AuditEnrichmentService {
     const [userMap, customerMap, productMap, postMap, branchMap, orderMap] =
       await Promise.all([
         this.resolveUsers(userIds),
-        this.resolveBatch(this.identity, 'identity.customer.find_by_ids', customerIds),
-        this.resolveBatch(this.catalog, 'catalog.product.find_by_ids', productIds),
-        this.resolveBatch(this.logistics, 'logistics.post.find_by_ids', postIds),
+        this.resolveBatch(
+          this.identity,
+          'identity.customer.find_by_ids',
+          customerIds,
+        ),
+        this.resolveBatch(
+          this.catalog,
+          'catalog.product.find_by_ids',
+          productIds,
+        ),
+        this.resolveBatch(
+          this.logistics,
+          'logistics.post.find_by_ids',
+          postIds,
+        ),
         // branch.find_by_id scopes by requester; pass a system/superadmin actor
         // so the in-process enrichment lookup isn't tenant-filtered to nothing.
         this.resolveLoop(this.branch, 'branch.find_by_id', branchIds, {
@@ -112,22 +144,38 @@ export class AuditEnrichmentService {
       const key = String(id ?? '').trim();
       if (!key) return null;
       if (AuditEnrichmentService.CUSTOMER_FIELDS.has(field)) {
-        return this.userSummary(customerMap.get(key)) ?? this.userSummary(userMap.get(key));
+        return (
+          this.userSummary(customerMap.get(key)) ??
+          this.userSummary(userMap.get(key))
+        );
       }
       if (AuditEnrichmentService.USER_FIELDS.has(field)) {
-        return this.userSummary(userMap.get(key)) ?? this.userSummary(customerMap.get(key));
+        return (
+          this.userSummary(userMap.get(key)) ??
+          this.userSummary(customerMap.get(key))
+        );
       }
-      if (AuditEnrichmentService.BRANCH_FIELDS.has(field)) return this.branchSummary(branchMap.get(key));
-      if (AuditEnrichmentService.PRODUCT_FIELDS.has(field)) return this.productSummary(productMap.get(key));
-      if (AuditEnrichmentService.POST_FIELDS.has(field)) return this.postSummary(postMap.get(key));
-      if (AuditEnrichmentService.ORDER_FIELDS.has(field)) return this.orderSummary(orderMap.get(key));
+      if (AuditEnrichmentService.BRANCH_FIELDS.has(field))
+        return this.branchSummary(branchMap.get(key));
+      if (AuditEnrichmentService.PRODUCT_FIELDS.has(field))
+        return this.productSummary(productMap.get(key));
+      if (AuditEnrichmentService.POST_FIELDS.has(field))
+        return this.postSummary(postMap.get(key));
+      if (AuditEnrichmentService.ORDER_FIELDS.has(field))
+        return this.orderSummary(orderMap.get(key));
       return null;
     };
 
     const collectRefs = (obj: unknown, into: Row) => {
       if (!obj || typeof obj !== 'object') return;
       for (const [key, val] of Object.entries(obj as Row)) {
-        if (val === null || val === undefined || Array.isArray(val) || typeof val === 'object') continue;
+        if (
+          val === null ||
+          val === undefined ||
+          Array.isArray(val) ||
+          typeof val === 'object'
+        )
+          continue;
         if (into[key]) continue; // first wins
         const resolved = lookup(key, val);
         if (resolved) into[key] = resolved;
@@ -139,7 +187,11 @@ export class AuditEnrichmentService {
       const actor =
         this.userSummary(userMap.get(String(row.user_id ?? ''))) ??
         (row.user_id || row.user_name
-          ? { id: row.user_id ?? null, name: row.user_name ?? null, role: row.user_role ?? null }
+          ? {
+              id: row.user_id ?? null,
+              name: row.user_name ?? null,
+              role: row.user_role ?? null,
+            }
           : null);
 
       // entity: resolve the row's primary subject by its type.
@@ -148,13 +200,24 @@ export class AuditEnrichmentService {
       switch (row.entity_type) {
         case 'User':
         case 'Auth':
-          entity = this.userSummary(userMap.get(eid)) ?? this.userSummary(customerMap.get(eid));
+          entity =
+            this.userSummary(userMap.get(eid)) ??
+            this.userSummary(customerMap.get(eid));
           break;
-        case 'Order': entity = this.orderSummary(orderMap.get(eid)); break;
-        case 'Branch': entity = this.branchSummary(branchMap.get(eid)); break;
-        case 'Product': entity = this.productSummary(productMap.get(eid)); break;
-        case 'Post': entity = this.postSummary(postMap.get(eid)); break;
-        default: entity = null;
+        case 'Order':
+          entity = this.orderSummary(orderMap.get(eid));
+          break;
+        case 'Branch':
+          entity = this.branchSummary(branchMap.get(eid));
+          break;
+        case 'Product':
+          entity = this.productSummary(productMap.get(eid));
+          break;
+        case 'Post':
+          entity = this.postSummary(postMap.get(eid));
+          break;
+        default:
+          entity = null;
       }
 
       const references: Row = {};
@@ -198,8 +261,11 @@ export class AuditEnrichmentService {
     const map = new Map<string, Row>();
     if (!ids.size) return map;
     const res = await this.sendSafe(client, cmd, { ids: Array.from(ids) });
-    const items: Row[] = Array.isArray(res) ? res : res?.data ?? res?.items ?? [];
-    for (const it of items) if (it?.id !== undefined) map.set(String(it.id), it);
+    const items: Row[] = Array.isArray(res)
+      ? res
+      : (res?.data ?? res?.items ?? []);
+    for (const it of items)
+      if (it?.id !== undefined) map.set(String(it.id), it);
     return map;
   }
 
@@ -214,13 +280,17 @@ export class AuditEnrichmentService {
     if (!ids.size) return map;
     const list = Array.from(ids).slice(0, this.MAX_LOOP);
     if (ids.size > this.MAX_LOOP) {
-      this.logger.warn(`${cmd}: ${ids.size} distinct ids on page, enriching first ${this.MAX_LOOP}.`);
+      this.logger.warn(
+        `${cmd}: ${ids.size} distinct ids on page, enriching first ${this.MAX_LOOP}.`,
+      );
     }
     const results = await Promise.all(
       list.map((id) =>
         this.sendSafe(client, cmd, { id, ...extra }).then((res) => {
           const data = res?.data ?? res ?? null;
-          return data && data.id !== undefined ? ([String(data.id), data] as const) : null;
+          return data && data.id !== undefined
+            ? ([String(data.id), data] as const)
+            : null;
         }),
       ),
     );
@@ -228,13 +298,19 @@ export class AuditEnrichmentService {
     return map;
   }
 
-  private async sendSafe(client: ClientProxy, cmd: string, payload: unknown): Promise<any> {
-    return firstValueFrom(client.send({ cmd }, payload).pipe(timeout(this.TIMEOUT))).catch(
-      (err: unknown) => {
-        this.logger.warn(`enrich leg ${cmd} failed: ${err instanceof Error ? err.message : 'unknown'}`);
-        return null;
-      },
-    );
+  private async sendSafe(
+    client: ClientProxy,
+    cmd: string,
+    payload: unknown,
+  ): Promise<any> {
+    return firstValueFrom(
+      client.send({ cmd }, payload).pipe(timeout(this.TIMEOUT)),
+    ).catch((err: unknown) => {
+      this.logger.warn(
+        `enrich leg ${cmd} failed: ${err instanceof Error ? err.message : 'unknown'}`,
+      );
+      return null;
+    });
   }
 
   // ---- summaries (only the fields a UI needs; never secrets) -----------
@@ -252,15 +328,28 @@ export class AuditEnrichmentService {
   }
   private branchSummary(b?: Row): Row | null {
     if (!b) return null;
-    return { id: String(b.id), name: b.name ?? null, code: b.code ?? null, type: b.type ?? null };
+    return {
+      id: String(b.id),
+      name: b.name ?? null,
+      code: b.code ?? null,
+      type: b.type ?? null,
+    };
   }
   private productSummary(p?: Row): Row | null {
     if (!p) return null;
-    return { id: String(p.id), name: p.name ?? null, image_url: p.image_url ?? null };
+    return {
+      id: String(p.id),
+      name: p.name ?? null,
+      image_url: p.image_url ?? null,
+    };
   }
   private postSummary(p?: Row): Row | null {
     if (!p) return null;
-    return { id: String(p.id), status: p.status ?? null, courier_id: p.courier_id ?? null };
+    return {
+      id: String(p.id),
+      status: p.status ?? null,
+      courier_id: p.courier_id ?? null,
+    };
   }
   private orderSummary(o?: Row): Row | null {
     if (!o) return null;

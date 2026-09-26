@@ -481,7 +481,7 @@ export class OrdersArrayDto {
 export class ReceiveByScanDto {
   @ApiProperty({
     type: [String],
-    description: "Posilka yorliqlaridan skanerlangan QR qiymatlari",
+    description: 'Posilka yorliqlaridan skanerlangan QR qiymatlari',
     example: ['a1b2c3d4e5f6a1b2c3d4e5f6', 'f6e5d4c3b2a1f6e5d4c3b2a1'],
   })
   @IsArray()

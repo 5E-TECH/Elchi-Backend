@@ -1,4 +1,11 @@
-import { IsNumber, IsOptional, IsString, Matches, Max, Min } from 'class-validator';
+import {
+  IsNumber,
+  IsOptional,
+  IsString,
+  Matches,
+  Max,
+  Min,
+} from 'class-validator';
 
 export class UpdateSalaryDto {
   @IsString()

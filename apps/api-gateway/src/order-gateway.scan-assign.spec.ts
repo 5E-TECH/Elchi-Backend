@@ -6,7 +6,9 @@ describe('OrderGatewayController scanAssignOrder', () => {
     const orderClient = { send: jest.fn(() => of({})) };
     const identityClient = { send: jest.fn(() => of({})) };
     const branchClient = { send: jest.fn(() => of({})) };
-    const logisticsClient = { send: jest.fn(() => of({ statusCode: 200, data: { idempotent: false } })) };
+    const logisticsClient = {
+      send: jest.fn(() => of({ statusCode: 200, data: { idempotent: false } })),
+    };
 
     const controller = new OrderGatewayController(
       orderClient as any,

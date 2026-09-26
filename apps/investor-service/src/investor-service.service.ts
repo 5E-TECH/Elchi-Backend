@@ -309,10 +309,10 @@ export class InvestorServiceService {
         : null;
     }
     if (dto.status !== undefined) {
-      if (![Status.ACTIVE, Status.INACTIVE].includes(dto.status as Status)) {
+      if (![Status.ACTIVE, Status.INACTIVE].includes(dto.status)) {
         this.badRequest('status must be active or inactive');
       }
-      investor.status = dto.status as Status;
+      investor.status = dto.status;
     }
 
     const saved = await this.investorRepo.save(investor);

@@ -1,4 +1,10 @@
-import { IsNumberString, IsObject, IsOptional, IsString, MinLength } from 'class-validator';
+import {
+  IsNumberString,
+  IsObject,
+  IsOptional,
+  IsString,
+  MinLength,
+} from 'class-validator';
 
 export class CreateBranchConfigDto {
   @IsNumberString()
@@ -12,4 +18,3 @@ export class CreateBranchConfigDto {
   @IsObject()
   config_value?: Record<string, unknown> | null;
 }
-

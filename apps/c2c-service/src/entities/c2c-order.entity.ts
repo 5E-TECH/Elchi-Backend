@@ -28,7 +28,11 @@ export class C2COrder extends BaseEntity {
   @Column({ type: 'float' })
   price!: number;
 
-  @Column({ type: 'enum', enum: C2COrderStatus, default: C2COrderStatus.PENDING })
+  @Column({
+    type: 'enum',
+    enum: C2COrderStatus,
+    default: C2COrderStatus.PENDING,
+  })
   status!: C2COrderStatus;
 
   @Column({ type: 'text', nullable: true })

@@ -79,12 +79,10 @@ describe('Sinov webhooki', () => {
   it('TC3: 4xx/5xx -> ok:false, lekin XATO TASHLAMAYDI', async () => {
     // Operator natijani ko'rishi kerak, 500 olmasligi kerak.
     const { svc } = makeSvc(PARTNER);
-    global.fetch = jest
-      .fn()
-      .mockResolvedValue({
-        status: 401,
-        text: async () => 'imzo yaroqsiz',
-      }) as any;
+    global.fetch = jest.fn().mockResolvedValue({
+      status: 401,
+      text: async () => 'imzo yaroqsiz',
+    }) as any;
 
     const res: any = await svc.testPartnerWebhook('7');
 

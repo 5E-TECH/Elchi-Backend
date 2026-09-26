@@ -11,7 +11,7 @@ jest.mock('qrcode', () => ({
 
 describe('FileServiceService', () => {
   let service: FileServiceService;
-  const qrCodeModule = jest.requireMock('qrcode') as { toBuffer: jest.Mock };
+  const qrCodeModule = jest.requireMock('qrcode');
 
   beforeEach(() => {
     const config = {
@@ -37,13 +37,19 @@ describe('FileServiceService', () => {
   });
 
   it('upload throws when file_name is missing', async () => {
-    await expect(service.upload({ mime_type: 'image/png', file_base64: 'abcd' } as any)).rejects.toBeInstanceOf(RpcException);
+    await expect(
+      service.upload({ mime_type: 'image/png', file_base64: 'abcd' } as any),
+    ).rejects.toBeInstanceOf(RpcException);
   });
 
   it('upload throws on unsupported mime', async () => {
     const b64 = Buffer.from('abc').toString('base64');
     await expect(
-      service.upload({ file_name: 'a.txt', mime_type: 'text/plain', file_base64: b64 } as any),
+      service.upload({
+        file_name: 'a.txt',
+        mime_type: 'text/plain',
+        file_base64: b64,
+      } as any),
     ).rejects.toBeInstanceOf(RpcException);
   });
 
@@ -52,20 +58,35 @@ describe('FileServiceService', () => {
     const b64 = Buffer.from([
       0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
     ]).toString('base64');
-    jest.spyOn(service as any, 'uploadBuffer').mockResolvedValue({ key: 'k1', bucket: 'b', file_name: 'a.png', mime_type: 'image/png', size: 3, url: 'u' });
+    jest.spyOn(service as any, 'uploadBuffer').mockResolvedValue({
+      key: 'k1',
+      bucket: 'b',
+      file_name: 'a.png',
+      mime_type: 'image/png',
+      size: 3,
+      url: 'u',
+    });
 
-    const res = await service.upload({ file_name: 'a.png', mime_type: 'image/png', file_base64: b64 } as any);
+    const res = await service.upload({
+      file_name: 'a.png',
+      mime_type: 'image/png',
+      file_base64: b64,
+    } as any);
 
     expect(res.statusCode).toBe(201);
     expect(res.data.key).toBe('k1');
   });
 
   it('getUrl throws when key is missing', async () => {
-    await expect(service.getUrl({ key: '' } as any)).rejects.toBeInstanceOf(RpcException);
+    await expect(service.getUrl({ key: '' } as any)).rejects.toBeInstanceOf(
+      RpcException,
+    );
   });
 
   it('remove deletes object and returns 200', async () => {
-    jest.spyOn(service as any, 'ensureObjectExists').mockResolvedValue(undefined);
+    jest
+      .spyOn(service as any, 'ensureObjectExists')
+      .mockResolvedValue(undefined);
     jest.spyOn((service as any).s3, 'send').mockResolvedValue({});
 
     const res = await service.remove({ key: 'uploads-a.png' } as any);
@@ -75,7 +96,9 @@ describe('FileServiceService', () => {
   });
 
   it('generateQr throws when text is empty', async () => {
-    await expect(service.generateQr({ text: '   ' } as any)).rejects.toBeInstanceOf(RpcException);
+    await expect(
+      service.generateQr({ text: '   ' } as any),
+    ).rejects.toBeInstanceOf(RpcException);
   });
 
   it('generateQr sends prefixed text to QR encoder', async () => {
@@ -97,13 +120,25 @@ describe('FileServiceService', () => {
   });
 
   it('generatePdf throws when content is empty', async () => {
-    await expect(service.generatePdf({ content: '  ' } as any)).rejects.toBeInstanceOf(RpcException);
+    await expect(
+      service.generatePdf({ content: '  ' } as any),
+    ).rejects.toBeInstanceOf(RpcException);
   });
 
   it('generatePdf returns 201 when upload succeeds', async () => {
-    jest.spyOn(service as any, 'uploadBuffer').mockResolvedValue({ key: 'pdf-k', bucket: 'b', file_name: 'document.pdf', mime_type: 'application/pdf', size: 10, url: 'u' });
+    jest.spyOn(service as any, 'uploadBuffer').mockResolvedValue({
+      key: 'pdf-k',
+      bucket: 'b',
+      file_name: 'document.pdf',
+      mime_type: 'application/pdf',
+      size: 10,
+      url: 'u',
+    });
 
-    const res = await service.generatePdf({ content: 'hello', title: 'T' } as any);
+    const res = await service.generatePdf({
+      content: 'hello',
+      title: 'T',
+    } as any);
 
     expect(res.statusCode).toBe(201);
     expect(res.data.key).toBe('pdf-k');

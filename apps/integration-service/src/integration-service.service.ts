@@ -1365,8 +1365,8 @@ export class IntegrationServiceService {
       { cmd: 'identity.customer.create' },
       {
         dto: {
-          name: dto.customer!.name!.trim(),
-          phone_number: dto.customer!.phone!.trim(),
+          name: dto.customer.name.trim(),
+          phone_number: dto.customer.phone.trim(),
           district_id: String(dto.district_id),
         },
       },
@@ -3947,30 +3947,26 @@ export class IntegrationServiceService {
       ((dto as any).credentials && typeof (dto as any).credentials === 'object'
         ? ((dto as any).credentials as Record<string, unknown>)
         : null) ?? {};
-    const authType = (
+    const authType =
       String(
         dto.auth_type ??
           (credentialsInput.auth_type as string | undefined) ??
           (credentialsInput.api_key ? 'api_key' : 'login'),
       ).toLowerCase() === 'login'
         ? 'login'
-        : 'api_key'
-    ) as 'api_key' | 'login';
-    const apiKey = (dto.api_key ??
-      (credentialsInput.api_key as string | undefined) ??
-      null) as string | null;
-    const apiSecret = (dto.api_secret ??
+        : 'api_key';
+    const apiKey =
+      dto.api_key ?? (credentialsInput.api_key as string | undefined) ?? null;
+    const apiSecret =
+      dto.api_secret ??
       (credentialsInput.api_secret as string | undefined) ??
-      null) as string | null;
-    const username = (dto.username ??
-      (credentialsInput.username as string | undefined) ??
-      null) as string | null;
-    const password = (dto.password ??
-      (credentialsInput.password as string | undefined) ??
-      null) as string | null;
-    const authUrl = (dto.auth_url ??
-      (credentialsInput.auth_url as string | undefined) ??
-      null) as string | null;
+      null;
+    const username =
+      dto.username ?? (credentialsInput.username as string | undefined) ?? null;
+    const password =
+      dto.password ?? (credentialsInput.password as string | undefined) ?? null;
+    const authUrl =
+      dto.auth_url ?? (credentialsInput.auth_url as string | undefined) ?? null;
     const mergedCredentials = {
       ...credentialsInput,
       ...(apiKey ? { api_key: apiKey } : {}),
@@ -4587,9 +4583,7 @@ export class IntegrationServiceService {
      * (yorliq saytda chop etilgan). Sayt payload'ida QR bo'lmasa, biz
      * skanerlangan qiymatni ishlatamiz.
      */
-    const qrField =
-      (integration.field_mapping as Record<string, string> | null)
-        ?.qr_code_field ?? 'qr_code';
+    const qrField = integration.field_mapping?.qr_code_field ?? 'qr_code';
     const enriched = orders.map((o) =>
       o && typeof o === 'object' && !(qrField in (o as object))
         ? { ...(o as Record<string, unknown>), [qrField]: qr }
@@ -4805,10 +4799,7 @@ export class IntegrationServiceService {
     action: string,
     newStatus?: string,
   ): string {
-    const mapping = (integration.status_mapping ?? {}) as Record<
-      string,
-      string
-    >;
+    const mapping = integration.status_mapping ?? {};
     const candidates = [newStatus, action].filter(Boolean) as string[];
 
     for (const candidate of candidates) {
@@ -6163,9 +6154,7 @@ export class IntegrationServiceService {
      * dan olinadi — order-service'dagi AYNI sukut qiymati bilan (`'id'`),
      * aks holda bu yerda o'tib, o'sha yerda null bo'lib qolardi.
      */
-    const idField =
-      (integration.field_mapping as Record<string, string> | null)?.id_field ??
-      'id';
+    const idField = integration.field_mapping?.id_field ?? 'id';
     const dealId = this.stringifyPath(this.extractPath(dealObj, idField));
     if (!dealId) {
       this.logger.warn(

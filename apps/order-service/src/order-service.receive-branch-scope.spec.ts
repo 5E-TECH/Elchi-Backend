@@ -53,7 +53,6 @@ jest.mock('@app/common', () => {
   };
 });
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { rmqSend } = require('@app/common') as { rmqSend: jest.Mock };
 
 const requester = (roles: string[], id = 'u1') => ({ id, roles });
@@ -113,14 +112,16 @@ describe('receiveNewOrders — filial doirasi', () => {
     await expect(scope(svc, requester(['courier']))).rejects.toBeInstanceOf(
       RpcException,
     );
-    await expect(scope(svc, requester([]))).rejects.toBeInstanceOf(RpcException);
+    await expect(scope(svc, requester([]))).rejects.toBeInstanceOf(
+      RpcException,
+    );
   });
 
   it('foydalanuvchi id‘si yo‘q bo‘lsa rad etiladi', async () => {
     const { svc } = buildSvc();
-    await expect(
-      scope(svc, { roles: ['manager'] }),
-    ).rejects.toBeInstanceOf(RpcException);
+    await expect(scope(svc, { roles: ['manager'] })).rejects.toBeInstanceOf(
+      RpcException,
+    );
   });
 });
 

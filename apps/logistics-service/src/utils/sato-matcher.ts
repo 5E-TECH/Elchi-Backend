@@ -89,11 +89,18 @@ function namesMatch(name1: string, name2: string): boolean {
   // ========== Toshkent shahri va Toshkent viloyati ni aniq farqlash ==========
   const isToshkentShahri1 = n1Lower.includes('toshkent') && hasShahri1;
   const isToshkentShahri2 = n2Lower.includes('toshkent') && hasShahri2;
-  const isToshkentViloyati1 = n1Lower.includes('toshkent') && (n1Lower.includes('viloyati') || n1Lower.includes('viloyat'));
-  const isToshkentViloyati2 = n2Lower.includes('toshkent') && (n2Lower.includes('viloyati') || n2Lower.includes('viloyat'));
+  const isToshkentViloyati1 =
+    n1Lower.includes('toshkent') &&
+    (n1Lower.includes('viloyati') || n1Lower.includes('viloyat'));
+  const isToshkentViloyati2 =
+    n2Lower.includes('toshkent') &&
+    (n2Lower.includes('viloyati') || n2Lower.includes('viloyat'));
 
   // Agar biri Toshkent shahri, ikkinchisi Toshkent viloyati bo'lsa - mos emas
-  if ((isToshkentShahri1 && isToshkentViloyati2) || (isToshkentViloyati1 && isToshkentShahri2)) {
+  if (
+    (isToshkentShahri1 && isToshkentViloyati2) ||
+    (isToshkentViloyati1 && isToshkentShahri2)
+  ) {
     return false;
   }
 
@@ -120,20 +127,20 @@ function namesMatch(name1: string, name2: string): boolean {
 
   // Maxsus holatlar (Toshkent bundan mustasno - yuqorida hal qilindi)
   const specialMatches: Record<string, string[]> = {
-    'andijon': ['andijon viloyati', 'andijon v'],
+    andijon: ['andijon viloyati', 'andijon v'],
     "farg'ona": ['fargona', 'fergana'],
-    'namangan': ['namangan viloyati'],
-    'samarqand': ['samarkand'],
-    'buxoro': ['bukhara', 'buxara'],
-    'navoiy': ['navoi'],
-    'xorazm': ['khorezm', 'xorezm'],
-    'surxondaryo': ['surkhandarya'],
-    'qashqadaryo': ['kashkadarya'],
-    'jizzax': ['jizzakh', 'djizak'],
-    'sirdaryo': ['syrdarya'],
+    namangan: ['namangan viloyati'],
+    samarqand: ['samarkand'],
+    buxoro: ['bukhara', 'buxara'],
+    navoiy: ['navoi'],
+    xorazm: ['khorezm', 'xorezm'],
+    surxondaryo: ['surkhandarya'],
+    qashqadaryo: ['kashkadarya'],
+    jizzax: ['jizzakh', 'djizak'],
+    sirdaryo: ['syrdarya'],
     "qoraqalpog'iston": ['karakalpakstan', 'qoraqalpogiston'],
-    'khiva': ['xiva'],
-    'khojaobod': ["xo'jaobod"],
+    khiva: ['xiva'],
+    khojaobod: ["xo'jaobod"],
   };
 
   for (const [key, variants] of Object.entries(specialMatches)) {
@@ -341,7 +348,7 @@ export function matchDistricts(
     districtNameCount.get(key)!.push({
       id: district.id,
       name: district.name,
-      regionName: district.region?.name || 'Noma\'lum',
+      regionName: district.region?.name || "Noma'lum",
       regionId: district.region?.id || 'unknown',
     });
   }
@@ -349,7 +356,9 @@ export function matchDistricts(
   for (const [key, entries] of districtNameCount) {
     if (entries.length > 1) {
       // Turli viloyatlardagi dublikatlarni ko'rsatish
-      const regionNames = [...new Set(entries.map(e => e.regionName))].join(', ');
+      const regionNames = [...new Set(entries.map((e) => e.regionName))].join(
+        ', ',
+      );
       result.duplicates.push({
         name: `${entries[0].name} (${regionNames})`,
         entries: entries.map((e) => ({ id: e.id, regionName: e.regionName })),
@@ -423,7 +432,7 @@ export function matchDistricts(
             if (!isDuplicate) {
               result.matched.push({
                 dbId: dbDistrict.id,
-                dbName: `${dbDistrict.name} (${dbDistrict.region?.name || 'Noma\'lum'})`,
+                dbName: `${dbDistrict.name} (${dbDistrict.region?.name || "Noma'lum"})`,
                 satoCode: satoDistrict.sato_code,
                 satoName: `${satoDistrict.name} (${satoRegion.name})`,
               });

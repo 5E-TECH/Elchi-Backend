@@ -38,7 +38,11 @@ describe('NotificationServiceService', () => {
       save: jest.fn(),
       create: jest.fn((v) => v),
     };
-    config = { get: jest.fn((k: string) => (k === 'TELEGRAM_BOT_TOKEN' ? 'ENV_TOKEN' : undefined)) };
+    config = {
+      get: jest.fn((k: string) =>
+        k === 'TELEGRAM_BOT_TOKEN' ? 'ENV_TOKEN' : undefined,
+      ),
+    };
     activityLog = {
       log: jest.fn().mockResolvedValue(undefined),
       logChange: jest.fn().mockResolvedValue(undefined),
@@ -49,7 +53,12 @@ describe('NotificationServiceService', () => {
       findByEntity: jest.fn().mockResolvedValue([]),
       findByUser: jest.fn().mockResolvedValue([]),
     };
-    service = new NotificationServiceService(repo, config, {} as any, activityLog);
+    service = new NotificationServiceService(
+      repo,
+      config,
+      {} as any,
+      activityLog,
+    );
     (global as any).fetch = jest.fn();
   });
 
@@ -73,22 +82,33 @@ describe('NotificationServiceService', () => {
     repo.findOne.mockResolvedValue({ id: 'old' });
 
     await expect(
-      service.createTelegramMarket({ market_id: '13', group_id: '-1001', group_type: 'create' as any } as any),
+      service.createTelegramMarket({
+        market_id: '13',
+        group_id: '-1001',
+        group_type: 'create' as any,
+      } as any),
     ).rejects.toBeInstanceOf(RpcException);
   });
 
   it('findAllTelegramMarkets throws when market_id is invalid', async () => {
-    await expect(service.findAllTelegramMarkets({ market_id: 'abc' } as any)).rejects.toBeInstanceOf(RpcException);
+    await expect(
+      service.findAllTelegramMarkets({ market_id: 'abc' } as any),
+    ).rejects.toBeInstanceOf(RpcException);
   });
 
   it('connectGroupByTokenText returns message on invalid token format', async () => {
-    const res = await service.connectGroupByTokenText('group_token-abc', '-10099');
+    const res = await service.connectGroupByTokenText(
+      'group_token-abc',
+      '-10099',
+    );
     expect(res).toHaveProperty('message');
     expect(String(res.message).toLowerCase()).toContain('token');
   });
 
   it('sendNotification throws when message is empty', async () => {
-    await expect(service.sendNotification({ message: '   ', group_id: '-1001' } as any)).rejects.toBeInstanceOf(RpcException);
+    await expect(
+      service.sendNotification({ message: '   ', group_id: '-1001' } as any),
+    ).rejects.toBeInstanceOf(RpcException);
   });
 
   it('sendNotification sends direct to group with env token', async () => {
@@ -97,7 +117,10 @@ describe('NotificationServiceService', () => {
       json: async () => ({ ok: true, result: { message_id: 1 } }),
     });
 
-    const res = await service.sendNotification({ message: 'hello', group_id: '-1001' } as any);
+    const res = await service.sendNotification({
+      message: 'hello',
+      group_id: '-1001',
+    } as any);
 
     expect(res.statusCode).toBe(200);
     expect(res.data.success).toBe(1);
@@ -108,7 +131,11 @@ describe('NotificationServiceService', () => {
     repo.find.mockResolvedValue([]);
 
     await expect(
-      service.sendNotification({ message: 'hello', market_id: '13', group_type: 'create' as any } as any),
+      service.sendNotification({
+        message: 'hello',
+        market_id: '13',
+        group_type: 'create' as any,
+      } as any),
     ).rejects.toBeInstanceOf(RpcException);
   });
 });

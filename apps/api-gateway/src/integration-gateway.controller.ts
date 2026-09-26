@@ -98,7 +98,8 @@ export class IntegrationGatewayController {
     name: 'role',
     required: false,
     enum: ['carrier', 'source', 'payment', 'mirror'],
-    description: 'Rol bo‘yicha filtr — UI ulanishlarni rol guruhlariga ajratadi',
+    description:
+      'Rol bo‘yicha filtr — UI ulanishlarni rol guruhlariga ajratadi',
   })
   @ApiQuery({
     name: 'category',
@@ -140,25 +141,27 @@ export class IntegrationGatewayController {
           ? false
           : undefined;
 
-    return this.integrationClient.send(
-      { cmd: 'integration.find_all' },
-      {
-        query: {
-          is_active:
-            typeof is_active === 'string'
-              ? ['true', '1', 'yes'].includes(is_active.toLowerCase())
-              : statusToIsActive,
-          status: normalizedStatus,
-          role,
-          category,
-          market_id,
-          from_date,
-          to_date,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.find_all' },
+        {
+          query: {
+            is_active:
+              typeof is_active === 'string'
+                ? ['true', '1', 'yes'].includes(is_active.toLowerCase())
+                : statusToIsActive,
+            status: normalizedStatus,
+            role,
+            category,
+            market_id,
+            from_date,
+            to_date,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   /**
@@ -250,7 +253,7 @@ export class IntegrationGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({
     summary:
-      "Kiruvchi webhook jurnali — imzo, natija, xato sababi (tana qaytarilmaydi)",
+      'Kiruvchi webhook jurnali — imzo, natija, xato sababi (tana qaytarilmaydi)',
   })
   @ApiQuery({ name: 'integration_id', required: false, type: String })
   @ApiQuery({
@@ -286,10 +289,9 @@ export class IntegrationGatewayController {
     summary: 'Sync history list (pagination/filter/success rate)',
   })
   syncHistory(@Query() query: FilterSyncHistoryQueryDto) {
-    return this.integrationClient.send(
-      { cmd: 'integration.sync.history' },
-      { query },
-    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+    return this.integrationClient
+      .send({ cmd: 'integration.sync.history' }, { query })
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Post()
@@ -300,10 +302,12 @@ export class IntegrationGatewayController {
     @Body() dto: CreateIntegrationRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.integrationClient.send(
-      { cmd: 'integration.create' },
-      { dto: { ...dto, requester: this.auditActor(req) } },
-    ).pipe(timeout(8000));
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.create' },
+        { dto: { ...dto, requester: this.auditActor(req) } },
+      )
+      .pipe(timeout(8000));
   }
 
   /**
@@ -338,35 +342,35 @@ export class IntegrationGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.integrationClient.send(
-      { cmd: 'integration.receivable.list' },
-      {
-        integration_id,
-        status,
-        page: page ? Number(page) : undefined,
-        limit: limit ? Number(limit) : undefined,
-      },
-    ).pipe(timeout(8000));
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.receivable.list' },
+        {
+          integration_id,
+          status,
+          page: page ? Number(page) : undefined,
+          limit: limit ? Number(limit) : undefined,
+        },
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('shipments/:order_id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiOperation({ summary: 'Get the provider shipment for an order' })
   getShipment(@Param('order_id') orderId: string) {
-    return this.integrationClient.send(
-      { cmd: 'integration.shipment.get' },
-      { order_id: orderId },
-    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+    return this.integrationClient
+      .send({ cmd: 'integration.shipment.get' }, { order_id: orderId })
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Get(':id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Get integration by id' })
   findById(@Param('id', ParseIntegrationIdPipe) id: string) {
-    return this.integrationClient.send(
-      { cmd: 'integration.find_by_id' },
-      { id },
-    ).pipe(timeout(8000));
+    return this.integrationClient
+      .send({ cmd: 'integration.find_by_id' }, { id })
+      .pipe(timeout(8000));
   }
 
   @Patch(':id')
@@ -378,10 +382,12 @@ export class IntegrationGatewayController {
     @Body() dto: UpdateIntegrationRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.integrationClient.send(
-      { cmd: 'integration.update' },
-      { id, dto: { ...dto, requester: this.auditActor(req) } },
-    ).pipe(timeout(8000));
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.update' },
+        { id, dto: { ...dto, requester: this.auditActor(req) } },
+      )
+      .pipe(timeout(8000));
   }
 
   @Delete(':id')
@@ -391,10 +397,12 @@ export class IntegrationGatewayController {
     @Param('id', ParseIntegrationIdPipe) id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    return this.integrationClient.send(
-      { cmd: 'integration.delete' },
-      { id, requester: this.auditActor(req) },
-    ).pipe(timeout(8000));
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.delete' },
+        { id, requester: this.auditActor(req) },
+      )
+      .pipe(timeout(8000));
   }
 
   @Post(':id/healthcheck')
@@ -405,13 +413,15 @@ export class IntegrationGatewayController {
     @Param('id', ParseIntegrationIdPipe) id: string,
     @Body() dto: IntegrationHealthcheckRequestDto = {},
   ) {
-    return this.integrationClient.send(
-      { cmd: 'integration.healthcheck' },
-      {
-        id,
-        ...dto,
-      },
-    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.healthcheck' },
+        {
+          id,
+          ...dto,
+        },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Post(':id/test')
@@ -422,13 +432,15 @@ export class IntegrationGatewayController {
     @Param('id', ParseIntegrationIdPipe) id: string,
     @Body() dto: IntegrationHealthcheckRequestDto = {},
   ) {
-    return this.integrationClient.send(
-      { cmd: 'integration.healthcheck' },
-      {
-        id,
-        ...dto,
-      },
-    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.healthcheck' },
+        {
+          id,
+          ...dto,
+        },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Get(':id/sync-history')
@@ -438,10 +450,12 @@ export class IntegrationGatewayController {
     @Param('id', ParseIntegrationIdPipe) id: string,
     @Query() query: FilterSyncHistoryQueryDto,
   ) {
-    return this.integrationClient.send(
-      { cmd: 'integration.sync.history' },
-      { query: { ...query, integration_id: id } },
-    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.sync.history' },
+        { query: { ...query, integration_id: id } },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Post(':id/sync')
@@ -452,10 +466,12 @@ export class IntegrationGatewayController {
     @Param('id', ParseIntegrationIdPipe) id: string,
     @Body() dto: StartSyncRequestDto = {},
   ) {
-    return this.integrationClient.send(
-      { cmd: 'integration.sync.process' },
-      { integration_id: id, limit: dto.limit ?? 20 },
-    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.sync.process' },
+        { integration_id: id, limit: dto.limit ?? 20 },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Post(':id/sync/queue')
@@ -466,10 +482,9 @@ export class IntegrationGatewayController {
     @Param('id', ParseIntegrationIdPipe) id: string,
     @Body() dto: CreateSyncQueueRequestDto,
   ) {
-    return this.integrationClient.send(
-      { cmd: 'integration.sync.queue' },
-      { ...dto, integration_id: id },
-    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+    return this.integrationClient
+      .send({ cmd: 'integration.sync.queue' }, { ...dto, integration_id: id })
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Post(':id/retry')
@@ -480,10 +495,12 @@ export class IntegrationGatewayController {
     @Param('id', ParseIntegrationIdPipe) id: string,
     @Body() dto: RetrySyncRequestDto = {},
   ) {
-    return this.integrationClient.send(
-      { cmd: 'integration.sync.retry' },
-      { integration_id: id, queue_id: dto.queue_id },
-    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.sync.retry' },
+        { integration_id: id, queue_id: dto.queue_id },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   /**
@@ -529,13 +546,15 @@ export class IntegrationGatewayController {
   @ApiOperation({ summary: 'Universal QR search via integration config' })
   @ApiBody({ type: QrSearchRequestDto })
   searchByQr(@Param('slug') slug: string, @Body() dto: QrSearchRequestDto) {
-    return this.integrationClient.send(
-      { cmd: 'integration.external.search_by_qr' },
-      {
-        slug,
-        ...dto,
-      },
-    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.external.search_by_qr' },
+        {
+          slug,
+          ...dto,
+        },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Post(':slug/request')
@@ -546,13 +565,15 @@ export class IntegrationGatewayController {
     @Param('slug') slug: string,
     @Body() dto: ExternalRequestDto,
   ) {
-    return this.integrationClient.send(
-      { cmd: 'integration.external.request' },
-      {
-        slug,
-        ...dto,
-      },
-    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.external.request' },
+        {
+          slug,
+          ...dto,
+        },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   @Post(':slug/dispatch')
@@ -565,10 +586,12 @@ export class IntegrationGatewayController {
     @Param('slug') slug: string,
     @Body() dto: DispatchShipmentRequestDto,
   ) {
-    return this.integrationClient.send(
-      { cmd: 'integration.shipment.dispatch' },
-      { slug, order_id: dto.order_id, context: dto.context },
-    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.shipment.dispatch' },
+        { slug, order_id: dto.order_id, context: dto.context },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
   /**
@@ -614,10 +637,9 @@ export class IntegrationGatewayController {
   @ApiOperation({ summary: "Provider's outstanding COD balance" })
   @ApiParam({ name: 'id', description: 'Integration id' })
   getReceivableBalance(@Param('id', ParseIntegrationIdPipe) id: string) {
-    return this.integrationClient.send(
-      { cmd: 'integration.receivable.balance' },
-      { integration_id: id },
-    ).pipe(timeout(8000));
+    return this.integrationClient
+      .send({ cmd: 'integration.receivable.balance' }, { integration_id: id })
+      .pipe(timeout(8000));
   }
 
   @Post(':id/remittances')
@@ -632,16 +654,18 @@ export class IntegrationGatewayController {
     @Body() dto: CreateRemittanceRequestDto,
     @Req() req: { user?: { sub?: string } },
   ) {
-    return this.integrationClient.send(
-      { cmd: 'integration.remittance.create' },
-      {
-        integration_id: id,
-        amount: dto.amount,
-        reference: dto.reference ?? null,
-        note: dto.note ?? null,
-        order_ids: dto.order_ids ?? undefined,
-        created_by: req.user?.sub ?? null,
-      },
-    ).pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.remittance.create' },
+        {
+          integration_id: id,
+          amount: dto.amount,
+          reference: dto.reference ?? null,
+          note: dto.note ?? null,
+          order_ids: dto.order_ids ?? undefined,
+          created_by: req.user?.sub ?? null,
+        },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 }

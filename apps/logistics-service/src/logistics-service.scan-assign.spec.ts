@@ -47,7 +47,8 @@ describe('LogisticsServiceService scanAssignOrder', () => {
               () =>
                 new RpcException({
                   statusCode: 400,
-                  message: "Paket hali jo'natilmagan — posilka filialga yetib kelmagan",
+                  message:
+                    "Paket hali jo'natilmagan — posilka filialga yetib kelmagan",
                 }),
             );
           }
@@ -65,7 +66,9 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     };
 
     const branchClient = {
-      send: jest.fn(() => of({ data: { branch_id: options?.branchId ?? '10' } })),
+      send: jest.fn(() =>
+        of({ data: { branch_id: options?.branchId ?? '10' } }),
+      ),
     };
 
     const postUpdateQb = {
@@ -78,19 +81,29 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     const postRepo = {
       // Post hisoblagichi (order_quantity) atomik UPDATE query orqali yangilanadi.
       createQueryBuilder: jest.fn(() => postUpdateQb),
-      findOne: jest.fn((query: { where?: { id?: string; courier_id?: string; status?: Post_status } }) => {
-        if (query?.where?.id && options?.linkedPost !== undefined) {
-          return Promise.resolve(options.linkedPost);
-        }
-        if (query?.where?.status === Post_status.SENT) {
-          return Promise.resolve(
-            options?.openPost === undefined
-              ? { id: 'p-open', courier_id: 'c1', status: Post_status.SENT, order_quantity: 2, post_total_price: 200000 }
-              : options.openPost,
-          );
-        }
-        return Promise.resolve(null);
-      }),
+      findOne: jest.fn(
+        (query: {
+          where?: { id?: string; courier_id?: string; status?: Post_status };
+        }) => {
+          if (query?.where?.id && options?.linkedPost !== undefined) {
+            return Promise.resolve(options.linkedPost);
+          }
+          if (query?.where?.status === Post_status.SENT) {
+            return Promise.resolve(
+              options?.openPost === undefined
+                ? {
+                    id: 'p-open',
+                    courier_id: 'c1',
+                    status: Post_status.SENT,
+                    order_quantity: 2,
+                    post_total_price: 200000,
+                  }
+                : options.openPost,
+            );
+          }
+          return Promise.resolve(null);
+        },
+      ),
       create: jest.fn((payload: Record<string, unknown>) => payload),
       save: jest.fn(async (entity: Record<string, unknown>) => ({
         ...entity,
@@ -101,7 +114,10 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     const activityLog = {
       log: jest.fn().mockResolvedValue(undefined),
       logChange: jest.fn().mockResolvedValue(undefined),
-      query: jest.fn().mockResolvedValue({ items: [], meta: { page: 1, limit: 50, total: 0, totalPages: 1 } }),
+      query: jest.fn().mockResolvedValue({
+        items: [],
+        meta: { page: 1, limit: 50, total: 0, totalPages: 1 },
+      }),
       findByEntity: jest.fn().mockResolvedValue([]),
       findByUser: jest.fn().mockResolvedValue([]),
     };
@@ -117,7 +133,14 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       activityLog as any,
     );
 
-    return { service, orderClient, branchClient, postRepo, postUpdateQb, activityLog };
+    return {
+      service,
+      orderClient,
+      branchClient,
+      postRepo,
+      postUpdateQb,
+      activityLog,
+    };
   }
 
   async function expectRpcStatus(
@@ -130,7 +153,10 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       throw new Error('Expected RpcException');
     } catch (error) {
       expect(error).toBeInstanceOf(RpcException);
-      const payload = (error as RpcException).getError() as { statusCode?: number; message?: string };
+      const payload = (error as RpcException).getError() as {
+        statusCode?: number;
+        message?: string;
+      };
       expect(payload?.statusCode).toBe(expectedStatus);
       if (expectedMessagePart) {
         expect(String(payload?.message ?? '')).toContain(expectedMessagePart);
@@ -162,7 +188,9 @@ describe('LogisticsServiceService scanAssignOrder', () => {
       }),
     );
     // Reused 'p-open' postning hisoblagichi atomik UPDATE query bilan oshiriladi.
-    expect(postUpdateQb.where).toHaveBeenCalledWith('id = :id', { id: 'p-open' });
+    expect(postUpdateQb.where).toHaveBeenCalledWith('id = :id', {
+      id: 'p-open',
+    });
     expect(postUpdateQb.execute).toHaveBeenCalled();
     expect(result.data.idempotent).toBe(false);
     expect(result.data.post_created).toBe(false);
@@ -190,7 +218,10 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     const { service } = setup({ branchId: '99' });
 
     await expectRpcStatus(
-      service.scanAssignOrder({ id: 'c1', roles: ['courier'] }, { qr_token: 'ORD-abc123' }),
+      service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      ),
       403,
       'Boshqa filial orderi',
     );
@@ -220,7 +251,10 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     });
 
     await expectRpcStatus(
-      service.scanAssignOrder({ id: 'c1', roles: ['courier'] }, { qr_token: 'ORD-abc123' }),
+      service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      ),
       400,
       "Order holati noto'g'ri",
     );
@@ -232,7 +266,10 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     });
 
     await expectRpcStatus(
-      service.scanAssignOrder({ id: 'c1', roles: ['courier'] }, { qr_token: 'ORD-abc123' }),
+      service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      ),
       400,
       'boshqa courierga',
     );

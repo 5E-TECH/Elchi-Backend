@@ -1,4 +1,9 @@
-import { Cashbox_type, Operation_type, PaymentMethod, Source_type } from '@app/common';
+import {
+  Cashbox_type,
+  Operation_type,
+  PaymentMethod,
+  Source_type,
+} from '@app/common';
 import {
   IsArray,
   IsEnum,

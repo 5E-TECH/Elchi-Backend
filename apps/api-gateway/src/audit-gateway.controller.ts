@@ -1,6 +1,18 @@
-import { Controller, Get, Inject, Param, Query, UseGuards } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Inject,
+  Param,
+  Query,
+  UseGuards,
+} from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiParam,
+  ApiTags,
+} from '@nestjs/swagger';
 import { firstValueFrom, timeout } from 'rxjs';
 import { ActivityAction, Roles as RoleEnum } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -66,10 +78,13 @@ export class AuditGatewayController {
   }
 
   @Get()
-  @ApiOperation({ summary: 'Audit-log feed (merged across services, enriched)' })
+  @ApiOperation({
+    summary: 'Audit-log feed (merged across services, enriched)',
+  })
   async list(@Query() q: ActivityLogQueryDto) {
     const page = q.page && q.page > 0 ? Math.floor(q.page) : 1;
-    const limit = q.limit && q.limit > 0 ? Math.min(Math.floor(q.limit), 100) : 20;
+    const limit =
+      q.limit && q.limit > 0 ? Math.min(Math.floor(q.limit), 100) : 20;
 
     const filters = {
       entity_type: q.entity_type,
@@ -125,7 +140,9 @@ export class AuditGatewayController {
   }
 
   @Get('entity/:entity_type/:entity_id')
-  @ApiOperation({ summary: 'Full history of one entity (merged across services)' })
+  @ApiOperation({
+    summary: 'Full history of one entity (merged across services)',
+  })
   @ApiParam({ name: 'entity_type', example: 'Order' })
   @ApiParam({ name: 'entity_id', example: '123' })
   async entityHistory(
@@ -141,7 +158,9 @@ export class AuditGatewayController {
           entity_id: entityId,
           limit,
         })
-          .then((r) => this.itemsOf(r).map((it: Row) => ({ ...it, _service: leg.name })))
+          .then((r) =>
+            this.itemsOf(r).map((it: Row) => ({ ...it, _service: leg.name })),
+          )
           .catch(() => [] as Row[]),
       ),
     );
@@ -163,7 +182,9 @@ export class AuditGatewayController {
   // ---- helpers ---------------------------------------------------------
 
   private send(client: ClientProxy, cmd: string, payload: unknown) {
-    return firstValueFrom(client.send({ cmd }, payload).pipe(timeout(this.TIMEOUT)));
+    return firstValueFrom(
+      client.send({ cmd }, payload).pipe(timeout(this.TIMEOUT)),
+    );
   }
 
   /** Normalise the various envelope shapes a service might return. */
@@ -176,7 +197,8 @@ export class AuditGatewayController {
   }
 
   private byNewest = (a: Row, b: Row): number => {
-    const t = new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+    const t =
+      new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
     if (t !== 0 && !Number.isNaN(t)) return t;
     return Number(b.id ?? 0) - Number(a.id ?? 0);
   };

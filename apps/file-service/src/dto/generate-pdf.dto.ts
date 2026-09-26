@@ -17,4 +17,3 @@ export class GeneratePdfDto {
   @IsString()
   folder?: string;
 }
-

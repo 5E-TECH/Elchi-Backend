@@ -61,10 +61,12 @@ export class PartnerAdminGatewayController {
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return firstValueFrom(
-      this.integrationClient.send(
-        { cmd: 'integration.partner.create' },
-        { ...dto, requester: this.auditActor(req) },
-      ).pipe(timeout(8000)),
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.create' },
+          { ...dto, requester: this.auditActor(req) },
+        )
+        .pipe(timeout(8000)),
     );
   }
 
@@ -73,7 +75,9 @@ export class PartnerAdminGatewayController {
   @ApiOperation({ summary: 'Hamkorlar ro‘yxati (sirlarsiz)' })
   list() {
     return firstValueFrom(
-      this.integrationClient.send({ cmd: 'integration.partner.list' }, {}).pipe(timeout(8000)),
+      this.integrationClient
+        .send({ cmd: 'integration.partner.list' }, {})
+        .pipe(timeout(8000)),
     );
   }
 
@@ -86,7 +90,7 @@ export class PartnerAdminGatewayController {
   @Get('webhooks')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({
-    summary: "Hamkor webhook outbox jurnali (yetkazilgan/kutilayotgan/xato)",
+    summary: 'Hamkor webhook outbox jurnali (yetkazilgan/kutilayotgan/xato)',
   })
   @ApiQuery({ name: 'partner_id', required: false })
   @ApiQuery({ name: 'status', required: false })
@@ -185,8 +189,8 @@ export class PartnerAdminGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({
     summary:
-      "Sinov webhookini yuborish — haqiqiy buyurtmaga tegmaydi. " +
-      "`url` berilsa saqlangan manzildan ustun turadi (saqlashdan OLDIN sinash).",
+      'Sinov webhookini yuborish — haqiqiy buyurtmaga tegmaydi. ' +
+      '`url` berilsa saqlangan manzildan ustun turadi (saqlashdan OLDIN sinash).',
   })
   @ApiOkResponse({
     description:
@@ -217,7 +221,7 @@ export class PartnerAdminGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({
     summary:
-      "Hamkor sozlamalari: webhook manzili/sekreti, SANDBOX manzili, " +
+      'Hamkor sozlamalari: webhook manzili/sekreti, SANDBOX manzili, ' +
       "IP ro'yxati, nom. API kalit BU YERDA o‘zgarmaydi — buning uchun " +
       'rotate-key bor. `webhook_url` qo‘yilganda sozlama yo‘qligi tufayli ' +
       'kutib turgan hodisalar avtomatik navbatga qaytariladi ' +
@@ -249,10 +253,12 @@ export class PartnerAdminGatewayController {
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return firstValueFrom(
-      this.integrationClient.send(
-        { cmd: 'integration.partner.rotate_key' },
-        { id, requester: this.auditActor(req) },
-      ).pipe(timeout(8000)),
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.rotate_key' },
+          { id, requester: this.auditActor(req) },
+        )
+        .pipe(timeout(8000)),
     );
   }
 
@@ -267,10 +273,12 @@ export class PartnerAdminGatewayController {
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return firstValueFrom(
-      this.integrationClient.send(
-        { cmd: 'integration.partner.set_active' },
-        { id, is_active: dto.is_active, requester: this.auditActor(req) },
-      ).pipe(timeout(8000)),
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.set_active' },
+          { id, is_active: dto.is_active, requester: this.auditActor(req) },
+        )
+        .pipe(timeout(8000)),
     );
   }
 }

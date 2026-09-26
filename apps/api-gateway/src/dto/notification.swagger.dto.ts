@@ -161,11 +161,14 @@ export class SendNotificationRequestDto {
   @IsString()
   token?: string;
 
-  @ApiProperty({ example: "Buyurtma yaratildi: #123" })
+  @ApiProperty({ example: 'Buyurtma yaratildi: #123' })
   @IsString()
   message!: string;
 
-  @ApiPropertyOptional({ enum: ['Markdown', 'MarkdownV2', 'HTML'], example: 'HTML' })
+  @ApiPropertyOptional({
+    enum: ['Markdown', 'MarkdownV2', 'HTML'],
+    example: 'HTML',
+  })
   @IsOptional()
   @IsString()
   parse_mode?: 'Markdown' | 'MarkdownV2' | 'HTML';
@@ -190,44 +193,69 @@ export class ConnectTelegramByTokenRequestDto {
 // ==================== In-app notification inbox ====================
 
 export class DispatchNotificationRequestDto {
-  @ApiPropertyOptional({ example: '42', description: 'Single recipient user id' })
+  @ApiPropertyOptional({
+    example: '42',
+    description: 'Single recipient user id',
+  })
   @IsOptional()
   @IsString()
   @Matches(/^\d+$/)
   recipient_id?: string;
 
-  @ApiPropertyOptional({ example: ['42', '43'], description: 'Explicit recipient list' })
+  @ApiPropertyOptional({
+    example: ['42', '43'],
+    description: 'Explicit recipient list',
+  })
   @IsOptional()
   @IsArray()
   @ArrayNotEmpty()
   @IsString({ each: true })
   recipient_ids?: string[];
 
-  @ApiPropertyOptional({ example: ['courier', 'manager'], description: 'Target all users of these roles' })
+  @ApiPropertyOptional({
+    example: ['courier', 'manager'],
+    description: 'Target all users of these roles',
+  })
   @IsOptional()
   @IsArray()
   @IsString({ each: true })
   roles?: string[];
 
-  @ApiPropertyOptional({ example: false, description: 'Send to every active user' })
+  @ApiPropertyOptional({
+    example: false,
+    description: 'Send to every active user',
+  })
   @IsOptional()
   @Transform(({ value }) =>
-    value === true || value === 'true' ? true : value === false || value === 'false' ? false : value,
+    value === true || value === 'true'
+      ? true
+      : value === false || value === 'false'
+        ? false
+        : value,
   )
   @IsBoolean()
   broadcast?: boolean;
 
-  @ApiProperty({ example: 'order.sold', description: 'Event key `{domain}.{event}`' })
+  @ApiProperty({
+    example: 'order.sold',
+    description: 'Event key `{domain}.{event}`',
+  })
   @IsString()
   @MaxLength(120)
   type!: string;
 
-  @ApiPropertyOptional({ enum: NotificationCategory, example: NotificationCategory.ORDER })
+  @ApiPropertyOptional({
+    enum: NotificationCategory,
+    example: NotificationCategory.ORDER,
+  })
   @IsOptional()
   @IsEnum(NotificationCategory)
   category?: NotificationCategory;
 
-  @ApiPropertyOptional({ enum: NotificationPriority, example: NotificationPriority.NORMAL })
+  @ApiPropertyOptional({
+    enum: NotificationPriority,
+    example: NotificationPriority.NORMAL,
+  })
   @IsOptional()
   @IsEnum(NotificationPriority)
   priority?: NotificationPriority;
@@ -264,7 +292,10 @@ export class DispatchNotificationRequestDto {
   @IsEnum(NotificationChannel, { each: true })
   channels?: NotificationChannel[];
 
-  @ApiPropertyOptional({ example: 'order-123', description: 'Dedupe/collapse key' })
+  @ApiPropertyOptional({
+    example: 'order-123',
+    description: 'Dedupe/collapse key',
+  })
   @IsOptional()
   @IsString()
   @MaxLength(255)
@@ -285,7 +316,11 @@ export class InboxQueryDto {
   @ApiPropertyOptional({ example: false, description: 'Filter by read state' })
   @IsOptional()
   @Transform(({ value }) =>
-    value === true || value === 'true' ? true : value === false || value === 'false' ? false : value,
+    value === true || value === 'true'
+      ? true
+      : value === false || value === 'false'
+        ? false
+        : value,
   )
   @IsBoolean()
   is_read?: boolean;

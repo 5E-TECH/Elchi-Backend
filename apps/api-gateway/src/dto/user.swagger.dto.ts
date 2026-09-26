@@ -127,7 +127,11 @@ export class DeleteUserResponseDto {
   @ApiProperty({ example: 'User o‘chirildi' })
   message!: string;
 
-  @ApiProperty({ type: 'object', additionalProperties: false, example: { id: '1' } })
+  @ApiProperty({
+    type: 'object',
+    additionalProperties: false,
+    example: { id: '1' },
+  })
   data!: Record<string, unknown>;
 }
 

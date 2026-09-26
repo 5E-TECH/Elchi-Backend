@@ -20,7 +20,9 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   private normalizeRoles(roles?: string[]) {
     const normalized = new Set<string>();
     for (const rawRole of roles ?? []) {
-      const role = String(rawRole ?? '').trim().toLowerCase();
+      const role = String(rawRole ?? '')
+        .trim()
+        .toLowerCase();
       if (!role) {
         continue;
       }

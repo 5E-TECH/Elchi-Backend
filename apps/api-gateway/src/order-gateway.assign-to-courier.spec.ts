@@ -8,7 +8,10 @@ describe('OrderGatewayController assignOrdersToCourier', () => {
     const branchClient = { send: jest.fn(() => of({})) };
     const logisticsClient = {
       send: jest.fn(() =>
-        of({ statusCode: 200, data: { assigned_count: 3, post_created: false } }),
+        of({
+          statusCode: 200,
+          data: { assigned_count: 3, post_created: false },
+        }),
       ),
     };
 

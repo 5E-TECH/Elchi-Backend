@@ -2228,7 +2228,7 @@ export class OrderGatewayController {
       { cmd: 'order.find_by_id' },
       { id },
     );
-    await this.assertCanViewOrder(req?.user, (response as any)?.data);
+    await this.assertCanViewOrder(req?.user, response?.data);
     return response;
   }
 
@@ -2405,7 +2405,7 @@ export class OrderGatewayController {
       { cmd: 'order.find_by_id' },
       { id },
     );
-    await this.assertCanViewOrderTracking(req?.user, (order as any)?.data);
+    await this.assertCanViewOrderTracking(req?.user, order?.data);
     return firstValueFrom(
       this.orderClient
         .send({ cmd: 'order.tracking' }, { id, page, limit })

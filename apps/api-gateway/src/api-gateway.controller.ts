@@ -82,13 +82,15 @@ export class ApiGatewayController {
     reqUser: JwtUser,
   ): Promise<BranchAssignment | null> {
     const response = await firstValueFrom(
-      this.branchClient.send(
-        { cmd: 'branch.user.find_by_user' },
-        {
-          user_id: reqUser.sub,
-          requester: { id: reqUser.sub, roles: reqUser.roles ?? [] },
-        },
-      ).pipe(timeout(8000)),
+      this.branchClient
+        .send(
+          { cmd: 'branch.user.find_by_user' },
+          {
+            user_id: reqUser.sub,
+            requester: { id: reqUser.sub, roles: reqUser.roles ?? [] },
+          },
+        )
+        .pipe(timeout(8000)),
     );
 
     return (response?.data ?? null) as BranchAssignment | null;
@@ -97,10 +99,12 @@ export class ApiGatewayController {
   private async findUserCashbox(userId: string, cashboxType: Cashbox_type) {
     try {
       const response = await firstValueFrom(
-        this.financeClient.send(
-          { cmd: 'finance.cashbox.find_by_user' },
-          { user_id: String(userId), cashbox_type: cashboxType },
-        ).pipe(timeout(8000)),
+        this.financeClient
+          .send(
+            { cmd: 'finance.cashbox.find_by_user' },
+            { user_id: String(userId), cashbox_type: cashboxType },
+          )
+          .pipe(timeout(8000)),
       );
 
       if (Array.isArray(response?.data)) {
@@ -121,7 +125,9 @@ export class ApiGatewayController {
   @Get()
   @ApiOperation({ summary: 'Gateway health check via identity service' })
   getHello() {
-    return this.identityClient.send({ cmd: 'identity.health' }, {}).pipe(timeout(8000));
+    return this.identityClient
+      .send({ cmd: 'identity.health' }, {})
+      .pipe(timeout(8000));
   }
 
   @Post('admins')
@@ -136,10 +142,12 @@ export class ApiGatewayController {
     @Body() dto: CreateAdminRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return this.identityClient.send(
-      { cmd: 'identity.user.create' },
-      { dto, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    return this.identityClient
+      .send(
+        { cmd: 'identity.user.create' },
+        { dto, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
   }
 
   @Post('registrators')
@@ -192,13 +200,15 @@ export class ApiGatewayController {
     // identity-service o'zi user.save + branch.user.assign saga'sini bajaradi
     // va fail bo'lsa user'ni o'chiradi. Gateway endi faqat transit qiladi.
     return firstValueFrom(
-      this.identityClient.send(
-        { cmd: 'identity.registrator.create' },
-        {
-          dto: { ...dto, branch_id: resolvedBranchId },
-          requester: this.toRequester(req),
-        },
-      ).pipe(timeout(8000)),
+      this.identityClient
+        .send(
+          { cmd: 'identity.registrator.create' },
+          {
+            dto: { ...dto, branch_id: resolvedBranchId },
+            requester: this.toRequester(req),
+          },
+        )
+        .pipe(timeout(8000)),
     );
   }
 
@@ -223,18 +233,20 @@ export class ApiGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.identityClient.send(
-      { cmd: 'identity.user.find_all' },
-      {
-        query: {
-          role: RoleEnum.REGISTRATOR,
-          search,
-          status,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
+    return this.identityClient
+      .send(
+        { cmd: 'identity.user.find_all' },
+        {
+          query: {
+            role: RoleEnum.REGISTRATOR,
+            search,
+            status,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('admins')
@@ -258,18 +270,20 @@ export class ApiGatewayController {
     @Query('page') page?: string,
     @Query('limit') limit?: string,
   ) {
-    return this.identityClient.send(
-      { cmd: 'identity.user.find_all' },
-      {
-        query: {
-          role: RoleEnum.ADMIN,
-          search,
-          status,
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
+    return this.identityClient
+      .send(
+        { cmd: 'identity.user.find_all' },
+        {
+          query: {
+            role: RoleEnum.ADMIN,
+            search,
+            status,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Post('couriers')
@@ -299,7 +313,9 @@ export class ApiGatewayController {
     let branchId = '';
     if (isSystemPrivileged) {
       const hqBranch = await firstValueFrom(
-        this.branchClient.send({ cmd: 'branch.find_hq' }, {}).pipe(timeout(8000)),
+        this.branchClient
+          .send({ cmd: 'branch.find_hq' }, {})
+          .pipe(timeout(8000)),
       );
       branchId = String(hqBranch?.data?.id ?? '').trim();
       if (!branchId) {
@@ -316,10 +332,12 @@ export class ApiGatewayController {
     }
 
     const branchResponse = await firstValueFrom(
-      this.branchClient.send(
-        { cmd: 'branch.find_by_id' },
-        { id: branchId, requester: this.toRequester(req) },
-      ).pipe(timeout(8000)),
+      this.branchClient
+        .send(
+          { cmd: 'branch.find_by_id' },
+          { id: branchId, requester: this.toRequester(req) },
+        )
+        .pipe(timeout(8000)),
     );
     const branchType = String(branchResponse?.data?.type ?? '')
       .trim()
@@ -338,23 +356,25 @@ export class ApiGatewayController {
     // identity-service create + branch.user.assign saga'sini o'zi bajaradi.
     // Fail bo'lsa user'ni o'chiradi.
     return firstValueFrom(
-      this.identityClient.send(
-        { cmd: 'identity.courier.create' },
-        {
-          dto: {
-            name: dto.name,
-            phone_number: dto.phone_number,
-            password: dto.password,
-            salary: dto.salary,
-            payment_day: dto.payment_day,
-            tariff_home: dto.tariff_home,
-            tariff_center: dto.tariff_center,
-            region_id: branchRegionId || undefined,
-            branch_id: branchId,
+      this.identityClient
+        .send(
+          { cmd: 'identity.courier.create' },
+          {
+            dto: {
+              name: dto.name,
+              phone_number: dto.phone_number,
+              password: dto.password,
+              salary: dto.salary,
+              payment_day: dto.payment_day,
+              tariff_home: dto.tariff_home,
+              tariff_center: dto.tariff_center,
+              region_id: branchRegionId || undefined,
+              branch_id: branchId,
+            },
+            requester: this.toRequester(req),
           },
-          requester: this.toRequester(req),
-        },
-      ).pipe(timeout(8000)),
+        )
+        .pipe(timeout(8000)),
     );
   }
 
@@ -373,10 +393,12 @@ export class ApiGatewayController {
     // identity-service'ning createManager o'zi user.save + branch.user.assign
     // saga'sini bajaradi (branch_id DTO'da majburiy).
     return firstValueFrom(
-      this.identityClient.send(
-        { cmd: 'identity.manager.create' },
-        { dto, requester: this.toRequester(req) },
-      ).pipe(timeout(8000)),
+      this.identityClient
+        .send(
+          { cmd: 'identity.manager.create' },
+          { dto, requester: this.toRequester(req) },
+        )
+        .pipe(timeout(8000)),
     );
   }
 
@@ -436,31 +458,35 @@ export class ApiGatewayController {
     }
 
     const response = await firstValueFrom(
-      this.identityClient.send(
-        { cmd: 'identity.courier.find_all' },
-        {
-          query: {
-            search,
-            status,
-            region_id: resolvedRegionId,
-            page: page ? Number(page) : undefined,
-            limit: limit ? Number(limit) : undefined,
+      this.identityClient
+        .send(
+          { cmd: 'identity.courier.find_all' },
+          {
+            query: {
+              search,
+              status,
+              region_id: resolvedRegionId,
+              page: page ? Number(page) : undefined,
+              limit: limit ? Number(limit) : undefined,
+            },
           },
-        },
-      ).pipe(timeout(8000)),
+        )
+        .pipe(timeout(8000)),
     );
 
     let items = Array.isArray(response?.data?.items) ? response.data.items : [];
 
     if (resolvedBranchId && req?.user) {
       const branchUsersResponse = await firstValueFrom(
-        this.branchClient.send(
-          { cmd: 'branch.user.find_by_branch' },
-          {
-            branch_id: resolvedBranchId,
-            requester: this.toRequester(req),
-          },
-        ).pipe(timeout(8000)),
+        this.branchClient
+          .send(
+            { cmd: 'branch.user.find_by_branch' },
+            {
+              branch_id: resolvedBranchId,
+              requester: this.toRequester(req),
+            },
+          )
+          .pipe(timeout(8000)),
       );
 
       const branchUsers = Array.isArray(branchUsersResponse?.data)
@@ -524,18 +550,20 @@ export class ApiGatewayController {
     @Req() req?: { user: JwtUser },
   ) {
     const response = await firstValueFrom(
-      this.identityClient.send(
-        { cmd: 'identity.user.find_all' },
-        {
-          query: {
-            role: RoleEnum.MANAGER,
-            search,
-            status,
-            page: page ? Number(page) : undefined,
-            limit: limit ? Number(limit) : undefined,
+      this.identityClient
+        .send(
+          { cmd: 'identity.user.find_all' },
+          {
+            query: {
+              role: RoleEnum.MANAGER,
+              search,
+              status,
+              page: page ? Number(page) : undefined,
+              limit: limit ? Number(limit) : undefined,
+            },
           },
-        },
-      ).pipe(timeout(8000)),
+        )
+        .pipe(timeout(8000)),
     );
 
     const items = Array.isArray(response?.data?.items)
@@ -547,17 +575,19 @@ export class ApiGatewayController {
 
     const requester = req?.user ? this.toRequester(req) : undefined;
     const branchRows = await firstValueFrom(
-      this.branchClient.send(
-        { cmd: 'branch.find_all' },
-        {
-          requester,
-          query: {
-            status: 'active',
-            page: 1,
-            limit: 10000,
+      this.branchClient
+        .send(
+          { cmd: 'branch.find_all' },
+          {
+            requester,
+            query: {
+              status: 'active',
+              page: 1,
+              limit: 10000,
+            },
           },
-        },
-      ).pipe(timeout(8000)),
+        )
+        .pipe(timeout(8000)),
     ).catch(() => null);
     const branches = Array.isArray(branchRows?.data?.items)
       ? branchRows.data.items
@@ -586,10 +616,12 @@ export class ApiGatewayController {
 
         if (!branch && managerId) {
           const assignment = await firstValueFrom(
-            this.branchClient.send(
-              { cmd: 'branch.user.find_by_user' },
-              { user_id: managerId, requester },
-            ).pipe(timeout(8000)),
+            this.branchClient
+              .send(
+                { cmd: 'branch.user.find_by_user' },
+                { user_id: managerId, requester },
+              )
+              .pipe(timeout(8000)),
           ).catch(() => null);
           branch = assignment?.data?.branch ?? null;
         }
@@ -598,10 +630,7 @@ export class ApiGatewayController {
         const cashbox = branchId
           ? await this.findUserCashbox(branchId, Cashbox_type.BRANCH)
           : null;
-        const payableToHq = Math.max(
-          Number(branch?.berilishi_kerak ?? 0),
-          0,
-        );
+        const payableToHq = Math.max(Number(branch?.berilishi_kerak ?? 0), 0);
 
         return {
           ...manager,
@@ -626,14 +655,16 @@ export class ApiGatewayController {
   @ApiParam({ name: 'id', description: 'Region ID' })
   @ApiOkResponse({ description: 'Courier list by region' })
   getCouriersByRegion(@Param('id') id: string) {
-    return this.identityClient.send(
-      { cmd: 'identity.courier.find_all' },
-      {
-        query: {
-          region_id: id,
+    return this.identityClient
+      .send(
+        { cmd: 'identity.courier.find_all' },
+        {
+          query: {
+            region_id: id,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('users')
@@ -697,10 +728,12 @@ export class ApiGatewayController {
       }
 
       const branchUsersResponse = await firstValueFrom(
-        this.branchClient.send(
-          { cmd: 'branch.user.find_by_branch' },
-          { branch_id: branchId, requester: this.toRequester(req) },
-        ).pipe(timeout(8000)),
+        this.branchClient
+          .send(
+            { cmd: 'branch.user.find_by_branch' },
+            { branch_id: branchId, requester: this.toRequester(req) },
+          )
+          .pipe(timeout(8000)),
       );
       const branchUsers = Array.isArray(branchUsersResponse?.data)
         ? branchUsersResponse.data
@@ -728,7 +761,9 @@ export class ApiGatewayController {
 
       if (!branchId && isSystemPrivileged) {
         const hqBranch = await firstValueFrom(
-          this.branchClient.send({ cmd: 'branch.find_hq' }, {}).pipe(timeout(8000)),
+          this.branchClient
+            .send({ cmd: 'branch.find_hq' }, {})
+            .pipe(timeout(8000)),
         );
         branchId = String(hqBranch?.data?.id ?? '').trim();
       }
@@ -740,10 +775,12 @@ export class ApiGatewayController {
       }
 
       const branchUsersResponse = await firstValueFrom(
-        this.branchClient.send(
-          { cmd: 'branch.user.find_by_branch' },
-          { branch_id: branchId, requester: this.toRequester(req) },
-        ).pipe(timeout(8000)),
+        this.branchClient
+          .send(
+            { cmd: 'branch.user.find_by_branch' },
+            { branch_id: branchId, requester: this.toRequester(req) },
+          )
+          .pipe(timeout(8000)),
       );
       const branchUsers = Array.isArray(branchUsersResponse?.data)
         ? branchUsersResponse.data
@@ -783,20 +820,22 @@ export class ApiGatewayController {
     }
 
     const response = await firstValueFrom(
-      this.identityClient.send(
-        { cmd: 'identity.user.find_all' },
-        {
-          query: {
-            search,
-            role,
-            status,
-            region_id: resolvedRegionId,
-            user_ids: scopedUserIds,
-            page: page ? Number(page) : undefined,
-            limit: limit ? Number(limit) : undefined,
+      this.identityClient
+        .send(
+          { cmd: 'identity.user.find_all' },
+          {
+            query: {
+              search,
+              role,
+              status,
+              region_id: resolvedRegionId,
+              user_ids: scopedUserIds,
+              page: page ? Number(page) : undefined,
+              limit: limit ? Number(limit) : undefined,
+            },
           },
-        },
-      ).pipe(timeout(8000)),
+        )
+        .pipe(timeout(8000)),
     );
 
     const items = Array.isArray(response?.data?.items)
@@ -917,13 +956,15 @@ export class ApiGatewayController {
       }
 
       const branchUsersResponse = await firstValueFrom(
-        this.branchClient.send(
-          { cmd: 'branch.user.find_by_branch' },
-          {
-            branch_id: branchId,
-            requester: this.toRequester(req as { user: JwtUser }),
-          },
-        ).pipe(timeout(8000)),
+        this.branchClient
+          .send(
+            { cmd: 'branch.user.find_by_branch' },
+            {
+              branch_id: branchId,
+              requester: this.toRequester(req as { user: JwtUser }),
+            },
+          )
+          .pipe(timeout(8000)),
       );
       const branchUsers = Array.isArray(branchUsersResponse?.data)
         ? branchUsersResponse.data
@@ -940,7 +981,9 @@ export class ApiGatewayController {
     }
 
     return firstValueFrom(
-      this.identityClient.send({ cmd: 'identity.user.find_by_id' }, { id }).pipe(timeout(8000)),
+      this.identityClient
+        .send({ cmd: 'identity.user.find_by_id' }, { id })
+        .pipe(timeout(8000)),
     );
   }
 
@@ -994,13 +1037,15 @@ export class ApiGatewayController {
       }
 
       const branchUsersResponse = await firstValueFrom(
-        this.branchClient.send(
-          { cmd: 'branch.user.find_by_branch' },
-          {
-            branch_id: branchId,
-            requester: this.toRequester(req as { user: JwtUser }),
-          },
-        ).pipe(timeout(8000)),
+        this.branchClient
+          .send(
+            { cmd: 'branch.user.find_by_branch' },
+            {
+              branch_id: branchId,
+              requester: this.toRequester(req as { user: JwtUser }),
+            },
+          )
+          .pipe(timeout(8000)),
       );
 
       allowedUserIds = Array.from(
@@ -1021,17 +1066,19 @@ export class ApiGatewayController {
       }
     }
 
-    return this.identityClient.send(
-      { cmd: 'identity.user.update' },
-      {
-        id,
-        dto,
-        requester: {
-          ...this.toRequester(req),
-          allowed_user_ids: allowedUserIds,
+    return this.identityClient
+      .send(
+        { cmd: 'identity.user.update' },
+        {
+          id,
+          dto,
+          requester: {
+            ...this.toRequester(req),
+            allowed_user_ids: allowedUserIds,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Delete('users/:id')
@@ -1043,10 +1090,12 @@ export class ApiGatewayController {
   @ApiOkResponse({ description: 'User deleted' })
   @ApiNotFoundResponse({ description: 'Not found' })
   deleteUser(@Param('id') id: string, @Req() req: { user: JwtUser }) {
-    return this.identityClient.send(
-      { cmd: 'identity.user.delete' },
-      { id, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    return this.identityClient
+      .send(
+        { cmd: 'identity.user.delete' },
+        { id, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
   }
 
   @Patch('users/:id/status')
@@ -1063,10 +1112,12 @@ export class ApiGatewayController {
     @Body() dto: UpdateUserStatusRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return this.identityClient.send(
-      { cmd: 'identity.user.status' },
-      { id, status: dto.status, requester: this.toRequester(req) },
-    ).pipe(timeout(8000));
+    return this.identityClient
+      .send(
+        { cmd: 'identity.user.status' },
+        { id, status: dto.status, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
   }
 
   @Post('markets')
@@ -1107,24 +1158,26 @@ export class ApiGatewayController {
       }
     }
 
-    return this.identityClient.send(
-      { cmd: 'identity.market.create' },
-      {
-        dto: {
-          name: dto.name,
-          phone_number: dto.phone_number,
-          username: dto.username,
-          password: dto.password,
-          tariff_home: dto.tariff_home,
-          tariff_center: dto.tariff_center,
-          default_tariff: dto.default_tariff,
-          add_order: dto.add_order,
-          cancelled_handover_qr_required: dto.cancelled_handover_qr_required,
-          expense_proof_conditions: dto.expense_proof_conditions,
+    return this.identityClient
+      .send(
+        { cmd: 'identity.market.create' },
+        {
+          dto: {
+            name: dto.name,
+            phone_number: dto.phone_number,
+            username: dto.username,
+            password: dto.password,
+            tariff_home: dto.tariff_home,
+            tariff_center: dto.tariff_center,
+            default_tariff: dto.default_tariff,
+            add_order: dto.add_order,
+            cancelled_handover_qr_required: dto.cancelled_handover_qr_required,
+            expense_proof_conditions: dto.expense_proof_conditions,
+          },
+          requester: this.toRequester(req),
         },
-        requester: this.toRequester(req),
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('markets')
@@ -1156,17 +1209,19 @@ export class ApiGatewayController {
     @Query('limit') limit?: string,
   ) {
     const response = await firstValueFrom(
-      this.identityClient.send(
-        { cmd: 'identity.market.find_all' },
-        {
-          query: {
-            search,
-            status,
-            page: page ? Number(page) : undefined,
-            limit: limit ? Number(limit) : undefined,
+      this.identityClient
+        .send(
+          { cmd: 'identity.market.find_all' },
+          {
+            query: {
+              search,
+              status,
+              page: page ? Number(page) : undefined,
+              limit: limit ? Number(limit) : undefined,
+            },
           },
-        },
-      ).pipe(timeout(8000)),
+        )
+        .pipe(timeout(8000)),
     );
 
     const items = Array.isArray(response?.data?.items)
@@ -1202,15 +1257,17 @@ export class ApiGatewayController {
     @Param('id') id: string,
     @Body() dto: UpdateMarketAddOrderRequestDto,
   ) {
-    return this.identityClient.send(
-      { cmd: 'identity.market.update' },
-      {
-        id,
-        dto: {
-          add_order: dto.add_order,
+    return this.identityClient
+      .send(
+        { cmd: 'identity.market.update' },
+        {
+          id,
+          dto: {
+            add_order: dto.add_order,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Patch('markets/:id/cancelled-handover-qr')
@@ -1244,15 +1301,17 @@ export class ApiGatewayController {
       );
     }
 
-    return this.identityClient.send(
-      { cmd: 'identity.market.update' },
-      {
-        id,
-        dto: {
-          cancelled_handover_qr_required: dto.cancelled_handover_qr_required,
+    return this.identityClient
+      .send(
+        { cmd: 'identity.market.update' },
+        {
+          id,
+          dto: {
+            cancelled_handover_qr_required: dto.cancelled_handover_qr_required,
+          },
         },
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 
   @Patch('markets/:id/expense-proof')
@@ -1272,15 +1331,17 @@ export class ApiGatewayController {
     @Body() dto: UpdateMarketExpenseProofRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return this.identityClient.send(
-      { cmd: 'identity.market.update' },
-      {
-        id,
-        dto: {
-          expense_proof_conditions: dto.expense_proof_conditions,
+    return this.identityClient
+      .send(
+        { cmd: 'identity.market.update' },
+        {
+          id,
+          dto: {
+            expense_proof_conditions: dto.expense_proof_conditions,
+          },
+          requester: this.toRequester(req),
         },
-        requester: this.toRequester(req),
-      },
-    ).pipe(timeout(8000));
+      )
+      .pipe(timeout(8000));
   }
 }

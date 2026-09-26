@@ -148,7 +148,8 @@ export class ScanGatewayController {
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Market canceled handover QRni scan qilib 5 daqiqalik ruxsat olish',
+    summary:
+      'Market canceled handover QRni scan qilib 5 daqiqalik ruxsat olish',
   })
   @ApiBody({ type: ScanMarketCancelledHandoverQrDto })
   async scanMarketCancelledHandover(

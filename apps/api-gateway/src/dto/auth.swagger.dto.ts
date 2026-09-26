@@ -1,5 +1,10 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { IsOptional, IsPhoneNumber, IsString, MinLength } from 'class-validator';
+import {
+  IsOptional,
+  IsPhoneNumber,
+  IsString,
+  MinLength,
+} from 'class-validator';
 
 export class LoginRequestDto {
   @ApiProperty({ example: '+998900000000' })
@@ -15,7 +20,8 @@ export class LoginRequestDto {
 export class RefreshRequestDto {
   @ApiPropertyOptional({
     example: 'eyJhbGciOiJIUzI1NiIs...',
-    description: 'Optional fallback. Normally refresh token is read from httpOnly cookie.',
+    description:
+      'Optional fallback. Normally refresh token is read from httpOnly cookie.',
   })
   @IsOptional()
   @IsString()

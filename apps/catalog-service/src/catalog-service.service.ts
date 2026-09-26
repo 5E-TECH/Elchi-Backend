@@ -28,9 +28,10 @@ export class CatalogServiceService {
     private readonly activityLog: ActivityLogService,
   ) {}
 
-  private auditActor(
-    requester?: { id?: string; roles?: string[] } | null,
-  ): { user_id: string | null; user_role: string | null } {
+  private auditActor(requester?: { id?: string; roles?: string[] } | null): {
+    user_id: string | null;
+    user_role: string | null;
+  } {
     const roles = requester?.roles ?? [];
     return {
       user_id: requester?.id ? String(requester.id) : null,
@@ -80,7 +81,10 @@ export class CatalogServiceService {
     if (error instanceof QueryFailedError) {
       const pgError = error.driverError as { code?: string };
       if (pgError?.code === '22P02') {
-        throw new RpcException({ statusCode: 400, message: 'ID format noto‘g‘ri' });
+        throw new RpcException({
+          statusCode: 400,
+          message: 'ID format noto‘g‘ri',
+        });
       }
       if (pgError?.code === '23505') {
         this.conflict('Bu marketda bu nomdagi product allaqachon mavjud');
@@ -92,21 +96,23 @@ export class CatalogServiceService {
   private async syncProductToSearch(product: Product) {
     try {
       await lastValueFrom(
-        this.searchClient.send(
-          { cmd: 'search.index.upsert' },
-          {
-            source: 'catalog',
-            type: 'product',
-            sourceId: product.id,
-            title: product.name,
-            content: product.user_id,
-            tags: ['product'],
-            metadata: {
-              user_id: product.user_id,
-              image_url: product.image_url,
+        this.searchClient
+          .send(
+            { cmd: 'search.index.upsert' },
+            {
+              source: 'catalog',
+              type: 'product',
+              sourceId: product.id,
+              title: product.name,
+              content: product.user_id,
+              tags: ['product'],
+              metadata: {
+                user_id: product.user_id,
+                image_url: product.image_url,
+              },
             },
-          },
-        ).pipe(timeout(1500)),
+          )
+          .pipe(timeout(1500)),
       );
     } catch {
       // Search index sync should not block product flows.
@@ -116,17 +122,21 @@ export class CatalogServiceService {
   private async removeProductFromSearch(id: string) {
     try {
       await lastValueFrom(
-        this.searchClient.send(
-          { cmd: 'search.index.remove' },
-          { source: 'catalog', type: 'product', sourceId: id },
-        ).pipe(timeout(1500)),
+        this.searchClient
+          .send(
+            { cmd: 'search.index.remove' },
+            { source: 'catalog', type: 'product', sourceId: id },
+          )
+          .pipe(timeout(1500)),
       );
     } catch {
       // Search index sync should not block product flows.
     }
   }
 
-  private async attachMarket(product: Product): Promise<Product & { market: MarketInfo | null }> {
+  private async attachMarket(
+    product: Product,
+  ): Promise<Product & { market: MarketInfo | null }> {
     try {
       const result = await lastValueFrom(
         this.identityClient
@@ -254,10 +264,7 @@ export class CatalogServiceService {
     return this.attachMarket(product);
   }
 
-  async update(
-    id: string,
-    dto: { name?: string; image_url?: string },
-  ) {
+  async update(id: string, dto: { name?: string; image_url?: string }) {
     const product = await this.findByIdEntity(id);
     const before = { name: product.name, image_url: product.image_url };
     Object.assign(product, dto);
@@ -321,7 +328,10 @@ export class CatalogServiceService {
   async remove(id: string, requester?: { id: string; roles: string[] }) {
     const product = await this.findByIdEntity(id);
 
-    if (requester?.roles?.includes('market') && product.user_id !== requester.id) {
+    if (
+      requester?.roles?.includes('market') &&
+      product.user_id !== requester.id
+    ) {
       this.forbidden('You can delete only your own product');
     }
 

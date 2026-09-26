@@ -17,4 +17,3 @@ export class UploadFileDto {
   @IsString()
   folder?: string;
 }
-

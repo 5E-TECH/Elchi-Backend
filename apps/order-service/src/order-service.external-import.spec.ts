@@ -7,7 +7,6 @@ jest.mock('@app/common', () => {
   return { ...actual, rmqSend: jest.fn() };
 });
 
-// eslint-disable-next-line @typescript-eslint/no-var-requires
 const { rmqSend } = require('@app/common') as { rmqSend: jest.Mock };
 
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
@@ -91,7 +90,7 @@ const runFull = async (
 
 const VALID = { id: 'X1', phone: '+998901112233', total_price: 100 };
 
-describe('EI-06 — `region` matn bo\'lsa 500 bermaydi', () => {
+describe("EI-06 — `region` matn bo'lsa 500 bermaydi", () => {
   it('⭐ MATN region `null` ga tushadi (ilgari xom yozilardi)', async () => {
     const dto = await run({
       id: 'X1',
@@ -111,9 +110,13 @@ describe('EI-06 — `region` matn bo\'lsa 500 bermaydi', () => {
     expect(dto.region_id).toBe('14');
   });
 
-  it('bo\'sh va yo\'q qiymat `null`', async () => {
-    expect((await run({ id: 'X3', phone: '+998901112233', region: '' })).region_id).toBeNull();
-    expect((await run({ id: 'X4', phone: '+998901112233' })).region_id).toBeNull();
+  it("bo'sh va yo'q qiymat `null`", async () => {
+    expect(
+      (await run({ id: 'X3', phone: '+998901112233', region: '' })).region_id,
+    ).toBeNull();
+    expect(
+      (await run({ id: 'X4', phone: '+998901112233' })).region_id,
+    ).toBeNull();
   });
 
   it('⭐ aralash qiymat ham rad etiladi (SQL injektsiya shakli ham)', async () => {
@@ -158,7 +161,7 @@ describe('EI-12 — mahsulot qatorlari', () => {
     ]);
   });
 
-  it('⭐ katalogga BOG\'LANMAYDI (`product_id: null`)', async () => {
+  it("⭐ katalogga BOG'LANMAYDI (`product_id: null`)", async () => {
     /**
      * Ataylab: kichik saytlarning mahsulot id'lari bizning katalogimizga mos
      * kelmaydi va har nomni katalogda yaratish uni axlatga to'ldirardi.
@@ -183,16 +186,19 @@ describe('EI-12 — mahsulot qatorlari', () => {
     expect(dto.items[0].product_name).toBe('Bor');
   });
 
-  it('noto\'g\'ri son 1 ga tushadi', async () => {
+  it("noto'g'ri son 1 ga tushadi", async () => {
     const dto = await run({
       id: 'Y4',
       phone: '+998901112233',
-      items: [{ name: 'A', quantity: -5 }, { name: 'B', quantity: 'salom' }],
+      items: [
+        { name: 'A', quantity: -5 },
+        { name: 'B', quantity: 'salom' },
+      ],
     });
     expect(dto.items.map((i: any) => i.quantity)).toEqual([1, 1]);
   });
 
-  it('`items` massiv bo\'lmasa bo\'sh ro\'yxat — yiqilmaydi', async () => {
+  it("`items` massiv bo'lmasa bo'sh ro'yxat — yiqilmaydi", async () => {
     const dto = await run({
       id: 'Y5',
       phone: '+998901112233',
@@ -202,7 +208,7 @@ describe('EI-12 — mahsulot qatorlari', () => {
   });
 });
 
-describe("⭐ NARX — `NaN` moliyani zaharlaydi", () => {
+describe('⭐ NARX — `NaN` moliyani zaharlaydi', () => {
   /**
    * ADVERSARIAL TOPILMA (kritik). `Number('250 000')` → `NaN`,
    * `Math.max(NaN, 0)` → `NaN`. Postgres `numeric` ustuni `NaN` ni QABUL
@@ -211,7 +217,10 @@ describe("⭐ NARX — `NaN` moliyani zaharlaydi", () => {
    * qoladi. Eng yomon turdagi xato: jimgina va butun moliyani buzadi.
    */
   it("son bo'lmagan narx qatorni TASHLAYDI", async () => {
-    const { res, created } = await runFull({ ...VALID, total_price: '250 000' });
+    const { res, created } = await runFull({
+      ...VALID,
+      total_price: '250 000',
+    });
 
     expect(created).toHaveLength(0);
     expect(res.data.skipped[0]).toMatchObject({ reason: 'price_invalid' });

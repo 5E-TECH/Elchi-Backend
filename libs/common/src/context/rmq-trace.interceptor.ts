@@ -24,9 +24,7 @@ export class RmqTraceInterceptor implements NestInterceptor {
       return next.handle();
     }
 
-    const payload = context.switchToRpc().getData() as
-      | Record<string, unknown>
-      | undefined;
+    const payload = context.switchToRpc().getData();
     const traceId =
       payload && typeof payload === 'object' && !Array.isArray(payload)
         ? typeof payload.trace_id === 'string' && payload.trace_id.length > 0
@@ -42,9 +40,7 @@ export class RmqTraceInterceptor implements NestInterceptor {
     // observable surface; the inner `switchMap` only runs after `als.run`
     // has set up the context.
     return from(Promise.resolve()).pipe(
-      switchMap(() =>
-        requestContext.run({ traceId }, () => next.handle()),
-      ),
+      switchMap(() => requestContext.run({ traceId }, () => next.handle())),
     );
   }
 }
