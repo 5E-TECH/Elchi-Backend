@@ -18,6 +18,7 @@ import { OrderAnalyticsService } from './analytics/order-analytics.service';
 import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
 import { OrderSettlementService } from './settlement/order-settlement.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+import type { PartlySellRequestItem } from './lifecycle/partly-sell-items';
 import { OrderHolderType, Order_source } from './entities/order.entity';
 
 @Controller()
@@ -387,7 +388,7 @@ export class OrderServiceController {
     data: {
       id: string;
       dto: {
-        order_item_info: Array<{ product_id: string; quantity: number }>;
+        order_item_info: PartlySellRequestItem[];
         totalPrice: number;
         extraCost?: number;
         comment?: string;

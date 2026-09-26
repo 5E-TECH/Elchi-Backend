@@ -49,6 +49,10 @@ import {
 } from '../domain/order-money';
 import { OrderLookupService } from '../lookup/order-lookup.service';
 import { OrderCustodyService } from '../custody/order-custody.service';
+import {
+  matchPartlySellItems,
+  type PartlySellRequestItem,
+} from './partly-sell-items';
 
 const CANCELLED_HANDOVER_MANUAL_REASONS = new Set([
   'QR yirtilgan',
@@ -6107,7 +6111,7 @@ export class OrderLifecycleService {
     requester: { id: string; roles?: string[]; branch_id?: string | null },
     id: string,
     dto: {
-      order_item_info: Array<{ product_id: string; quantity: number }>;
+      order_item_info: PartlySellRequestItem[];
       totalPrice: number;
       extraCost?: number;
       comment?: string;
@@ -6315,47 +6319,10 @@ export class OrderLifecycleService {
       this.badRequest('Partly sell quantity cannot exceed original quantity');
     }
 
-    for (const existingItem of existingItems) {
-      const dtoItem = dto.order_item_info.find(
-        (item) => String(item.product_id) === String(existingItem.product_id),
-      );
-      if (!dtoItem) {
-        this.notFound(
-          `Product not found in request: ${existingItem.product_id}`,
-        );
-      }
-      if (Number(dtoItem.quantity) > Number(existingItem.quantity)) {
-        this.badRequest(
-          `Quantity cannot exceed original amount for product ${existingItem.product_id}`,
-        );
-      }
-    }
-
-    for (const dtoItem of dto.order_item_info) {
-      const existingItem = existingItems.find(
-        (item) => String(item.product_id) === String(dtoItem.product_id),
-      );
-      if (!existingItem) {
-        this.notFound(`Product not found in order: ${dtoItem.product_id}`);
-      }
-    }
-
-    const cancelledItems = existingItems
-      .map((existingItem) => {
-        const dtoItem = dto.order_item_info.find(
-          (item) => String(item.product_id) === String(existingItem.product_id),
-        );
-        if (!dtoItem) return null;
-
-        const diff = Number(existingItem.quantity) - Number(dtoItem.quantity);
-        return diff > 0
-          ? { product_id: String(existingItem.product_id), quantity: diff }
-          : null;
-      })
-      .filter(
-        (item): item is { product_id: string; quantity: number } =>
-          item !== null,
-      );
+    const { matches: itemMatches, cancelledItems } = matchPartlySellItems(
+      existingItems,
+      dto.order_item_info,
+    );
 
     if (!cancelledItems.length) {
       this.badRequest(
@@ -6452,18 +6419,14 @@ export class OrderLifecycleService {
       await this.lockWaitingOrder(tx, id);
       const txOrderItemRepo = tx.getRepository(OrderItem);
       const pay = (
-        data: Parameters<typeof this.updateCashboxBalance>[0],
+        // `typeof this.…` bu yerda TS 5.9 da hal bo'lmaydi (metodda boshqa
+        // `this` tip so'rovi qolmagach) — sinf nomi orqali, ma'nosi bir xil.
+        data: Parameters<OrderLifecycleService['updateCashboxBalance']>[0],
       ): Promise<void> =>
         this.updateCashboxBalance({ ...data, dedup_epoch: dedupEpoch }, tx);
 
       // Persist the reduced quantities for partially-returned line items.
-      for (const existingItem of existingItems) {
-        const dtoItem = dto.order_item_info.find(
-          (item) => String(item.product_id) === String(existingItem.product_id),
-        );
-        if (!dtoItem) continue;
-
-        const nextQty = Number(dtoItem.quantity);
+      for (const { item: existingItem, quantity: nextQty } of itemMatches) {
         if (nextQty < Number(existingItem.quantity)) {
           existingItem.quantity = nextQty;
           await txOrderItemRepo.save(existingItem);
@@ -6681,6 +6644,7 @@ export class OrderLifecycleService {
           cancelledItems.map((item) => ({
             order_id: cancelledOrder.id,
             product_id: item.product_id,
+            product_name: item.product_name,
             quantity: item.quantity,
           })),
         )

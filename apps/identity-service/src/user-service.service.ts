@@ -1748,6 +1748,9 @@ export class UserServiceService implements OnModuleInit {
           );
         }),
       )
+      // Barqaror tartib: limitdan oshganda qaysi mijozlar qaytishi tasodifiy
+      // bo'lmasin (eng yangilari birinchi).
+      .orderBy('u.id', 'DESC')
       .take(limit);
 
     const rows = await qb.getMany();
