@@ -3076,6 +3076,25 @@ export class OrderLifecycleService {
       },
     });
 
+    // G4 — TASHQI SINXRON. Bekor qilingan mol jismonan marketga qaytdi;
+    // hamkor (BeePost) buni bilishi uchun ALOHIDA signal chiqariladi. Elchining
+    // o'z statusi CLOSED qoladi (rollback/return shartlari CLOSED'ga bog'liq),
+    // lekin hamkorga `returned_to_market` yuboriladi — BeePost uni
+    // CANCELLED_SENT + 'return' amaliga xaritalaydi. Dedup (partner_id,
+    // order_id, new_status) to'smaydi: oldin 'cancelled' ketgan, bu boshqa status.
+    for (const order of handedOverOrders) {
+      try {
+        void this.queueExternalStatusSync(
+          order,
+          'canceled',
+          Order_status.CANCELLED,
+          Order_status.RETURNED_TO_MARKET,
+        );
+      } catch {
+        // Best-effort: topshirishning o'zi allaqachon durable (commit bo'lgan).
+      }
+    }
+
     return successRes(
       {
         market_id: marketId,
@@ -6976,8 +6995,16 @@ export class OrderLifecycleService {
       typeof dto.branch_id !== 'undefined' ||
       typeof dto.courier_id !== 'undefined';
     if (shouldRecalculateHolder) {
+      // Faqat courier_id o'zgarganda mavjud custody filialini (holder_branch_id)
+      // saqlaymiz — aks holda stale order.branch_id (masalan HQ) holderni HQ ga
+      // tortib, filial oyog'ini va uning naqdini yo'qotadi. branch_id aniq
+      // uzatilganda (dispatch/receivePost) esa yangi filial ustun bo'ladi.
+      const custodyBranchId =
+        typeof dto.branch_id !== 'undefined'
+          ? order.branch_id
+          : (order.holder_branch_id ?? order.branch_id);
       const resolvedHolder = await this.resolveHolderFromState(
-        order.branch_id,
+        custodyBranchId,
         order.courier_id,
       );
       order.holder_type = resolvedHolder.holder_type;

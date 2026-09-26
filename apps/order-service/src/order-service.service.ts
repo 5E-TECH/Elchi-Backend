@@ -839,6 +839,7 @@ export class OrderServiceService {
     status?: Order_status | Order_status[] | string | string[];
     start_day?: string;
     end_day?: string;
+    fetch_all?: boolean | string;
     page?: number;
     limit?: number;
   }) {

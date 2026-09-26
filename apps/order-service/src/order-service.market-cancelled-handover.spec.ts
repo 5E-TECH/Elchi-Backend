@@ -309,6 +309,30 @@ describe('OrderServiceService market cancelled handover', () => {
     expect(response.data.closed_count).toBe(1);
   });
 
+  it('emits a returned_to_market partner signal after closing cancelled orders', async () => {
+    const { service, order } = setup({ marketQrRequired: false });
+    order.external_id = 'BP-777';
+
+    const syncSpy = jest
+      .spyOn(service as any, 'queueExternalStatusSync')
+      .mockResolvedValue(undefined);
+
+    await service.completeMarketCancelledHandover({
+      market_id: '16',
+      order_ids: ['101'],
+      requester: { id: '9', roles: ['admin'] },
+    });
+
+    // BeePost mol qaytganini bilishi uchun `returned_to_market` signali
+    // chiqishi SHART (u buni CANCELLED_SENT + 'return' ga xaritalaydi).
+    expect(syncSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ id: '101' }),
+      'canceled',
+      Order_status.CANCELLED,
+      Order_status.RETURNED_TO_MARKET,
+    );
+  });
+
   it('rejects unknown manual override reasons', async () => {
     const { service } = setup({ marketQrRequired: false });
 

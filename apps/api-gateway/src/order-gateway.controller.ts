@@ -1207,6 +1207,7 @@ export class OrderGatewayController {
     enum: [10, 25, 50, 100],
     schema: { default: 10 } as any,
   })
+  @ApiQuery({ name: 'fetch_all', required: false, type: Boolean })
   async findAllExternal(
     @Query('market_id') market_id?: string,
     @Query('status') status?: string | string[],
@@ -1215,6 +1216,7 @@ export class OrderGatewayController {
     @Query('end_day') end_day?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('fetch_all') fetch_all?: string,
     @Req() req?: { user: JwtUser },
   ) {
     const roles = req?.user?.roles ?? [];
@@ -1276,6 +1278,8 @@ export class OrderGatewayController {
               status: statuses,
               start_day: resolvedStartDay,
               end_day: resolvedEndDay,
+              fetch_all:
+                String(fetch_all ?? '').toLowerCase() === 'true' || undefined,
               page: pagination.page,
               limit: pagination.limit,
             },

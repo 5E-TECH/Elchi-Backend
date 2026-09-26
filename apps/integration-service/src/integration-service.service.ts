@@ -1201,6 +1201,9 @@ export class IntegrationServiceService {
           tariff_home: Number(dto.tariff_home ?? 0),
           tariff_center: Number(dto.tariff_center ?? 0),
           default_tariff: Where_deliver.CENTER,
+          // API-only hamkor (BeePost) MHA-QR yarata olmaydi, shuning uchun
+          // bekor qilingan mol tokensiz yopilsin — aks holda HQ omborida qoladi.
+          cancelled_handover_qr_required: false,
         },
         requester: { id: `partner:${partnerId}`, roles: [Roles.SUPERADMIN] },
       },
@@ -1365,15 +1368,11 @@ export class IntegrationServiceService {
       },
     });
     if (existing) {
-      return successRes(
-        { shipment_id: existing.order_id, idempotent: true },
-        200,
-        'shipment already exists',
-      );
+      return this.idempotentShipmentRes(String(existing.order_id));
     }
 
     // 1) Customer (lightweight, phone bo'yicha idempotent)
-    const customerRes = await this.rmqRequest<Record<string, any>>(
+    const customerRes = await this.rmqRequestStrict<Record<string, any>>(
       this.identityClient,
       { cmd: 'identity.customer.create' },
       {
@@ -1387,7 +1386,11 @@ export class IntegrationServiceService {
     );
     const customerId = this.pluckId(customerRes);
     if (!customerId) {
-      throw new RpcException(errorRes('Customer yaratib bo‘lmadi', 502));
+      // rmqRequestStrict endi identity'ning 409/4xx javobini HAMKORGA o'tkazadi;
+      // bu yerga faqat TIMEOUT (strict null qaytaradi) yetib keladi.
+      throw new RpcException(
+        errorRes('Customer yaratib bo‘lmadi (identity javob bermadi)', 504),
+      );
     }
 
     // 2) Mahsulotlarni Elchi katalogiga bog'lash (yo'q bo'lsa yaratiladi).
@@ -1526,11 +1529,7 @@ export class IntegrationServiceService {
         where: { partner_id: partnerId, external_order_id: externalOrderId },
       });
       if (raced) {
-        return successRes(
-          { shipment_id: raced.order_id, idempotent: true },
-          200,
-          'shipment already exists',
-        );
+        return this.idempotentShipmentRes(String(raced.order_id));
       }
       throw new RpcException(
         errorRes('Shipment bog‘lanishini saqlab bo‘lmadi', 500),
@@ -1573,6 +1572,41 @@ export class IntegrationServiceService {
    *
    * Topilmasa — 404. Buzilgan kirish endi hech qachon 500 bermaydi.
    */
+  /**
+   * Idempotent shipment javobi (audit NrapO7Zq). Mavjud buyurtmani
+   * `order.find_by_id` bilan o'qib, `qr_code_token`/`order_status`/`to_be_paid`
+   * ni yangi-yaratish javobi bilan BIR XIL shaklda qaytaradi. Ilgari faqat
+   * `{ shipment_id, idempotent }` qaytardi — natijada qayta jo'natishda
+   * BeePost ko'zgu ustuni (qr_code_token) BO'SH qolardi. Buyurtma o'qib
+   * bo'lmasa (rmqRequest null) — eski minimal shaklga xavfsiz qaytamiz.
+   */
+  private async idempotentShipmentRes(orderId: string) {
+    const order = await this.rmqRequest<Record<string, any>>(
+      this.orderClient,
+      { cmd: 'order.find_by_id' },
+      { id: String(orderId) },
+      8000,
+    );
+    if (!order) {
+      return successRes(
+        { shipment_id: String(orderId), idempotent: true },
+        200,
+        'shipment already exists',
+      );
+    }
+    return successRes(
+      {
+        shipment_id: String(orderId),
+        order_status: this.pluck(order, 'status'),
+        qr_code_token: this.pluck(order, 'qr_code_token') ?? null,
+        to_be_paid: Number(this.pluck(order, 'to_be_paid') ?? 0),
+        idempotent: true,
+      },
+      200,
+      'shipment already exists',
+    );
+  }
+
   private async findPartnerShipmentRef(
     partnerId: string,
     shipmentId: string,
