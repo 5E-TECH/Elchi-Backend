@@ -1404,7 +1404,7 @@
             "name": "search",
             "required": false,
             "in": "query",
-            "description": "Customer name/family/phone search",
+            "description": "Customer name/phone search, or order number (order id, e.g. 1251175). Response has search_truncated=true when more than 1000 customers match.",
             "schema": {
               "type": "string"
             }
@@ -1521,6 +1521,33 @@
               "enum": [
                 "center",
                 "address"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort_by",
+            "required": false,
+            "in": "query",
+            "description": "Server-side sort across all pages (default created_at desc). status sorts by lifecycle order, not alphabetically.",
+            "schema": {
+              "enum": [
+                "created_at",
+                "total_price",
+                "status"
+              ],
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort_dir",
+            "required": false,
+            "in": "query",
+            "description": "Default desc",
+            "schema": {
+              "enum": [
+                "asc",
+                "desc"
               ],
               "type": "string"
             }
@@ -12362,9 +12389,16 @@
       "PartlySoldItemDto": {
         "type": "object",
         "properties": {
+          "order_item_id": {
+            "type": "string",
+            "example": "5501",
+            "description": "Buyurtma qatorining id'si (GET /orders/:id → items[].id). Katalogsiz (hamkor) qatorlarda product_id null — ular faqat shu id bilan topiladi. Berilsa qator avval shu bo‘yicha moslanadi."
+          },
           "product_id": {
             "type": "string",
-            "example": "1"
+            "example": "1",
+            "nullable": true,
+            "description": "Katalog mahsuloti id. order_item_id berilmasa majburiy (eski usul)."
           },
           "quantity": {
             "type": "number",
@@ -12373,7 +12407,6 @@
           }
         },
         "required": [
-          "product_id",
           "quantity"
         ]
       },

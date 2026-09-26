@@ -594,6 +594,8 @@ export class PartlySoldItemDto {
   order_item_id?: string;
 
   @ApiPropertyOptional({
+    // `string | null` tipini Swagger o'zi `object` deb o'qiydi.
+    type: String,
     example: '1',
     nullable: true,
     description:
