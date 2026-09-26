@@ -11,7 +11,7 @@ import { IntegrationServiceService } from './integration-service.service';
  * "server buzildi".
  */
 function makeService(rows: any[]) {
-  const findOne = jest.fn(async ({ where }: any) => {
+  const findOne = jest.fn(({ where }: any) => {
     // Haqiqiy Postgres xulqini taqlid qilamiz: bigint ustunga raqam bo'lmagan
     // qiymat berilsa, so'rovning O'ZI yiqiladi.
     if (where.order_id !== undefined && !/^\d+$/.test(String(where.order_id))) {

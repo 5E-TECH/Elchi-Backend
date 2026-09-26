@@ -117,7 +117,7 @@ function makeService(opts: {
   /** `order.payment.record` javobi; `Error` → RMQ xatosi, `null` → timeout. */
   orderReply?: unknown;
   /** To'lov yozuvini band qilishda otiladigan xato. */
-  txnError?: unknown;
+  txnError?: Error;
 }) {
   const integrationRepo: any = {
     findOne: jest.fn().mockResolvedValue(opts.integration),
@@ -125,17 +125,17 @@ function makeService(opts: {
   const webhookLogRepo: any = {
     findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn((dto: any) => dto),
-    save: jest.fn(async (e: any) => ({ id: 'log1', ...e })),
+    save: jest.fn((e: any) => ({ id: 'log1', ...e })),
     update: jest.fn().mockResolvedValue(undefined),
   };
   const simpleRepo = (): any => ({
     findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn((dto: any) => ({ ...dto })),
-    save: jest.fn(async (e: any) => ({ id: 'x1', ...e })),
+    save: jest.fn((e: any) => ({ id: 'x1', ...e })),
   });
   const paymentTxnRepo: any = {
     create: jest.fn((dto: any) => ({ ...dto })),
-    save: jest.fn(async (e: any) => {
+    save: jest.fn((e: any) => {
       if (opts.txnError) throw opts.txnError;
       return { id: 'ptx1', ...e };
     }),

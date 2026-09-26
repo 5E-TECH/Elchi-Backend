@@ -1806,6 +1806,14 @@
             }
           },
           {
+            "name": "fetch_all",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "status",
             "required": false,
             "in": "query",

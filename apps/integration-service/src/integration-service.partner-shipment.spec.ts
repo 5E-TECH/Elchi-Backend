@@ -1,5 +1,5 @@
 import { RpcException } from '@nestjs/microservices';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { IntegrationServiceService } from './integration-service.service';
 
 /** createPartnerShipment (C2.1) — prototip orqali (og'ir konstruktorsiz). */
@@ -227,9 +227,13 @@ describe('IntegrationServiceService.createPartnerShipment (C2.1)', () => {
     );
   });
 
-  it('TC4: idempotent — mavjud ref bo‘lsa yangi order YARATILMAYDI', async () => {
-    const { svc, identitySend, orderSend } = makeService({
+  it('TC4: idempotent — mavjud ref bo‘lsa yangi order YARATILMAYDI, ammo qr_code_token qaytadi', async () => {
+    const orderSend = jest.fn(() =>
+      of({ id: '900', status: 'new', qr_code_token: 'qr-abc' }),
+    );
+    const { svc, identitySend } = makeService({
       refFindOne: jest.fn(() => Promise.resolve({ order_id: '900' })),
+      orderSend,
     });
 
     const res: any = await svc.createPartnerShipment({
@@ -238,9 +242,44 @@ describe('IntegrationServiceService.createPartnerShipment (C2.1)', () => {
     });
 
     expect(res.statusCode).toBe(200);
-    expect(res.data).toEqual({ shipment_id: '900', idempotent: true });
+    // Ko'zgu ustuni bo'sh qolmasin — token idempotent javobda ham keladi.
+    expect(res.data).toMatchObject({
+      shipment_id: '900',
+      idempotent: true,
+      qr_code_token: 'qr-abc',
+      order_status: 'new',
+    });
     expect(identitySend).not.toHaveBeenCalled();
-    expect(orderSend).not.toHaveBeenCalled();
+    // order.create CHAQIRILMAYDI (faqat order.find_by_id bilan o'qiladi).
+    expect(orderSend).not.toHaveBeenCalledWith(
+      { cmd: 'order.create' },
+      expect.anything(),
+    );
+  });
+
+  it('TC(xJAdfqtX): identity 409 (telefon boshqa rolda) -> hamkorga 409 uzatiladi, 502 EMAS', async () => {
+    // identity.customer.create RMQ orqali RpcException(errorRes(msg, 409))
+    // tashlaganda transport getError() payload'ini (statusCode+message) yetkazadi.
+    const identitySend = jest.fn(() =>
+      throwError(() => ({
+        statusCode: 409,
+        message: 'Bu telefon raqam boshqa rolda allaqachon mavjud',
+        data: null,
+      })),
+    );
+    const { svc } = makeService({ identitySend });
+
+    const err = await svc
+      .createPartnerShipment({ ...baseDto, cod_amount: 0 })
+      .catch((e: unknown) => e);
+
+    expect(err).toBeInstanceOf(RpcException);
+    // Patchsiz: rmqRequest 409 ni yutib null qaytaradi -> statusCode 502,
+    // message 'Customer yaratib bo‘lmadi' (identity xabari yo'qoladi) -> yiqiladi.
+    expect((err as RpcException).getError()).toMatchObject({
+      statusCode: 409,
+      message: 'Bu telefon raqam boshqa rolda allaqachon mavjud',
+    });
   });
 
   it('external_order_id yo‘q -> 400', async () => {

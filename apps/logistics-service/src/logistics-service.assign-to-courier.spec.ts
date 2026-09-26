@@ -99,11 +99,13 @@ describe('LogisticsServiceService assignOrdersToCourier', () => {
         return Promise.resolve(null);
       }),
       create: jest.fn((payload: Record<string, unknown>) => payload),
-      save: jest.fn(async (entity: Record<string, unknown>) => ({
-        ...entity,
-        id: String(entity.id ?? 'p-new'),
-      })),
-      remove: jest.fn(async () => undefined),
+      save: jest.fn((entity: Record<string, unknown>) =>
+        Promise.resolve({
+          ...entity,
+          id: String((entity.id as string | number | undefined) ?? 'p-new'),
+        }),
+      ),
+      remove: jest.fn(() => Promise.resolve(undefined)),
     };
 
     const activityLog = {

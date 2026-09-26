@@ -242,7 +242,10 @@ export class OrderServiceService {
     }
 
     return {
-      id: user.id != null ? String(user.id) : null,
+      id:
+        typeof user.id === 'string' || typeof user.id === 'number'
+          ? String(user.id)
+          : null,
       name:
         typeof user.name === 'string'
           ? user.name
@@ -486,7 +489,7 @@ export class OrderServiceService {
   }
 
   private normalizeSourceFilter(
-    source?: Order_source | 'internal' | 'external' | 'branch' | string,
+    source?: Order_source | string,
   ): Order_source | undefined {
     if (source == null) {
       return undefined;
@@ -968,6 +971,7 @@ export class OrderServiceService {
     status?: Order_status | Order_status[] | string | string[];
     start_day?: string;
     end_day?: string;
+    fetch_all?: boolean | string;
     page?: number;
     limit?: number;
   }) {

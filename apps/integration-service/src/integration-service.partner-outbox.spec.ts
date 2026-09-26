@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import { RpcException } from '@nestjs/microservices';
 import { IntegrationServiceService } from './integration-service.service';
 
@@ -84,10 +85,7 @@ describe('IntegrationServiceService — hamkorni tahrirlash', () => {
         return Promise.resolve();
       }),
     };
-    svc.primaryKey = require('crypto')
-      .createHash('sha256')
-      .update('x'.repeat(40))
-      .digest();
+    svc.primaryKey = createHash('sha256').update('x'.repeat(40)).digest();
     svc.previousKey = null;
     svc.allowPrivateHosts = false;
     svc.logger = { warn: jest.fn(), error: jest.fn(), log: jest.fn() };
@@ -255,7 +253,11 @@ describe('IntegrationServiceService — partner webhook outbox (P5d)', () => {
   it("qisman unique indeks urilsa — XATO emas, 'allaqachon navbatda'", async () => {
     const { svc } = makeService({
       row: { id: '7', status: 'permanently_failed', attempts: 4 },
-      updateImpl: jest.fn(() => Promise.reject({ code: '23505' })),
+      updateImpl: jest.fn(() =>
+        Promise.reject(
+          Object.assign(new Error('duplicate key'), { code: '23505' }),
+        ),
+      ),
     });
 
     const res: any = await svc.retryPartnerWebhook('7');

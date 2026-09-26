@@ -53,7 +53,15 @@ function buildSvc(rows: {
         const want = new Set(inValues(opts?.where?.external_batch_token));
         return Promise.resolve(
           (rows.batchMembers ?? []).filter((r) =>
-            want.has(String(r.external_batch_token ?? '')),
+            want.has(
+              String(
+                (r.external_batch_token as
+                  | string
+                  | number
+                  | null
+                  | undefined) ?? '',
+              ),
+            ),
           ),
         );
       }
@@ -61,7 +69,11 @@ function buildSvc(rows: {
       const want = new Set(inValues(opts?.where?.qr_code_token));
       return Promise.resolve(
         (rows.byParcelToken ?? []).filter((r) =>
-          want.has(String(r.qr_code_token ?? '')),
+          want.has(
+            String(
+              (r.qr_code_token as string | number | null | undefined) ?? '',
+            ),
+          ),
         ),
       );
     }),

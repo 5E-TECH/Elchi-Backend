@@ -232,7 +232,7 @@ export class OrderGatewayController {
     }
 
     return Array.from(
-      new Set(posts.map((post) => String(post?.id ?? '')).filter(Boolean)),
+      new Set(posts.map((post) => this.asStr(post?.id)).filter(Boolean)),
     );
   }
 
@@ -286,37 +286,33 @@ export class OrderGatewayController {
         ? this.extractRows(responses[2]?.data ?? responses[2])
         : []
       )
-        .map((row) => String(row?.id ?? '').trim())
+        .map((row) => this.asStr(row?.id).trim())
         .filter(Boolean),
     );
     const uniqueRows = new Map<string, Record<string, unknown>>();
     responses
       .flatMap((response) => this.extractRows(response?.data ?? response))
       .filter((row) => {
-        const holderType = String(row?.holder_type ?? row?.holderType ?? '')
+        const holderType = this.asStr(row?.holder_type ?? row?.holderType)
           .trim()
           .toUpperCase();
-        const courierId = String(
-          row?.courier_id ?? row?.courierId ?? '',
+        const courierId = this.asStr(row?.courier_id ?? row?.courierId).trim();
+        const holderCourierId = this.asStr(
+          row?.holder_courier_id ?? row?.holderCourierId,
         ).trim();
-        const holderCourierId = String(
-          row?.holder_courier_id ?? row?.holderCourierId ?? '',
-        ).trim();
-        const status = String(row?.status ?? '')
-          .trim()
-          .toLowerCase();
-        const transportStatus = String(
-          row?.transport_status ?? row?.transportStatus ?? '',
+        const status = this.asStr(row?.status).trim().toLowerCase();
+        const transportStatus = this.asStr(
+          row?.transport_status ?? row?.transportStatus,
         )
           .trim()
           .toLowerCase();
-        const canceledPostId = String(
-          row?.canceled_post_id ?? row?.canceledPostId ?? '',
+        const canceledPostId = this.asStr(
+          row?.canceled_post_id ?? row?.canceledPostId,
         ).trim();
-        const parentOrderId = String(
-          row?.parent_order_id ?? row?.parentOrderId ?? '',
+        const parentOrderId = this.asStr(
+          row?.parent_order_id ?? row?.parentOrderId,
         ).trim();
-        const postId = String(row?.post_id ?? row?.postId ?? '').trim();
+        const postId = this.asStr(row?.post_id ?? row?.postId).trim();
 
         if (
           status === Order_status.CANCELLED_SENT ||
@@ -334,7 +330,7 @@ export class OrderGatewayController {
             (courierId === requesterId ||
               holderCourierId === requesterId ||
               (courierPostIdSet.has(postId) &&
-                postHistoryRowIds.has(String(row?.id ?? '').trim())))
+                postHistoryRowIds.has(this.asStr(row?.id).trim())))
           );
         }
         if (!holderType && !courierId && !holderCourierId) {
@@ -343,7 +339,7 @@ export class OrderGatewayController {
         return courierId === requesterId || holderCourierId === requesterId;
       })
       .forEach((row) => {
-        const id = String(row?.id ?? '').trim();
+        const id = this.asStr(row?.id).trim();
         if (id) {
           uniqueRows.set(id, row);
         }
@@ -400,10 +396,9 @@ export class OrderGatewayController {
       throw error;
     });
 
-    const key = String(
+    const key = this.asStr(
       (response as { data?: { key?: unknown }; key?: unknown })?.data?.key ??
-        (response as { key?: unknown })?.key ??
-        '',
+        (response as { key?: unknown })?.key,
     ).trim();
     if (!key) {
       throw new BadRequestException('Proof file upload did not return a key');
@@ -604,7 +599,7 @@ export class OrderGatewayController {
 
   private normalizeOrderStatusForDisplay(row: Record<string, unknown>) {
     const normalized = { ...row };
-    if (String(normalized.status ?? '') === Order_status.CANCELLED_SENT) {
+    if (this.asStr(normalized.status) === Order_status.CANCELLED_SENT) {
       normalized.status = Order_status.CANCELLED;
       normalized.transport_status = Order_status.CANCELLED_SENT;
     }
@@ -613,8 +608,8 @@ export class OrderGatewayController {
 
   private normalizeCourierCancelledRowForDisplay(row: Record<string, unknown>) {
     const normalized = this.normalizeOrderStatusForDisplay(row);
-    const parentOrderId = String(
-      normalized.parent_order_id ?? normalized.parentOrderId ?? '',
+    const parentOrderId = this.asStr(
+      normalized.parent_order_id ?? normalized.parentOrderId,
     ).trim();
 
     if (!parentOrderId) {
@@ -641,6 +636,24 @@ export class OrderGatewayController {
       }
     }
     return [];
+  }
+
+  /**
+   * Xom RPC natijalari `unknown`/`any` bo'ladi; id/status kabi maydonlar odatda
+   * matn yoki son. Obyekt kelib qolsa `String(...)` "[object Object]" beradi —
+   * shu bois obyektni bo'sh matnga aylantiramiz, primitivlarni esa avvalgidek
+   * `String(...)` bilan (xulq o'zgarmaydi).
+   */
+  private asStr(value: unknown): string {
+    if (typeof value === 'string') return value;
+    if (
+      typeof value === 'number' ||
+      typeof value === 'bigint' ||
+      typeof value === 'boolean'
+    ) {
+      return String(value);
+    }
+    return '';
   }
 
   private parsePaginationQuery(page?: string, limit?: string) {
@@ -748,7 +761,7 @@ export class OrderGatewayController {
     const body = payload as Record<string, unknown>;
     const rows = this.extractRows(body);
     const data = rows.map((row) => {
-      const realStatus = String(row.status ?? '');
+      const realStatus = this.asStr(row.status);
       if (realStatus !== Order_status.CANCELLED_SENT) {
         return row;
       }
@@ -1198,6 +1211,7 @@ export class OrderGatewayController {
     enum: [10, 25, 50, 100],
     schema: { default: 10 } as any,
   })
+  @ApiQuery({ name: 'fetch_all', required: false, type: Boolean })
   async findAllExternal(
     @Query('market_id') market_id?: string,
     @Query('status') status?: string | string[],
@@ -1206,6 +1220,7 @@ export class OrderGatewayController {
     @Query('end_day') end_day?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('fetch_all') fetch_all?: string,
     @Req() req?: { user: JwtUser },
   ) {
     const roles = req?.user?.roles ?? [];
@@ -1267,6 +1282,8 @@ export class OrderGatewayController {
               status: statuses,
               start_day: resolvedStartDay,
               end_day: resolvedEndDay,
+              fetch_all:
+                String(fetch_all ?? '').toLowerCase() === 'true' || undefined,
               page: pagination.page,
               limit: pagination.limit,
             },
@@ -1849,8 +1866,6 @@ export class OrderGatewayController {
       );
     }
 
-    let filteredRows: any[];
-    let total: number;
     let currentPage = pagination.page;
     let currentLimit = pagination.limit;
 
@@ -1880,10 +1895,10 @@ export class OrderGatewayController {
       payload,
     );
     const resultRows = this.extractRows(result?.data ?? result);
-    filteredRows = resultRows.filter((row) =>
-      courierPostIds.includes(String(row?.post_id ?? row?.postId ?? '')),
+    const filteredRows = resultRows.filter((row) =>
+      courierPostIds.includes(this.asStr(row?.post_id ?? row?.postId)),
     );
-    total = Number(result?.total ?? filteredRows.length);
+    const total = Number(result?.total ?? filteredRows.length);
     currentPage = Number(result?.page ?? pagination.page);
     currentLimit = Number(result?.limit ?? pagination.limit);
 

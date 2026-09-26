@@ -121,9 +121,9 @@ function makeService(opts: {
    * `save` da otiladigan xato — bitim BAND bo'lgan holatni taqlid qiladi
    * (unique buzilishi `23505`).
    */
-  dealRefError?: unknown;
+  dealRefError?: Error;
   /** To'lov yozuvini band qilishda otiladigan xato (unique buzilishi). */
-  paymentTxnError?: unknown;
+  paymentTxnError?: Error;
 }) {
   const integrationRepo: any = {
     findOne: jest.fn().mockResolvedValue(opts.integration),
@@ -131,19 +131,19 @@ function makeService(opts: {
   const webhookLogRepo: any = {
     findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn((dto: any) => dto),
-    save: jest.fn(async (e: any) => ({ id: 'log1', ...e })),
+    save: jest.fn((e: any) => ({ id: 'log1', ...e })),
     update: jest.fn().mockResolvedValue(undefined),
   };
   const shipmentRepo: any = {
     findOne: jest.fn().mockResolvedValue(opts.shipment ?? null),
     findAndCount: jest.fn(),
     create: jest.fn((dto: any) => ({ ...dto })),
-    save: jest.fn(async (e: any) => ({ id: 'shp1', ...e })),
+    save: jest.fn((e: any) => ({ id: 'shp1', ...e })),
   };
   const simpleRepo = (): any => ({
     findOne: jest.fn().mockResolvedValue(null),
     create: jest.fn((dto: any) => ({ ...dto })),
-    save: jest.fn(async (e: any) => ({ id: 'x1', ...e })),
+    save: jest.fn((e: any) => ({ id: 'x1', ...e })),
   });
   const activityLog: any = {
     log: jest.fn().mockResolvedValue(undefined),
@@ -152,7 +152,7 @@ function makeService(opts: {
 
   const inboundDealRefRepo: any = {
     create: jest.fn((dto: any) => ({ ...dto })),
-    save: jest.fn(async (e: any) => {
+    save: jest.fn((e: any) => {
       if (opts.dealRefError) throw opts.dealRefError;
       return { id: 'idr1', ...e };
     }),
@@ -162,7 +162,7 @@ function makeService(opts: {
 
   const paymentTxnRepo: any = {
     create: jest.fn((dto: any) => ({ ...dto })),
-    save: jest.fn(async (e: any) => {
+    save: jest.fn((e: any) => {
       if (opts.paymentTxnError) throw opts.paymentTxnError;
       return { id: 'ptx1', ...e };
     }),
@@ -830,11 +830,13 @@ describe('CRM voronkasidan buyurtma yaratish', () => {
      * o'qiydi. Webhook vaqtida qaytarilsa, u kechasi kelgan hodisa
      * logidan sababni izlab yurardi.
      */
-    const check = async (cfg: Record<string, unknown>) => {
+    const check = (cfg: Record<string, unknown>) => {
       const { service } = makeService({ integration: null });
-      return (service as any).assertInboundOrderConfig({
-        inbound_order_config: cfg,
-      });
+      return Promise.resolve().then(() =>
+        (service as any).assertInboundOrderConfig({
+          inbound_order_config: cfg,
+        }),
+      );
     };
 
     it("yoqilgan, lekin darvoza yo'q → 400", async () => {

@@ -56,10 +56,13 @@ describe('FinanceGatewayController', () => {
   it('allows managers to create branch-to-main payments (scoped to own branch)', () => {
     // Audit I5: managers now have a real branch→HQ settle action — they were
     // previously locked out with no way to record remitting their branch's cash.
-    const roles = Reflect.getMetadata(
-      ROLES_KEY,
-      FinanceGatewayController.prototype.paymentBranchToMain,
+    // Metadata `@Roles` orqali metodning o'ziga (descriptor.value) yoziladi;
+    // metodni to'g'ridan-to'g'ri bog'lanmasdan olish o'rniga descriptordan olamiz.
+    const descriptor = Object.getOwnPropertyDescriptor(
+      FinanceGatewayController.prototype,
+      'paymentBranchToMain',
     );
+    const roles = Reflect.getMetadata(ROLES_KEY, descriptor?.value);
 
     expect(roles).toEqual(['superadmin', 'admin', 'manager']);
   });

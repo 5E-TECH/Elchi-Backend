@@ -318,7 +318,7 @@ export class BranchServiceService implements OnModuleInit {
     if (value === null || typeof value === 'undefined' || value === '') {
       return null;
     }
-    return String(value);
+    return String(value as string | number | bigint);
   }
 
   private parseBranchType(type?: string): BranchType {
@@ -595,7 +595,7 @@ export class BranchServiceService implements OnModuleInit {
       const items = Array.isArray(res?.data) ? res.data : [];
       const map = new Map<string, unknown>();
       items.forEach((region) => {
-        const id = String(region?.id ?? '');
+        const id = String((region?.id ?? '') as string);
         if (id) {
           map.set(id, region);
         }
@@ -628,7 +628,7 @@ export class BranchServiceService implements OnModuleInit {
       const items = Array.isArray(res?.data) ? res.data : [];
       const map = new Map<string, unknown>();
       items.forEach((district) => {
-        const id = String(district?.id ?? '');
+        const id = String((district?.id ?? '') as string);
         if (id) {
           map.set(id, district);
         }
@@ -1508,7 +1508,9 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const batchRecord = batchData;
-    const regionId = String(batchRecord?.target_region_id ?? '').trim();
+    const regionId = String(
+      (batchRecord?.target_region_id ?? '') as string,
+    ).trim();
     const regionMap = await this.getRegionsByIds(regionId ? [regionId] : []);
     const rawItems = Array.isArray(batchRecord?.items)
       ? (batchRecord.items as Array<Record<string, unknown>>)
@@ -1516,7 +1518,7 @@ export class BranchServiceService implements OnModuleInit {
 
     const enrichedItems = await Promise.all(
       rawItems.map(async (item) => {
-        const orderId = String(item?.order_id ?? '').trim();
+        const orderId = String((item?.order_id ?? '') as string).trim();
         if (!orderId) {
           return { ...item, order: null };
         }
@@ -1640,7 +1642,7 @@ export class BranchServiceService implements OnModuleInit {
   async findBranchesWithSentBatches(
     query: {
       direction?: string;
-      side?: 'source' | 'destination' | string;
+      side?: string;
     },
     requester?: RequesterContext,
   ) {
@@ -1741,7 +1743,7 @@ export class BranchServiceService implements OnModuleInit {
       new Set(
         items
           .map((batch: Record<string, unknown>) =>
-            String(batch?.target_region_id ?? '').trim(),
+            String((batch?.target_region_id ?? '') as string).trim(),
           )
           .filter(Boolean),
       ),
@@ -1749,7 +1751,7 @@ export class BranchServiceService implements OnModuleInit {
 
     const regionMap = await this.getRegionsByIds(regionIds);
     const enrichedItems = items.map((batch: Record<string, unknown>) => {
-      const regionId = String(batch?.target_region_id ?? '').trim();
+      const regionId = String((batch?.target_region_id ?? '') as string).trim();
       return {
         ...batch,
         region: regionId ? (regionMap.get(regionId) ?? null) : null,
@@ -1800,7 +1802,9 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const batchRecord = batchData;
-    const regionId = String(batchRecord?.target_region_id ?? '').trim();
+    const regionId = String(
+      (batchRecord?.target_region_id ?? '') as string,
+    ).trim();
     const regionMap = await this.getRegionsByIds(regionId ? [regionId] : []);
     const rawItems = Array.isArray(batchRecord?.items)
       ? (batchRecord.items as Array<Record<string, unknown>>)
@@ -1808,7 +1812,7 @@ export class BranchServiceService implements OnModuleInit {
 
     const enrichedItems = await Promise.all(
       rawItems.map(async (item) => {
-        const orderId = String(item?.order_id ?? '').trim();
+        const orderId = String((item?.order_id ?? '') as string).trim();
         if (!orderId) {
           return { ...item, order: null };
         }
@@ -2065,7 +2069,7 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const sourceBranch = await this.getBranchOrThrow(sourceBranchId);
-    const destinationBranch = await this.getBranchOrThrow(destinationBranchId);
+    await this.getBranchOrThrow(destinationBranchId);
 
     if (sourceBranch.type !== BranchType.HQ) {
       this.forbidden("Post dispatch faqat HQ branch'dan ruxsat etilgan");
@@ -2117,7 +2121,7 @@ export class BranchServiceService implements OnModuleInit {
 
     const selectedSet = new Set(selectedOrderIds);
     const candidateOrders = orders.filter((order) =>
-      selectedSet.has(String(order?.id ?? '').trim()),
+      selectedSet.has(String((order?.id ?? '') as string).trim()),
     );
 
     if (!candidateOrders.length) {
@@ -2132,16 +2136,16 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const orderIds = candidateOrders
-      .map((order) => String(order?.id ?? ''))
+      .map((order) => String((order?.id ?? '') as string))
       .filter(Boolean);
     const mismatchedOrders = candidateOrders.filter(
-      (order) => String(order?.branch_id ?? '') !== sourceBranchId,
+      (order) => String((order?.branch_id ?? '') as string) !== sourceBranchId,
     );
     const deletedOrders = candidateOrders.filter((order) =>
       Boolean(order?.isDeleted ?? order?.is_deleted),
     );
     const blockedStatusOrders = candidateOrders.filter((order) => {
-      const status = String(order?.status ?? '')
+      const status = String((order?.status ?? '') as string)
         .trim()
         .toLowerCase();
       return (
@@ -2151,7 +2155,7 @@ export class BranchServiceService implements OnModuleInit {
 
     const ineligibleOrderIds = new Set(
       [...mismatchedOrders, ...deletedOrders, ...blockedStatusOrders]
-        .map((order) => String(order?.id ?? '').trim())
+        .map((order) => String((order?.id ?? '') as string).trim())
         .filter(Boolean),
     );
 
@@ -2194,7 +2198,7 @@ export class BranchServiceService implements OnModuleInit {
               blocked_status_count: blockedStatusOrders.length,
             },
             mismatched_order_ids: mismatchedOrders
-              .map((order) => String(order?.id ?? '').trim())
+              .map((order) => String((order?.id ?? '') as string).trim())
               .filter(Boolean)
               .slice(0, 20),
           },
@@ -2209,10 +2213,12 @@ export class BranchServiceService implements OnModuleInit {
       data?: Array<{ order_id?: string; post_id?: string }>;
     }>('logistics.post.receive_orders', {
       orders: candidateOrders
-        .filter((order) => eligibleOrderIds.includes(String(order?.id ?? '')))
+        .filter((order) =>
+          eligibleOrderIds.includes(String((order?.id ?? '') as string)),
+        )
         .map((order) => ({
-          order_id: String(order?.id ?? ''),
-          assigned_region: String(order?.region_id ?? ''),
+          order_id: String((order?.id ?? '') as string),
+          assigned_region: String((order?.region_id ?? '') as string),
           assigned_branch: destinationBranchId,
           assigned_post_status: Post_status.SENT,
           total_price: Number(order?.total_price ?? 0),

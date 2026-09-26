@@ -39,7 +39,7 @@ export class OutboxPublisher implements OnModuleInit, OnModuleDestroy {
     this.failedAlertIntervalMs = options?.failedAlertIntervalMs ?? 60_000;
   }
 
-  async onModuleInit(): Promise<void> {
+  onModuleInit(): void {
     for (const target of this.targets) {
       try {
         const client = this.moduleRef.get<ClientProxy>(target, {

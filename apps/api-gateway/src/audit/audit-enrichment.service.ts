@@ -5,6 +5,23 @@ import { firstValueFrom, timeout } from 'rxjs';
 type Row = Record<string, any>;
 
 /**
+ * Id qiymatlari `unknown` bo'ladi va odatda matn/son. Obyekt kelib qolsa
+ * `String(...)` "[object Object]" beradi — shu bois faqat primitivlarni matnga
+ * aylantiramiz, qolganini bo'sh matnga (xulq o'zgarmaydi).
+ */
+function toIdString(value: unknown): string {
+  if (typeof value === 'string') return value;
+  if (
+    typeof value === 'number' ||
+    typeof value === 'bigint' ||
+    typeof value === 'boolean'
+  ) {
+    return String(value);
+  }
+  return '';
+}
+
+/**
  * Turns an audit-log page (raw ids) into "full data" for the frontend.
  *
  * Each row only stores ids (actor user_id, entity_id, and *_id keys inside
@@ -73,7 +90,7 @@ export class AuditEnrichmentService {
     const orderIds = new Set<string>();
 
     const add = (set: Set<string>, v: unknown) => {
-      const s = String(v ?? '').trim();
+      const s = toIdString(v).trim();
       if (s && s !== 'null' && s !== 'undefined') set.add(s);
     };
 
@@ -141,7 +158,7 @@ export class AuditEnrichmentService {
       ]);
 
     const lookup = (field: string, id: unknown): Row | null => {
-      const key = String(id ?? '').trim();
+      const key = toIdString(id).trim();
       if (!key) return null;
       if (AuditEnrichmentService.CUSTOMER_FIELDS.has(field)) {
         return (

@@ -58,7 +58,7 @@ export class NotificationBotUpdateService
 
   private scheduleNext(delayMs = 1000) {
     if (!this.running) return;
-    this.timer = setTimeout(() => this.pollLoop(), delayMs);
+    this.timer = setTimeout(() => void this.pollLoop(), delayMs);
   }
 
   private async pollLoop() {

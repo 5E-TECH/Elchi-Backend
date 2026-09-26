@@ -319,7 +319,10 @@ export class CatalogGatewayController {
         req as unknown as HttpRequestLike,
       );
     }
-    const { image: _ignoredImage, ...safeDto } = dto;
+    // `image` faylni yuqorida `image_url`ga aylantirdik — xom binary maydonni
+    // servisga uzatmaymiz.
+    const safeDto = { ...dto };
+    delete safeDto.image;
 
     return this.catalogClient
       .send(
@@ -383,7 +386,10 @@ export class CatalogGatewayController {
         req as unknown as HttpRequestLike,
       );
     }
-    const { image: _ignoredImage, ...safeDto } = dto;
+    // `image` faylni yuqorida `image_url`ga aylantirdik — xom binary maydonni
+    // servisga uzatmaymiz.
+    const safeDto = { ...dto };
+    delete safeDto.image;
 
     return this.catalogClient
       .send(

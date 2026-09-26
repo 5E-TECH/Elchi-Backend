@@ -73,7 +73,7 @@ interface MockUser {
 function buildService(user: MockUser | null) {
   const usersRepo: any = {
     findOne: jest.fn().mockResolvedValue(user),
-    save: jest.fn().mockImplementation(async (u: any) => u),
+    save: jest.fn().mockImplementation((u: any) => Promise.resolve(u)),
     update: jest.fn().mockResolvedValue({}),
   };
 

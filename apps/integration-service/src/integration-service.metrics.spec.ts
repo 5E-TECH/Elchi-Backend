@@ -29,7 +29,7 @@ function makeSvc(opts: {
     ]) {
       b[m] = jest.fn(() => b);
     }
-    b.getRawMany = jest.fn(async () => rows);
+    b.getRawMany = jest.fn(() => Promise.resolve(rows));
     return b;
   };
 

@@ -23,12 +23,12 @@ describe('OrderServiceService extra cost approval flow', () => {
   }) {
     const orderRepo = {
       findOne: jest.fn().mockResolvedValue(order),
-      save: jest.fn(async (entity: any) => entity),
+      save: jest.fn((entity: any) => entity),
     };
     const extraCostApprovalRepo = {
       findOne: jest.fn().mockResolvedValue(options?.pendingApproval ?? null),
       create: jest.fn((entity: any) => entity),
-      save: jest.fn(async (entity: any) => ({
+      save: jest.fn((entity: any) => ({
         id: entity.id ?? 'approval-1',
         createdAt: new Date('2026-09-10T10:00:00.000Z'),
         updatedAt: new Date('2026-09-10T10:00:00.000Z'),
@@ -67,10 +67,12 @@ describe('OrderServiceService extra cost approval flow', () => {
         tariff_center: 0,
         tariff_home: 0,
       }),
-      getCashboxByUser: jest.fn(async (_id: string, type: Cashbox_type) => ({
-        id: `${type}-cashbox`,
-        balance: 0,
-      })),
+      getCashboxByUser: jest.fn((_id: string, type: Cashbox_type) =>
+        Promise.resolve({
+          id: `${type}-cashbox`,
+          balance: 0,
+        }),
+      ),
       resolveSettlementBranchId: jest.fn().mockResolvedValue(null),
       ensureBranchCashbox: jest.fn().mockResolvedValue(undefined),
       resolveBranchShare: jest.fn().mockResolvedValue(0),

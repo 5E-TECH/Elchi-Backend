@@ -13,7 +13,7 @@ function makeService() {
   const repo = {
     findOne: jest.fn(),
     create: jest.fn((value) => ({ id: 'created-user', ...value })),
-    save: jest.fn(async (value) => ({ id: 'created-user', ...value })),
+    save: jest.fn((value) => Promise.resolve({ id: 'created-user', ...value })),
   };
   const noopClient = { send: jest.fn(), emit: jest.fn() };
   const bcrypt = { encrypt: jest.fn(), compare: jest.fn() };

@@ -216,12 +216,10 @@ export class AnalyticsServiceService {
       return overview;
     }
 
-    const {
-      profit: _profit,
-      totalRevenue: _totalRevenue,
-      total_revenue: _totalRevenueSnake,
-      ...safeOverview
-    } = overview;
+    const safeOverview = { ...overview };
+    delete safeOverview.profit;
+    delete safeOverview.totalRevenue;
+    delete safeOverview.total_revenue;
     return safeOverview;
   }
 
