@@ -1,9 +1,13 @@
 #!/usr/bin/env bash
-# ELCHI LOKAL SINOV STEKI — hamkor (Partner API) oqimini sinash uchun.
+# ELCHI LOKAL SINOV STEKI — hamkor (Partner API) va AI buyurtma oqimlarini
+# sinash uchun.
 #
-# ⚠️ FAQAT 7 SERVIS ishga tushadi, 14 emas. Hamkor yo'li aynan shularga
-# tegadi; qolganlari (analytics, investor, c2c, search, file, branch,
-# notification) bu oqimda qatnashmaydi va ularsiz stek yengilroq ishlaydi.
+# ⚠️ FAQAT 8 SERVIS ishga tushadi, 15 emas. Hamkor yo'li birinchi 7 tasiga
+# tegadi; ai-service AI buyurtma oqimi uchun (POST /orders/ai-parse gateway'dan
+# unga RPC yuboradi — u bo'lmasa so'rov 60s kutib 'network' qaytaradi).
+# .env da ANTHROPIC_API_KEY bo'sh bo'lsa ai-service AI o'chiq holda ko'tariladi.
+# Qolganlari (analytics, investor, c2c, search, file, branch, notification) bu
+# oqimlarda qatnashmaydi va ularsiz stek yengilroq ishlaydi.
 #
 # Ishlatilishi:
 #   bash scripts/local/start-test-stack.sh          # ishga tushirish
@@ -13,7 +17,7 @@ set -u
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 LOG_DIR="$ROOT/.local-logs"
 PID_DIR="$ROOT/.local-pids"
-SERVICES="api-gateway identity-service order-service catalog-service logistics-service finance-service integration-service"
+SERVICES="api-gateway identity-service order-service catalog-service logistics-service finance-service integration-service ai-service"
 GATEWAY_PORT="${PORT:-3004}"
 
 mkdir -p "$LOG_DIR" "$PID_DIR"

@@ -91,10 +91,14 @@ jobs:
       # Build each service to catch import / decorator metadata regressions
       # that bare typecheck misses. Gateway + integration-service (Partner API
       # lives here) are smoke-built to keep CI fast; full build is in deploy.yml.
-      - name: Build smoke (gateway + integration)
+      # ai-service is smoke-built too: it is the only app that wires ClaudeModule
+      # (@anthropic-ai/sdk) at runtime, so a broken import there fails the PR
+      # instead of the production deploy.
+      - name: Build smoke (gateway + integration + ai)
         run: |
           npx nest build api-gateway
           npx nest build integration-service
+          npx nest build ai-service
 
   # Secret-scanning gate (Audit P0/P1: live secrets were committed to history).
   # Scans the working tree so a PR that adds a real credential to a tracked file

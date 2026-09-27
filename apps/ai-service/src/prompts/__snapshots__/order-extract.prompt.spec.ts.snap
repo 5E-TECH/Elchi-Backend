@@ -1,0 +1,161 @@
+// Jest Snapshot v1, https://jestjs.io/docs/snapshot-testing
+
+exports[`ORDER_EXTRACT_SCHEMA (C2/C12) snapshot (32fNx0Ci #3 — sxemaga *_id qo'shish urinishi shu yerda qizaradi): ORDER_EXTRACT_SCHEMA 1`] = `
+{
+  "additionalProperties": false,
+  "properties": {
+    "orders": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "address": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "comment": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "customer_name": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "district_name": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "extra_number": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "full_address": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "is_replacement": {
+            "type": "boolean",
+          },
+          "items": {
+            "items": {
+              "additionalProperties": false,
+              "properties": {
+                "name": {
+                  "type": "string",
+                },
+                "quantity": {
+                  "type": "integer",
+                },
+              },
+              "required": [
+                "name",
+                "quantity",
+              ],
+              "type": "object",
+            },
+            "type": "array",
+          },
+          "operator": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "phone_number": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "region_name": {
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+          "total_price": {
+            "type": [
+              "number",
+              "null",
+            ],
+          },
+          "where_deliver": {
+            "enum": [
+              "center",
+              "address",
+              null,
+            ],
+            "type": [
+              "string",
+              "null",
+            ],
+          },
+        },
+        "required": [
+          "customer_name",
+          "phone_number",
+          "extra_number",
+          "region_name",
+          "district_name",
+          "address",
+          "full_address",
+          "items",
+          "total_price",
+          "comment",
+          "where_deliver",
+          "is_replacement",
+          "operator",
+        ],
+        "type": "object",
+      },
+      "type": "array",
+    },
+  },
+  "required": [
+    "orders",
+  ],
+  "type": "object",
+}
+`;
+
+exports[`ORDER_EXTRACT_SCHEMA (C2/C12) snapshot (32fNx0Ci #3 — sxemaga *_id qo'shish urinishi shu yerda qizaradi): PRODUCT_DISAMBIG_SCHEMA 1`] = `
+{
+  "additionalProperties": false,
+  "properties": {
+    "picks": {
+      "items": {
+        "additionalProperties": false,
+        "properties": {
+          "choice": {
+            "type": "integer",
+          },
+          "item_index": {
+            "type": "integer",
+          },
+        },
+        "required": [
+          "item_index",
+          "choice",
+        ],
+        "type": "object",
+      },
+      "type": "array",
+    },
+  },
+  "required": [
+    "picks",
+  ],
+  "type": "object",
+}
+`;

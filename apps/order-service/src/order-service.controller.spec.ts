@@ -6,6 +6,7 @@ import { OrderAnalyticsService } from './analytics/order-analytics.service';
 import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
 import { OrderSettlementService } from './settlement/order-settlement.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
+import { AiPreviewService } from './ai/ai-preview.service';
 
 describe('OrderServiceController', () => {
   let orderServiceController: OrderServiceController;
@@ -44,6 +45,10 @@ describe('OrderServiceController', () => {
         {
           provide: IdempotencyService,
           useValue: {},
+        },
+        {
+          provide: AiPreviewService,
+          useValue: { resolve: jest.fn() },
         },
       ],
     }).compile();

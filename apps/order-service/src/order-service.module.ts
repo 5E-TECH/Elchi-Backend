@@ -9,6 +9,12 @@ import { OrderSettlementService } from './settlement/order-settlement.service';
 import { OrderLookupService } from './lookup/order-lookup.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { OrderCustodyService } from './custody/order-custody.service';
+import { ProductResolverService } from './ai/product-resolver.service';
+import { AiPreviewService } from './ai/ai-preview.service';
+import {
+  PRODUCT_DISAMBIGUATOR,
+  RmqProductDisambiguator,
+} from './ai/product-disambiguator';
 import {
   AppLoggerModule,
   RmqModule,
@@ -48,6 +54,9 @@ import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.ent
     RmqModule.register({ name: 'INTEGRATION' }),
     RmqModule.register({ name: 'BRANCH' }),
     RmqModule.register({ name: 'FILE' }),
+    // `ai.product.disambiguate` (noaniq mahsulotni LLM bilan aniqlashtirish) —
+    // ai-service navbati. Faqat RPC mijozi; outbox maqsadi EMAS.
+    RmqModule.register({ name: 'AI' }),
     DatabaseModule,
     IdempotencyModule.forService(),
     OutboxModule.forService({
@@ -86,6 +95,9 @@ import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.ent
     OrderLookupService,
     OrderLifecycleService,
     OrderCustodyService,
+    ProductResolverService,
+    AiPreviewService,
+    { provide: PRODUCT_DISAMBIGUATOR, useClass: RmqProductDisambiguator },
   ],
 })
 export class OrderServiceModule {}

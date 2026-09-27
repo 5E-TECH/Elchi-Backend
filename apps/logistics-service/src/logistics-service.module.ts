@@ -13,6 +13,7 @@ import {
 import { Post } from './entities/post.entity';
 import { Region } from './entities/region.entity';
 import { District } from './entities/district.entity';
+import { DistrictResolverService } from './district-resolver/district-resolver.service';
 
 @Module({
   imports: [
@@ -32,6 +33,6 @@ import { District } from './entities/district.entity';
     ActivityLogModule.forService('logistics-service'),
   ],
   controllers: [LogisticsServiceController],
-  providers: [LogisticsServiceService],
+  providers: [LogisticsServiceService, DistrictResolverService],
 })
 export class LogisticsServiceModule {}

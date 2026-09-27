@@ -12,6 +12,58 @@ export interface AppLoggerOptions {
 }
 
 /**
+ * Pino `redact.paths` — barcha servislar uchun yagona ro'yxat (spec shu
+ * konstantani tekshiradi). Mavjud bo'lmagan yo'llar no-op.
+ *
+ * ⚠️ `'*.x'` faqat BIR daraja ichidagi `x` ni ushlaydi (`{ order: { x } }`).
+ * nestjs-pino `logger.log({ x }, ctx)` obyektini log qatorining YUQORI
+ * darajasiga yoyadi — shuning uchun AI buyurtma PII kalitlari ikkala shaklda
+ * ham (`'x'` va `'*.x'`) turibdi.
+ *
+ * ⚠️ MAXFIYLIK (HD5zOyBp #18): AI buyurtma oqimidagi mijoz ma'lumoti
+ * (telefon, qo'shimcha raqam, ism, manzil), rasm base64 va xom/preview
+ * buyurtmalar logga CHIQMASIN.
+ */
+export const PINO_REDACT_PATHS: readonly string[] = [
+  'req.headers.authorization',
+  'req.headers.cookie',
+  'password',
+  '*.password',
+  'token',
+  '*.token',
+  '*.access_token',
+  '*.refresh_token',
+  'secret',
+  '*.secret',
+  '*.api_key',
+  '*.apiKey',
+  '*.webhook_secret',
+  '*.pinfl',
+  '*.card_number',
+  // AI buyurtma PII (HD5zOyBp) — yuqori daraja + bir daraja ichki.
+  'phone_number',
+  '*.phone_number',
+  'extra_number',
+  '*.extra_number',
+  'address',
+  '*.address',
+  'full_address',
+  '*.full_address',
+  'customer_name',
+  '*.customer_name',
+  'data_base64',
+  '*.data_base64',
+  'file_base64',
+  '*.file_base64',
+  'images',
+  '*.images',
+  'raw_orders',
+  '*.raw_orders',
+  'previews',
+  '*.previews',
+];
+
+/**
  * Shared Pino configuration used by every service. Centralised here so the
  * log shape stays consistent across the monorepo.
  *
@@ -36,24 +88,7 @@ export class AppLoggerModule {
         // redaction was configured). Covers both top-level and one-level-nested
         // sensitive fields in any logged object. Non-existent paths are no-ops.
         redact: {
-          paths: [
-            'req.headers.authorization',
-            'req.headers.cookie',
-            'password',
-            '*.password',
-            'token',
-            '*.token',
-            '*.access_token',
-            '*.refresh_token',
-            'secret',
-            '*.secret',
-            '*.api_key',
-            '*.apiKey',
-            '*.webhook_secret',
-            '*.pinfl',
-            '*.card_number',
-            '*.phone_number',
-          ],
+          paths: [...PINO_REDACT_PATHS],
           censor: '[REDACTED]',
         },
         // x-request-id roundtrips through gateway → RMQ → service; if absent,

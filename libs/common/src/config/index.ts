@@ -103,6 +103,47 @@ export const gatewayValidationSchema = Joi.object({
   // served only when SWAGGER_PASSWORD is set, and always behind Basic Auth.
   SWAGGER_USER: Joi.string().default('admin'),
   SWAGGER_PASSWORD: Joi.string().allow('').default(''),
+  /**
+   * AI buyurtma (ai-service) navbati.
+   *
+   * ⚠️ `required()` EMAS, ataylab `default`. Barcha servislar BITTA
+   * `.env.production` ni o'qiydi — kalit yozilmay qolsa butun API
+   * (gateway) yiqilmasligi kerak; AI yo'li shunchaki standart navbatga ulanadi.
+   *
+   * ⚠️ Barcha AI kalitlarida `.empty('')`: `.env.production` da qiymatsiz
+   * yozilgan kalit (`AI_ORDER_ENABLED=`) Joi xatosi bilan butun gateway'ni
+   * yiqitmasin — bo'sh qiymat sukutga tushadi (AI_ORDER_ENABLED uchun `false`).
+   */
+  RABBITMQ_AI_QUEUE: Joi.string().empty('').default('ai_queue'),
+  /**
+   * AI buyurtma operatsion o'chirgichi (kill switch). `false` bo'lsa
+   * `POST /orders/ai-parse` Anthropic'ga bormasdan 200 `{ok:false,
+   * reason:'disabled'}` qaytaradi. `ai-confirm` bunga BOG'LANMAGAN — qo'lda
+   * tahrirlangan buyurtmalarni qabul qilish ishlayveradi.
+   *
+   * ⚠️ Sukut `false`: birinchi deploy "qorong'i" chiqadi, E2E'dan keyin
+   * `true` qilinadi (faqat api-gateway qayta yaratiladi).
+   */
+  AI_ORDER_ENABLED: Joi.boolean()
+    .truthy('true', '1', 'yes')
+    .falsy('false', '0', 'no')
+    .empty('')
+    .default(false)
+    .description(
+      "AI buyurtma kill switch. false — ai-parse 'disabled' qaytaradi, ai-confirm ishlayveradi.",
+    ),
+  // `ai-parse` uchun FOYDALANUVCHI (JWT sub) bo'yicha limit: TTL oynasida nechta
+  // so'rov. Bu global per-IP THROTTLE_* ni o'zgartirmaydi — alohida 'ai-user'
+  // throttler (UserThrottlerGuard) ishlatadi.
+  AI_PARSE_THROTTLE_LIMIT: Joi.number().integer().min(1).empty('').default(10),
+  AI_PARSE_THROTTLE_TTL_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .empty('')
+    .default(60_000),
+  // ⚠️ ANTHROPIC_API_KEY bu yerda ATAYLAB YO'Q: gateway kalitni ushlamaydi va
+  // noto'g'ri formatdagi kalit butun API'ni yiqitmasligi kerak. Kalit faqat
+  // `aiValidationSchema` da (pastda) tekshiriladi.
 });
 
 export const identityValidationSchema = Joi.object({
@@ -144,6 +185,10 @@ export const orderValidationSchema = Joi.object({
   RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
   RABBITMQ_CATALOG_QUEUE: Joi.string().required(),
   RABBITMQ_FILE_QUEUE: Joi.string().required(),
+  // `ai.product.disambiguate` (mahsulotni LLM bilan aniqlashtirish) shu navbat
+  // orqali ai-service'ga boradi. `required()` emas — kalit yo'q bo'lsa ham
+  // order-service ko'tariladi.
+  RABBITMQ_AI_QUEUE: Joi.string().empty('').default('ai_queue'),
 });
 
 export const catalogValidationSchema = Joi.object({
@@ -323,4 +368,74 @@ export const searchValidationSchema = Joi.object({
   DB_SCHEMA: Joi.string().default('search_schema'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_SEARCH_QUEUE: Joi.string().required(),
+});
+
+/**
+ * ai-service — Anthropic'ni chaqiradigan va `ANTHROPIC_API_KEY` ni ushlaydigan
+ * YAGONA jarayon. Xarajat jurnali (`ai_usage_log`) va kunlik shift hisoblagichi
+ * (`ai_spend_counter`) o'z sxemasida (`ai_schema`) turadi.
+ *
+ * ⚠️ `.unknown(false)` QO'SHILMAYDI: barcha servislar bitta `.env.production`
+ * ni o'qiydi — begona kalitlarni rad etish ai-service'ni boshqa servislarning
+ * kalitlari sababli yiqitadi. Xato nomlangan kalit (masalan `ANTROPIC_API_KEY`)
+ * Joi'da emas, bootstrap'da `inspectAnthropicEnv` orqali WARN bilan
+ * ko'rsatiladi (faqat NOMLAR, qiymat hech qachon logga chiqmaydi).
+ */
+export const aiValidationSchema = Joi.object({
+  ...observabilityKeys,
+  POSTGRES_URI: Joi.string().required(),
+  DB_SCHEMA: Joi.string().default('ai_schema'),
+  RABBITMQ_URI: Joi.string().required(),
+  RABBITMQ_AI_QUEUE: Joi.string().empty('').default('ai_queue'),
+  // Kunlik shift 80% / 100% ga yetganda superadmin/admin'ga bildirishnoma.
+  RABBITMQ_NOTIFICATION_QUEUE: Joi.string().required(),
+  /**
+   * Anthropic kaliti.
+   *
+   * - Berilmagan yoki bo'sh → servis NORMAL ko'tariladi, AI o'chiq
+   *   (`ClaudeService.isEnabled() === false`, startda bitta WARN).
+   * - Berilgan, lekin `sk-ant-` bilan boshlanmaydi → ai-service boot'i yiqiladi
+   *   (fail-fast). Boshqa servislarga ta'sir qilmaydi — kalit faqat shu sxemada.
+   *
+   * ⚠️ `strongKey`/`rejectWeakSecret` va `required()` ATAYLAB ishlatilmaydi:
+   * kalitsiz ishga tushish — qonuniy holat (AI o'chiq).
+   *
+   * ⚠️ `messages` — Joi'ning standart `string.pattern.base` xabari QIYMATNI
+   * (`with value "..."`) matnga qo'shadi va u ConfigModule orqali boot logiga,
+   * u yerdan Sentry'ga tushadi. Noto'g'ri formatdagi kalit ham haqiqiy sir
+   * bo'lishi mumkin (masalan boshqa provayder kaliti), shuning uchun xabarda
+   * faqat kalit NOMI qoladi.
+   */
+  ANTHROPIC_API_KEY: Joi.string()
+    .trim()
+    .allow('')
+    .pattern(/^sk-ant-/)
+    .optional()
+    .messages({
+      'string.pattern.base':
+        "ANTHROPIC_API_KEY noto'g'ri formatda: 'sk-ant-' bilan boshlanishi kerak (qiymat xavfsizlik uchun ko'rsatilmaydi). AI'ni o'chirish uchun kalitni bo'sh qoldiring.",
+    }),
+  // Modellar. ⚠️ AI_ORDER_VISION_MODEL = AI_ORDER_MODEL — matn va rasm
+  // chaqiruvlari bitta prompt keshini bo'lishadi (model almashsa kesh yo'qoladi).
+  AI_ORDER_MODEL: Joi.string().empty('').default('claude-sonnet-5'),
+  AI_ORDER_VISION_MODEL: Joi.string().empty('').default('claude-sonnet-5'),
+  AI_CLASSIFY_MODEL: Joi.string().empty('').default('claude-haiku-4-5'),
+  // Pul: `ai_usage_log.cost_uzs = cost_usd × AI_USD_UZS_RATE`;
+  // `applied_price_uzs` = AI_ORDER_PRICE_UZS (order_extract_* uchun).
+  AI_USD_UZS_RATE: Joi.number().positive().empty('').default(12800),
+  AI_ORDER_PRICE_UZS: Joi.number().min(0).empty('').default(300),
+  /**
+   * Kunlik GLOBAL avariya shifti (USD, Toshkent sanasi bo'yicha). Oshsa
+   * ai-parse `cap_exceeded` qaytaradi va Anthropic'ga so'rov KETMAYDI; qo'lda
+   * buyurtma yaratish ishlayveradi. Market/foydalanuvchi kvotasi va oylik
+   * shift YO'Q (ega qarori).
+   */
+  AI_DAILY_USD_CAP: Joi.number().positive().empty('').default(50),
+  // Shiftning shu ulushida (sukut 80%) bir marta ogohlantirish yuboriladi.
+  AI_CAP_WARN_RATIO: Joi.number().min(0.1).max(0.99).empty('').default(0.8),
+  // SUPERADMIN'ning bir kunlik "shiftni ko'tarish" amali uchun yuqori chegara.
+  AI_CAP_RAISE_MAX_USD: Joi.number().positive().empty('').default(50),
+  // ai-service navbatining prefetch'i (faqat kanal QoS). Bir vaqtda nechta
+  // Anthropic chaqiruvi ochiq turishi mumkinligini cheklaydi.
+  AI_RMQ_PREFETCH: Joi.number().integer().min(1).max(50).empty('').default(8),
 });

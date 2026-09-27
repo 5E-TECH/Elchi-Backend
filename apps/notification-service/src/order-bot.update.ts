@@ -21,6 +21,16 @@ import { rmqSend } from '@app/common';
  * Like the notification bot this uses raw long-polling (getUpdates) rather than
  * pulling in the telegraf dependency. If ORDER_BOT_TOKEN is unset the listener
  * stays disabled, so the service boots fine without the bot configured.
+ *
+ * PER-CHAT NAVBAT (Gy8Lt6KT, BeePost `enqueueAi` namunasi): pollLoop update'ni
+ * faqat o'z chatining navbatiga qo'yadi va DARHOL keyingisiga o'tadi. Bitta
+ * chatning sekin ishi (masalan 15 s) boshqa chatlarni bloklamaydi; bitta chat
+ * ichida esa xabarlar kelgan tartibda birma-bir bajariladi.
+ *
+ * ⚠️ FAQAT BITTA REPLIKA. Telegram getUpdates bir token uchun bitta
+ * polling'ga ruxsat beradi: ikkinchi replika (yoki bir xil ORDER_BOT_TOKEN
+ * bilan ishlayotgan boshqa muhit) HTTP 409 Conflict oladi va bot jim qoladi.
+ * notification-service'ni scale qilmang (yoki avval webhook'ga o'ting).
  */
 
 interface TelegramApiResponse<T> {
@@ -33,6 +43,10 @@ interface TelegramChat {
   type?: string;
 }
 
+interface TelegramUser {
+  id: number | string;
+}
+
 interface TelegramMessage {
   message_id?: number;
   chat?: TelegramChat;
@@ -42,6 +56,7 @@ interface TelegramMessage {
 interface TelegramCallbackQuery {
   id: string;
   data?: string;
+  from?: TelegramUser;
   message?: TelegramMessage;
 }
 
@@ -75,6 +90,20 @@ const STATUS_EMOJI: Record<string, string> = {
 
 const TOKEN_RE = /^group_token-[a-z0-9]{14,64}$/i;
 
+// Navbat to'lganda foydalanuvchiga boradigan javob (Gy8Lt6KT #10): xabar
+// JIMGINA tashlanmaydi, operator nima bo'lganini ko'radi.
+const CHAT_QUEUE_FULL_TEXT =
+  "⏳ Juda ko'p xabar navbatda. Avvalgilarini o'qib bo'lay, biroz kuting.";
+
+// Chat aniqlanmagan update'lar (amalda uchramaydi: allowed_updates faqat
+// message/callback_query, callback_query'da esa `from` doim bor) umumiy
+// navbatga tushadi — processUpdate ularni o'zi jimgina o'tkazib yuboradi.
+const NO_CHAT_QUEUE_KEY = '__no_chat__';
+
+// onModuleDestroy navbatdagi ishlarni ko'pi bilan shuncha kutadi. Docker
+// stop_grace_period (sukut 10 s) dan KICHIK bo'lishi shart, aks holda SIGKILL.
+const QUEUE_DRAIN_TIMEOUT_MS = 8_000;
+
 @Injectable()
 export class OrderBotUpdateService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(OrderBotUpdateService.name);
@@ -87,6 +116,14 @@ export class OrderBotUpdateService implements OnModuleInit, OnModuleDestroy {
   // chatId -> linked market. In-memory: a restart simply asks the operator to
   // re-send their token. The WebApp re-authenticates with the token anyway.
   private readonly links = new Map<string, LinkedMarket>();
+
+  // Chat bo'yicha KETMA-KET NAVBAT (Gy8Lt6KT, BeePost order-bot.update.ts
+  // `aiQueues`/`aiPending`). chatQueues: chat -> oxirgi ish promise'i (zanjir
+  // dumi). chatPending: shu chatda bajarilayotgan + kutayotgan ishlar soni
+  // (navbat cheklovi uchun).
+  private readonly chatQueues = new Map<string, Promise<void>>();
+  private readonly chatPending = new Map<string, number>();
+  private static readonly MAX_QUEUE = 12;
 
   constructor(
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
@@ -108,11 +145,33 @@ export class OrderBotUpdateService implements OnModuleInit, OnModuleDestroy {
     this.logger.log('Order-create bot listener started (long polling)');
   }
 
-  onModuleDestroy() {
+  async onModuleDestroy(): Promise<void> {
+    // 1) Polling to'xtaydi: yangi getUpdates rejalashtirilmaydi, uchib
+    //    ketayotgan so'rov natijasi esa navbatga qo'yilmaydi (pollLoop).
     this.running = false;
     if (this.timer) {
       clearTimeout(this.timer);
       this.timer = null;
+    }
+
+    // 2) Navbatdagi ishlar tugashini kutamiz, lekin ko'pi bilan 8 s. Har chat
+    //    uchun faqat zanjir DUMI saqlanadi — u tugasa o'sha chatning barcha
+    //    avvalgi ishlari ham tugagan bo'ladi.
+    const pending = [...this.chatQueues.values()];
+    if (pending.length === 0) return;
+    let capTimer: NodeJS.Timeout | undefined;
+    const cap = new Promise<'timeout'>((resolve) => {
+      capTimer = setTimeout(() => resolve('timeout'), QUEUE_DRAIN_TIMEOUT_MS);
+    });
+    const outcome = await Promise.race([
+      Promise.allSettled(pending).then(() => 'drained' as const),
+      cap,
+    ]);
+    if (capTimer) clearTimeout(capTimer);
+    if (outcome === 'timeout') {
+      this.logger.warn(
+        `Order bot shutdown: ${this.chatQueues.size} chat queue(s) still busy after ${QUEUE_DRAIN_TIMEOUT_MS}ms, not waiting any longer`,
+      );
     }
   }
 
@@ -130,7 +189,13 @@ export class OrderBotUpdateService implements OnModuleInit, OnModuleDestroy {
         { signal: AbortSignal.timeout(30_000) },
       );
       if (!response.ok) {
-        this.logger.error(`getUpdates failed: HTTP ${response.status}`);
+        // ⚠️ 409 = shu token bilan BOSHQA instance ham polling qilyapti (ikkinchi
+        // replika). Bot shu holatda jim qoladi — sababini logda aniq ko'rsatamiz.
+        this.logger.error(
+          response.status === 409
+            ? 'getUpdates failed: HTTP 409 Conflict (another instance is polling this ORDER_BOT_TOKEN; the order bot must run on a single replica)'
+            : `getUpdates failed: HTTP ${response.status}`,
+        );
         this.scheduleNext(3000);
         return;
       }
@@ -142,9 +207,17 @@ export class OrderBotUpdateService implements OnModuleInit, OnModuleDestroy {
         this.scheduleNext(3000);
         return;
       }
+      // ⚠️ Servis to'xtatilayotgan bo'lsa (onModuleDestroy) yangi ish QABUL
+      // QILINMAYDI: bu update'lar keyingi getUpdates offset'i bilan
+      // tasdiqlanmagan, shuning uchun Telegram ularni keyingi ishga tushishda
+      // qayta beradi. Aks holda ular drain'dan keyin navbatga tushib yo'qolardi.
+      if (!this.running) return;
       for (const update of body.result ?? []) {
+        // Offset NAVBATGA QO'YISHDA oshiriladi, ishlov berish esa navbatda
+        // (processWithRetry: bir marta qayta urinish). Sof "ishlovdan keyin
+        // ko'chirish" poison-message'da cheksiz sikl beradi (Gy8Lt6KT #9).
         this.offset = update.update_id + 1;
-        await this.processUpdate(update);
+        this.dispatchUpdate(update);
       }
       this.scheduleNext(200);
     } catch (error) {
@@ -152,6 +225,93 @@ export class OrderBotUpdateService implements OnModuleInit, OnModuleDestroy {
         error instanceof Error ? error.message : 'polling error',
       );
       this.scheduleNext(3000);
+    }
+  }
+
+  // ===== Per-chat queue (Gy8Lt6KT) =====
+
+  /**
+   * Update'ni o'z chatining navbatiga qo'yadi va DARHOL qaytadi — pollLoop
+   * ishlov berishni hech qachon kutmaydi (Gy8Lt6KT #8). Navbat to'lgan bo'lsa
+   * foydalanuvchiga javob yuboriladi (#10).
+   */
+  private dispatchUpdate(update: TelegramUpdate): void {
+    const chatId = this.chatIdOf(update);
+    const accepted = this.enqueueChat(chatId ?? NO_CHAT_QUEUE_KEY, () =>
+      this.processWithRetry(update),
+    );
+    if (accepted) return;
+    this.logger.warn(
+      `Chat queue is full (${OrderBotUpdateService.MAX_QUEUE}); update ${update.update_id} rejected with a "queue full" reply`,
+    );
+    // sendMessage o'z xatolarini o'zi ushlaydi; pollLoop'ni to'sib qo'ymaslik
+    // uchun kutmaymiz.
+    if (chatId !== null) void this.sendMessage(chatId, CHAT_QUEUE_FULL_TEXT);
+  }
+
+  // message.chat.id, bo'lmasa callback_query.message.chat.id / from.id.
+  private chatIdOf(update: TelegramUpdate): string | null {
+    const id =
+      update.message?.chat?.id ??
+      update.callback_query?.message?.chat?.id ??
+      update.callback_query?.from?.id;
+    return id === undefined || id === null ? null : String(id);
+  }
+
+  /**
+   * Ishni chat navbatiga qo'shadi (avvalgisi tugagach bajariladi). Navbat
+   * to'lgan bo'lsa false qaytaradi — chaqiruvchi foydalanuvchini ogohlantiradi.
+   * Ish xato bersa (sync throw ham) zanjir BUZILMAYDI: `.catch` log qiladi,
+   * keyingi ishlar baribir bajariladi (#11). `.finally` xaritalarni tozalaydi.
+   */
+  private enqueueChat(chatId: string, task: () => Promise<void>): boolean {
+    const pending = this.chatPending.get(chatId) ?? 0;
+    if (pending >= OrderBotUpdateService.MAX_QUEUE) return false;
+    this.chatPending.set(chatId, pending + 1);
+    const prev = this.chatQueues.get(chatId) ?? Promise.resolve();
+    const next: Promise<void> = prev
+      .then(() => task())
+      .catch((error: unknown) => {
+        this.logger.error(
+          `Chat queue task failed: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      })
+      .finally(() => {
+        const left = (this.chatPending.get(chatId) ?? 1) - 1;
+        if (left <= 0) {
+          this.chatPending.delete(chatId);
+          if (this.chatQueues.get(chatId) === next) {
+            this.chatQueues.delete(chatId);
+          }
+        } else {
+          this.chatPending.set(chatId, left);
+        }
+      });
+    this.chatQueues.set(chatId, next);
+    return true;
+  }
+
+  /**
+   * processUpdate'ni bajaradi; throw bo'lsa BIR MARTA qayta urinadi (#9).
+   * Ikkinchi xatoda ERROR log qilinadi va update tashlab ketiladi — offset
+   * allaqachon oshgan, shuning uchun poison-message cheksiz aylanmaydi. Bu
+   * metod hech qachon throw qilmaydi.
+   */
+  private async processWithRetry(update: TelegramUpdate): Promise<void> {
+    try {
+      await this.processUpdate(update);
+      return;
+    } catch (error) {
+      this.logger.warn(
+        `Update ${update.update_id} failed, retrying once: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    try {
+      await this.processUpdate(update);
+    } catch (error) {
+      this.logger.error(
+        `Update ${update.update_id} failed twice, dropped: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
   }
 

@@ -1625,6 +1625,107 @@
         ]
       }
     },
+    "/orders/ai-parse": {
+      "post": {
+        "operationId": "OrderGatewayController_aiParse",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "text": {
+                    "type": "string",
+                    "maxLength": 4000,
+                    "description": "Buyurtma matni. Matn yoki kamida bitta rasm majburiy."
+                  },
+                  "market_id": {
+                    "type": "string",
+                    "example": "12",
+                    "description": "Faqat admin/superadmin/registrator/menejer uchun majburiy."
+                  },
+                  "images": {
+                    "type": "array",
+                    "maxItems": 3,
+                    "items": {
+                      "type": "string",
+                      "format": "binary"
+                    },
+                    "description": "JPEG yoki PNG, har biri 2 MB gacha, ko‘pi bilan 3 ta."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI: matn/rasmdan buyurtma preview (hech narsa yaratmaydi)",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
+    "/orders/ai-availability": {
+      "get": {
+        "operationId": "OrderGatewayController_aiAvailability",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI buyurtma mavjudligi: {enabled, state}",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
+    "/orders/ai-confirm": {
+      "post": {
+        "operationId": "OrderGatewayController_aiConfirm",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AiConfirmRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI: tasdiqlangan buyurtmalarni yaratish (har buyurtmaga alohida natija)",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
     "/orders/receive": {
       "post": {
         "operationId": "OrderGatewayController_receiveNewOrders",
@@ -11295,6 +11396,97 @@
         ]
       }
     },
+    "/ai/status": {
+      "get": {
+        "operationId": "AiGatewayController_status",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI holati: kalit holati (qiymatsiz), modellar, bugungi global shift",
+        "tags": [
+          "AI"
+        ]
+      }
+    },
+    "/ai/cap/raise": {
+      "post": {
+        "operationId": "AiGatewayController_raiseCap",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RaiseAiCapRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI kunlik shiftini bugun uchun bir martalik ko‘tarish (audit)",
+        "tags": [
+          "AI"
+        ]
+      }
+    },
+    "/ai/usage/summary": {
+      "get": {
+        "operationId": "AiGatewayController_usageSummary",
+        "parameters": [
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "description": "Boshlanish sanasi (YYYY-MM-DD, Toshkent).",
+            "schema": {
+              "example": "2026-09-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "description": "Tugash sanasi (YYYY-MM-DD, Toshkent), shu kun ham kiradi.",
+            "schema": {
+              "example": "2026-09-27",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI xarajat yig‘indisi (from/to — YYYY-MM-DD, Toshkent)",
+        "tags": [
+          "AI"
+        ]
+      }
+    },
     "/health/readiness": {
       "get": {
         "operationId": "HealthController_readiness",
@@ -12037,6 +12229,164 @@
           "district_id",
           "order_item_info",
           "total_price"
+        ]
+      },
+      "AiConfirmCustomerDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Ali Valiyev",
+            "maxLength": 100
+          },
+          "phone_number": {
+            "type": "string",
+            "example": "+998901234567",
+            "pattern": "^\\+998\\d{9}$",
+            "description": "Faqat +998XXXXXXXXX. Server o‘zi TO‘G‘RILAMAYDI — noto‘g‘ri shakl 400."
+          },
+          "district_id": {
+            "type": "string",
+            "example": "12",
+            "description": "Tuman ID — buyurtmaning district_id bilan bir xil bo‘lishi shart"
+          },
+          "extra_number": {
+            "type": "string",
+            "example": "97-111-22-33",
+            "maxLength": 20,
+            "description": "Qo‘shimcha raqam (frontend formati XX-XXX-XX-XX)"
+          },
+          "address": {
+            "type": "string",
+            "example": "Chilonzor, 2-kvartal",
+            "maxLength": 255
+          }
+        },
+        "required": [
+          "name",
+          "phone_number",
+          "district_id"
+        ]
+      },
+      "AiConfirmItemDto": {
+        "type": "object",
+        "properties": {
+          "product_id": {
+            "type": "string",
+            "example": "15",
+            "description": "Katalogdagi mahsulot ID. product_name bilan BIRGA yuborilmaydi — aynan bittasi."
+          },
+          "product_name": {
+            "type": "string",
+            "example": "Atir 50 ml",
+            "maxLength": 255,
+            "description": "Katalogda yo‘q mahsulot nomi — FAQAT allow_unlisted_product: true bilan."
+          },
+          "allow_unlisted_product": {
+            "type": "boolean",
+            "example": true,
+            "description": "Operator mahsulotni \"katalogda yo‘q\" deb ATAYLAB belgilagan. product_name bilan majburiy."
+          },
+          "quantity": {
+            "type": "number",
+            "example": 1,
+            "minimum": 1,
+            "maximum": 1000
+          }
+        },
+        "required": [
+          "quantity"
+        ]
+      },
+      "AiConfirmOrderDto": {
+        "type": "object",
+        "properties": {
+          "customer": {
+            "$ref": "#/components/schemas/AiConfirmCustomerDto"
+          },
+          "district_id": {
+            "type": "string",
+            "example": "12",
+            "description": "Tuman ID (raqam)"
+          },
+          "region_id": {
+            "type": "string",
+            "example": "1",
+            "description": "Qabul qilinadi, lekin HECH QACHON ishlatilmaydi — viloyat tuman yozuvidan olinadi."
+          },
+          "draft_id": {
+            "type": "string",
+            "example": "3f9b1c9e-5a7d-4c1e-9b3a-2d4e6f8a0b1c",
+            "description": "ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun."
+          },
+          "items": {
+            "maxItems": 50,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiConfirmItemDto"
+            }
+          },
+          "total_price": {
+            "type": "number",
+            "example": 150000,
+            "minimum": 0
+          },
+          "where_deliver": {
+            "type": "string",
+            "enum": [
+              "center",
+              "address"
+            ],
+            "example": "center"
+          },
+          "address": {
+            "type": "string",
+            "example": "Chilonzor, 2-kvartal",
+            "maxLength": 255
+          },
+          "comment": {
+            "type": "string",
+            "example": "Kechqurun qo‘ng‘iroq qiling",
+            "maxLength": 1000
+          },
+          "operator": {
+            "type": "string",
+            "example": "sevinch",
+            "maxLength": 100,
+            "description": "Operator nomi — FAQAT matn (varchar). operator_id ga HECH QACHON bog‘lanmaydi."
+          }
+        },
+        "required": [
+          "customer",
+          "district_id",
+          "items",
+          "total_price",
+          "where_deliver"
+        ]
+      },
+      "AiConfirmRequestDto": {
+        "type": "object",
+        "properties": {
+          "market_id": {
+            "type": "string",
+            "example": "12",
+            "description": "Market ID — admin/superadmin/registrator/menejer uchun majburiy; market va market operatori uchun e’tiborsiz."
+          },
+          "request_id": {
+            "type": "string",
+            "example": "7c2e0f4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b",
+            "description": "Frontend har yuborishda yangi UUID beradi. Dublikat himoyasi unga TAYANMAYDI (server buyurtma imzosidan foydalanadi)."
+          },
+          "orders": {
+            "maxItems": 30,
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiConfirmOrderDto"
+            }
+          }
+        },
+        "required": [
+          "orders"
         ]
       },
       "OrdersArrayDto": {
@@ -14849,6 +15199,27 @@
         },
         "required": [
           "is_active"
+        ]
+      },
+      "RaiseAiCapRequestDto": {
+        "type": "object",
+        "properties": {
+          "extra_usd": {
+            "type": "number",
+            "example": 10,
+            "minimum": 0.01,
+            "description": "Bugungi shiftga qo‘shiladigan summa (USD). ai-service AI_CAP_RAISE_MAX_USD dan oshirmaydi."
+          },
+          "reason": {
+            "type": "string",
+            "example": "Aksiya kuni — buyurtmalar ko‘p",
+            "maxLength": 255,
+            "description": "Ko‘tarish sababi (auditga yoziladi)."
+          }
+        },
+        "required": [
+          "extra_usd",
+          "reason"
         ]
       }
     }

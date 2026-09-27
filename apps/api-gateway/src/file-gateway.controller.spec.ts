@@ -44,6 +44,37 @@ describe('FileGatewayController object-level access control', () => {
       expect(fileClient.send).not.toHaveBeenCalled();
     });
 
+    it("HD5zOyBp #6: 'ai-' kaliti maxfiy — mijoz/investor imzolangan URL ololmaydi", async () => {
+      const { controller, fileClient, orderClient } = makeController();
+      const asUser = (roles: string[]) => ({ user: { roles, sub: 'u1' } });
+
+      for (const role of ['customer', 'investor']) {
+        await expect(
+          controller.getFileUrl('ai-123-x.jpg', asUser([role])),
+        ).rejects.toThrow(ForbiddenException);
+      }
+      // Rolsiz (bo'sh) token ham rad etiladi.
+      await expect(
+        controller.getFileUrl('ai-123-x.jpg', asUser([])),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(fileClient.send).not.toHaveBeenCalled();
+      expect(orderClient.send).not.toHaveBeenCalled();
+    });
+
+    it("'ai-' kaliti xodim rollariga avvalgidek ochiq (admin)", async () => {
+      const { controller, fileClient } = makeController();
+
+      await controller.getFileUrl('ai-123-x.jpg', {
+        user: { roles: ['admin'], sub: 'a1' },
+      });
+
+      expect(fileClient.send).toHaveBeenCalledWith(
+        { cmd: 'file.get_url' },
+        { key: 'ai-123-x.jpg', expires_in: undefined },
+      );
+    });
+
     it('allows a signed URL for a private key to staff/business roles', async () => {
       const { controller, fileClient } = makeController();
 
