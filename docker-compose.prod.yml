@@ -612,6 +612,47 @@ services:
       retries: 3
       start_period: 40s
 
+  # AI buyurtma servisi: Anthropic'ni chaqiradigan YAGONA jarayon (port 3024,
+  # ai_queue, ai_schema). ANTHROPIC_API_KEY umumiy .env.production'da turadi,
+  # lekin faqat shu servis uni o'qiydi va tekshiradi — bo'sh bo'lsa servis AI
+  # o'chiq holda normal ko'tariladi.
+  # ⚠️ RMQ navbat TTL'i (rmq.service.ts) bu servis uchun ham O'ZGARTIRILMAYDI —
+  # uzoq AI chaqiruvi AI_RPC_TIMEOUT_MS bilan boshqariladi, TTL bilan emas.
+  ai-service:
+    <<: *svc-limits
+    build:
+      context: .
+      dockerfile: apps/ai-service/Dockerfile
+    env_file: .env.production
+    # Pool budget: ai-service faqat usage log + kunlik spend counter yozadi (kam
+    # trafik), shuning uchun default 10 emas, 5 — max_connections=200 ichida
+    # order(20) + finance(20) + qolganlar(~10) bilan birga bosh joy qoladi.
+    environment:
+      DB_POOL_MAX: '5'
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      migration-runner:
+        condition: service_completed_successfully
+    logging: *json-logging
+    restart: unless-stopped
+    # Liveness: hit the worker's own /health (registerLiveness) so Docker
+    # restarts a wedged container. Uses the bundled node binary.
+    healthcheck:
+      test:
+        [
+          'CMD',
+          'node',
+          '-e',
+          "require('http').get('http://127.0.0.1:3024/health',r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
 volumes:
   rabbitmq_data:
   postgres_data:

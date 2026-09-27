@@ -60,6 +60,7 @@ jobs:
           npx nest build logistics-service
           npx nest build order-service
           npx nest build integration-service
+          npx nest build ai-service
 
   deploy:
     runs-on: ubuntu-latest
@@ -96,7 +97,7 @@ jobs:
             git fetch origin main
             NEW_SHA="$(git rev-parse origin/main)"
 
-            APP_SERVICES="api-gateway identity-service order-service catalog-service logistics-service finance-service notification-service integration-service analytics-service branch-service investor-service file-service c2c-service search-service"
+            APP_SERVICES="api-gateway identity-service order-service catalog-service logistics-service finance-service notification-service integration-service analytics-service branch-service investor-service file-service c2c-service search-service ai-service"
             DEPLOY_SERVICES=""
             DEPLOY_ALL=false
             RUN_MIGRATIONS=false
@@ -132,12 +133,32 @@ jobs:
             # never left half-deployed on new code. A failed migration may have
             # partially applied schema changes — the pre-migration dump written
             # to ./backups/pre-migration/ below is the DB restore point.
+            #
+            # ⚠️ Only services that EXIST in the rolled-back compose file are
+            # rebuilt. APP_SERVICES is the NEW list: on the first deploy of a new
+            # service (e.g. ai-service) the old docker-compose.prod.yml restored
+            # by `git reset --hard $OLD_SHA` has no such service, and a single
+            # unknown name makes `docker compose up` abort ("no such service")
+            # WITHOUT rebuilding any of the others — production would stay on the
+            # half-deployed new code. A service left over from the failed deploy
+            # keeps running untouched; nothing on the old code calls it.
             rollback() {
               set +e
               echo "!!! DEPLOY FAILED — rolling back code to ${OLD_SHA:-unknown}"
               if [ -n "$OLD_SHA" ]; then
                 git reset --hard "$OLD_SHA"
-                docker compose -f docker-compose.prod.yml up -d --no-deps --build $APP_SERVICES
+                ROLLBACK_SERVICES=""
+                for s in $APP_SERVICES; do
+                  docker compose -f docker-compose.prod.yml config --services 2>/dev/null | grep -qx "$s" && ROLLBACK_SERVICES="$ROLLBACK_SERVICES $s"
+                done
+                # An empty list must never reach `up`: with no service names it
+                # would start EVERY service in the file (migration-runner too).
+                if [ -n "$ROLLBACK_SERVICES" ]; then
+                  echo "!!! Rebuilding from $OLD_SHA:$ROLLBACK_SERVICES"
+                  docker compose -f docker-compose.prod.yml up -d --no-deps --build $ROLLBACK_SERVICES
+                else
+                  echo "!!! Could not list services from the old compose file — no service was rebuilt; fix manually."
+                fi
                 echo "!!! Rolled back to $OLD_SHA. If migrations ran, restore the DB from the newest ./backups/pre-migration/*.sql.gz"
               fi
               docker compose -f docker-compose.prod.yml ps || true

@@ -2,6 +2,7 @@ import * as Sentry from '@sentry/node';
 import { RpcException } from '@nestjs/microservices';
 import { HttpException, Logger } from '@nestjs/common';
 import { requestContext } from '../context/request-context';
+import { scrubSentryEvent } from './scrub-pii';
 
 export interface InitSentryOptions {
   serviceName: string;
@@ -112,7 +113,10 @@ export function initSentry(options: InitSentryOptions): void {
       if (ctx?.userId) {
         event.user = { ...event.user, id: ctx.userId };
       }
-      return event;
+      // ⚠️ MAXFIYLIK (HD5zOyBp #18): tashqi Sentry'ga to'liq telefon va AI
+      // buyurtma tanasi (matn/manzil/rasm) chiqmasin — oxirgi qadam sifatida
+      // tozalanadi (scrub-pii.ts).
+      return scrubSentryEvent(event);
     },
   });
   Sentry.setTag('service', options.serviceName);

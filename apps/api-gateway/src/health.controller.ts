@@ -1,6 +1,15 @@
-import { Controller, Get, HttpStatus, Inject, Res } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  HttpStatus,
+  Inject,
+  Optional,
+  Res,
+} from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
+import type { AiHealthState } from '@app/common';
 import { Public } from './auth/public.decorator';
+import { AiStatusPoller } from './ai/ai-status.poller';
 import { ApiOperation, ApiTags } from '@nestjs/swagger';
 import { SkipThrottle } from '@nestjs/throttler';
 import type { Response } from 'express';
@@ -27,6 +36,9 @@ const SERVICE_HEALTH_PROBES: Array<{ token: string; cmd: string }> = [
   { token: 'FILE', cmd: 'file.health' },
   { token: 'C2C', cmd: 'c2c.health' },
   { token: 'SEARCH', cmd: 'search.health' },
+  // AI buyurtma (ai-service, port 3024). ⚠️ Bu yerda FAQAT readiness — liveness
+  // (`GET /health`) ai-service'ni kutmaydi, poller keshini o'qiydi.
+  { token: 'AI', cmd: 'ai.health' },
 ];
 
 const PROBE_TIMEOUT_MS = 1500;
@@ -51,6 +63,9 @@ export class HealthController {
     @Inject('FILE') fileClient: ClientProxy,
     @Inject('C2C') c2cClient: ClientProxy,
     @Inject('SEARCH') searchClient: ClientProxy,
+    // Ixtiyoriy (oxirida) — mavjud pozitsion konstruktor chaqiruvlari buzilmaydi.
+    @Optional() @Inject('AI') aiClient?: ClientProxy,
+    @Optional() private readonly aiStatus?: AiStatusPoller,
   ) {
     this.clients = new Map<string, ClientProxy>([
       ['IDENTITY', identityClient],
@@ -67,16 +82,33 @@ export class HealthController {
       ['C2C', c2cClient],
       ['SEARCH', searchClient],
     ]);
+    if (aiClient) {
+      this.clients.set('AI', aiClient);
+    }
   }
 
+  /**
+   * Liveness — tez va faqat gateway'ning o'zi.
+   *
+   * ⚠️ `ai` maydoni (bVeyEuIR #2) AiStatusPoller KESHIDAN o'qiladi — bu
+   * metod SINXRON va RMQ'ni HECH QACHON kutmaydi: ai-service sekinlashsa ham
+   * gateway healthcheck'i yiqilmaydi. Qiymat: enabled | disabled |
+   * cap_exceeded | unknown.
+   */
   @Public()
   @Get()
   @ApiOperation({ summary: 'Liveness check — fast, gateway-only' })
-  check() {
+  check(): {
+    status: string;
+    timestamp: string;
+    service: string;
+    ai: AiHealthState;
+  } {
     return {
       status: 'ok',
       timestamp: new Date().toISOString(),
       service: 'api-gateway',
+      ai: this.aiStatus?.getState() ?? 'unknown',
     };
   }
 

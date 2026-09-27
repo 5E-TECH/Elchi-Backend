@@ -5,6 +5,7 @@ import request from 'supertest';
 import { AllExceptionsFilter, RpcExceptionFilter } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
+import { UserThrottlerGuard } from './auth/user-throttler.guard';
 import { OrderGatewayController } from './order-gateway.controller';
 import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
 
@@ -48,6 +49,10 @@ describe('OrderGatewayController — HTTP kodi javob tanasiga mos', () => {
         },
       })
       .overrideGuard(RolesGuard)
+      .useValue({ canActivate: () => true })
+      // POST ai-parse'dagi per-user throttle guard ThrottlerModule opsiyalarini
+      // talab qiladi — bu test uni sinamaydi (alohida unit-testi bor).
+      .overrideGuard(UserThrottlerGuard)
       .useValue({ canActivate: () => true })
       .compile();
 

@@ -18,6 +18,7 @@ import { SelfGuard } from './auth/self.guard';
 import { PartnerApiKeyGuard } from './auth/partner-api-key.guard';
 import { PartnerThrottlerGuard } from './auth/partner-throttler.guard';
 import { ClientIpThrottlerGuard } from './auth/client-ip-throttler.guard';
+import { UserThrottlerGuard } from './auth/user-throttler.guard';
 import { PartnerGatewayController } from './partner-gateway.controller';
 import { PartnerAdminGatewayController } from './partner-admin-gateway.controller';
 import { AuthGatewayController } from './auth-gateway.controller';
@@ -41,6 +42,8 @@ import { RealtimeGateway } from './realtime/realtime.gateway';
 import { RealtimeController } from './realtime/realtime.controller';
 import { AuditGatewayController } from './audit-gateway.controller';
 import { AuditEnrichmentService } from './audit/audit-enrichment.service';
+import { AiGatewayController } from './ai-gateway.controller';
+import { AiStatusPoller } from './ai/ai-status.poller';
 import type { StringValue } from 'ms';
 
 @Module({
@@ -93,6 +96,9 @@ import type { StringValue } from 'ms';
     RmqModule.register({ name: 'FILE' }),
     RmqModule.register({ name: 'C2C' }),
     RmqModule.register({ name: 'SEARCH' }),
+    // AI buyurtma (ai-service): ai-parse/ai-confirm, /ai/* admin va /health
+    // holati. Navbat nomi RABBITMQ_AI_QUEUE (sukut 'ai_queue').
+    RmqModule.register({ name: 'AI' }),
   ],
   controllers: [
     ApiGatewayController,
@@ -116,6 +122,7 @@ import type { StringValue } from 'ms';
     AuditGatewayController,
     PartnerGatewayController,
     PartnerAdminGatewayController,
+    AiGatewayController,
     HealthController,
     // TODO: Qolgan gateway controllerlarni qo'shish
     // FinanceGatewayController,
@@ -135,6 +142,11 @@ import type { StringValue } from 'ms';
     SelfGuard,
     PartnerApiKeyGuard,
     PartnerThrottlerGuard,
+    // ai-parse: foydalanuvchi (JWT sub) bo'yicha alohida 'ai-user' limiti —
+    // faqat @UseGuards orqali, global APP_GUARD EMAS.
+    UserThrottlerGuard,
+    // /health va ai-availability uchun AI holati keshi (30s so'rov, RMQ kutilmaydi).
+    AiStatusPoller,
     RealtimeGateway,
     AuditEnrichmentService,
     // Rate limit kaliti soxtalashtirib bo'lmaydigan mijoz IP'si bo'yicha

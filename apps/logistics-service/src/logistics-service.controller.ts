@@ -20,12 +20,15 @@ import { ReceivePostDto } from './dto/receive-post.dto';
 import { PostIdDto } from './dto/post-id.dto';
 import { Post_status } from '@app/common';
 import type { ActivityLogQuery } from '@app/common';
+import { DistrictResolverService } from './district-resolver/district-resolver.service';
+import type { DistrictResolveByTextPayload } from './district-resolver/district-resolver.types';
 
 @Controller()
 export class LogisticsServiceController {
   constructor(
     private readonly rmqService: RmqService,
     private readonly logisticsService: LogisticsServiceService,
+    private readonly districtResolver: DistrictResolverService,
   ) {}
 
   private executeAndAck<T>(
@@ -646,6 +649,23 @@ export class LogisticsServiceController {
     return this.executeAndAck(context, () =>
       this.logisticsService.findDistrictsByIds(payload.ids ?? []),
     );
+  }
+
+  /**
+   * AI buyurtma: erkin matndan viloyat + tuman (PLAN C7, karta AnKM7xmy).
+   * PARTIYA shakli — bitta preview (<= 30 buyurtma) = bitta RPC, DB bir
+   * marta o'qiladi. Deterministik, LLM'siz. Javob `items` tartibida.
+   */
+  @MessagePattern({ cmd: 'logistics.district.resolve_by_text' })
+  resolveDistrictsByText(
+    @Payload() payload: DistrictResolveByTextPayload | undefined,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => {
+      const items = payload?.items;
+      if (!Array.isArray(items)) return successRes([]);
+      return this.districtResolver.resolveBatch(items);
+    });
   }
 
   @MessagePattern({ cmd: 'logistics.region.find_by_ids' })

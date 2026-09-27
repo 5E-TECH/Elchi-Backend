@@ -7,7 +7,7 @@
   "license": "UNLICENSED",
   "scripts": {
     "build": "npm run build:all",
-    "build:all": "nest build api-gateway && nest build identity-service && nest build order-service && nest build catalog-service && nest build logistics-service && nest build finance-service && nest build notification-service && nest build integration-service && nest build analytics-service && nest build branch-service && nest build investor-service && nest build file-service && nest build c2c-service && nest build search-service",
+    "build:all": "nest build api-gateway && nest build identity-service && nest build order-service && nest build catalog-service && nest build logistics-service && nest build finance-service && nest build notification-service && nest build integration-service && nest build analytics-service && nest build branch-service && nest build investor-service && nest build file-service && nest build c2c-service && nest build search-service && nest build ai-service",
     "format": "prettier --write \"apps/**/*.ts\" \"libs/**/*.ts\"",
     "start:gateway": "nest start api-gateway --watch",
     "start:identity": "nest start identity-service --watch",
@@ -23,7 +23,8 @@
     "start:file": "nest start file-service --watch",
     "start:c2c": "nest start c2c-service --watch",
     "start:search": "nest start search-service --watch",
-    "start:all": "concurrently \"npm run start:gateway\" \"npm run start:identity\" \"npm run start:order\" \"npm run start:catalog\" \"npm run start:logistics\" \"npm run start:finance\" \"npm run start:notification\" \"npm run start:integration\" \"npm run start:analytics\" \"npm run start:branch\" \"npm run start:investor\" \"npm run start:file\" \"npm run start:c2c\" \"npm run start:search\"",
+    "start:ai": "nest start ai-service --watch",
+    "start:all": "concurrently \"npm run start:gateway\" \"npm run start:identity\" \"npm run start:order\" \"npm run start:catalog\" \"npm run start:logistics\" \"npm run start:finance\" \"npm run start:notification\" \"npm run start:integration\" \"npm run start:analytics\" \"npm run start:branch\" \"npm run start:investor\" \"npm run start:file\" \"npm run start:c2c\" \"npm run start:search\" \"npm run start:ai\"",
     "start:prod:gateway": "node dist/apps/api-gateway/main.js",
     "start:prod:identity": "node dist/apps/identity-service/main.js",
     "start:prod:order": "node dist/apps/order-service/main.js",
@@ -38,6 +39,7 @@
     "start:prod:file": "node dist/apps/file-service/main.js",
     "start:prod:c2c": "node dist/apps/c2c-service/main.js",
     "start:prod:search": "node dist/apps/search-service/main.js",
+    "start:prod:ai": "node dist/apps/ai-service/main.js",
     "lint": "eslint \"{src,apps,libs,test}/**/*.ts\" --fix",
     "test": "jest",
     "test:watch": "jest --watch",
@@ -63,6 +65,7 @@
     "migration:run:safe": "bash scripts/pre-migration-backup.sh && npm run migration:run"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.128.0",
     "@aws-sdk/client-s3": "^3.1045.0",
     "@aws-sdk/s3-request-presigner": "^3.1045.0",
     "@nestjs/common": "^11.0.1",

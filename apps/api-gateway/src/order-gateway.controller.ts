@@ -8,6 +8,7 @@ import {
   Get,
   HttpCode,
   Inject,
+  Logger,
   Optional,
   Param,
   Patch,
@@ -15,11 +16,13 @@ import {
   Query,
   Req,
   UploadedFile,
+  UploadedFiles,
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { IsArray, IsNotEmpty, IsString } from 'class-validator';
 import { ClientProxy } from '@nestjs/microservices';
+import { ConfigService } from '@nestjs/config';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -31,10 +34,31 @@ import {
 } from '@nestjs/swagger';
 import { randomUUID } from 'node:crypto';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { FileInterceptor, FilesInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { UserThrottlerGuard } from './auth/user-throttler.guard';
 import { BodyStatusCodeInterceptor } from './body-status-code.interceptor';
+import { AiStatusPoller } from './ai/ai-status.poller';
+import { verifyAiOrders } from './ai-order/verify-ai-orders';
+import {
+  AI_CONFIRM_CONCURRENCY,
+  AI_CONFIRM_DEADLINE_MS,
+  AI_CONFIRM_REASON_TEXT,
+  AI_DEDUPE_PREFIX,
+  AI_PARSE_TOTAL_BUDGET_MS,
+  AI_RESOLVE_TIMEOUT_MS,
+  aiOrderSignature,
+  runInLanes,
+  toConfirmFailure,
+  toParseFailure,
+  type AiParseFailureReason,
+} from './ai-order/ai-order.helpers';
+import {
+  AiConfirmOrderDto,
+  AiConfirmRequestDto,
+  AiParseRequestDto,
+} from './dto/ai-order.swagger.dto';
 import {
   AssignOrdersToCourierRequestDto,
   CouldNotDeliverOrderRequestDto,
@@ -55,7 +79,21 @@ import {
   SettlementHqToMarketDto,
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
-import { Order_status, Roles as RoleEnum, Where_deliver } from '@app/common';
+import {
+  AI_IMAGE_MAX_BYTES,
+  AI_MAX_IMAGES,
+  AI_RPC_TIMEOUT_MS,
+  AI_TEXT_MAX_CHARS,
+  Order_status,
+  RMQ_FIRE_AND_FORGET_TIMEOUT,
+  Roles as RoleEnum,
+  Where_deliver,
+  matchesDeclaredType,
+  requestContext,
+  type AiHealthState,
+  type AiOrderExtractRequest,
+  type AiOrderExtractResponse,
+} from '@app/common';
 import { successRes } from '../../../libs/common/helpers/response';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
@@ -80,6 +118,82 @@ type UploadedProofFile = {
 
 const PROOF_OPERATION_TIMEOUT_MS = 60000;
 
+/** ai-parse rasmi (multer memoryStorage) — faqat RAM'da, hech qayerga yozilmaydi. */
+type UploadedAiImage = {
+  originalname?: string;
+  mimetype: string;
+  size?: number;
+  buffer: Buffer;
+};
+
+/** ai-confirm natijasi — har kiruvchi buyurtmaga AYNAN bitta, `index` bo'yicha. */
+type AiConfirmResult = {
+  index: number;
+  ok: boolean;
+  order_id?: string;
+  /** Odam o'qiydigan o'zbekcha sabab — frontend uni o'zgartirmasdan ko'rsatadi. */
+  reason?: string;
+  /** Mashina kaliti (district_not_found, duplicate_recent, ...). */
+  code?: string;
+};
+
+/**
+ * `successRes` konverti (`{statusCode, message, data}`). `successRes` o'zi
+ * `data: any` qaytaradi — AI endpointlari javobi shu tip bilan aniq
+ * ko'rsatiladi (frontend shartnomasi kompilyator nazoratida bo'lsin).
+ */
+type AiSuccessEnvelope<T> = { statusCode: number; message: string; data: T };
+
+/**
+ * ai-parse javobi — Elchi-Frontend `AiParseResponse`
+ * (src/entities/ai-order/types.ts) bilan AYNAN bir xil YASSI shakl:
+ * muvaffaqiyatda `{ok:true, orders, draft_id}`, AI holatlarida
+ * `{ok:false, reason, message, scope?, reset_at?}` (`toParseFailure`).
+ */
+type AiParseResponseData = {
+  ok: boolean;
+  /** order-service'ning `AiOrderPreview[]` i — gateway o'zgartirmasdan uzatadi. */
+  orders?: unknown[];
+  draft_id?: string;
+  reason?: AiParseFailureReason;
+  message?: string;
+  scope?: 'global';
+  reset_at?: string;
+};
+
+/** Tekshiruvdan o'tgan, yaratishga navbatdagi AI buyurtma. */
+type EligibleAiOrder = {
+  index: number;
+  order: AiConfirmOrderDto;
+  signature: string;
+  /** DB'dagi tuman yozuvidan — mijoz yuborgan qiymat EMAS. */
+  districtId: string;
+  regionId: string;
+};
+
+/**
+ * ai-parse rasm turlari — faqat JPEG va PNG. Frontend rasmni canvas orqali
+ * JPEG'ga o'giradi; webp/gif file-service'da ham yo'q.
+ */
+const AI_IMAGE_MIME_ALLOWLIST = new Set(['image/jpeg', 'image/png']);
+/**
+ * multer'ning o'z chegarasi ATAYLAB 2 MB dan katta: 2..8 MB li rasmni handler
+ * tushunarli 400 ("Rasm 2 MB dan katta") bilan rad etadi, multer esa 413
+ * qaytarardi.
+ */
+const AI_MULTER_FILE_SIZE_LIMIT = 8 * 1024 * 1024;
+/**
+ * multer `memoryStorage` — ai-parse rasmi faqat RAM'dagi Buffer'da qoladi
+ * (diskka/MinIO'ga YOZILMAYDI). `multer` paketida TS tiplari yo'q
+ * (@types/multer o'rnatilmagan), shu sabab imzo shu yerda aniq berilgan —
+ * aks holda chaqiruv tiplanmagan (`any`) qiymat bo'lib qoladi.
+ */
+const createAiImageMemoryStorage = memoryStorage as () => unknown;
+/** Preview uchun shundan kam vaqt qolsa order-service chaqirilmaydi. */
+const AI_MIN_PREVIEW_BUDGET_MS = 5_000;
+/** ai-confirm'dagi find_by_ids tekshiruvlari (partiyaga BITTADAN). */
+const AI_CONFIRM_LOOKUP_TIMEOUT_MS = 8_000;
+
 class ReceiveExternalOrdersDto {
   @IsString()
   @IsNotEmpty()
@@ -101,7 +215,16 @@ export class OrderGatewayController {
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
     @Optional() @Inject('FILE') private readonly fileClient?: ClientProxy,
+    // ⚠️ AI bog'liqliklari OXIRIGA va @Optional qo'shilgan: mavjud spec'lar
+    // kontrollerni pozitsion argumentlar bilan quradi va o'zgarmasdan
+    // kompilyatsiya bo'lishi shart.
+    @Optional() @Inject('AI') private readonly aiClient?: ClientProxy,
+    @Optional() @Inject('CATALOG') private readonly catalogClient?: ClientProxy,
+    @Optional() private readonly config?: ConfigService,
+    @Optional() private readonly aiStatus?: AiStatusPoller,
   ) {}
+
+  private readonly logger = new Logger(OrderGatewayController.name);
 
   private normalizeRoles(roles?: string[]) {
     const normalized = new Set<string>();
@@ -800,6 +923,321 @@ export class OrderGatewayController {
     }));
   }
 
+  // ─── AI buyurtma yordamchilari (ai-parse / ai-confirm / ai-availability) ───
+
+  /**
+   * `AI_ORDER_ENABLED` — operatsion o'chirgich. ConfigService Joi'dan o'tgan
+   * boolean qaytaradi; ehtiyot uchun satr ko'rinishi ham tushuniladi.
+   * Config yo'q bo'lsa (masalan spec) — o'chiq.
+   */
+  private isAiOrderEnabled(): boolean {
+    const raw: unknown = this.config?.get<unknown>('AI_ORDER_ENABLED');
+    if (typeof raw === 'boolean') return raw;
+    return ['true', '1', 'yes'].includes(this.asStr(raw).trim().toLowerCase());
+  }
+
+  /**
+   * AI oqimi uchun market SERVER tomonda aniqlanadi (mijozga ishonilmaydi):
+   *  - MARKET — token `sub`; tanadagi market_id E'TIBORSIZ;
+   *  - MARKET_OPERATOR — identity `user.market_id`; bo'lmasa `{noMarket}`
+   *    (parse → 200 no_market, confirm → 400);
+   *  - SUPERADMIN / ADMIN / REGISTRATOR / MANAGER — tanadagi market_id
+   *    majburiy, aks holda 400.
+   */
+  private async resolveAiMarket(
+    user: JwtUser,
+    bodyMarketId?: string,
+  ): Promise<{ marketId: string } | { noMarket: true }> {
+    const roles = this.normalizeRoles(user?.roles);
+    if (roles.includes(RoleEnum.MARKET)) {
+      const marketId = this.asStr(user?.sub).trim();
+      return marketId ? { marketId } : { noMarket: true };
+    }
+    if (roles.includes(RoleEnum.MARKET_OPERATOR)) {
+      const operatorProfile: unknown = await this.sendIdentityWithTimeout(
+        { cmd: 'identity.user.find_by_id' },
+        { id: user.sub },
+      ).catch(() => null);
+      const marketId = this.asStr(
+        (operatorProfile as { data?: { market_id?: unknown } } | null)?.data
+          ?.market_id,
+      ).trim();
+      return marketId ? { marketId } : { noMarket: true };
+    }
+    const marketId = this.asStr(bodyMarketId).trim();
+    if (!marketId) {
+      throw new BadRequestException('market_id majburiy');
+    }
+    return { marketId };
+  }
+
+  /**
+   * ai-parse kiritmasini Claude'ga BORISHDAN OLDIN tekshiradi — xato 400.
+   * Tartib: bo'sh kiritish → matn uzunligi → rasm soni → har rasm uchun
+   * tur (allowlist) → hajm (2 MB) → haqiqiy imzo (magic bytes).
+   */
+  private assertAiParseInput(text: string, images: UploadedAiImage[]): void {
+    if (!text && !images.length) {
+      throw new BadRequestException('Matn yoki rasm yuboring');
+    }
+    if (text.length > AI_TEXT_MAX_CHARS) {
+      throw new BadRequestException(
+        `Matn ${AI_TEXT_MAX_CHARS} belgidan oshmasligi kerak`,
+      );
+    }
+    if (images.length > AI_MAX_IMAGES) {
+      throw new BadRequestException(
+        `Ko'pi bilan ${AI_MAX_IMAGES} ta rasm yuborish mumkin`,
+      );
+    }
+    for (const image of images) {
+      const mime = this.asStr(image?.mimetype).toLowerCase();
+      if (!AI_IMAGE_MIME_ALLOWLIST.has(mime)) {
+        throw new BadRequestException('Faqat JPEG yoki PNG rasm');
+      }
+      const buffer = image.buffer;
+      const size = Math.max(Number(image.size) || 0, buffer?.length ?? 0);
+      if (size > AI_IMAGE_MAX_BYTES) {
+        throw new BadRequestException('Rasm 2 MB dan katta');
+      }
+      // `mimetype` ni MIJOZ yozadi — haqiqiy imzo tekshiriladi (audit S8).
+      if (!Buffer.isBuffer(buffer) || !matchesDeclaredType(buffer, mime)) {
+        throw new BadRequestException('Rasm fayli buzilgan yoki turi mos emas');
+      }
+    }
+  }
+
+  /**
+   * AI RPC xatosini sababga o'giradi: timeout → 'network' (frontend
+   * "Qayta urinib ko'ring"), boshqa har qanday xato → 'ai_error'.
+   * ⚠️ Faqat xato TURI log qilinadi — payload/matn HECH QACHON.
+   */
+  private aiRpcFailureReason(
+    error: unknown,
+    cmd: string,
+  ): 'network' | 'ai_error' {
+    if (error instanceof TimeoutError) {
+      this.logger.warn(`${cmd}: javob kelmadi (timeout) — reason=network`);
+      return 'network';
+    }
+    this.logger.warn(
+      `${cmd}: RPC xatosi (${this.errorName(error)}) — reason=ai_error`,
+    );
+    return 'ai_error';
+  }
+
+  private errorName(error: unknown): string {
+    if (error instanceof Error) return error.name || 'Error';
+    return typeof error;
+  }
+
+  /** `order.ai_resolve_preview` javobidan preview massivi; shakl buzuq bo'lsa null. */
+  private extractAiPreviews(response: unknown): unknown[] | null {
+    const body = response as {
+      previews?: unknown;
+      data?: { previews?: unknown };
+    } | null;
+    if (Array.isArray(body?.previews)) return body.previews as unknown[];
+    if (Array.isArray(body?.data?.previews)) {
+      return body.data.previews as unknown[];
+    }
+    return null;
+  }
+
+  private distinctIds(values: unknown[]): string[] {
+    return Array.from(
+      new Set(values.map((value) => this.asStr(value).trim()).filter(Boolean)),
+    );
+  }
+
+  private isDeletedRow(row: Record<string, unknown>): boolean {
+    return row?.isDeleted === true || row?.is_deleted === true;
+  }
+
+  private async findAiConfirmProducts(ids: string[]): Promise<unknown> {
+    if (!this.catalogClient) {
+      throw new Error('CATALOG client sozlanmagan');
+    }
+    return firstValueFrom(
+      this.catalogClient
+        .send<unknown>({ cmd: 'catalog.product.find_by_ids' }, { ids })
+        .pipe(timeout(AI_CONFIRM_LOOKUP_TIMEOUT_MS)),
+    );
+  }
+
+  /**
+   * ai-confirm SERVER TOMONDA QAYTA TEKSHIRUVI uchun ma'lumot: partiyadagi
+   * barcha tumanlar BITTA `logistics.district.find_by_ids`, barcha mahsulotlar
+   * BITTA `catalog.product.find_by_ids` bilan o'qiladi (wgqxS0Cp #11).
+   * Istalgan biri ishlamasa `null` — chaqiruvchi hamma buyurtmani
+   * `validation_unavailable` qiladi (tekshiruvsiz yaratish YO'Q).
+   */
+  private async loadAiConfirmLookups(orders: AiConfirmOrderDto[]): Promise<{
+    districts: Array<Record<string, unknown>>;
+    products: Array<Record<string, unknown>>;
+  } | null> {
+    const districtIds = this.distinctIds(
+      orders.flatMap((order) => [
+        order?.district_id,
+        order?.customer?.district_id,
+      ]),
+    );
+    const productIds = this.distinctIds(
+      orders.flatMap((order) =>
+        (Array.isArray(order?.items) ? order.items : []).map(
+          (item) => item?.product_id,
+        ),
+      ),
+    );
+    try {
+      const [districtResponse, productResponse]: [unknown, unknown] =
+        await Promise.all([
+          districtIds.length
+            ? firstValueFrom(
+                this.logisticsClient
+                  .send<unknown>(
+                    { cmd: 'logistics.district.find_by_ids' },
+                    { ids: districtIds },
+                  )
+                  .pipe(timeout(AI_CONFIRM_LOOKUP_TIMEOUT_MS)),
+              )
+            : Promise.resolve([]),
+          productIds.length
+            ? this.findAiConfirmProducts(productIds)
+            : Promise.resolve([]),
+        ]);
+      return {
+        districts: this.extractRows(districtResponse).filter(
+          (row) => !this.isDeletedRow(row),
+        ),
+        products: this.extractRows(productResponse),
+      };
+    } catch (error: unknown) {
+      this.logger.warn(
+        `ai-confirm: tuman/mahsulot tekshiruvi ishlamadi (${this.errorName(error)}) — validation_unavailable`,
+      );
+      return null;
+    }
+  }
+
+  /**
+   * Bitta tasdiqlangan AI buyurtmani mavjud `POST /orders` yo'li
+   * (`createOrderInternal`) bilan yaratadi.
+   *
+   * ⚠️ `status`, `source`, `branch_id` YUBORILMAYDI: holat sukutdagi NEW
+   * ("Yangi buyurtmalar" ekranida ko'rinadi — bot yo'lidagi CREATED tuzog'i
+   * takrorlanmaydi), filial esa rol bo'yicha `createOrderInternal` da
+   * qo'yiladi. `region_id` — DB'dagi tuman yozuvidan. `operator` — FAQAT
+   * matn; `operator_id` `createOrderInternal` da faqat ROLDAN qo'yiladi
+   * (MARKET → null, MARKET_OPERATOR/REGISTRATOR → sub), matndan HECH QACHON.
+   */
+  private async createAiOrder(
+    item: EligibleAiOrder,
+    req: { user: JwtUser },
+    ctx: {
+      marketId: string;
+      includeMarketId: boolean;
+      branchAssignment: BranchAssignment | null;
+    },
+  ): Promise<AiConfirmResult> {
+    const { order, index } = item;
+    const mapped: CreateOrderRequestDto = {
+      customer: {
+        name: order.customer.name,
+        phone_number: order.customer.phone_number,
+        district_id: item.districtId,
+        ...(order.customer.extra_number
+          ? { extra_number: order.customer.extra_number }
+          : {}),
+        ...(order.customer.address ? { address: order.customer.address } : {}),
+      },
+      ...(ctx.includeMarketId ? { market_id: ctx.marketId } : {}),
+      district_id: item.districtId,
+      region_id: item.regionId,
+      address: order.address ?? order.customer.address ?? null,
+      where_deliver: order.where_deliver,
+      total_price: order.total_price,
+      comment: order.comment ?? null,
+      operator: order.operator ?? null,
+      items: order.items.map((orderItem) =>
+        orderItem.product_id
+          ? {
+              product_id: String(orderItem.product_id),
+              quantity: orderItem.quantity,
+            }
+          : {
+              product_name: this.asStr(orderItem.product_name),
+              quantity: orderItem.quantity,
+            },
+      ),
+    };
+
+    const response: unknown = await this.createOrderInternal(mapped, req, {
+      requestId: `${AI_DEDUPE_PREFIX}${item.signature}`,
+      marketId: ctx.marketId,
+      branchAssignment: ctx.branchAssignment,
+    });
+    const body = (response ?? {}) as {
+      id?: unknown;
+      data?: { id?: unknown } | null;
+      idempotent_replay?: unknown;
+    };
+    const orderId = this.asStr(body.data?.id ?? body.id).trim();
+
+    // order.create keshdan qaytdi — xuddi shu buyurtma 10 daqiqa ichida
+    // allaqachon yaratilgan; yangisi YARATILMADI (wgqxS0Cp #13).
+    if (body.idempotent_replay === true) {
+      return {
+        index,
+        ok: false,
+        code: 'duplicate_recent',
+        ...(orderId ? { order_id: orderId } : {}),
+        reason: `Bu buyurtma 10 daqiqa ichida allaqachon yaratilgan${
+          orderId ? ` (#${orderId})` : ''
+        } — takror yaratilmadi`,
+      };
+    }
+    return { index, ok: true, ...(orderId ? { order_id: orderId } : {}) };
+  }
+
+  /**
+   * AI xarajatini (ai_usage_log) yaratilgan buyurtmalarga bog'laydi — har
+   * `draft_id` uchun BITTA `ai.usage.link_orders` (lYVuADRE #18).
+   * Fire-and-forget: javob kutilmaydi, xato faqat WARN — buyurtma natijasiga
+   * TA'SIR QILMAYDI. ⚠️ Qayta urinish YO'Q (ai.* RPC).
+   */
+  private linkAiUsageOrders(
+    orders: AiConfirmOrderDto[],
+    results: Map<number, AiConfirmResult>,
+    marketId: string,
+  ): void {
+    if (!this.aiClient) return;
+    const orderIdsByDraft = new Map<string, string[]>();
+    orders.forEach((order, index) => {
+      const result = results.get(index);
+      const draftId = this.asStr(order?.draft_id).trim();
+      if (!result?.ok || !result.order_id || !draftId) return;
+      orderIdsByDraft.set(draftId, [
+        ...(orderIdsByDraft.get(draftId) ?? []),
+        result.order_id,
+      ]);
+    });
+    for (const [draftId, orderIds] of orderIdsByDraft) {
+      void firstValueFrom(
+        this.aiClient
+          .send(
+            { cmd: 'ai.usage.link_orders' },
+            { draft_id: draftId, order_ids: orderIds, market_id: marketId },
+          )
+          .pipe(timeout(RMQ_FIRE_AND_FORGET_TIMEOUT)),
+      ).catch((error: unknown) => {
+        this.logger.warn(
+          `ai.usage.link_orders yuborilmadi (draft ${draftId}): ${this.errorName(error)}`,
+        );
+      });
+    }
+  }
+
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -817,6 +1255,34 @@ export class OrderGatewayController {
     @Body() dto: CreateOrderRequestDto,
     @Req() req: { user: JwtUser },
   ) {
+    return this.createOrderInternal(dto, req);
+  }
+
+  /**
+   * `POST /orders` ning butun mantig'i — `create()` va `ai-confirm` ikkalasi
+   * shu yerdan o'tadi (yangi yaratish mantig'i YOZILMAYDI, wgqxS0Cp #4).
+   *
+   * ⚠️ `opts` berilmasa xulq `create()` ning avvalgi tanasi bilan AYNAN bir
+   * xil (baytma-bayt): filial va market odatdagidek aniqlanadi, `order.create`
+   * payloadiga `request_id` QO'SHILMAYDI.
+   *
+   * `opts` faqat ai-confirm uchun:
+   *  - `marketId` — partiya uchun BIR MARTA aniqlangan market; rolga qarab
+   *    qayta qidirilmaydi;
+   *  - `branchAssignment` — partiya uchun BIR MARTA aniqlangan filial
+   *    (`null` ham qiymat: "filial yo'q"); `undefined` bo'lsa odatiy yo'l;
+   *  - `requestId` — `'ai-dedupe:<sha256>'`: order-service uni 10 daqiqalik
+   *    idempotentlik kaliti sifatida ishlatadi (takror yuborish — dublikat emas).
+   */
+  private async createOrderInternal(
+    dto: CreateOrderRequestDto,
+    req: { user: JwtUser },
+    opts?: {
+      requestId?: string;
+      marketId?: string;
+      branchAssignment?: BranchAssignment | null;
+    },
+  ): Promise<unknown> {
     const { customer, ...orderDto } = dto;
     let customerId = dto.customer_id;
     const roles = this.normalizeRoles(req.user.roles);
@@ -824,9 +1290,12 @@ export class OrderGatewayController {
       roles.includes(RoleEnum.BRANCH) ||
       roles.includes(RoleEnum.MANAGER) ||
       roles.includes(RoleEnum.REGISTRATOR);
-    const branchAssignment = shouldResolveBranchAssignment
-      ? await this.resolveBranchAssignment(req.user)
-      : null;
+    const branchAssignment =
+      opts?.branchAssignment !== undefined
+        ? opts.branchAssignment
+        : shouldResolveBranchAssignment
+          ? await this.resolveBranchAssignment(req.user)
+          : null;
     const isBranchStaff = this.isBranchStaffAssignment(branchAssignment);
     const assignedBranchId = branchAssignment?.branch_id
       ? String(branchAssignment.branch_id)
@@ -859,7 +1328,10 @@ export class OrderGatewayController {
     }
 
     let resolvedMarketId = orderDto.market_id;
-    if (roles.includes(RoleEnum.MARKET)) {
+    if (opts?.marketId) {
+      // ai-confirm: market partiya boshida `resolveAiMarket` bilan aniqlangan.
+      resolvedMarketId = opts.marketId;
+    } else if (roles.includes(RoleEnum.MARKET)) {
       resolvedMarketId = req.user.sub;
     } else if (roles.includes(RoleEnum.MARKET_OPERATOR)) {
       // An operator (incl. the telegram bot) is linked to a market via
@@ -938,6 +1410,7 @@ export class OrderGatewayController {
               source: isBranchStaff ? 'branch' : orderDto.source,
             },
             requester: { id: req.user.sub, roles },
+            ...(opts?.requestId ? { request_id: opts.requestId } : {}),
           },
         )
         .pipe(timeout(8000)),
@@ -976,6 +1449,418 @@ export class OrderGatewayController {
     };
 
     return this.create(mappedDto, req);
+  }
+
+  /**
+   * AI BUYURTMA — 1-QADAM: matn va/yoki rasmdan preview (NsxoDSmm).
+   * HECH NARSA YARATMAYDI.
+   *
+   * Oqim: gateway → ai-service `ai.order.extract` (xom JSON) → order-service
+   * `order.ai_resolve_preview` (tuman/mahsulot/tarif) → javob.
+   *
+   * Javob AI holatlarida DOIM HTTP 200 va bitta envelope:
+   *  - `successRes({ ok: true, orders: AiPreviewOrder[], draft_id })`
+   *  - `successRes({ ok: false, reason, message, scope?, reset_at? })`,
+   *    reason ∈ disabled | refused | truncated | network | ai_error |
+   *    no_market | cap_exceeded — har biriga frontend BOSHQA harakat
+   *    ko'rsatadi (bVeyEuIR). ClaudeService'ning `invalid_json` i `ai_error`.
+   * Faqat validatsiya xatolari 400: bo'sh kiritish, >4000 belgi, 4-rasm,
+   * noto'g'ri tur/hajm/imzo, admin/menejerda market_id yo'q.
+   *
+   * ⚠️ MAXFIYLIK (HD5zOyBp): mijoz matni va rasmi Anthropic'ga faqat
+   * ai-service orqali ketadi (telefonlar u yerda [TEL_n] bilan maskalanadi).
+   * Bu yerda rasm buffer'dan TO'G'RIDAN base64'ga o'giriladi va faqat RAM'da
+   * yashaydi: MinIO'ga (`file.upload`), diskka yoki DB'ga YOZILMAYDI —
+   * `fileClient` bu endpointda umuman chaqirilmaydi. Matn, rasm va
+   * buyurtmalar (telefon/manzil) HECH QACHON log qilinmaydi — faqat sabab.
+   *
+   * ⚠️ TIMEOUT: `ai.order.extract` — `timeout(AI_RPC_TIMEOUT_MS)` (60s), preview
+   * — min(25s, 85s − o'tgan vaqt). QAYTA URINISH YO'Q: kechikkan so'rov
+   * ai-service'da baribir bajariladi, har qayta urinish Anthropic'ni yana
+   * chaqirib pul yechardi. RMQ_RPC_TTL_MS ga TEGILMAYDI.
+   */
+  @Post('ai-parse')
+  @HttpCode(200)
+  // Global per-IP limit (ClientIpThrottlerGuard) O'ZGARMAYDI; ustiga
+  // foydalanuvchi (JWT sub) bo'yicha alohida 'ai-user' limiti. ⚠️
+  // @Throttle({default}) ham, @SkipThrottle ham ATAYLAB YO'Q.
+  @UseGuards(JwtAuthGuard, RolesGuard, UserThrottlerGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+    RoleEnum.MARKET,
+    RoleEnum.MARKET_OPERATOR,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'AI: matn/rasmdan buyurtma preview (hech narsa yaratmaydi)',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    schema: {
+      type: 'object',
+      properties: {
+        text: {
+          type: 'string',
+          maxLength: AI_TEXT_MAX_CHARS,
+          description: 'Buyurtma matni. Matn yoki kamida bitta rasm majburiy.',
+        },
+        market_id: {
+          type: 'string',
+          example: '12',
+          description:
+            'Faqat admin/superadmin/registrator/menejer uchun majburiy.',
+        },
+        images: {
+          type: 'array',
+          maxItems: AI_MAX_IMAGES,
+          items: { type: 'string', format: 'binary' },
+          description: 'JPEG yoki PNG, har biri 2 MB gacha, ko‘pi bilan 3 ta.',
+        },
+      },
+    },
+  })
+  @UseInterceptors(
+    FilesInterceptor('images', AI_MAX_IMAGES, {
+      storage: createAiImageMemoryStorage(),
+      limits: {
+        files: AI_MAX_IMAGES,
+        fileSize: AI_MULTER_FILE_SIZE_LIMIT,
+        fields: 4,
+        fieldSize: 64 * 1024,
+      },
+    }),
+  )
+  async aiParse(
+    @Body() dto: AiParseRequestDto,
+    @UploadedFiles() files: UploadedAiImage[] | undefined,
+    @Req() req: { user: JwtUser },
+  ): Promise<AiSuccessEnvelope<AiParseResponseData>> {
+    if (!this.isAiOrderEnabled() || !this.aiClient) {
+      return successRes(toParseFailure({ reason: 'disabled' }));
+    }
+
+    const text = typeof dto?.text === 'string' ? dto.text.trim() : '';
+    const images = Array.isArray(files) ? files : [];
+    this.assertAiParseInput(text, images);
+
+    const market = await this.resolveAiMarket(req.user, dto?.market_id);
+    if ('noMarket' in market) {
+      return successRes(toParseFailure({ reason: 'no_market' }));
+    }
+
+    const draftId = randomUUID();
+    const traceId = requestContext.getTraceId() ?? null;
+    const requester = {
+      id: this.asStr(req.user.sub),
+      roles: this.normalizeRoles(req.user.roles),
+    };
+    const startedAt = Date.now();
+
+    // MAXFIYLIK: rasm faqat base64 ko'rinishida RPC payloadiga tushadi.
+    const extractRequest: AiOrderExtractRequest = {
+      text,
+      images: images.map((image) => ({
+        media_type: this.asStr(image.mimetype).toLowerCase() as
+          | 'image/jpeg'
+          | 'image/png',
+        data_base64: image.buffer.toString('base64'),
+      })),
+      market_id: market.marketId,
+      requester,
+      trace_id: traceId,
+      draft_id: draftId,
+      deadline_at: startedAt + AI_RPC_TIMEOUT_MS - 2_000,
+    };
+
+    let extracted: AiOrderExtractResponse | null;
+    try {
+      extracted = await firstValueFrom(
+        this.aiClient
+          .send<AiOrderExtractResponse>(
+            { cmd: 'ai.order.extract' },
+            extractRequest,
+          )
+          .pipe(timeout(AI_RPC_TIMEOUT_MS)),
+      );
+    } catch (error: unknown) {
+      return successRes(
+        toParseFailure({
+          reason: this.aiRpcFailureReason(error, 'ai.order.extract'),
+        }),
+      );
+    }
+
+    if (!extracted || typeof extracted !== 'object') {
+      return successRes(toParseFailure({ reason: 'ai_error' }));
+    }
+    if (extracted.ok !== true) {
+      return successRes(toParseFailure(extracted));
+    }
+    if (!Array.isArray(extracted.orders)) {
+      return successRes(toParseFailure({ reason: 'ai_error' }));
+    }
+    if (!extracted.orders.length) {
+      return successRes({ ok: true, orders: [], draft_id: draftId });
+    }
+
+    const previewTimeoutMs = Math.min(
+      AI_RESOLVE_TIMEOUT_MS,
+      AI_PARSE_TOTAL_BUDGET_MS - (Date.now() - startedAt),
+    );
+    if (previewTimeoutMs < AI_MIN_PREVIEW_BUDGET_MS) {
+      return successRes(toParseFailure({ reason: 'network' }));
+    }
+
+    let previews: unknown[] | null;
+    try {
+      const previewResponse: unknown = await firstValueFrom(
+        this.orderClient
+          .send(
+            { cmd: 'order.ai_resolve_preview' },
+            {
+              raw_orders: extracted.orders,
+              market_id: market.marketId,
+              requester,
+              request_id: randomUUID(),
+              trace_id: traceId,
+              draft_id: draftId,
+              deadline_at: Date.now() + previewTimeoutMs - 1_000,
+            },
+          )
+          .pipe(timeout(previewTimeoutMs)),
+      );
+      previews = this.extractAiPreviews(previewResponse);
+    } catch (error: unknown) {
+      return successRes(
+        toParseFailure({
+          reason: this.aiRpcFailureReason(error, 'order.ai_resolve_preview'),
+        }),
+      );
+    }
+    if (!previews) {
+      return successRes(toParseFailure({ reason: 'ai_error' }));
+    }
+
+    return successRes({ ok: true, orders: previews, draft_id: draftId });
+  }
+
+  /**
+   * AI tabini ko'rsatish kerakmi (HD5zOyBp #9). `enabled` — AI_ORDER_ENABLED
+   * o'chirgichi; `state` — AiStatusPoller keshidan (RMQ KUTILMAYDI):
+   * enabled | disabled | cap_exceeded | unknown.
+   *
+   * ⚠️ `@Get(':id')` dan OLDIN e'lon qilingan — aks holda 'ai-availability'
+   * buyurtma ID'si deb ushlanadi.
+   */
+  @Get('ai-availability')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+    RoleEnum.MARKET,
+    RoleEnum.MARKET_OPERATOR,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'AI buyurtma mavjudligi: {enabled, state}' })
+  aiAvailability(): AiSuccessEnvelope<{
+    enabled: boolean;
+    state: AiHealthState;
+  }> {
+    return successRes({
+      enabled: this.isAiOrderEnabled(),
+      state: this.aiStatus?.getState() ?? 'unknown',
+    });
+  }
+
+  /**
+   * AI BUYURTMA — 2-QADAM: operator tasdiqlagan buyurtmalarni yaratish
+   * (wgqxS0Cp). Bu endpoint AI xatosining bazaga kirishiga OXIRGI to'siq.
+   *
+   * ⚠️ AI_ORDER_ENABLED ga BOG'LANMAGAN — AI o'chiq bo'lsa ham qo'lda
+   * tahrirlangan buyurtmalarni qabul qilish to'xtamasligi kerak.
+   *
+   * Tartib:
+   *  1) Partiya darajasi (HECH NARSA yaratilishidan OLDIN, xato → 4xx):
+   *     market (`resolveAiMarket`) va filial BIR MARTA aniqlanadi.
+   *  2) Server tomonda qayta tekshiruv: tumanlar va mahsulotlar partiyaga
+   *     BITTADAN RPC bilan o'qiladi; region_id DB'dagi tumandan, mahsulot
+   *     tanlangan marketniki bo'lishi shart. Istalgan RPC ishlamasa — hamma
+   *     buyurtma `validation_unavailable` (tekshiruvsiz yaratish YO'Q).
+   *  3) Dublikat: partiya ichida imzo bo'yicha (`duplicate_in_batch`),
+   *     so'rovlar orasida `request_id='ai-dedupe:<sha256>'` — order-service
+   *     10 daqiqa ichidagi takrorni yaratmaydi (`duplicate_recent`).
+   *  4) Yaratish: 3 ta yo'lak (bir telefon — bitta yo'lak, ketma-ket),
+   *     75s muddat; har buyurtma o'z try/catch'i bilan — biri yiqilsa
+   *     qolganlari yaratiladi.
+   * Javob: `successRes({results})` — har kiruvchi buyurtmaga AYNAN bitta
+   * natija, `index` bo'yicha tartiblangan.
+   */
+  @Post('ai-confirm')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+    RoleEnum.MARKET,
+    RoleEnum.MARKET_OPERATOR,
+  )
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'AI: tasdiqlangan buyurtmalarni yaratish (har buyurtmaga alohida natija)',
+  })
+  @ApiBody({ type: AiConfirmRequestDto })
+  async aiConfirm(
+    @Body() dto: AiConfirmRequestDto,
+    @Req() req: { user: JwtUser },
+  ): Promise<AiSuccessEnvelope<{ results: AiConfirmResult[] }>> {
+    const startedAt = Date.now();
+    const orders: AiConfirmOrderDto[] = Array.isArray(dto?.orders)
+      ? dto.orders
+      : [];
+
+    // 1) Partiya darajasi — market va filial BIR MARTA.
+    const market = await this.resolveAiMarket(req.user, dto?.market_id);
+    if ('noMarket' in market) {
+      throw new BadRequestException(
+        'Operator hech qaysi marketga biriktirilmagan',
+      );
+    }
+    const { marketId } = market;
+    const roles = this.normalizeRoles(req.user.roles);
+    const branchAssignment =
+      roles.includes(RoleEnum.BRANCH) ||
+      roles.includes(RoleEnum.MANAGER) ||
+      roles.includes(RoleEnum.REGISTRATOR)
+        ? await this.resolveBranchAssignment(req.user)
+        : null;
+    if (
+      this.isBranchStaffAssignment(branchAssignment) &&
+      !this.asStr(branchAssignment?.branch_id).trim()
+    ) {
+      throw new BadRequestException(
+        'Filial xodimi hech qaysi filialga biriktirilmagan',
+      );
+    }
+
+    const results = new Map<number, AiConfirmResult>();
+
+    // 2) Server tomonda qayta tekshiruv (mijozga ishonilmaydi).
+    const lookups = await this.loadAiConfirmLookups(orders);
+    if (!lookups) {
+      return successRes({
+        results: orders.map(
+          (_order, index): AiConfirmResult => ({
+            index,
+            ok: false,
+            code: 'validation_unavailable',
+            reason: AI_CONFIRM_REASON_TEXT.validation_unavailable,
+          }),
+        ),
+      });
+    }
+    const verdicts = verifyAiOrders(orders, {
+      marketId,
+      districts: lookups.districts,
+      products: lookups.products,
+    });
+
+    // 3) Partiya ichidagi dublikat — bir xil imzoli ikkinchi buyurtma.
+    const seenSignatures = new Set<string>();
+    const eligible: EligibleAiOrder[] = [];
+    orders.forEach((order, index) => {
+      const verdict = verdicts[index];
+      if (!verdict) {
+        results.set(index, {
+          index,
+          ok: false,
+          code: 'validation_unavailable',
+          reason: AI_CONFIRM_REASON_TEXT.validation_unavailable,
+        });
+        return;
+      }
+      if (!verdict.ok) {
+        results.set(index, {
+          index,
+          ok: false,
+          code: verdict.code,
+          reason: verdict.reason,
+        });
+        return;
+      }
+      const signature = aiOrderSignature(marketId, order);
+      if (seenSignatures.has(signature)) {
+        results.set(index, {
+          index,
+          ok: false,
+          code: 'duplicate_in_batch',
+          reason: AI_CONFIRM_REASON_TEXT.duplicate_in_batch,
+        });
+        return;
+      }
+      seenSignatures.add(signature);
+      eligible.push({
+        index,
+        order,
+        signature,
+        districtId: this.asStr(verdict.district_id),
+        regionId: this.asStr(verdict.region_id),
+      });
+    });
+
+    // 4) Yaratish — cheklangan parallellik, telefon bo'yicha yo'laklar.
+    const ctx = {
+      marketId,
+      includeMarketId: !roles.includes(RoleEnum.MARKET),
+      branchAssignment,
+    };
+    const outcomes = await runInLanes(
+      eligible,
+      (item: EligibleAiOrder) => item.order.customer.phone_number,
+      AI_CONFIRM_CONCURRENCY,
+      startedAt + AI_CONFIRM_DEADLINE_MS,
+      (item: EligibleAiOrder) => this.createAiOrder(item, req, ctx),
+    );
+    outcomes.forEach((outcome, position) => {
+      const { index } = eligible[position];
+      if (outcome.status === 'done') {
+        results.set(index, outcome.value);
+      } else if (outcome.status === 'error') {
+        results.set(index, {
+          index,
+          ok: false,
+          ...toConfirmFailure(outcome.error),
+        });
+      } else {
+        results.set(index, {
+          index,
+          ok: false,
+          code: 'not_started',
+          reason: AI_CONFIRM_REASON_TEXT.not_started,
+        });
+      }
+    });
+
+    this.linkAiUsageOrders(orders, results, marketId);
+
+    return successRes({
+      results: orders.map(
+        (_order, index): AiConfirmResult =>
+          results.get(index) ?? {
+            index,
+            ok: false,
+            code: 'create_failed',
+            reason: AI_CONFIRM_REASON_TEXT.create_failed,
+          },
+      ),
+    });
   }
 
   /**

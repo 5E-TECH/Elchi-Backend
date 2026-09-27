@@ -142,12 +142,18 @@ export class FileGatewayController {
   // ownership ("only the uploader/assignee") still needs a file-ownership
   // registry in file-service — tracked as a follow-up; this closes the
   // cross-role leak and the destructive delete, which are the exploitable parts.
+  //
+  // 'ai-' (HD5zOyBp #6) — AI buyurtma rasmlari. Hozir ular UMUMAN saqlanmaydi
+  // (ai-parse rasmni faqat RAM'da base64 qilib ai-service'ga uzatadi, MinIO'ga
+  // yozmaydi) — bu prefiks chuqur himoya: kelajakda shunday kalit paydo
+  // bo'lsa ham mijoz/investor unga imzolangan URL ololmaydi.
   private static readonly PRIVATE_KEY_PREFIXES = [
     'proof-',
     'expense-',
     'return-',
     'cod-',
     'receipt-',
+    'ai-',
   ];
 
   private static readonly PRIVATE_FILE_ROLES = new Set<string>([

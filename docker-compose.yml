@@ -200,6 +200,22 @@ services:
         condition: service_healthy
     restart: unless-stopped
 
+  # AI buyurtma servisi (port 3024, ai_queue, ai_schema). .env da
+  # ANTHROPIC_API_KEY bo'sh bo'lsa AI o'chiq holda ko'tariladi.
+  ai-service:
+    build:
+      context: .
+      dockerfile: apps/ai-service/Dockerfile
+    env_file: .env
+    environment:
+      DB_POOL_MAX: '5'
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
 volumes:
   rabbitmq_data:
   postgres_data:

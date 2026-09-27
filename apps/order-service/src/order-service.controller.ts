@@ -20,6 +20,26 @@ import { OrderSettlementService } from './settlement/order-settlement.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import type { PartlySellRequestItem } from './lifecycle/partly-sell-items';
 import { OrderHolderType, Order_source } from './entities/order.entity';
+import { AiPreviewService } from './ai/ai-preview.service';
+import type { AiResolvePreviewRequest } from './ai/ai-preview.types';
+
+/**
+ * ai-confirm (gateway) har buyurtma uchun DETERMINISTIK `request_id` yuboradi:
+ * `'ai-dedupe:' + sha256(market|telefon|tuman|narx|yetkazish|mahsulotlar)`.
+ * Faqat shu prefiksli kalitlar uchun idempotency 10 daqiqalik TTL bilan
+ * ishlaydi (wgqxS0Cp #13: bir xil partiya qayta yuborilsa dublikat yaratilmaydi).
+ *
+ * ⚠️ Oddiy POST /orders (tasodifiy UUID `request_id`) uchun opsiyalar QO'SHILMAYDI:
+ * `markReplay` uning takroriy javobiga `idempotent_replay` qo'shardi,
+ * `reclaimFailed` esa yiqilgan create'ni qayta ishga tushirardi — ya'ni
+ * mavjud xatti-harakat baytma-bayt o'zgarmaydi.
+ */
+const AI_DEDUPE_REQUEST_PREFIX = 'ai-dedupe:';
+const AI_DEDUPE_CREATE_OPTIONS = {
+  completedTtlMs: 600_000,
+  reclaimFailed: true,
+  markReplay: true,
+} as const;
 
 @Controller()
 export class OrderServiceController {
@@ -31,6 +51,7 @@ export class OrderServiceController {
     private readonly settlementService: OrderSettlementService,
     private readonly lifecycleService: OrderLifecycleService,
     private readonly idempotencyService: IdempotencyService,
+    private readonly aiPreview: AiPreviewService,
   ) {}
 
   private executeAndAck<T>(
@@ -103,12 +124,39 @@ export class OrderServiceController {
     },
     @Ctx() context: RmqContext,
   ) {
+    const requestId = data.request_id;
     return executeIdempotent(
       this.rmqService,
       this.idempotencyService,
       context,
-      { requestId: data.request_id, pattern: 'order.create' },
+      {
+        requestId,
+        pattern: 'order.create',
+        ...(typeof requestId === 'string' &&
+        requestId.startsWith(AI_DEDUPE_REQUEST_PREFIX)
+          ? AI_DEDUPE_CREATE_OPTIONS
+          : {}),
+      },
       () => this.lifecycleService.create(data.dto, data.requester),
+    );
+  }
+
+  /**
+   * AI buyurtma preview'i (fPre2MRr): xom ekstraksiya → yassi preview.
+   * Gateway har chaqiruvda yangi `request_id` (randomUUID) beradi —
+   * RMQ qayta yetkazsa bitta natija qaytadi. Kesh qatorlari (PII) 1 soatdan
+   * keyin `AiPreviewService` ichida tozalanadi.
+   */
+  @MessagePattern({ cmd: 'order.ai_resolve_preview' })
+  aiResolvePreview(
+    @Payload() data: AiResolvePreviewRequest,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.runIdempotent(
+      context,
+      'order.ai_resolve_preview',
+      data?.request_id,
+      () => this.aiPreview.resolve(data),
     );
   }
 
