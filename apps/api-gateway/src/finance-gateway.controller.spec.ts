@@ -464,4 +464,68 @@ describe('FinanceGatewayController', () => {
       "Siz faqat o'zingizning kassa tarixingizni ko'ra olasiz",
     );
   });
+
+  /**
+   * m2DAhYid. Kompaniya holati faqat finance-service'da hisoblanadi —
+   * gateway'da ikkinchi (raqobatdosh) formula bo'lsa bu test yiqiladi.
+   */
+  describe('financialBalance', () => {
+    const financeBalance = {
+      statusCode: 200,
+      message: 'Financial balance infos',
+      data: {
+        // Misol: MAIN + zanjir (HQ kuryeridagi naqd bilan) − market qarzi
+        currentSituation: 40748235.57,
+        main: { balance: 94213635.57 },
+        chain: {
+          chainReceivable: 110336500,
+          branchReceivable: 64712000,
+          hqReceivable: 45624500,
+          providerReceivable: 0,
+        },
+        branches: {
+          branchReceivable: 64712000,
+          branchCashboxTotal: 0,
+          items: [],
+        },
+        markets: { marketPayable: 163801900, marketsTotalBalans: -163801900 },
+        couriers: { allCourierCashboxes: [], couriersTotalBalanse: 52674500 },
+        difference: -53465400,
+        formula:
+          'main_cashbox + chain_receivable + provider_receivable - market_cashbox_payable',
+      },
+    };
+
+    it('uzatadi finance-service formulasiga va javobni o`zgartirmaydi', async () => {
+      const { controller, financeClient, branchClient } = setup();
+      financeClient.send.mockReturnValue(of(financeBalance));
+
+      const response: any = await controller.financialBalance();
+
+      expect(financeClient.send).toHaveBeenCalledTimes(1);
+      expect(financeClient.send).toHaveBeenCalledWith(
+        { cmd: 'finance.cashbox.financial_balance' },
+        {},
+      );
+      // Filiallar ro'yxatidan o'z hisobini QILMAYDI (HQ tashlab yuborilardi).
+      expect(branchClient.send).not.toHaveBeenCalled();
+      expect(response).toEqual(financeBalance);
+    });
+
+    it('HQ kuryeridagi naqd holatni o`zgartiradi, "Kuryerlar" filial qarzini takrorlamaydi', async () => {
+      const { controller, financeClient } = setup();
+      financeClient.send.mockReturnValue(of(financeBalance));
+
+      const response: any = await controller.financialBalance();
+
+      expect(response.data.formula).toBe(
+        'main_cashbox + chain_receivable + provider_receivable - market_cashbox_payable',
+      );
+      expect(response.data.chain.hqReceivable).toBeGreaterThan(0);
+      expect(response.data.currentSituation).toBeGreaterThan(0);
+      expect(response.data.couriers.couriersTotalBalanse).not.toBe(
+        response.data.branches.branchReceivable,
+      );
+    });
+  });
 });

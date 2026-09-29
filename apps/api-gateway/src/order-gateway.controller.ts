@@ -3432,6 +3432,26 @@ export class OrderGatewayController {
     });
   }
 
+  /**
+   * HISOB-KITOB IDEMPOTENTLIGI (5hBeDuyn). Ilgari har so'rovda yangi
+   * `randomUUID()` edi — javob 8 s dan kechiksa operator qayta bosar va
+   * `runIdempotent` buni ushlamay, bitta pul ikki marta FIFO taqsimlanardi.
+   * Frontend forma ochilganda bitta kalit yaratib, muvaffaqiyatgacha shu
+   * kalitni `Idempotency-Key` sarlavhasida yuboradi. Boshqa foydalanuvchi
+   * kaliti bilan to'qnashmasligi uchun foydalanuvchi ID si bilan bog'lanadi;
+   * kalit bo'lmasa yoki noto'g'ri bo'lsa — avvalgidek tasodifiy.
+   */
+  private settlementRequestId(req: {
+    user: JwtUser;
+    headers?: Record<string, string | string[] | undefined>;
+  }) {
+    const raw = req.headers?.['idempotency-key'];
+    const key = (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? '';
+    return /^[A-Za-z0-9_-]{8,64}$/.test(key)
+      ? `${req.user.sub}:${key}`
+      : randomUUID();
+  }
+
   @Post('settlement/courier-to-branch')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -3446,7 +3466,11 @@ export class OrderGatewayController {
   })
   settlementCourierToBranch(
     @Body() dto: SettlementCourierToBranchDto,
-    @Req() req: { user: JwtUser },
+    @Req()
+    req: {
+      user: JwtUser;
+      headers?: Record<string, string | string[] | undefined>;
+    },
   ) {
     return firstValueFrom(
       this.orderClient
@@ -3459,7 +3483,7 @@ export class OrderGatewayController {
               roles: this.normalizeRoles(req.user.roles),
               branch_id: req.user.branch_id ?? null,
             },
-            request_id: randomUUID(),
+            request_id: this.settlementRequestId(req),
           },
         )
         .pipe(timeout(8000)),
@@ -3480,7 +3504,11 @@ export class OrderGatewayController {
   })
   settlementBranchToHq(
     @Body() dto: SettlementBranchToHqDto,
-    @Req() req: { user: JwtUser },
+    @Req()
+    req: {
+      user: JwtUser;
+      headers?: Record<string, string | string[] | undefined>;
+    },
   ) {
     return firstValueFrom(
       this.orderClient
@@ -3493,7 +3521,7 @@ export class OrderGatewayController {
               roles: this.normalizeRoles(req.user.roles),
               branch_id: req.user.branch_id ?? null,
             },
-            request_id: randomUUID(),
+            request_id: this.settlementRequestId(req),
           },
         )
         .pipe(timeout(8000)),
@@ -3514,7 +3542,11 @@ export class OrderGatewayController {
   })
   settlementHqToMarket(
     @Body() dto: SettlementHqToMarketDto,
-    @Req() req: { user: JwtUser },
+    @Req()
+    req: {
+      user: JwtUser;
+      headers?: Record<string, string | string[] | undefined>;
+    },
   ) {
     return firstValueFrom(
       this.orderClient
@@ -3527,7 +3559,7 @@ export class OrderGatewayController {
               roles: this.normalizeRoles(req.user.roles),
               branch_id: req.user.branch_id ?? null,
             },
-            request_id: randomUUID(),
+            request_id: this.settlementRequestId(req),
           },
         )
         .pipe(timeout(8000)),

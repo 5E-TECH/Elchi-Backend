@@ -1459,88 +1459,29 @@ export class FinanceGatewayController {
     };
   }
 
+  /**
+   * ⚠️ KOMPANIYA HOLATI FAQAT finance-service'da hisoblanadi (AUDIT M1/M5).
+   *
+   * Ilgari (2026-06-12) bu yerda gateway'ning o'z formulasi bor edi:
+   * `main + faol HQ bo'lmagan filiallar olinishi_kerak − market qarzi`.
+   * Unda HQ kuryerlaridagi naqd (masalan #109 — 44 980 000 kuryer 119 da)
+   * va kargo qarzi umuman sanalmasdi, marketga qarz esa sotuv paytidayoq
+   * yozilardi — balans yo'q qarz bilan manfiyga og'ardi. "Kuryerlar"
+   * kartasiga ham filial qarzi yozilardi.
+   *
+   * finance-service `main + chain_receivable + provider_receivable −
+   * market_cashbox_payable` ni har buyurtmani BIR MARTA sanab hisoblaydi va
+   * `couriers.couriersTotalBalanse` ga kuryer kassalarining haqiqiy
+   * yig'indisini beradi. Ikki raqobatdosh nusxa bo'lmasligi uchun gateway
+   * faqat uzatadi.
+   */
   @Get('cashbox/financial-balanse')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get financial balance' })
-  async financialBalance(@Req() req: { user: JwtUser }) {
-    const [financeResponse, branchesResponse] = await Promise.all([
-      this.send<{
-        data?: {
-          mainCashboxTotal?: number | string;
-          marketCashboxTotal?: number | string;
-        };
-      }>(
-        { cmd: 'finance.cashbox.all_info' },
-        {
-          page: 1,
-          limit: 1,
-        },
-      ),
-      this.sendBranch<{
-        data?: {
-          items?: Array<{
-            type?: string;
-            olinishi_kerak?: number | string;
-          }>;
-        };
-      }>(
-        { cmd: 'branch.find_all' },
-        {
-          requester: this.toRequester(req.user),
-          query: {
-            status: 'active',
-            page: 1,
-            limit: 1000,
-          },
-        },
-      ).catch(() => null),
-    ]);
-
-    const branchReceivable = (branchesResponse?.data?.items ?? []).reduce(
-      (sum, branch) => {
-        if (String(branch?.type ?? '').toUpperCase() === 'HQ') {
-          return sum;
-        }
-        const amount = Number(branch?.olinishi_kerak ?? 0);
-        return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
-      },
-      0,
-    );
-    const mainCashboxTotal = Number(
-      financeResponse?.data?.mainCashboxTotal ?? 0,
-    );
-    const marketPayable = Math.max(
-      Number(financeResponse?.data?.marketCashboxTotal ?? 0),
-      0,
-    );
-    const difference = branchReceivable - marketPayable;
-
-    return {
-      statusCode: 200,
-      message: 'Financial balance infos',
-      data: {
-        currentSituation: mainCashboxTotal + difference,
-        main: {
-          balance: mainCashboxTotal,
-        },
-        branches: {
-          branchReceivable,
-        },
-        markets: {
-          marketPayable,
-          marketsTotalBalans: -marketPayable,
-        },
-        // Frontend still reads the legacy courier fields for receivables.
-        couriers: {
-          allCourierCashboxes: [],
-          couriersTotalBalanse: branchReceivable,
-        },
-        difference,
-        formula: 'main_cashbox + branch_receivable - market_payable',
-      },
-    };
+  financialBalance() {
+    return this.send({ cmd: 'finance.cashbox.financial_balance' }, {});
   }
 
   // --- Financial balance ledger (company-wide P&L history) ---
