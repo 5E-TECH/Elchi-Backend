@@ -713,11 +713,74 @@ export class IntegrationServiceService {
      */
     let requeued = 0;
     if (partner.webhook_url) {
-      const res = await this.partnerWebhookOutboxRepo.update(
-        { partner_id: String(partner.id), status: 'awaiting_config' },
-        { status: 'pending', next_retry_at: new Date(), last_error: null },
-      );
-      requeued = Number(res.affected ?? 0);
+      /**
+       * ⚠️ DEDUP-XAVFSIZ REQUEUE (bug: PATCH -> 500, lekin saqlaydi).
+       *
+       * Ilgari bu yer BARCHA `awaiting_config` qatorlarni BIR VAQTDA `pending`
+       * ga o'girardi. `IDX_PWO_DEDUP` esa `(partner_id, order_id, new_status)`
+       * bo'yicha QISMAN unique — faqat `status IN ('pending','processing')`
+       * ustida. Shu bois:
+       *   - bir xil (order, new_status) uchun ikkita `awaiting_config` qator
+       *     bo'lsa (takroriy hodisa, webhook_url null turganda), ikkalasi ham
+       *     `pending` bo'lib IKKI pending -> 23505 unique violation, YOKI
+       *   - `awaiting_config` qator kaliti allaqachon `pending`/`processing`
+       *     qatorники bilan bir xil bo'lsa,
+       * `UPDATE` butunlay yiqilardi. `partnerRepo.save` esa undan OLDIN
+       * bajarilgani uchun webhook_url SAQLANARDI — natijada 500 qaytsa ham
+       * o'zgarish qolib ketardi (aynan shu chalg'ituvchi bug).
+       *
+       * Endi: har bir (order_id, new_status) kaliti uchun FAQAT bitta qator
+       * `pending` ga ko'tariladi va faol (pending/processing) kalit bilan
+       * to'qnashadigani ko'tarilmaydi. Qolgan takroriy qatorlar terminal
+       * `completed` ga o'tkaziladi (bir xil hodisa sibling qator orqali
+       * yetkaziladi; qayta yuborish shart emas) — aks holda ular abadiy
+       * `awaiting_config` bo'lib qolib, keyingi requeue'da yana to'qnashardi.
+       */
+      const waiting = await this.partnerWebhookOutboxRepo.find({
+        where: { partner_id: String(partner.id), status: 'awaiting_config' },
+        select: ['id', 'order_id', 'new_status'],
+      });
+      if (waiting.length > 0) {
+        const active = await this.partnerWebhookOutboxRepo.find({
+          where: {
+            partner_id: String(partner.id),
+            status: In(['pending', 'processing']),
+          },
+          select: ['order_id', 'new_status'],
+        });
+        const dedupKey = (r: { order_id: string; new_status: string | null }) =>
+          `${r.order_id} ${r.new_status ?? ''}`;
+        const blocked = new Set(active.map(dedupKey));
+        const seen = new Set<string>();
+        const promoteIds: string[] = [];
+        const supersededIds: string[] = [];
+        for (const row of waiting) {
+          const key = dedupKey(row);
+          if (blocked.has(key) || seen.has(key)) {
+            supersededIds.push(row.id);
+          } else {
+            seen.add(key);
+            promoteIds.push(row.id);
+          }
+        }
+        if (promoteIds.length > 0) {
+          await this.partnerWebhookOutboxRepo.update(
+            { id: In(promoteIds) },
+            { status: 'pending', next_retry_at: new Date(), last_error: null },
+          );
+          requeued = promoteIds.length;
+        }
+        if (supersededIds.length > 0) {
+          await this.partnerWebhookOutboxRepo.update(
+            { id: In(supersededIds) },
+            {
+              status: 'completed',
+              last_error:
+                'dedup: bir xil hodisa boshqa qator orqali yetkazildi',
+            },
+          );
+        }
+      }
       if (requeued > 0) {
         this.logger.log(
           `partner ${partner.id}: webhook_url sozlandi — ${requeued} ta ` +
