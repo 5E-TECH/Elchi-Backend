@@ -1,6 +1,7 @@
 import { OrderSettlementService } from './settlement/order-settlement.service';
 import { SettlementStatus } from '@app/common';
 import { OrderSettlement } from './entities/order-settlement.entity';
+import { OrderSettlementCarry } from './entities/order-settlement-carry.entity';
 
 /**
  * FIFO settlement allocation: a lump-sum payment settles the oldest unsettled
@@ -353,5 +354,362 @@ describe('OrderSettlementService settlement (FIFO)', () => {
         ],
       },
     );
+  });
+});
+
+/**
+ * TAQSIMLANMAGAN QOLDIQ SAQLANADI (`order_settlement_carry`) — E2E 30-09.
+ *
+ * Filial 760 000 topshirdi, FIFO butun buyurtmalarni yopdi (235 000 + 140 000
+ * + 290 000 = 665 000), navbatdagi 235 000 lik buyurtma sig'madi. Ilgari
+ * qolgan 95 000 tashlab yuborilardi: balans uni ham MAIN'da, ham zanjir
+ * qarzida sanab +95 000 soxta holat ko'rsatdi, buyurtma esa abadiy qotdi.
+ */
+describe('OrderSettlementService — taqsimlanmagan qoldiq (carry)', () => {
+  function makeCarryService(
+    rows: Partial<OrderSettlement>[],
+    carries: Partial<OrderSettlementCarry>[] = [],
+  ) {
+    const store = rows.map((r, i) => ({
+      id: String(i + 1),
+      status: SettlementStatus.PENDING,
+      courier_amount: 0,
+      branch_amount: 0,
+      market_amount: 0,
+      isDeleted: false,
+      ...r,
+    })) as OrderSettlement[];
+    const carryStore = carries.map((c, i) => ({
+      id: String(i + 1),
+      branch_id: null,
+      amount: 0,
+      isDeleted: false,
+      ...c,
+    })) as OrderSettlementCarry[];
+
+    const matches = (row: any, where: any) =>
+      Object.entries(where ?? {}).every(([k, v]) => row[k] === v);
+
+    const settlementRepo = {
+      find: jest.fn((opts: any) =>
+        store
+          .filter((row) => matches(row, opts?.where))
+          .sort((a, b) => Number(a.id) - Number(b.id)),
+      ),
+      findOne: jest.fn(
+        (opts: any) => store.find((row) => matches(row, opts?.where)) ?? null,
+      ),
+      update: jest.fn((criteria: any, patch: any) => {
+        const row = store.find((r) => r.id === criteria.id);
+        if (row) Object.assign(row, patch);
+        return { affected: row ? 1 : 0 };
+      }),
+      createQueryBuilder: jest.fn(),
+    };
+
+    const carryRepo = {
+      createQueryBuilder: jest.fn(() => {
+        let values: any = null;
+        const qb: any = {
+          insert: () => qb,
+          values: (v: any) => {
+            values = v;
+            return qb;
+          },
+          orIgnore: () => qb,
+          execute: () => {
+            const exists = carryStore.some(
+              (c) => c.level === values.level && c.party_id === values.party_id,
+            );
+            if (!exists) {
+              carryStore.push({
+                id: String(carryStore.length + 1),
+                isDeleted: false,
+                ...values,
+              });
+            }
+            return Promise.resolve({});
+          },
+        };
+        return qb;
+      }),
+      findOne: jest.fn(
+        (opts: any) => carryStore.find((c) => matches(c, opts?.where)) ?? null,
+      ),
+      find: jest.fn((opts: any) =>
+        carryStore.filter((c) => matches(c, opts?.where)),
+      ),
+      update: jest.fn((criteria: any, patch: any) => {
+        const row = carryStore.find((c) => c.id === criteria.id);
+        if (row) Object.assign(row, patch);
+        return { affected: row ? 1 : 0 };
+      }),
+    };
+
+    const repoFor = (entity: unknown) =>
+      entity === OrderSettlementCarry ? carryRepo : settlementRepo;
+    const queryRunner = {
+      connect: jest.fn(),
+      startTransaction: jest.fn(),
+      commitTransaction: jest.fn(),
+      rollbackTransaction: jest.fn(),
+      release: jest.fn(),
+      manager: { getRepository: jest.fn(repoFor) },
+    };
+    const dataSource = {
+      options: { schema: 'order_schema' },
+      createQueryRunner: jest.fn(() => queryRunner),
+      query: jest.fn().mockResolvedValue([{ t: 'order_settlement_carry' }]),
+      getRepository: jest.fn(repoFor),
+    };
+
+    const service = new OrderSettlementService(
+      dataSource as any,
+      settlementRepo as any,
+      {} as any,
+    );
+    const carryOf = (level: string, party: string) =>
+      Number(
+        carryStore.find((c) => c.level === level && c.party_id === party)
+          ?.amount ?? 0,
+      );
+    return { service, store, carryStore, carryOf, settlementRepo };
+  }
+
+  const e2eBranchRows = (): Partial<OrderSettlement>[] => [
+    {
+      order_id: 'O1',
+      branch_id: '14',
+      market_id: '191',
+      status: SettlementStatus.COURIER_SETTLED,
+      branch_amount: 235000,
+    },
+    {
+      order_id: 'O3',
+      branch_id: '14',
+      market_id: '191',
+      status: SettlementStatus.COURIER_SETTLED,
+      branch_amount: 140000,
+    },
+    {
+      order_id: 'O6',
+      branch_id: '14',
+      market_id: '191',
+      status: SettlementStatus.COURIER_SETTLED,
+      branch_amount: 290000,
+    },
+    {
+      order_id: 'O5',
+      branch_id: '14',
+      market_id: '191',
+      status: SettlementStatus.COURIER_SETTLED,
+      branch_amount: 235000,
+    },
+  ];
+
+  it('⭐ E2E: 760 000 dan 95 000 qoldiq SAQLANADI va keyingi to`lovda O5 ni yopadi', async () => {
+    const { service, store, carryOf } = makeCarryService(e2eBranchRows());
+
+    const first = (await service.advanceSettlement({
+      level: 'branch_to_hq',
+      match_value: '14',
+      amount: 760000,
+    })) as any;
+    expect(first.data.settled_order_ids).toEqual(['O1', 'O3', 'O6']);
+    expect(first.data.allocated).toBe(665000);
+    expect(first.data.leftover).toBe(95000);
+    expect(carryOf('branch_to_hq', '14')).toBe(95000);
+    expect(store[3].status).toBe(SettlementStatus.COURIER_SETTLED);
+    // Ichki kaskad ma'lumoti javobga chiqmaydi.
+    expect(first.data.touched).toBeUndefined();
+
+    // Menejer qolgan 140 000 ni topshiradi: 140 000 + 95 000 = 235 000.
+    const second = (await service.advanceSettlement({
+      level: 'branch_to_hq',
+      match_value: '14',
+      amount: 140000,
+    })) as any;
+    expect(second.data.settled_order_ids).toEqual(['O5']);
+    expect(store[3].status).toBe(SettlementStatus.BRANCH_SETTLED);
+    expect(carryOf('branch_to_hq', '14')).toBe(0);
+  });
+
+  it('qoldiq bitta tomonga bog`liq — boshqa filialning to`loviga qo`shilmaydi', async () => {
+    const { service, carryOf } = makeCarryService(
+      [
+        {
+          order_id: 'X1',
+          branch_id: '15',
+          status: SettlementStatus.COURIER_SETTLED,
+          branch_amount: 100000,
+        },
+      ],
+      [{ level: 'branch_to_hq', party_id: '14', amount: 95000 }],
+    );
+
+    const res = (await service.advanceSettlement({
+      level: 'branch_to_hq',
+      match_value: '15',
+      amount: 50000,
+    })) as any;
+    expect(res.data.settled_order_ids).toEqual([]);
+    expect(carryOf('branch_to_hq', '14')).toBe(95000);
+    expect(carryOf('branch_to_hq', '15')).toBe(50000);
+  });
+
+  it('⭐ kaskad: filial oldinroq topshirgan qoldiq kuryer pul bergan zahoti qo`llanadi', async () => {
+    const { service, store, carryOf } = makeCarryService(
+      [
+        {
+          order_id: 'K1',
+          courier_id: '199',
+          branch_id: '14',
+          market_id: '191',
+          courier_amount: 235000,
+          branch_amount: 235000,
+        },
+      ],
+      [{ level: 'branch_to_hq', party_id: '14', amount: 235000 }],
+    );
+
+    await service.advanceSettlement({
+      level: 'courier_to_branch',
+      match_value: '199',
+      amount: 235000,
+    });
+
+    // Kuryer → filial, keyin filialning kutib turgan qoldig'i bilan → HQ.
+    expect(store[0].status).toBe(SettlementStatus.BRANCH_SETTLED);
+    expect(carryOf('branch_to_hq', '14')).toBe(0);
+    expect(carryOf('courier_to_branch', '199')).toBe(0);
+  });
+
+  it('kuryer qoldig`iga kuryerning filiali yoziladi (HQ kuryerida NULL)', async () => {
+    const { service, carryStore } = makeCarryService([
+      {
+        order_id: 'H1',
+        courier_id: '7',
+        branch_id: null,
+        courier_amount: 60000,
+      },
+      {
+        order_id: 'B1',
+        courier_id: '8',
+        branch_id: '14',
+        courier_amount: 60000,
+      },
+    ]);
+
+    await service.advanceSettlement({
+      level: 'courier_to_branch',
+      match_value: '7',
+      amount: 20000,
+    });
+    await service.advanceSettlement({
+      level: 'courier_to_branch',
+      match_value: '8',
+      amount: 20000,
+    });
+
+    const byParty = (p: string) => carryStore.find((c) => c.party_id === p);
+    expect(byParty('7')).toMatchObject({ amount: 20000, branch_id: null });
+    expect(byParty('8')).toMatchObject({ amount: 20000, branch_id: '14' });
+  });
+
+  it('⭐ moliyaviy balans qoldiqni AYIRADI (filial va HQ kuryeri; filial kuryeri emas)', async () => {
+    const { service, settlementRepo } = makeCarryService(
+      [],
+      [
+        { level: 'branch_to_hq', party_id: '14', amount: 95000 },
+        {
+          level: 'courier_to_branch',
+          party_id: '7',
+          branch_id: null,
+          amount: 50000,
+        },
+        {
+          level: 'courier_to_branch',
+          party_id: '8',
+          branch_id: '14',
+          amount: 30000,
+        },
+        { level: 'hq_to_market', party_id: '191', amount: 220000 },
+      ],
+    );
+    const makeQb = (rows: any[]) => ({
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue(rows),
+    });
+    settlementRepo.createQueryBuilder
+      .mockReturnValueOnce(
+        makeQb([
+          { branch_id: '14', amount: '235000' },
+          { branch_id: null, amount: '90000' },
+        ]),
+      )
+      .mockReturnValueOnce(makeQb([{ market_id: '191', amount: '220000' }]));
+
+    const response: any = await service.getFinancialBalanceSettlementSummary();
+
+    // Filial: 235 000 − 95 000; HQ: 90 000 − 50 000 (HQ kuryeri). Filial
+    // kuryerining 30 000 qoldig'i zanjirga tegmaydi — naqd hali filialda.
+    expect(response.data.branches).toEqual([
+      { branch_id: '14', amount: 140000 },
+    ]);
+    expect(response.data.hq_receivable).toBe(40000);
+    expect(response.data.chain_receivable).toBe(180000);
+    expect(response.data.market_payable).toBe(0);
+  });
+
+  it('menejer paneli: berilishi/olinishi kerak qoldiqni hisobga oladi', async () => {
+    const { service, settlementRepo } = makeCarryService(
+      [],
+      [
+        { level: 'branch_to_hq', party_id: '14', amount: 95000 },
+        {
+          level: 'courier_to_branch',
+          party_id: '199',
+          branch_id: '14',
+          amount: 30000,
+        },
+      ],
+    );
+    const qbWith = (amount: string) => ({
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({ amount }),
+    });
+    settlementRepo.createQueryBuilder
+      .mockReturnValueOnce(qbWith('235000'))
+      .mockReturnValueOnce(qbWith('100000'));
+
+    const response: any = await service.getBranchSettlementSummary({
+      branch_id: '14',
+      courier_ids: ['199'],
+    });
+
+    expect(response.data.branch_payable).toBe(140000);
+    expect(response.data.courier_receivable).toBe(70000);
+  });
+
+  it('jadval yo`q bo`lsa (migratsiya ishlamagan) — eski tartib, xato yo`q', async () => {
+    const { service, store } = makeCarryService(e2eBranchRows());
+    (service as any).dataSource.query = jest
+      .fn()
+      .mockResolvedValue([{ t: null }]);
+
+    const res = (await service.advanceSettlement({
+      level: 'branch_to_hq',
+      match_value: '14',
+      amount: 760000,
+    })) as any;
+    expect(res.data.settled_order_ids).toEqual(['O1', 'O3', 'O6']);
+    expect(res.data.leftover).toBe(95000);
+    expect(store[3].status).toBe(SettlementStatus.COURIER_SETTLED);
   });
 });

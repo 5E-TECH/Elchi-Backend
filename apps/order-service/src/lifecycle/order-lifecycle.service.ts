@@ -718,6 +718,39 @@ export class OrderLifecycleService {
     return parts.join('\n');
   }
 
+  /**
+   * MENEJER SOTUVIDA NAQD FILIAL QO'LIDA — filial kassasiga kirim summasi.
+   *
+   * Audit M3 dan beri filial kassasi = filial jismonan ushlab turgan naqd, va
+   * u faqat kuryerdan pul qabul qilinganda ko'payadi. Menejer buyurtmani
+   * O'ZI sotganda esa kuryer yo'q: naqd to'g'ridan-to'g'ri menejer qo'lida,
+   * ya'ni hech qachon "kuryerdan qabul qilinmaydi". Shu kirim yozilmasa
+   * filial kassasida bu pul umuman yo'q bo'lib qolardi: `branch-to-main`
+   * "Insufficient cash balance" bilan rad etardi, daftar esa filialdan uni
+   * abadiy talab qilardi (E2E 30-09: 150 000 lik menejer sotuvi, 140 000
+   * HQ'ga topshirib bo'lmadi).
+   *
+   * Summa kuryer sotuvidagi kuryer kassasi kirimi bilan AYNI
+   * (`yig'ilgan − menejer ulushi`): qo'shimcha xarajat keyin alohida chiqim
+   * bo'lib filial kassasidan yechiladi. HQ menejeri (filial yo'q) va
+   * yig'ilgan pul ulushdan kam bo'lgan holat o'zgarmaydi — 0 qaytadi.
+   */
+  private resolveManagerSaleBranchCash(params: {
+    isManagerRequester: boolean;
+    settlementBranchId: string | null;
+    hasBranchCashbox: boolean;
+    courierIncome: number;
+  }): number {
+    if (
+      !params.isManagerRequester ||
+      !params.settlementBranchId ||
+      !params.hasBranchCashbox
+    ) {
+      return 0;
+    }
+    return Math.max(Number(params.courierIncome) || 0, 0);
+  }
+
   private resolveSaleActorShare(
     isManagerSale: boolean,
     financialActor: { compensation_mode?: string | null } | null | undefined,
@@ -5060,6 +5093,12 @@ export class OrderLifecycleService {
     const marketIncome = Math.max(collectible - marketTariff, 0);
     const marketExpense = Math.max(marketTariff - collectible, 0);
     const courierIncome = Math.max(collectible - courierShare, 0);
+    const managerBranchCash = this.resolveManagerSaleBranchCash({
+      isManagerRequester,
+      settlementBranchId,
+      hasBranchCashbox: Boolean(branchCashbox),
+      courierIncome,
+    });
     const courierExpense = Math.max(courierShare - collectible, 0);
     const branchNet = collectible - courierShare - branchShare;
     const saleComment =
@@ -5190,7 +5229,23 @@ export class OrderLifecycleService {
        * pulini bildiradi. "Filial HQ'ga qancha qarz" degan savolga esa
        * `order_settlement.branch_amount` javob beradi (buyurtma boshiga bir
        * marta, qaysi bo'g'inda turganidan qat'i nazar).
+       *
+       * ISTISNO — menejer sotuvi: kuryer yo'q, naqd filialning o'zida
+       * (`resolveManagerSaleBranchCash`). Qo'shimcha xarajatdan OLDIN
+       * yoziladi: filial kassasi manfiyga tushishi mumkin emas.
        */
+      if (managerBranchCash > 0 && settlementBranchId) {
+        await pay({
+          user_id: settlementBranchId,
+          cashbox_type: Cashbox_type.BRANCH,
+          amount: managerBranchCash,
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: saleComment,
+        });
+      }
 
       if (extraCost > 0) {
         await pay({
@@ -5251,10 +5306,12 @@ export class OrderLifecycleService {
           courier_tariff: courierTariff,
           courier_share: courierShare,
           branch_share: branchShare,
-          // Sotuvda filial kassasiga oyoq yozilmaydi (audit M3), shu bois
-          // qaytariladigan summa ham 0. Eski buyurtmalarda bu ustun real
-          // qiymat bilan to'lgan va rollback o'shani aynan teskari qiladi.
-          branch_cashbox_amount: 0,
+          // Kuryer sotuvida filial kassasiga oyoq yozilmaydi (audit M3) —
+          // 0. Menejer sotuvida esa naqd filialda, yozilgan kirim AYNAN shu
+          // yerga snapshot qilinadi va rollback uni teskari qiladi. Eski
+          // buyurtmalarda bu ustun real qiymat bilan to'lgan — rollback
+          // o'shani ham aynan teskari qiladi.
+          branch_cashbox_amount: managerBranchCash,
           // Naqd oyoqlari AYNAN shu summa bilan yozildi. Rollback uni qayta
           // hisoblamasligi kerak: `paid_online_amount` sotuvdan keyin ham
           // o'zgaradi (qaytarish webhooki), ya'ni qayta hisob boshqa raqam
@@ -6394,6 +6451,12 @@ export class OrderLifecycleService {
     const marketIncome = Math.max(collectible - marketTariff, 0);
     const marketExpense = Math.max(marketTariff - collectible, 0);
     const courierIncome = Math.max(collectible - courierShare, 0);
+    const managerBranchCash = this.resolveManagerSaleBranchCash({
+      isManagerRequester,
+      settlementBranchId,
+      hasBranchCashbox: Boolean(branchCashbox),
+      courierIncome,
+    });
     const courierExpense = Math.max(courierShare - collectible, 0);
     const branchNet = collectible - courierShare - branchShare;
     const saleComment =
@@ -6528,7 +6591,23 @@ export class OrderLifecycleService {
        * pulini bildiradi. "Filial HQ'ga qancha qarz" degan savolga esa
        * `order_settlement.branch_amount` javob beradi (buyurtma boshiga bir
        * marta, qaysi bo'g'inda turganidan qat'i nazar).
+       *
+       * ISTISNO — menejer sotuvi: kuryer yo'q, naqd filialning o'zida
+       * (`resolveManagerSaleBranchCash`). Qo'shimcha xarajatdan OLDIN
+       * yoziladi: filial kassasi manfiyga tushishi mumkin emas.
        */
+      if (managerBranchCash > 0 && settlementBranchId) {
+        await pay({
+          user_id: settlementBranchId,
+          cashbox_type: Cashbox_type.BRANCH,
+          amount: managerBranchCash,
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.SELL,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: saleComment,
+        });
+      }
 
       if (extraCost > 0) {
         await pay({
@@ -6582,10 +6661,12 @@ export class OrderLifecycleService {
           courier_tariff: courierTariff,
           courier_share: courierShare,
           branch_share: branchShare,
-          // Sotuvda filial kassasiga oyoq yozilmaydi (audit M3), shu bois
-          // qaytariladigan summa ham 0. Eski buyurtmalarda bu ustun real
-          // qiymat bilan to'lgan va rollback o'shani aynan teskari qiladi.
-          branch_cashbox_amount: 0,
+          // Kuryer sotuvida filial kassasiga oyoq yozilmaydi (audit M3) —
+          // 0. Menejer sotuvida esa naqd filialda, yozilgan kirim AYNAN shu
+          // yerga snapshot qilinadi va rollback uni teskari qiladi. Eski
+          // buyurtmalarda bu ustun real qiymat bilan to'lgan — rollback
+          // o'shani ham aynan teskari qiladi.
+          branch_cashbox_amount: managerBranchCash,
           // Qisman sotuvda ham naqd oyoqlari AYNAN shu summa bilan yozildi —
           // rollback qayta hisoblamasligi uchun snapshot qilinadi
           // (`sellOrder` dagi bilan bir xil sabab).

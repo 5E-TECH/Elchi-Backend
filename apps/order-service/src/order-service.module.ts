@@ -29,6 +29,7 @@ import { OrderItem } from './entities/order-item.entity';
 import { OrderTracking } from './entities/order-tracking.entity';
 import { OrderCustodyEvent } from './entities/order-custody-event.entity';
 import { OrderSettlement } from './entities/order-settlement.entity';
+import { OrderSettlementCarry } from './entities/order-settlement-carry.entity';
 import { Branch } from './entities/branch.entity';
 import { BranchTransferBatch } from './entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from './entities/branch-transfer-batch-item.entity';
@@ -77,6 +78,7 @@ import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.ent
       OrderTracking,
       OrderCustodyEvent,
       OrderSettlement,
+      OrderSettlementCarry,
       Branch,
       BranchTransferBatch,
       BranchTransferBatchItem,
