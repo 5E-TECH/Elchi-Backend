@@ -293,6 +293,25 @@ export class IntegrationServiceController {
     );
   }
 
+  // finance-service MARKET_PAYMENT harakatidan keyin chaqiradi. Market hamkorniki
+  // bo'lmasa integration-service ichida no-op (skipped).
+  @MessagePattern({ cmd: 'integration.partner.settlement.enqueue' })
+  enqueueSettlementPayment(
+    @Payload()
+    data: {
+      market_id?: string | number;
+      amount?: number;
+      paid_at?: number;
+      payment_key?: string;
+      note?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.enqueueSettlementPayment(data ?? {}),
+    );
+  }
+
   // --- ExternalIntegration ---
   @MessagePattern({ cmd: 'integration.create' })
   create(@Payload() data: any, @Ctx() context: RmqContext) {
