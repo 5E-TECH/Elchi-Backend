@@ -946,6 +946,10 @@ export class IntegrationServiceService {
         pending: number;
         failed: number;
         completed: number;
+        // `awaiting_config` — webhook_url hali qo'yilmagani uchun kutayotgan
+        // qatorlar (W1zECdbv). Ilgari umuman sanalmasdi va kartochkada
+        // "ko'rinmas" bo'lib qolardi.
+        awaiting: number;
         last_delivered_at: Date | null;
       }
     >();
@@ -955,6 +959,7 @@ export class IntegrationServiceService {
         pending: 0,
         failed: 0,
         completed: 0,
+        awaiting: 0,
         last_delivered_at: null,
       };
       const cnt = Number(row.cnt ?? 0);
@@ -964,6 +969,8 @@ export class IntegrationServiceService {
         entry.failed += cnt;
       } else if (row.status === 'completed') {
         entry.completed += cnt;
+      } else if (row.status === 'awaiting_config') {
+        entry.awaiting += cnt;
       }
       if (
         row.last_delivered_at &&
@@ -988,6 +995,7 @@ export class IntegrationServiceService {
           pending: 0,
           failed: 0,
           completed: 0,
+          awaiting: 0,
           last_delivered_at: null,
         },
       })),
