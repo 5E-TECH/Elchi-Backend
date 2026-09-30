@@ -113,11 +113,17 @@ export class OrderSettlementService {
    * money-movers can never both run for the same handover.
    */
   private deprecatedSettlementPath(level: string): never {
-    this.badRequest(
-      `order.settlement.${level} endi qo'llab-quvvatlanmaydi (Faza 2b): ` +
-        `pul faqat cashbox to'lov endpointlari orqali ko'chiriladi, ular ` +
-        `settlement'ni outbox orqali avtomatik advance qiladi.`,
-    );
+    // 410 Gone (400 EMAS) — bu endpoint MAVJUD EMAS, validatsiya xatosi emas.
+    // Integrator Swaggerdagi `deprecated` belgini ko'radi va 410 ni "olib
+    // tashlangan" deb aniq tushunadi, jimgina 400 validatsiya xatosidan ko'ra
+    // (uEPILERk).
+    throw new RpcException({
+      statusCode: 410,
+      message:
+        `order.settlement.${level} OLIB TASHLANDI (Faza 2b): pul faqat cashbox ` +
+        `to'lov endpointlari orqali ko'chiriladi, ular settlement'ni outbox ` +
+        `orqali avtomatik advance qiladi.`,
+    });
   }
 
   /**
