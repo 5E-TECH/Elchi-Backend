@@ -145,8 +145,29 @@ describe('webhook_secret sozlanmagan -> awaiting_config', () => {
 });
 
 describe('webhook_url sozlanganda kutayotganlar navbatga qaytadi', () => {
-  function makeUpdateSvc(webhookUrl: string | null, affected: number) {
+  function makeUpdateSvc(
+    webhookUrl: string | null,
+    affected: number,
+    outbox?: {
+      waiting?: Array<{
+        id: string;
+        order_id: string;
+        new_status: string | null;
+      }>;
+      active?: Array<{ order_id: string; new_status: string | null }>;
+    },
+  ) {
     const calls: any[] = [];
+    // Standart holat: `affected` ta ALOHIDA kalitli awaiting_config qatori
+    // (dedup to'qnashuvi yo'q) — eski `affected` semantikasini saqlaydi.
+    const waiting =
+      outbox?.waiting ??
+      Array.from({ length: affected }, (_, i) => ({
+        id: `w${i}`,
+        order_id: `o${i}`,
+        new_status: 'sold',
+      }));
+    const active = outbox?.active ?? [];
     const svc: any = Object.create(IntegrationServiceService.prototype);
     svc.logger = { warn: jest.fn(), error: jest.fn(), log: jest.fn() };
     svc.primaryKey = null;
@@ -164,9 +185,15 @@ describe('webhook_url sozlanganda kutayotganlar navbatga qaytadi', () => {
       save: jest.fn((x: any) => x),
     };
     svc.partnerWebhookOutboxRepo = {
+      // `updatePartner` avval awaiting_config, keyin pending/processing
+      // qatorlarni O'QIYDI (dedup uchun), so'ng ID bo'yicha yangilaydi.
+      find: jest.fn((opts: any) => {
+        const status = opts?.where?.status;
+        return Promise.resolve(status === 'awaiting_config' ? waiting : active);
+      }),
       update: jest.fn((where: any, patch: any) => {
         calls.push({ where, patch });
-        return Promise.resolve({ affected });
+        return Promise.resolve({ affected: 1 });
       }),
     };
     svc.activityLog = { log: jest.fn().mockResolvedValue(undefined) };
@@ -180,21 +207,75 @@ describe('webhook_url sozlanganda kutayotganlar navbatga qaytadi', () => {
     return { svc, calls, webhookUrl };
   }
 
-  it("TC5: url qo'yilsa awaiting_config -> pending", async () => {
+  it("TC5: url qo'yilsa awaiting_config -> pending (ALOHIDA kalitlar)", async () => {
     const { svc, calls } = makeUpdateSvc(null, 3);
 
     const res: any = await svc.updatePartner('7', {
       webhook_url: 'https://beepost.example.com/api/v1/elchi/webhook',
     });
 
-    expect(calls[0].where).toEqual({
-      partner_id: '7',
-      status: 'awaiting_config',
-    });
-    expect(calls[0].patch.status).toBe('pending');
+    // Endi ID bo'yicha ko'tariladi (blind `status='awaiting_config'` UPDATE emas).
+    const promote = calls.find((c) => c.patch.status === 'pending');
+    expect(promote).toBeDefined();
     expect(res.data.requeued_webhooks).toBe(3);
+    // ⚠️ Eski, TO'QNASHADIGAN naqsh ishlatilmasligi SHART: hech qaysi UPDATE
+    // `where.status === 'awaiting_config'` bilan pending'ga o'girmaydi.
+    expect(
+      calls.some(
+        (c) =>
+          c.where?.status === 'awaiting_config' && c.patch.status === 'pending',
+      ),
+    ).toBe(false);
     // Operator natijani kutib turadi — scheduler tick'ini kutmaymiz.
     expect(svc.processPendingPartnerWebhooks).toHaveBeenCalled();
+  });
+
+  it('TC5b: takroriy (order,new_status) qatorlar 500 BERMAYDI — bittasi pending, qolgani superseded', async () => {
+    // Regressiya (iiX3dhHZ): webhook_url null turganda bir xil order+status
+    // ikki marta navbatga tushган -> ikkita awaiting_config qator. Ilgari
+    // ikkalasi ham BIR VAQTDA pending bo'lib IDX_PWO_DEDUP (partial unique,
+    // pending/processing ustida) ni buzardi -> 23505 -> PATCH 500 (lekin save
+    // allaqachon bo'lgani uchun o'zgarish qolib ketardi).
+    const { svc, calls } = makeUpdateSvc(null, 0, {
+      waiting: [
+        { id: 'w1', order_id: 'o1', new_status: 'sold' },
+        { id: 'w2', order_id: 'o1', new_status: 'sold' }, // TAKROR
+        { id: 'w3', order_id: 'o2', new_status: 'cancelled' },
+      ],
+      active: [],
+    });
+
+    const res: any = await svc.updatePartner('7', {
+      webhook_url: 'https://beepost.example.com/api/v1/elchi/webhook',
+    });
+
+    const promote = calls.find((c) => c.patch.status === 'pending');
+    const supersede = calls.find((c) => c.patch.status === 'completed');
+    // Faqat ALOHIDA kalitlar pending: w1 (o1/sold) va w3 (o2/cancelled).
+    expect(promote.where.id.value.sort()).toEqual(['w1', 'w3']);
+    // Takror (w2) terminal 'completed' ga o'tadi — abadiy awaiting_config
+    // bo'lib qolib keyingi requeue'da yana to'qnashmaydi.
+    expect(supersede.where.id.value).toEqual(['w2']);
+    expect(res.data.requeued_webhooks).toBe(2);
+  });
+
+  it('TC5c: kaliti allaqachon pending qator awaiting_config qatori ko‘tarilmaydi', async () => {
+    // (order, new_status) allaqachon pending -> partial unique index shu kalit
+    // ustida. Yana bir pending qo'shsak -> to'qnashuv. Shuning uchun bunday
+    // awaiting_config qator superseded qilinadi.
+    const { svc, calls } = makeUpdateSvc(null, 0, {
+      waiting: [{ id: 'w1', order_id: 'o1', new_status: 'sold' }],
+      active: [{ order_id: 'o1', new_status: 'sold' }],
+    });
+
+    const res: any = await svc.updatePartner('7', {
+      webhook_url: 'https://beepost.example.com/api/v1/elchi/webhook',
+    });
+
+    expect(calls.find((c) => c.patch.status === 'pending')).toBeUndefined();
+    const supersede = calls.find((c) => c.patch.status === 'completed');
+    expect(supersede.where.id.value).toEqual(['w1']);
+    expect(res.data.requeued_webhooks).toBe(0);
   });
 
   it("TC6: url O'CHIRILSA navbatga qaytarilmaydi", async () => {

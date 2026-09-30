@@ -96,6 +96,10 @@ describe('IntegrationServiceService — hamkorni tahrirlash', () => {
      */
     const requeued: Row[] = [];
     svc.partnerWebhookOutboxRepo = {
+      // `updatePartner` requeue'dan oldin awaiting_config/pending qatorlarni
+      // O'QIYDI (dedup). Bu testlar SAVE xatti-harakatini sinaydi — kutayotgan
+      // qator yo'q, shuning uchun requeue no-op.
+      find: jest.fn(() => Promise.resolve([])),
       update: jest.fn((where: Row, patch: Row) => {
         requeued.push({ where, patch });
         return Promise.resolve({ affected: 0 });
