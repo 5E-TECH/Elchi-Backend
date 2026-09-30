@@ -187,4 +187,14 @@ export class CreatePartnerShipmentRequestDto {
   @Min(1)
   @Max(10000)
   batch_size?: number;
+
+  @ApiPropertyOptional({
+    description:
+      'Operator izohi — Elchi kuryeri yetkazishda ko‘radi (TzuuOKI3).',
+    example: 'Eshik kodi 1234; faqat ertalab',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  comment?: string;
 }

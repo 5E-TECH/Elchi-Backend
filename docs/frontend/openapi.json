@@ -15104,6 +15104,11 @@
             "type": "number",
             "description": "Shu qopda ketayotgan posilka soni — HAMKOR aytgan son. Elchi uni o‘zi sanagan son bilan solishtiradi (qop to‘liq yetib keldimi).",
             "example": 12
+          },
+          "comment": {
+            "type": "string",
+            "description": "Operator izohi — Elchi kuryeri yetkazishda ko‘radi (TzuuOKI3).",
+            "example": "Eshik kodi 1234; faqat ertalab"
           }
         },
         "required": [
