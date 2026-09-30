@@ -8,6 +8,7 @@ import {
   Repository,
 } from 'typeorm';
 import { OrderSettlement } from '../entities/order-settlement.entity';
+import { OrderSettlementCarry } from '../entities/order-settlement-carry.entity';
 import { Cashbox_type, SettlementStatus, rmqSend } from '@app/common';
 import { successRes } from '../../../../libs/common/helpers/response';
 
@@ -25,8 +26,14 @@ import { successRes } from '../../../../libs/common/helpers/response';
  * read-only (getSettlementByOrderId / financial-balance summary), plus the
  * retired settle* stubs. badRequest/handleDbError are duplicated leaf helpers.
  */
+type SettlementLevel = 'courier_to_branch' | 'branch_to_hq' | 'hq_to_market';
+
 @Injectable()
 export class OrderSettlementService {
+  /** `order_settlement_carry` jadvali bormi (migratsiya ishlaganmi) — kesh. */
+  private carryTableReady: boolean | null = null;
+  private carryCheckedAt = 0;
+
   constructor(
     private readonly dataSource: DataSource,
     @InjectRepository(OrderSettlement)
@@ -113,6 +120,57 @@ export class OrderSettlementService {
     );
   }
 
+  /**
+   * `order_settlement_carry` jadvali mavjudmi. Migratsiya ishlamagan muhitda
+   * (yoki test mockida) qoldiq mexanizmi o'chadi va FIFO avvalgidek ishlaydi —
+   * to'lov oqimi jadval yo'qligi sababli hech qachon to'xtamasligi kerak.
+   * Yo'q bo'lsa har 60 soniyada qayta tekshiriladi.
+   */
+  private async isCarryEnabled(): Promise<boolean> {
+    if (this.carryTableReady) {
+      return true;
+    }
+    if (
+      this.carryTableReady === false &&
+      Date.now() - this.carryCheckedAt < 60_000
+    ) {
+      return false;
+    }
+    try {
+      const schema =
+        (this.dataSource.options as { schema?: string } | undefined)?.schema ||
+        'public';
+      const rows: Array<{ t: string | null }> = await this.dataSource.query(
+        'SELECT to_regclass($1) AS t',
+        [`${schema}.order_settlement_carry`],
+      );
+      this.carryTableReady = Boolean(rows?.[0]?.t);
+    } catch {
+      this.carryTableReady = false;
+    }
+    this.carryCheckedAt = Date.now();
+    return this.carryTableReady;
+  }
+
+  /** Musbat qoldiqlar (bo'g'in bo'yicha). Jadval bo'lmasa — bo'sh ro'yxat. */
+  private async loadCarries(
+    level?: SettlementLevel,
+  ): Promise<OrderSettlementCarry[]> {
+    if (!(await this.isCarryEnabled())) {
+      return [];
+    }
+    try {
+      const rows = await this.dataSource
+        .getRepository(OrderSettlementCarry)
+        .find({
+          where: level ? { level, isDeleted: false } : { isDeleted: false },
+        });
+      return rows.filter((row) => (Number(row.amount) || 0) > 0);
+    } catch {
+      return [];
+    }
+  }
+
   /** Return the per-order settlement row (status + leg stamps) for one order. */
   async getSettlementByOrderId(orderId: string) {
     const id = String(orderId ?? '').trim();
@@ -179,7 +237,7 @@ export class OrderSettlementService {
 
     // Qirqish YO'Q: manfiy qoldiq ham haqiqiy ma'lumot (HQ o'sha bo'g'inga
     // ustama to'lagan). Ilgari `Math.max(x, 0)` uni jimgina yo'qotardi.
-    const hqAmount = branchRows
+    let hqAmount = branchRows
       .filter((row) => !row.branch_id)
       .reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
     const branches = branchRows
@@ -192,6 +250,38 @@ export class OrderSettlementService {
       market_id: String(row.market_id),
       amount: Number(row.amount) || 0,
     }));
+
+    /**
+     * TAQSIMLANMAGAN QOLDIQ AYIRILADI (`order_settlement_carry`). Bu naqd
+     * kassada allaqachon yuqoriga ko'chgan, lekin hali hech bir butun
+     * buyurtmani yopmagan. Ayirilmasa o'sha summa ham MAIN'da, ham zanjir
+     * qarzida sanalardi (E2E 30-09: +95 000 soxta balans).
+     *   • filial → HQ qoldig'i: filial qarzidan;
+     *   • HQ kuryeri → HQ qoldig'i (`branch_id` NULL): HQ bandidan. Filial
+     *     kuryerining qoldig'i zanjirga ta'sir qilmaydi — naqd hali filialda;
+     *   • HQ → market qoldig'i: marketga qarzdan (oldindan to'langan).
+     */
+    for (const carry of await this.loadCarries()) {
+      const amount = Number(carry.amount) || 0;
+      const partyId = String(carry.party_id);
+      if (carry.level === 'branch_to_hq') {
+        const row = branches.find((item) => item.branch_id === partyId);
+        if (row) {
+          row.amount -= amount;
+        } else {
+          branches.push({ branch_id: partyId, amount: -amount });
+        }
+      } else if (carry.level === 'courier_to_branch' && !carry.branch_id) {
+        hqAmount -= amount;
+      } else if (carry.level === 'hq_to_market') {
+        const row = markets.find((item) => item.market_id === partyId);
+        if (row) {
+          row.amount -= amount;
+        } else {
+          markets.push({ market_id: partyId, amount: -amount });
+        }
+      }
+    }
 
     const branchReceivable = branches.reduce((sum, row) => sum + row.amount, 0);
 
@@ -277,11 +367,28 @@ export class OrderSettlementService {
         : Promise.resolve(0),
     ]);
 
+    // Taqsimlanmagan qoldiqlar (`order_settlement_carry`) — o'sha naqd
+    // allaqachon topshirilgan, menejer uni qayta so'ramasligi kerak.
+    const carries = await this.loadCarries();
+    const branchCarry = carries
+      .filter(
+        (row) =>
+          row.level === 'branch_to_hq' && String(row.party_id) === branchId,
+      )
+      .reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+    const courierCarry = carries
+      .filter(
+        (row) =>
+          row.level === 'courier_to_branch' &&
+          courierIds.includes(String(row.party_id)),
+      )
+      .reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+
     return successRes(
       {
         branch_id: branchId || null,
-        branch_payable: branchPayable,
-        courier_receivable: courierReceivable,
+        branch_payable: branchPayable - branchCarry,
+        courier_receivable: courierReceivable - courierCarry,
       },
       200,
       'Branch settlement summary',
@@ -358,6 +465,11 @@ export class OrderSettlementService {
    * bo'lganda tortiladi (pastdagi izohga qarang).
    */
   private async runFifoSettlement(params: {
+    /**
+     * Qoldiq kaliti. Berilsa, avvalgi taqsimlanmagan qoldiq lump-sum'ga
+     * qo'shiladi va yangi qoldiq saqlanadi (`order_settlement_carry`).
+     */
+    carryLevel?: SettlementLevel;
     matchColumn: 'courier_id' | 'branch_id' | 'market_id';
     matchValue: string;
     fromStatus: SettlementStatus;
@@ -383,20 +495,63 @@ export class OrderSettlementService {
     settled_order_ids: string[];
     allocated: number;
     leftover: number;
+    /** Yopilgan qatorlarning filial/market id lari — kaskad uchun. */
+    touched: { branch_ids: string[]; market_ids: string[] };
   }> {
     const lumpSum = Math.max(Number(params.lumpSum) || 0, 0);
-    if (!params.matchValue || lumpSum <= 0) {
-      return { settled_order_ids: [], allocated: 0, leftover: lumpSum };
+    const carryEnabled = params.carryLevel
+      ? await this.isCarryEnabled()
+      : false;
+    // lump-sum 0 bilan faqat qoldiqni qo'llash uchun chaqiriladi (kaskad).
+    if (!params.matchValue || (lumpSum <= 0 && !carryEnabled)) {
+      return {
+        settled_order_ids: [],
+        allocated: 0,
+        leftover: lumpSum,
+        touched: { branch_ids: [], market_ids: [] },
+      };
     }
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
     const settledOrderIds: string[] = [];
+    const touchedBranches = new Set<string>();
+    const touchedMarkets = new Set<string>();
     let allocated = 0;
+    let carryBefore = 0;
+    let newCarry = lumpSum;
     try {
       const tx = queryRunner.manager;
       const repo = tx.getRepository(OrderSettlement);
+
+      /**
+       * Avvalgi taqsimlanmagan qoldiq — qator QULFLANADI (bir tomonga ikki
+       * to'lov parallel kelsa, ikkalasi bir qoldiqni ikki marta sarflamasin).
+       */
+      let carryRow: OrderSettlementCarry | null = null;
+      const carryRepo = carryEnabled
+        ? tx.getRepository(OrderSettlementCarry)
+        : null;
+      if (carryRepo && params.carryLevel) {
+        await carryRepo
+          .createQueryBuilder()
+          .insert()
+          .values({
+            level: params.carryLevel,
+            party_id: params.matchValue,
+            branch_id: null,
+            amount: 0,
+          })
+          .orIgnore()
+          .execute();
+        carryRow = await carryRepo.findOne({
+          where: { level: params.carryLevel, party_id: params.matchValue },
+          lock: { mode: 'pessimistic_write' },
+        });
+        carryBefore = Math.max(Number(carryRow?.amount ?? 0) || 0, 0);
+      }
+
       const candidates = await repo.find({
         where: {
           [params.matchColumn]: params.matchValue,
@@ -406,7 +561,7 @@ export class OrderSettlementService {
         order: { createdAt: 'ASC' },
       });
 
-      let remaining = lumpSum;
+      let remaining = lumpSum + carryBefore;
       const now = new Date();
       const advanceRow = async (row: OrderSettlement): Promise<void> => {
         await repo.update(
@@ -414,6 +569,8 @@ export class OrderSettlementService {
           { status: params.toStatus(row), ...params.stamp(now) },
         );
         settledOrderIds.push(String(row.order_id));
+        if (row.branch_id) touchedBranches.add(String(row.branch_id));
+        if (row.market_id) touchedMarkets.add(String(row.market_id));
       };
       /**
        * MANFIY OYOQ = KREDIT, "qarz yo'q" EMAS (audit: qo'shimcha xarajat).
@@ -473,6 +630,36 @@ export class OrderSettlementService {
         }
       }
 
+      /**
+       * Yangi qoldiq = (lump-sum + eski qoldiq) − haqiqatan yopilgan summa.
+       * `remaining` EMAS: tortilib, lekin yozilmay qolgan kreditlar uni
+       * sun'iy oshirgan bo'lishi mumkin.
+       */
+      newCarry = Math.max(lumpSum + carryBefore - allocated, 0);
+      if (carryRepo && carryRow) {
+        // Kuryer bo'g'ini: naqd HQ'ga to'g'ridan-to'g'ri yetganmi (HQ kuryeri,
+        // `branch_id` NULL) — balans shunga qarab ayiradi.
+        let carryBranchId = carryRow.branch_id ?? null;
+        if (params.carryLevel === 'courier_to_branch') {
+          const sample =
+            candidates[0] ??
+            (await repo.findOne({
+              where: { courier_id: params.matchValue } as Record<
+                string,
+                unknown
+              >,
+              order: { createdAt: 'DESC' },
+            }));
+          if (sample) {
+            carryBranchId = sample.branch_id ? String(sample.branch_id) : null;
+          }
+        }
+        await carryRepo.update(
+          { id: carryRow.id },
+          { amount: newCarry, branch_id: carryBranchId },
+        );
+      }
+
       await queryRunner.commitTransaction();
     } catch (error) {
       await queryRunner.rollbackTransaction();
@@ -492,8 +679,64 @@ export class OrderSettlementService {
     return {
       settled_order_ids: settledOrderIds,
       allocated,
-      leftover: Math.max(lumpSum - allocated, 0),
+      // Qoldiq mexanizmi yoqilgan bo'lsa — saqlangan qoldiq (keyingi to'lovga
+      // o'tadi); aks holda avvalgidek taqsimlanmagan summa.
+      leftover: carryEnabled ? newCarry : Math.max(lumpSum - allocated, 0),
+      touched: {
+        branch_ids: [...touchedBranches],
+        market_ids: [...touchedMarkets],
+      },
     };
+  }
+
+  /**
+   * KASKAD: bir bo'g'inda buyurtmalar yopilgach, keyingi bo'g'inda shu
+   * tomonlar uchun kutib turgan qoldiq bo'lsa, u darhol qo'llanadi
+   * (lump-sum 0). Masalan filial HQ'ga oldinroq ortiqcha topshirgan bo'lsa,
+   * kuryer qolgan pulni topshirgan zahoti o'sha buyurtmalar BRANCH_SETTLED
+   * bo'ladi — keyingi to'lovni kutmasdan. Best-effort: xato asosiy to'lovni
+   * buzmaydi, qoldiq keyingi to'lovda baribir qo'llanadi.
+   */
+  private async applyPendingCarries(
+    level: SettlementLevel,
+    partyIds: string[],
+    configs: Record<
+      SettlementLevel,
+      Omit<
+        Parameters<OrderSettlementService['runFifoSettlement']>[0],
+        'matchValue' | 'lumpSum' | 'requesterId' | 'postLeg'
+      >
+    >,
+    requesterId: string,
+  ): Promise<void> {
+    if (!partyIds.length) {
+      return;
+    }
+    const carries = await this.loadCarries(level);
+    const withCarry = partyIds.filter((id) =>
+      carries.some((row) => String(row.party_id) === id),
+    );
+    for (const partyId of withCarry) {
+      try {
+        const result = await this.runFifoSettlement({
+          ...configs[level],
+          matchValue: partyId,
+          lumpSum: 0,
+          requesterId,
+          postLeg: async () => {},
+        });
+        if (level === 'branch_to_hq') {
+          await this.applyPendingCarries(
+            'hq_to_market',
+            result.touched.market_ids,
+            configs,
+            requesterId,
+          );
+        }
+      } catch {
+        // Best-effort — qoldiq keyingi to'lovda qo'llanadi.
+      }
+    }
   }
 
   /**
@@ -528,6 +771,7 @@ export class OrderSettlementService {
 
     const configs = {
       courier_to_branch: {
+        carryLevel: 'courier_to_branch' as const,
         matchColumn: 'courier_id' as const,
         fromStatus: SettlementStatus.PENDING,
         // Filial bo'lsa — filialda; bo'lmasa (HQ sotuvi) naqd allaqachon
@@ -543,6 +787,7 @@ export class OrderSettlementService {
         }),
       },
       branch_to_hq: {
+        carryLevel: 'branch_to_hq' as const,
         matchColumn: 'branch_id' as const,
         fromStatus: SettlementStatus.COURIER_SETTLED,
         toStatus: () => SettlementStatus.BRANCH_SETTLED,
@@ -553,6 +798,7 @@ export class OrderSettlementService {
         }),
       },
       hq_to_market: {
+        carryLevel: 'hq_to_market' as const,
         matchColumn: 'market_id' as const,
         fromStatus: SettlementStatus.BRANCH_SETTLED,
         toStatus: () => SettlementStatus.MARKET_SETTLED,
@@ -569,6 +815,7 @@ export class OrderSettlementService {
     }
 
     const result = await this.runFifoSettlement({
+      carryLevel: cfg.carryLevel,
       matchColumn: cfg.matchColumn,
       matchValue,
       fromStatus: cfg.fromStatus,
@@ -579,7 +826,35 @@ export class OrderSettlementService {
       postLeg: noPost,
       stamp: cfg.stamp,
     });
-    return successRes(result, 200, 'Settlement advanced');
+
+    // Keyingi bo'g'inda kutib turgan qoldiqlarni darhol qo'llash (kaskad).
+    if (data.level === 'courier_to_branch') {
+      await this.applyPendingCarries(
+        'branch_to_hq',
+        result.touched.branch_ids,
+        configs,
+        requesterId,
+      );
+      // HQ kuryeri: qatorlar to'g'ridan-to'g'ri BRANCH_SETTLED bo'ldi.
+      await this.applyPendingCarries(
+        'hq_to_market',
+        result.touched.market_ids,
+        configs,
+        requesterId,
+      );
+    } else if (data.level === 'branch_to_hq') {
+      await this.applyPendingCarries(
+        'hq_to_market',
+        result.touched.market_ids,
+        configs,
+        requesterId,
+      );
+    }
+
+    // `touched` — faqat kaskad uchun ichki ma'lumot, javobga chiqmaydi.
+    const publicResult: Partial<typeof result> = { ...result };
+    delete publicResult.touched;
+    return successRes(publicResult, 200, 'Settlement advanced');
   }
 
   /**

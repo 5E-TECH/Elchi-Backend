@@ -288,3 +288,81 @@ describe("bekor qilingan buyurtmaning qo'shimcha xarajati", () => {
     expect(settlement.status).toBe(SettlementStatus.COURIER_SETTLED);
   });
 });
+
+/**
+ * MENEJER SOTUVIDA NAQD FILIAL KASSASIGA TUSHADI (E2E 30-09).
+ *
+ * Audit M3 dan beri filial kassasi faqat kuryerdan pul qabul qilinganda
+ * ko'payadi. Menejer o'zi sotganda kuryer yo'q — ilgari bu naqd filial
+ * kassasiga umuman tushmasdi: 150 000 lik sotuvdan 140 000 ni HQ'ga
+ * topshirishda `branch-to-main` "Insufficient cash balance" qaytardi.
+ */
+/** Harness stub'lariga bog'lanmagan (unbound) murojaat qilmaslik uchun. */
+const mocksOf = (s: unknown) => s as Record<string, jest.Mock>;
+
+describe('menejer sotuvi — naqd filial kassasida', () => {
+  const branchLegs = (legs: Record<string, unknown>[]) =>
+    legs.filter((leg) => leg.cashbox_type === Cashbox_type.BRANCH);
+
+  it('⭐ menejer sotsa filial kassasiga yig`ilgan − ulush kirim bo`ladi va snapshot qilinadi', async () => {
+    const { s, requester, cashboxLegs } = makeService({ isManager: true });
+
+    await s.sellOrder(requester, '7001', { comment: 'Menejer sotdi' });
+
+    const legs = branchLegs(cashboxLegs);
+    expect(legs).toHaveLength(1);
+    expect(legs[0]).toMatchObject({
+      user_id: '77',
+      operation_type: 'income',
+      source_type: 'sell',
+      source_id: '7001',
+      // collectible 250 000 − menejer ulushi 0 (harness'da tarif 0).
+      amount: 250000,
+    });
+    // Rollback AYNAN shu summani teskari qilishi uchun snapshot.
+    expect(mocksOf(s).updateFull).toHaveBeenCalledWith(
+      '7001',
+      expect.objectContaining({ branch_cashbox_amount: 250000 }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('kirim qo`shimcha xarajat chiqimidan OLDIN yoziladi (filial kassasi manfiyga tushmaydi)', async () => {
+    const { s, requester, cashboxLegs } = makeService({ isManager: true });
+
+    await s.sellOrder(requester, '7001', {
+      extraCost: 5000,
+      extraCostApproved: true,
+    });
+
+    const legs = branchLegs(cashboxLegs);
+    expect(legs.map((leg) => [leg.operation_type, leg.amount])).toEqual([
+      ['income', 250000],
+      ['expense', 5000],
+    ]);
+  });
+
+  it('kuryer sotuvida filial kassasiga hech narsa yozilmaydi (audit M3 saqlanadi)', async () => {
+    const { s, requester, cashboxLegs } = makeService();
+
+    await s.sellOrder(requester, '7001', { comment: 'Sotildi' });
+
+    expect(branchLegs(cashboxLegs)).toHaveLength(0);
+    expect(mocksOf(s).updateFull).toHaveBeenCalledWith(
+      '7001',
+      expect.objectContaining({ branch_cashbox_amount: 0 }),
+      expect.anything(),
+      expect.anything(),
+    );
+  });
+
+  it('HQ menejeri (filial yo`q) — filial kassasiga yozilmaydi', async () => {
+    const { s, requester, cashboxLegs } = makeService({ isManager: true });
+    s.lookup.resolveSettlementBranchId.mockResolvedValue(null);
+
+    await s.sellOrder(requester, '7001', { comment: 'HQ menejeri sotdi' });
+
+    expect(branchLegs(cashboxLegs)).toHaveLength(0);
+  });
+});
