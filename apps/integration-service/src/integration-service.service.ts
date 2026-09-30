@@ -2078,6 +2078,104 @@ export class IntegrationServiceService {
   }
 
   /**
+   * HISOB-KITOB TO'LOVI WEBHOOKI — hamkorga "men senga to'ladim" signali.
+   *
+   * ⚠️ MUAMMO (Andijon E2E). HQ bir marketga pul to'laganda (MARKET_PAYMENT),
+   * agar o'sha market bir HAMKORNIKI bo'lsa (masalan BeePost), hamkor bu
+   * haqda HECH QANDAY signal olmasdi — "hamkorga qarz" summasi hech qachon
+   * o'z-o'zidan kamaymasdi, moliyachi har to'lovni QO'LDA kiritishi kerak edi
+   * va unutilsa qarz raqami abadiy noto'g'ri qolardi.
+   *
+   * Bu metod aynan `shipment.status_changed` bilan BIR XIL outbox → scheduler
+   * → HMAC-POST quvuridan foydalanadi (durable, retry bilan). Farqi: hodisa
+   * MARKET darajasida, buyurtmaga bog'liq emas.
+   *
+   * IDEMPOTENTLIK IKKI QATLAM:
+   *   1) Outbox qisman-unique `(partner_id, order_id, new_status)` — bu yerda
+   *      `order_id = '0'` (buyurtma yo'q) va `new_status = payment_key`
+   *      (hamkor uchun to'lovning barqaror id'si). Ayni to'lov ikki marta
+   *      emit qilinsa ikkinchisi dedupga tushadi.
+   *   2) Qabul qiluvchi (BeePost) `external_payment_id` bo'yicha yakuniy
+   *      himoya beradi — outbox retry qilsa ham daftar bittagina yozuv.
+   */
+  async enqueueSettlementPayment(dto: {
+    market_id?: string | number;
+    amount?: number;
+    /** To'lov sanasi (epoch ms). */
+    paid_at?: number;
+    /** Hamkor uchun to'lovning BARQAROR id'si (dedup kaliti). */
+    payment_key?: string;
+    note?: string | null;
+  }) {
+    const marketId = String(dto?.market_id ?? '').trim();
+    const paymentKey = String(dto?.payment_key ?? '').trim();
+    const amount = Number(dto?.amount ?? 0);
+
+    if (!marketId || !paymentKey) {
+      return successRes(
+        { skipped: 'market_id/payment_key required' },
+        200,
+        'skipped',
+      );
+    }
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return successRes({ skipped: 'amount must be positive' }, 200, 'skipped');
+    }
+
+    // Bu market bir hamkornikimi? (teskari lookup — IDX_PMR_MARKET indeksi).
+    const ref = await this.partnerMarketRefRepo.findOne({
+      where: { elchi_market_id: marketId },
+    });
+    if (!ref) {
+      // Oddiy market — hamkorga yuboradigan hech narsa yo'q. Bu NORMAL
+      // (marketlarning aksariyati hamkorniki emas), xato emas.
+      return successRes({ skipped: 'not a partner market' }, 200, 'skipped');
+    }
+
+    const paidAt = Number(dto?.paid_at) || Date.now();
+    const payload = {
+      event: 'settlement.payment',
+      // Qabul qiluvchi TAKRORNI shu bo'yicha ajratadi (outbox retry / poyga).
+      event_id: randomUUID(),
+      // Hamkor daftarida DEDUP kaliti bo'ladi (BeePost `external_payment_id`).
+      payment_id: paymentKey,
+      amount,
+      paid_at: paidAt,
+      market_id: marketId,
+      occurred_at: new Date(paidAt).toISOString(),
+      note: dto?.note ?? null,
+    };
+
+    try {
+      const saved = await this.partnerWebhookOutboxRepo.save(
+        this.partnerWebhookOutboxRepo.create({
+          partner_id: String(ref.partner_id),
+          // Buyurtma darajasida emas — sentinel. Dedup `new_status` orqali.
+          order_id: '0',
+          external_order_id: '',
+          event_type: 'settlement.payment',
+          new_status: paymentKey,
+          payload,
+          status: 'pending',
+          attempts: 0,
+          max_attempts: 4,
+        }),
+      );
+      void this.processPendingPartnerWebhooks(1).catch(() => undefined);
+      return successRes({ outbox_id: saved.id }, 201, 'settlement enqueued');
+    } catch (error) {
+      // DEDUP: ayni to'lov (partner_id, '0', payment_key) uchun uchuvchi qator
+      // bor — takroriy emit, qayta navbatga qo'ymaymiz.
+      if (this.isUniqueViolation(error)) {
+        return successRes({ skipped: 'duplicate' }, 200, 'dedup');
+      }
+      throw new RpcException(
+        errorRes('Settlement webhook navbatga qo‘yib bo‘lmadi', 500),
+      );
+    }
+  }
+
+  /**
    * Pending (va muddati kelgan) hamkor webhook qatorlarini yuboradi. Har qatorni
    * atomik ravishda `processing`ga claim qiladi (ikki worker bir rowni ikki marta
    * yubormasin), keyin HMAC POST qiladi. Scheduler tick'idan va enqueue'dan
