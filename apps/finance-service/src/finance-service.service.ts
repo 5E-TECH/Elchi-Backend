@@ -375,6 +375,58 @@ export class FinanceServiceService implements OnModuleInit {
     }
   }
 
+  /**
+   * HAMKORGA HISOB-KITOB TO'LOVI XABARI — best-effort.
+   *
+   * MARKET_PAYMENT durable yozilgandan KEYIN chaqiriladi. integration-service
+   * marketning hamkorniki ekanini tekshiradi; hamkorniki bo'lmasa no-op
+   * (marketlarning aksariyati shunday). Xato bo'lsa faqat `warn` — pul
+   * harakati allaqachon commit bo'lgan, uni QAYTA URISH kerak emas; hamkor
+   * daftari solishtirishda (reconcile) baribir tuziladi.
+   *
+   * `payment_key` — hamkor daftarida DEDUP kaliti: bir to'lov ikki marta
+   * yuborilsa (outbox retry / RMQ redelivery) ikkinchisi yozilmaydi. Barqaror
+   * bo'lishi shart, shuning uchun to'lovning idempotentlik tokeniga (dedup)
+   * tayanadi; u bo'lmasa to'lov sanasiga.
+   */
+  private async emitSettlementPaymentSafely(input: {
+    market_id: string;
+    amount: number;
+    payment_date?: number | string | null;
+    dedup_key?: string | null;
+  }) {
+    try {
+      const pd = Number(input.payment_date);
+      const paidAt =
+        Number.isFinite(pd) && pd > 0
+          ? pd
+          : input.payment_date
+            ? Date.parse(String(input.payment_date)) || Date.now()
+            : Date.now();
+      const dedup = String(input.dedup_key ?? '').trim();
+      const paymentKey = `${input.market_id}:${dedup || paidAt}`;
+
+      await rmqSend(
+        this.integrationClient,
+        { cmd: 'integration.partner.settlement.enqueue' },
+        {
+          market_id: input.market_id,
+          amount: input.amount,
+          paid_at: paidAt,
+          payment_key: paymentKey,
+        },
+      );
+    } catch (error) {
+      const message =
+        error instanceof Error
+          ? error.message
+          : 'unknown settlement emit error';
+      this.logger.warn(
+        `MARKET_PAYMENT committed, but partner settlement emit failed (market_id=${input.market_id}, amount=${input.amount}): ${message}`,
+      );
+    }
+  }
+
   private extractResponseData<T>(response: any): T | null {
     if (response && typeof response === 'object' && 'data' in response) {
       return (response.data ?? null) as T | null;
@@ -2145,6 +2197,14 @@ export class FinanceServiceService implements OnModuleInit {
           data.market_id,
           Number(data.amount),
         );
+        // Hamkor marketga bevosita o'tkazma ham hisob-kitob to'lovi — hamkorga
+        // xabar beramiz (best-effort).
+        await this.emitSettlementPaymentSafely({
+          market_id: String(data.market_id),
+          amount: Number(data.amount),
+          payment_date: data.payment_date,
+          dedup_key: dedupKey,
+        });
       }
 
       return this.successRes(
@@ -2529,6 +2589,14 @@ export class FinanceServiceService implements OnModuleInit {
       await this.tryPublishAdvanceNow(advancePayload);
       auditedMarketCashboxId = String(marketCashbox.id);
       await this.syncMarketPaymentsSafely(data.market_id, Number(data.amount));
+      // Agar market bir hamkorniki bo'lsa, hamkorga "to'ladim" webhookini
+      // yuboramiz (best-effort — asosiy to'lovni yiqitmaydi).
+      await this.emitSettlementPaymentSafely({
+        market_id: String(data.market_id),
+        amount: Number(data.amount),
+        payment_date: data.payment_date,
+        dedup_key: dedupKey,
+      });
 
       return this.successRes({}, 200, `Marketga ${data.amount} so'm to'landi`);
     } catch (error) {
