@@ -36,6 +36,7 @@ import { RolesGuard } from './auth/roles.guard';
 import {
   Cashbox_type,
   Operation_type,
+  PaymentMethod,
   Roles as RoleEnum,
   Source_type,
 } from '@app/common';
@@ -447,6 +448,14 @@ export class FinanceGatewayController {
     }
   }
 
+  /** So'rovchining o'z filiali: JWT'dagi `branch_id`, bo'lmasa branch_users. */
+  private async resolveOwnBranchId(user: JwtUser): Promise<string> {
+    return (
+      this.extractBranchId(user) ||
+      (await this.resolveBranchIdByUserId(String(user.sub), user))
+    );
+  }
+
   /**
    * Superadmin/admin kuryerdan naqd olishidagi rad javoblari (C4). Matnlar
    * frontend va E2E bilan kelishilgan — o'zgartirilmasin.
@@ -457,6 +466,12 @@ export class FinanceGatewayController {
     'Bu kuryer filialga tegishli — pulni filial menejeri qabul qiladi (kuryer → filial → HQ)';
   private static readonly RECEIVE_CHECK_UNAVAILABLE_MESSAGE =
     "Tekshiruv xizmati javob bermadi, keyinroq urinib ko'ring";
+  /** C3 — menejer boshqa filial (HQ, ota filial) kuryeridan naqd olmoqchi. */
+  private static readonly COURIER_NOT_IN_MANAGER_BRANCH_MESSAGE =
+    'Bu kuryer sizning filialingizga tegishli emas';
+  /** Audit M4 — "Marketga o'tkazma" filial kassasi orqali taqiqlangan. */
+  private static readonly MANAGER_CLICK_TO_MARKET_MESSAGE =
+    "Marketga o'tkazma (click_to_market) faqat HQ kassasi orqali (superadmin/admin) qabul qilinadi";
 
   /** `branch_users.role` dagi kuryer qiymati (BranchUserRole.COURIER). */
   private static readonly COURIER_BRANCH_ROLE = 'COURIER';
@@ -537,6 +552,66 @@ export class FinanceGatewayController {
       this.findBranchAssignmentOrThrow(courierId, requester),
     ]);
     return { hqBranchId, assignment };
+  }
+
+  /**
+   * C3 (defense in depth) — menejer naqd qabul qilishidan OLDINGI qat'iy
+   * tekshiruv: kuryerning FAOL `branch_users` qatori AYNAN menejerning
+   * filialida bo'lishi shart. Ajdod filiallar (HQ, ota filial) hisobga
+   * OLINMAYDI — branch-service resolver'iga (`resolve_for_manager`)
+   * bog'liq emas.
+   *
+   * ⚠️ NEGA. Ilgari yagona tekshiruv `canManagerAccessUser` edi: u
+   * resolver'ning ajdodlar bo'ylab yurishiga tayanardi va zanjir doim HQ'ga
+   * yetgani uchun istalgan menejer HQ kuryerining naqdini o'z filial
+   * kassasiga "qabul qila olardi"; FIFO esa HQ qatorlarini BRANCH_SETTLED
+   * ("naqd HQ'da") qilardi — pul HQ daftaridan yo'qolardi (audit M7/RBAC-07).
+   *
+   * `branch.user.find_by_user` menejerga boshqa foydalanuvchining qatorini
+   * bermaydi (403), shuning uchun menejerning O'Z filiali qatorlari
+   * o'qiladi. Filial xizmati javob bermasa pul KO'CHIRILMAYDI (503); 4xx →
+   * 403 (kuryer bu filialda emas).
+   */
+  private async assertCourierInManagerBranch(
+    courierId: string,
+    managerBranchId: string,
+    manager: JwtUser,
+  ): Promise<void> {
+    let rows: unknown[];
+    try {
+      const response = await this.sendBranch<{ data?: unknown }>(
+        { cmd: 'branch.user.find_by_branch' },
+        { branch_id: managerBranchId, requester: this.toRequester(manager) },
+      );
+      rows = Array.isArray(response?.data) ? response.data : [];
+    } catch (error) {
+      const status = rpcErrorStatus(error);
+      if (status !== null && status >= 400 && status < 500) {
+        throw new ForbiddenException(
+          FinanceGatewayController.COURIER_NOT_IN_MANAGER_BRANCH_MESSAGE,
+        );
+      }
+      throw new ServiceUnavailableException(
+        FinanceGatewayController.RECEIVE_CHECK_UNAVAILABLE_MESSAGE,
+      );
+    }
+    const assigned = rows.some((row) => {
+      if (!row || typeof row !== 'object') {
+        return false;
+      }
+      const record = row as Record<string, unknown>;
+      const rowBranchId = toText(record.branch_id);
+      return (
+        toText(record.user_id) === String(courierId) &&
+        record.isDeleted !== true &&
+        (!rowBranchId || rowBranchId === String(managerBranchId))
+      );
+    });
+    if (!assigned) {
+      throw new ForbiddenException(
+        FinanceGatewayController.COURIER_NOT_IN_MANAGER_BRANCH_MESSAGE,
+      );
+    }
   }
 
   /**
@@ -971,9 +1046,6 @@ export class FinanceGatewayController {
       },
     );
     const resolvedBranchId = String(response?.data?.branch_id ?? '');
-    if (resolvedBranchId) {
-      return resolvedBranchId;
-    }
 
     const managerBranchId =
       this.extractBranchId(manager) ||
@@ -982,33 +1054,30 @@ export class FinanceGatewayController {
       return '';
     }
 
+    /**
+     * C3 (defense in depth): resolver javobi faqat menejerning O'Z filiali
+     * bo'lsa qabul qilinadi. Eski resolver ajdod filiallarni (zanjir doim
+     * HQ'ga yetadi) ham qaytarardi — HQ kuryeri id si bilan menejer HQ filial
+     * kassasini ko'rardi va naqdini "qabul qila olardi" (audit M7/RBAC-07).
+     */
+    if (resolvedBranchId) {
+      return resolvedBranchId === String(managerBranchId)
+        ? resolvedBranchId
+        : '';
+    }
+
+    /**
+     * C3 (audit M7/RBAC-07): FAQAT menejerning o'zi yoki o'z filiali. Ilgari
+     * bu yerda ota filial (id si yoki uning menejeri id si) ham ochilardi —
+     * ya'ni menejer ota filial (oxir-oqibat HQ) kassasini ko'ra olardi va
+     * kuryer id si ota filial id si bilan raqamda mos kelsa, unga kirish
+     * berilardi. Ajdodlar endi hisobga olinmaydi.
+     */
     if (
       String(requestedId) === String(manager.sub) ||
       String(requestedId) === String(managerBranchId)
     ) {
       return managerBranchId;
-    }
-
-    try {
-      const branchResponse = await this.sendBranch<{
-        data?: Record<string, any>;
-      }>(
-        { cmd: 'branch.find_by_id' },
-        { id: managerBranchId, requester: this.toRequester(manager) },
-      );
-      const branch = branchResponse?.data;
-      const parentBranchId = String(branch?.parent_id ?? '');
-      const parentManagerId = String(branch?.parent?.manager_id ?? '');
-
-      if (
-        parentBranchId &&
-        (String(requestedId) === parentBranchId ||
-          (parentManagerId && String(requestedId) === parentManagerId))
-      ) {
-        return parentBranchId;
-      }
-    } catch {
-      return '';
     }
 
     return '';
@@ -1127,6 +1196,8 @@ export class FinanceGatewayController {
       limit?: number;
       sourceTypes?: string;
       source_types?: string;
+      fromDate?: string;
+      toDate?: string;
     },
   ): Promise<any[]> {
     if (!cashboxId) {
@@ -1140,6 +1211,9 @@ export class FinanceGatewayController {
         limit: query.limit,
         sourceTypes: query.sourceTypes,
         source_types: query.source_types,
+        // FE-PAY-04 / C2: sana filtri (Toshkent kuni — finance'da).
+        from_date: query.fromDate,
+        to_date: query.toDate,
       },
     );
     const histories = historyResponse?.data?.items ?? [];
@@ -1344,6 +1418,8 @@ export class FinanceGatewayController {
   @ApiQuery({ name: 'with_history', required: false, type: Boolean })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiQuery({ name: 'fromDate', required: false, example: '2026-10-01' })
+  @ApiQuery({ name: 'toDate', required: false, example: '2026-10-01' })
   async findCashboxByUser(
     @Param('user_id') user_id: string,
     @Query() query: FindCashboxByUserQueryDto,
@@ -1378,7 +1454,19 @@ export class FinanceGatewayController {
     let requestQuery: FindCashboxByUserQueryDto = query;
     let requestUserId = user_id;
     if (this.isManager(req?.user) && !this.isPrivileged(req?.user)) {
-      if (managerBranchCashboxId) {
+      /**
+       * BE-PAY-14: menejer KURYER kassasini so'rasa (`cashbox_type=couriers`,
+       * id — menejerning o'zi ham, filiali ham emas) filial kassasiga
+       * ALMASHTIRILMAYDI. Ilgari resolver filialdagi kuryer uchun ham filial
+       * id sini qaytargani sababli kuryer sahifasida FILIAL kassasi (barcha
+       * kuryer to'lovlari, filial chiqimlari) shu kuryerniki bo'lib
+       * ko'rinardi. Kirish huquqi yuqorida allaqachon tekshirilgan.
+       */
+      const requestsCourierCashbox =
+        query.cashbox_type === Cashbox_type.FOR_COURIER &&
+        String(user_id) !== String(req.user.sub) &&
+        String(user_id) !== String(managerBranchCashboxId);
+      if (managerBranchCashboxId && !requestsCourierCashbox) {
         requestUserId = managerBranchCashboxId;
         requestQuery = {
           ...query,
@@ -1847,6 +1935,13 @@ export class FinanceGatewayController {
     const isManager = this.isManager(req?.user);
     let receiverBranchId = '';
     if (isManager) {
+      // Audit M4: filial kassasi orqali "Marketga o'tkazma" soxta filial
+      // qarzini qoldiradi — menejer bu usulni ishlata olmaydi.
+      if (dto.payment_method === PaymentMethod.CLICK_TO_MARKET) {
+        throw new ForbiddenException(
+          FinanceGatewayController.MANAGER_CLICK_TO_MARKET_MESSAGE,
+        );
+      }
       receiverBranchId =
         this.extractBranchId(req.user) ||
         (await this.resolveBranchIdByUserId(String(req.user.sub), req.user));
@@ -1864,6 +1959,12 @@ export class FinanceGatewayController {
           "Siz faqat o'z branch'ingiz courieridan to'lov qabul qilasiz",
         );
       }
+      // C3: qat'iy — kuryerning faol qatori AYNAN shu filialda.
+      await this.assertCourierInManagerBranch(
+        dto.courier_id,
+        receiverBranchId,
+        req.user,
+      );
     } else {
       // C4: superadmin/admin — faqat HQ kuryeridan, naqd MAIN'ga (pastda
       // receiver_user_id YUBORILMAYDI). Filial kuryeri → 403. Kuryerlik
@@ -1910,10 +2011,19 @@ export class FinanceGatewayController {
     @Body() dto: PaymentToMarketRequestDto,
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
+    // C1 / audit M2: kalit bo'lmasa zaxira barmoq izi FAQAT to'lovning o'zidan
+    // (market, summa, usul). Ilgari butun dto (`payment_date`, `comment`)
+    // olinardi — frontend har bosishda yangi `payment_date` yuborgani uchun
+    // 504 dan keyingi qayta bosish hech qachon bir xil token bermasdi va
+    // to'lov IKKI MARTA yozilardi.
     const token = this.resolveTransferToken(idempotencyKey, {
       actorId: String(req.user.sub),
       kind: 'payment_market',
-      payload: dto,
+      payload: {
+        market_id: dto.market_id,
+        amount: dto.amount,
+        payment_method: dto.payment_method,
+      },
     });
     const result = await this.send(
       { cmd: 'finance.cashbox.payment_market' },
@@ -1966,6 +2076,8 @@ export class FinanceGatewayController {
       { id: branchId, requester: this.toRequester(req.user) },
     );
 
+    // C1 / audit M2: zaxira barmoq izida `payment_date` YO'Q (har bosishda
+    // yangi bo'lgani uchun qayta bosish dedup qilinmasdi).
     const token = this.resolveTransferToken(idempotencyKey, {
       actorId: String(req.user.sub),
       kind: 'payment_branch_main',
@@ -1973,7 +2085,6 @@ export class FinanceGatewayController {
         branch_id: branchId,
         amount: dto.amount,
         payment_method: dto.payment_method,
-        payment_date: dto.payment_date,
       },
     });
     const result = await this.send(
@@ -2100,8 +2211,14 @@ export class FinanceGatewayController {
       financeResponse.data.kassadagi_summa = Number(
         financeResponse.data.mainCashboxTotal ?? 0,
       );
+      // Audit M16: "Berilishi kerak" — faqat MUSBAT market kassalari (HQ
+      // to'lashi kerak). Imzoli `marketCashboxTotal` HQ'ga qarzdor marketlarni
+      // boshqa marketlarga qarzdan ayirib, kartani kam ko'rsatardi. Eski
+      // finance javobida maydon bo'lmasa — avvalgi qiymat.
       financeResponse.data.berilishi_kerak = Number(
-        financeResponse.data.marketCashboxTotal ?? 0,
+        financeResponse.data.marketPayableTotal ??
+          financeResponse.data.marketCashboxTotal ??
+          0,
       );
       financeResponse.data.branch_managers_receivable =
         branchManagersReceivable;
@@ -2526,6 +2643,31 @@ export class FinanceGatewayController {
       return this.attachCreatedByUsersToHistoryResponse(historyResponse);
     }
 
+    /**
+     * CODE-08 (C11): registrator FAQAT o'z filiali kassasining tarixini
+     * ko'radi. Ilgari u quyidagi umumiy yo'lga tushardi va istalgan kassa
+     * (MAIN, kuryer, market, boshqa filiallar) tarixini o'qiy olardi.
+     */
+    if (
+      this.hasRole(req?.user, RoleEnum.REGISTRATOR) &&
+      !this.isPrivileged(req?.user)
+    ) {
+      const branchId = await this.resolveOwnBranchId(req.user);
+      if (!branchId) {
+        throw new ForbiddenException('Registratorning filiali topilmadi');
+      }
+      return this.attachCreatedByUsersToHistoryResponse(
+        await this.send(
+          { cmd: 'finance.history.find_all' },
+          {
+            ...query,
+            user_id: branchId,
+            cashbox_type: Cashbox_type.BRANCH,
+          },
+        ),
+      );
+    }
+
     const hasCashboxSelector = Boolean(
       query.cashbox_id ||
       query.user_id ||
@@ -2599,6 +2741,21 @@ export class FinanceGatewayController {
           "Siz faqat o'zingizning kassa tarixingizni ko'ra olasiz",
         );
       }
+    } else if (this.hasRole(req?.user, RoleEnum.REGISTRATOR)) {
+      // CODE-08 (C11): registrator — faqat o'z filiali kassasi yozuvi.
+      const branchId = await this.resolveOwnBranchId(req.user);
+      if (
+        !branchId ||
+        String(cashbox?.user_id ?? '') !== String(branchId) ||
+        cashbox?.cashbox_type !== Cashbox_type.BRANCH
+      ) {
+        throw new ForbiddenException(
+          "Siz faqat o'z filialingiz kassa tarixini ko'ra olasiz",
+        );
+      }
+    } else {
+      // Boshqa (kutilmagan) rol — yopiq: begona kassa yozuvi qaytmaydi.
+      throw new ForbiddenException("Siz bu kassa tarixini ko'ra olmaysiz");
     }
 
     return response;

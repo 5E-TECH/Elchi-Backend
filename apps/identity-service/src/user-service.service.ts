@@ -102,6 +102,63 @@ function toFinalClientError(error: unknown): unknown {
   });
 }
 
+/** RpcException yoki RMQ orqali kelgan oddiy xato obyektining statusi. */
+function sagaErrorStatus(error: unknown): number | null {
+  const payload = error instanceof RpcException ? error.getError() : error;
+  if (!payload || typeof payload !== 'object') {
+    return null;
+  }
+  const statusCode = Number((payload as { statusCode?: unknown }).statusCode);
+  return Number.isInteger(statusCode) ? statusCode : null;
+}
+
+/**
+ * CODE-26: saga qadami (masalan branch.user.assign) xato bersa ham yozilib
+ * ulgurgan bo'lishi mumkinmi: 409 (qayta yuborishdagi "allaqachon
+ * biriktirilgan") yoki 4xx bo'lmagan har qanday xato (timeout, 5xx).
+ */
+function sagaStepMayHaveCommitted(error: unknown): boolean {
+  const statusCode = sagaErrorStatus(error);
+  if (statusCode === null) {
+    return true;
+  }
+  return statusCode === 409 || statusCode < 400 || statusCode > 499;
+}
+
+/** string/number qiymatning matni; boshqa har qanday qiymat — ''. */
+function primitiveText(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number'
+    ? String(value)
+    : '';
+}
+
+function describeSagaError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message;
+  }
+  if (error && typeof error === 'object') {
+    const { statusCode, message } = error as {
+      statusCode?: unknown;
+      message?: unknown;
+    };
+    return `${primitiveText(statusCode) || '?'} ${primitiveText(message)}`.trim();
+  }
+  return primitiveText(error) || 'unknown error';
+}
+
+/** Ikki id bir xilmi ('01' ≡ '1' — raqamli id'lar kanonik solishtiriladi). */
+function sameEntityId(left: unknown, right: unknown): boolean {
+  const a = primitiveText(left).trim();
+  const b = primitiveText(right).trim();
+  if (!a || !b) {
+    return false;
+  }
+  if (/^\d+$/.test(a) && /^\d+$/.test(b)) {
+    return BigInt(a) === BigInt(b);
+  }
+  return a === b;
+}
+
 @Injectable()
 export class UserServiceService implements OnModuleInit {
   private readonly logger = new Logger(UserServiceService.name);
@@ -198,11 +255,127 @@ export class UserServiceService implements OnModuleInit {
         { attachRequestId: false, retries: 1, timeoutMs: 5000 },
       );
     } catch (assignError) {
-      await this.softCompensateUser(userId).catch(() => undefined);
+      // CODE-26: birinchi urinish timeout bo'lib, lekin branch-service'da
+      // yozilib ulgurgan bo'lsa, rmqSend qayta yuboradi va 409 "allaqachon
+      // biriktirilgan" (yoki yana timeout) oladi. Biriktirish HAQIQATAN bor —
+      // userni o'chirish yetim branch_users qatorini va mijozga 409 ni
+      // qoldirardi. Tekshiruv faqat 409 va 4xx bo'lmagan xatolarda: boshqa 4xx
+      // (403/400/404) da branch-service hech narsa yozmagan.
+      if (
+        sagaStepMayHaveCommitted(assignError) &&
+        (await this.isUserAssignedToBranch(userId, branchId))
+      ) {
+        this.logger.warn(
+          `branch.user.assign failed (${describeSagaError(assignError)}), but user ${userId} is assigned to branch ${branchId} — keeping the user`,
+        );
+        return;
+      }
+      await this.compensateCreatedUser(userId);
       // 4xx rad javobi (masalan PICKUP filialiga kuryer — 403) RpcException
       // bo'lib ketadi: mijoz aniq xabarni oladi, xabar qayta navbatga
       // qo'yilmaydi va user ikkinchi marta yaratilmaydi.
       throw toFinalClientError(assignError);
+    }
+  }
+
+  /**
+   * CODE-26: user haqiqatan shu filialga biriktirilganmi (saga xatosidan
+   * keyingi solishtirish). Ichki o'qish — auth.service bilan bir xil tizim
+   * requester'i. Tekshirib bo'lmasa — false (kompensatsiya avvalgidek).
+   */
+  private async isUserAssignedToBranch(
+    userId: string,
+    branchId: string,
+  ): Promise<boolean> {
+    try {
+      const response = await rmqSend<{
+        data?: { branch_id?: string | number | null } | null;
+      }>(
+        this.branchClient,
+        { cmd: 'branch.user.find_by_user' },
+        {
+          user_id: String(userId),
+          requester: { id: String(userId), roles: [Roles.SUPERADMIN] },
+        },
+        { attachRequestId: false, retries: 0, timeoutMs: 3000 },
+      );
+      return sameEntityId(response?.data?.branch_id, branchId);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Saga kompensatsiyasi: yangi userni soft-delete. CODE-26: ilgari xatosi
+   * jimgina yutilardi — faol, filialsiz yoki kassasiz "arvoh" user qolardi.
+   * Endi xato ERROR darajasida loglanadi (qo'lda tozalash uchun user id).
+   */
+  private async compensateCreatedUser(userId: string): Promise<void> {
+    try {
+      await this.softCompensateUser(userId);
+    } catch (error) {
+      this.logger.error(
+        `Saga compensation failed: user ${userId} was NOT soft-deleted (${describeSagaError(error)}) — remove it manually`,
+      );
+    }
+  }
+
+  /**
+   * CODE-26: yangi user kassasini yaratish. Ilgari xato xom holda otilardi:
+   * kuryer faol va filialga biriktirilgan, lekin kassasiz qolardi (keyingi
+   * pul amallari 'Cashbox not found'), mijoz esa 500 ko'rardi; qayta urinish
+   * esa 409 "telefon band" bilan tugardi. Endi kassa yaratilmasa saga orqaga
+   * qaytariladi — filial qatori (bo'lsa) best-effort olib tashlanadi, user
+   * soft-delete — va xato biriktirish bosqichidagi kabi qaytariladi (4xx →
+   * RpcException; timeout/5xx o'zgarishsiz, mavjud bir martalik qayta navbat
+   * saqlanadi — telefon endi bo'sh, shuning uchun qayta ishlash toza).
+   */
+  private async ensureCreatedUserCashboxOrCompensate(params: {
+    userId: string;
+    cashboxUserId: string;
+    cashboxType: Cashbox_type;
+    branchId?: string | null;
+    requester?: RequesterContext;
+  }): Promise<void> {
+    try {
+      await this.ensureUserCashbox(params.cashboxUserId, params.cashboxType);
+    } catch (cashboxError) {
+      this.logger.error(
+        `finance.cashbox.create (${params.cashboxType}) failed for new user ${params.userId}: ${describeSagaError(cashboxError)} — rolling the user back`,
+      );
+      if (params.branchId) {
+        await this.unassignCreatedUser(
+          params.userId,
+          params.branchId,
+          params.requester,
+        );
+      }
+      await this.compensateCreatedUser(params.userId);
+      throw toFinalClientError(cashboxError);
+    }
+  }
+
+  /** Kompensatsiya: yangi userning branch_users qatorini olib tashlash. */
+  private async unassignCreatedUser(
+    userId: string,
+    branchId: string,
+    requester?: RequesterContext,
+  ): Promise<void> {
+    try {
+      await rmqSend(
+        this.branchClient,
+        { cmd: 'branch.user.remove' },
+        {
+          requester,
+          branch_id: String(branchId),
+          user_id: String(userId),
+        },
+        { attachRequestId: false, retries: 0, timeoutMs: 5000 },
+      );
+    } catch (error) {
+      this.logger.error(
+        `Saga compensation: branch_users row (branch ${branchId}, user ${userId}) was NOT removed (${describeSagaError(error)}) — remove it manually`,
+      );
     }
   }
 
@@ -366,12 +539,23 @@ export class UserServiceService implements OnModuleInit {
     requester: RequesterContext | undefined,
     targetUserId: string,
     targetRole: Roles,
+    options: { allowSelf?: boolean } = {},
   ) {
     if (!requester) {
       return;
     }
 
     if (this.hasRole(requester, Roles.SUPERADMIN)) {
+      return;
+    }
+
+    // RBAC-19: o'z profilini/parolini tahrirlash (PATCH /auth/my-profile).
+    // Ilgari ADMIN shoxi o'zini ham "admin" deb 403 qilardi — admin o'z
+    // (standart 0990) parolini almashtira olmasdi. Faqat updateUser yoqadi:
+    // u o'z-o'zini tahrirlashda status, maosh, to'lov kuni, add_order va
+    // komissiyani baribir o'zgartirmaydi, rol esa DTO'da yo'q. O'chirish va
+    // statusni o'zgartirish uchun xulq O'ZGARMAGAN.
+    if (options.allowSelf && this.isSelfRequester(requester, targetUserId)) {
       return;
     }
 
@@ -839,7 +1023,9 @@ export class UserServiceService implements OnModuleInit {
     if (!admin) {
       this.notFound('User topilmadi');
     }
-    this.assertRequesterCanMutateUser(requester, id, admin.role);
+    this.assertRequesterCanMutateUser(requester, id, admin.role, {
+      allowSelf: true,
+    });
 
     const auditBefore = {
       name: admin.name,
@@ -865,10 +1051,18 @@ export class UserServiceService implements OnModuleInit {
     if (dto.phone_number && dto.phone_number !== admin.phone_number) {
       await this.ensurePhoneUnique(dto.phone_number, id);
       admin.phone_number = dto.phone_number;
+      // RBAC-09: login (telefon) o'zgardi — eski sessiyalar yopiladi.
+      admin.refresh_token = null;
     }
 
     if (dto.password) {
       admin.password = await this.bcryptEncryption.encrypt(dto.password);
+      // RBAC-09: parol almashtirilsa (o'g'irlangan telefon, ishdan
+      // bo'shatilgan kuryer) allaqachon kirgan qurilma 7 kungacha refresh
+      // qila olardi. Saqlangan refresh hashi o'chiriladi — keyingi refresh
+      // 401, qurilma qayta login (yangi parol bilan) qiladi. Access token
+      // ko'pi bilan 15 daqiqa yashaydi.
+      admin.refresh_token = null;
     }
 
     if (typeof dto.name !== 'undefined') {
@@ -1226,6 +1420,14 @@ export class UserServiceService implements OnModuleInit {
     const saved = await this.users.save(admin);
     void this.removeUserFromSearch(saved);
 
+    // fix3b (CODE-07): o'chirilgan menejer/registratorning faol branch_users
+    // qatori ham olib tashlanadi (best-effort, user baribir o'chirilgan).
+    // Kuryer yo'li o'zgarmagan: uni yuqoridagi assertCourierCanBeDeleted
+    // qo'riqlaydi.
+    if (admin.role === Roles.MANAGER || admin.role === Roles.REGISTRATOR) {
+      await this.unassignDeletedStaffFromBranch(String(admin.id), requester);
+    }
+
     await this.activityLog.log({
       entity_type: 'User',
       entity_id: id,
@@ -1235,6 +1437,58 @@ export class UserServiceService implements OnModuleInit {
     });
 
     return successRes({ id }, 200, 'User o‘chirildi');
+  }
+
+  /**
+   * fix3b (CODE-07): o'chirilgan menejer/registratorning FAOL branch_users
+   * qatorini soft-delete qiladi (`branch.user.remove`, so'rovchi bilan).
+   * Ilgari qator qolardi: filial "menejeri bor" deb hisoblanib, unga pochta
+   * jo'natilardi. Branch-service o'qishlari o'chirilgan/bloklangan menejerni
+   * identity orqali allaqachon chetlab o'tadi — bu tozalash, shuning uchun
+   * BEST-EFFORT: xato yoki timeout faqat WARN log, o'chirish to'xtamaydi.
+   * Byudjet: 3 s + 5 s, gateway DELETE /users/:id (15 s) ichida.
+   */
+  private async unassignDeletedStaffFromBranch(
+    userId: string,
+    requester?: RequesterContext,
+  ): Promise<void> {
+    let branchId = '';
+    try {
+      const response = await rmqSend<{
+        data?: { branch_id?: string | number | null } | null;
+      }>(
+        this.branchClient,
+        { cmd: 'branch.user.find_by_user' },
+        {
+          user_id: userId,
+          // Ichki o'qish — isUserAssignedToBranch bilan bir xil tizim requester'i.
+          requester: { id: userId, roles: [Roles.SUPERADMIN] },
+        },
+        { attachRequestId: false, retries: 0, timeoutMs: 3000 },
+      );
+      branchId = String(response?.data?.branch_id ?? '').trim();
+    } catch (error) {
+      this.logger.warn(
+        `deleteUser: branch.user.find_by_user failed for user ${userId} (${describeSagaError(error)}) — its branch_users row (if any) was NOT removed`,
+      );
+      return;
+    }
+    if (!branchId) {
+      return;
+    }
+
+    try {
+      await rmqSend(
+        this.branchClient,
+        { cmd: 'branch.user.remove' },
+        { requester, branch_id: branchId, user_id: userId },
+        { attachRequestId: false, retries: 0, timeoutMs: 5000 },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `deleteUser: branch_users row (branch ${branchId}, user ${userId}) was NOT removed (${describeSagaError(error)}) — remove it manually`,
+      );
+    }
   }
 
   async findUserById(id: string, options: { includeTgToken?: boolean } = {}) {
@@ -1516,7 +1770,12 @@ export class UserServiceService implements OnModuleInit {
     });
 
     const saved = await this.users.save(market);
-    await this.ensureUserCashbox(saved.id, Cashbox_type.FOR_MARKET);
+    await this.ensureCreatedUserCashboxOrCompensate({
+      userId: saved.id,
+      cashboxUserId: saved.id,
+      cashboxType: Cashbox_type.FOR_MARKET,
+      requester,
+    });
     void this.syncUserToSearch(saved);
     await this.activityLog.log({
       entity_type: 'User',
@@ -1569,7 +1828,13 @@ export class UserServiceService implements OnModuleInit {
       );
     }
 
-    await this.ensureUserCashbox(saved.id, Cashbox_type.FOR_COURIER);
+    await this.ensureCreatedUserCashboxOrCompensate({
+      userId: saved.id,
+      cashboxUserId: saved.id,
+      cashboxType: Cashbox_type.FOR_COURIER,
+      branchId: dto.branch_id,
+      requester,
+    });
     void this.syncUserToSearch(saved);
     await this.activityLog.log({
       entity_type: 'User',
@@ -1678,7 +1943,13 @@ export class UserServiceService implements OnModuleInit {
         'MANAGER',
         requester,
       );
-      await this.ensureUserCashbox(dto.branch_id, Cashbox_type.BRANCH);
+      await this.ensureCreatedUserCashboxOrCompensate({
+        userId: saved.id,
+        cashboxUserId: dto.branch_id,
+        cashboxType: Cashbox_type.BRANCH,
+        branchId: dto.branch_id,
+        requester,
+      });
     }
 
     void this.syncUserToSearch(saved);
@@ -1817,10 +2088,14 @@ export class UserServiceService implements OnModuleInit {
     if (dto.phone_number && dto.phone_number !== market.phone_number) {
       await this.ensurePhoneUnique(dto.phone_number, id);
       market.phone_number = dto.phone_number;
+      // RBAC-09: login (telefon) o'zgardi — eski sessiyalar yopiladi.
+      market.refresh_token = null;
     }
 
     if (dto.password) {
       market.password = await this.bcryptEncryption.encrypt(dto.password);
+      // RBAC-09: yangi parol — eski qurilmalar endi refresh qila olmaydi.
+      market.refresh_token = null;
     }
 
     if (typeof dto.name !== 'undefined') {
@@ -1986,9 +2261,10 @@ export class UserServiceService implements OnModuleInit {
 
   /**
    * market_tg_token'ni QAYTARADIGAN yagona RPC (identity.market.rotate_tg_token).
-   * Faqat ichki: uni notification-service guruh ulangandan keyin chaqiradi va
-   * javobini o'qimaydi. Gateway'da bu RPC'ga olib boradigan HTTP route
-   * bo'lmasligi SHART — aks holda token yana ochiq qoladi.
+   * Faqat ichki. fix3b: notification-service uni endi CHAQIRMAYDI — guruh
+   * ulangandan keyin token almashtirilmaydi (u marketning order-bot kaliti).
+   * RPC o'zgarmagan holda qoldirildi (hozir chaqiruvchisi yo'q). Gateway'da bu RPC'ga olib boradigan
+   * HTTP route bo'lmasligi SHART — aks holda token yana ochiq qoladi.
    */
   async rotateMarketTelegramToken(id: string) {
     const market = await this.users.findOne({

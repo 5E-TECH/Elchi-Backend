@@ -94,8 +94,24 @@ export const gatewayValidationSchema = Joi.object({
   // Auth endpoints (login/refresh) override these with stricter limits.
   THROTTLE_TTL_MS: Joi.number().integer().min(1000).default(60_000),
   THROTTLE_LIMIT: Joi.number().integer().min(1).default(60),
+  // fix3 C10 (RBAC-11): login — 30/daqiqa/IP (ilgari 10). Haqiqiy qiymatni
+  // auth-gateway.controller.ts `authThrottleConfig()` process.env dan o'qiydi
+  // (@Throttle metadata klass yuklanganda, Joi sukutidan OLDIN) — bu yerdagi
+  // sukutlar u bilan AYNI bo'lishi shart.
   AUTH_THROTTLE_TTL_MS: Joi.number().integer().min(1000).default(60_000),
-  AUTH_THROTTLE_LIMIT: Joi.number().integer().min(1).default(10),
+  AUTH_THROTTLE_LIMIT: Joi.number().integer().min(1).default(30),
+  // Refresh — login'dan ALOHIDA, 60/daqiqa/IP. `.empty('')`: qiymatsiz
+  // yozilgan kalit gateway'ni yiqitmasin (kod ham bo'sh qiymatda sukutga tushadi).
+  AUTH_REFRESH_THROTTLE_LIMIT: Joi.number()
+    .integer()
+    .min(1)
+    .empty('')
+    .default(60),
+  AUTH_REFRESH_THROTTLE_TTL_MS: Joi.number()
+    .integer()
+    .min(1000)
+    .empty('')
+    .default(60_000),
   // Comma-separated list of allowed browser origins for CORS.
   // localhost/127.0.0.1 are always allowed in code regardless of this value.
   CORS_ORIGINS: Joi.string().allow('').default(''),

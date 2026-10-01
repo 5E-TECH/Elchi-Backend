@@ -52,6 +52,22 @@ interface HttpRequestLike {
   headers?: Record<string, string | string[] | undefined>;
 }
 
+/**
+ * Mahsulot ro'yxati / bitta mahsulot — o'qish rollari (fix3 C11, CODE-08).
+ * Ilgari faqat JwtAuthGuard edi: kuryer, mijoz, investor ham barcha
+ * marketlar mahsulotlarini market profili (telefon, tarif) bilan olardi.
+ * Filial xodimlari `product/market/:marketId` bilan bir xil ro'yxatni
+ * allaqachon o'qiydi — ular saqlanadi; market faqat o'zinikini.
+ */
+const PRODUCT_READ_ROLES: string[] = [
+  RoleEnum.SUPERADMIN,
+  RoleEnum.ADMIN,
+  RoleEnum.REGISTRATOR,
+  RoleEnum.MANAGER,
+  RoleEnum.BRANCH,
+  RoleEnum.MARKET,
+];
+
 @ApiTags('Products')
 @Controller('product')
 export class CatalogGatewayController {
@@ -206,8 +222,23 @@ export class CatalogGatewayController {
     });
   }
 
+  /** So'rovchi faqat MARKET (o'z mahsulotlari bilan cheklanadi). */
+  private isMarketOnlyRequester(user?: JwtUser): boolean {
+    const roles = (user?.roles ?? []).map((role) =>
+      String(role ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+    return (
+      roles.includes(RoleEnum.MARKET) &&
+      !roles.includes(RoleEnum.SUPERADMIN) &&
+      !roles.includes(RoleEnum.ADMIN)
+    );
+  }
+
   @Get()
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...PRODUCT_READ_ROLES)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List products with filtering and pagination' })
   @ApiQuery({ name: 'market_id', required: false, type: String })
@@ -221,8 +252,19 @@ export class CatalogGatewayController {
     @Query('search') search?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Req() req?: { user: JwtUser },
   ) {
-    const resolvedUserId = market_id ?? user_id;
+    let resolvedUserId = market_id ?? user_id;
+    if (this.isMarketOnlyRequester(req?.user)) {
+      // Market — faqat o'z mahsulotlari (boshqa market id'si 403).
+      const ownId = String(req?.user?.sub ?? '').trim();
+      if (resolvedUserId && String(resolvedUserId).trim() !== ownId) {
+        throw new ForbiddenException(
+          "Market faqat o'z mahsulotlarini ko'ra oladi",
+        );
+      }
+      resolvedUserId = ownId;
+    }
 
     return this.catalogClient
       .send(
@@ -275,14 +317,51 @@ export class CatalogGatewayController {
   }
 
   @Get(':id')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...PRODUCT_READ_ROLES)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get product by ID' })
   @ApiParam({ name: 'id', description: 'Product ID (id)' })
-  findById(@Param('id') id: string) {
-    return this.catalogClient
-      .send({ cmd: 'catalog.product.find_by_id' }, { id })
-      .pipe(timeout(8000));
+  async findById(@Param('id') id: string, @Req() req?: { user: JwtUser }) {
+    const response: unknown = await firstValueFrom(
+      this.catalogClient
+        .send({ cmd: 'catalog.product.find_by_id' }, { id })
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Catalog service response timeout');
+      }
+      throw error;
+    });
+
+    // fix3 C11: market faqat o'z mahsulotini (tahrirlash oynasi shu
+    // marshrutdan o'qiydi). Egasi aniqlanmasa — rad (fail-closed).
+    // catalog `findById` mahsulotni O'RAMSIZ qaytaradi (eski `{ data }`
+    // o'rami ham qabul qilinadi) — ilgari faqat `.data` o'qilib, tekshiruv
+    // hech qachon ishlamasdi.
+    const body =
+      response && typeof response === 'object'
+        ? (response as Record<string, unknown>)
+        : null;
+    const product =
+      body && body.data && typeof body.data === 'object' ? body.data : body;
+    if (
+      this.isMarketOnlyRequester(req?.user) &&
+      product &&
+      typeof product === 'object'
+    ) {
+      const rawOwner = (product as { user_id?: unknown }).user_id;
+      const ownerId =
+        typeof rawOwner === 'string' || typeof rawOwner === 'number'
+          ? String(rawOwner).trim()
+          : '';
+      if (!ownerId || ownerId !== String(req?.user?.sub ?? '').trim()) {
+        throw new ForbiddenException(
+          "Market faqat o'z mahsulotini ko'ra oladi",
+        );
+      }
+    }
+    return response;
   }
 
   @Patch(':id')

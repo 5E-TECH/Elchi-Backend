@@ -5,7 +5,7 @@ import {
   OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
-import { ClientProxy } from '@nestjs/microservices';
+import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { rmqSend } from '@app/common';
 
 /**
@@ -89,6 +89,15 @@ const STATUS_EMOJI: Record<string, string> = {
 };
 
 const TOKEN_RE = /^group_token-[a-z0-9]{14,64}$/i;
+
+// Token topilmadi (identity 404) va javobda market yo'q — bitta javob.
+const TOKEN_NOT_FOUND_TEXT = "❌ Token noto'g'ri yoki market topilmadi.";
+// Kutilmagan xato (timeout va h.k.) — ichki (inglizcha) xato matni chatga
+// yuborilmaydi.
+const TOKEN_CHECK_FAILED_TEXT =
+  "❌ Token tekshirishda xatolik. Birozdan so'ng qayta urinib ko'ring.";
+const ORDER_LOOKUP_FAILED_TEXT =
+  "❌ Buyurtmani olishda xatolik. Birozdan so'ng qayta urinib ko'ring.";
 
 // Navbat to'lganda foydalanuvchiga boradigan javob (Gy8Lt6KT #10): xabar
 // JIMGINA tashlanmaydi, operator nima bo'lganini ko'radi.
@@ -370,10 +379,7 @@ export class OrderBotUpdateService implements OnModuleInit, OnModuleDestroy {
       );
       const market = res?.data;
       if (!market?.id) {
-        await this.sendMessage(
-          chat,
-          "❌ Token noto'g'ri yoki market topilmadi.",
-        );
+        await this.sendMessage(chat, TOKEN_NOT_FOUND_TEXT);
         return;
       }
       const linked: LinkedMarket = {
@@ -384,10 +390,15 @@ export class OrderBotUpdateService implements OnModuleInit, OnModuleDestroy {
       this.links.set(chat, linked);
       await this.sendStartButtons(chat, linked, true);
     } catch (error) {
-      await this.sendMessage(
-        chat,
-        `❌ ${error instanceof Error ? error.message : 'Token tekshirishda xatolik.'}`,
+      // identity noma'lum token uchun 404 OTADI (null qaytarmaydi).
+      if (this.rpcStatusOf(error) === 404) {
+        await this.sendMessage(chat, TOKEN_NOT_FOUND_TEXT);
+        return;
+      }
+      this.logger.warn(
+        `Market token check failed: ${this.describeError(error)}`,
       );
+      await this.sendMessage(chat, TOKEN_CHECK_FAILED_TEXT);
     }
   }
 
@@ -431,14 +442,34 @@ export class OrderBotUpdateService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * CODE-18: holat FAQAT market tokeni bilan ulangan chatga va FAQAT o'sha
+   * marketning buyurtmasi uchun beriladi. Ilgari istalgan chat istalgan
+   * buyurtma raqamining holatini so'ray olardi. Boshqa marketning buyurtmasi
+   * "topilmadi" deb javob oladi — mavjudligi ham oshkor bo'lmaydi.
+   *
+   * fix3b: mavjud bo'lmagan buyurtma uchun order-service 404 OTADI (null
+   * qaytarmaydi) — u ham AYNAN shu "topilmadi" javobini oladi. Ilgari u
+   * "xatolik" javobini olardi va market id mavjudligini farqlay olardi.
+   */
   private async replyOrderStatus(chat: string, orderId: string) {
+    const linked = this.links.get(chat);
+    if (!linked) {
+      await this.sendMessage(
+        chat,
+        "🔒 Buyurtma holatini ko'rish uchun avval market tokeningizni yuboring.",
+      );
+      return;
+    }
     try {
-      const res = await rmqSend<{
-        data?: { id: string; status?: string; total_price?: number };
-      }>(this.orderClient, { cmd: 'order.find_by_id' }, { id: orderId });
-      const order = res?.data;
-      if (!order?.id) {
-        await this.sendMessage(chat, `❌ #${orderId} buyurtma topilmadi.`);
+      const res = await rmqSend<unknown>(
+        this.orderClient,
+        { cmd: 'order.find_by_id' },
+        { id: orderId },
+      );
+      const order = this.unwrapOrder(res);
+      if (!order?.id || String(order.market_id ?? '') !== linked.id) {
+        await this.sendMessage(chat, this.orderNotFoundText(orderId));
         return;
       }
       const status = String(order.status ?? '');
@@ -448,11 +479,62 @@ export class OrderBotUpdateService implements OnModuleInit, OnModuleDestroy {
         `${emoji} Buyurtma <b>#${this.escape(String(order.id))}</b>\nHolati: <b>${this.escape(status)}</b>`,
       );
     } catch (error) {
-      await this.sendMessage(
-        chat,
-        `❌ ${error instanceof Error ? error.message : 'Buyurtmani olishda xatolik.'}`,
+      if (this.rpcStatusOf(error) === 404) {
+        await this.sendMessage(chat, this.orderNotFoundText(orderId));
+        return;
+      }
+      this.logger.warn(
+        `Order status lookup failed for #${orderId}: ${this.describeError(error)}`,
       );
+      await this.sendMessage(chat, ORDER_LOOKUP_FAILED_TEXT);
     }
+  }
+
+  /** Yo'q buyurtma va boshqa marketning buyurtmasi uchun BIR XIL javob. */
+  private orderNotFoundText(orderId: string): string {
+    return `❌ #${orderId} buyurtma topilmadi.`;
+  }
+
+  /**
+   * Masofaviy RpcException holat kodi. RMQ orqali u ODDIY obyekt bo'lib
+   * keladi (`{ statusCode, message }`); lokal RpcException ham qabul qilinadi.
+   */
+  private rpcStatusOf(error: unknown): number | null {
+    const source = error instanceof RpcException ? error.getError() : error;
+    if (!source || typeof source !== 'object') {
+      return null;
+    }
+    const status = Number((source as { statusCode?: unknown }).statusCode);
+    return Number.isFinite(status) ? status : null;
+  }
+
+  private describeError(error: unknown): string {
+    if (error instanceof Error) {
+      return error.message;
+    }
+    const message = (error as { message?: unknown } | null)?.message;
+    return typeof message === 'string' ? message : 'unknown error';
+  }
+
+  /**
+   * order.find_by_id buyurtma qatorini O'RAMSIZ qaytaradi (order-service
+   * findById); eski `{ data }` ko'rinishi ham qabul qilinadi.
+   */
+  private unwrapOrder(response: unknown): {
+    id?: string | number;
+    status?: string;
+    market_id?: string | number | null;
+  } | null {
+    if (!response || typeof response !== 'object') {
+      return null;
+    }
+    const wrapped = (response as { data?: unknown }).data;
+    const order = wrapped && typeof wrapped === 'object' ? wrapped : response;
+    return order as {
+      id?: string | number;
+      status?: string;
+      market_id?: string | number | null;
+    };
   }
 
   // ===== Telegram Bot API helpers =====

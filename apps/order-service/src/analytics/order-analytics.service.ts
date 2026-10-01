@@ -435,40 +435,62 @@ export class OrderAnalyticsService {
     });
   }
 
+  /**
+   * Toshkent vaqti UTC+5, yozgi vaqt YO'Q — shuning uchun "Toshkent devor
+   * soati" oddiy siljitish bilan olinadi: lahzaga +5 soat qo'shilgan Date ning
+   * UTC maydonlari aynan Toshkentdagi yil/oy/kun/soat.
+   */
+  private static readonly TASHKENT_OFFSET_MS = 5 * 60 * 60 * 1000;
+
+  private toTashkentWall(date: Date): Date {
+    return new Date(date.getTime() + OrderAnalyticsService.TASHKENT_OFFSET_MS);
+  }
+
+  private fromTashkentWall(wall: Date): Date {
+    return new Date(wall.getTime() - OrderAnalyticsService.TASHKENT_OFFSET_MS);
+  }
+
+  /**
+   * Band boshi — TOSHKENT kuni/haftasi/oyi/yilining boshlanish LAHZASI.
+   *
+   * ⚠️ CODE-22: ilgari kun `setHours` bilan SERVER vaqtida (konteynerda UTC)
+   * kesilardi, kalit esa Toshkentda formatlanardi. Toshkent oynasi UTC'da
+   * oldingi kunning 19:00 ida boshlangani uchun skelet BITTA ORTIQCHA bo'sh
+   * bandni (oynadan oldingi kun/hafta/oy) qo'shardi va `avgRevenue` jami /
+   * (n + 1) bo'lib chiqardi. Endi skelet SQL kalitlari
+   * (`tashkentPeriodKeySql`) bilan bir xil mintaqada quriladi.
+   */
   private periodStart(
     date: Date,
     period: 'daily' | 'weekly' | 'monthly' | 'yearly',
   ): Date {
-    const d = new Date(date);
-    d.setHours(0, 0, 0, 0);
+    const d = this.toTashkentWall(date);
+    d.setUTCHours(0, 0, 0, 0);
 
-    if (period === 'daily') return d;
     if (period === 'monthly') {
-      d.setDate(1);
-      return d;
+      d.setUTCDate(1);
+    } else if (period === 'yearly') {
+      d.setUTCMonth(0, 1);
+    } else if (period === 'weekly') {
+      // Hafta dushanbadan boshlanadi (Postgres `date_trunc('week')` kabi).
+      const day = d.getUTCDay(); // 0=Sun..6=Sat
+      const diffToMonday = day === 0 ? -6 : 1 - day;
+      d.setUTCDate(d.getUTCDate() + diffToMonday);
     }
-    if (period === 'yearly') {
-      d.setMonth(0, 1);
-      return d;
-    }
-
-    // weekly (week starts on Monday)
-    const day = d.getDay(); // 0=Sun..6=Sat
-    const diffToMonday = day === 0 ? -6 : 1 - day;
-    d.setDate(d.getDate() + diffToMonday);
-    return d;
+    return this.fromTashkentWall(d);
   }
 
+  /** Keyingi band boshi (`date` — `periodStart` natijasi). */
   private nextPeriodStart(
     date: Date,
     period: 'daily' | 'weekly' | 'monthly' | 'yearly',
   ): Date {
-    const d = new Date(date);
-    if (period === 'daily') d.setDate(d.getDate() + 1);
-    else if (period === 'weekly') d.setDate(d.getDate() + 7);
-    else if (period === 'monthly') d.setMonth(d.getMonth() + 1);
-    else d.setFullYear(d.getFullYear() + 1);
-    return d;
+    const d = this.toTashkentWall(date);
+    if (period === 'daily') d.setUTCDate(d.getUTCDate() + 1);
+    else if (period === 'weekly') d.setUTCDate(d.getUTCDate() + 7);
+    else if (period === 'monthly') d.setUTCMonth(d.getUTCMonth() + 1);
+    else d.setUTCFullYear(d.getUTCFullYear() + 1);
+    return this.fromTashkentWall(d);
   }
 
   private periodKey(
@@ -482,12 +504,13 @@ export class OrderAnalyticsService {
     if (period === 'weekly') {
       return `W:${this.dateKey(d)}`;
     }
+    const wall = this.toTashkentWall(d);
     if (period === 'monthly') {
-      const y = d.getFullYear();
-      const m = String(d.getMonth() + 1).padStart(2, '0');
+      const y = wall.getUTCFullYear();
+      const m = String(wall.getUTCMonth() + 1).padStart(2, '0');
       return `M:${y}-${m}`;
     }
-    return `Y:${d.getFullYear()}`;
+    return `Y:${wall.getUTCFullYear()}`;
   }
 
   private periodLabel(
@@ -499,15 +522,15 @@ export class OrderAnalyticsService {
       return this.dateLabel(d);
     }
     if (period === 'weekly') {
-      const end = new Date(d);
-      end.setDate(end.getDate() + 6);
+      const end = new Date(d.getTime() + 6 * 24 * 60 * 60 * 1000);
       return `${this.dateLabel(d)}-${this.dateLabel(end)}`;
     }
+    const wall = this.toTashkentWall(d);
     if (period === 'monthly') {
-      const m = String(d.getMonth() + 1).padStart(2, '0');
-      return `${m}.${d.getFullYear()}`;
+      const m = String(wall.getUTCMonth() + 1).padStart(2, '0');
+      return `${m}.${wall.getUTCFullYear()}`;
     }
-    return String(d.getFullYear());
+    return String(wall.getUTCFullYear());
   }
 
   private async getPostsByIds(ids: string[]) {

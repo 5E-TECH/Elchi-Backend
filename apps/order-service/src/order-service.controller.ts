@@ -61,17 +61,24 @@ export class OrderServiceController {
     return executeAndAck(this.rmqService, context, handler);
   }
 
+  /**
+   * `extra` — faqat aniq kerak bo'lgan handlerlar uchun (masalan
+   * `order.settlement.advance` ning `reclaimFailed`i). Berilmasa opsiyalar
+   * AYNAN `{ requestId, pattern }` — mavjud handlerlar xatti-harakati
+   * o'zgarmaydi.
+   */
   private runIdempotent<T>(
     context: RmqContext,
     pattern: string,
     requestId: string | undefined,
     handler: () => Promise<T> | T,
+    extra: { reclaimFailed?: boolean } = {},
   ): Promise<T> {
     return executeIdempotent(
       this.rmqService,
       this.idempotencyService,
       context,
-      { requestId, pattern },
+      { requestId, pattern, ...extra },
       handler,
     );
   }
@@ -96,6 +103,12 @@ export class OrderServiceController {
         total_price?: number;
         to_be_paid?: number;
         paid_amount?: number;
+        /**
+         * fix3b: hamkor prepaid qismi (`createPartnerShipment`:
+         * `subtotal − cod_amount`). Faqat SA/ADMIN/hamkor va ichki
+         * chaqiruvlardan qabul qilinadi, 0 ≤ qiymat ≤ total_price.
+         */
+        paid_online_amount?: number | null;
         status?: Order_status;
         comment?: string | null;
         operator?: string | null;
@@ -599,6 +612,19 @@ export class OrderServiceController {
   // State-only FIFO advance, called by the gateway right after a production
   // finance.cashbox.payment_* succeeds, so order_settlement tracks which orders'
   // COD reached which level (keeps the rollback guard accurate). (Audit I1/I2.)
+  /**
+   * ⚠️ `reclaimFailed: true` (audit M8). Bu hodisa finance outbox'idan keladi
+   * va HAR qayta urinish AYNAN shu `request_id` ni olib keladi. Ilgari bitta
+   * tranzient xato (postgres qayta ishga tushishi, pool to'lishi, lock
+   * timeout) kalitni `failed` qilib keshlab qo'yardi: keyingi har urinish o'sha
+   * keshlangan xatoni olardi va 10 urinishdan keyin hodisa abadiy yo'qolardi —
+   * kassa ko'chgan, daftar esa hech qachon yetib olmasdi.
+   *
+   * Qayta urinish xavfsiz: `advanceSettlement` faqat FIFO commit'idan OLDIN
+   * xato otadi, commit esa token'ning "applied" belgisi bilan atomik — ya'ni
+   * qayta ishga tushgan handler (bu yoki lease qayta egallanishi orqali)
+   * allaqachon qo'llangan to'lovni ikkinchi marta qo'llamaydi.
+   */
   @MessagePattern({ cmd: 'order.settlement.advance' })
   settlementAdvance(
     @Payload()
@@ -616,6 +642,29 @@ export class OrderServiceController {
       'order.settlement.advance',
       data.request_id,
       () => this.settlementService.advanceSettlement(data),
+      { reclaimFailed: true },
+    );
+  }
+
+  /**
+   * C8 (CODE-06) — kuryerning SOF-NOL PENDING savdo qatorlarini yopish.
+   * branch-service kuryerni o'tkazish / filialdan chiqarishdan oldin
+   * (best-effort) chaqiradi: qatorlar yig'indisi AYNAN 0 tiyin va qoldiq 0
+   * bo'lsagina, nol lump-sum FIFO bilan bitta tranzaksiyada yopiladi. Pul
+   * ko'chmaydi; shartlar bajarilmasa hech narsa o'zgarmaydi
+   * (`closed_count: 0`). Xatolar har doim RpcException.
+   */
+  @MessagePattern({ cmd: 'order.settlement.close_zero_courier_rows' })
+  settlementCloseZeroCourierRows(
+    @Payload()
+    data: {
+      courier_id?: string | null;
+      requester?: { id?: string | null; roles?: string[] } | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.settlementService.closeZeroCourierRows(data ?? {}),
     );
   }
 
@@ -901,11 +950,22 @@ export class OrderServiceController {
         external_id?: string | null;
         items?: Array<{ product_id: string; quantity?: number }>;
       };
+      /**
+       * fix3b: gateway (POST /orders/external) so'rovchini DOIM uzatadi.
+       * Ilgari bu handler uni tashlab yuborardi — `createExternalOrder`
+       * har kimni imtiyozsiz deb hisoblardi (SA/ADMIN maydonlari ham
+       * olib tashlanardi) va filial xodimi buyurtmasi HQ ga tushardi.
+       */
+      requester?: {
+        id?: string;
+        roles?: string[];
+        branch_id?: string | null;
+      } | null;
     },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.lifecycleService.createExternalOrder(data.dto),
+      this.lifecycleService.createExternalOrder(data.dto, data.requester),
     );
   }
 
@@ -1091,6 +1151,45 @@ export class OrderServiceController {
         data.id,
         normalized as any,
         data.requester,
+      );
+    });
+  }
+
+  /**
+   * PATCH /orders/:id va /:id/full — FAQAT gateway'ning HTTP tahrir yo'li
+   * (fix3b; M11/CODE-03).
+   *
+   * Taqiqlangan maydon / rol / filial doirasi qoidalari (`updateFromApi`)
+   * FAQAT shu yerda qo'llanadi. `order.update`, `order.update_full` va
+   * `order.update_normalized` avvalgidek to'g'ridan-to'g'ri `updateFull` ga
+   * boradi — ularni ichki oqimlar ishlatadi va status/custody maydonlarini
+   * qonuniy yozadi: filial dispatch (registrator/menejer so'rovchisi bilan
+   * `status: 'on the road'`, `post_id`, `branch_id`), logistika (pochta
+   * yuborish/qabul, qaytarish), finance `writeOrderPayment` (so'rovchisiz
+   * `paid`/`partly_paid` + `paid_amount`). Qoidalar o'sha naqshlarga
+   * qo'yilsa bu oqimlar 400/403 bilan to'xtardi.
+   *
+   * DTO `order.update_normalized` dagi kabi normallashtiriladi (gateway xom
+   * PATCH tanasini yuboradi).
+   */
+  @MessagePattern({ cmd: 'order.update_from_api' })
+  updateFromApi(
+    @Payload()
+    data: {
+      id: string;
+      dto: Record<string, any>;
+      requester?: { id?: string; roles?: string[]; note?: string | null };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => {
+      const normalized = this.orderService.normalizeUpdatePayload(
+        data?.dto ?? {},
+      );
+      return this.lifecycleService.updateFromApi(
+        data?.id,
+        normalized,
+        data?.requester,
       );
     });
   }

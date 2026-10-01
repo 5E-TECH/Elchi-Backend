@@ -3,6 +3,7 @@ import { ClientProxy, RpcException } from '@nestjs/microservices';
 import {
   Order_status,
   Roles,
+  TASHKENT_OFFSET_MINUTES,
   endOfTashkentDay,
   parseDateOnly,
   rmqSend,
@@ -16,6 +17,18 @@ interface RequesterContext {
   id: string;
   roles?: string[];
   branch_id?: string;
+}
+
+/**
+ * Analytics javobiga chiqadigan market/kuryer obyekti (RBAC-02, CODE-08).
+ * identity'ning to'liq qatori (telefon — login, username, tariflar, maosh,
+ * komissiya, telegram_id, sozlamalar) dashboard javobiga TUSHMAYDI: FE faqat
+ * `id` va `name` ni o'qiydi (entities/dashboard normalizeTopMarket /
+ * normalizeTopCourier).
+ */
+interface AnalyticsPartyRef {
+  id: string | null;
+  name: string | null;
 }
 
 interface RevenueFilter {
@@ -159,6 +172,94 @@ export class AnalyticsServiceService {
     return new Set(
       (requester?.roles ?? []).map((role) => String(role).toLowerCase()),
     );
+  }
+
+  /** identity qatorini {id, name} ga qisqartiradi (RBAC-02, CODE-08). */
+  private toPartyRef(value: unknown): AnalyticsPartyRef | null {
+    if (!value || typeof value !== 'object') {
+      return null;
+    }
+    const row = value as { id?: unknown; name?: unknown };
+    const id = row.id;
+    return {
+      id: typeof id === 'string' || typeof id === 'number' ? String(id) : null,
+      name: typeof row.name === 'string' ? row.name : null,
+    };
+  }
+
+  /**
+   * market_stats / courier_stats qatorlaridagi `market` yoki `courier`
+   * obyektini {id, name} ga qisqartiradi; hisob maydonlari o'zgarmaydi.
+   * Massiv bo'lmagan javob (downstream xatosi → null) o'z holicha qaytadi.
+   */
+  private projectStatsRows(response: unknown, key: 'market' | 'courier') {
+    const rows = this.unwrap<any>(response as any);
+    if (!Array.isArray(rows)) {
+      return rows;
+    }
+    return rows.map((row: any) => ({
+      ...row,
+      [key]: this.toPartyRef(row?.[key]),
+    }));
+  }
+
+  /**
+   * RBAC-02: market (va market operatori) dashboard'idagi `markets` FAQAT
+   * so'rovchi marketning o'z qatori. Ilgari market_stats javobi butunligicha
+   * qaytardi — har bir market boshqa barcha marketlarning telefoni (login),
+   * username'i, tariflari va hajmini DevTools'da ko'rardi.
+   */
+  private ownMarketStatsRows(response: unknown, marketId: string) {
+    const rows = this.projectStatsRows(response, 'market');
+    if (!Array.isArray(rows) || !marketId) {
+      return [];
+    }
+    return rows.filter(
+      (row: any) => String(row?.market?.id ?? '') === marketId,
+    );
+  }
+
+  /**
+   * CODE-08 / C11: filial xodimi (MANAGER/REGISTRATOR/BRANCH) uchun o'z
+   * filialining faol kuryerlari (branch_users, role COURIER). Filial
+   * aniqlanmasa yoki branch-service javob bermasa — bo'sh to'plam
+   * (fail-closed: kompaniya bo'yicha ro'yxat chiqmaydi).
+   */
+  private async resolveBranchCourierIds(
+    requester: RequesterContext | undefined,
+  ): Promise<Set<string>> {
+    const branchId = await this.resolveRequesterBranchId(requester);
+    if (!branchId) {
+      return new Set();
+    }
+
+    const response = await rmqSend<any>(
+      this.branchClient,
+      { cmd: 'branch.user.find_by_branch' },
+      { branch_id: branchId, requester },
+      { timeoutMs: 3000, retries: 1 },
+    ).catch(() => null);
+    const rows = this.unwrap<any>(response);
+    if (!Array.isArray(rows)) {
+      return new Set();
+    }
+
+    return new Set(
+      rows
+        .filter(
+          (row: any) => String(row?.role ?? '').toUpperCase() === 'COURIER',
+        )
+        .map((row: any) => String(row?.user_id ?? '').trim())
+        .filter(Boolean),
+    );
+  }
+
+  /** `date` tushgan Toshkent oyi, 'YYYY-MM' (CODE-22: UTC oy emas). */
+  private tashkentMonthKey(date: Date): string {
+    const shifted = new Date(
+      date.getTime() + TASHKENT_OFFSET_MINUTES * 60 * 1000,
+    );
+    return `${shifted.getUTCFullYear()}-${String(shifted.getUTCMonth() + 1).padStart(2, '0')}`;
   }
 
   private sanitizeDashboardOverview(overview: any, hideFinancials: boolean) {
@@ -494,7 +595,10 @@ export class AnalyticsServiceService {
       return successRes(
         {
           myStat: this.unwrap(myStat),
-          markets: this.unwrap(markets),
+          markets: this.ownMarketStatsRows(
+            markets,
+            String(marketRequester?.id ?? ''),
+          ),
           topMarkets: this.unwrap(topMarkets),
           topOperators: this.unwrap(topOperators as any),
         },
@@ -591,8 +695,8 @@ export class AnalyticsServiceService {
     return successRes(
       {
         orders: safeOrdersOverview,
-        markets: this.unwrap(markets),
-        couriers: this.unwrap(couriers),
+        markets: this.projectStatsRows(markets, 'market'),
+        couriers: this.projectStatsRows(couriers, 'courier'),
         topMarkets: this.unwrap(topMarkets),
         topBranches: this.unwrap(topBranches),
         branchDashboard,
@@ -938,7 +1042,7 @@ export class AnalyticsServiceService {
     for (const row of histories) {
       const createdAt = this.parseDateValue(row?.createdAt);
       if (!createdAt) continue;
-      const key = `${createdAt.getUTCFullYear()}-${String(createdAt.getUTCMonth() + 1).padStart(2, '0')}`;
+      const key = this.tashkentMonthKey(createdAt);
       const delta =
         row?.operation_type === 'income'
           ? this.parseNumber(row?.amount)
@@ -976,6 +1080,25 @@ export class AnalyticsServiceService {
     filter: RevenueFilter,
   ) {
     const normalized = this.normalizeDateRangeAny(filter);
+    const roles = this.roleSet(requester);
+    const isCourier = roles.has(Roles.COURIER);
+    const isPrivileged = roles.has(Roles.SUPERADMIN) || roles.has(Roles.ADMIN);
+
+    // CODE-08 / C11: menejer, registrator (va BRANCH) kompaniya bo'yicha
+    // hisobotni EMAS, faqat o'z filiali kuryerlarini ko'radi. Ruxsat to'plami
+    // og'ir hisobdan OLDIN olinadi: filial aniqlanmasa — darhol bo'sh javob
+    // (fail-closed), N+1 hisob umuman boshlanmaydi.
+    const branchCourierIds =
+      !isCourier && !isPrivileged
+        ? await this.resolveBranchCourierIds(requester)
+        : null;
+    if (branchCourierIds && branchCourierIds.size === 0) {
+      return successRes(
+        { range: normalized, items: [], ranking: [] },
+        200,
+        'Courier report',
+      );
+    }
 
     // Cache key intentionally ignores requester — the heavy N+1 work is
     // role-independent (we return the same items[]/ranking[]; only the
@@ -1026,7 +1149,9 @@ export class AnalyticsServiceService {
 
           const detailData = this.unwrap<any>(detail);
           return {
-            courier: row?.courier ?? null,
+            // CODE-08: identity'ning to'liq kuryer qatori (telefon, maosh,
+            // tariflar) emas — faqat {id, name}.
+            courier: this.toPartyRef(row?.courier),
             deliveredOrders: this.parseNumber(row?.soldOrders),
             cancelledOrders: this.parseNumber(
               detailData?.canceledOrders,
@@ -1057,7 +1182,7 @@ export class AnalyticsServiceService {
       });
     }
 
-    if (this.roleSet(requester).has(Roles.COURIER)) {
+    if (isCourier) {
       const requesterId = requester?.id ? String(requester.id) : '';
       return successRes(
         {
@@ -1066,6 +1191,22 @@ export class AnalyticsServiceService {
             (row) => String(row?.courier?.id ?? '') === requesterId,
           ),
           ranking: topCouriersData,
+        },
+        200,
+        'Courier report',
+      );
+    }
+
+    if (branchCourierIds) {
+      return successRes(
+        {
+          range: normalized,
+          items: items.filter((row) =>
+            branchCourierIds.has(String(row?.courier?.id ?? '')),
+          ),
+          ranking: topCouriersData.filter((row) =>
+            branchCourierIds.has(String(row?.courier_id ?? '')),
+          ),
         },
         200,
         'Courier report',

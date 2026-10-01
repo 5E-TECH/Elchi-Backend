@@ -45,8 +45,10 @@ export class PartnerApiKeyGuard implements CanActivate {
       headers: Record<string, unknown>;
       partner?: PartnerPrincipal;
       /**
-       * `main.ts` da `trust proxy` yoqilgan, shuning uchun `req.ip` tunnel
-       * konteyneri emas, HAQIQIY mijoz IP'sini beradi.
+       * ⚠️ `main.ts` da `trust proxy` TO'LIQ yoqilgan: `req.ip` —
+       * `X-Forwarded-For` ning eng chap qiymati, uni esa MIJOZ O'ZI yozadi.
+       * Shu sababli allowlist qarori `CF-Connecting-IP` ga tayanadi
+       * (`resolveClientIp`); `req.ip` faqat sarlavha bo'lmasa (lokal).
        */
       ip?: string;
       ips?: string[];
@@ -89,8 +91,13 @@ export class PartnerApiKeyGuard implements CanActivate {
      * boshqa choralar ko'rishni to'sadi.
      *
      * Ro'yxat bo'sh bo'lsa cheklov yo'q (mavjud hamkorlar buzilmasin).
+     *
+     * ⚠️ fix3 RBAC-12: ilgari `request.ip` ishlatilardi — sizib chiqqan kalit
+     * egasi `X-Forwarded-For: <ruxsat etilgan IP>` yuborib cheklovni
+     * aylanib o'tardi. Endi `ClientIpThrottlerGuard.getTracker` bilan AYNI
+     * manba: Cloudflare har doim o'zi qayta yozadigan `CF-Connecting-IP`.
      */
-    const clientIp = request.ip ?? request.ips?.[0];
+    const clientIp = this.resolveClientIp(request);
     if (!isIpAllowed(clientIp, partner.ip_allowlist)) {
       throw new ForbiddenException(
         `IP ruxsat etilmagan: ${normalizeIp(clientIp) || 'aniqlanmadi'}`,
@@ -99,6 +106,24 @@ export class PartnerApiKeyGuard implements CanActivate {
 
     request.partner = { id: partner.id, name: partner.name };
     return true;
+  }
+
+  /**
+   * Ishonchli mijoz IP'si: `CF-Connecting-IP` (Cloudflare Tunnel — yagona
+   * tashqi kirish, sarlavhani mijoz soxtalashtira olmaydi), bo'lmasa `req.ip`.
+   */
+  private resolveClientIp(request: {
+    headers?: Record<string, unknown>;
+    ip?: string;
+    ips?: string[];
+  }): string | undefined {
+    const raw: unknown = request.headers?.['cf-connecting-ip'];
+    const value: unknown = Array.isArray(raw) ? (raw as unknown[])[0] : raw;
+    const trusted = typeof value === 'string' ? value.trim() : '';
+    if (trusted) {
+      return trusted;
+    }
+    return request.ip ?? request.ips?.[0];
   }
 
   private extractApiKey(request: {

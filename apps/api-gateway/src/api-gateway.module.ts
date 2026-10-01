@@ -68,10 +68,11 @@ import type { StringValue } from 'ms';
     ThrottlerModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        // Global per-IP rate limit. Sensitive endpoints (login/refresh)
-        // override this with @Throttle({ default: { ... } }) to a stricter
-        // value (AUTH_THROTTLE_LIMIT). Health endpoints are exempted via
-        // @SkipThrottle().
+        // Global per-IP rate limit (har route o'z hisoblagichi bilan).
+        // Auth endpointlari @Throttle({ default: { ... } }) bilan o'z
+        // qiymatini oladi: login — AUTH_THROTTLE_LIMIT (sukut 30/min),
+        // refresh — AUTH_REFRESH_THROTTLE_LIMIT (sukut 60/min) (fix3 C10).
+        // Health endpoints are exempted via @SkipThrottle().
         throttlers: [
           {
             name: 'default',

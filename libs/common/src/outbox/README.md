@@ -14,8 +14,19 @@
 1. Tranzaksiya ichida ikki insert: `orders` + `outbox_events` (status=pending).
 2. Tranzaksiya commit bo'lsa, ikkalasi yoziladi. Rollback bo'lsa, ikkalasi yo'qoladi.
 3. Background `OutboxPublisher` har 1 sekundda pending event'larni o'qib RMQ'ga uzatadi.
-4. Muvaffaqiyatli yetkazilsa → status='published'. Fail bo'lsa → exponential backoff.
-5. 10 marta fail → status='failed' (poison, operator inspect qiladi).
+4. Muvaffaqiyatli yetkazilsa → status='published'. Fail bo'lsa → exponential backoff
+   (1, 2, 4 … s, yuqori chegara 60 s).
+5. Oddiy hodisa 10 marta fail → status='failed' (poison, operator inspect qiladi).
+6. **PUL hodisalari hech qachon `failed` bo'lmaydi** (audit M8): `finance.*`
+   (sotuv oyoqlari, moliyaviy balans, operator daromadi) va
+   `order.settlement.advance` 60 s lik chegarada CHEKSIZ qayta uriniladi —
+   maqsad servis 5 daqiqadan ko'p ishlamasa ham daftar kassaga yetib oladi.
+   Ro'yxat: `DEFAULT_PERSISTENT_OUTBOX_PATTERNS` (`tokens.ts`), modulda
+   `OutboxModule.forService({ targets, options: { persistentPatterns } })`
+   bilan almashtiriladi (`[]` — eski xatti-harakat).
+7. Kamida 10 marta yiqilib hamon `pending` turgan hodisa "STUCK" deb har
+   daqiqada error log'ga, soni o'zgarganda Sentry'ga chiqadi
+   (`stuckAlertAttempts`).
 
 ## Ulash
 
@@ -85,6 +96,38 @@ Cron ishga tushirish uchun har serviceda alohida qo'shing (yoki @nestjs/schedule
 -- Kelmayotgan eventlar
 SELECT * FROM outbox_events WHERE status = 'pending' AND attempts > 3;
 
+-- Qotib qolgan PUL eventlari (cheksiz qayta urinilmoqda — maqsad servisni tekshiring)
+SELECT id, target, pattern, attempts, last_error, scheduled_at
+FROM outbox_events WHERE status = 'pending' AND attempts >= 10 ORDER BY id;
+
 -- Poison eventlar (operator tekshirsin)
 SELECT * FROM outbox_events WHERE status = 'failed';
 ```
+
+## Qayta o'ynash (replay)
+
+`failed` hodisa o'z-o'zidan qayta yuborilmaydi. Sababi bartaraf etilgach
+(maqsad servis tiklandi, ma'lumot tuzatildi) — tekshirib, qayta navbatga
+qo'ying. Kod orqali: `OutboxService.requeueFailed({ ids?, patterns? })`.
+SQL orqali (har servis o'z sxemasida, masalan `order_schema` /
+`finance_schema`):
+
+```sql
+-- 1) Avval ko'ring: nima va nega yiqilgan
+SELECT id, target, pattern, attempts, last_error, payload
+FROM outbox_events WHERE status = 'failed' ORDER BY id;
+
+-- 2) Tanlanganlarni qayta navbatga qo'ying (publisher ~1 s ichida oladi)
+UPDATE outbox_events
+SET status = 'pending', attempts = 0, scheduled_at = NOW()
+WHERE status = 'failed' AND id IN (/* tekshirilgan id'lar */);
+```
+
+⚠️ Hodisa qo'lda (SQL bilan) allaqachon qo'llangan bo'lsa uni qayta
+o'ynamang. Qabul qiluvchilar takroriy yetkazishga chidamli
+(`finance.cashbox.update_balance` dedup kaliti, `order.settlement.advance`
+`request_id` + "applied" belgisi), lekin qo'lda kiritilgan tuzatishni ular
+bilmaydi.
+
+`order.settlement.advance` uchun ilgari yiqilgan idempotency kaliti endi
+o'z-o'zidan qayta egallanadi (`reclaimFailed`) — alohida tozalash kerak emas.

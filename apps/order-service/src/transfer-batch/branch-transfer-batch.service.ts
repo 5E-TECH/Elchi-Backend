@@ -2392,6 +2392,7 @@ export class BranchTransferBatchService {
         select: [
           'id',
           'status',
+          'region_id',
           'current_batch_id',
           'holder_type',
           'holder_branch_id',
@@ -2467,13 +2468,31 @@ export class BranchTransferBatchService {
       const priorHolderBranchId = order.holder_branch_id ?? null;
       const priorHolderCourierId = order.holder_courier_id ?? null;
 
+      /**
+       * ⚠️ fix3b (CODE-11) — TRANZIT BUYURTMA `RECEIVED` EMAS, `NEW`.
+       *
+       * Butun paketni qabul qilish (`receiveBranchTransferBatch`) paket hududi
+       * (`target_region_id`) dagi buyurtmani RECEIVED, boshqa hududnikini
+       * (tranzit) NEW qiladi: u bu filialda faqat qayta jo'natilguncha turadi.
+       * Skan yo'li esa HAR DOIM RECEIVED qilardi — tranzit buyurtma shu
+       * filial kuryeriga yetkazishga chiqib ketardi. Endi xuddi o'sha qoida:
+       * saqlanish (custody) filialga o'tadi, holat NEW, javob esa
+       * `received: false, reason: 'transit'` — chaqiruvchi (logistika skani)
+       * buyurtmani kuryerga BIRIKTIRMAYDI.
+       */
+      const targetRegionId = String(batch.target_region_id ?? '').trim();
+      const isTransit =
+        Boolean(targetRegionId) &&
+        String(order.region_id ?? '').trim() !== targetRegionId;
+      const nextStatus = isTransit ? Order_status.NEW : Order_status.RECEIVED;
+
       await orderRepo
         .createQueryBuilder()
         .update(Order)
         .set({
           current_batch_id: null,
           branch_id: destinationBranchId,
-          status: Order_status.RECEIVED,
+          status: nextStatus,
           holder_type: OrderHolderType.BRANCH,
           holder_branch_id: destinationBranchId,
           holder_courier_id: null,
@@ -2488,18 +2507,29 @@ export class BranchTransferBatchService {
         .andWhere('"current_batch_id" = :batchId', { batchId })
         .execute();
 
-      if (priorStatus !== Order_status.RECEIVED) {
+      if (priorStatus !== nextStatus) {
         await this.custody.createTrackingEvent(
-          {
-            order_id: orderId,
-            from_status: priorStatus,
-            to_status: Order_status.RECEIVED,
-            changed_by: requesterId,
-            changed_by_role: requesterRole,
-            action: 'branch_batch_received_by_scan',
-            description: `Kuryer skani orqali filialga qabul qilindi (paket #${batchId})`,
-            note: `Batch #${batchId} — skan orqali qabul`,
-          },
+          isTransit
+            ? {
+                order_id: orderId,
+                from_status: priorStatus,
+                to_status: Order_status.NEW,
+                changed_by: requesterId,
+                changed_by_role: requesterRole,
+                action: 'branch_batch_requeued',
+                description: `Pochta #${batchId} tranzit uchun qayta navbatga qo'yildi (kuryer skani)`,
+                note: `Batch #${batchId} — skan, tranzit buyurtma qayta navbatga qo'yildi`,
+              }
+            : {
+                order_id: orderId,
+                from_status: priorStatus,
+                to_status: Order_status.RECEIVED,
+                changed_by: requesterId,
+                changed_by_role: requesterRole,
+                action: 'branch_batch_received_by_scan',
+                description: `Kuryer skani orqali filialga qabul qilindi (paket #${batchId})`,
+                note: `Batch #${batchId} — skan orqali qabul`,
+              },
           trackingRepo,
         );
       }
@@ -2554,9 +2584,13 @@ export class BranchTransferBatchService {
           batch_id: batchId,
           user_id: requesterId,
           action: BranchTransferBatchAction.RECEIVED,
-          notes: batchClosed
-            ? `Kuryer ${requesterName} skan orqali oxirgi buyurtmani qabul qildi — paket yopildi`
-            : `Kuryer ${requesterName} skan orqali 1 ta buyurtmani qabul qildi (paketda ${remaining} ta qoldi)`,
+          notes:
+            (batchClosed
+              ? `Kuryer ${requesterName} skan orqali oxirgi buyurtmani qabul qildi — paket yopildi`
+              : `Kuryer ${requesterName} skan orqali 1 ta buyurtmani qabul qildi (paketda ${remaining} ta qoldi)`) +
+            (isTransit
+              ? ` — #${orderId} tranzit, filialda qayta navbatga qo'yildi`
+              : ''),
         }),
       );
 
@@ -2567,15 +2601,36 @@ export class BranchTransferBatchService {
         entity_id: orderId,
         action: ActivityAction.STATUS_CHANGE,
         old_value: { status: priorStatus },
-        new_value: { status: Order_status.RECEIVED },
+        new_value: { status: nextStatus },
         ...this.custody.auditActor({ id: requesterId }),
         metadata: {
           batch_id: batchId,
           branch_id: destinationBranchId,
           via: 'courier_scan',
           batch_closed: batchClosed,
+          ...(isTransit
+            ? { transit: true, target_region_id: targetRegionId }
+            : {}),
         },
       });
+
+      if (isTransit) {
+        // Filialga qabul qilindi, lekin kuryerga EMAS: `received: false`
+        // chaqiruvchini (logistika `scanAssignOrder`) biriktirishdan to'xtatadi.
+        return successRes(
+          {
+            received: false,
+            reason: 'transit',
+            order_id: orderId,
+            batch_id: batchId,
+            branch_id: destinationBranchId,
+            status: Order_status.NEW,
+            batch_closed: batchClosed,
+          },
+          200,
+          'Tranzit buyurtma filialga qabul qilindi (NEW) — kuryerga biriktirilmaydi',
+        );
+      }
 
       return successRes(
         {

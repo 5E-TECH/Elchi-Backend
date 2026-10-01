@@ -4,6 +4,7 @@ import {
   MessagePattern,
   Payload,
   RmqContext,
+  RpcException,
 } from '@nestjs/microservices';
 import { RmqService, executeAndAck } from '@app/common';
 import { LogisticsServiceService } from './logistics-service.service';
@@ -13,15 +14,35 @@ import { UpdateDistrictNameDto } from './dto/update-district-name.dto';
 import { UpdateDistrictSatoCodeDto } from './dto/update-district-sato-code.dto';
 import { CreateRegionDto } from './dto/create-region.dto';
 import { UpdateRegionDto } from './dto/update-region.dto';
-import { successRes } from '../../../libs/common/helpers/response';
-import { CreatePostDto } from './dto/create-post.dto';
-import { SendPostDto } from './dto/send-post.dto';
+import { errorRes, successRes } from '../../../libs/common/helpers/response';
 import { ReceivePostDto } from './dto/receive-post.dto';
 import { PostIdDto } from './dto/post-id.dto';
 import { Post_status } from '@app/common';
 import type { ActivityLogQuery } from '@app/common';
 import { DistrictResolverService } from './district-resolver/district-resolver.service';
 import type { DistrictResolveByTextPayload } from './district-resolver/district-resolver.types';
+
+/**
+ * CODE-12 — eski, tekshiruvsiz pochta buyruqlari ishga tushirishda O'CHIQ.
+ *
+ * - `logistics.post.create` — chaqiruvchisi yo'q; buyurtmalarni holat
+ *   tekshiruvisiz RECEIVED qilardi;
+ * - `logistics.post.update` (sendPost) — pochtani filial tekshiruvisiz istalgan
+ *   kuryerga berardi va tanlanmagan buyurtmalarga RECEIVED yozardi;
+ * - `logistics.post.reassign` — faqat post.courier_id ni almashtirardi,
+ *   buyurtmalar custody'si eski kuryerda qolardi.
+ *
+ * Frontend ularni chaqirmaydi. Ish oqimlari: filialga —
+ * POST /branches/posts/:postId/dispatch, kuryerga — POST
+ * /orders/assign-to-courier yoki skan. Servis metodlari o'zgarmagan: qayta
+ * yoqish = shu handlerlarni qaytarish.
+ */
+export const LEGACY_POST_COMMAND_DISABLED_MESSAGE =
+  "Bu eski pochta amali o'chirilgan (buyurtma custody'sini tekshiruvsiz o'zgartirardi). Pochtani filialga POST /branches/posts/:postId/dispatch, kuryerga esa POST /orders/assign-to-courier yoki skan orqali bering";
+
+const rejectLegacyPostCommand = (): never => {
+  throw new RpcException(errorRes(LEGACY_POST_COMMAND_DISABLED_MESSAGE, 410));
+};
 
 @Controller()
 export class LogisticsServiceController {
@@ -54,14 +75,10 @@ export class LogisticsServiceController {
   }
 
   // --- Post ---
+  // CODE-12: o'chiq (yuqoridagi LEGACY_POST_COMMAND_DISABLED_MESSAGE ga qarang).
   @MessagePattern({ cmd: 'logistics.post.create' })
-  createPost(
-    @Payload() data: { dto: CreatePostDto },
-    @Ctx() context: RmqContext,
-  ) {
-    return this.executeAndAck(context, () =>
-      this.logisticsService.createPost(data.dto),
-    );
+  createPost(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, rejectLegacyPostCommand);
   }
 
   @MessagePattern({ cmd: 'logistics.post.find_all' })
@@ -310,29 +327,16 @@ export class LogisticsServiceController {
     );
   }
 
+  // CODE-12: o'chiq (sendPost — filial/holat tekshiruvisiz).
   @MessagePattern({ cmd: 'logistics.post.update' })
-  updatePost(
-    @Payload()
-    data: {
-      id: string;
-      dto: SendPostDto;
-      requester?: { id: string; roles?: string[] };
-    },
-    @Ctx() context: RmqContext,
-  ) {
-    return this.executeAndAck(context, () =>
-      this.logisticsService.sendPost(data.id, data.dto, data.requester),
-    );
+  updatePost(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, rejectLegacyPostCommand);
   }
 
+  // CODE-12: o'chiq (faqat post.courier_id almashardi, custody eski kuryerda).
   @MessagePattern({ cmd: 'logistics.post.reassign' })
-  reassignPost(
-    @Payload() data: { id: string; dto: { courierId: string } },
-    @Ctx() context: RmqContext,
-  ) {
-    return this.executeAndAck(context, () =>
-      this.logisticsService.reassignCourier(data.id, data.dto.courierId),
-    );
+  reassignPost(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, rejectLegacyPostCommand);
   }
 
   @MessagePattern({ cmd: 'logistics.post.receive' })
@@ -594,11 +598,22 @@ export class LogisticsServiceController {
 
   @MessagePattern({ cmd: 'logistics.district.update' })
   updateDistrict(
-    @Payload() payload: { id: string; dto: UpdateDistrictDto },
+    @Payload()
+    payload: {
+      id: string;
+      dto: UpdateDistrictDto;
+      requester?: { id?: string; roles?: string[] };
+    },
     @Ctx() context: RmqContext,
   ) {
+    const requester = payload?.requester
+      ? {
+          id: String(payload.requester.id ?? ''),
+          roles: payload.requester.roles ?? [],
+        }
+      : undefined;
     return this.executeAndAck(context, () =>
-      this.logisticsService.updateDistrict(payload.id, payload.dto),
+      this.logisticsService.updateDistrict(payload.id, payload.dto, requester),
     );
   }
 

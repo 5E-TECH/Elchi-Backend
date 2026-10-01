@@ -19,6 +19,13 @@ interface TelegramUpdate {
   };
 }
 
+/**
+ * `/id` yoki guruhdagi `/id@<bot_username>` (hujjat: telegram-notification-bot.md).
+ * Admin "Telegram guruhlari" formasiga (market + Group ID + tur) kerakli
+ * chat id'ni shu bilan oladi — u faqat guruh a'zolariga o'z chat id'sini aytadi.
+ */
+const GROUP_ID_COMMAND_RE = /^\/id(?:@\w+)?$/i;
+
 @Injectable()
 export class NotificationBotUpdateService
   implements OnModuleInit, OnModuleDestroy
@@ -110,11 +117,21 @@ export class NotificationBotUpdateService
 
     const groupId = String(chatId);
 
+    if (GROUP_ID_COMMAND_RE.test(text)) {
+      await this.notificationService.sendDirectToGroup({
+        group_id: groupId,
+        message: `Group ID: ${groupId}`,
+      });
+      return;
+    }
+
+    // CODE-02: ko'rsatmalarda market id bo'yicha ulash formati
+    // (group_token-<marketId>) endi YO'Q — ulash faqat maxfiy token bilan.
     if (text === '/start') {
       await this.notificationService.sendDirectToGroup({
         group_id: groupId,
         message:
-          "Salom. Guruhni ulash uchun 'group_token-*' yuboring. Masalan: group_token-2 yoki group_token-2-create.",
+          "Salom. Guruhni ulash uchun admin bergan maxfiy market tokenini (group_token-…) yuboring. Bekor qilingan buyurtmalar guruhi uchun token oxiriga -cancel qo'shing.",
       });
       return;
     }
@@ -123,7 +140,7 @@ export class NotificationBotUpdateService
       await this.notificationService.sendDirectToGroup({
         group_id: groupId,
         message:
-          'Mavjud komandalar: /start, /help. Ulanish uchun: group_token-<marketId> yoki group_token-<marketId>-<group_type>.',
+          'Mavjud komandalar: /start, /help, /id (guruh ID si). Ulanish uchun: admin bergan maxfiy market tokeni (group_token-…); bekor qilinganlar guruhi uchun <token>-cancel. Ulangan guruhni almashtirish faqat admin orqali.',
       });
       return;
     }

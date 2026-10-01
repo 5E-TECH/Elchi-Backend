@@ -9,6 +9,7 @@ import { OrderHolderType, Order_source } from '../entities/order.entity';
 import { OrderTracking } from '../entities/order-tracking.entity';
 import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
 import { OrderSettlement } from '../entities/order-settlement.entity';
+import { OrderSettlementCarry } from '../entities/order-settlement-carry.entity';
 import { BranchTransferBatch } from '../entities/branch-transfer-batch.entity';
 import { BranchTransferBatchItem } from '../entities/branch-transfer-batch-item.entity';
 import { MarketCancelledHandoverSession } from '../entities/market-cancelled-handover-session.entity';
@@ -42,9 +43,12 @@ import {
   mapInitialStatusForTracking as mapInitialOrderStatusForTracking,
 } from '../domain/order-status.machine';
 import {
+  computeRollbackCourierCashboxDelta,
   computeSellProfit,
   computeTariffShortfall,
+  isCourierRemittedSettlement,
   resolveOrderTariff,
+  resolveRollbackReversalActor,
   resolveSaleActorShare as resolveSaleActorShareAmount,
 } from '../domain/order-money';
 import { OrderLookupService } from '../lookup/order-lookup.service';
@@ -61,6 +65,137 @@ const CANCELLED_HANDOVER_MANUAL_REASONS = new Set([
   'QR namlangan yoki xiralashgan',
 ]);
 const CANCELLED_HANDOVER_MANUAL_REASON_MAX_LENGTH = 80;
+
+/**
+ * BUYURTMA YARATISHDA FAQAT SUPERADMIN/ADMIN BERA OLADIGAN MAYDONLAR
+ * (fix3 C6; RBAC-05, LC-07, LC-14). Gateway'dagi `CREATE_LIFECYCLE_FIELDS`
+ * bilan AYNI ro'yxat — bu himoya chuqurligi.
+ *
+ * Holat va saqlash (custody) zanjiri faqat hayot sikli amallari (HQ qabuli,
+ * jo'natish, skan, sotish) orqali o'zgaradi. Market yoki filial xodimi
+ * `status:'received'` / `courier_id` / `post_id` yuborib HQ qabulini chetlab
+ * o'tardi, `status:'sold'` + rollback esa kassaga soxta chiqim yozdirardi.
+ * Boshqa yaratuvchilar uchun bu maydonlar JIMGINA olib tashlanadi: buyurtma
+ * sukutdagi NEW, kuryersiz va pochtasiz yaratiladi.
+ */
+const CREATE_LIFECYCLE_FIELDS = [
+  'status',
+  'post_id',
+  'courier_id',
+  'current_batch_id',
+  'assigned_at',
+  'return_reason',
+  'sold_at',
+  'canceled_post_id',
+  'holder_type',
+  'holder_branch_id',
+  'holder_courier_id',
+  'home_branch_id',
+  'parent_order_id',
+  'to_be_paid',
+  'paid_amount',
+  /**
+   * fix3b: mijoz OLDINDAN to'lagan qism (hamkor prepaid posilkasi). Kuryer
+   * shuncha kam naqd yig'adi (`resolveCollectibleAmount`), ya'ni bu pul
+   * maydoni — faqat SUPERADMIN/ADMIN, hamkor (tizim, superadmin roli) va
+   * so'rovchisiz ichki chaqiruvlardan. Market va filial xodimida olib
+   * tashlanadi: aks holda market "oldindan to'langan" deb kuryerni naqddan
+   * ozod qilib, marketga qarzni yo'qotardi.
+   */
+  'paid_online_amount',
+  'qr_code_token',
+  'operator_id',
+] as const;
+
+/**
+ * Joylashuv maydonlari: market (va uning operatori/boti) o'z buyurtmasini
+ * istalgan filialga yoki `source:'branch'` bilan SA/admin "Yangi buyurtmalar"
+ * ro'yxatidan yashira olmasin. Filial xodimida esa gateway ularni o'zi
+ * majburan qo'yadi (o'z filiali, `source='branch'`).
+ */
+const CREATE_PLACEMENT_FIELDS = ['branch_id', 'source'] as const;
+
+/**
+ * PATCH /orders/:id orqali HECH KIM (superadmin ham) o'zgartira olmaydigan
+ * maydonlar (fix3 C6; M11, CODE-03). Birinchi to'rttasi gateway'dagi
+ * `PATCH_FORBIDDEN_FIELDS` bilan AYNI; qolganlari gateway DTO'sida umuman yo'q
+ * (whitelist ularni 400 bilan rad etadi) — bu yerda himoya chuqurligi uchun.
+ *
+ * Holat faqat sotish / bekor qilish / qaytarish amallari orqali o'zgaradi:
+ * PATCH bilan WAITING→SOLD bo'lsa kassa oyoqlari va hisob-kitob qatori
+ * yozilmasdi, SOLD→WAITING esa faqat foydani teskari qilardi. Sotilgan
+ * buyurtmada market almashsa pul eski marketda qolib, rollback yangisini
+ * teskari yozardi.
+ */
+const API_UPDATE_FORBIDDEN_FIELDS = [
+  'status',
+  'market_id',
+  'to_be_paid',
+  'paid_amount',
+  'courier_id',
+  'branch_id',
+  'current_batch_id',
+  'assigned_at',
+  'canceled_post_id',
+  'sold_at',
+  'return_requested',
+  'return_reason',
+  'market_tariff',
+  'courier_tariff',
+  'courier_share',
+  'branch_share',
+  'branch_cashbox_amount',
+  'sale_collectible_amount',
+  'extra_cost',
+  'proof_files',
+  'external_id',
+] as const;
+
+/**
+ * PATCH'da faqat SUPERADMIN o'zgartira oladigan maydonlar (CODE-03) —
+ * gateway'dagi `PATCH_SUPERADMIN_ONLY_FIELDS` bilan AYNI: pochta, mijoz, QR
+ * yorlig'i va manba saqlash zanjiri va ro'yxatlarga ta'sir qiladi.
+ */
+const API_UPDATE_SUPERADMIN_ONLY_FIELDS = [
+  'post_id',
+  'customer_id',
+  'qr_code_token',
+  'source',
+] as const;
+
+/** `value` dan `fields` olib tashlangan nusxa (asl obyekt o'zgarmaydi). */
+function omitFields<T extends object>(value: T, fields: readonly string[]): T {
+  const copy = { ...value } as Record<string, unknown>;
+  for (const key of fields) {
+    delete copy[key];
+  }
+  return copy as T;
+}
+
+/** `dto` da haqiqatan yuborilgan (undefined emas) maydonlar. */
+function presentFields(dto: object, fields: readonly string[]): string[] {
+  const record = dto as Record<string, unknown>;
+  return fields.filter((key) => record[key] !== undefined);
+}
+
+/** Pul summasi tiyinda (numeric(14,2) — suzuvchi nuqta qoldig'isiz solishtirish). */
+const toTiyin = (value: unknown): number =>
+  Math.round((Number(value) || 0) * 100);
+
+/**
+ * fix3b (M6) — superadmin kuryer topshirib bo'lgan (COURIER_SETTLED) sotuvni
+ * qaytarganda kuryerning `courier_to_branch` qoldig'iga yoziladigan kredit.
+ * Tranzaksiyadan OLDIN tekshirilib yig'iladi, ichida esa qulf ostida qayta
+ * tasdiqlanadi (`creditRemittedCourierCarry`).
+ */
+interface RemittedCourierCredit {
+  courierId: string;
+  branchId: string;
+  /** Qatorning `courier_amount` i — musbat, so'm. */
+  amount: number;
+  /** Tekshirilgan qator holati (qulf ostida o'zgarmagan bo'lishi shart). */
+  status: SettlementStatus;
+}
 
 /**
  * Order lifecycle: the write/mutation core (create/receive/sell/partly-sell/
@@ -1270,6 +1405,47 @@ export class OrderLifecycleService {
     return roles[0] ? String(roles[0]).toLowerCase() : null;
   }
 
+  /**
+   * Tasdiq so'rovining PULGA ta'sir qiladigan "barmoq izi" (audit M3): amal,
+   * xarajat summasi va amalning summalari — qisman sotuvda yangi narx va
+   * qatorlar, sotuvda `paidAmount`. Izoh va dalil fayllari kirmaydi: ular
+   * bajariladigan pul amalini o'zgartirmaydi.
+   */
+  private extraCostRequestFingerprint(
+    action: ExtraCostApprovalAction,
+    amount: unknown,
+    payload: Record<string, unknown> | null | undefined,
+  ): string {
+    const source = payload ?? {};
+    const toNumberOrNull = (value: unknown): number | null =>
+      value === undefined || value === null || value === ''
+        ? null
+        : Number(value);
+    const toKeyPart = (value: unknown): string =>
+      typeof value === 'string' || typeof value === 'number'
+        ? String(value)
+        : '';
+    const items = Array.isArray(source.order_item_info)
+      ? (source.order_item_info as Array<Record<string, unknown> | null>)
+          .map((item) =>
+            [
+              toKeyPart(item?.order_item_id),
+              toKeyPart(item?.product_id),
+              Number(item?.quantity ?? 0),
+            ].join(':'),
+          )
+          .sort()
+      : [];
+    return JSON.stringify({
+      action,
+      amount: Number(amount ?? 0),
+      totalPrice:
+        action === 'partly_sell' ? toNumberOrNull(source.totalPrice) : null,
+      paidAmount: action === 'sell' ? toNumberOrNull(source.paidAmount) : null,
+      items: action === 'partly_sell' ? items : [],
+    });
+  }
+
   private async requestExtraCostApprovalIfNeeded(params: {
     order: Order;
     requester: { id: string; roles?: string[]; branch_id?: string | null };
@@ -1295,14 +1471,45 @@ export class OrderLifecycleService {
       order: { createdAt: 'DESC' },
     });
     if (existing) {
-      return successRes(
-        {
-          approval_required: true,
-          approval: this.serializeExtraCostApproval(existing),
-        },
-        202,
-        "Market tasdig'i kutilmoqda",
-      );
+      /**
+       * ⚠️ ESKI SO'ROV FAQAT AYNAN SHU SO'ROV BO'LSA QAYTARILADI (audit M3).
+       *
+       * Ilgari kutilayotgan so'rov faqat `order_id` bo'yicha topilib, yangi
+       * so'rov (boshqa amal yoki summa) jimgina tashlab yuborilardi. Kuryer
+       * SOTISH (xarajat 5 000) so'rovidan keyin mijoz rad etib BEKOR (xarajat
+       * 3 000) yuborsa, unga eski #1 qaytardi; market #1 ni tasdiqlaganda
+       * `sellOrder` bajarilardi — qaytayotgan tovar uchun soxta sotuv
+       * (kuryerga yig'ilmagan naqd qarzi, marketga kirim). Teskarisi ham:
+       * bekor kutilayotganda sotuv so'rovi BEKORni bajartirardi.
+       *
+       * Endi: amal, summa va amalning pul maydonlari bir xil bo'lsa — takroriy
+       * yuborish, eski so'rov qaytadi. Farq qilsa — kuryerning OXIRGI niyati
+       * ustun: eski so'rov yopiladi (`rejected`, izoh bilan) va yangisi
+       * ochiladi. Market faqat oxirgi so'rovni ko'radi va tasdiqlaydi.
+       */
+      const isSameRequest =
+        this.extraCostRequestFingerprint(
+          existing.action,
+          existing.amount,
+          existing.operation_payload,
+        ) === this.extraCostRequestFingerprint(action, extraCost, dto);
+      if (isSameRequest) {
+        return successRes(
+          {
+            approval_required: true,
+            approval: this.serializeExtraCostApproval(existing),
+          },
+          202,
+          "Market tasdig'i kutilmoqda",
+        );
+      }
+      existing.status = 'rejected';
+      existing.decided_by_user_id = String(requester.id);
+      existing.decided_at = new Date();
+      existing.decision_comment =
+        `Yangi so'rov bilan almashtirildi (${action}, ${extraCost} so'm) — ` +
+        `eski ${existing.action} so'rovi bekor qilindi`;
+      await this.extraCostApprovalRepo.save(existing);
     }
 
     const approval = this.extraCostApprovalRepo.create({
@@ -1763,6 +1970,140 @@ export class OrderLifecycleService {
     return normalized === '0' ? '' : normalized;
   }
 
+  /** SUPERADMIN yoki ADMIN (tizim darajasidagi xodim). */
+  private isSystemPrivilegedRequester(
+    requester: { roles?: string[] } | null | undefined,
+  ): boolean {
+    return (
+      this.hasRole(requester ?? undefined, Roles.SUPERADMIN) ||
+      this.hasRole(requester ?? undefined, Roles.ADMIN)
+    );
+  }
+
+  /**
+   * Posilka KURYER QO'LIDAMI (custody). `'0'` — tayinlanmagan pochta
+   * sentineli, kuryer emas.
+   */
+  private isHeldByCourier(order: {
+    holder_type?: OrderHolderType | string | null;
+    holder_courier_id?: string | null;
+    courier_id?: string | null;
+  }): boolean {
+    return (
+      String(order.holder_type ?? '').toUpperCase() ===
+        String(OrderHolderType.COURIER) ||
+      Boolean(this.normalizeCourierId(order.holder_courier_id)) ||
+      Boolean(this.normalizeCourierId(order.courier_id))
+    );
+  }
+
+  /**
+   * ⚠️ KURYERDAGI BUYURTMANI MENEJER SOTMAYDI (audit LC-04).
+   *
+   * Menejer sotuvining pul modeli "kuryer yo'q, naqd filialning o'zida":
+   * moliyaviy aktyor menejer, kuryer oyog'i yozilmaydi, butun naqd FILIAL
+   * kassasiga kirim bo'ladi va settlement qatori darhol COURIER_SETTLED.
+   * Posilka (va mijoz naqdi) kuryer qo'lida bo'lsa bu noto'g'ri: daftar
+   * kuryerda yo'q qarzni, filial kassasida esa menejerda yo'q naqdni
+   * ko'rsatardi, kuryer o'z ulushini yo'qotardi, filial → HQ topshirishi
+   * esa menejerda yo'q pulni kutardi. Bunday buyurtmani kuryerning o'zi
+   * sotadi (kuryer yo'li — kuryer kassasi va qarzi bilan).
+   */
+  private assertManagerSaleNotCourierHeld(
+    isManagerRequester: boolean,
+    order: {
+      holder_type?: OrderHolderType | string | null;
+      holder_courier_id?: string | null;
+      courier_id?: string | null;
+    },
+  ): void {
+    if (isManagerRequester && this.isHeldByCourier(order)) {
+      this.badRequest(
+        "Bu buyurtma kuryer qo'lida — uni kuryerning o'zi sotadi. " +
+          'Menejer faqat filialda turgan buyurtmani sota oladi',
+      );
+    }
+  }
+
+  /**
+   * FILIAL XODIMI DOIRASI (fix3 C6/C13; CODE-03, CODE-09): buyurtma so'rovchi
+   * filialiga tegishlimi. Doira gateway bilan AYNI — `branch_id`,
+   * `holder_branch_id` yoki `home_branch_id` xodim filialiga teng (HQ
+   * registratori uchun bu HQ'da yaratilgan barcha market buyurtmalari).
+   *
+   * ⚠️ FAIL-CLOSED: filial aniqlanmasa (biriktirilmagan yoki branch-service
+   * javob bermadi) — 403. Aks holda "filiali yo'q" xodim cheklovsiz bo'lib
+   * qolardi.
+   */
+  private async assertOrderInRequesterBranchScope(
+    requester: { id?: string | null } | null | undefined,
+    order: {
+      branch_id?: string | null;
+      holder_branch_id?: string | null;
+      home_branch_id?: string | null;
+    },
+    deniedMessage: string,
+  ): Promise<void> {
+    const requesterId = String(requester?.id ?? '').trim();
+    const assignment = requesterId
+      ? await this.lookup.getBranchAssignmentByUser(requesterId)
+      : null;
+    const branchId = String(assignment?.branch_id ?? '').trim();
+    if (!branchId) {
+      this.forbidden(
+        "Filialingiz aniqlanmadi — amal bajarilmadi. Filialga biriktirilganingizni tekshiring yoki qayta urinib ko'ring",
+      );
+    }
+    const orderBranchIds = [
+      order.branch_id,
+      order.holder_branch_id,
+      order.home_branch_id,
+    ]
+      .map((value) => String(value ?? '').trim())
+      .filter(Boolean);
+    if (!orderBranchIds.includes(branchId)) {
+      this.forbidden(deniedMessage);
+    }
+  }
+
+  /**
+   * YARATISH SO'ROVINI SO'ROVCHIGA QARAB TOZALASH (fix3 C6; RBAC-05, LC-07,
+   * LC-14) — gateway qoidasining xizmat qatlamidagi nusxasi.
+   *
+   *  - so'rovchi yo'q → ichki ishonchli chaqiruv (tashqi import,
+   *    `createExternalOrder` — u o'zi tozalaydi): o'zgarishsiz;
+   *  - SUPERADMIN/ADMIN → o'zgarishsiz;
+   *  - qolganlar → hayot sikli/saqlash maydonlari olib tashlanadi (buyurtma
+   *    DOIM NEW: market, bot va filial xodimi buyurtmasi HQ/filial qabulidan
+   *    o'tadi);
+   *  - market va market operatori (bot) → `branch_id` va `source` ham;
+   *  - boshqa (filial xodimi) → `source` faqat `'branch'` bo'lishi mumkin.
+   */
+  private sanitizeCreateDtoForRequester<T extends object>(
+    dto: T,
+    requester?: { id?: string; roles?: string[] } | null,
+  ): T {
+    if (!requester || this.isSystemPrivilegedRequester(requester)) {
+      return dto;
+    }
+    const isMarketScoped =
+      this.hasRole(requester, Roles.MARKET) ||
+      this.hasRole(requester, Roles.MARKET_OPERATOR);
+    const sanitized = omitFields(dto, [
+      ...CREATE_LIFECYCLE_FIELDS,
+      ...(isMarketScoped ? CREATE_PLACEMENT_FIELDS : []),
+    ]) as T & { source?: unknown };
+    if (
+      sanitized.source !== undefined &&
+      sanitized.source !== null &&
+      String(sanitized.source as string).toLowerCase() !==
+        String(Order_source.BRANCH)
+    ) {
+      delete sanitized.source;
+    }
+    return sanitized;
+  }
+
   private resolveActorCourierId(
     requester: { id: string; roles?: string[]; branch_id?: string | null },
     order: {
@@ -1820,45 +2161,29 @@ export class OrderLifecycleService {
     this.badRequest('Forbidden resource');
   }
 
-  private async findLatestHistoryBySource(data: {
-    user_id: string;
-    source_type: Source_type;
-    source_id: string;
-  }) {
-    const response = await rmqSend<{
-      data?: { items?: Array<{ amount?: number; createdAt?: string }> };
-    }>(
-      this.financeClient,
-      { cmd: 'finance.history.find_all' },
-      {
-        user_id: data.user_id,
-        source_type: data.source_type,
-        source_id: data.source_id,
-        page: 1,
-        limit: 1,
-      },
-    ).catch(() => ({ data: { items: [] } }));
-
-    return response?.data?.items?.[0];
-  }
-
-  private isNearInTime(
-    left?: string | Date | null,
-    right?: string | Date | null,
-    maxDiffMs = 5000,
-  ) {
-    if (!left || !right) {
-      return false;
+  /**
+   * RPC xatosidan foydalanuvchiga ko'rsatiladigan qisqa sabab. Mikroservis
+   * xatosi `RpcException`, xom `{ statusCode, message }` obyekt yoki oddiy
+   * `Error` bo'lib kelishi mumkin.
+   */
+  private describeRpcError(error: unknown): string {
+    const payload: unknown =
+      error instanceof RpcException ? error.getError() : error;
+    if (typeof payload === 'string' && payload.trim()) {
+      return payload.trim();
     }
-
-    const leftTime = new Date(left).getTime();
-    const rightTime = new Date(right).getTime();
-
-    if (Number.isNaN(leftTime) || Number.isNaN(rightTime)) {
-      return false;
+    if (payload && typeof payload === 'object') {
+      const message = (payload as { message?: unknown }).message;
+      if (typeof message === 'string' && message.trim()) {
+        return message.trim();
+      }
+      if (Array.isArray(message) && message.length) {
+        return message
+          .filter((item): item is string => typeof item === 'string')
+          .join(', ');
+      }
     }
-
-    return Math.abs(leftTime - rightTime) <= maxDiffMs;
+    return 'logistika xizmati javob bermadi';
   }
 
   async rollbackOrderToWaiting(
@@ -1927,6 +2252,78 @@ export class OrderLifecycleService {
       );
     }
 
+    /**
+     * MENEJER HAM FAQAT SOTILGAN / BEKOR QILINGAN BUYURTMANI QAYTARADI
+     * (audit RBAC-20). Ilgari status ro'yxati faqat kuryer va superadmin
+     * uchun bor edi: menejer API orqali CLOSED (tovar marketga qaytgan),
+     * RECEIVED yoki ON_THE_ROAD buyurtmani WAITING ga majburlay olardi —
+     * keyingi sotuv market qo'lidagi tovar uchun pul yozardi. UI ham
+     * rollbackni faqat shu ikki holatda ko'rsatadi.
+     */
+    if (
+      isManager &&
+      !isSuperAdmin &&
+      !isCourier &&
+      ![Order_status.SOLD, Order_status.CANCELLED].includes(order.status)
+    ) {
+      this.badRequest(`Rollback mumkin emas (status: ${order.status})`);
+    }
+
+    /**
+     * ⚠️ KURYER FAQAT O'Z QO'LIDAGI BEKOR BUYURTMANI TIKLAYDI (audit LC-05).
+     *
+     * Bekor qilingan buyurtma kuryerning eski yetkazish pochtasida (`post_id`
+     * hech qachon tozalanmaydi) qoladi, shuning uchun kuryer uni filial yoki
+     * HQ qabul qilib bo'lganidan keyin ham "Barchasi" tabida ko'rib,
+     * "Tiklash" bosa olardi. Natija: buyurtma WAITING bo'lib (holder HQ yoki
+     * filial qolgan holda) HQ/market bekor ro'yxati va QR topshirishdan
+     * chiqib ketardi, kuryerda esa "Sotish" tugmasi bilan qaytib chiqardi —
+     * HQ javonidagi tovar uchun kuryerga naqd qarz yozilardi. Endi kuryer
+     * faqat posilka hali o'zida turganda (holder = shu kuryer) tiklaydi.
+     */
+    if (isCourier && originalStatus === Order_status.CANCELLED) {
+      // `holder_courier_id` faqat holder = COURIER bo'lganda to'ldiriladi
+      // (`resolveHolderFromState`); filial/HQ/market holderida u null.
+      const holderType = String(order.holder_type ?? '').toUpperCase();
+      const holderCourierId = this.normalizeCourierId(order.holder_courier_id);
+      const heldByRequester =
+        (!holderType || holderType === String(OrderHolderType.COURIER)) &&
+        Boolean(holderCourierId) &&
+        holderCourierId === String(requester.id ?? '').trim();
+      if (!heldByRequester) {
+        this.badRequest(
+          "Topshirilgan bekor buyurtmani qaytarib bo'lmaydi — posilka endi " +
+            "filial yoki HQ qo'lida",
+        );
+      }
+    }
+
+    /**
+     * ⚠️ SOTUV QAYDISIZ "SOTILGAN" BUYURTMA ROLLBACK QILINMAYDI (RBAC-05,
+     * himoya chuqurligi).
+     *
+     * Har haqiqiy sotuv (`sellOrder`, `partlySellOrder`, kargo
+     * `markByProvider`) `sold_at` ni yozadi, PATCH va yaratish DTO'lari esa
+     * uni bera olmaydi. `sold_at` siz SOLD/PAID/PARTLY_PAID — sotish amalidan
+     * o'tmagan (masalan to'g'ridan-to'g'ri `status:'sold'` bilan yaratilgan
+     * yoki PATCH qilingan) buyurtma: uning kassa oyoqlari umuman YOZILMAGAN.
+     * Rollback esa `sale_collectible_amount` bo'lmasa `total_price` bo'yicha
+     * teskari oyoqlarni yozardi — market va filial/kuryer kassasiga hech
+     * qachon kirmagan pul uchun CHIQIM (filialda "yo'qolgan" naqd, kuryerning
+     * qarzi esa o'chib ketardi).
+     */
+    if (
+      [Order_status.SOLD, Order_status.PAID, Order_status.PARTLY_PAID].includes(
+        originalStatus,
+      ) &&
+      !String(order.sold_at ?? '').trim()
+    ) {
+      this.badRequest(
+        "Bu buyurtma sotish amali orqali sotilmagan (sotuv vaqti yo'q) — " +
+          'rollback kassaga teskari yozuv qila olmaydi. Superadminga murojaat qiling',
+      );
+    }
+
     // Merge note (dev↔shodiyor): post is optional (a manager can roll back an
     // order that isn't on a courier post yet), but a courier may only roll back
     // a post assigned to them. Both actor checks are kept.
@@ -1963,26 +2360,79 @@ export class OrderLifecycleService {
         "Bu buyurtma summasi bosh ofisga to'langan — rollback mumkin emas",
       );
     }
+    /**
+     * Kuryer pulni filialga topshirgan qator (audit M6) — `isCourierRemittedSettlement`
+     * izohiga qarang. Kuryer va menejer uchun YOPIQ (avvalgidek).
+     *
+     * fix3b — SUPERADMIN tuzatish roli (hujjat: rollback chegarasi HQ —
+     * "HQ'ga yetgach taqiqlanadi"; HQ'ga yetgan qator yuqorida hamma uchun
+     * yopiq qoladi). Superadmin qaytarganda kuryer topshirgan summa
+     * yo'qolmaydi: tranzaksiya ichida, `runFifoSettlement` dagi AYNI qoldiq
+     * qulfi ostida qatorning `courier_amount` i kuryerning `courier_to_branch`
+     * qoldig'iga qo'shiladi — u kuryerning KEYINGI topshirig'iga kredit
+     * bo'ladi. So'ng oyoqlar kutilayotgan (PENDING) sotuvdagidek teskari
+     * yoziladi. Xavfsiz bo'lmagan holatlar (manfiy/kredit qator, filialsiz
+     * yoki HQ qatori, kuryer boshqa filialga o'tgan, qoldiq jadvali yo'q,
+     * snapshot mos emas) aniq xabar bilan rad etiladi.
+     */
+    let remittedCourierCredit: RemittedCourierCredit | null = null;
+    if (isCourierRemittedSettlement(existingSettlement)) {
+      if (!isSuperAdmin) {
+        this.badRequest(
+          "Kuryer bu buyurtma pulini filialga topshirib bo'lgan — rollback " +
+            'mumkin emas, aks holda kuryer hisob-kitobi buziladi. ' +
+            'Tuzatishni faqat superadmin qila oladi',
+        );
+      }
+      remittedCourierCredit =
+        await this.prepareRemittedCourierCredit(existingSettlement);
+    }
 
     const courierId = this.resolveActorCourierId(requester, order, post);
     if (!courierId) {
       this.notFound('Courier not found');
     }
 
+    /**
+     * ⚠️ TESKARI OYOQLAR SOTUV YOZGANIDAN OLINADI, SO'ROVCHIDAN EMAS
+     * (audit M1/LC-01 — prod'da 289-kuryerda 140 000 soxta qarz qoldirgan).
+     *
+     * Ilgari menejer bosgan rollback moliyaviy aktyor sifatida MENEJERNI
+     * olardi: kuryer kassasi umuman qaralmasdi, qo'shimcha xarajat esa filial
+     * id si bilan qidirilardi. Kuryer sotgan buyurtmani menejer qaytarsa market
+     * oyog'i va settlement qatori qaytarilardi, kuryer kassasidagi kirim esa
+     * qolib ketardi. Endi kuryer oyog'i va xarajat egasi `order_settlement`
+     * qatoridan olinadi — kuryerning o'z rollbacki (to'g'ri ishlaydigan yo'l)
+     * bilan AYNAN bir xil oyoqlar, kim bosganidan qat'i nazar.
+     */
+    const reversalActor = resolveRollbackReversalActor({
+      settlement: existingSettlement,
+      legacy: {
+        isManagerRequester,
+        courierId,
+        requesterBranchId: requester.branch_id ?? null,
+      },
+    });
+    const saleCourierId = reversalActor.saleCourierId;
+
     const [market, financialActor] = await Promise.all([
       this.lookup
         .getMarketsByIds([String(order.market_id)])
         .then((rows) => rows[0]),
-      isManagerRequester
-        ? this.lookup.getUserById(String(requester.id))
-        : this.lookup.getCouriersByIds([courierId]).then((rows) => rows[0]),
+      saleCourierId
+        ? this.lookup.getCouriersByIds([saleCourierId]).then((rows) => rows[0])
+        : isManagerRequester
+          ? this.lookup.getUserById(String(requester.id))
+          : this.lookup.getCouriersByIds([courierId]).then((rows) => rows[0]),
     ]);
     if (!market) {
       this.notFound('Market not found');
     }
     if (!financialActor) {
       this.notFound(
-        isManagerRequester ? 'Manager not found' : 'Courier not found',
+        !saleCourierId && isManagerRequester
+          ? 'Manager not found'
+          : 'Courier not found',
       );
     }
 
@@ -1991,16 +2441,16 @@ export class OrderLifecycleService {
         String(order.market_id),
         Cashbox_type.FOR_MARKET,
       ),
-      isManagerRequester
-        ? Promise.resolve(null)
-        : this.lookup
-            .getCashboxByUser(courierId, Cashbox_type.FOR_COURIER)
-            .catch(() => null),
+      saleCourierId
+        ? this.lookup
+            .getCashboxByUser(saleCourierId, Cashbox_type.FOR_COURIER)
+            .catch(() => null)
+        : Promise.resolve(null),
     ]);
     if (!marketCashbox) {
       this.notFound('Market cashbox not found');
     }
-    if (!courierCashbox && !isManagerRequester) {
+    if (saleCourierId && !courierCashbox) {
       this.notFound('Courier cashbox not found');
     }
 
@@ -2022,66 +2472,102 @@ export class OrderLifecycleService {
     });
     const rollbackComment = `[ROLLBACK] ${order.comment || ''}`.trim();
     const totalPrice = Number(order.total_price ?? 0);
-    const actorExpenseUserId = isManagerRequester
-      ? String(requester.branch_id ?? '')
-      : courierId;
-    const actorExpenseCashboxType = isManagerRequester
-      ? Cashbox_type.BRANCH
-      : Cashbox_type.FOR_COURIER;
-    if (isManagerRequester && !actorExpenseUserId) {
-      this.badRequest('Manager branch not found');
-    }
-    if (isManagerRequester) {
-      await this.lookup.ensureBranchCashbox(actorExpenseUserId);
-    }
-    const actorExpenseCashbox = isManagerRequester
-      ? await this.lookup
-          .getCashboxByUser(actorExpenseUserId, Cashbox_type.BRANCH)
-          .catch(() => null)
-      : courierCashbox;
-    const [marketExtraCost, courierExtraCost] = await Promise.all([
-      this.findLatestHistoryBySource({
-        user_id: String(order.market_id),
-        source_type: Source_type.EXTRA_COST,
-        source_id: String(order.id),
-      }),
-      this.findLatestHistoryBySource({
-        user_id: actorExpenseUserId,
-        source_type: Source_type.EXTRA_COST,
-        source_id: String(order.id),
-      }),
-    ]);
 
-    const soldAt = order.sold_at ? Number(order.sold_at) : NaN;
-    const orderUpdatedAt = order.updatedAt ? new Date(order.updatedAt) : null;
-    const marketExtraCostCreatedAt = marketExtraCost?.createdAt ?? null;
-    const courierExtraCostCreatedAt = courierExtraCost?.createdAt ?? null;
-    const shouldRollbackMarketExtraCost =
-      !!marketExtraCost &&
-      Number(marketExtraCost.amount ?? 0) > 0 &&
-      ([
-        Order_status.SOLD,
-        Order_status.PAID,
-        Order_status.PARTLY_PAID,
-      ].includes(originalStatus)
-        ? Number.isFinite(soldAt) &&
-          this.isNearInTime(new Date(soldAt), marketExtraCostCreatedAt)
-        : [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
-          ? this.isNearInTime(orderUpdatedAt, marketExtraCostCreatedAt)
-          : false);
-    const shouldRollbackCourierExtraCost =
-      !!courierExtraCost &&
-      Number(courierExtraCost.amount ?? 0) > 0 &&
-      ([
-        Order_status.SOLD,
-        Order_status.PAID,
-        Order_status.PARTLY_PAID,
-      ].includes(originalStatus)
-        ? Number.isFinite(soldAt) &&
-          this.isNearInTime(new Date(soldAt), courierExtraCostCreatedAt)
-        : [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
-          ? this.isNearInTime(orderUpdatedAt, courierExtraCostCreatedAt)
-          : false);
+    /**
+     * ⚠️ QO'SHIMCHA XARAJAT DETERMINISTIK QAYTARILADI (audit M5).
+     *
+     * Ilgari qaytarish faqat finance tarixidagi EXTRA_COST yozuvi `sold_at`
+     * (bekorda `updatedAt`) dan 5 soniya ichida yaratilgan bo'lsagina
+     * bajarilardi. U yozuv esa outbox relay orqali kechikib yoziladi:
+     * tezkor rollbackda u hali yo'q, navbat to'lganda 5 soniyadan kech,
+     * bekor qilingan buyurtmada `updatedAt` esa har yangilanishda siljiydi.
+     * Settlement qatori esa baribir o'chirilardi — kuryer/filial va market
+     * kassasida −E daftarsiz qolib, FIFO ni AYNAN E so'mga qotirardi.
+     *
+     * Endi summa — buyurtmaning o'zidagi snapshot (`extra_cost`, sotuv /
+     * qisman sotuv / bekor qilishda yoziladi, rollbackda nolga tushadi),
+     * egasi — settlement qatori (`resolveRollbackReversalActor`). Teskari
+     * yozuv o'sha outbox navbatiga asl yozuvdan KEYIN qo'yiladi; asl yozuv
+     * hali qayta urinishda bo'lsa ham natija o'zgarmaydi — ikkalasi ham tizim
+     * oyog'i (EXTRA_COST / CORRECTION), finance ularni balans manfiyligidan
+     * qat'i nazar qo'llaydi, ya'ni yig'indi aynan 0.
+     */
+    const extraCostRefundStatuses = [
+      Order_status.SOLD,
+      Order_status.PAID,
+      Order_status.PARTLY_PAID,
+      Order_status.CANCELLED,
+      Order_status.CLOSED,
+    ];
+    const extraCostAmount = extraCostRefundStatuses.includes(originalStatus)
+      ? Math.max(Number(order.extra_cost ?? 0) || 0, 0)
+      : 0;
+    const extraCostParty =
+      extraCostAmount > 0 ? reversalActor.extraCostParty : null;
+    if (extraCostParty?.cashbox_type === Cashbox_type.BRANCH) {
+      await this.lookup.ensureBranchCashbox(extraCostParty.user_id);
+    }
+    const extraCostPartyCashbox = !extraCostParty
+      ? null
+      : extraCostParty.cashbox_type === Cashbox_type.FOR_COURIER &&
+          extraCostParty.user_id === saleCourierId
+        ? courierCashbox
+        : await this.lookup
+            .getCashboxByUser(
+              extraCostParty.user_id,
+              extraCostParty.cashbox_type,
+            )
+            .catch(() => null);
+    if (extraCostParty && !extraCostPartyCashbox) {
+      // Jimgina o'tkazib yuborilmaydi: aks holda settlement qatori o'chib,
+      // xarajat egasi kassasida −E daftarsiz qolardi.
+      this.notFound(
+        extraCostParty.cashbox_type === Cashbox_type.BRANCH
+          ? 'Filial kassasi topilmadi'
+          : 'Courier cashbox not found',
+      );
+    }
+    const isCancelledOriginal = [
+      Order_status.CANCELLED,
+      Order_status.CLOSED,
+    ].includes(originalStatus);
+
+    /**
+     * fix3b (M6) — kredit yo'li uchun daftar ↔ kassa mosligi. Kuryer kassasi
+     * pastdagi oyoqlar bilan AYNAN `courier_amount` ga kamayishi kerak, chunki
+     * qoldiqqa aynan shu summa kredit yoziladi. Formulalar tranzaksiyadagi
+     * kuryer oyoqlari bilan bir xil (`computeRollbackCourierCashboxDelta`).
+     */
+    if (remittedCourierCredit) {
+      const courierCashboxDelta = computeRollbackCourierCashboxDelta({
+        reverseSale:
+          [Order_status.SOLD, Order_status.PAID].includes(originalStatus) ||
+          (originalStatus === Order_status.PARTLY_PAID && isSuperAdmin),
+        saleCollectible:
+          order.sale_collectible_amount != null
+            ? Number(order.sale_collectible_amount)
+            : totalPrice,
+        courierShare:
+          order.courier_share != null
+            ? Number(order.courier_share)
+            : courierTariff,
+        extraCostRefund:
+          extraCostParty?.cashbox_type === Cashbox_type.FOR_COURIER &&
+          extraCostParty.user_id === remittedCourierCredit.courierId
+            ? extraCostAmount
+            : 0,
+      });
+      if (
+        saleCourierId !== remittedCourierCredit.courierId ||
+        toTiyin(courierCashboxDelta) !== -toTiyin(remittedCourierCredit.amount)
+      ) {
+        this.badRequest(
+          'Kuryer hisob-kitob qatori sotuv summalariga mos kelmaydi ' +
+            `(qator: ${remittedCourierCredit.amount}, kassa qaytimi: ${-courierCashboxDelta}) — ` +
+            'rollback kuryer daftarini buzadi, bajarilmadi. Buxgalteriya tuzatishi kerak',
+        );
+      }
+    }
 
     // Atomic rollback (Audit P0-1/P0-2). Previously the cashbox reversals,
     // settlement reset, and status flip ran WITHOUT a transaction, so a
@@ -2116,72 +2602,82 @@ export class OrderLifecycleService {
         );
       }
 
+      // fix3b (M6): superadmin kredit yo'li — qoldiq QULFI ostida, oyoqlardan
+      // OLDIN (qator qayta tekshiriladi; o'zgargan bo'lsa hech narsa yozilmaydi).
+      if (remittedCourierCredit) {
+        await this.creditRemittedCourierCarry(
+          tx,
+          String(order.id),
+          remittedCourierCredit,
+        );
+      }
+
       // Per-rollback idempotency epoch on every CORRECTION posting: a second
       // rollback of the same order (after a re-sell) is not deduped against the
       // first; a per-posting sequence suffix avoids in-run index collisions.
       const pay = (
-        data: Parameters<typeof this.updateCashboxBalance>[0],
+        // Sinf nomi orqali: `typeof this.…` bu metodda TS 5.9 da hal bo'lmaydi
+        // (`partlySellOrder` dagi izohga qarang) — ma'nosi bir xil.
+        data: Parameters<OrderLifecycleService['updateCashboxBalance']>[0],
       ): Promise<void> =>
         this.updateCashboxBalance(
           { ...data, dedup_epoch: `${rollbackEpoch}:${rollbackSeq++}` },
           tx,
         );
 
-      if (
-        [
-          Order_status.SOLD,
-          Order_status.PAID,
-          Order_status.PARTLY_PAID,
-        ].includes(originalStatus)
-      ) {
-        if (shouldRollbackMarketExtraCost) {
+      /**
+       * Qo'shimcha xarajatni qaytarish (audit M5) — sotuv oyoqlarini teskari
+       * yozishdan OLDIN (avvalgi tartib: kuryer kassasi kirimni chiqimdan oldin
+       * ko'radi). Sotilgan va bekor qilingan buyurtma uchun bitta yo'l.
+       */
+      if (extraCostAmount > 0) {
+        const extraCostComment = isCancelledOriginal
+          ? "Bekor qilingan buyurtmaga yozilgan qo'shimcha xarajat orqaga qaytarildi"
+          : "Qo'shimcha xarajat orqaga qaytarildi";
+        await pay({
+          user_id: String(order.market_id),
+          cashbox_type: Cashbox_type.FOR_MARKET,
+          amount: extraCostAmount,
+          operation_type: Operation_type.INCOME,
+          source_type: Source_type.CORRECTION,
+          source_id: String(order.id),
+          created_by: String(requester.id),
+          comment: extraCostComment,
+        });
+        if (extraCostParty && extraCostPartyCashbox) {
           await pay({
-            user_id: String(order.market_id),
-            cashbox_type: Cashbox_type.FOR_MARKET,
-            amount: Number(marketExtraCost?.amount ?? 0),
+            user_id: extraCostParty.user_id,
+            cashbox_type: extraCostParty.cashbox_type,
+            amount: extraCostAmount,
             operation_type: Operation_type.INCOME,
             source_type: Source_type.CORRECTION,
             source_id: String(order.id),
             created_by: String(requester.id),
-            comment: "Qo'shimcha xarajat orqaga qaytarildi",
+            comment: extraCostComment,
           });
         }
 
-        if (shouldRollbackCourierExtraCost && actorExpenseCashbox) {
-          await pay({
-            user_id: actorExpenseUserId,
-            cashbox_type: actorExpenseCashboxType,
-            amount: Number(courierExtraCost?.amount ?? 0),
-            operation_type: Operation_type.INCOME,
-            source_type: Source_type.CORRECTION,
-            source_id: String(order.id),
-            created_by: String(requester.id),
-            comment: "Qo'shimcha xarajat orqaga qaytarildi",
-          });
-        }
-
-        const rolledBackExtraCost = Math.max(
-          shouldRollbackMarketExtraCost
-            ? Number(marketExtraCost?.amount ?? 0)
-            : 0,
-          shouldRollbackCourierExtraCost
-            ? Number(courierExtraCost?.amount ?? 0)
-            : 0,
+        /**
+         * Moliyaviy balans: `sell_extra_cost` / `cancel_extra_cost` ning
+         * teskarisi. ⚠️ `dedup_key` SHART (audit M13): busiz yozuv
+         * (correction, order, '') bo'yicha bitta bo'lardi va ikkinchi
+         * sotuv → rollback zanjirida jimgina tashlab yuborilardi. Ilgari
+         * bekor qilingan buyurtmani qaytarishda bu yozuv umuman yo'q edi —
+         * kassa qaytardi, balans esa −E da qolardi.
+         */
+        await this.outbox.enqueue(
+          'FINANCE',
+          'finance.financial_balance.record',
+          {
+            amount: extraCostAmount,
+            source_type: 'correction',
+            order_id: String(order.id),
+            related_user_id: order.market_id ? String(order.market_id) : null,
+            comment: `Order #${order.id} extra cost rollback`,
+            dedup_key: `rollback-extra:${rollbackEpoch}`,
+          },
+          { manager: tx },
         );
-        if (rolledBackExtraCost > 0) {
-          await this.outbox.enqueue(
-            'FINANCE',
-            'finance.financial_balance.record',
-            {
-              amount: rolledBackExtraCost,
-              source_type: 'correction',
-              order_id: String(order.id),
-              related_user_id: order.market_id ? String(order.market_id) : null,
-              comment: `Order #${order.id} extra cost rollback`,
-            },
-            { manager: tx },
-          );
-        }
       }
 
       // Reverse the sale's cashbox legs EXACTLY (decoupled, snapshot-based) — the
@@ -2268,11 +2764,14 @@ export class OrderLifecycleService {
           });
         }
 
-        // courier leg (reverse)
-        if (courierCashbox) {
+        // courier leg (reverse) — FAQAT sotuv kuryer kassasiga yozgan bo'lsa
+        // va AYNAN o'sha kuryerda (audit M1/LC-01): so'rovchi menejer bo'lsa
+        // ham kuryer oyog'i qaytariladi, menejer sotuvida esa yozilmagan oyoq
+        // teskari yozilmaydi.
+        if (saleCourierId && courierCashbox) {
           if (saleCourierIncome > 0) {
             await pay({
-              user_id: courierId,
+              user_id: saleCourierId,
               cashbox_type: Cashbox_type.FOR_COURIER,
               amount: saleCourierIncome,
               operation_type: Operation_type.EXPENSE,
@@ -2283,7 +2782,7 @@ export class OrderLifecycleService {
             });
           } else if (saleCourierExpense > 0) {
             await pay({
-              user_id: courierId,
+              user_id: saleCourierId,
               cashbox_type: Cashbox_type.FOR_COURIER,
               amount: saleCourierExpense,
               operation_type: Operation_type.INCOME,
@@ -2327,46 +2826,10 @@ export class OrderLifecycleService {
       // row (guaranteed not yet settled-to-HQ by the guard above), in the same tx.
       await this.resetSettlementOnRollback(tx, id);
 
-      if (
-        shouldRollbackMarketExtraCost &&
-        [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
-      ) {
-        await pay({
-          user_id: String(order.market_id),
-          cashbox_type: Cashbox_type.FOR_MARKET,
-          amount: Number(marketExtraCost.amount),
-          operation_type: Operation_type.INCOME,
-          source_type: Source_type.CORRECTION,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: [Order_status.CANCELLED, Order_status.CLOSED].includes(
-            originalStatus,
-          )
-            ? "Bekor qilingan buyurtmaga yozilgan qo'shimcha xarajat orqaga qaytarildi"
-            : "Qo'shimcha xarajat orqaga qaytarildi",
-        });
-      }
-
-      if (
-        shouldRollbackCourierExtraCost &&
-        actorExpenseCashbox &&
-        [Order_status.CANCELLED, Order_status.CLOSED].includes(originalStatus)
-      ) {
-        await pay({
-          user_id: actorExpenseUserId,
-          cashbox_type: actorExpenseCashboxType,
-          amount: Number(courierExtraCost.amount),
-          operation_type: Operation_type.INCOME,
-          source_type: Source_type.CORRECTION,
-          source_id: String(order.id),
-          created_by: String(requester.id),
-          comment: [Order_status.CANCELLED, Order_status.CLOSED].includes(
-            originalStatus,
-          )
-            ? "Bekor qilingan buyurtmaga yozilgan qo'shimcha xarajat orqaga qaytarildi"
-            : "Qo'shimcha xarajat orqaga qaytarildi",
-        });
-      }
+      // Qo'shimcha xarajat yuqorida qaytarildi — buyurtmadagi snapshot ham
+      // nolga tushadi. Qolsa, keyingi rollback (qayta sotuv/bekordan keyin)
+      // o'sha eski summani yana qaytarardi (audit M5).
+      const extraCostReset = extraCostAmount > 0 ? { extra_cost: 0 } : {};
 
       // Single final status write inside the transaction, then commit.
       if (
@@ -2381,6 +2844,7 @@ export class OrderLifecycleService {
             canceled_post_id: null,
             return_requested: false,
             sold_at: null,
+            ...extraCostReset,
           },
           {
             id: requester.id,
@@ -2397,7 +2861,12 @@ export class OrderLifecycleService {
         finalStatus = Order_status.WAITING;
         await this.updateFull(
           id,
-          { status: Order_status.WAITING, paid_amount: 0, sold_at: null },
+          {
+            status: Order_status.WAITING,
+            paid_amount: 0,
+            sold_at: null,
+            ...extraCostReset,
+          },
           {
             id: requester.id,
             roles: requester.roles,
@@ -2417,6 +2886,7 @@ export class OrderLifecycleService {
             // Sotuv bekor qilindi — snapshot ham tozalanadi. Qolsa, keyingi
             // sotuvda ESKI naqd bilan rollback qilinardi.
             sale_collectible_amount: null,
+            ...extraCostReset,
           },
           {
             id: requester.id,
@@ -2448,15 +2918,36 @@ export class OrderLifecycleService {
 
     // Post-commit side-effects (non-DB). The reversal + status flip are already
     // durable; these are best-effort follow-ups and must not roll back money.
+    /**
+     * ⚠️ BEKOR POCHTASI XATOSI ROLLBACKNI 500 GA AYLANTIRMAYDI (CODE-14).
+     * Ilgari bu chaqiruv try/catch siz edi: rollback allaqachon commit
+     * bo'lgan, mijoz esa 500 olib qayta urinardi (endi "status o'zgargan"
+     * xatosini olardi). Endi muvaffaqiyat qaytadi, ogohlantirish bilan —
+     * buyurtma CANCELLED holatida, pochtaga qo'lda qo'shiladi.
+     */
+    let cancelPostWarning: string | null = null;
     if (rollbackTarget === 'cancelled_sent') {
-      await rmqSend(
-        this.logisticsClient,
-        { cmd: 'logistics.post.cancel.create' },
-        {
-          dto: { order_ids: [String(id)] },
-          requester: { id: String(requester.id), roles: requester.roles ?? [] },
-        },
-      );
+      try {
+        await rmqSend(
+          this.logisticsClient,
+          { cmd: 'logistics.post.cancel.create' },
+          {
+            dto: { order_ids: [String(id)] },
+            requester: {
+              id: String(requester.id),
+              roles: requester.roles ?? [],
+            },
+          },
+        );
+      } catch (error) {
+        const reason = this.describeRpcError(error);
+        this.logger.warn(
+          `rollback ${String(id)}: bekor qilinganlar pochtasi yaratilmadi — ${reason}`,
+        );
+        cancelPostWarning =
+          `Buyurtma bekor qilindi, lekin bekor qilinganlar pochtasiga ` +
+          `qo'shilmadi (${reason}). Uni pochtaga qo'lda qo'shing.`;
+      }
     }
 
     await this.activityLog.log({
@@ -2469,6 +2960,22 @@ export class OrderLifecycleService {
       metadata: {
         rollback_target: rollbackTarget,
         merged_partial_children: mergedPartialChildren,
+        // Qaysi kassalar teskari yozildi — sotuv yozgan oyoqlar (M1/LC-01).
+        reversal_courier_id: saleCourierId,
+        reversal_source: reversalActor.source,
+        extra_cost_refunded: extraCostAmount,
+        extra_cost_party: extraCostParty,
+        ...(cancelPostWarning
+          ? { cancel_post_warning: cancelPostWarning }
+          : {}),
+        // fix3b (M6): superadmin tuzatishi — kuryer qoldig'iga yozilgan kredit.
+        ...(remittedCourierCredit
+          ? {
+              courier_credit_carried: remittedCourierCredit.amount,
+              courier_credit_courier_id: remittedCourierCredit.courierId,
+              courier_credit_branch_id: remittedCourierCredit.branchId,
+            }
+          : {}),
       },
     });
 
@@ -2494,13 +3001,226 @@ export class OrderLifecycleService {
       // Tashqi sinxron best-effort — rollbackning o'zi allaqachon durable.
     }
 
+    // fix3b (M6): superadmin tuzatishida kuryer krediti haqida aniq xabar.
+    const courierCreditNote = remittedCourierCredit
+      ? `. Kuryer filialga topshirgan ${remittedCourierCredit.amount} so'm ` +
+        "uning keyingi topshirig'iga hisoblanadi"
+      : '';
     if (rollbackTarget === 'cancelled') {
-      return successRes({}, 200, 'Order CANCELLED holatiga qaytarildi');
+      return successRes(
+        {},
+        200,
+        `Order CANCELLED holatiga qaytarildi${courierCreditNote}`,
+      );
     }
     if (rollbackTarget === 'cancelled_sent') {
+      if (cancelPostWarning) {
+        return successRes(
+          { cancel_post_created: false, warning: cancelPostWarning },
+          200,
+          cancelPostWarning,
+        );
+      }
       return successRes({}, 200, "Order bekor qilinib pochtaga qo'shildi");
     }
-    return successRes({}, 200, 'Order WAITING holatiga qaytarildi');
+    return successRes(
+      {},
+      200,
+      `Order WAITING holatiga qaytarildi${courierCreditNote}`,
+    );
+  }
+
+  /**
+   * fix3b (M6) — superadmin kredit yo'lining TRANZAKSIYADAN OLDINGI
+   * tekshiruvi. Faqat xavfsiz holat o'tadi, aks holda aniq sabab bilan 400
+   * (yoki ma'lumot o'qib bo'lmasa 503); yarim ishlaydigan yo'l yo'q.
+   */
+  private async prepareRemittedCourierCredit(
+    settlement: OrderSettlement | null,
+  ): Promise<RemittedCourierCredit> {
+    const courierId = this.normalizeCourierId(settlement?.courier_id);
+    const branchId = String(settlement?.branch_id ?? '').trim();
+    const amount = Number(settlement?.courier_amount ?? 0) || 0;
+    if (!settlement || !courierId) {
+      this.badRequest(
+        'Kuryer hisob-kitob qatori topilmadi — rollback bajarilmadi',
+      );
+    }
+    // Manfiy (kredit) qator: qoldiq manfiy bo'la olmaydi (FIFO uni 0 deb
+    // o'qiydi), ya'ni teskari yozuvni daftarda ifodalab bo'lmaydi.
+    if (toTiyin(amount) <= 0) {
+      this.badRequest(
+        "Kuryer bu buyurtmaning manfiy (kredit) summasini topshiriqda ishlatib bo'lgan — " +
+          "rollback kuryer qoldig'ini manfiy qilardi, superadmin ham qaytara olmaydi. " +
+          'Buxgalteriya tuzatishi kerak',
+      );
+    }
+    if (!branchId) {
+      this.badRequest(
+        "Kuryer to'lovi filialsiz qatorda — rollback mumkin emas (naqd HQ'da)",
+      );
+    }
+
+    const hqBranchId = String((await this.lookup.getHqBranchId()) ?? '').trim();
+    if (!hqBranchId) {
+      throw new RpcException({
+        statusCode: 503,
+        message:
+          "Bosh ofis filialini aniqlab bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+      });
+    }
+    if (branchId === hqBranchId) {
+      // HQ qatorida kuryer naqdi MAIN'da; qoldiq esa filial kuryeri deb
+      // yozilib, moliyaviy balansni og'dirardi.
+      this.badRequest(
+        "Bu qator HQ filialiga yozilgan — kuryer kreditini avtomatik yozib bo'lmaydi, " +
+          'rollback bajarilmadi',
+      );
+    }
+
+    if (!(await this.isSettlementCarryTablePresent())) {
+      this.badRequest(
+        "Hisob-kitob qoldig'i jadvali topilmadi — kuryer kreditini yozib bo'lmaydi, " +
+          'rollback bajarilmadi',
+      );
+    }
+
+    // Kredit AYNAN o'sha filialda sarflanishi kerak: kuryer keyingi pulni o'z
+    // filialiga topshiradi, topshirilgan naqd esa shu qator filialida turibdi.
+    let assignment: { branch_id?: string | null } | null;
+    try {
+      assignment = await this.lookup.getBranchAssignmentByUserStrict(courierId);
+    } catch {
+      throw new RpcException({
+        statusCode: 503,
+        message:
+          "Kuryer filialini aniqlab bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+      });
+    }
+    if (String(assignment?.branch_id ?? '').trim() !== branchId) {
+      this.badRequest(
+        'Kuryer endi boshqa filialda (yoki filialga biriktirilmagan) — topshirilgan ' +
+          "summani uning hisobiga o'tkazib bo'lmaydi, rollback bajarilmadi",
+      );
+    }
+
+    return {
+      courierId,
+      branchId,
+      amount: toTiyin(amount) / 100,
+      status: settlement.status,
+    };
+  }
+
+  /** `order_settlement_carry` jadvali bormi (migratsiya ishlaganmi). */
+  private async isSettlementCarryTablePresent(): Promise<boolean> {
+    try {
+      const schema =
+        (this.dataSource.options as { schema?: string } | undefined)?.schema ||
+        'public';
+      const rows: Array<{ t: string | null }> = await this.dataSource.query(
+        'SELECT to_regclass($1) AS t',
+        [`${schema}.order_settlement_carry`],
+      );
+      return Boolean(rows?.[0]?.t);
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * fix3b (M6) — kuryer kreditini rollback tranzaksiyasi ICHIDA yozish.
+   *
+   * Qulf tartibi `runFifoSettlement` bilan mos: avval qoldiq qatori
+   * (`INSERT … ON CONFLICT DO NOTHING` + `pessimistic_write`), keyin
+   * settlement qatori. Ikkala qoldiq qulflanadi:
+   *   • kuryer (`courier_to_branch`) — kuryerning parallel to'lovi shu
+   *     qoldiqni o'qib-yozadi, ikkalasi navbatga turadi;
+   *   • filial (`branch_to_hq`) — filial → HQ FIFO aynan shu COURIER_SETTLED
+   *     qatorni BRANCH_SETTLED qilishi mumkin; u ham shu qulfni oladi, ya'ni
+   *     yo u avval tugaydi (qator HQ'ga yetgan → pastda rad), yo bu rollback
+   *     commit bo'lgach o'chirilgan qatorni ko'rmaydi.
+   * Qulf ostida qator qayta o'qiladi: holati yoki summasi o'zgargan bo'lsa
+   * 400, hech narsa yozilmaydi (tranzaksiya qaytadi).
+   */
+  private async creditRemittedCourierCarry(
+    tx: EntityManager,
+    orderId: string,
+    credit: RemittedCourierCredit,
+  ): Promise<void> {
+    const carryRepo = tx.getRepository(OrderSettlementCarry);
+    await carryRepo
+      .createQueryBuilder()
+      .insert()
+      .values({
+        level: 'courier_to_branch',
+        party_id: credit.courierId,
+        branch_id: credit.branchId,
+        amount: 0,
+      })
+      .orIgnore()
+      .execute();
+    const courierCarry = await carryRepo.findOne({
+      where: { level: 'courier_to_branch', party_id: credit.courierId },
+      lock: { mode: 'pessimistic_write' },
+    });
+    await carryRepo
+      .createQueryBuilder()
+      .insert()
+      .values({
+        level: 'branch_to_hq',
+        party_id: credit.branchId,
+        branch_id: null,
+        amount: 0,
+      })
+      .orIgnore()
+      .execute();
+    await carryRepo.findOne({
+      where: { level: 'branch_to_hq', party_id: credit.branchId },
+      lock: { mode: 'pessimistic_write' },
+    });
+
+    const row = await tx.getRepository(OrderSettlement).findOne({
+      where: { order_id: String(orderId), isDeleted: false },
+      lock: { mode: 'pessimistic_write' },
+    });
+    if (row && this.isSettledToHq(row.status)) {
+      this.badRequest(
+        "Bu buyurtma summasi bosh ofisga to'langan — rollback mumkin emas",
+      );
+    }
+    if (
+      !row ||
+      row.status !== credit.status ||
+      this.normalizeCourierId(row.courier_id) !== credit.courierId ||
+      String(row.branch_id ?? '').trim() !== credit.branchId ||
+      toTiyin(row.courier_amount) !== toTiyin(credit.amount)
+    ) {
+      this.badRequest(
+        "Rollback holati o'zgargan (hisob-kitob qatori yangilangan) — qayta urinib ko'ring",
+      );
+    }
+    if (!courierCarry) {
+      this.badRequest(
+        "Kuryer qoldig'i qatorini qulflab bo'lmadi — rollback bajarilmadi",
+      );
+    }
+
+    const existingAmount = Number(courierCarry.amount ?? 0) || 0;
+    const existingBranchId = String(courierCarry.branch_id ?? '').trim();
+    if (toTiyin(existingAmount) > 0 && existingBranchId !== credit.branchId) {
+      this.badRequest(
+        'Kuryerda boshqa filialga tegishli qoldiq bor — rollback bajarilmadi',
+      );
+    }
+    await carryRepo.update(
+      { id: courierCarry.id },
+      {
+        amount:
+          (Math.max(toTiyin(existingAmount), 0) + toTiyin(credit.amount)) / 100,
+        branch_id: credit.branchId,
+      },
+    );
   }
 
   async initiateReturn(
@@ -2514,6 +3234,23 @@ export class OrderLifecycleService {
     }
 
     const order = await this.findById(id);
+    /**
+     * fix3 C13 (CODE-09): qaytarishni SA/admin istalgan buyurtmada, registrator
+     * esa FAQAT o'z filiali doirasidagisida boshlaydi. Ilgari doira yo'q edi:
+     * istalgan filial registratori boshqa filial buyurtmasiga "qaytarish
+     * so'rovi" belgisini qo'ya olardi — u menejerning "Qaytarish" ro'yxatida
+     * chiqib, tasdiqlansa custody kuryerdan filialga o'tib ketardi.
+     */
+    if (!this.isSystemPrivilegedRequester(requester)) {
+      if (!this.hasRole(requester, Roles.REGISTRATOR)) {
+        this.forbidden("Qaytarishni boshlashga ruxsat yo'q");
+      }
+      await this.assertOrderInRequesterBranchScope(
+        requester,
+        order,
+        'Bu buyurtma sizning filialingizga tegishli emas — uni qaytarishni boshlay olmaysiz',
+      );
+    }
     if (
       order.status === Order_status.SOLD ||
       order.status === Order_status.PAID ||
@@ -3177,14 +3914,48 @@ export class OrderLifecycleService {
     return normalizedItems.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
   }
 
+  /**
+   * Yaratishdagi `paid_online_amount` (fix3b): berilmasa 0; berilsa son,
+   * 0 ≤ qiymat ≤ total_price (tiyin aniqligida). Aks holda 400 — yozilsa
+   * sotuv kuryerdan yig'ilmaydigan naqdni noto'g'ri hisoblardi.
+   */
+  private resolveCreatePaidOnlineAmount(
+    raw: number | string | null | undefined,
+    totalPrice: number | undefined,
+  ): number {
+    if (raw === undefined || raw === null || raw === '') {
+      return 0;
+    }
+    const amount = typeof raw === 'number' ? raw : Number(String(raw).trim());
+    const total = Number(totalPrice ?? 0);
+    if (
+      !Number.isFinite(amount) ||
+      !Number.isFinite(total) ||
+      toTiyin(amount) < 0 ||
+      toTiyin(amount) > toTiyin(total)
+    ) {
+      this.badRequest(
+        `paid_online_amount (${String(raw)}) 0 dan kichik yoki buyurtma ` +
+          `summasidan (${String(totalPrice ?? 0)}) katta bo'lmasligi kerak`,
+      );
+    }
+    return toTiyin(amount) / 100;
+  }
+
   async create(
-    dto: {
+    rawDto: {
       market_id: string;
       customer_id: string;
       where_deliver?: Where_deliver;
       total_price?: number;
       to_be_paid?: number;
       paid_amount?: number;
+      /**
+       * Mijoz oldindan (onlayn / hamkor orqali) to'lagan qism — fix3b.
+       * `createPartnerShipment` `subtotal − cod_amount` ni yuboradi.
+       * 0 ≤ qiymat ≤ total_price; faqat imtiyozli/ichki chaqiruvdan.
+       */
+      paid_online_amount?: number | string | null;
       status?: Order_status;
       comment?: string | null;
       operator?: string | null;
@@ -3217,6 +3988,16 @@ export class OrderLifecycleService {
     },
     requester?: { id: string; roles?: string[] },
   ) {
+    // fix3 C6 (RBAC-05, LC-07, LC-14): SUPERADMIN/ADMIN dan boshqa
+    // yaratuvchining hayot sikli/saqlash maydonlari olib tashlanadi —
+    // buyurtma DOIM NEW, kuryersiz va pochtasiz.
+    const dto = this.sanitizeCreateDtoForRequester(rawDto, requester);
+    // fix3b: hamkor prepaid summasi endi SAQLANADI (tozalashdan keyin —
+    // market/filial xodimidan kelgani allaqachon olib tashlangan).
+    const paidOnlineAmount = this.resolveCreatePaidOnlineAmount(
+      dto.paid_online_amount,
+      dto.total_price,
+    );
     const roles = new Set(
       (requester?.roles ?? []).map((role) => String(role).toLowerCase()),
     );
@@ -3252,6 +4033,14 @@ export class OrderLifecycleService {
         total_price: dto.total_price ?? 0,
         to_be_paid: dto.to_be_paid ?? 0,
         paid_amount: dto.paid_amount ?? 0,
+        /**
+         * ⚠️ fix3b — HAMKOR PREPAID PUL XATOSI (HIGH, fix3 dan oldingi).
+         * `createPartnerShipment` `subtotal − cod_amount` ni yuborardi, bu
+         * yer esa uni yozmasdi (ustun sukuti 0): sotuv `total_price` ni to'liq
+         * naqd deb hisoblab, kuryerni olMAGAN pul uchun qarzdor, marketni esa
+         * marketpleys allaqachon olgan pul uchun haqdor qilardi.
+         */
+        paid_online_amount: paidOnlineAmount,
         status: dto.status ?? Order_status.NEW,
         comment: dto.comment ?? null,
         operator: dto.operator ?? null,
@@ -3390,34 +4179,132 @@ export class OrderLifecycleService {
     return fullOrder;
   }
 
-  async createExternalOrder(dto: {
-    market_id: string;
-    customer_id: string;
-    where_deliver?: Where_deliver;
-    total_price?: number;
-    to_be_paid?: number;
-    paid_amount?: number;
-    status?: Order_status;
-    comment?: string | null;
-    operator?: string | null;
-    post_id?: string | null;
-    district_id?: string | null;
-    region_id?: string | null;
-    address?: string | null;
-    qr_code_token?: string | null;
-    external_id?: string | null;
-    items?: Array<{
-      product_id?: string | null;
-      product_name?: string | null;
-      quantity?: number;
-    }>;
-  }) {
+  /**
+   * POST /orders/external.
+   *
+   * fix3 C6 (RBAC-05, LC-07): hayot sikli/saqlash va joylashuv maydonlari
+   * (status, post_id, courier_id, branch_id, ...) faqat SUPERADMIN/ADMIN dan
+   * qabul qilinadi; qolganlar uchun buyurtma DOIM NEW. ⚠️ FAIL-CLOSED:
+   * so'rovchi uzatilmasa (eski chaqiruvchi) ham imtiyozsiz deb hisoblanadi —
+   * bu yo'lning yagona chaqiruvchisi gateway, frontend esa uni ishlatmaydi.
+   * `create()` ga so'rovchi ATAYLAB uzatilmaydi (u `source` ni
+   * `EXTERNAL` dan tozalab yuborardi): audit avvalgidek 'system'.
+   *
+   * fix3b: filial xodimi (registrator/menejer/filial) — buyurtma o'z
+   * biriktirilgan filialida yaratiladi, `createOrderInternal` (POST /orders)
+   * bilan AYNI qoida; `source` EXTERNAL bo'lib qoladi. Market va boshqalar —
+   * avvalgidek HQ.
+   */
+  async createExternalOrder(
+    dto: {
+      market_id: string;
+      customer_id: string;
+      where_deliver?: Where_deliver;
+      total_price?: number;
+      to_be_paid?: number;
+      paid_amount?: number;
+      status?: Order_status;
+      comment?: string | null;
+      operator?: string | null;
+      post_id?: string | null;
+      district_id?: string | null;
+      region_id?: string | null;
+      address?: string | null;
+      qr_code_token?: string | null;
+      external_id?: string | null;
+      items?: Array<{
+        product_id?: string | null;
+        product_name?: string | null;
+        quantity?: number;
+      }>;
+    },
+    requester?: {
+      id?: string;
+      roles?: string[];
+      branch_id?: string | null;
+    } | null,
+  ) {
+    const isPrivileged = this.isSystemPrivilegedRequester(requester);
+    const safeDto = isPrivileged
+      ? dto
+      : omitFields(dto, [
+          ...CREATE_LIFECYCLE_FIELDS,
+          ...CREATE_PLACEMENT_FIELDS,
+        ]);
+    const staffBranchId = isPrivileged
+      ? null
+      : await this.resolveExternalCreateStaffBranchId(requester);
     return this.create({
-      ...dto,
+      ...safeDto,
+      ...(staffBranchId ? { branch_id: staffBranchId } : {}),
       source: Order_source.EXTERNAL,
-      operator: dto.operator ?? 'external_manual',
-      status: dto.status ?? Order_status.NEW,
+      operator: safeDto.operator ?? 'external_manual',
+      status: isPrivileged
+        ? (dto.status ?? Order_status.NEW)
+        : Order_status.NEW,
     });
+  }
+
+  /**
+   * POST /orders/external — filial xodimining filiali (fix3b).
+   * `createOrderInternal` (gateway) bilan AYNI qoida:
+   *   - rolda registrator/menejer/filial yo'q → `null` (avvalgidek HQ);
+   *   - JWT `branch_id` bo'lsa → o'sha (RMQ'siz);
+   *   - aks holda branch_users biriktiruvi: roli MANAGER/REGISTRATOR/BRANCH
+   *     bo'lsa uning filiali (filialsiz bo'lsa 400), biriktiruv yo'q → `null`.
+   * ⚠️ branch-service javob bermasa — 503 (fail-closed): filial xodimi
+   * buyurtmasi jimgina HQ ga tushib qolmasin (gateway ham shu holatda
+   * so'rovni yiqitadi).
+   */
+  private async resolveExternalCreateStaffBranchId(
+    requester:
+      | { id?: string; roles?: string[]; branch_id?: string | null }
+      | null
+      | undefined,
+  ): Promise<string | null> {
+    const isStaffRole =
+      this.hasRole(requester ?? undefined, Roles.REGISTRATOR) ||
+      this.hasRole(requester ?? undefined, Roles.MANAGER) ||
+      this.hasRole(requester ?? undefined, Roles.BRANCH);
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!isStaffRole || !requesterId) {
+      return null;
+    }
+    const jwtBranchId = String(requester?.branch_id ?? '').trim();
+    if (jwtBranchId) {
+      return jwtBranchId;
+    }
+
+    let assignment: { branch_id?: string | null; role?: string | null } | null;
+    try {
+      assignment =
+        await this.lookup.getBranchAssignmentByUserStrict(requesterId);
+    } catch (error) {
+      const rawMessage = (error as { message?: unknown } | null)?.message;
+      const reason =
+        error instanceof Error
+          ? error.message
+          : typeof rawMessage === 'string'
+            ? rawMessage
+            : '';
+      this.logger.warn(
+        `createExternalOrder: filial biriktiruvi o'qilmadi (user=${requesterId}): ${reason}`,
+      );
+      throw new RpcException({
+        statusCode: 503,
+        message:
+          "Filialingizni aniqlab bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+      });
+    }
+    const assignmentRole = String(assignment?.role ?? '').toUpperCase();
+    if (!['MANAGER', 'REGISTRATOR', 'BRANCH'].includes(assignmentRole)) {
+      return null;
+    }
+    const assignedBranchId = String(assignment?.branch_id ?? '').trim();
+    if (!assignedBranchId) {
+      this.badRequest('Filial xodimi hech qaysi filialga biriktirilmagan');
+    }
+    return assignedBranchId;
   }
 
   private generateCustomToken(length = 24): string {
@@ -3700,6 +4587,45 @@ export class OrderLifecycleService {
         this.badRequest(
           `${externalOrders.length} ta posilka tashqi manbadan keldi — ` +
             'ular faqat skanerlab qabul qilinadi (Kiruvchi posilkalar ekrani)',
+        );
+      }
+    }
+
+    /**
+     * ⚠️ fix3b (LC-03 alomati) — HQ QABULI FILIALDA TURGAN BUYURTMANI OLMAYDI.
+     *
+     * SA/ADMIN (doira yo'q) va HQ registratori qabuli — HQ qabuli: buyurtma
+     * HQ hudud pochtasiga tushadi. Saqlanishi (custody) HQ'dan boshqa
+     * filialda bo'lgan NEW buyurtma (filial xodimi yaratgan) shu yo'l bilan
+     * qabul qilinsa, u HQ hudud pochtasiga yopishib qolardi — filial doirasi
+     * esa uni HQ registratoriga 403 bilan ko'rsatmasdi (jonli: #65). Bunday
+     * buyurtmani o'sha filial o'zi qabul qiladi. Butun so'rov rad etiladi.
+     *
+     * HQ id faqat filialda turgan buyurtma bo'lsagina so'raladi; HQ
+     * aniqlanmasa ham `BRANCH` ushlovchi baribir HQ emas (`resolveHolderFromState`
+     * uni faqat HQ'dan boshqa filial uchun qo'yadi).
+     */
+    const branchHeldOrders = orders.filter(
+      (order) =>
+        String(order.holder_type ?? '').toUpperCase() ===
+          String(OrderHolderType.BRANCH) &&
+        Boolean(String(order.holder_branch_id ?? '').trim()),
+    );
+    if (branchHeldOrders.length) {
+      const hqBranchId = String(
+        (await this.lookup.getHqBranchId()) ?? '',
+      ).trim();
+      const isHqIntake =
+        !scopeBranchId || (Boolean(hqBranchId) && scopeBranchId === hqBranchId);
+      const atNonHqBranch = isHqIntake
+        ? branchHeldOrders.filter(
+            (order) => String(order.holder_branch_id).trim() !== hqBranchId,
+          )
+        : [];
+      if (atNonHqBranch.length) {
+        this.badRequest(
+          "Bu buyurtma filialda turibdi — uni o'sha filial qabul qiladi " +
+            `(${atNonHqBranch.map((order) => `#${order.id}`).join(', ')})`,
         );
       }
     }
@@ -4690,6 +5616,26 @@ export class OrderLifecycleService {
         ext,
         fieldMapping.region_code_field ?? 'region',
       );
+      /**
+       * ⚠️ fix3b (LC-13) — `region_id` BO'SH QOLMAYDI. Sayt viloyatni
+       * yubormasa (yoki matn yuborsa) u ilgari NULL yozilardi; filial
+       * dispatch esa buyurtmaning `region_id` siga tayanadi va NULL da
+       * Postgres 22P02 bilan yarim yo'lda yiqilardi. Endi tumandan olinadi
+       * (`assigned_region`, bo'lmasa tumanning o'z viloyati). Baribir
+       * aniqlanmasa — qator yaratilMAYDI va `skipped` da aniq sabab bilan
+       * qaytadi (partiya yarim yo'lda uzilmasin: 400 butun importni
+       * to'xtatardi). Mijoz yaratilishidan OLDIN — yetim mijoz qolmasin.
+       */
+      const regionId =
+        this.numericRegionId(regionExternal) ??
+        (await this.lookup.resolveRegionIdForDistrict(districtId));
+      if (!regionId) {
+        skipped.push({
+          external_id: externalId,
+          reason: 'region_unresolved',
+        });
+        continue;
+      }
 
       const customerResponse = await rmqSend<{ data?: { id?: string } }>(
         this.identityClient,
@@ -4819,12 +5765,12 @@ export class OrderLifecycleService {
          * (`22P02`) chiqarardi va import BITTALAB ketgani uchun partiya
          * YARIM YO'LDA uzilardi — bir qismi yaratilib, qolgani yo'q.
          *
-         * Endi faqat SON qabul qilinadi. Matn bo'lsa `null`: bu xavfsiz,
-         * chunki marshrutlash `order.region_id` ga TAYANMAYDI — pochtaga
-         * ajratish tumandan olingan `assigned_region` bo'yicha ishlaydi
-         * (`receiveNewOrders` → `logistics.district.find_by_ids`).
+         * Endi faqat SON qabul qilinadi. Matn yoki bo'sh bo'lsa (fix3b,
+         * LC-13) tumandan aniqlangan viloyat yoziladi — yuqoridagi izoh:
+         * HQ qabuli `assigned_region` bo'yicha ishlasa ham, filial dispatch
+         * buyurtmaning `region_id` siga tayanadi.
          */
-        region_id: this.numericRegionId(regionExternal),
+        region_id: regionId,
         address:
           this.getFieldValue(ext, fieldMapping.address_field ?? 'address') ??
           null,
@@ -4923,6 +5869,7 @@ export class OrderLifecycleService {
     const isManagerRequester =
       this.hasRole(requester, Roles.MANAGER) &&
       !this.hasRole(requester, Roles.COURIER);
+    this.assertManagerSaleNotCourierHeld(isManagerRequester, order);
 
     const [market, financialActor] = await Promise.all([
       this.lookup
@@ -4975,6 +5922,22 @@ export class OrderLifecycleService {
           .getCashboxByUser(settlementBranchId, Cashbox_type.BRANCH)
           .catch(() => null)
       : null;
+    /**
+     * ⚠️ MENEJER SOTUVIDA FILIAL KASSASI SHART (audit M15).
+     *
+     * Menejer sotuvida naqd filial kassasiga kirim bo'lib yoziladi
+     * (`resolveManagerSaleBranchCash`), qo'shimcha xarajat ham shu kassadan
+     * yechiladi. Kassa topilmasa (finance RPC vaqt tugashi — `getCashboxByUser`
+     * xatoni yutadi) ilgari sotuv BARIBIR o'tardi: filial kassasiga hech narsa
+     * yozilmas, daftar esa filialdan to'liq `branch_amount` ni talab qilardi —
+     * qo'lda "to'ldirish" bilangina tuzaladigan soxta qarz. Kuryer va market
+     * kassasi bilan bir xil: kassa yo'q — sotuv yo'q.
+     */
+    if (isManagerRequester && settlementBranchId && !branchCashbox) {
+      this.notFound(
+        "Filial kassasi topilmadi — sotuv to'xtatildi, qaytadan urinib ko'ring",
+      );
+    }
     // branchShare = what a PARTNER branch keeps per order (0 for OWNED / HQ).
     const branchShare = settlementBranchId
       ? await this.lookup.resolveBranchShare(settlementBranchId)
@@ -5282,6 +6245,10 @@ export class OrderLifecycleService {
             order_id: String(order.id),
             related_user_id: order.market_id ? String(order.market_id) : null,
             comment: `Order #${order.id} sell extra cost`,
+            // Urinish tokeni (audit M13): busiz rollback → qayta sotuvdagi
+            // xarajat (sell_extra_cost, order, '') bo'yicha jimgina
+            // tashlab yuborilardi. `sell_profit` bilan bir xil token.
+            dedup_key: this.saleLedgerKey(soldAt),
           },
           { manager: tx },
         );
@@ -5297,6 +6264,10 @@ export class OrderLifecycleService {
           // hamkorga (BeePost) umuman yetib bormasdi.
           extra_cost: extraCost,
           sold_at: soldAt,
+          // fix3 C13 (CODE-09): sotilgan buyurtmada eski "qaytarish so'rovi"
+          // belgisi qolmaydi (qisman sotuv ham tozalaydi). Qolsa, u
+          // menejerning "Qaytarish" ro'yxatida so'rov bo'lib chiqardi.
+          return_requested: false,
           // Snapshot tariffs + the actually-kept shares so SELL_PROFIT
           // (marketTariff − courierShare − branchShare) and rollback are exact.
           // AYNAN kassa oyoqlarida ishlatilgan qiymat yoziladi (override bo'lsa
@@ -5610,6 +6581,9 @@ export class OrderLifecycleService {
             order_id: String(order.id),
             related_user_id: order.market_id ? String(order.market_id) : null,
             comment: `Order #${order.id} cancel extra cost`,
+            // Urinish tokeni (audit M13): rollbackdan keyingi qayta bekor
+            // qilish yangi yozuv ochadi, takroriy yetkazish esa bitta qoladi.
+            dedup_key: `cancel:${dedupEpoch}`,
           },
           { manager: tx },
         );
@@ -6030,7 +7004,22 @@ export class OrderLifecycleService {
     // hisoblanadi: market ma'lumoti tashqi (RMQ) chaqiruv talab qiladi.
     let providerMarketTariff = 0;
     let providerMarketAmount = 0;
-    const providerTotal = Number(order.total_price ?? 0);
+    /**
+     * fix3c (MONEY-01) — OYOQLAR KARGO YIG'ADIGAN NAQDDAN, `total_price`
+     * DAN EMAS.
+     *
+     * Hamkorning prepaid posilkasida `paid_online_amount` (= subtotal −
+     * cod_amount) endi saqlanadi va dispatch kargoga AYNAN `total −
+     * paid_online_amount` ni yig'ishni aytadi. Ilgari oyoqlar `total_price`
+     * dan yozilardi: to'liq prepaid (COD 0) posilkada HQ marketga hech kim
+     * yig'MAGAN `total − tarif` ni qarzdor bo'lib qolardi (SA uni MAIN dan
+     * to'lab yuborardi), kargoning `total` lik qarzi esa abadiy ochiq
+     * turardi. Qoida `sellOrder` dagi bilan AYNI (`resolveCollectibleAmount`):
+     * onlayn to'langan qism marketga to'g'ridan-to'g'ri tushgan, pochta unga
+     * aralashmaydi. Kuryer/filial oyoqlari o'rnida kargo qarzi turadi — u ham
+     * shu summa (javobdagi `cod_collected`).
+     */
+    const providerCollectible = this.resolveCollectibleAmount(order);
     if (input.action === 'sell' && order.market_id) {
       const market = await this.lookup
         .getMarketsByIds([String(order.market_id)])
@@ -6042,7 +7031,7 @@ export class OrderLifecycleService {
         centerTariff: market?.tariff_center,
         homeTariff: market?.tariff_home,
       });
-      providerMarketAmount = providerTotal - providerMarketTariff;
+      providerMarketAmount = providerCollectible - providerMarketTariff;
     }
 
     const queryRunner = this.dataSource.createQueryRunner();
@@ -6060,7 +7049,21 @@ export class OrderLifecycleService {
         order.market_tariff = order.market_tariff ?? providerMarketTariff;
         order.courier_share = 0;
         order.branch_share = 0;
-        order.to_be_paid = providerMarketAmount;
+        // fix3c: `sellOrder` dagi `netToBePaid` kabi manfiy bo'lmaydi —
+        // prepaid posilkada tarif market QARZI (FOR_MARKET chiqimi), marketga
+        // to'lanadigan qism esa 0.
+        order.to_be_paid = Math.max(providerMarketAmount, 0);
+        /**
+         * fix3b (L1 ochiq masalasi) — ROLLBACK UCHUN SNAPSHOT. Kargo sotuvi
+         * filial kassasiga hech narsa yozmaydi (pastda faqat market oyog'i),
+         * naqd esa kargoda — yig'iladigan qism (fix3c: `total_price −
+         * paid_online_amount`, prepaid posilkada 0). Bu ikki ustun yozilmasa
+         * rollback `null` zaxirasiga tushib, filialda turgan buyurtma uchun
+         * HECH QACHON yozilmagan filial oyog'ini (`saleBranchNet`) teskari
+         * yozardi.
+         */
+        order.branch_cashbox_amount = 0;
+        order.sale_collectible_amount = providerCollectible;
       }
       await orderRepo.save(order);
 
@@ -6076,8 +7079,9 @@ export class OrderLifecycleService {
        * daftarda ko'rinmasdi.
        *
        * Model: kargo mijozdan naqdni yig'adi (shuning uchun settlement qatori
-       * PENDING bo'lib turadi), Elchi esa marketga `total − market_tariff`
-       * qarzdor bo'lib qoladi. Kargo hisob-kitob qilganda
+       * PENDING bo'lib turadi), Elchi esa marketga `yig'iladigan naqd −
+       * market_tariff` qarzdor bo'lib qoladi (fix3c; manfiy bo'lsa — prepaid
+       * posilka — tarifni market qarz). Kargo hisob-kitob qilganda
        * (`integration.provider.remittance`) MAIN kassaga kirim yoziladi va
        * qator BRANCH_SETTLED ga o'tadi.
        *
@@ -6126,7 +7130,10 @@ export class OrderLifecycleService {
           branch_id: null,
           market_id: order.market_id ? String(order.market_id) : null,
           courier_amount: 0,
-          branch_amount: providerTotal,
+          // fix3c: HQ'ga kargodan keladigan naqd = kargo qarzi (yig'ilgan
+          // qism, `sellOrder` dagi `branchNet` ning ulushsiz ko'rinishi).
+          // Prepaid posilkada 0 — qarz yozilmaydi.
+          branch_amount: providerCollectible,
           market_amount: providerMarketAmount,
           hasCourier: false,
           // Naqd kargoda — HQ'ga hali yetib kelmagan.
@@ -6181,9 +7188,20 @@ export class OrderLifecycleService {
       {
         id: updated.id,
         status: updated.status,
-        // Surfaced for provider COD reconciliation (integration-service records
-        // the receivable from this amount on a provider 'sell').
+        // Moslik uchun qoladi: eski integration-service kargo qarzini shu
+        // summadan yozardi.
         total_price: Number(updated.total_price ?? 0),
+        /**
+         * fix3c (MONEY-01) — KARGO HAQIQATAN YIG'GAN NAQD (COD): sotuv
+         * snapshoti `sale_collectible_amount` bilan bir xil, dispatchda
+         * kargoga aytilgan summa. integration-service kargo qarzini
+         * (`provider_receivables`) SHUNDAN yozadi; prepaid posilkada 0 — qarz
+         * yozilmaydi. ⚠️ Hamkor kontraktidagi eski `cod_collected`
+         * (= `paid_amount`) bilan aralashtirilmasin — bu boshqa RPC javobi.
+         */
+        ...(input.action === 'sell'
+          ? { cod_collected: providerCollectible }
+          : {}),
       },
       200,
       `order marked ${input.action} by provider`,
@@ -6232,6 +7250,7 @@ export class OrderLifecycleService {
     ).catch(() => ({ data: undefined }));
     const post = postRes?.data;
     const actorCourierId = this.resolveActorCourierId(requester, order, post);
+    this.assertManagerSaleNotCourierHeld(isManagerRequester, order);
 
     if (!dto?.order_item_info?.length) {
       this.badRequest('order_item_info is required');
@@ -6240,6 +7259,22 @@ export class OrderLifecycleService {
     const price = Number(dto.totalPrice ?? 0);
     if (!Number.isFinite(price) || price < 0) {
       this.badRequest('totalPrice must be a non-negative number');
+    }
+    /**
+     * ⚠️ QISMAN SOTUV SUMMASI BUYURTMA SUMMASIDAN OSHMAYDI (audit M10).
+     *
+     * Ilgari faqat manfiy emasligi tekshirilardi: 150 000 lik buyurtmaga
+     * 1 500 000 yozilsa market va kuryer kassasi, daftar va `total_price`
+     * shunga shishardi, bekor qilingan qism esa `max(eski − narx, 0)` = 0
+     * bo'lib qolardi — rollback asl summani tiklay olmasdi (eski = narx +
+     * bekor qism). Chegara bilan bekor qism doim `eski − narx` va rollback
+     * aynan eski summani qaytaradi.
+     */
+    if (price > oldTotalPrice) {
+      this.badRequest(
+        `Qisman sotuv summasi (${price} so'm) buyurtma summasidan ` +
+          `(${oldTotalPrice} so'm) oshmasligi kerak`,
+      );
     }
 
     const [market, financialActor] = await Promise.all([
@@ -6290,6 +7325,13 @@ export class OrderLifecycleService {
           .getCashboxByUser(settlementBranchId, Cashbox_type.BRANCH)
           .catch(() => null)
       : null;
+    // Menejer sotuvida filial kassasi SHART — `sellOrder` dagi izohga qarang
+    // (audit M15).
+    if (isManagerRequester && settlementBranchId && !branchCashbox) {
+      this.notFound(
+        "Filial kassasi topilmadi — sotuv to'xtatildi, qaytadan urinib ko'ring",
+      );
+    }
     const branchShare = settlementBranchId
       ? await this.lookup.resolveBranchShare(settlementBranchId)
       : 0;
@@ -6493,6 +7535,8 @@ export class OrderLifecycleService {
     const dedupEpoch = this.resolveDedupEpoch(requestId);
     // sold_at is a real wall-clock timestamp (analytics reads it as a number).
     const soldAt = String(Date.now());
+    // Buyurtmaga yoziladigan `sold_at` — P&L tokeni ham AYNAN shundan olinadi.
+    const partlySoldAt = order.sold_at ?? soldAt;
 
     // Atomic block: item-quantity reduction, cashbox movements (outbox enqueues)
     // and the order status flip must commit together. Previously these ran
@@ -6644,6 +7688,8 @@ export class OrderLifecycleService {
             order_id: String(order.id),
             related_user_id: order.market_id ? String(order.market_id) : null,
             comment: `Order #${order.id} sell extra cost`,
+            // Urinish tokeni (audit M13) — `sellOrder` dagi kabi.
+            dedup_key: this.saleLedgerKey(partlySoldAt),
           },
           { manager: tx },
         );
@@ -6655,8 +7701,14 @@ export class OrderLifecycleService {
           status: nextStatus,
           to_be_paid: netToBePaid,
           paid_amount: paidAfter,
-          sold_at: order.sold_at ?? soldAt,
+          sold_at: partlySoldAt,
           total_price: price,
+          /**
+           * ⚠️ Qisman sotuvda ham xarajat buyurtmaga yoziladi (audit M5).
+           * Rollback xarajatni aynan shu snapshotdan qaytaradi; ilgari bu
+           * yo'l uni yozmasdi — rollback eski (yoki 0) qiymatni ko'rardi.
+           */
+          extra_cost: extraCost,
           market_tariff: marketTariff,
           courier_tariff: courierTariff,
           courier_share: courierShare,
@@ -6873,6 +7925,77 @@ export class OrderLifecycleService {
     requester?: { id?: string; roles?: string[]; note?: string | null },
   ) {
     return this.updateFull(id, dto, requester);
+  }
+
+  /**
+   * PATCH /orders/:id va /:id/full — FAQAT `order.update_from_api` RPC ning
+   * (gateway HTTP tahrir yo'li) xizmat qatlamidagi qoidasi (fix3 C6; M11,
+   * CODE-03). Gateway bilan AYNI, himoya chuqurligi uchun:
+   *
+   *  1. PATCH faqat SA/ADMIN/REGISTRATOR uchun — boshqa rollar 403;
+   *  2. `status`, `market_id`, `to_be_paid`, `paid_amount` va hayot sikli /
+   *     snapshot maydonlari — HECH KIMGA (superadmin ham), 400: holat faqat
+   *     sotish, bekor qilish va qaytarish amallari orqali o'zgaradi;
+   *  3. `post_id`, `customer_id`, `qr_code_token`, `source` — faqat
+   *     SUPERADMIN, aks holda 403;
+   *  4. REGISTRATOR — faqat o'z filiali doirasidagi buyurtma (403).
+   *
+   * ⚠️ Ichki oqimlar bu metodga KELMAYDI (fix3b): filial dispatch, logistika
+   * va finance `writeOrderPayment` `order.update` / `order.update_full` /
+   * `order.update_normalized` orqali to'g'ridan-to'g'ri `updateFull` ga
+   * boradi. Shuning uchun so'rovchisiz chaqiruv bu yerda TIZIM chaqiruvi
+   * EMAS, balki noto'g'ri chaqiruv — FAIL-CLOSED 403 (qoidalarni chetlab
+   * o'tadigan yo'l qolmasin).
+   */
+  async updateFromApi(
+    id: string,
+    dto: Record<string, unknown>,
+    requester?: { id?: string; roles?: string[]; note?: string | null },
+  ) {
+    type UpdateFullDto = Parameters<OrderLifecycleService['updateFull']>[1];
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId) {
+      this.forbidden(
+        "So'rovchi aniqlanmadi — buyurtmani tahrirlashga ruxsat yo'q",
+      );
+    }
+
+    const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
+    const isAdmin = this.hasRole(requester, Roles.ADMIN);
+    const isRegistrator = this.hasRole(requester, Roles.REGISTRATOR);
+    if (!isSuperAdmin && !isAdmin && !isRegistrator) {
+      this.forbidden("Buyurtmani tahrirlashga ruxsat yo'q");
+    }
+
+    const forbidden = presentFields(dto, API_UPDATE_FORBIDDEN_FIELDS);
+    if (forbidden.length) {
+      this.badRequest(
+        `Bu maydonlarni PATCH orqali o'zgartirib bo'lmaydi: ${forbidden.join(', ')}. ` +
+          "Holat sotish, bekor qilish va qaytarish amallari orqali o'zgaradi",
+      );
+    }
+
+    if (!isSuperAdmin) {
+      const superadminOnly = presentFields(
+        dto,
+        API_UPDATE_SUPERADMIN_ONLY_FIELDS,
+      );
+      if (superadminOnly.length) {
+        this.forbidden(
+          `Bu maydonlarni faqat superadmin o'zgartira oladi: ${superadminOnly.join(', ')}`,
+        );
+      }
+    }
+    if (!isSuperAdmin && !isAdmin) {
+      const order = await this.findById(id);
+      await this.assertOrderInRequesterBranchScope(
+        requester,
+        order,
+        "Bu buyurtma sizning filialingizga tegishli emas — uni o'zgartira olmaysiz",
+      );
+    }
+
+    return this.updateFull(id, dto as UpdateFullDto, requester);
   }
 
   async updateFull(
@@ -7292,10 +8415,32 @@ export class OrderLifecycleService {
         );
       }
     } else if (order.status === Order_status.NEW) {
-      const canDeleteNew = isSuperAdmin || isAdmin || isRegistrator || isMarket;
+      const isPrivileged = isSuperAdmin || isAdmin;
+      const canDeleteNew = isPrivileged || isRegistrator || isMarket;
       if (!canDeleteNew) {
         this.forbidden(
           "Faqat superadmin/admin/registrator/market 'new' holatdagi buyurtmani o‘chira oladi",
+        );
+      }
+      /**
+       * fix3 C6 (RBAC-04, CODE-01): market faqat O'Z buyurtmasini o'chiradi.
+       * Ilgari egalik faqat CREATED uchun tekshirilardi — istalgan market
+       * ketma-ket id'lar bo'yicha boshqa marketlarning HQ qabulini kutayotgan
+       * NEW buyurtmalarini o'chirib yubora olardi (tiklash faqat SQL bilan).
+       */
+      if (
+        !isPrivileged &&
+        !isRegistrator &&
+        (!requesterId || requesterId !== String(order.market_id ?? ''))
+      ) {
+        this.forbidden("Market faqat o'z buyurtmasini o'chira oladi");
+      }
+      // fix3 C6 (CODE-03): registrator — faqat o'z filiali doirasidagisini.
+      if (!isPrivileged && isRegistrator) {
+        await this.assertOrderInRequesterBranchScope(
+          requester,
+          order,
+          "Bu buyurtma sizning filialingizga tegishli emas — uni o'chira olmaysiz",
         );
       }
     } else if (order.status === Order_status.RECEIVED) {

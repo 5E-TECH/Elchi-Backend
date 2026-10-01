@@ -140,7 +140,8 @@ export class CreateOrderRequestDto {
 
   @ApiPropertyOptional({
     example: '1',
-    description: 'Customer ID (as string/bigint)',
+    description:
+      'Customer ID (as string/bigint) — faqat superadmin/admin uchun. Boshqa rollarda mijoz `customer` obyektidan aniqlanadi (fix3 RBAC-01).',
   })
   @IsOptional()
   @IsString()
@@ -165,7 +166,18 @@ export class CreateOrderRequestDto {
   @IsNumber()
   total_price?: number;
 
-  @ApiPropertyOptional({ enum: Order_status, default: Order_status.NEW })
+  /**
+   * ⚠️ fix3 C6 (RBAC-05, LC-07): `status`, `post_id`, `current_batch_id`,
+   * `courier_id`, `assigned_at`, `return_reason` (va filial xodimi bo'lmasa
+   * `branch_id`, `source`) faqat SUPERADMIN/ADMIN dan qabul qilinadi —
+   * boshqa rollarda gateway ularni JIMGINA olib tashlaydi.
+   */
+  @ApiPropertyOptional({
+    enum: Order_status,
+    default: Order_status.NEW,
+    description:
+      'Faqat superadmin/admin; boshqa rollarda e’tiborsiz (buyurtma doim NEW)',
+  })
   @Transform(({ value }) =>
     typeof value === 'string' ? value.toLowerCase() : value,
   )
@@ -183,7 +195,11 @@ export class CreateOrderRequestDto {
   @IsString()
   operator?: string | null;
 
-  @ApiPropertyOptional({ type: String, example: '1' })
+  @ApiPropertyOptional({
+    type: String,
+    example: '1',
+    description: 'Faqat superadmin/admin; boshqa rollarda e’tiborsiz',
+  })
   @IsOptional()
   @IsString()
   post_id?: string | null;
@@ -201,7 +217,8 @@ export class CreateOrderRequestDto {
   @ApiPropertyOptional({
     type: String,
     example: '12',
-    description: 'Branch ID (as string/bigint)',
+    description:
+      'Branch ID (as string/bigint) — superadmin/admin; filial xodimida o‘z filiali majburan, boshqalarda e’tiborsiz',
   })
   @IsOptional()
   @IsString()
@@ -210,7 +227,8 @@ export class CreateOrderRequestDto {
   @ApiPropertyOptional({
     type: String,
     example: '1001',
-    description: 'Current batch ID (as string/bigint)',
+    description:
+      'Current batch ID (as string/bigint) — faqat superadmin/admin; boshqa rollarda e’tiborsiz',
   })
   @IsOptional()
   @IsString()
@@ -219,18 +237,25 @@ export class CreateOrderRequestDto {
   @ApiPropertyOptional({
     type: String,
     example: '77',
-    description: 'Courier ID (as string/bigint)',
+    description:
+      'Courier ID (as string/bigint) — faqat superadmin/admin; boshqa rollarda e’tiborsiz',
   })
   @IsOptional()
   @IsString()
   courier_id?: string | null;
 
-  @ApiPropertyOptional({ example: '2026-04-25T14:30:00+05:00' })
+  @ApiPropertyOptional({
+    example: '2026-04-25T14:30:00+05:00',
+    description: 'Faqat superadmin/admin; boshqa rollarda e’tiborsiz',
+  })
   @IsOptional()
   @IsISO8601()
   assigned_at?: string | null;
 
-  @ApiPropertyOptional({ example: 'Mijoz uyda yo‘q edi' })
+  @ApiPropertyOptional({
+    example: 'Mijoz uyda yo‘q edi',
+    description: 'Faqat superadmin/admin; boshqa rollarda e’tiborsiz',
+  })
   @IsOptional()
   @IsString()
   return_reason?: string | null;
@@ -243,6 +268,8 @@ export class CreateOrderRequestDto {
   @ApiPropertyOptional({
     enum: OrderSourceDto,
     default: OrderSourceDto.INTERNAL,
+    description:
+      'Superadmin/admin; filial xodimida majburan `branch`, boshqalarda e’tiborsiz',
   })
   @Transform(({ value }) =>
     typeof value === 'string' ? value.toLowerCase() : value,
@@ -370,7 +397,18 @@ export class UpdateOrderByIdRequestDto {
   @IsNumber()
   total_price?: number;
 
-  @ApiPropertyOptional({ enum: Order_status })
+  /**
+   * ⚠️ fix3 C6 (M11): `status`, `market_id`, `to_be_paid`, `paid_amount`
+   * DTO'da ATAYLAB qoldirilgan — gateway ularni tushunarli o'zbekcha 400
+   * bilan rad etadi (`PATCH_FORBIDDEN_FIELDS`). DTO'dan olib tashlansa
+   * ValidationPipe inglizcha "should not exist" qaytarardi.
+   */
+  @ApiPropertyOptional({
+    enum: Order_status,
+    deprecated: true,
+    description:
+      "PATCH orqali o'zgartirib bo'lmaydi (400) — holat sotish/bekor qilish/qaytarish amallari orqali o'zgaradi",
+  })
   @Transform(({ value }) =>
     typeof value === 'string' ? value.toLowerCase() : value,
   )
@@ -388,7 +426,11 @@ export class UpdateOrderByIdRequestDto {
   @IsString()
   operator?: string | null;
 
-  @ApiPropertyOptional({ type: String, example: '1' })
+  @ApiPropertyOptional({
+    type: String,
+    example: '1',
+    description: "Faqat superadmin o'zgartira oladi (aks holda 403)",
+  })
   @IsOptional()
   @IsString()
   post_id?: string | null;
@@ -417,7 +459,8 @@ export class UpdateOrderByIdRequestDto {
 
   @ApiPropertyOptional({
     example: '1',
-    description: 'Market ID (as string/bigint)',
+    deprecated: true,
+    description: "Market ID — PATCH orqali o'zgartirib bo'lmaydi (400)",
   })
   @IsOptional()
   @IsString()
@@ -425,23 +468,35 @@ export class UpdateOrderByIdRequestDto {
 
   @ApiPropertyOptional({
     example: '1',
-    description: 'Customer ID (as string/bigint)',
+    description:
+      "Customer ID (as string/bigint) — faqat superadmin o'zgartira oladi (aks holda 403)",
   })
   @IsOptional()
   @IsString()
   customer_id?: string;
 
-  @ApiPropertyOptional({ example: 0 })
+  @ApiPropertyOptional({
+    example: 0,
+    deprecated: true,
+    description: "PATCH orqali o'zgartirib bo'lmaydi (400)",
+  })
   @IsOptional()
   @IsNumber()
   to_be_paid?: number;
 
-  @ApiPropertyOptional({ example: 0 })
+  @ApiPropertyOptional({
+    example: 0,
+    deprecated: true,
+    description: "PATCH orqali o'zgartirib bo'lmaydi (400)",
+  })
   @IsOptional()
   @IsNumber()
   paid_amount?: number;
 
-  @ApiPropertyOptional({ example: 'qr_token' })
+  @ApiPropertyOptional({
+    example: 'qr_token',
+    description: "Faqat superadmin o'zgartira oladi (aks holda 403)",
+  })
   @IsOptional()
   @IsString()
   qr_code_token?: string | null;
@@ -449,6 +504,7 @@ export class UpdateOrderByIdRequestDto {
   @ApiPropertyOptional({
     enum: OrderSourceDto,
     default: OrderSourceDto.INTERNAL,
+    description: "Faqat superadmin o'zgartira oladi (aks holda 403)",
   })
   @Transform(({ value }) =>
     typeof value === 'string' ? value.toLowerCase() : value,

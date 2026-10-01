@@ -681,10 +681,15 @@ describe('BranchServiceService — kuryerni filialdan filialga o`tkazish (R3)', 
       const res: any = await check();
 
       expect(res.data.can_transfer).toBe(false);
+      // C8: haqiqiy yo'l — filialdan chiqarish/o'tkazish bu qatorlarni yopadi.
       expect(res.data.reasons).toEqual([
-        "kuryerning 2 ta sotuvi bo'yicha hisob-kitob ochiq qolgan, lekin ularning jami summasi 0 so'm — bu yozuvlar kuryerning keyingi pul topshirishida yopiladi; shoshilinch bo'lsa, tizim administratoriga murojaat qiling.",
+        "kuryerning 2 ta sotuvi bo'yicha hisob-kitob ochiq qolgan, lekin ularning jami summasi 0 so'm — kuryerni filialdan chiqarganda yoki boshqa filialga o'tkazganda bu 0 so'mlik yozuvlar avtomatik yopiladi; yopilmasa, tizim administratoriga murojaat qiling.",
       ]);
       expect(res.data.reasons[0]).not.toContain('bir necha soniyadan');
+      // Tekshiruv FAQAT o'qiydi — yopish RPC'si chaqirilmaydi.
+      expect(calls).not.toContain(
+        'send:order.settlement.close_zero_courier_rows',
+      );
     });
 
     it("sof-nol PENDING, kassa yo'q (finance 404) — xuddi shu maxsus sabab", async () => {
@@ -1961,6 +1966,227 @@ describe('BranchServiceService — kuryerni filialdan filialga o`tkazish (R3)', 
 
       expect(err.statusCode).toBe(503);
       expect(branchUserRepo.manager.transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  // ------------------------------------------------------------ C8 (CODE-06)
+  /**
+   * fix3 C8 — sof-nol PENDING qatorlar (yig'indi, kassa va qoldiq aynan 0)
+   * o'tkazish va filialdan chiqarishni abadiy to'smaydi: branch-service
+   * `order.settlement.close_zero_courier_rows` ni best-effort chaqiradi va
+   * tekshiruvni qayta bajaradi. RPC'ni A4 parallel quradi — bu yerda mock.
+   */
+  describe("C8 — sof-nol PENDING qatorlarni yopish (o'tkazish / chiqarish)", () => {
+    const CLOSE_CMD = 'order.settlement.close_zero_courier_rows';
+    const NET_ZERO = {
+      pending_settlement_count: 2,
+      pending_settlement_amount: 0,
+    };
+    const closeCalls = () =>
+      clients.order.send.mock.calls.filter(
+        ([pattern]) => (pattern as { cmd: string }).cmd === CLOSE_CMD,
+      );
+    const remove = (requester: object = SA) =>
+      service.removeUserFromBranch(
+        { branch_id: '15', user_id: COURIER },
+        requester,
+      );
+    /** Birinchi tekshiruvda sof-nol, keyingilarida — toza. */
+    const netZeroThenClean = () => {
+      replies['order.courier_transfer_check'] = firstThen(
+        orderCheck(NET_ZERO),
+        orderCheck(),
+      );
+    };
+
+    it('chiqarish: yopiladi → qayta tekshiruv toza → qator o`chiriladi (200)', async () => {
+      const row = addRow({ branch_id: '15' });
+      netZeroThenClean();
+      replies[CLOSE_CMD] = () =>
+        of({ statusCode: 200, message: 'ok', data: { closed_count: 2 } });
+
+      const res = await remove();
+
+      expect(res.statusCode).toBe(200);
+      expect(rowOf(row.id)?.isDeleted).toBe(true);
+      expect(closeCalls()).toEqual([
+        [
+          { cmd: CLOSE_CMD },
+          {
+            courier_id: COURIER,
+            requester: { id: '1', roles: ['superadmin'] },
+          },
+        ],
+      ]);
+      // Tekshiruv ikki marta: yopishdan oldin va keyin.
+      expect([...holdingSends()].sort()).toEqual(
+        [...HOLDING_CMDS, ...HOLDING_CMDS].sort(),
+      );
+      const closeAt = calls.indexOf(`send:${CLOSE_CMD}`);
+      expect(calls.indexOf('send:order.courier_transfer_check')).toBeLessThan(
+        closeAt,
+      );
+      expect(
+        calls.lastIndexOf('send:order.courier_transfer_check'),
+      ).toBeGreaterThan(closeAt);
+    });
+
+    it.each([
+      [
+        'RPC xatosi (deploy paytida yo`q)',
+        () =>
+          throwError(() => ({
+            status: 'error',
+            message:
+              'There is no matching message handler defined in the remote service.',
+          })),
+      ],
+      [
+        'RPC 409 (qatorlar sof-nol emas)',
+        () => throwError(() => ({ statusCode: 409, message: 'not zero' })),
+      ],
+      ['timeout', () => throwError(() => new TimeoutError())],
+    ])(
+      'chiqarish: yopish muvaffaqiyatsiz (%s) — avvalgi 409, qator saqlanadi, qayta tekshiruv yo`q',
+      async (_label, reply) => {
+        const row = addRow({ branch_id: '15' });
+        replies['order.courier_transfer_check'] = orderCheck(NET_ZERO);
+        replies[CLOSE_CMD] = reply;
+
+        const err = await rpcErrorOf(remove());
+
+        expect(err.statusCode).toBe(409);
+        expect(err.message?.startsWith(UNASSIGN_PREFIX)).toBe(true);
+        expect(err.message).toContain("jami summasi 0 so'm");
+        expect(rowOf(row.id)?.isDeleted).toBe(false);
+        expect(closeCalls()).toHaveLength(1);
+        expect(holdingSends()).toEqual(HOLDING_CMDS);
+      },
+    );
+
+    it('chiqarish: closed_count 0 — qayta tekshiruvsiz 409', async () => {
+      addRow({ branch_id: '15' });
+      replies['order.courier_transfer_check'] = orderCheck(NET_ZERO);
+      replies[CLOSE_CMD] = () =>
+        of({ statusCode: 200, data: { closed_count: 0 } });
+
+      const err = await rpcErrorOf(remove());
+
+      expect(err.statusCode).toBe(409);
+      expect(holdingSends()).toEqual(HOLDING_CMDS);
+    });
+
+    it('chiqarish: yopilgandan keyin ham qator qolsa — 409 (to`siq zaiflashmaydi)', async () => {
+      const row = addRow({ branch_id: '15' });
+      replies['order.courier_transfer_check'] = orderCheck(NET_ZERO);
+      replies[CLOSE_CMD] = () =>
+        of({ statusCode: 200, data: { closed_count: 1 } });
+
+      const err = await rpcErrorOf(remove());
+
+      expect(err.statusCode).toBe(409);
+      expect(rowOf(row.id)?.isDeleted).toBe(false);
+      expect([...holdingSends()].sort()).toEqual(
+        [...HOLDING_CMDS, ...HOLDING_CMDS].sort(),
+      );
+    });
+
+    it.each([
+      [
+        'kassada pul bor',
+        { cashbox: cashbox(1000), check: orderCheck(NET_ZERO) },
+      ],
+      [
+        'PENDING yig`indisi 0 emas',
+        {
+          cashbox: cashbox(0),
+          check: orderCheck({
+            pending_settlement_count: 1,
+            pending_settlement_amount: 25000,
+          }),
+        },
+      ],
+      [
+        'taqsimlanmagan qoldiq bor',
+        {
+          cashbox: cashbox(0),
+          check: orderCheck({ ...NET_ZERO, carry_amount: 5000 }),
+        },
+      ],
+      [
+        'oyoqlar nol emas (naqd 100)',
+        { cashbox: cashbox(0, 100, 0), check: orderCheck(NET_ZERO) },
+      ],
+      [
+        'PENDING qator yo`q',
+        {
+          cashbox: cashbox(0),
+          check: orderCheck({
+            orders_in_hand: 1,
+            orders_sample: [{ id: '7' }],
+          }),
+        },
+      ],
+    ])('sof-nol emas (%s) — yopish chaqirilmaydi', async (_label, setup) => {
+      addRow({ branch_id: '15' });
+      replies['finance.cashbox.find_by_user'] = setup.cashbox;
+      replies['order.courier_transfer_check'] = setup.check;
+
+      await rpcErrorOf(remove());
+
+      expect(closeCalls()).toEqual([]);
+    });
+
+    it("o'tkazish: oldindan tekshiruvda yopiladi va o'tkazish bajariladi", async () => {
+      addRow({ branch_id: '1' });
+      netZeroThenClean();
+      replies[CLOSE_CMD] = () =>
+        of({ statusCode: 200, data: { closed_count: 2 } });
+
+      const res: any = await transfer('15');
+
+      expect(res.statusCode).toBe(200);
+      expect(res.data.to_branch_id).toBe('15');
+      expect(closeCalls()).toHaveLength(1);
+      expect(closeCalls()[0][1]).toEqual({
+        courier_id: COURIER,
+        requester: { id: '1', roles: ['superadmin'] },
+      });
+      // Yopish swap'dan (tranzaksiyadan) OLDIN.
+      expect(calls.indexOf(`send:${CLOSE_CMD}`)).toBeLessThan(
+        calls.indexOf('tx:begin'),
+      );
+      expect(activeRowsOf()).toEqual([
+        expect.objectContaining({ branch_id: '15', role: 'COURIER' }),
+      ]);
+    });
+
+    it("o'tkazish: yopish yiqilsa — 409 TRANSFER prefiksi, tranzaksiya yo'q", async () => {
+      addRow({ branch_id: '1' });
+      replies['order.courier_transfer_check'] = orderCheck(NET_ZERO);
+      replies[CLOSE_CMD] = () =>
+        throwError(() => ({ statusCode: 500, message: 'db' }));
+
+      const err = await rpcErrorOf(transfer('15'));
+
+      expect(err.statusCode).toBe(409);
+      expect(err.message?.startsWith(TRANSFER_PREFIX)).toBe(true);
+      expect(branchUserRepo.manager.transaction).not.toHaveBeenCalled();
+    });
+
+    it('yetim kuryerni biriktirish (rehome) va tekshiruv — yopish chaqirilmaydi', async () => {
+      addRow({ branch_id: '16', isDeleted: true });
+      replies['order.courier_transfer_check'] = orderCheck(NET_ZERO);
+      replies[CLOSE_CMD] = () =>
+        of({ statusCode: 200, data: { closed_count: 2 } });
+
+      const err = await rpcErrorOf(
+        service.assignUserToBranch({ branch_id: '15', user_id: COURIER }, SA),
+      );
+      await check();
+
+      expect(err.statusCode).toBe(409);
+      expect(closeCalls()).toEqual([]);
     });
   });
 });

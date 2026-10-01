@@ -1,6 +1,7 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
+import { createHash } from 'crypto';
 import {
   Brackets,
   DataSource,
@@ -15,6 +16,7 @@ import { OrderSettlementCarry } from '../entities/order-settlement-carry.entity'
 import { OrderLookupService } from '../lookup/order-lookup.service';
 import {
   Cashbox_type,
+  IdempotencyKey,
   Order_status,
   SettlementStatus,
   rmqSend,
@@ -71,6 +73,46 @@ const COURIER_ACTIONABLE_ORDER_STATUSES: Order_status[] = [
 
 /** Tekshiruv javobidagi namuna buyurtmalar soni (id bo'yicha o'sib borish). */
 const COURIER_TRANSFER_SAMPLE_LIMIT = 5;
+
+/**
+ * M8 — `order.settlement.advance` tokeni QO'LLANGANINI bildiruvchi belgi
+ * (`idempotency_keys` jadvalida, alohida pattern bilan).
+ *
+ * ⚠️ NEGA KERAK. Controller endi yiqilgan advance kalitini qayta egallaydi
+ * (`reclaimFailed`): outbox'ning keyingi urinishi handlerni qayta ishga
+ * tushiradi. Lekin `executeIdempotent` kalitni FIFO commit'idan KEYIN
+ * (`markCompleted`) yozadi: commit o'tib, `markCompleted` yiqilsa kalit
+ * `failed` bo'lib qolardi va qayta ishga tushgan handler AYNAN o'sha to'lovni
+ * ikkinchi marta qo'llardi — keyingi qatorlar naqdsiz yopilar yoki qoldiq
+ * ikki marta qo'shilardi. Belgi FIFO tranzaksiyasining birinchi yozuvi
+ * sifatida kiritiladi, ya'ni commit bilan ATOMIK: qayta ishga tushgan handler
+ * uni ko'radi va hech narsa qilmaydi. Parallel ikki ishga tushish UNIQUE
+ * indeksda navbatga turadi.
+ */
+const ADVANCE_APPLIED_PATTERN = 'order.settlement.advance.applied';
+const PG_UNIQUE_VIOLATION = '23505';
+
+/** Advance tokeni boshqa (commit bo'lgan) tranzaksiyada qo'llanib bo'lgan. */
+class AdvanceAlreadyAppliedError extends Error {
+  constructor(readonly key: string) {
+    super(`Settlement advance already applied (${key})`);
+  }
+}
+
+/**
+ * C8 — sof-nol yopish rad etilgan sabab (javobdagi `skipped_reason`).
+ * Hech biri xato emas: shart bajarilmasa hech narsa o'zgarmaydi.
+ *
+ * `carry_not_zero` — qoldiq 0 emas va PENDING yig'indisiga ham teng emas
+ * (yoki manfiy). `carry_branch_mismatch` (MONEY-02) — yig'indi qoldiqqa teng,
+ * lekin qaysidir qator qoldiq turgan filialga tegishli emas.
+ */
+type ZeroNetRejection =
+  | 'no_pending_rows'
+  | 'carry_not_zero'
+  | 'carry_branch_mismatch'
+  | 'pending_amount_not_zero'
+  | 'not_fully_closed';
 
 @Injectable()
 export class OrderSettlementService {
@@ -243,6 +285,30 @@ export class OrderSettlementService {
     }
   }
 
+  /**
+   * `order_settlement_carry` jadvali bormi — QAT'IY (xato yutilmaydi).
+   * `isCarryEnabled` dan farqi: uning `false` keshi yutilgan xatodan ham
+   * yozilishi mumkin, shuning uchun bu yerda keshdan faqat `true` olinadi.
+   */
+  private async isCarryTableStrict(): Promise<boolean> {
+    if (this.carryTableReady === true) {
+      return true;
+    }
+    const schema =
+      (this.dataSource.options as { schema?: string } | undefined)?.schema ||
+      'public';
+    const tables: Array<{ t: string | null }> = await this.dataSource.query(
+      'SELECT to_regclass($1) AS t',
+      [`${schema}.order_settlement_carry`],
+    );
+    if (!tables?.[0]?.t) {
+      return false;
+    }
+    this.carryTableReady = true;
+    this.carryCheckedAt = Date.now();
+    return true;
+  }
+
   /** Musbat qoldiqlar (bo'g'in bo'yicha). Jadval bo'lmasa — bo'sh ro'yxat. */
   private async loadCarries(
     level?: SettlementLevel,
@@ -273,19 +339,8 @@ export class OrderSettlementService {
    * (migratsiya ishlamagan) — 0: bunday muhitda qoldiq mexanizmi o'chiq.
    */
   private async loadCourierCarryStrict(courierId: string): Promise<number> {
-    if (this.carryTableReady !== true) {
-      const schema =
-        (this.dataSource.options as { schema?: string } | undefined)?.schema ||
-        'public';
-      const tables: Array<{ t: string | null }> = await this.dataSource.query(
-        'SELECT to_regclass($1) AS t',
-        [`${schema}.order_settlement_carry`],
-      );
-      if (!tables?.[0]?.t) {
-        return 0;
-      }
-      this.carryTableReady = true;
-      this.carryCheckedAt = Date.now();
+    if (!(await this.isCarryTableStrict())) {
+      return 0;
     }
 
     const rows = await this.dataSource
@@ -564,10 +619,49 @@ export class OrderSettlementService {
    * qirqilmaydi (kredit qatorlari ham kiradi) — boshqa yig'indilar kabi.
    * `carry_amount` — kuryerning taqsimlanmagan qoldig'i (`courier_to_branch`).
    * Bo'sh id → nollar, so'rov yuborilmaydi.
+   *
+   * ⚠️ CODE-28: qoldiq QAT'IY o'qiladi (`loadCourierCarryStrict`). Ilgari
+   * `loadCarries` xatoni yutib `[]` qaytarardi — baza xatosida HQ kuryerining
+   * "olinishi kerak" ko'rinishi qoldiqni jimgina tashlab yuborardi. Endi baza
+   * xatosi RpcException 500 bo'lib chiqadi (gateway uni "tekshirib bo'lmadi"
+   * deb ko'rsatadi), RMQ'da qayta navbatga qo'yilmaydi.
    */
   async getCourierSettlementScope(data: { courier_id?: string | null }) {
     const courierId = String(data?.courier_id ?? '').trim();
-    const scope = {
+    if (!courierId) {
+      return successRes(
+        this.emptyCourierScope(),
+        200,
+        'Courier settlement scope',
+      );
+    }
+    if (!/^\d+$/.test(courierId)) {
+      this.badRequest("courier_id raqam ko'rinishida bo'lishi kerak");
+    }
+
+    try {
+      return successRes(
+        await this.computeCourierSettlementScope(courierId),
+        200,
+        'Courier settlement scope',
+      );
+    } catch (error) {
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.logger.warn(
+        `order.settlement.courier_scope failed (courier=${courierId}): ${(error as Error)?.message ?? error}`,
+      );
+      throw new RpcException({
+        statusCode: 500,
+        message:
+          "Kuryer hisob-kitob holatini o'qib bo'lmadi (ma'lumotlar bazasi xatosi)",
+      });
+    }
+  }
+
+  private emptyCourierScope() {
+    return {
       hq_pending_count: 0,
       hq_pending_amount: 0,
       branch_pending_count: 0,
@@ -575,13 +669,16 @@ export class OrderSettlementService {
       branch_ids: [] as string[],
       carry_amount: 0,
     };
-    if (!courierId) {
-      return successRes(scope, 200, 'Courier settlement scope');
-    }
-    if (!/^\d+$/.test(courierId)) {
-      this.badRequest("courier_id raqam ko'rinishida bo'lishi kerak");
-    }
+  }
 
+  /**
+   * `getCourierSettlementScope` ning hisob qismi — `courierId` tekshirilgan
+   * (raqam). Baza xatolari O'RALMAYDI: chaqiruvchi o'z xabari bilan o'raydi
+   * (`getCourierTransferCheck` ham shuni ishlatadi). `handleDbError` tanigan
+   * xatolar avvalgidek RpcException bo'lib chiqadi.
+   */
+  private async computeCourierSettlementScope(courierId: string) {
+    const scope = this.emptyCourierScope();
     const rows = await this.orderSettlementRepo
       .createQueryBuilder('settlement')
       .select('settlement.branch_id', 'branch_id')
@@ -610,20 +707,20 @@ export class OrderSettlementService {
       }
     }
     scope.branch_ids = [...branchIds];
-    scope.carry_amount = (await this.loadCarries('courier_to_branch'))
-      .filter((row) => String(row.party_id) === courierId)
-      .reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+    // CODE-28: qat'iy o'qish — xato yutilmaydi (yuqoridagi izoh).
+    scope.carry_amount = await this.loadCourierCarryStrict(courierId);
 
-    return successRes(scope, 200, 'Courier settlement scope');
+    return scope;
   }
 
   /**
    * R3 — kuryerni filialdan filialga o'tkazish tekshiruvi (order qismi).
    * FAQAT O'QIYDI; bloklash qarorini branch-service chiqaradi.
    *
-   *   • PENDING savdo — `getCourierSettlementScope` (o'zgarishsiz qayta
-   *     ishlatiladi);
-   *   • `carry_amount` — `loadCourierCarryStrict` (xato yutilmaydi);
+   *   • PENDING savdo — `computeCourierSettlementScope` (`getCourierSettlementScope`
+   *     ning hisob qismi, o'zgarishsiz qayta ishlatiladi);
+   *   • `carry_amount` — o'sha hisobning `loadCourierCarryStrict` i (xato
+   *     yutilmaydi);
    *   • qo'lidagi buyurtmalar — ushlovchi KURYER va yakunlanmagan, YOKI
    *     `courier_id` shu kuryer va yo'lda/kutilmoqda (qisman sotuvning bekor
    *     qoldig'i ham, qaytarilmagan bekorlar ham birinchi shartga tushadi);
@@ -632,7 +729,7 @@ export class OrderSettlementService {
    *
    * ⚠️ Baza xatosi hech qachon yutilmaydi va RpcException'ga o'raladi — xom
    * xato RMQ'da qayta navbatga qo'yilib, handler ikki marta ishlardi.
-   * `getCourierSettlementScope` ning `handleDbError` i ham tanimagan
+   * `computeCourierSettlementScope` ning `handleDbError` i ham tanimagan
    * QueryFailedError'ni xom holda qayta otadi — u ham shu yerda o'raladi.
    */
   async getCourierTransferCheck(data: { courier_id?: string | null }) {
@@ -666,33 +763,25 @@ export class OrderSettlementService {
         );
 
     try {
-      const [scopeResponse, carryAmount, ordersInHand, sampleRows, approvals] =
-        await Promise.all([
-          this.getCourierSettlementScope({ courier_id: courierId }),
-          this.loadCourierCarryStrict(courierId),
-          ordersInHandQuery().getCount(),
-          ordersInHandQuery()
-            .select('o.id', 'id')
-            .addSelect('o.status', 'status')
-            .orderBy('o.id', 'ASC')
-            .limit(COURIER_TRANSFER_SAMPLE_LIMIT)
-            .getRawMany<{ id: string; status: string }>(),
-          this.dataSource.getRepository(OrderExtraCostApproval).count({
-            where: {
-              requested_by_user_id: courierId,
-              status: 'pending',
-              isDeleted: false,
-            },
-          }),
-        ]);
-      const scope = scopeResponse.data as {
-        hq_pending_count: number;
-        hq_pending_amount: number;
-        branch_pending_count: number;
-        branch_pending_amount: number;
-        branch_ids: string[];
-        carry_amount: number;
-      };
+      // `scope.carry_amount` — `loadCourierCarryStrict` (CODE-28: scope ham
+      // endi qat'iy o'qiydi, alohida ikkinchi o'qish kerak emas).
+      const [scope, ordersInHand, sampleRows, approvals] = await Promise.all([
+        this.computeCourierSettlementScope(courierId),
+        ordersInHandQuery().getCount(),
+        ordersInHandQuery()
+          .select('o.id', 'id')
+          .addSelect('o.status', 'status')
+          .orderBy('o.id', 'ASC')
+          .limit(COURIER_TRANSFER_SAMPLE_LIMIT)
+          .getRawMany<{ id: string; status: string }>(),
+        this.dataSource.getRepository(OrderExtraCostApproval).count({
+          where: {
+            requested_by_user_id: courierId,
+            status: 'pending',
+            isDeleted: false,
+          },
+        }),
+      ]);
 
       return successRes(
         {
@@ -702,7 +791,7 @@ export class OrderSettlementService {
             scope.hq_pending_count + scope.branch_pending_count,
           pending_settlement_amount:
             scope.hq_pending_amount + scope.branch_pending_amount,
-          carry_amount: carryAmount,
+          carry_amount: scope.carry_amount,
           orders_in_hand: Number(ordersInHand) || 0,
           orders_sample: (sampleRows ?? []).map((row) => ({
             id: String(row.id),
@@ -750,6 +839,16 @@ export class OrderSettlementService {
     }
 
     const now = new Date();
+    /**
+     * fix3b (A4 ochiq masalasi): `branch_to_hq_by` — `bigint`. Integratsiya
+     * `created_by` bo'lmasa `'system'` yuboradi; u Postgres'da 22P02 bilan
+     * BUTUN update'ni yiqitardi (chaqiruvchi xatoni faqat ogohlantirish bilan
+     * yutadi — qatorlar PENDING da qolib, rollback qo'riqchisi naqd HQ'ga
+     * yetganini ko'rmasdi). `buildSettlementConfigs` dagi kabi: raqam
+     * bo'lmasa `NULL` (ustun nullable).
+     */
+    const requesterId = String(data?.requester_id ?? '').trim();
+    const settledBy = /^\d+$/.test(requesterId) ? requesterId : null;
     const result = await this.orderSettlementRepo
       .createQueryBuilder()
       .update(OrderSettlement)
@@ -757,7 +856,7 @@ export class OrderSettlementService {
         status: SettlementStatus.BRANCH_SETTLED,
         courier_to_branch_at: now,
         branch_to_hq_at: now,
-        branch_to_hq_by: String(data?.requester_id ?? 'system'),
+        branch_to_hq_by: settledBy,
       })
       .where('order_id IN (:...orderIds)', { orderIds })
       .andWhere('status = :status', { status: SettlementStatus.PENDING })
@@ -824,25 +923,56 @@ export class OrderSettlementService {
       amount: number,
     ) => Promise<void>;
     stamp: (now: Date) => Partial<OrderSettlement>;
+    /**
+     * M8 — advance tokenining "qo'llandi" belgisi (`ADVANCE_APPLIED_PATTERN`
+     * izohi). Berilsa tranzaksiyaning BIRINCHI yozuvi sifatida kiritiladi va
+     * commit bilan atomik bo'ladi; belgi allaqachon bo'lsa (boshqa commit
+     * bo'lgan tranzaksiya) `AdvanceAlreadyAppliedError` otiladi va hech narsa
+     * o'zgarmaydi. Kaskad chaqiruvlari bermaydi.
+     */
+    claimKey?: string;
+    /**
+     * C8 — FAQAT sof-nol yopish (`closeZeroCourierRows`). Lump-sum 0 bo'lishi
+     * shart. Tranzaksiya ichida, qoldiq qatori QULFLANGANDAN keyin
+     * tekshiriladi: qoldiq aynan 0 va `fromStatus` qatorlari yig'indisi aynan
+     * 0 tiyin bo'lsagina FIFO ishlaydi va BARCHA qatorlar yopilishi shart.
+     * MONEY-02: qoldiq musbat va yig'indiga AYNAN teng (butun tiyin) bo'lsa
+     * ham — bunda oddiy FIFO sikli qoldiq bilan ishlaydi, qoldiq 0 bo'ladi.
+     * Aks holda tranzaksiya qaytariladi va `rejected` da sabab qaytadi.
+     */
+    requireZeroNet?: boolean;
   }): Promise<{
     settled_order_ids: string[];
     allocated: number;
     leftover: number;
     /** Yopilgan qatorlarning filial/market id lari — kaskad uchun. */
     touched: { branch_ids: string[]; market_ids: string[] };
+    /** Faqat `requireZeroNet`: nega hech narsa yopilmadi. */
+    rejected?: ZeroNetRejection;
   }> {
     const lumpSum = Math.max(Number(params.lumpSum) || 0, 0);
+    // C8: sof-nol yopishda qoldiq jadvali QAT'IY aniqlanadi — yutilgan
+    // xatodan qolgan `false` kesh qoldiqni "yo'q" deb ko'rsatmasin.
     const carryEnabled = params.carryLevel
-      ? await this.isCarryEnabled()
+      ? params.requireZeroNet
+        ? await this.isCarryTableStrict()
+        : await this.isCarryEnabled()
       : false;
     // lump-sum 0 bilan faqat qoldiqni qo'llash uchun chaqiriladi (kaskad).
-    if (!params.matchValue || (lumpSum <= 0 && !carryEnabled)) {
+    // Sof-nol yopish qoldiq jadvali bo'lmasa ham tranzaksiyaga kiradi.
+    if (
+      !params.matchValue ||
+      (lumpSum <= 0 && !carryEnabled && !params.requireZeroNet)
+    ) {
       return {
         settled_order_ids: [],
         allocated: 0,
         leftover: lumpSum,
         touched: { branch_ids: [], market_ids: [] },
       };
+    }
+    if (params.requireZeroNet && lumpSum !== 0) {
+      this.badRequest("Sof-nol yopishda lump-sum 0 bo'lishi kerak");
     }
 
     const queryRunner = this.dataSource.createQueryRunner();
@@ -854,9 +984,16 @@ export class OrderSettlementService {
     let allocated = 0;
     let carryBefore = 0;
     let newCarry = lumpSum;
+    let zeroNetRejection: ZeroNetRejection | null = null;
     try {
       const tx = queryRunner.manager;
       const repo = tx.getRepository(OrderSettlement);
+
+      // M8: token birinchi bo'lib "egallanadi" — parallel ikkinchi ishga
+      // tushish UNIQUE indeksda shu tranzaksiya tugashini kutadi.
+      if (params.claimKey) {
+        await this.claimAdvanceToken(tx, params.claimKey);
+      }
 
       /**
        * Avvalgi taqsimlanmagan qoldiq — qator QULFLANADI (bir tomonga ikki
@@ -932,7 +1069,73 @@ export class OrderSettlementService {
         Number(row[params.amountField] ?? 0) || 0;
       const credits = candidates.filter((row) => legOf(row) < 0);
       const payables = candidates.filter((row) => legOf(row) >= 0);
-      for (const settlement of payables) {
+      /**
+       * C8 — sof-nol yopish sharti. Qoldiq qatori yuqorida QULFLANGAN, ya'ni
+       * parallel to'lov uni o'zgartira olmaydi. Summalar butun tiyinda —
+       * suzuvchi nuqta qoldig'i "deyarli 0" ni 0 deb o'tkazib yubormasin.
+       * Qoldiq xom qiymati tekshiriladi (`carryBefore` manfiyni 0 ga qirqadi).
+       *
+       * MONEY-02 — QOLDIQ QOPLAGAN holat (`carryCoveredTiyin`). Superadmin
+       * topshirilgan sotuvni qaytarsa, kuryer topshirgan summa uning
+       * qoldig'iga kredit bo'ladi. O'sha kuryer buyurtmani AYNI summaga qayta
+       * sotsa kassasi 0 (Σ PENDING − qoldiq), lekin qatorni hech narsa yopa
+       * olmasdi: 0 so'm topshirib bo'lmaydi, sof-nol yopish esa qoldiq 0
+       * bo'lishini talab qilardi — kuryerni o'tkazish/chiqarish uning keyingi
+       * to'lovigacha 409. Endi qoldiq musbat va yig'indiga AYNAN teng bo'lsa
+       * (butun tiyin), qatorlar ODDIY FIFO sikli bilan yopiladi (pastda):
+       * lump-sum 0, `remaining` = qoldiq. Natija kuryer to'lovi kelib, eski
+       * qoldiq qatorlarni qoplagandagi bilan AYNAN bir xil (holatlar, `postLeg`
+       * chaqiruvlari, kaskad), qoldiq esa 0. Qo'shimcha shart: har qator
+       * qoldiq turgan filialniki (`branch_id`; HQ kuryerida NULL). Aks holda
+       * bir filial kassasidagi naqd boshqa filial qatorini yopib, ikkala
+       * filial daftarini buzardi (`carry_branch_mismatch`, hech narsa
+       * o'zgarmaydi).
+       */
+      let carryCoveredTiyin: number | null = null;
+      if (params.requireZeroNet) {
+        const toTiyin = (value: number) => Math.round(value * 100);
+        const netTiyin = candidates.reduce(
+          (sum, row) => sum + toTiyin(legOf(row)),
+          0,
+        );
+        const carryTiyin = toTiyin(Number(carryRow?.amount ?? 0) || 0);
+        if (!candidates.length) {
+          zeroNetRejection = 'no_pending_rows';
+        } else if (carryTiyin > 0 && carryTiyin === netTiyin) {
+          const carryBranch = String(carryRow?.branch_id ?? '').trim();
+          if (
+            candidates.some(
+              (row) => String(row.branch_id ?? '').trim() !== carryBranch,
+            )
+          ) {
+            zeroNetRejection = 'carry_branch_mismatch';
+          } else {
+            carryCoveredTiyin = carryTiyin;
+          }
+        } else if (carryTiyin !== 0) {
+          zeroNetRejection = 'carry_not_zero';
+        } else if (netTiyin !== 0) {
+          zeroNetRejection = 'pending_amount_not_zero';
+        }
+        /**
+         * Lump-sum 0, qoldiq 0, yig'indi 0 bo'lganda nol FIFO (pastdagi
+         * sikl) aniq arifmetikada BARCHA qatorlarni yopadi: har musbat qator
+         * uchun kreditlar yetadi, kreditlar esa oxirigacha tortiladi. Shu
+         * natija bu yerda to'g'ridan-to'g'ri, `createdAt` tartibida, butun
+         * tiyinda qo'llanadi — suzuvchi nuqta (masalan 0,1 + 0,2 − 0,3)
+         * siklni yarim yo'lda to'xtatib qo'ymasin. `allocated` = 0 aniq.
+         */
+        if (!zeroNetRejection && carryCoveredTiyin === null) {
+          for (const row of candidates) {
+            await advanceRow(row);
+          }
+        }
+      }
+      // Sof-nol (C8) yo'lida sikl ishlamaydi — qatorlar yuqorida yopildi.
+      // Qoldiq qoplagan holatda (MONEY-02) — oddiy FIFO bilan AYNAN bir xil.
+      const fifoRows =
+        params.requireZeroNet && carryCoveredTiyin === null ? [] : payables;
+      for (const settlement of fifoRows) {
         const legAmount = legOf(settlement);
         // Strict FIFO (Faza 4 / Audit I16): if the OLDEST still-unsettled order's
         // leg does not fully fit in the remaining lump-sum, STOP — never skip
@@ -963,13 +1166,29 @@ export class OrderSettlementService {
         }
       }
 
+      // C8: hammasi yoki hech narsa — yopilmay qolgan qator bo'lsa, yopilgan
+      // qism sof-nol emas edi (naqdsiz yopilgan bo'lardi).
+      if (
+        params.requireZeroNet &&
+        !zeroNetRejection &&
+        settledOrderIds.length !== candidates.length
+      ) {
+        zeroNetRejection = 'not_fully_closed';
+      }
+
       /**
        * Yangi qoldiq = (lump-sum + eski qoldiq) − haqiqatan yopilgan summa.
        * `remaining` EMAS: tortilib, lekin yozilmay qolgan kreditlar uni
        * sun'iy oshirgan bo'lishi mumkin.
        */
       newCarry = Math.max(lumpSum + carryBefore - allocated, 0);
-      if (carryRepo && carryRow) {
+      // MONEY-02: hammasi yopildi, yig'indi qoldiqqa butun tiyinda teng —
+      // qoldiq to'liq sarflandi (suzuvchi nuqta qoldig'i yozilmasin).
+      if (carryCoveredTiyin !== null && !zeroNetRejection) {
+        allocated = carryCoveredTiyin / 100;
+        newCarry = 0;
+      }
+      if (carryRepo && carryRow && !zeroNetRejection) {
         // Kuryer bo'g'ini: naqd HQ'ga to'g'ridan-to'g'ri yetganmi (HQ kuryeri,
         // `branch_id` NULL) — balans shunga qarab ayiradi.
         let carryBranchId = carryRow.branch_id ?? null;
@@ -993,7 +1212,29 @@ export class OrderSettlementService {
         );
       }
 
-      await queryRunner.commitTransaction();
+      if (params.claimKey && !zeroNetRejection) {
+        // Belgiga natija yoziladi — qayta ishga tushgan handler AYNAN shuni
+        // qaytaradi (tashxis uchun).
+        await tx.getRepository(IdempotencyKey).update(
+          { key: params.claimKey },
+          {
+            response: {
+              settled_order_ids: settledOrderIds,
+              allocated,
+              leftover: carryEnabled
+                ? newCarry
+                : Math.max(lumpSum - allocated, 0),
+            },
+          },
+        );
+      }
+
+      if (zeroNetRejection) {
+        // C8: shart bajarilmadi — hech narsa o'zgarmaydi.
+        await queryRunner.rollbackTransaction();
+      } else {
+        await queryRunner.commitTransaction();
+      }
     } catch (error) {
       await queryRunner.rollbackTransaction();
       if (error instanceof RpcException) {
@@ -1009,6 +1250,16 @@ export class OrderSettlementService {
       await queryRunner.release();
     }
 
+    if (zeroNetRejection) {
+      return {
+        settled_order_ids: [],
+        allocated: 0,
+        leftover: 0,
+        touched: { branch_ids: [], market_ids: [] },
+        rejected: zeroNetRejection,
+      };
+    }
+
     return {
       settled_order_ids: settledOrderIds,
       allocated,
@@ -1020,6 +1271,63 @@ export class OrderSettlementService {
         market_ids: [...touchedMarkets],
       },
     };
+  }
+
+  /**
+   * M8 — advance tokenini FIFO tranzaksiyasi ichida "egallash". UNIQUE
+   * buzilishi (23505) = token boshqa, commit bo'lgan tranzaksiyada
+   * qo'llangan → `AdvanceAlreadyAppliedError`.
+   */
+  private async claimAdvanceToken(
+    tx: EntityManager,
+    key: string,
+  ): Promise<void> {
+    try {
+      await tx.getRepository(IdempotencyKey).insert({
+        key,
+        pattern: ADVANCE_APPLIED_PATTERN,
+        status: 'completed',
+        completed_at: new Date(),
+      });
+    } catch (error) {
+      const code =
+        (error as { code?: string })?.code ??
+        (error as { driverError?: { code?: string } })?.driverError?.code;
+      if (error instanceof QueryFailedError && code === PG_UNIQUE_VIOLATION) {
+        throw new AdvanceAlreadyAppliedError(key);
+      }
+      throw error;
+    }
+  }
+
+  /** M8 — token belgisi kaliti (token uzunligidan qat'i nazar 97 belgi). */
+  private advanceAppliedKey(token: string): string {
+    return `${ADVANCE_APPLIED_PATTERN}:${createHash('sha256')
+      .update(token)
+      .digest('hex')}`;
+  }
+
+  /**
+   * M8 — token allaqachon qo'llanganmi. Ha bo'lsa o'sha natija (`replayed:
+   * true` bilan) qaytadi, aks holda `null`. Baza xatosi YUTILMAYDI — handler
+   * yiqiladi va keyingi urinish (reclaimFailed) qayta tekshiradi.
+   */
+  private async findAppliedAdvance(key: string) {
+    const row = await this.dataSource
+      .getRepository(IdempotencyKey)
+      .findOne({ where: { key } });
+    if (!row) {
+      return null;
+    }
+    const stored =
+      row.response && typeof row.response === 'object'
+        ? (row.response as Record<string, unknown>)
+        : {};
+    return successRes(
+      { ...stored, replayed: true },
+      200,
+      'Settlement already advanced',
+    );
   }
 
   /**
@@ -1087,6 +1395,7 @@ export class OrderSettlementService {
     match_value: string;
     amount: number;
     requester_id?: string;
+    request_id?: string;
   }) {
     const requesterId = String(data?.requester_id ?? 'system');
     const matchValue = String(data?.match_value ?? '').trim();
@@ -1102,49 +1411,28 @@ export class OrderSettlementService {
     // State-only: the cashbox was already moved by the finance payment path.
     const noPost = async (): Promise<void> => {};
 
-    const configs = {
-      courier_to_branch: {
-        carryLevel: 'courier_to_branch' as const,
-        matchColumn: 'courier_id' as const,
-        fromStatus: SettlementStatus.PENDING,
-        // Filial bo'lsa — filialda; bo'lmasa (HQ sotuvi) naqd allaqachon
-        // HQ'da, shuning uchun darhol BRANCH_SETTLED.
-        toStatus: (settlement: OrderSettlement) =>
-          settlement.branch_id
-            ? SettlementStatus.COURIER_SETTLED
-            : SettlementStatus.BRANCH_SETTLED,
-        amountField: 'courier_amount' as const,
-        stamp: (now: Date) => ({
-          courier_to_branch_at: now,
-          courier_to_branch_by: requesterId,
-        }),
-      },
-      branch_to_hq: {
-        carryLevel: 'branch_to_hq' as const,
-        matchColumn: 'branch_id' as const,
-        fromStatus: SettlementStatus.COURIER_SETTLED,
-        toStatus: () => SettlementStatus.BRANCH_SETTLED,
-        amountField: 'branch_amount' as const,
-        stamp: (now: Date) => ({
-          branch_to_hq_at: now,
-          branch_to_hq_by: requesterId,
-        }),
-      },
-      hq_to_market: {
-        carryLevel: 'hq_to_market' as const,
-        matchColumn: 'market_id' as const,
-        fromStatus: SettlementStatus.BRANCH_SETTLED,
-        toStatus: () => SettlementStatus.MARKET_SETTLED,
-        amountField: 'market_amount' as const,
-        stamp: (now: Date) => ({
-          hq_to_market_at: now,
-          hq_to_market_by: requesterId,
-        }),
-      },
-    };
+    const configs = this.buildSettlementConfigs(requesterId);
     const cfg = configs[data.level];
     if (!cfg) {
       this.badRequest(`Invalid settlement level: ${String(data?.level)}`);
+    }
+
+    /**
+     * M8 — token allaqachon qo'llangan bo'lsa (commit o'tgan, lekin javob /
+     * `markCompleted` yo'qolgan va handler qayta ishga tushgan) hech narsa
+     * qilinmaydi: o'sha natija qaytadi. Token bo'lmasa (eski chaqiruvchi)
+     * xatti-harakat avvalgidek.
+     */
+    const token = String(data?.request_id ?? '').trim();
+    const appliedKey = token ? this.advanceAppliedKey(token) : undefined;
+    if (appliedKey) {
+      const applied = await this.findAppliedAdvance(appliedKey);
+      if (applied) {
+        this.logger.warn(
+          `order.settlement.advance replay ignored (already applied): level=${data.level} match=${matchValue}`,
+        );
+        return applied;
+      }
     }
 
     /**
@@ -1161,18 +1449,45 @@ export class OrderSettlementService {
       data.level === 'branch_to_hq' &&
       (await this.resolveHqBranchId()) === matchValue;
 
-    const result = await this.runFifoSettlement({
-      carryLevel: isHqBranchParty ? undefined : cfg.carryLevel,
-      matchColumn: cfg.matchColumn,
-      matchValue,
-      fromStatus: cfg.fromStatus,
-      toStatus: cfg.toStatus,
-      amountField: cfg.amountField,
-      lumpSum: amount,
-      requesterId,
-      postLeg: noPost,
-      stamp: cfg.stamp,
-    });
+    let result: Awaited<
+      ReturnType<OrderSettlementService['runFifoSettlement']>
+    >;
+    try {
+      result = await this.runFifoSettlement({
+        carryLevel: isHqBranchParty ? undefined : cfg.carryLevel,
+        matchColumn: cfg.matchColumn,
+        matchValue,
+        fromStatus: cfg.fromStatus,
+        toStatus: cfg.toStatus,
+        amountField: cfg.amountField,
+        lumpSum: amount,
+        requesterId,
+        postLeg: noPost,
+        stamp: cfg.stamp,
+        claimKey: appliedKey,
+      });
+    } catch (error) {
+      // M8: parallel ishga tushgan ikkinchi nusxa — birinchisi commit bo'ldi.
+      if (error instanceof AdvanceAlreadyAppliedError && appliedKey) {
+        this.logger.warn(
+          `order.settlement.advance concurrent replay ignored: level=${data.level} match=${matchValue}`,
+        );
+        return (
+          (await this.findAppliedAdvance(appliedKey)) ??
+          successRes(
+            {
+              settled_order_ids: [],
+              allocated: 0,
+              leftover: 0,
+              replayed: true,
+            },
+            200,
+            'Settlement already advanced',
+          )
+        );
+      }
+      throw error;
+    }
 
     // Keyingi bo'g'inda kutib turgan qoldiqlarni darhol qo'llash (kaskad).
     if (data.level === 'courier_to_branch') {
@@ -1207,6 +1522,162 @@ export class OrderSettlementService {
     const publicResult: Partial<typeof result> = { ...result };
     delete publicResult.touched;
     return successRes(publicResult, 200, 'Settlement advanced');
+  }
+
+  /**
+   * Bo'g'inlar konfiguratsiyasi — advance, kaskad va sof-nol yopish uchun
+   * BITTA manba (`advanceSettlement` dan o'zgarishsiz ko'chirilgan).
+   *
+   * `*_by` ustunlari `bigint`: raqam bo'lmagan qiymat (masalan `'system'`)
+   * Postgres'da 22P02 bilan butun FIFO tranzaksiyasini yiqitardi — outbox
+   * esa endi pul hodisasini to'xtovsiz qayta urinadi (M8), ya'ni bunday
+   * hodisa hech qachon o'tmasdi. Shuning uchun raqam bo'lmagan qiymat `null`
+   * yoziladi (ustun nullable).
+   */
+  private buildSettlementConfigs(requesterId: string | null) {
+    const stampBy =
+      requesterId && /^\d+$/.test(requesterId) ? requesterId : null;
+    return {
+      courier_to_branch: {
+        carryLevel: 'courier_to_branch' as const,
+        matchColumn: 'courier_id' as const,
+        fromStatus: SettlementStatus.PENDING,
+        // Filial bo'lsa — filialda; bo'lmasa (HQ sotuvi) naqd allaqachon
+        // HQ'da, shuning uchun darhol BRANCH_SETTLED.
+        toStatus: (settlement: OrderSettlement) =>
+          settlement.branch_id
+            ? SettlementStatus.COURIER_SETTLED
+            : SettlementStatus.BRANCH_SETTLED,
+        amountField: 'courier_amount' as const,
+        stamp: (now: Date) => ({
+          courier_to_branch_at: now,
+          courier_to_branch_by: stampBy,
+        }),
+      },
+      branch_to_hq: {
+        carryLevel: 'branch_to_hq' as const,
+        matchColumn: 'branch_id' as const,
+        fromStatus: SettlementStatus.COURIER_SETTLED,
+        toStatus: () => SettlementStatus.BRANCH_SETTLED,
+        amountField: 'branch_amount' as const,
+        stamp: (now: Date) => ({
+          branch_to_hq_at: now,
+          branch_to_hq_by: stampBy,
+        }),
+      },
+      hq_to_market: {
+        carryLevel: 'hq_to_market' as const,
+        matchColumn: 'market_id' as const,
+        fromStatus: SettlementStatus.BRANCH_SETTLED,
+        toStatus: () => SettlementStatus.MARKET_SETTLED,
+        amountField: 'market_amount' as const,
+        stamp: (now: Date) => ({
+          hq_to_market_at: now,
+          hq_to_market_by: stampBy,
+        }),
+      },
+    };
+  }
+
+  /**
+   * C8 (CODE-06) — kuryerning SOF-NOL PENDING `courier_to_branch` qatorlarini
+   * yopish (`order.settlement.close_zero_courier_rows`).
+   *
+   * ⚠️ NEGA KERAK. Qatorlar faqat MUSBAT topshiriq ichidagi FIFO bilan
+   * yopiladi (finance 0 so'mni qabul qilmaydi). Kuryerning oxirgi sotuvi
+   * aynan uning ulushiga teng bo'lsa qator 0, kassa ham 0 — menejer 0 so'm
+   * qabul qila olmaydi, kuryerni o'tkazish / filialdan chiqarish esa PENDING
+   * qator tufayli abadiy 409 qaytaradi. Pul ko'chmaydi, faqat daftar yopiladi.
+   *
+   * Shartlar (hammasi bitta tranzaksiyada, qoldiq qatori QULFLANGAN holda,
+   * `runFifoSettlement({ requireZeroNet })`):
+   *   • kuryerning BARCHA PENDING qatorlari `courier_amount` yig'indisi
+   *     AYNAN 0 tiyin VA `courier_to_branch` qoldig'i AYNAN 0;
+   *   • YOKI (MONEY-02) qoldiq musbat va o'sha yig'indiga AYNAN teng (butun
+   *     tiyin), har qator qoldiq turgan filialniki — qatorlar oddiy FIFO
+   *     bilan qoldiq hisobidan yopiladi, qoldiq 0 bo'ladi (superadmin
+   *     kreditidan keyin AYNI summaga qayta sotuv);
+   *   • nol lump-sum FIFO BARCHA qatorlarni yopadi (hammasi yoki hech narsa).
+   * Biror shart bajarilmasa hech narsa o'zgarmaydi: `closed_count: 0`,
+   * sabab `skipped_reason` da. Keyin kaskad — `advanceSettlement` dagi kabi
+   * (best-effort). Xatolar har doim RpcException (RMQ qayta navbatga
+   * qo'ymasin). Javob: `successRes({closed_count, ...})` + yuqori darajadagi
+   * `closed_count`.
+   */
+  async closeZeroCourierRows(data: {
+    courier_id?: string | null;
+    requester?: { id?: string | null; roles?: string[] } | null;
+  }) {
+    const courierId = String(data?.courier_id ?? '').trim();
+    if (!/^\d+$/.test(courierId)) {
+      this.badRequest("courier_id raqam ko'rinishida bo'lishi kerak");
+    }
+    const requesterId = String(data?.requester?.id ?? '').trim() || null;
+    const configs = this.buildSettlementConfigs(requesterId);
+    const cascadeRequesterId = requesterId ?? 'system';
+
+    try {
+      const result = await this.runFifoSettlement({
+        ...configs.courier_to_branch,
+        matchValue: courierId,
+        lumpSum: 0,
+        requesterId: cascadeRequesterId,
+        postLeg: async () => {},
+        requireZeroNet: true,
+      });
+
+      if (!result.rejected && result.settled_order_ids.length) {
+        // Kaskad — advance'dagi kabi; C10: HQ nomidagi qoldiq qo'llanmaydi.
+        const hqBranchId = result.touched.branch_ids.length
+          ? await this.resolveHqBranchId()
+          : null;
+        await this.applyPendingCarries(
+          'branch_to_hq',
+          result.touched.branch_ids.filter((id) => id !== hqBranchId),
+          configs,
+          cascadeRequesterId,
+        );
+        await this.applyPendingCarries(
+          'hq_to_market',
+          result.touched.market_ids,
+          configs,
+          cascadeRequesterId,
+        );
+        // MONEY-02: qoldiq hisobidan yopilgan bo'lsa — sarflangan qoldiq ham.
+        this.logger.log(
+          `Net-zero courier rows closed: courier=${courierId} count=${result.settled_order_ids.length}${result.allocated ? ` carry_used=${result.allocated}` : ''} by=${requesterId ?? 'unknown'}`,
+        );
+      }
+
+      const closedCount = result.rejected ? 0 : result.settled_order_ids.length;
+      return {
+        ...successRes(
+          {
+            courier_id: courierId,
+            closed_count: closedCount,
+            closed_order_ids: result.rejected ? [] : result.settled_order_ids,
+            skipped_reason: result.rejected ?? null,
+          },
+          200,
+          closedCount
+            ? 'Net-zero courier settlement rows closed'
+            : 'Nothing to close',
+        ),
+        closed_count: closedCount,
+      };
+    } catch (error) {
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.logger.warn(
+        `order.settlement.close_zero_courier_rows failed (courier=${courierId}): ${(error as Error)?.message ?? error}`,
+      );
+      throw new RpcException({
+        statusCode: 500,
+        message:
+          "Kuryerning sof-nol hisob-kitob qatorlarini yopib bo'lmadi (ma'lumotlar bazasi xatosi)",
+      });
+    }
   }
 
   /**

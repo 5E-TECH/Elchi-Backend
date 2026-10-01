@@ -76,6 +76,28 @@ export class FindCashboxByUserQueryDto {
   @IsBoolean()
   with_history?: boolean;
 
+  /**
+   * FE-PAY-04 / C2: kassa sahifasidagi sana filtri. Ilgari DTO'da yo'q edi —
+   * `forbidNonWhitelisted` 400 qaytarardi va sahifa bo'shab qolardi.
+   */
+  @ApiPropertyOptional({
+    example: '2026-10-01',
+    description:
+      'Tarix boshlanishi: YYYY-MM-DD (Toshkent kuni 00:00) yoki to‘liq ISO',
+  })
+  @IsOptional()
+  @IsString()
+  fromDate?: string;
+
+  @ApiPropertyOptional({
+    example: '2026-10-01',
+    description:
+      'Tarix oxiri: YYYY-MM-DD (Toshkent kuni 23:59:59.999) yoki to‘liq ISO',
+  })
+  @IsOptional()
+  @IsString()
+  toDate?: string;
+
   @ApiPropertyOptional({
     example: 1,
     description: '0 yuborilsa pagination o‘chadi va hamma history qaytadi',

@@ -106,13 +106,26 @@ describe('PartnerGatewayController — geo passthrough (C1.4)', () => {
     ]);
   });
 
+  // fix3 RBAC-13: market shu hamkor tomonidan ochilgan bo'lishi shart
+  // (`mp<partner_id>_<external_seller_id>` username).
+  const partnerReq = { partner: { id: '7', name: 'Acme' } };
+
   it('TC3: tariff -> where_deliver bo‘yicha market summasi qaytadi', async () => {
     const identity = jest.fn(() =>
-      of({ data: [{ id: 77, tariff_home: 15000, tariff_center: 10000 }] }),
+      of({
+        data: [
+          {
+            id: 77,
+            username: 'mp7_shop1',
+            tariff_home: 15000,
+            tariff_center: 10000,
+          },
+        ],
+      }),
     );
     const ctrl = makeController(jest.fn(), identity);
 
-    const center = await ctrl.getTariff('77', 'center');
+    const center = await ctrl.getTariff('77', 'center', partnerReq);
     expect(identity).toHaveBeenCalledWith(
       { cmd: 'identity.market.find_by_ids' },
       { ids: ['77'] },
@@ -126,8 +139,47 @@ describe('PartnerGatewayController — geo passthrough (C1.4)', () => {
     const address = await makeController(jest.fn(), identity).getTariff(
       '77',
       'address',
+      partnerReq,
     );
     expect(address.data.market_tariff).toBe(15000);
+  });
+
+  it('tariff: BOSHQA hamkor yoki ichki Elchi marketi -> 404 (RBAC-13)', async () => {
+    const identity = jest.fn(() =>
+      of({
+        data: [
+          {
+            id: 78,
+            username: 'yandex_market',
+            tariff_home: 15000,
+            tariff_center: 10000,
+          },
+        ],
+      }),
+    );
+    await expect(
+      makeController(jest.fn(), identity).getTariff('78', 'center', partnerReq),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    // mp70_* — 70-hamkorniki; 7-hamkor uni ko'rmaydi (prefiks `_` bilan).
+    const otherPartner = jest.fn(() =>
+      of({ data: [{ id: 79, username: 'mp70_shop', tariff_home: 1 }] }),
+    );
+    await expect(
+      makeController(jest.fn(), otherPartner).getTariff(
+        '79',
+        'center',
+        partnerReq,
+      ),
+    ).rejects.toBeInstanceOf(NotFoundException);
+
+    // Hamkor aniqlanmasa — fail-closed.
+    const own = jest.fn(() =>
+      of({ data: [{ id: 77, username: 'mp7_shop1', tariff_home: 1 }] }),
+    );
+    await expect(
+      makeController(jest.fn(), own).getTariff('77', 'center', undefined),
+    ).rejects.toBeInstanceOf(NotFoundException);
   });
 
   it('tariff: elchi_market_id yo‘q -> 400', async () => {

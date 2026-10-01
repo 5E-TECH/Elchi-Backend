@@ -1261,8 +1261,12 @@ export class ApiGatewayController {
   })
   @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
   @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
-  @ApiOkResponse({ description: 'Market list' })
+  @ApiOkResponse({
+    description:
+      "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status}. COURIER: faqat {id, name, status}.",
+  })
   async getMarkets(
+    @Req() req: { user: JwtUser },
     @Query('search') search?: string,
     @Query('status') status?: string,
     @Query('page') page?: string,
@@ -1291,6 +1295,18 @@ export class ApiGatewayController {
       return response;
     }
 
+    // CODE-08 / C11: faqat superadmin/admin to'liq market qatorini (login
+    // telefoni, username, tariflar, sozlamalar) va kassa balansini oladi.
+    // Qolgan rollar ekranlari faqat tanlash ro'yxatini ko'rsatadi — ularga
+    // shu ro'yxat uchun kerakli maydonlar qaytadi (kassa so'rovi ham yo'q).
+    const view = this.marketListView(req?.user);
+    if (view !== 'full') {
+      response.data.items = items.map((market: any) =>
+        this.projectMarketListItem(market, view),
+      );
+      return response;
+    }
+
     response.data.items = await Promise.all(
       items.map(async (market: any) => ({
         ...market,
@@ -1302,6 +1318,48 @@ export class ApiGatewayController {
     );
 
     return response;
+  }
+
+  /**
+   * GET /markets ko'rinishi (CODE-08 / C11):
+   * - full: SUPERADMIN/ADMIN — to'liq qator + cashbox (o'zgarmagan);
+   * - branch_staff: MANAGER/REGISTRATOR/BRANCH — buyurtma yaratish, filtr va
+   *   mahsulot ekranlari market tanlashda id, nom, telefon va statusni
+   *   ishlatadi (orders/create Step1Market, orders, products);
+   * - minimal: COURIER (va boshqa har qanday rol) — faqat filtr: id, nom,
+   *   status. Telefon, username, tariflar, kassa — yo'q.
+   */
+  private marketListView(
+    user: JwtUser | undefined,
+  ): 'full' | 'branch_staff' | 'minimal' {
+    const roles = new Set(
+      (user?.roles ?? []).map((role) => String(role).toLowerCase()),
+    );
+    if (roles.has(RoleEnum.SUPERADMIN) || roles.has(RoleEnum.ADMIN)) {
+      return 'full';
+    }
+    if (
+      roles.has(RoleEnum.MANAGER) ||
+      roles.has(RoleEnum.REGISTRATOR) ||
+      roles.has(RoleEnum.BRANCH)
+    ) {
+      return 'branch_staff';
+    }
+    return 'minimal';
+  }
+
+  private projectMarketListItem(
+    market: Record<string, unknown> | null | undefined,
+    view: 'branch_staff' | 'minimal',
+  ) {
+    const base = {
+      id: market?.id ?? null,
+      name: market?.name ?? null,
+      status: market?.status ?? null,
+    };
+    return view === 'branch_staff'
+      ? { ...base, phone_number: market?.phone_number ?? null }
+      : base;
   }
 
   @Patch('markets/:id/add-order')

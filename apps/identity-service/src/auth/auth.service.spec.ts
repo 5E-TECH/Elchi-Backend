@@ -166,8 +166,9 @@ describe('AuthService.refresh', () => {
     ).rejects.toBeInstanceOf(RpcException);
   });
 
-  it('detects reuse: stored hash differs → invalidates session AND rejects', async () => {
-    // A validly signed but stale token does not match the active DB hash.
+  it('superseded token: stored hash differs → rejects (401) but keeps the newer session (RBAC-10)', async () => {
+    // A validly signed but stale token (an earlier login, superseded by a
+    // newer login on another device) does not match the active DB hash.
     const user: MockUser = {
       id: 'u1',
       username: 'alice',
@@ -175,16 +176,57 @@ describe('AuthService.refresh', () => {
       refresh_token: sha256('different-token'),
       isDeleted: false,
     };
-    const { service, usersRepo } = buildService(user);
+    const { service, usersRepo, activityLog } = buildService(user);
 
+    const error = await service
+      .refresh({ refreshToken: VALID_TOKEN } as any)
+      .then(
+        () => {
+          throw new Error('expected a 401');
+        },
+        (e: unknown) => e,
+      );
+    expect(error).toBeInstanceOf(RpcException);
+    expect((error as RpcException).getError()).toEqual(
+      expect.objectContaining({ statusCode: 401 }),
+    );
+
+    // The stale token is never accepted, but the NEWER session is not wiped:
+    // wiping it logged out the legitimate second device too.
+    expect(usersRepo.save).not.toHaveBeenCalled();
+    expect(usersRepo.update).not.toHaveBeenCalled();
+    expect(user.refresh_token).toBe(sha256('different-token'));
+    // The security trail is kept.
+    expect(activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        action: 'auth_failure',
+        metadata: {
+          reason: 'refresh_token_superseded',
+          session_invalidated: false,
+        },
+      }),
+    );
+  });
+
+  it('two devices: after device A presents its superseded token, device B still refreshes (RBAC-10)', async () => {
+    const DEVICE_B_TOKEN = 'device-b-refresh-token';
+    const user: MockUser = {
+      id: 'u1',
+      username: 'alice',
+      status: 'active',
+      refresh_token: sha256(DEVICE_B_TOKEN),
+      isDeleted: false,
+    };
+    const { service } = buildService(user);
+
+    // Device A (older login) is logged out...
     await expect(
       service.refresh({ refreshToken: VALID_TOKEN } as any),
     ).rejects.toBeInstanceOf(RpcException);
 
-    // CRITICAL: the active session is wiped when a stale token is presented.
-    expect(usersRepo.save).toHaveBeenCalledTimes(1);
-    const savedUser = usersRepo.save.mock.calls[0][0];
-    expect(savedUser.refresh_token).toBeNull();
+    // ...device B (the latest login) keeps working.
+    const res = await service.refresh({ refreshToken: DEVICE_B_TOKEN } as any);
+    expect(res.statusCode).toBe(200);
   });
 
   it('rejects when user is inactive', async () => {

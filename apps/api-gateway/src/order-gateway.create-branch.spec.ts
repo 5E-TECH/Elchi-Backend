@@ -27,16 +27,21 @@ describe('OrderGatewayController create with branch auto binding', () => {
         data: { branch_id: '12', role: 'REGISTRATOR' },
       }),
     );
-    identityClient.send.mockReturnValue(
-      of({ data: { id: 'reg1', market_id: '77', name: 'Registrator 1' } }),
-    );
+    // fix3 RBAC-01: filial xodimidan tayyor customer_id qabul qilinmaydi —
+    // mijoz `customer` obyektidan (identity.customer.create) aniqlanadi.
+    identityClient.send.mockReturnValue(of({ data: { id: '55' } }));
     orderClient.send.mockReturnValue(
       of({ statusCode: 201, data: { id: '100' } }),
     );
 
     await controller.create(
       {
-        customer_id: '55',
+        market_id: '77',
+        customer: {
+          name: 'Ali',
+          phone_number: '+998901112233',
+          district_id: '5',
+        },
         items: [{ product_id: '10', quantity: 1 }],
       } as any,
       { user: { sub: 'reg1', username: 'reg', roles: ['branch'] } } as any,
@@ -45,6 +50,7 @@ describe('OrderGatewayController create with branch auto binding', () => {
     const payload = orderClient.send.mock.calls[0][1];
     expect(payload.dto.branch_id).toBe('12');
     expect(payload.dto.source).toBe('branch');
+    expect(payload.dto.customer_id).toBe('55');
   });
 
   it('HQ admin create qilsa eski flow qoladi (branch auto qo‘shilmaydi)', async () => {

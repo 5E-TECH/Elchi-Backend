@@ -187,7 +187,9 @@ describe('partlySellOrder — katalogsiz (hamkor) qatorlar', () => {
       { id: '1', product_id: '4', product_name: 'Telefon', quantity: 10 },
     ]);
 
-    await t.partlySell([{ product_id: '4', quantity: 3 }], 1500000);
+    // Narx buyurtma summasidan (1 000 000) oshmasligi shart (audit M10):
+    // 10 ta telefondan 3 tasi — 300 000.
+    await t.partlySell([{ product_id: '4', quantity: 3 }], 300000);
 
     expect(t.savedItems).toEqual([{ id: '1', quantity: 3 }]);
     expect(t.childItems).toEqual([

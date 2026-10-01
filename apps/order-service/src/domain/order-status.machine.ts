@@ -43,8 +43,13 @@ export const ORDER_STATUS_TRANSITIONS: Record<Order_status, Order_status[]> = {
     Order_status.RETURNED_TO_MARKET,
     Order_status.CLOSED,
   ],
+  // fix3b: SOLD → PARTLY_PAID — HQ marketga sotilgan buyurtma summasining
+  // bir qismini to'laganda (finance `writeOrderPayment`, so'rovchisiz
+  // `order.update_normalized`). Ilgari bu o'tish rad etilardi va finance
+  // faqat `paid_amount` ni yozardi — holat SOLD da qolardi.
   [Order_status.SOLD]: [
     Order_status.PAID,
+    Order_status.PARTLY_PAID,
     Order_status.WAITING,
     Order_status.CLOSED,
   ],

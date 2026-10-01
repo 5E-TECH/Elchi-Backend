@@ -44,6 +44,10 @@ const baseShipment = {
   elchi_market_id: '500',
   customer: { name: 'Ali', phone: '+998901234567' },
   district_id: '12',
+  // fix3b (LC-13): `region_id` berilmasa u tumandan (logistika) aniqlanadi —
+  // bu specda logistika klienti yo'q, shu bois raqamli viloyat beriladi.
+  // Viloyatni aniqlash `fix3b-partner-shipment-region.spec.ts` da.
+  region_id: '1',
   cod_amount: 100000,
 };
 

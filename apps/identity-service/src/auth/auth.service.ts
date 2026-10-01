@@ -171,12 +171,20 @@ export class AuthService {
 
     if (user.refresh_token !== presentedHash) {
       // The signature is valid but this is not the active token stored for
-      // the user. Invalidate the session instead of accepting a stale token.
+      // the user, so it is rejected (401) — a stale token is never accepted.
+      //
+      // RBAC-10: the stored session is NOT wiped any more. Refresh tokens are
+      // not rotated and every login overwrites the single stored hash, so a
+      // mismatching token is a SUPERSEDED login (another device/browser logged
+      // in later), not a replay of a rotated token. Wiping the hash here
+      // logged out the newer, legitimate session as well — both devices were
+      // kicked within ~15 minutes of every login. Explicit revocations
+      // (logout, password/phone change, deactivation) still null the hash or
+      // fail the status check above. Per-device sessions are a separate
+      // redesign (C15 decision).
       this.logger.warn(
-        `Refresh token reuse detected for user ${user.id} — invalidating session`,
+        `Superseded refresh token presented for user ${user.id} — rejected, current session kept`,
       );
-      user.refresh_token = null;
-      await this.users.save(user);
       await this.activityLog.log({
         entity_type: 'Auth',
         entity_id: user.id,
@@ -184,7 +192,10 @@ export class AuthService {
         user_id: user.id,
         user_name: user.name,
         user_role: user.role,
-        metadata: { reason: 'refresh_token_reuse', session_invalidated: true },
+        metadata: {
+          reason: 'refresh_token_superseded',
+          session_invalidated: false,
+        },
       });
       throw new RpcException(errorRes('Invalid refresh token', 401));
     }

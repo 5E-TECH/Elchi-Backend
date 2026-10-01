@@ -76,6 +76,14 @@ describe('BranchGatewayController — marshrut tartibi', () => {
     );
   });
 
+  it("GET /branches/new-orders -> 'branch.new_orders.branches' (`:id` ga TUSHMAYDI)", async () => {
+    const res = await request(http()).get('/branches/new-orders');
+
+    expect(res.status).toBe(200);
+    expect(cmdOf()).toBe('branch.new_orders.branches');
+    expect(cmdOf()).not.toBe('branch.find_by_id');
+  });
+
   it('GET /branches/5 hamon branch.find_by_id ga boradi (regressiya emas)', async () => {
     await request(http()).get('/branches/5');
 

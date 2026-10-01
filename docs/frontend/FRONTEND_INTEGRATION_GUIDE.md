@@ -78,9 +78,25 @@ multiple roles, each with a distinct app surface.
 **Recommended client behavior:** on any `401`, call `/auth/refresh` once; if it
 succeeds, retry the original request with the new token; if it fails, route to login.
 
+**Refresh failures are not all logouts (2026-10-01, RBAC-11):** if
+`POST /auth/refresh` itself answers `429` or `5xx` (or does not answer at all),
+the session is still valid — **do not log out**. Back off and retry (Elchi-Frontend:
+1 s / 3 s / 7 s + 0–0.5 s jitter, at most 3 retries; on app bootstrap one more
+`initAuth` attempt after 30 s), and reject only the pending request. Route to
+login on `401`/`403` or any other non-transient error. Limits: login 30/min per
+IP, refresh 60/min per IP, separate counters.
+
+**Sessions:** one refresh session per account — a newer login supersedes the
+older device, which gets `401` at its next refresh (the newer device stays
+logged in). Changing your password or login phone revokes the session (401 at
+the next refresh, within the 15 min access-token lifetime); Elchi-Frontend logs
+the user out right away after an own password change.
+
 ### Other auth endpoints
 - `GET /auth/validate` → `{ statusCode, message, user: { id, username, name, phone_number, role, status } }`. Use to bootstrap the session on app load.
-- `GET /auth/my-profile` / `PATCH /auth/my-profile` → current user's profile.
+- `GET /auth/my-profile` / `PATCH /auth/my-profile` → current user's profile
+  (since 2026-10-01 admins can change their own name/phone/password here too;
+  self-changes of status/salary/commission stay blocked).
 - `POST /auth/logout` → clears the refresh cookie.
 
 ### The JWT payload (what you can trust client-side)
@@ -110,10 +126,10 @@ Canonical role values (always **lowercase** on the wire):
 | `registrator` | registration/back-office operator (order intake, posts) |
 | `courier` | delivery courier (mobile app) |
 | `market` | seller/merchant (creates products & orders, gets paid) |
-| `market_operator` | operator that ingests orders on behalf of markets |
-| `operator` | operator with commission earnings |
-| `investor` | capital investor (read-only portfolio) |
-| `customer` | end customer (minimal) |
+| `market_operator` | Telegram order-bot operator of **one** market (`user.market_id`); creates orders via the bot route and sees only that market's orders |
+| `operator` | operator with commission earnings (no order list/detail access — 403) |
+| `investor` | capital investor (read-only portfolio; no order list/detail access — 403) |
+| `customer` | end customer (minimal; sees only own orders) |
 
 The full **role → endpoint matrix** is in §11. Use it to build each role's menu.
 
@@ -140,8 +156,15 @@ Standard Nest/HTTP errors. Shape:
   send only documented fields).
 - `401` missing/expired token → try refresh. `403` role not allowed.
 - `404` not found. `409` conflict (e.g. invariant violation). `429` rate limited.
+- `410` Gone — a route disabled on purpose (2026-10-01: `PATCH /post/{id}` and
+  `PATCH /post/reassign/{id}`); don't call it.
 - `504` `GatewayTimeoutException` — a downstream service didn't answer in time;
-  safe to show "try again".
+  safe to show "try again". **Money endpoints:** the operation may still have
+  been applied — retry only with the **same** `Idempotency-Key` (see §7) and
+  refetch the balances first.
+- Business-rule `message` texts are mostly Uzbek (Latin) and meant to be shown
+  as-is (branch-service now keeps downstream 4xx instead of turning them into
+  500 and its texts are Uzbek; some finance shift errors are still English).
 
 ### Pagination
 List endpoints accept `?page=&limit=` (and usually `?search=`, `?status=`, plus
@@ -154,8 +177,10 @@ The gateway echoes/accepts `x-request-id`. Send a UUID per request if you want
 end-to-end trace correlation in logs; otherwise one is minted for you.
 
 ### Rate limiting
-Global ~60 req/min per IP; auth endpoints (`login`/`refresh`) stricter (~10/min).
-Handle `429` gracefully.
+Global ~60 req/min per IP; auth endpoints have their own per-IP limits:
+`POST /auth/login` 30/min, `POST /auth/refresh` 60/min (env
+`AUTH_THROTTLE_*` / `AUTH_REFRESH_THROTTLE_*`). Handle `429` gracefully — a `429`
+from refresh is not a logout (§2).
 
 ### IDs & money
 - IDs are strings. Treat all IDs as opaque strings.
@@ -223,15 +248,28 @@ This is the spine of the product. Build the order screens around it.
 
 1. **Create** — a market (or registrator/market_operator, or telegram bot, or
    external integration) creates an order.
-   - `POST /orders` (manual), `POST /orders/telegram/bot/create`,
-     `POST /orders/external` + `POST /orders/external/receive` (provider feed),
-     `POST /orders/receive` (market_operator bulk intake).
+   - `POST /orders` (manual), `POST /orders/telegram/bot/create`
+     (market_operator), `POST /orders/external` + `POST /orders/external/receive`
+     (provider feed).
+   - A market's order stays `new` until HQ accepts it by hand: **HQ intake**
+     `POST /orders/receive` (superadmin/admin/registrator/manager, branch-scoped)
+     → `received` + region post. Since 2026-10-01 HQ intake rejects orders that
+     a non-HQ branch holds (400 "Bu buyurtma filialda turibdi — uni o'sha filial
+     qabul qiladi").
 2. **Intake / routing** — orders get grouped and routed through branches via
    **transfer batches** (§8) and assigned to couriers.
    - Manager bulk-assign: `POST /orders/assign-to-courier`.
    - Courier self-assign by scanning QR: `POST /orders/scan-assign`.
 3. **Delivery (post)** — couriers carry orders as **posts** (delivery batches).
    See Logistics (§ posts) for send/receive/reassign/cancel.
+   - Since 2026-10-01 `PATCH /post/{id}` (send post) and `PATCH /post/reassign/{id}`
+     return **410** for everyone (they changed custody without checks). Send to a
+     branch with `POST /branches/posts/{postId}/dispatch`, to a courier with
+     `POST /orders/assign-to-courier` or the courier's scan.
+   - `PATCH /post/receive/{id}` also returns top-level `not_received_order_ids`
+     and `failures: [{order_id, error}]` (`data` unchanged); the post stays
+     `sent` while any order is still on the road — don't mark those orders as
+     received (Elchi-Frontend: done).
 4. **Outcome (courier records it):**
    - **Sell:** `POST /orders/sell/{id}` — delivered & paid. May require expense
      proof (see §5). Records COD + creates per-order settlement (§7).
@@ -239,7 +277,8 @@ This is the spine of the product. Build the order screens around it.
    - **Cancel:** `POST /orders/cancel/{id}`.
    - **Could not deliver:** `POST /orders/{id}/could-not-deliver`.
 5. **Return path:**
-   - `POST /orders/{id}/initiate-return` (HQ/courier/manager) →
+   - `POST /orders/{id}/initiate-return` (superadmin/admin; registrator only in
+     its branch scope) →
    - `POST /orders/{id}/mark-returned-to-market` (registrator/admin).
 6. **Rollback / correction:** `POST /orders/rollback/{id}` reverses a
    sold/cancelled order back to a prior state (settlement-aware — it unwinds the
@@ -248,7 +287,61 @@ This is the spine of the product. Build the order screens around it.
    `GET /orders/qr-code/{token}`, market/branch-scoped list endpoints.
 
 **Settlement view:** `GET /orders/{id}/settlement` returns where that order's
-cash currently sits in the chain.
+cash currently sits in the chain (superadmin/admin; manager/registrator only for
+orders in their branch scope, else 403).
+
+### Order rules the UI must respect (2026-10-01, fix3)
+
+- **Create (`POST /orders`, `/orders/external`):** for every role except
+  superadmin/admin the lifecycle/custody fields (`status`, `post_id`,
+  `courier_id`, `current_batch_id`, `assigned_at`, `return_reason`, …) are
+  **silently ignored** — the order is always `new`, with no courier and no post.
+  Markets also lose `branch_id`/`source` (the order starts at HQ); branch staff
+  get their own branch forced. `customer_id` is accepted only from
+  superadmin/admin — everyone else must send the `customer` object (name, phone,
+  district); `customer_id` alone → 400. (This deviates from "unknown fields →
+  400": these are known DTO fields that are dropped.) Bot orders start as
+  `new`. Elchi-Frontend's create form already sends only the `customer` object.
+- **Edit (`PATCH /orders/{id}`, `/{id}/full`):** superadmin/admin/registrator
+  only. `status`, `market_id`, `to_be_paid`, `paid_amount` → **400 for
+  everyone** (status changes only through sell/cancel/return/rollback);
+  `post_id`, `customer_id`, `qr_code_token`, `source` → superadmin only (403);
+  a registrator may edit only orders whose `branch_id` / `holder_branch_id` /
+  `home_branch_id` is its branch (403). Show the edit popups only to these roles
+  (Elchi-Frontend: done).
+- **Delete (`DELETE /orders/{id}`):** a market deletes only its own NEW orders,
+  a registrator only in its branch scope (403).
+- **Read scope:** `GET /orders/{id}` — market: own; market_operator: own
+  market; customer: own; courier: orders assigned to / held by him; branch
+  staff: own branch (HQ staff also HQ-held); operator/investor: 403.
+  `GET /orders/{id}/tracking` — branch staff the same; a courier only while the
+  parcel is in his hands. (These checks now really run — before 2026-10-01 they
+  were silently skipped.) `GET /orders`: operator/investor 403, customer own,
+  market_operator own market. `GET /orders/market/{marketId}`:
+  superadmin/admin/market (own). `GET /orders/markets/new` and
+  `/orders/markets/{id}/new`: superadmin/admin/registrator/manager/branch/market
+  (market: own row only). QR lookups (`/orders/qr-code/{token}`,
+  `/scan/{token}`): a market sees only its own parcels. Show the backend 403
+  message when a search result leads to an order outside the user's scope.
+- **Sell / cancel:** a manager cannot sell or partly-sell a **courier-held**
+  order (`holder_type COURIER` or a courier id set) → 400 — the courier sells
+  it; cancel stays allowed. Partly-sell amount must be ≤ `total_price` (400
+  otherwise). If a different extra-cost request replaces a pending one, the old
+  approval is closed and the 202 reply carries the **new** approval's action
+  and amount. (Elchi-Frontend: Sell hidden on courier-held rows for managers,
+  partly-sell capped, approval action shown — done.)
+- **Rollback (`POST /orders/rollback/{id}`):** courier — SOLD/CANCELLED only, and
+  a cancelled order only while the parcel is still with him; manager —
+  SOLD/CANCELLED only, own branch; superadmin — also CLOSED/PAID/PARTLY_PAID
+  (PARTLY_PAID is superadmin-only). Blocked for everyone once the order's cash
+  reached HQ. Once the courier has handed the cash to the branch
+  (`courier_settled`) couriers and managers get 400 ("Tuzatishni faqat
+  superadmin qila oladi"); a **superadmin** may still roll it back — the remitted
+  amount becomes a credit toward the courier's next settlement. If the reply is
+  200 with `data.cancel_post_created === false` (only for the courier's
+  `cancelled_sent` target), show `data.warning` (add the order to a return post
+  by hand). Restore buttons: show only when the rule
+  allows (Elchi-Frontend: done for the courier list).
 
 ---
 
@@ -263,6 +356,11 @@ Cash collected on delivery flows **courier → branch → HQ → market**, recon
 
 Each payment is a lump sum; the backend allocates it across that party's
 outstanding orders oldest-first and advances each order's `SettlementStatus`.
+
+> **Note (state as of 2026-10-01):** the three `POST /orders/settlement/*` routes
+> above are deprecated and answer **410** — the per-order FIFO now advances
+> automatically from the finance payments below (`payment/courier`,
+> `payment/branch-to-main`, `payment/market`). Don't build screens on them.
 
 **Who keeps what** is config-driven:
 - A **courier's** share per order depends on `CourierCompensationMode`
@@ -283,6 +381,47 @@ outstanding orders oldest-first and advances each order's `SettlementStatus`.
 - **Salaries:** `POST|PATCH /finance/salary`, `GET /finance/salary/{user_id}`.
 - **Operator earnings:** `GET /finance/operators/{id}/earnings|payments|balance`,
   `POST /finance/operator-payments`.
+
+**Payment rules (2026-10-01, fix3):**
+- **`Idempotency-Key` header** on `POST /finance/cashbox/payment/courier`,
+  `.../payment/market` and `.../payment/branch-to-main` (CORS allows it). Use
+  one key per logical payment and keep it until a response arrives; a resend
+  with the same key returns `{ statusCode: 200, data: { idempotent: true } }` —
+  treat it as "already recorded". After a 502/503/504 or no response keep the
+  key, refetch the cashbox/history, and only then let the user retry.
+  Without a key the market and branch-to-main payouts are deduped by
+  actor + target + amount + method within a 30 s window. (Elchi-Frontend: done,
+  `pages/payments/components/lib/paymentIdempotency.ts`.)
+- **Market payout** (`payment/market`) is superadmin/admin only; it answers
+  right after the cash moves (the per-order paid-status sync runs in the
+  background, so order badges may update a moment later).
+- **Manager receiving courier cash** (`payment/courier`): only from couriers of
+  the manager's **own** branch (403 "Bu kuryer sizning filialingizga tegishli
+  emas"); `click_to_market` is not allowed for managers (403 — only via the HQ
+  cashbox). Do not send `source_user_id` (not in the DTOs). (Elchi-Frontend:
+  click_to_market and the market-payout action hidden for managers, card-owner
+  picker removed — done.)
+- **Branch cash → HQ (business decision #7):** branch cash reaches HQ **only**
+  when superadmin/admin receive it in "To'lovlar → Qabul qilinishi kerak"
+  (choose the branch → `POST /finance/cashbox/payment/branch-to-main` with that
+  `branch_id`). A manager does **not** push money to HQ — do not build or
+  enable a manager → HQ transfer screen (the route still lists `manager` in
+  `@Roles` for legacy reasons; that is not a supported flow).
+- **Shifts** (backend: superadmin/admin/registrator, not manager; Elchi-Frontend
+  wires them for superadmin/admin on the MAIN cashbox): `GET /finance/shift?status=open&opened_by=<me>&limit=1`;
+  none open → `POST /finance/shift/open` `{ opened_by }`; open →
+  `POST /finance/shift/close` `{ closed_by, shift_id, comment? }`. Send exactly
+  these fields — the gateway DTO has no `cashbox_user_id`. (Elchi-Frontend:
+  wired in mainCashbox, hidden for managers.) There is no salary **payout**
+  command — `POST /finance/salary` only stores a salary setting.
+- **Dates:** send plain `YYYY-MM-DD` — `GET /finance/cashbox/user/{id}` accepts
+  `fromDate`/`toDate`, and the financial-balance history/analytics/top-impacts
+  endpoints treat `YYYY-MM-DD` as a whole Tashkent day.
+- **Manager manual expense** (`PATCH /finance/cashbox/spend` on a BRANCH
+  cashbox) can no longer take the balance below zero (400 "Insufficient cash
+  balance").
+- **History:** a registrator sees only its own branch's BRANCH cashbox history
+  (`GET /finance/history`, `/finance/history/{id}`); unknown roles get 403.
 
 > The cashbox system has a money **invariant** the backend enforces; the UI just
 > records operations and reads balances — never tries to "fix" balances directly
@@ -311,6 +450,29 @@ branches in **transfer batches** (QR-coded), forward and return.
     `POST /transfer-batches/{id}/cancel`.
   - Read: `GET /transfer-batches`, `/{id}`, `/{id}/remaining`,
     `GET /branches/with-sent-batches`, `GET /branches/new-orders`.
+- **Dispatch rules (2026-10-01):** `POST /branches/posts/{postId}/dispatch`
+  `{ destination_branch_id, order_ids }` — `order_ids` is required; an id that is
+  not in the post → 409 with the ids in the message (nothing is sent); only
+  `received` orders can be dispatched (`new` → 400 — HQ must accept them first);
+  orders that don't belong to the source branch → 400 "…Ularni tanlovdan olib
+  tashlang…"; the destination must have an active manager; the destination
+  branch must be in the **same region as the post** (400 otherwise) — use the
+  post's own `region_id` to load destinations (Elchi-Frontend:
+  `pages/mails/detail/lib/dispatchRegion.ts`, done); an order with no region →
+  400 naming it.
+- `GET /branches/new-orders` works again (it used to be shadowed by
+  `GET /branches/{id}`, so the superadmin list was always empty/erroring).
+- **Courier scan of a transfer-batch order:** an order of another region
+  (transit) is received into the branch as `new` and is **not** assigned to the
+  courier — the scan answers 400 "Bu buyurtma boshqa hudud uchun (tranzit) …";
+  show the message (the branch re-dispatches it).
+- **Branch edits:** `PATCH /branches/{id}` → 409 when couriers are attached and
+  the branch would become PICKUP / inactive / change region, or when open
+  orders/batches exist and it would become PICKUP / inactive. Every non-HQ
+  branch needs a parent (`parent_id`), PICKUP included.
+- **Branch dashboard:** `data.branchDashboard.stats_unavailable === true` means
+  the order statistics could not be loaded — show "Statistika vaqtincha mavjud
+  emas" instead of zeros (Elchi-Frontend: done).
 
 ---
 
@@ -386,9 +548,50 @@ Order-specific: `GET /orders/qr-code/{token}`. Post check: `POST /post/check/{id
 `GET|POST|PATCH|DELETE /notifications`, connect a group by token
 (`POST /notifications/connect-by-token`), send (`POST /notifications/send`).
 
+**Group binding (2026-10-01, CODE-02):**
+- The binding credential is the market's **secret** `market_tg_token`
+  (`group_token-<32 hex>`). Only superadmin/admin can read it — it is included in
+  `GET /users/{id}` for a market row only for those roles (managers never see
+  it). Elchi-Frontend shows it on the market's user page as a masked card with
+  Show/Copy (superadmin/admin only).
+- The market adds the notification bot to its Telegram group and sends the
+  token text: `group_token-<secret>` = new-orders group, `group_token-<secret>-cancel`
+  = cancelled-orders group (`-create` is the default). The old
+  `group_token-<marketId>` form is rejected.
+- The token is **not rotated** by a bind (it stays the order-bot credential),
+  and an existing (market, group type) binding is **never overwritten** by the
+  bot/token (reply: "Bu market uchun bu turdagi guruh allaqachon ulangan — admin
+  orqali o'zgartiring"). Re-bind only through `PATCH` / `DELETE /notifications/{id}`
+  (superadmin/admin).
+- `/id` (or `/id@<bot>`) in the group replies `Group ID: <chat.id>` — use it for
+  the manual `POST /notifications` `{ market_id, group_id, group_type }`
+  (superadmin/admin).
+- `POST /notifications/connect-by-token` body is `{ text, group_id }` (both
+  required, `text` = the token text above; superadmin/admin/registrator). The FE
+  "Token orqali ulash" section that posted `{ token }` was removed.
+- No service sends automatic new/cancelled-order alerts to bound groups yet —
+  only `POST /notifications/send` and the admin dispatch relay.
+
 ### Analytics
 `GET /analytics/dashboard` (role-aware), `/kpi`, `/revenue`,
 `/reports/orders|couriers|finance`. Use for dashboards per role.
+Since 2026-10-01: a market's dashboard `markets` contains only its own row
+(`{id, name}`), market/courier rows elsewhere are `{id, name}`, and
+`/reports/couriers` covers only the requester's own branch couriers for
+manager/registrator/branch.
+
+### Field minimisation (2026-10-01)
+- `GET /markets`: superadmin/admin get the full row + cashbox;
+  manager/registrator/branch get only `{id, name, phone_number, status}`;
+  courier and any other role only `{id, name, status}` (no cashbox balances —
+  don't read balances from this list outside superadmin/admin).
+- `GET /product`, `/product/{id}`: superadmin/admin/registrator/manager/branch/market
+  only; a market sees only its own products.
+- `GET /region/stats/all`: no market; `GET /region/stats/{id}`: no market, no
+  courier. `PATCH /district/{id}`: superadmin/admin only.
+- `POST /printer/*`: superadmin/admin only, at most 200 `order_ids`.
+- `GET /export/orders.xlsx`: manager/registrator/branch always get their own
+  branch; `from_date`/`to_date` and `courier_id` filters now apply.
 
 ---
 
@@ -405,24 +608,37 @@ Everything in Identity (`/admins`, `/couriers`, `/managers`, `/markets`,
 `/registrators`, `/users`, status), Branch (full CRUD + config + users + transfer
 batches), Finance (cashboxes, payments, salary, shifts, ledger, operators),
 Investor (investors/investments/profits), Integrations (full), Notification
-(full), Logistics admin ops (regions/districts, post reassign/receive, return
-requests approve/reject), Orders (read/update/return/settlement hq-to-market),
-Analytics, Excel, Products (list/update/delete). `superadmin` additionally:
-`POST /registrators`, `DELETE /district/{id}`, `PATCH /post/{id}` (send post),
-`POST /district/sato-match/apply`.
+(full), Logistics admin ops (regions/districts, post receive, return
+requests approve/reject; post reassign — 410 since 2026-10-01), Orders
+(read/update/return/settlement view), Analytics, Excel, Products
+(list/update/delete), Printer (superadmin/admin only), `DELETE /users/{id}`,
+`POST|PATCH /finance/salary`, market payout (`POST /finance/cashbox/payment/market`),
+branch cash receive ("Qabul qilinishi kerak" → `POST /finance/cashbox/payment/branch-to-main`),
+shift open/close. Market Telegram token: visible to superadmin/admin only (in
+`GET /users/{id}`). `superadmin` additionally: `POST /registrators`,
+`DELETE /district/{id}`, `POST /district/sato-match/apply`, the superadmin-only
+order PATCH fields (`post_id`, `customer_id`, `qr_code_token`, `source`), rollback
+of CLOSED/PAID/PARTLY_PAID and of a courier-remitted sale. (`PATCH /post/{id}`
+(send post) — 410 since 2026-10-01.)
 
 ### manager (branch-scoped)
 - Finance: `GET /finance/cashbox/manager/settlement`, `.../manager/payable-to-hq`,
   `.../financial-balanse`, `.../my-cashbox`, `.../user/{id}/main`, `GET /finance/history`,
-  `PATCH /finance/cashbox/fill`, `POST /finance/cashbox/payment/market`,
-  operator earnings/payments.
-- Orders: `POST /orders/settlement/hq-to-market`, cancel/partly-sell/rollback,
-  initiate-return; `GET /orders/{id}/tracking`.
-- Identity: list `/markets`, `/registrators`, `GET/PATCH/DELETE /users[...]`,
-  `POST /managers`.
+  `PATCH /finance/cashbox/fill`, operator earnings/payments. **Not** for managers
+  (2026-10-01): market payout `POST /finance/cashbox/payment/market` (superadmin/admin
+  only), `click_to_market`, shifts, and pushing branch cash to HQ — branch cash
+  reaches HQ only when superadmin/admin receive it (business decision #7).
+- Orders: sell/partly-sell (not courier-held orders), cancel, rollback
+  (SOLD/CANCELLED, own branch), HQ intake `POST /orders/receive` (branch-scoped),
+  `GET /orders/{id}/tracking`, `GET /orders/{id}/settlement` (own branch).
+- Identity: list `/markets` (only `{id, name, phone_number, status}`),
+  `GET/PATCH /users[...]` (own branch staff; no market Telegram token),
+  `POST /couriers`. (`GET /registrators`, `POST /managers` and
+  `DELETE /users/{id}` are superadmin/admin only.)
 - Branch: read branch/tree-scoped + transfer batch send/receive/cancel/return,
   dispatch.
-- Finance payment from courier (`POST /finance/cashbox/payment/courier`).
+- Finance payment from courier (`POST /finance/cashbox/payment/courier`) — only
+  couriers of the manager's own branch.
 
 ### branch
 - Branch read (`GET /branches/{id}`, `/new-orders`), transfer batches
@@ -430,11 +646,18 @@ Analytics, Excel, Products (list/update/delete). `superadmin` additionally:
   `GET /orders/{id}/tracking`.
 
 ### registrator
-- Orders: `GET /orders`, `/external`, update (`PATCH /orders/{id}`),
-  return mark, external receive, post orders.
-- Logistics: `GET /region`, post receive/reassign, return-requests approve/reject,
-  cancel-receive check.
-- Finance: shifts (`GET /finance/shift`, open/close), salary create.
+- Orders: `GET /orders`, `/external`, update (`PATCH /orders/{id}` — own branch
+  scope only, see §6 rules), delete / initiate-return (own branch scope), HQ
+  intake `POST /orders/receive`, return mark, external receive, post orders.
+  The **HQ** registrator also gets the HQ-custody cancelled lists
+  (`GET /orders/markets/cancelled`, `/orders/markets/{id}/cancelled`) and the
+  cancelled-goods handover, like superadmin/admin.
+- Logistics: `GET /region`, post receive (reassign — 410), return-requests
+  approve/reject, cancel-receive check.
+- Finance: shifts (`GET /finance/shift`, open/close — allowed by the backend;
+  Elchi-Frontend wires shifts for superadmin/admin only); `GET /finance/history`
+  only for the own branch's BRANCH cashbox. Salary create is superadmin/admin
+  only.
 - Integrations: receivables, shipments, dispatch, request.
 - Notification send. Branch transfer batches (shared branch-staff set).
 - Products: update own (`PATCH /product/my/{id}`).
@@ -444,29 +667,40 @@ Analytics, Excel, Products (list/update/delete). `superadmin` additionally:
   `/on-the-road`; receive order/post (`PATCH /post/receive/order/{id}`,
   `/receive/scan/{id}`, `/receive/{id}`), cancel post (`POST /post/cancel`,
   `/cancel/receive/{id}`), check posts.
-- Orders: `POST /orders/scan-assign`, `/assign-to-courier`, sell, partly-sell,
-  cancel, could-not-deliver, rollback, initiate-return.
-- Settlement: `POST /orders/settlement/courier-to-branch`,
-  `POST /finance/cashbox/payment/courier`.
+- Orders: `POST /orders/scan-assign`, sell, partly-sell, cancel,
+  could-not-deliver, rollback (SOLD/CANCELLED; a cancelled order only while he
+  still holds the parcel). `GET /orders/{id}` only for orders assigned to / held
+  by him; `/tracking` only while he holds the parcel. A scanned transit order
+  (other region) is not assigned to him (400).
+- Cash: handed to the branch manager (or HQ), who records it with
+  `POST /finance/cashbox/payment/courier` (superadmin/admin/manager — not the
+  courier). `POST /orders/settlement/*` answer 410.
+- Regions: `GET /region/stats/all` only (no `/region/stats/{id}`).
 
 ### market (merchant)
-- Products: `GET /product`, `/my-products`, `/product/{id}`,
+- Products: `GET /product` (own only), `/my-products`, `/product/{id}` (own only),
   `PATCH /product/my/{id}`, `POST /product`.
-- Orders: create (`POST /orders/external` allowed for market too), list by market,
-  markets/new, `GET /orders`.
-- Finance: `POST /finance/cashbox/payment/courier` (as part of chain),
-  `GET /finance/cashbox/my-cashbox`.
+- Orders: create (`POST /orders`, `POST /orders/external` allowed for market too)
+  — always `new` at HQ, lifecycle fields ignored, `customer` object required;
+  list by market (own only), markets/new (own row), `GET /orders` and
+  `GET /orders/{id}` (own only), `DELETE /orders/{id}` (own NEW only), QR lookup
+  (own parcels only). Dashboard: own market only.
+- Finance: `GET /finance/cashbox/my-cashbox`.
 
 ### market_operator
-- `POST /orders/receive` (bulk intake on behalf of markets).
+- Telegram order bot: `POST /orders/telegram/bot/create` (orders start `new`).
+  `GET /orders` / `GET /orders/{id}` only for its own market (`user.market_id`,
+  403 without one). No access to `POST /orders/receive` (HQ intake).
 
 ### operator
 - Earns commission; surfaced via `/finance/operators/{id}/*` (read by admins).
-  Operator-facing screens read their own earnings/balance.
+  Operator-facing screens read their own earnings/balance. `GET /orders` and
+  `GET /orders/{id}` → 403.
 
 ### investor
 - Read-only portfolio: investors/investments/profits are admin-managed; investor
   app reads its own investor record, investments, and profit shares.
+  `GET /orders` and `GET /orders/{id}` → 403.
 
 > **Reading the full matrix programmatically:** the precise per-route role list
 > was extracted from the gateway's `@Roles` decorators. If you need it as data,
@@ -496,7 +730,8 @@ request body, and the 86 component schemas (DTOs). Recommended:
 
 ## 13. Build checklist (so nothing is missed)
 
-- [ ] Auth: login, refresh-on-401, logout, profile, role-gated routing.
+- [ ] Auth: login, refresh-on-401 (no logout on refresh 429/5xx — retry with
+      backoff), logout, profile, role-gated routing.
 - [ ] Role-specific shells/menus per §11 (superadmin, admin, manager, branch,
       registrator, courier, market, market_operator, operator, investor).
 - [ ] Orders: list+filters, detail, tracking timeline, create (all create paths),
@@ -505,11 +740,13 @@ request body, and the 86 component schemas (DTOs). Recommended:
 - [ ] Settlement: courier→branch, branch→HQ, HQ→market screens + per-order status.
 - [ ] Finance: cashboxes per role, payments, shifts, salaries, ledger, operators.
 - [ ] Branches: tree, CRUD, config, users, transfer batches (full lifecycle), returns.
-- [ ] Logistics: posts (send/receive/reassign/cancel), regions/districts, return requests.
+- [ ] Logistics: posts (receive/cancel; send/reassign are 410 — use branch
+      dispatch / assign-to-courier), regions/districts, return requests.
 - [ ] Products: market catalog + admin management.
 - [ ] Investors / investments / profits.
 - [ ] Integrations: providers, sync, receivables/remittances, dispatch.
 - [ ] Notifications (Telegram), Analytics dashboards, Search, Excel exports, Printer, Files.
 - [ ] Realtime socket wiring + live updates layered over REST.
-- [ ] Global: envelope unwrap, error/429/504 handling, pagination, strict-body (no extra fields).
+- [ ] Global: envelope unwrap, error/429/504 handling, pagination, strict-body (no extra fields),
+      `Idempotency-Key` on the three cash payment endpoints (§7).
 ```

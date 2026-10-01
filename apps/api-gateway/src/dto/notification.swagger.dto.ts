@@ -181,7 +181,14 @@ export class SendNotificationRequestDto {
 }
 
 export class ConnectTelegramByTokenRequestDto {
-  @ApiProperty({ example: 'group_token-2-create' })
+  @ApiProperty({
+    example: 'group_token-0123456789abcdef0123456789abcdef',
+    description:
+      "The market's secret market_tg_token (`group_token-<32 hex>`), readable only by SUPERADMIN/ADMIN via GET /users/:id. " +
+      'Optional suffix `-create` (default) or `-cancel` selects the group type, e.g. `group_token-<32 hex>-cancel`. ' +
+      'The old `group_token-<marketId>` form is rejected. A bind does NOT rotate the token (it stays the order-bot credential), ' +
+      'and an existing (market, group type) binding is never overwritten: re-bind only via PATCH/DELETE /notifications/:id.',
+  })
   @IsString()
   text!: string;
 

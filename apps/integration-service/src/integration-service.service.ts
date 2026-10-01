@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Between, In, IsNull, LessThanOrEqual, Repository } from 'typeorm';
@@ -368,6 +368,15 @@ export class IntegrationServiceService {
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('NOTIFICATION') private readonly notificationClient: ClientProxy,
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
+    /**
+     * fix3b (LC-13) — hamkor posilkasining viloyatini tumandan aniqlash
+     * uchun. Oxirida va `@Optional()`: pozitsion konstruktor bilan
+     * yaratiladigan eski speclar buzilmasin. Yo'q bo'lsa viloyat
+     * aniqlanmaydi (aniq xato bilan rad etiladi, NULL yozilmaydi).
+     */
+    @Optional()
+    @Inject('LOGISTICS')
+    private readonly logisticsClient?: ClientProxy,
   ) {}
 
   private badRequest(message: string): never {
@@ -1344,6 +1353,86 @@ export class IntegrationServiceService {
   }
 
   /**
+   * LC-13 (fix3b) — hamkor posilkasining viloyati (`order.region_id`).
+   *
+   * ⚠️ NEGA KERAK. `region_id` kontraktda ixtiyoriy edi va berilmasa NULL
+   * yozilardi. Filial dispatch esa buyurtmaning `region_id` siga tayanadi —
+   * NULL da Postgres 22P02 bilan yarim yo'lda yiqilardi (A6 faqat alomatni
+   * tuzatgan).
+   *
+   * Qoida: raqamli `region_id` berilsa — o'sha; aks holda (yo'q yoki matn)
+   * tumandan: `logistics.district.find_by_id` → `assigned_region` (HQ qabuli
+   * ham pochtani shu bo'yicha tanlaydi), bo'lmasa tumanning o'z `region_id`
+   * si. Baribir aniqlanmasa — 400 (tuman topilmadi / viloyatsiz). Logistika
+   * javob bermasa (timeout, 5xx) — 503: bu hamkor xatosi emas, qayta urinish
+   * kerak (400 bo'lsa hamkor uni doimiy rad deb tashlab yuborardi).
+   */
+  private async resolvePartnerShipmentRegionId(
+    regionId: unknown,
+    districtId: unknown,
+  ): Promise<string> {
+    const explicit = toText(regionId).trim();
+    if (/^\d+$/.test(explicit)) {
+      return explicit;
+    }
+
+    type DistrictReply = Record<string, any> | null;
+    const district = toText(districtId).trim();
+    let found: DistrictReply = null;
+    let lookupFailed = false;
+    if (/^\d+$/.test(district)) {
+      if (!this.logisticsClient) {
+        lookupFailed = true;
+      } else {
+        try {
+          const res = await firstValueFrom(
+            this.logisticsClient
+              .send<DistrictReply>(
+                { cmd: 'logistics.district.find_by_id' },
+                { id: district },
+              )
+              .pipe(timeout(5000)),
+          );
+          found = (res?.data ?? res ?? null) as DistrictReply;
+        } catch (error) {
+          const status = Number(
+            (error as { statusCode?: unknown } | null)?.statusCode,
+          );
+          // 4xx (masalan 404 — tuman topilmadi) — hamkor ma'lumoti xato;
+          // qolgani (timeout, 5xx, transport) — vaqtinchalik.
+          lookupFailed = !(status >= 400 && status < 500);
+        }
+      }
+    }
+
+    const candidates: unknown[] = [
+      found?.assigned_region,
+      found?.assignedToRegion?.id,
+      found?.region_id,
+      found?.region?.id,
+    ];
+    for (const candidate of candidates) {
+      const value = toText(candidate).trim();
+      if (/^\d+$/.test(value)) {
+        return value;
+      }
+    }
+
+    if (lookupFailed) {
+      throw new RpcException(
+        errorRes(
+          "Viloyatni aniqlab bo'lmadi (logistika xizmati javob bermadi) — birozdan so'ng qayta urinib ko'ring",
+          503,
+        ),
+      );
+    }
+    this.badRequest(
+      "region_id aniqlanmadi: district_id bo'yicha viloyat topilmadi — " +
+        "to'g'ri district_id yoki raqamli region_id yuboring",
+    );
+  }
+
+  /**
    * C2.1 — Partner shipment → Elchi `order.create`. Marketplace buyurtmasini
    * Elchi'ga posilka sifatida uzatadi. Idempotent (partner_shipment_ref bo'yicha
    * (partner_id, external_order_id)). `to_be_paid = cod_amount` (0 = prepaid/online,
@@ -1444,6 +1533,13 @@ export class IntegrationServiceService {
       return this.idempotentShipmentRes(String(existing.order_id));
     }
 
+    // 0) Viloyat (fix3b, LC-13) — mijoz/mahsulot yaratilishidan OLDIN, rad
+    //    etilsa hech narsa yetim qolmasin.
+    const regionId = await this.resolvePartnerShipmentRegionId(
+      dto.region_id,
+      dto.district_id,
+    );
+
     // 1) Customer (lightweight, phone bo'yicha idempotent)
     const customerRes = await this.rmqRequestStrict<Record<string, any>>(
       this.identityClient,
@@ -1529,7 +1625,9 @@ export class IntegrationServiceService {
             dto.where_deliver === 'address'
               ? Where_deliver.ADDRESS
               : Where_deliver.CENTER,
-          region_id: dto.region_id ?? null,
+          // fix3b (LC-13): DOIM raqamli viloyat — berilgani yoki tumandan
+          // aniqlangani. NULL bo'lsa filial dispatch 22P02 bilan yiqilardi.
+          region_id: regionId,
           district_id: dto.district_id ?? null,
           address: dto.address ?? null,
           total_price: totalPrice,
@@ -6638,10 +6736,12 @@ export class IntegrationServiceService {
     // call is safe: if it fails, the shipment status is already recorded and a
     // later webhook / reconcile re-drives it. Never let it fail the webhook.
     if (mapped.action && ['sell', 'cancel', 'return'].includes(mapped.action)) {
-      let markResult: { data?: { total_price?: number } } | null = null;
+      let markResult: {
+        data?: { total_price?: number; cod_collected?: number };
+      } | null = null;
       try {
         markResult = await this.rmqRequest<{
-          data?: { total_price?: number };
+          data?: { total_price?: number; cod_collected?: number };
         }>(
           this.orderClient,
           { cmd: 'order.provider.mark' },
@@ -6680,20 +6780,48 @@ export class IntegrationServiceService {
            * Endi: summa o'qilmasa qarz YARATILMAYDI va bu ogohlantirish
            * bilan yoziladi. Qarzni keyin solishtiruvchi yoki takroriy
            * webhook tiklaydi — posilka statusi allaqachon saqlangan.
+           *
+           * fix3c (MONEY-01) — QARZ = KARGO HAQIQATAN YIG'GAN NAQD.
+           * order-service endi `cod_collected` (= `total_price −
+           * paid_online_amount`, dispatchda kargoga aytilgan COD) qaytaradi.
+           * `total_price` dan yozilsa prepaid posilkada kargo hech qachon
+           * ushlamagan pulga qarzdor bo'lib, qarz abadiy ochiq qolardi.
+           * To'liq prepaid posilkada u 0 — qarz shu tarmoqda yozilmaydi
+           * (bu xato emas, sabab `nothing_collected`). `cod_collected` yo'q
+           * (eski order-service javobi) — avvalgidek `total_price`.
            */
-          const codAmount = Number(markResult?.data?.total_price);
+          const markData = markResult?.data;
+          const rawCodAmount = markData?.cod_collected ?? markData?.total_price;
+          const codAmount = Number(rawCodAmount);
           if (!Number.isFinite(codAmount) || codAmount <= 0) {
-            this.logger.warn(
-              `provider receivable SKIPPED for order ${shipment.order_id}: ` +
-                `summa o'qilmadi (total_price=${String(
-                  markResult?.data?.total_price,
-                )}). Nol summali qarz yozilmadi.`,
-            );
+            // `Number(null)` ham 0 — u "o'qilmadi", "yig'ilmadi" emas.
+            const nothingCollected = rawCodAmount != null && codAmount === 0;
+            if (nothingCollected) {
+              this.logger.log(
+                `provider receivable SKIPPED for order ${shipment.order_id}: ` +
+                  "kargo naqd yig'magan (oldindan to'langan posilka). " +
+                  'Nol summali qarz yozilmadi.',
+              );
+            } else {
+              this.logger.warn(
+                `provider receivable SKIPPED for order ${shipment.order_id}: ` +
+                  `summa o'qilmadi (cod_collected=${String(
+                    markData?.cod_collected,
+                  )}, total_price=${String(
+                    markData?.total_price,
+                  )}). Nol summali qarz yozilmadi.`,
+              );
+            }
             await this.activityLog.log({
               entity_type: 'ProviderShipment',
               entity_id: String(shipment.order_id),
               action: ActivityAction.EXTERNAL_SYNC,
-              new_value: { receivable: 'skipped', reason: 'amount_unreadable' },
+              new_value: {
+                receivable: 'skipped',
+                reason: nothingCollected
+                  ? 'nothing_collected'
+                  : 'amount_unreadable',
+              },
               metadata: { provider: integration.slug },
             });
           } else {

@@ -415,6 +415,28 @@ describe('LogisticsServiceService scanAssignOrder', () => {
     expect(updateCalls).toHaveLength(0);
   });
 
+  it('P1b: tranzit buyurtma (boshqa hudud) -> 400 aniq xabar, kuryerga biriktirilmaydi', async () => {
+    const { service, orderClient } = setup({
+      order: { branch_id: '99', status: Order_status.ON_THE_ROAD },
+      branchId: '10',
+      receiveByScan: { received: false, reason: 'transit' },
+    });
+
+    await expectRpcStatus(
+      service.scanAssignOrder(
+        { id: 'c1', roles: ['courier'] },
+        { qr_token: 'ORD-abc123' },
+      ),
+      400,
+      'boshqa hudud uchun (tranzit)',
+    );
+
+    const updateCalls = orderClient.send.mock.calls.filter(
+      ([pattern]: [{ cmd: string }]) => pattern.cmd === 'order.update',
+    );
+    expect(updateCalls).toHaveLength(0);
+  });
+
   it('P1b: guard xatosi (paket hali jo‘natilmagan) UMUMIY xabar bilan yashirilmaydi', async () => {
     const { service } = setup({
       order: { branch_id: '99', status: Order_status.ON_THE_ROAD },

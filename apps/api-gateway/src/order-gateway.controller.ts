@@ -97,6 +97,10 @@ import {
 import { successRes } from '../../../libs/common/helpers/response';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
+import {
+  ORDER_QR_LOOKUP_ROLES,
+  assertQrOrderVisible,
+} from './auth/order-qr-visibility';
 
 interface JwtUser {
   sub: string;
@@ -194,6 +198,74 @@ const AI_MIN_PREVIEW_BUDGET_MS = 5_000;
 /** ai-confirm'dagi find_by_ids tekshiruvlari (partiyaga BITTADAN). */
 const AI_CONFIRM_LOOKUP_TIMEOUT_MS = 8_000;
 
+/**
+ * BUYURTMA YARATISHDA MIJOZ YUBORA OLMAYDIGAN MAYDONLAR (fix3 C6; RBAC-05,
+ * LC-07). Holat va saqlash (custody) zanjiri faqat hayot sikli amallari
+ * (HQ qabuli, jo'natish, skan, sotish) orqali o'zgaradi. Market yoki filial
+ * xodimi `status:'received'` / `courier_id` / `post_id` yuborib HQ qabulini
+ * chetlab o'tardi, `status:'sold'` + rollback esa kassaga soxta chiqim
+ * yozdirardi. SUPERADMIN/ADMIN dan boshqa barcha yaratuvchilar uchun bu
+ * maydonlar JIMGINA olib tashlanadi (order-service sukuti: NEW, kuryersiz).
+ * DTO'da yo'q maydonlar (holder_*, sold_at, ...) ham himoya uchun ro'yxatda:
+ * ichki chaqiruvchilar (bot, ai-confirm) ValidationPipe'dan o'tmaydi.
+ */
+const CREATE_LIFECYCLE_FIELDS = [
+  'status',
+  'post_id',
+  'courier_id',
+  'current_batch_id',
+  'assigned_at',
+  'return_reason',
+  'sold_at',
+  'canceled_post_id',
+  'holder_type',
+  'holder_branch_id',
+  'holder_courier_id',
+  'home_branch_id',
+  'parent_order_id',
+  'to_be_paid',
+  'paid_amount',
+  'qr_code_token',
+  'operator_id',
+] as const;
+
+/**
+ * Joylashuv maydonlari: filial xodimida server ularni MAJBURAN qo'yadi
+ * (o'z filiali, source='branch'), SUPERADMIN/ADMIN dan boshqa yaratuvchida
+ * esa olib tashlanadi — market o'z buyurtmasini istalgan filialga yoki
+ * `source:'branch'` bilan HQ ro'yxatidan yashira olmasin.
+ */
+const CREATE_PLACEMENT_FIELDS = ['branch_id', 'source'] as const;
+
+/**
+ * PATCH /orders/:id orqali HECH KIM (superadmin ham) o'zgartira olmaydigan
+ * maydonlar (fix3 C6; M11, CODE-03): holat faqat sotish/bekor qilish/
+ * qaytarish amallari orqali o'zgaradi — aks holda kassa oyoqlari va
+ * hisob-kitob qatori yozilmay qolardi (WAITING→SOLD, SOLD→WAITING), market
+ * esa sotilgan buyurtmada almashsa pul eski marketda qolardi.
+ */
+const PATCH_FORBIDDEN_FIELDS = [
+  'status',
+  'market_id',
+  'to_be_paid',
+  'paid_amount',
+] as const;
+
+/**
+ * PATCH'da faqat SUPERADMIN o'zgartira oladigan maydonlar (CODE-03): pochta,
+ * mijoz, QR yorlig'i va manba — saqlash zanjiri va ro'yxatlarga ta'sir
+ * qiladi. Frontend ularni hech qachon yubormaydi (UpdateNewOrderPayload).
+ */
+const PATCH_SUPERADMIN_ONLY_FIELDS = [
+  'post_id',
+  'customer_id',
+  'qr_code_token',
+  'source',
+] as const;
+
+/** HQ filial id si o'zgarmaydi (tizimda bitta HQ) — qisqa kesh yetarli. */
+const HQ_BRANCH_CACHE_TTL_MS = 60_000;
+
 class ReceiveExternalOrdersDto {
   @IsString()
   @IsNotEmpty()
@@ -225,6 +297,8 @@ export class OrderGatewayController {
   ) {}
 
   private readonly logger = new Logger(OrderGatewayController.name);
+
+  private hqBranchIdCache: { id: string; at: number } | null = null;
 
   private normalizeRoles(roles?: string[]) {
     const normalized = new Set<string>();
@@ -578,12 +652,9 @@ export class OrderGatewayController {
     }
     const roles = this.normalizeRoles(reqUser?.roles);
     // Internal full-access staff (consistent with the unscoped list endpoint).
-    if (
-      roles.includes(RoleEnum.SUPERADMIN) ||
-      roles.includes(RoleEnum.ADMIN) ||
-      roles.includes(RoleEnum.OPERATOR) ||
-      roles.includes(RoleEnum.MARKET_OPERATOR)
-    ) {
+    // ⚠️ OPERATOR va MARKET_OPERATOR bu yerdan OLIB TASHLANDI (fix3 C11,
+    // CODE-04): ular har qanday buyurtmaning mijoz ma'lumotini o'qiy olardi.
+    if (roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN)) {
       return;
     }
     const sub = String(reqUser?.sub ?? '').trim();
@@ -595,6 +666,15 @@ export class OrderGatewayController {
 
     if (roles.includes(RoleEnum.MARKET)) {
       return sub && field('market_id') === sub ? undefined : denied();
+    }
+    if (roles.includes(RoleEnum.MARKET_OPERATOR)) {
+      // Operator faqat o'zi biriktirilgan marketning buyurtmasini ko'radi.
+      const operatorMarketId = await this.resolveMarketOperatorMarketId(
+        reqUser as JwtUser,
+      );
+      return operatorMarketId && field('market_id') === operatorMarketId
+        ? undefined
+        : denied();
     }
     if (roles.includes(RoleEnum.CUSTOMER)) {
       return sub && field('customer_id') === sub ? undefined : denied();
@@ -617,12 +697,171 @@ export class OrderGatewayController {
         field('holder_branch_id'),
         field('home_branch_id'),
       ];
-      return branchId && orderBranches.includes(branchId)
+      if (branchId && orderBranches.includes(branchId)) {
+        return;
+      }
+      // HQ xodimi HQ qo'lidagi buyurtmani ko'radi (holder_type HQ,
+      // holder_branch_id NULL — masalan filialdan qaytgan bekor qilinganlar).
+      return (await this.isHqHeldOrderForBranch(branchId, field('holder_type')))
         ? undefined
         : denied();
     }
-    // investor / unknown roles: no per-order access.
+    // operator / investor / unknown roles: no per-order access.
     return denied();
+  }
+
+  /**
+   * HQ filial id si (`branch.find_hq`), 60 s keshlanadi. Xato chaqiruvchiga
+   * uzatiladi — har bir chaqiruvchi o'zi fail-closed qaror qiladi.
+   */
+  private async resolveHqBranchId(): Promise<string> {
+    const cached = this.hqBranchIdCache;
+    if (cached && Date.now() - cached.at < HQ_BRANCH_CACHE_TTL_MS) {
+      return cached.id;
+    }
+    const response: unknown = await this.sendBranchWithTimeout(
+      { cmd: 'branch.find_hq' },
+      {},
+    );
+    const hqBranchId = this.asStr(
+      (response as { data?: { id?: unknown } } | null)?.data?.id,
+    ).trim();
+    if (hqBranchId) {
+      this.hqBranchIdCache = { id: hqBranchId, at: Date.now() };
+    }
+    return hqBranchId;
+  }
+
+  /** `branchId` — HQ filiali. HQ aniqlanmasa (xato) — false (fail-closed). */
+  private async isHqBranchId(branchId: string): Promise<boolean> {
+    if (!branchId) {
+      return false;
+    }
+    const hqBranchId = await this.resolveHqBranchId().catch(() => '');
+    return Boolean(hqBranchId) && hqBranchId === branchId;
+  }
+
+  /** Buyurtma HQ qo'lida va so'rovchi filial xodimi HQ'ga biriktirilgan. */
+  private async isHqHeldOrderForBranch(
+    branchId: string,
+    holderType: string,
+  ): Promise<boolean> {
+    return (
+      holderType.trim().toUpperCase() === 'HQ' &&
+      (await this.isHqBranchId(branchId))
+    );
+  }
+
+  /**
+   * HQ filialiga biriktirilgan REGISTRATOR (fix3 C4). Bekor qilingan mollar
+   * HQ qo'lida (holder_type HQ, holder_branch_id NULL) turadi, shuning uchun
+   * uning ro'yxatlari SA/admin ro'yxati bilan bir xil bo'lishi kerak —
+   * aks holda topshirish ekrani doim bo'sh qolardi.
+   */
+  private async isHqRegistrator(
+    roles: string[],
+    assignment: BranchAssignment | null,
+  ): Promise<boolean> {
+    if (!roles.includes(RoleEnum.REGISTRATOR)) {
+      return false;
+    }
+    return this.isHqBranchId(this.asStr(assignment?.branch_id).trim());
+  }
+
+  /**
+   * MARKET_OPERATOR biriktirilgan market (identity `user.market_id`).
+   * Topilmasa yoki identity javob bermasa — '' (chaqiruvchi rad etadi).
+   */
+  private async resolveMarketOperatorMarketId(user: JwtUser): Promise<string> {
+    const profile: unknown = await this.sendIdentityWithTimeout(
+      { cmd: 'identity.user.find_by_id' },
+      { id: user?.sub },
+    ).catch(() => null);
+    return this.asStr(
+      (profile as { data?: { market_id?: unknown } } | null)?.data?.market_id,
+    ).trim();
+  }
+
+  /**
+   * Filial xodimi (REGISTRATOR) faqat o'z filiali doirasidagi buyurtmani
+   * o'zgartiradi/o'chiradi (fix3 C6, CODE-03). Doira — ko'rish qoidasi bilan
+   * AYNI: branch_id / holder_branch_id / home_branch_id. Buyurtma topilmasa
+   * order-service'ning o'z 404 xatosi qaytadi.
+   */
+  private async assertOrderInRequesterBranch(
+    reqUser: JwtUser,
+    orderId: string,
+    deniedMessage: string,
+  ): Promise<void> {
+    const assignment = await this.resolveBranchAssignment(reqUser);
+    const branchId = this.asStr(assignment?.branch_id).trim();
+    if (!this.isBranchStaffAssignment(assignment) || !branchId) {
+      throw new ForbiddenException(
+        'Filial xodimi hech qaysi filialga biriktirilmagan',
+      );
+    }
+    const order = await this.findOrderRowForScope(orderId);
+    if (!order) {
+      return;
+    }
+    const orderBranches = ['branch_id', 'holder_branch_id', 'home_branch_id']
+      .map((key) => this.asStr(order[key] ?? order[this.toCamelKey(key)]))
+      .map((value) => value.trim());
+    if (!orderBranches.includes(branchId)) {
+      throw new ForbiddenException(deniedMessage);
+    }
+  }
+
+  /**
+   * Doira tekshiruvi uchun buyurtma qatori (`order.find_by_id`).
+   *
+   * fix3b: order-service `findById` buyurtma qatorini O'RAMSIZ qaytaradi
+   * (`{ data }` emas). Ilgari faqat `.data` o'qilardi — prod'da u doim
+   * `undefined` edi, ya'ni qator "topilmadi" deb hisoblanib, filial va
+   * market egasi tekshiruvlari jimgina o'tkazib yuborilardi. Endi ikkala
+   * ko'rinish ham qabul qilinadi (eski `{ data }` o'rami ham).
+   */
+  private async findOrderRowForScope(
+    orderId: string,
+  ): Promise<Record<string, unknown> | null> {
+    const response: unknown = await this.sendOrderWithTimeout(
+      { cmd: 'order.find_by_id' },
+      { id: orderId },
+    );
+    const row = this.unwrapOrderRow(response);
+    return row && this.asStr(row.id).trim() ? row : null;
+  }
+
+  /**
+   * `order.find_by_id(_enriched)` javobidagi buyurtma qatori. order-service
+   * qatorni O'RAMSIZ qaytaradi; eski `{ data }` o'rami ham qabul qilinadi.
+   * Ilgari GET /orders/:id va /:id/tracking faqat `.data` ni tekshiruvga
+   * berardi — prod'da u doim `undefined` bo'lib, ko'rish tekshiruvlari
+   * umuman ishlamasdi (istalgan rol istalgan buyurtmani o'qirdi).
+   */
+  private unwrapOrderRow(response: unknown): Record<string, any> | null {
+    if (!response || typeof response !== 'object') {
+      return null;
+    }
+    const wrapped = (response as { data?: unknown }).data;
+    return (
+      wrapped && typeof wrapped === 'object' ? wrapped : response
+    ) as Record<string, any>;
+  }
+
+  /** `value` dan `fields` ni olib tashlangan nusxa (asl obyekt o'zgarmaydi). */
+  private omitFields<T extends object>(value: T, fields: readonly string[]): T {
+    const copy = { ...value } as Record<string, unknown>;
+    for (const key of fields) {
+      delete copy[key];
+    }
+    return copy as T;
+  }
+
+  /** `dto` da haqiqatan yuborilgan (undefined emas) maydonlar. */
+  private presentFields(dto: unknown, fields: readonly string[]): string[] {
+    const record = (dto ?? {}) as Record<string, unknown>;
+    return fields.filter((key) => record[key] !== undefined);
   }
 
   private async assertCanViewOrderTracking(
@@ -661,11 +900,21 @@ export class OrderGatewayController {
       roles.includes(RoleEnum.MANAGER) ||
       roles.includes(RoleEnum.REGISTRATOR)
     ) {
+      // fix3 RBAC-15: ilgari faqat `holder_type BRANCH` + o'z filiali o'tardi —
+      // HQ registratori HECH QACHON (HQ qo'lidagi buyurtma holder_branch_id
+      // NULL), filial xodimi esa buyurtma kuryerga o'tishi bilan 403 olardi.
+      // Endi doira buyurtmani ko'rish qoidasi bilan AYNI.
       const assignment = await this.resolveBranchAssignment(reqUser as JwtUser);
       const branchId = String(assignment?.branch_id ?? '').trim();
-      return branchId &&
-        holderType === 'BRANCH' &&
-        field('holder_branch_id') === branchId
+      const orderBranches = [
+        field('branch_id'),
+        field('holder_branch_id'),
+        field('home_branch_id'),
+      ];
+      if (branchId && orderBranches.includes(branchId)) {
+        return;
+      }
+      return (await this.isHqHeldOrderForBranch(branchId, holderType))
         ? undefined
         : denied();
     }
@@ -1284,8 +1533,21 @@ export class OrderGatewayController {
     },
   ): Promise<unknown> {
     const { customer, ...orderDto } = dto;
-    let customerId = dto.customer_id;
     const roles = this.normalizeRoles(req.user.roles);
+    const isSystemPrivileged =
+      roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
+    // fix3 RBAC-01: tayyor `customer_id` faqat SUPERADMIN/ADMIN dan qabul
+    // qilinadi. Market ketma-ket id yuborib boshqa marketlar mijozlarining
+    // ism/telefon/manzilini o'z buyurtmasi orqali o'qiy olardi. Qolganlar
+    // uchun mijoz DOIM `customer` obyektidan (telefon bo'yicha) aniqlanadi.
+    let customerId = isSystemPrivileged ? dto.customer_id : undefined;
+    // fix3 C6: hayot sikli/saqlash maydonlari faqat SUPERADMIN/ADMIN dan.
+    const safeOrderDto = isSystemPrivileged
+      ? orderDto
+      : this.omitFields(orderDto, [
+          ...CREATE_LIFECYCLE_FIELDS,
+          ...CREATE_PLACEMENT_FIELDS,
+        ]);
     const shouldResolveBranchAssignment =
       roles.includes(RoleEnum.BRANCH) ||
       roles.includes(RoleEnum.MANAGER) ||
@@ -1365,7 +1627,9 @@ export class OrderGatewayController {
     if (!customerId) {
       if (!customer) {
         throw new BadRequestException(
-          'customer_id yoki customer obyekt yuborilishi shart',
+          isSystemPrivileged || !dto.customer_id
+            ? 'customer_id yoki customer obyekt yuborilishi shart'
+            : "Mijoz ma'lumoti (customer: ism, telefon, tuman) yuborilishi shart — customer_id faqat admin uchun",
         );
       }
 
@@ -1396,7 +1660,7 @@ export class OrderGatewayController {
           { cmd: 'order.create' },
           {
             dto: {
-              ...orderDto,
+              ...safeOrderDto,
               market_id: resolvedMarketId,
               customer_id: finalCustomerId,
               operator_id:
@@ -1404,10 +1668,19 @@ export class OrderGatewayController {
                 roles.includes(RoleEnum.MARKET_OPERATOR)
                   ? req.user.sub
                   : null,
+              // Filial xodimi — o'z filiali; SUPERADMIN/ADMIN — so'raganicha;
+              // qolganlar (market, operator) — null: order-service o'zi
+              // aniqlaydi (HQ).
               branch_id: isBranchStaff
                 ? assignedBranchId
-                : (orderDto.branch_id ?? null),
-              source: isBranchStaff ? 'branch' : orderDto.source,
+                : isSystemPrivileged
+                  ? (orderDto.branch_id ?? null)
+                  : null,
+              source: isBranchStaff
+                ? 'branch'
+                : isSystemPrivileged
+                  ? orderDto.source
+                  : undefined,
             },
             requester: { id: req.user.sub, roles },
             ...(opts?.requestId ? { request_id: opts.requestId } : {}),
@@ -1432,6 +1705,9 @@ export class OrderGatewayController {
     @Body() dto: CreateOrderByTelegramBotRequestDto,
     @Req() req: { user: JwtUser },
   ) {
+    // fix3 LC-14: `status` YUBORILMAYDI — buyurtma sukutdagi NEW bo'ladi.
+    // Ilgari CREATED edi va hech narsa uni NEW ga o'tkazmasdi: bot
+    // buyurtmasi HQ "Yangi buyurtmalar" ekraniga hech qachon chiqmasdi.
     const mappedDto: CreateOrderRequestDto = {
       customer: {
         name: dto.name,
@@ -1442,7 +1718,6 @@ export class OrderGatewayController {
       },
       where_deliver: dto.where_deliver ?? Where_deliver.CENTER,
       total_price: dto.total_price,
-      status: Order_status.CREATED,
       comment: dto.comment ?? null,
       operator: dto.operator ?? null,
       items: dto.order_item_info,
@@ -2200,9 +2475,20 @@ export class OrderGatewayController {
     @Body() dto: CreateExternalOrderRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    const { customer, external_id, ...orderDto } = dto;
-    let customerId = dto.customer_id;
+    const { customer, external_id, ...rawOrderDto } = dto;
     const roles = this.normalizeRoles(req.user.roles);
+    const isSystemPrivileged =
+      roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
+    // fix3 C6 / RBAC-01 — `createOrderInternal` bilan AYNI qoida: hayot sikli,
+    // saqlash va joylashuv maydonlari hamda tayyor `customer_id` faqat
+    // SUPERADMIN/ADMIN dan.
+    const orderDto = isSystemPrivileged
+      ? rawOrderDto
+      : this.omitFields(rawOrderDto, [
+          ...CREATE_LIFECYCLE_FIELDS,
+          ...CREATE_PLACEMENT_FIELDS,
+        ]);
+    let customerId = isSystemPrivileged ? dto.customer_id : undefined;
 
     let resolvedMarketId = orderDto.market_id;
     if (roles.includes(RoleEnum.MARKET)) {
@@ -2219,7 +2505,9 @@ export class OrderGatewayController {
     if (!customerId) {
       if (!customer) {
         throw new BadRequestException(
-          'customer_id yoki customer obyekt yuborilishi shart',
+          isSystemPrivileged || !dto.customer_id
+            ? 'customer_id yoki customer obyekt yuborilishi shart'
+            : "Mijoz ma'lumoti (customer: ism, telefon, tuman) yuborilishi shart — customer_id faqat admin uchun",
         );
       }
 
@@ -2259,6 +2547,9 @@ export class OrderGatewayController {
               market_id: resolvedMarketId,
               customer_id: customerId,
             },
+            // fix3 C6: so'rovchi DOIM uzatiladi — order-service ham xuddi
+            // shu qoidani o'zi qo'llaydi (himoya chuqurligi).
+            requester: { id: req.user.sub, roles },
           },
         )
         .pipe(timeout(8000)),
@@ -2383,7 +2674,29 @@ export class OrderGatewayController {
       (normalizedRoles.includes(RoleEnum.BRANCH) ||
         normalizedRoles.includes(RoleEnum.MANAGER) ||
         normalizedRoles.includes(RoleEnum.REGISTRATOR));
+    const isCustomer =
+      !isSystemPrivilegedRequester &&
+      normalizedRoles.includes(RoleEnum.CUSTOMER);
+    const isMarketOperator =
+      !isSystemPrivilegedRequester &&
+      !isMarket &&
+      normalizedRoles.includes(RoleEnum.MARKET_OPERATOR);
     const requesterId = req?.user?.sub;
+
+    // fix3 C11 / CODE-04: OPERATOR, INVESTOR va noma'lum rollar uchun doira
+    // yo'q edi — ular BARCHA buyurtmani mijoz ma'lumoti bilan o'qirdi.
+    if (
+      !isSystemPrivilegedRequester &&
+      !isMarket &&
+      !isCourier &&
+      !isBranchScopedRequester &&
+      !isCustomer &&
+      !isMarketOperator
+    ) {
+      throw new ForbiddenException(
+        "Buyurtmalar ro'yxatini ko'rishga ruxsat yo'q",
+      );
+    }
 
     if (
       isMarket &&
@@ -2394,15 +2707,34 @@ export class OrderGatewayController {
       throw new BadRequestException('market role cannot query other market_id');
     }
 
-    const resolvedMarketId = isMarket && requesterId ? requesterId : market_id;
+    let resolvedMarketId = isMarket && requesterId ? requesterId : market_id;
+    if (isMarketOperator && req?.user) {
+      // Operator — faqat o'zi biriktirilgan market (server tomonda).
+      const operatorMarketId = await this.resolveMarketOperatorMarketId(
+        req.user,
+      );
+      if (!operatorMarketId) {
+        throw new ForbiddenException(
+          'Operator hech qaysi marketga biriktirilmagan',
+        );
+      }
+      resolvedMarketId = operatorMarketId;
+    }
+    // Mijoz — faqat o'z buyurtmalari.
+    const resolvedCustomerId =
+      isCustomer && requesterId ? String(requesterId) : customer_id;
     let resolvedBranchId = branch_id;
+    let branchAssignment: BranchAssignment | null = null;
 
     if (isBranchScopedRequester && req?.user) {
-      const assignment = await this.resolveBranchAssignment(req.user);
-      if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
+      branchAssignment = await this.resolveBranchAssignment(req.user);
+      if (
+        !this.isBranchStaffAssignment(branchAssignment) ||
+        !branchAssignment?.branch_id
+      ) {
         throw new BadRequestException('Branch user branchga biriktirilmagan');
       }
-      resolvedBranchId = String(assignment.branch_id);
+      resolvedBranchId = String(branchAssignment.branch_id);
     }
 
     const pagination = this.parsePaginationQuery(page, limit);
@@ -2440,8 +2772,20 @@ export class OrderGatewayController {
           value === Order_status.CANCELLED ||
           value === Order_status.CANCELLED_SENT,
       );
-    const isBranchCancelledTab = isBranchScopedRequester && isCancelledTab;
-    const isHqCancelledTab = isSystemPrivilegedRequester && isCancelledTab;
+    // fix3 C4: HQ registratori bekor qilinganlar tabida SA/admin bilan AYNI
+    // ro'yxatni ko'radi (HQ qo'lidagi, filial filtrsiz) — aks holda doim bo'sh.
+    const isHqRegistratorCancelledTab =
+      isBranchScopedRequester &&
+      isCancelledTab &&
+      (await this.isHqRegistrator(normalizedRoles, branchAssignment));
+    if (isHqRegistratorCancelledTab) {
+      resolvedBranchId = undefined;
+    }
+    const isBranchCancelledTab =
+      isBranchScopedRequester && isCancelledTab && !isHqRegistratorCancelledTab;
+    const isHqCancelledTab =
+      (isSystemPrivilegedRequester || isHqRegistratorCancelledTab) &&
+      isCancelledTab;
     const resolvedStatuses =
       (isCourier || isBranchCancelledTab || isHqCancelledTab) && isCancelledTab
         ? [Order_status.CANCELLED]
@@ -2485,7 +2829,7 @@ export class OrderGatewayController {
     const payload = {
       query: {
         market_id: resolvedMarketId,
-        customer_id,
+        customer_id: resolvedCustomerId,
         status: resolvedStatuses,
         where_deliver: normalizedWhereDeliver as Where_deliver | undefined,
         search,
@@ -2521,8 +2865,12 @@ export class OrderGatewayController {
     });
   }
 
+  // fix3 RBAC-03: ilgari faqat JwtAuthGuard — kuryer (va operator/mijoz/
+  // investor) har marketning BARCHA buyurtmasini mijoz ma'lumoti bilan
+  // varaqlay olardi. UI bu marshrutni ishlatmaydi; market — faqat o'zinikini.
   @Get('market/:marketId')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MARKET)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'List orders by market ID with pagination' })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
@@ -2809,13 +3157,30 @@ export class OrderGatewayController {
     );
   }
 
+  // fix3 RBAC-03 / CODE-04: ilgari faqat JwtAuthGuard — kuryer har marketning
+  // NEW buyurtmalarini ko'rardi. Market esa BARCHA marketlar qatorini (market
+  // profili bilan) olardi; endi faqat o'z qatorini.
   @Get('markets/new')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+    RoleEnum.BRANCH,
+    RoleEnum.MARKET,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Markets with NEW orders' })
   async findNewMarkets(@Req() req?: { user: JwtUser }) {
     const roles = req?.user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
+    const ownMarketId =
+      normalizedRoles.includes(RoleEnum.MARKET) &&
+      !normalizedRoles.includes(RoleEnum.SUPERADMIN) &&
+      !normalizedRoles.includes(RoleEnum.ADMIN)
+        ? String(req?.user?.sub ?? '').trim()
+        : null;
     const isBranchScopedRequester =
       normalizedRoles.includes(RoleEnum.BRANCH) ||
       normalizedRoles.includes(RoleEnum.MANAGER) ||
@@ -2834,7 +3199,7 @@ export class OrderGatewayController {
       excludeBranchSource = true;
     }
 
-    const result = await this.sendOrderWithFallback(
+    const rawResult: unknown = await this.sendOrderWithFallback(
       { cmd: 'order.find_new_markets_enriched' },
       { cmd: 'order.find_new_markets' },
       {
@@ -2842,12 +3207,37 @@ export class OrderGatewayController {
         exclude_branch_source: excludeBranchSource,
       },
     );
+    const result =
+      ownMarketId === null
+        ? rawResult
+        : this.filterRowsByMarket(rawResult, ownMarketId);
 
     if (!Array.isArray(result)) {
       return result;
     }
 
-    return this.enrichMarketRows(result);
+    return this.enrichMarketRows(result as Array<Record<string, any>>);
+  }
+
+  /**
+   * Faqat `marketId` qatorlari. Massiv yoki `{data: []}` shakli; tanilmagan
+   * shakl — bo'sh massiv (fail-closed: boshqa market qatori sizmasin).
+   */
+  private filterRowsByMarket(payload: unknown, marketId: string): unknown {
+    const keep = (row: unknown) =>
+      Boolean(marketId) &&
+      this.asStr(
+        (row as Record<string, unknown> | null)?.market_id ??
+          (row as Record<string, unknown> | null)?.marketId,
+      ).trim() === marketId;
+    if (Array.isArray(payload)) {
+      return payload.filter(keep);
+    }
+    const body = payload as { data?: unknown } | null;
+    if (body && typeof body === 'object' && Array.isArray(body.data)) {
+      return { ...body, data: body.data.filter(keep) };
+    }
+    return [];
   }
 
   @Get('markets/cancelled')
@@ -2888,8 +3278,11 @@ export class OrderGatewayController {
       if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
         throw new BadRequestException('Branch user branchga biriktirilmagan');
       }
-      branchId = String(assignment.branch_id);
-      holderType = 'BRANCH';
+      // fix3 C4: HQ registratori — SA/admin bilan AYNI (HQ qo'lidagilar).
+      if (!(await this.isHqRegistrator(normalizedRoles, assignment))) {
+        branchId = String(assignment.branch_id);
+        holderType = 'BRANCH';
+      }
       excludeBranchSource = false;
     }
 
@@ -2977,8 +3370,18 @@ export class OrderGatewayController {
     );
   }
 
+  // fix3 RBAC-03 / CODE-04: kuryer, operator, mijoz va investor endi kira
+  // olmaydi (ilgari har marketning NEW buyurtmalarini mijoz PII bilan olardi).
   @Get('markets/:marketId/new')
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+    RoleEnum.BRANCH,
+    RoleEnum.MARKET,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'NEW orders by market id' })
   @ApiParam({ name: 'marketId', description: 'Market ID (id)' })
@@ -3066,8 +3469,11 @@ export class OrderGatewayController {
       if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
         throw new BadRequestException('Branch user branchga biriktirilmagan');
       }
-      branchId = String(assignment.branch_id);
-      holderType = 'BRANCH';
+      // fix3 C4: HQ registratori — SA/admin bilan AYNI (HQ qo'lidagilar).
+      if (!(await this.isHqRegistrator(normalizedRoles, assignment))) {
+        branchId = String(assignment.branch_id);
+        holderType = 'BRANCH';
+      }
       excludeBranchSource = false;
     }
 
@@ -3152,30 +3558,31 @@ export class OrderGatewayController {
       { cmd: 'order.find_by_id' },
       { id },
     );
-    await this.assertCanViewOrder(req?.user, response?.data);
+    await this.assertCanViewOrder(req?.user, this.unwrapOrderRow(response));
     return response;
   }
 
   @Get('qr-code/:token')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(
-    RoleEnum.SUPERADMIN,
-    RoleEnum.ADMIN,
-    RoleEnum.BRANCH,
-    RoleEnum.MANAGER,
-    RoleEnum.COURIER,
-    RoleEnum.MARKET,
-    RoleEnum.REGISTRATOR,
-  )
+  @Roles(...ORDER_QR_LOOKUP_ROLES)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get order by QR code (Post Control style)' })
   @ApiParam({ name: 'token', description: 'Order QR token' })
-  findByQrCode(@Param('token') token: string) {
-    return this.sendOrderWithFallback(
+  async findByQrCode(
+    @Param('token') token: string,
+    @Req() req?: { user: JwtUser },
+  ) {
+    const response: unknown = await this.sendOrderWithFallback(
       { cmd: 'order.find_by_qr_enriched' },
       { cmd: 'order.find_by_qr' },
       { token },
     );
+    // fix3 C11 (CODE-04): market faqat o'z posilkasini (auth/order-qr-visibility).
+    assertQrOrderVisible(
+      req?.user,
+      (response as { data?: unknown } | null)?.data,
+    );
+    return response;
   }
 
   @Post('scan-assign')
@@ -3329,7 +3736,10 @@ export class OrderGatewayController {
       { cmd: 'order.find_by_id' },
       { id },
     );
-    await this.assertCanViewOrderTracking(req?.user, order?.data);
+    await this.assertCanViewOrderTracking(
+      req?.user,
+      this.unwrapOrderRow(order),
+    );
     return firstValueFrom(
       this.orderClient
         .send({ cmd: 'order.tracking' }, { id, page, limit })
@@ -3588,7 +3998,24 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get the per-order settlement state' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
-  getOrderSettlement(@Param('id') id: string) {
+  async getOrderSettlement(
+    @Param('id') id: string,
+    @Req() req: { user: JwtUser },
+  ) {
+    // fix3b: MANAGER/REGISTRATOR faqat o'z filiali doirasidagi buyurtmaning
+    // hisob-kitob holatini (pul summalari) o'qiydi — PATCH/DELETE bilan AYNI
+    // doira (branch_id / holder_branch_id / home_branch_id). SA/ADMIN — cheklovsiz.
+    const roles = this.normalizeRoles(req.user.roles);
+    if (
+      !roles.includes(RoleEnum.SUPERADMIN) &&
+      !roles.includes(RoleEnum.ADMIN)
+    ) {
+      await this.assertOrderInRequesterBranch(
+        req.user,
+        id,
+        "Bu buyurtma sizning filialingizga tegishli emas — hisob-kitobini ko'ra olmaysiz",
+      );
+    }
     return firstValueFrom(
       this.orderClient
         .send({ cmd: 'order.settlement.find_by_order' }, { id })
@@ -3797,26 +4224,7 @@ export class OrderGatewayController {
     @Body() dto: UpdateOrderByIdRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return firstValueFrom(
-      this.orderClient
-        .send(
-          { cmd: 'order.update_normalized' },
-          {
-            id,
-            dto,
-            requester: {
-              id: req.user.sub,
-              roles: this.normalizeRoles(req.user.roles),
-            },
-          },
-        )
-        .pipe(timeout(8000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
-      }
-      throw error;
-    });
+    return this.updateOrderGuarded(id, dto, req);
   }
 
   @Patch(':id/full')
@@ -3831,16 +4239,73 @@ export class OrderGatewayController {
     @Body() dto: UpdateOrderByIdRequestDto,
     @Req() req: { user: JwtUser },
   ) {
+    return this.updateOrderGuarded(id, dto, req);
+  }
+
+  /**
+   * PATCH /orders/:id va /:id/full — umumiy yo'l (fix3 C6; M11, CODE-03).
+   *
+   *  1. `status`, `market_id`, `to_be_paid`, `paid_amount` — HECH KIMGA
+   *     (superadmin ham): holat faqat sotish/bekor qilish/qaytarish
+   *     amallari orqali o'zgaradi, aks holda kassa oyoqlari va hisob-kitob
+   *     qatori yozilmaydi.
+   *  2. `post_id`, `customer_id`, `qr_code_token`, `source` — faqat
+   *     SUPERADMIN.
+   *  3. REGISTRATOR — faqat o'z filiali doirasidagi buyurtma.
+   *
+   * fix3b (M11/CODE-03): faqat shu HTTP PATCH yo'li ALOHIDA
+   * `order.update_from_api` pattern'iga boradi — order-service uni
+   * `updateFromApi` ga ulaydi (xuddi shu qoidalar xizmat qatlamida ham).
+   * `order.update`, `order.update_full`, `order.update_normalized` ichki
+   * chaqiruvchilar (filial jo'natmasi, logistika, finance to'lov yozuvi)
+   * uchun avvalgidek oddiy `updateFull` da qoladi — ularga bu taqiqlar
+   * qo'llanmasligi SHART.
+   */
+  private async updateOrderGuarded(
+    id: string,
+    dto: UpdateOrderByIdRequestDto,
+    req: { user: JwtUser },
+  ) {
+    const roles = this.normalizeRoles(req.user.roles);
+    const forbidden = this.presentFields(dto, PATCH_FORBIDDEN_FIELDS);
+    if (forbidden.length) {
+      throw new BadRequestException(
+        `Bu maydonlarni PATCH orqali o'zgartirib bo'lmaydi: ${forbidden.join(', ')}. ` +
+          "Holat sotish, bekor qilish va qaytarish amallari orqali o'zgaradi",
+      );
+    }
+    if (!roles.includes(RoleEnum.SUPERADMIN)) {
+      const superadminOnly = this.presentFields(
+        dto,
+        PATCH_SUPERADMIN_ONLY_FIELDS,
+      );
+      if (superadminOnly.length) {
+        throw new ForbiddenException(
+          `Bu maydonlarni faqat superadmin o'zgartira oladi: ${superadminOnly.join(', ')}`,
+        );
+      }
+    }
+    if (
+      !roles.includes(RoleEnum.SUPERADMIN) &&
+      !roles.includes(RoleEnum.ADMIN)
+    ) {
+      await this.assertOrderInRequesterBranch(
+        req.user,
+        id,
+        "Bu buyurtma sizning filialingizga tegishli emas — uni o'zgartira olmaysiz",
+      );
+    }
+
     return firstValueFrom(
       this.orderClient
-        .send(
-          { cmd: 'order.update_normalized' },
+        .send<unknown>(
+          { cmd: 'order.update_from_api' },
           {
             id,
             dto,
             requester: {
               id: req.user.sub,
-              roles: this.normalizeRoles(req.user.roles),
+              roles,
             },
           },
         )
@@ -3864,18 +4329,50 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete order (status-based role rules)' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
-  remove(@Param('id') id: string, @Req() req: { user: JwtUser }) {
-    return this.orderClient
-      .send(
-        { cmd: 'order.delete' },
-        {
-          id,
-          requester: {
-            id: req.user.sub,
-            roles: this.normalizeRoles(req.user.roles),
+  async remove(@Param('id') id: string, @Req() req: { user: JwtUser }) {
+    const roles = this.normalizeRoles(req.user.roles);
+    const isSystemPrivileged =
+      roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
+
+    // fix3 C6 (RBAC-04, CODE-01, CODE-03): market faqat O'Z buyurtmasini,
+    // registrator faqat o'z filiali doirasidagisini o'chiradi. Holat
+    // qoidalari (NEW/CREATED/RECEIVED) order-service'da qoladi.
+    if (!isSystemPrivileged && roles.includes(RoleEnum.MARKET)) {
+      const order = await this.findOrderRowForScope(id);
+      const ownerMarketId = this.asStr(
+        order?.market_id ?? order?.marketId,
+      ).trim();
+      if (order && ownerMarketId !== String(req.user.sub ?? '').trim()) {
+        throw new ForbiddenException(
+          "Market faqat o'z buyurtmasini o'chira oladi",
+        );
+      }
+    } else if (!isSystemPrivileged && roles.includes(RoleEnum.REGISTRATOR)) {
+      await this.assertOrderInRequesterBranch(
+        req.user,
+        id,
+        "Bu buyurtma sizning filialingizga tegishli emas — uni o'chira olmaysiz",
+      );
+    }
+
+    return firstValueFrom(
+      this.orderClient
+        .send<unknown>(
+          { cmd: 'order.delete' },
+          {
+            id,
+            requester: {
+              id: req.user.sub,
+              roles,
+            },
           },
-        },
-      )
-      .pipe(timeout(8000));
+        )
+        .pipe(timeout(8000)),
+    ).catch((error: unknown) => {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('Order service response timeout');
+      }
+      throw error;
+    });
   }
 }

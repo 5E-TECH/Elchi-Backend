@@ -57,6 +57,8 @@ interface OrderRow {
   where_deliver?: Where_deliver;
   qr_code_token?: string | null;
   current_batch_id?: string | null;
+  // order-service Order_source: 'internal' | 'external' | 'branch'.
+  source?: string | null;
 }
 
 interface CourierRow {
@@ -92,6 +94,14 @@ const RETURN_REQUEST_STATUSES: Order_status[] = [
 
 /** findOrders ning odatiy order.find_all kutish vaqti. */
 const FIND_ORDERS_TIMEOUT_MS = 5000;
+
+/**
+ * CODE-10 — Qaytarish tasdiqlash/rad etishda bir vaqtda yuboriladigan
+ * order.update soni. Har bir chaqiruv alohida buyurtma (order-service da
+ * alohida tranzaksiya), shuning uchun parallel xavfsiz; chegara order-service
+ * ni bosib qo'ymaslik uchun.
+ */
+const RETURN_REQUEST_UPDATE_CONCURRENCY = 5;
 
 /**
  * logistics.post.open_return_posts_for_courier: har bir pochtaning
@@ -639,10 +649,13 @@ export class LogisticsServiceService implements OnModuleInit {
   /**
    * P1b — kuryer skani orqali buyurtmani o'z filialiga qabul qilish.
    *
-   * `true` — qabul qilindi (buyurtma endi kuryer filialida, `RECEIVED`).
-   * `false` — bu yo'l qo'llanmaydi: buyurtma paketda yo'lda emas
+   * `received: true` — qabul qilindi (buyurtma endi kuryer filialida, `RECEIVED`).
+   * `received: false` — bu yo'l qo'llanmaydi: buyurtma paketda yo'lda emas
    *           (`no_batch`) yoki paket boshqa filialga atalgan (`other_branch`).
    *           Chaqiruvchi o'zining odatdagi "boshqa filial" xatosini beradi.
+   *           `reason: 'transit'` (fix3b) — buyurtma filialga qabul qilindi,
+   *           lekin boshqa hudud uchun: `NEW` bo'lib qayta jo'natiladi,
+   *           kuryerga berilmaydi.
    *
    * Guard xatolari (paket hali jo'natilmagan, bekor qilingan, qaytarish paketi)
    * ATAYLAB yuqoriga uzatiladi — kuryer sababini bilishi kerak, umumiy
@@ -652,21 +665,48 @@ export class LogisticsServiceService implements OnModuleInit {
     orderId: string,
     courierBranchId: string,
     requester: RequesterContext,
-  ): Promise<boolean> {
-    const res = await lastValueFrom(
-      this.orderClient
-        .send<{ data?: { received?: boolean; reason?: string } }>(
-          { cmd: 'order.transfer_batch.receive_one_by_scan' },
-          {
-            order_id: orderId,
-            courier_branch_id: courierBranchId,
-            requester_id: String(requester.id),
-            requester_roles: requester.roles ?? [],
-          },
-        )
-        .pipe(timeout(8000)),
-    );
-    return Boolean(res?.data?.received);
+  ): Promise<{ received: boolean; reason: string }> {
+    let res: { data?: { received?: boolean; reason?: string } } | undefined;
+    try {
+      res = await lastValueFrom(
+        this.orderClient
+          .send<{ data?: { received?: boolean; reason?: string } }>(
+            { cmd: 'order.transfer_batch.receive_one_by_scan' },
+            {
+              order_id: orderId,
+              courier_branch_id: courierBranchId,
+              requester_id: String(requester.id),
+              requester_roles: requester.roles ?? [],
+            },
+          )
+          .pipe(timeout(8000)),
+      );
+    } catch (error: unknown) {
+      // CODE-13 / C12 — RPC xatosi transportda oddiy obyekt bo'lib keladi
+      // (RpcException emas). O'ralmasa kuryer 400/404 o'rniga 500 olardi va
+      // executeAndAck xabarni qayta navbatga qo'yardi (skan ikki marta
+      // bajarilardi). updateOrder bilan bir xil: >= 400 holati saqlanadi,
+      // qolgani (timeout va h.k.) — 502.
+      const downstreamError: unknown =
+        error instanceof RpcException ? error.getError() : error;
+      if (
+        downstreamError &&
+        typeof downstreamError === 'object' &&
+        Number((downstreamError as { statusCode?: number }).statusCode) >= 400
+      ) {
+        throw new RpcException(downstreamError);
+      }
+      throw new RpcException(
+        errorRes(
+          "Buyurtmani skan orqali filialga qabul qilib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+          502,
+        ),
+      );
+    }
+    return {
+      received: Boolean(res?.data?.received),
+      reason: String(res?.data?.reason ?? ''),
+    };
   }
 
   private async updateOrder(
@@ -734,23 +774,45 @@ export class LogisticsServiceService implements OnModuleInit {
           await this.updateOrder(order.id, { post_id: canonical.id });
         }
 
-        const allGroupOrders = await this.findOrders({
-          post_ids: [String(canonical.id), ...duplicateIds],
-          fetch_all: true,
-          limit: 1000,
-        });
-        canonical.order_quantity = allGroupOrders.length;
-        canonical.post_total_price = allGroupOrders.reduce(
-          (sum, order) => sum + Number(order.total_price ?? 0),
-          0,
-        );
-
+        // LOG-01: ko'chirish davomida HQ qabuli dublikatga yangi buyurtma
+        // yozgan bo'lishi mumkin. O'chirishdan oldin qayta tekshiriladi:
+        // kechikkanlar ham ko'chiriladi, hali ishora qilinayotgan dublikat
+        // esa o'chirilmaydi (keyingi yuklashda birlashtiriladi).
         const duplicates = sorted.slice(1);
         for (const duplicate of duplicates) {
+          const lateOrders = await this.findOrders({
+            post_ids: [String(duplicate.id)],
+            fetch_all: true,
+            limit: 1000,
+          });
+          for (const order of lateOrders) {
+            await this.updateOrder(order.id, { post_id: canonical.id });
+          }
+          const stillReferenced = lateOrders.length
+            ? await this.findOrders({
+                post_ids: [String(duplicate.id)],
+                fetch_all: true,
+                limit: 1,
+              })
+            : [];
+          if (stillReferenced.length) {
+            continue;
+          }
           await this.postRepo.remove(duplicate);
           void this.removePostFromSearch(duplicate);
           removedPostIds.add(String(duplicate.id));
         }
+
+        const canonicalOrders = await this.findOrders({
+          post_ids: [String(canonical.id)],
+          fetch_all: true,
+          limit: 1000,
+        });
+        canonical.order_quantity = canonicalOrders.length;
+        canonical.post_total_price = canonicalOrders.reduce(
+          (sum, order) => sum + Number(order.total_price ?? 0),
+          0,
+        );
       }
 
       const savedCanonical = await this.postRepo.save(canonical);
@@ -1005,6 +1067,62 @@ export class LogisticsServiceService implements OnModuleInit {
         ? (rows[0] as CourierRow)
         : null;
     } catch {
+      return null;
+    }
+  }
+
+  /**
+   * CODE-11 — kuryer identity'da qanday holatda.
+   *
+   * - `{ found: false }` — identity javob berdi, lekin bunday (o'chirilmagan)
+   *   kuryer yo'q: identity `deleteUser` branch_users qatorini o'chirmaydi,
+   *   shuning uchun filial a'zoligi tekshiruvi o'chirilgan kuryerni o'tkazib
+   *   yuborardi;
+   * - `{ found: true, status }` — 'active' / 'inactive' (kichik harfda);
+   * - `null` — identity javob bermadi yoki javob shakli noma'lum: chaqiruvchi
+   *   tekshiruvni o'tkazib yuboradi (bu yangi qo'shimcha to'siq, filial
+   *   a'zoligi allaqachon tekshirilgan).
+   */
+  private async findCourierStatus(
+    courierId: string,
+  ): Promise<{ found: false } | { found: true; status: string } | null> {
+    try {
+      const res = await lastValueFrom(
+        this.identityClient
+          .send<{
+            data?: unknown;
+          }>({ cmd: 'identity.courier.find_by_ids' }, { ids: [courierId] })
+          .pipe(timeout(5000)),
+      );
+      if (!Array.isArray(res?.data)) {
+        return null;
+      }
+      const rows: unknown[] = res.data;
+      const row = rows.find(
+        (item): item is { id: string | number; status?: unknown } => {
+          if (!item || typeof item !== 'object') {
+            return false;
+          }
+          const id = (item as { id?: unknown }).id;
+          return (
+            (typeof id === 'string' || typeof id === 'number') &&
+            String(id) === String(courierId)
+          );
+        },
+      );
+      if (!row) {
+        return { found: false };
+      }
+      const rawStatus = row.status;
+      return {
+        found: true,
+        status:
+          typeof rawStatus === 'string' ? rawStatus.trim().toLowerCase() : '',
+      };
+    } catch (error) {
+      this.logger.warn(
+        `findCourierStatus(${courierId}) failed: ${(error as Error)?.message ?? error}`,
+      );
       return null;
     }
   }
@@ -1273,14 +1391,86 @@ export class LogisticsServiceService implements OnModuleInit {
     }
   }
 
+  /**
+   * LC-03 — buyurtma HQ omborida turibdimi (custody bo'yicha)?
+   *
+   * Doira getPostOrders/receivePost bilan AYNAN bir xil hisoblanadi
+   * (`holder_branch_id ?? branch_id`), aks holda HQ hudud pochtasi aralash
+   * doiraga ega bo'lib, HQ registratori uni ocha olmasdi (403). Kuryerdagi
+   * (COURIER) yoki marketga qaytgan (MARKET) buyurtma HQ omborida emas.
+   * Doirasiz eski qator — HQ (resolveReturnCustodyBranchId bilan bir xil).
+   */
+  private isInHqCustody(order: OrderRow, hqBranchId: string): boolean {
+    const holderType = String(order.holder_type ?? '')
+      .trim()
+      .toUpperCase();
+    if (holderType && holderType !== 'HQ' && holderType !== 'BRANCH') {
+      return false;
+    }
+    const scope = this.getOrderBranchScope(order);
+    return !scope || scope === hqBranchId;
+  }
+
+  /**
+   * LC-03 — newPosts faqat HQ omboridagi yetim buyurtmalarni HQ hudud
+   * pochtasiga oladi. Ilgari filial (REGIONAL/HYBRID ota filial) paketni qabul
+   * qilgan, hali kuryerga bermagan RECEIVED buyurtmalar ham olinardi va HQ
+   * pochtasi ochilmay qolardi. HQ aniqlanmasa — hech narsa olinmaydi (fail
+   * closed), ro'yxat esa baribir qaytadi.
+   */
+  private async filterHqCustodyOrphans(
+    orders: OrderRow[],
+  ): Promise<OrderRow[]> {
+    if (!orders.length) {
+      return [];
+    }
+    let hqBranchId: string;
+    try {
+      hqBranchId = await this.findHqBranchId();
+    } catch (error) {
+      this.logger.warn(
+        `newPosts: HQ filiali aniqlanmadi — yetim buyurtmalar pochtaga biriktirilmadi: ${(error as Error)?.message ?? error}`,
+      );
+      return [];
+    }
+    return orders.filter((order) => this.isInHqCustody(order, hqBranchId));
+  }
+
   async newPosts(query?: { search?: string }, requester?: RequesterContext) {
     const orphanOrders = await this.findOrders({
       status: Order_status.RECEIVED,
       page: 1,
       limit: 1000,
     });
-    const candidates = orphanOrders.filter(
-      (order) => !order.post_id && order.region_id,
+    // LOG-01: o'chirilgan pochtaga ishora qiladigan RECEIVED buyurtma ham
+    // yetim. Dublikat pochta birlashtirilayotganda HQ qabuli unga yangi
+    // buyurtma yozib ulgursa, pochta o'chgach buyurtma hech bir kartada
+    // ko'rinmay, jo'natib ham bo'lmay qolardi — endi keyingi yuklashda
+    // o'z hudud pochtasiga qaytadi.
+    const referencedPostIds = Array.from(
+      new Set(
+        orphanOrders
+          .map((order) => String(order.post_id ?? '').trim())
+          .filter(Boolean),
+      ),
+    );
+    const existingPostIds = new Set(
+      referencedPostIds.length
+        ? (
+            await this.postRepo.find({
+              where: { id: In(referencedPostIds) },
+              select: ['id'],
+            })
+          ).map((post) => String(post.id))
+        : [],
+    );
+    const candidates = await this.filterHqCustodyOrphans(
+      orphanOrders.filter((order) => {
+        const postId = String(order.post_id ?? '').trim();
+        return (
+          Boolean(order.region_id) && (!postId || !existingPostIds.has(postId))
+        );
+      }),
     );
 
     const byRegion = new Map<
@@ -2240,6 +2430,8 @@ export class LogisticsServiceService implements OnModuleInit {
     // across two services — no atomic TX possible. Track which transitions
     // succeeded so partial failures are visible in logs rather than silent.
     const failures: Array<{ order_id: string; error: string }> = [];
+    // LC-11 — tanlangan, lekin WAITING ga o'tkazib bo'lmagan buyurtmalar.
+    const failedSelectedOrderIds: string[] = [];
 
     for (const orderId of waitingOrderIds) {
       const target = orderById.get(orderId);
@@ -2255,6 +2447,7 @@ export class LogisticsServiceService implements OnModuleInit {
             order_id: String(orderId),
             error: (err as Error)?.message ?? String(err),
           });
+          failedSelectedOrderIds.push(String(orderId));
         }
       }
     }
@@ -2309,7 +2502,19 @@ export class LogisticsServiceService implements OnModuleInit {
       );
     }
 
-    const hasRemainingReceivableOrders = remaining.length > 0;
+    // LC-11 — pochta holati so'rov boshidagi suratdan EMAS, yozuvlardan keyingi
+    // haqiqiy holatdan tanlanadi: yangilanmay qolgan tanlangan buyurtma yoki
+    // shu orada HQ dispatch qo'shgan buyurtma hamon ON_THE_ROAD bo'lsa, pochta
+    // SENT qoladi (RECEIVED pochta FE da faqat ko'rish rejimida ochiladi va
+    // qolgan posilkalarni qabul qilib bo'lmay qolardi). Qayta tekshiruv
+    // yiqilsa — surat + yiqilgan tanlov bo'yicha (SENT tomonga, xavfsiz).
+    const stillOnTheRoadIds = await this.findOnTheRoadOrderIdsInPost(id);
+    const notReceivedOrderIds = failedSelectedOrderIds.filter(
+      (orderId) => !stillOnTheRoadIds || stillOnTheRoadIds.has(orderId),
+    );
+    const hasRemainingReceivableOrders = stillOnTheRoadIds
+      ? stillOnTheRoadIds.size > 0
+      : remaining.length > 0 || notReceivedOrderIds.length > 0;
     post.status = hasRemainingReceivableOrders
       ? Post_status.SENT
       : Post_status.RECEIVED;
@@ -2326,6 +2531,8 @@ export class LogisticsServiceService implements OnModuleInit {
         order_count: allOrders.length,
         branch_id: targetBranchId ?? null,
         courier_id: savedPost.courier_id,
+        failed_order_count: failures.length,
+        not_received_order_ids: notReceivedOrderIds.slice(0, 10),
       },
     });
 
@@ -2335,7 +2542,44 @@ export class LogisticsServiceService implements OnModuleInit {
         )
       : [];
 
-    return successRes(waitingOrders, 200, 'Post received successfully');
+    // `data` shakli o'zgarmaydi (qabul qilingan buyurtmalar ro'yxati).
+    // `not_received_order_ids` — tanlangan, lekin hamon yo'lda qolgan
+    // buyurtmalar: FE ularni "qabul qilindi" deb yashirmasligi kerak.
+    return {
+      ...successRes(
+        waitingOrders,
+        200,
+        notReceivedOrderIds.length
+          ? `Pochta qisman qabul qilindi: ${notReceivedOrderIds.length} ta buyurtmani qabul qilib bo'lmadi — qayta urinib ko'ring`
+          : 'Post received successfully',
+      ),
+      failures,
+      not_received_order_ids: notReceivedOrderIds,
+    };
+  }
+
+  /**
+   * LC-11 — pochtada hozir ON_THE_ROAD turgan buyurtmalar id lari. Yiqilsa
+   * `null` (chaqiruvchi zaxira qoidaga o'tadi, javob yiqilmaydi).
+   */
+  private async findOnTheRoadOrderIdsInPost(
+    postId: string,
+  ): Promise<Set<string> | null> {
+    try {
+      const rows = await this.findOrders({
+        post_id: postId,
+        status: Order_status.ON_THE_ROAD,
+        fetch_all: true,
+        page: 1,
+        limit: 1000,
+      });
+      return new Set(rows.map((order) => String(order.id)));
+    } catch (error) {
+      this.logger.warn(
+        `receivePost: post=${postId} qayta tekshiruvi yiqildi — holat surat bo'yicha tanlandi: ${(error as Error)?.message ?? error}`,
+      );
+      return null;
+    }
   }
 
   async reassignCourier(postId: string, courierId: string) {
@@ -2699,51 +2943,73 @@ export class LogisticsServiceService implements OnModuleInit {
     const postDeltas = new Map<string, { count: number; total: number }>();
     let updateError: RpcException | null = null;
 
-    for (const order of eligibleOrders) {
-      const custodyBranchId = this.resolveReturnCustodyBranchId(
-        order,
-        scope.hqBranchId,
+    // CODE-10 — yangilanishlar RETURN_REQUEST_UPDATE_CONCURRENCY tadan
+    // parallel (har biri alohida buyurtma, order-service da alohida
+    // tranzaksiya). Ketma-ket 100+ buyurtma gateway'ning 8 s chegarasidan
+    // oshib 504 berardi, ish esa orqada davom etardi.
+    for (
+      let start = 0;
+      start < eligibleOrders.length && !updateError;
+      start += RETURN_REQUEST_UPDATE_CONCURRENCY
+    ) {
+      const chunk = eligibleOrders.slice(
+        start,
+        start + RETURN_REQUEST_UPDATE_CONCURRENCY,
       );
-      try {
-        await this.updateOrder(
-          String(order.id),
-          {
-            status: Order_status.WAITING,
-            return_requested: false,
-            courier_id: null,
-            assigned_at: null,
-            post_id: null,
-            branch_id: custodyBranchId,
-          },
-          {
-            id: requester?.id ?? 'system',
-            roles: requester?.roles ?? [],
-            note,
-          },
-        );
-      } catch (error) {
-        // Bir nechta RPC — atomik emas. To'xtaymiz, lekin allaqachon
-        // qaytarilganlarning pochta hisobi pastda baribir yangilanadi (aks
-        // holda qayta urinish ularni o'tkazib yuborib, hisob abadiy noto'g'ri
-        // qolardi). updateOrder faqat RpcException tashlaydi; boshqasi ham
-        // o'raladi — xabar qayta navbatga tushmasin.
-        updateError =
-          error instanceof RpcException
-            ? error
-            : new RpcException(
-                errorRes(`Order #${String(order.id)} update failed`, 502),
-              );
-        break;
-      }
+      const custodyBranchIds = chunk.map((order) =>
+        this.resolveReturnCustodyBranchId(order, scope.hqBranchId),
+      );
+      const results = await Promise.allSettled(
+        chunk.map((order, index) =>
+          this.updateOrder(
+            String(order.id),
+            {
+              status: Order_status.WAITING,
+              return_requested: false,
+              courier_id: null,
+              assigned_at: null,
+              post_id: null,
+              branch_id: custodyBranchIds[index],
+            },
+            {
+              id: requester?.id ?? 'system',
+              roles: requester?.roles ?? [],
+              note,
+            },
+          ),
+        ),
+      );
 
-      approvedOrderIds.push(String(order.id));
-      destinationBranchIds.add(custodyBranchId);
-      const sourcePostId = String(order.post_id ?? '').trim();
-      if (sourcePostId) {
-        const delta = postDeltas.get(sourcePostId) ?? { count: 0, total: 0 };
-        delta.count += 1;
-        delta.total += Number(order.total_price ?? 0);
-        postDeltas.set(sourcePostId, delta);
+      for (let index = 0; index < chunk.length; index += 1) {
+        const order = chunk[index];
+        const result = results[index];
+        if (result.status === 'rejected') {
+          // Bir nechta RPC — atomik emas. Shu bo'lakdan keyin to'xtaymiz,
+          // lekin allaqachon qaytarilganlarning pochta hisobi pastda baribir
+          // yangilanadi (aks holda qayta urinish ularni o'tkazib yuborib, hisob
+          // abadiy noto'g'ri qolardi). Birinchi xato qaytadi; updateOrder faqat
+          // RpcException tashlaydi, boshqasi ham o'raladi — xabar qayta
+          // navbatga tushmasin.
+          if (!updateError) {
+            updateError =
+              result.reason instanceof RpcException
+                ? result.reason
+                : new RpcException(
+                    errorRes(`Order #${String(order.id)} update failed`, 502),
+                  );
+          }
+          continue;
+        }
+
+        approvedOrderIds.push(String(order.id));
+        destinationBranchIds.add(custodyBranchIds[index]);
+        const sourcePostId = String(order.post_id ?? '').trim();
+        if (sourcePostId) {
+          const delta = postDeltas.get(sourcePostId) ?? { count: 0, total: 0 };
+          delta.count += 1;
+          delta.total += Number(order.total_price ?? 0);
+          postDeltas.set(sourcePostId, delta);
+        }
       }
     }
 
@@ -2817,19 +3083,48 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     const rejectedOrderIds: string[] = [];
-    for (const order of eligibleOrders) {
-      await this.updateOrder(
-        String(order.id),
-        { return_requested: false },
-        {
-          id: requester?.id ?? 'system',
-          roles: requester?.roles ?? [],
-          note:
-            requester?.note ??
-            "Qaytarish so'rovi rad etildi — buyurtma kuryerda qoldi",
-        },
+    // CODE-10 — tasdiqlash bilan bir xil: bo'laklab parallel; birinchi xato
+    // shu bo'lakdan keyin qaytadi (avvalgidek log yozilmaydi).
+    for (
+      let start = 0;
+      start < eligibleOrders.length;
+      start += RETURN_REQUEST_UPDATE_CONCURRENCY
+    ) {
+      const chunk = eligibleOrders.slice(
+        start,
+        start + RETURN_REQUEST_UPDATE_CONCURRENCY,
       );
-      rejectedOrderIds.push(String(order.id));
+      const results = await Promise.allSettled(
+        chunk.map((order) =>
+          this.updateOrder(
+            String(order.id),
+            { return_requested: false },
+            {
+              id: requester?.id ?? 'system',
+              roles: requester?.roles ?? [],
+              note:
+                requester?.note ??
+                "Qaytarish so'rovi rad etildi — buyurtma kuryerda qoldi",
+            },
+          ),
+        ),
+      );
+      const failedIndex = results.findIndex(
+        (result) => result.status === 'rejected',
+      );
+      if (failedIndex >= 0) {
+        const reason = (results[failedIndex] as PromiseRejectedResult)
+          .reason as unknown;
+        throw reason instanceof RpcException
+          ? reason
+          : new RpcException(
+              errorRes(
+                `Order #${String(chunk[failedIndex].id)} update failed`,
+                502,
+              ),
+            );
+      }
+      rejectedOrderIds.push(...chunk.map((order) => String(order.id)));
     }
 
     await this.activityLog.log({
@@ -2877,8 +3172,15 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('There are not orders in this post');
     }
 
+    // CODE-09 / C13 — skan bilan qabul qilingan posilka kuryer qo'lida:
+    // eski qaytarish so'rovi belgisi tozalanadi (receivePost bilan bir xil),
+    // aks holda u menejerning "Qaytarish" ro'yxatida so'rov bo'lib chiqib,
+    // tasdiqlansa custody kuryerdan filialga o'tib ketardi.
     for (const order of orders) {
-      await this.updateOrder(order.id, { status: Order_status.WAITING });
+      await this.updateOrder(order.id, {
+        status: Order_status.WAITING,
+        return_requested: false,
+      });
     }
 
     post.status = Post_status.RECEIVED;
@@ -2916,7 +3218,11 @@ export class LogisticsServiceService implements OnModuleInit {
       this.notFound('Post not found or not assigned to this courier');
     }
 
-    await this.updateOrder(order.id, { status: Order_status.WAITING });
+    // CODE-09 / C13 — qaytarish so'rovi belgisi tozalanadi (yuqoriga qarang).
+    await this.updateOrder(order.id, {
+      status: Order_status.WAITING,
+      return_requested: false,
+    });
 
     const remaining = await this.findOrders({
       post_id: post.id,
@@ -2947,6 +3253,41 @@ export class LogisticsServiceService implements OnModuleInit {
     });
 
     return successRes({}, 200, 'Order received');
+  }
+
+  /**
+   * CODE-25 — buyurtma HQ hudud NEW pochtasidan kuryer pochtasiga o'tdi: NEW
+   * pochtaning saqlangan hisobi kamayadi (`GREATEST(..., 0)`, atomik). Faqat
+   * NEW pochta — SENT/RECEIVED pochtaning hisobi tarix (necha posilka shu
+   * pochtada kelgan) va o'zgarmaydi. Xato skan natijasini buzmaydi: buyurtma
+   * allaqachon kuryerda, hisob esa order.post_id dan qayta hisoblanadi.
+   */
+  private async releaseOrderFromNewRegionPost(order: OrderRow): Promise<void> {
+    const oldPostId = String(order.post_id ?? '').trim();
+    if (!oldPostId) {
+      return;
+    }
+    try {
+      const oldPost = await this.postRepo.findOne({ where: { id: oldPostId } });
+      if (!oldPost || oldPost.status !== Post_status.NEW) {
+        return;
+      }
+      const delta = Number(order.total_price ?? 0);
+      await this.postRepo
+        .createQueryBuilder()
+        .update(Post)
+        .set({
+          order_quantity: () => 'GREATEST(order_quantity - 1, 0)',
+          post_total_price: () =>
+            `GREATEST(post_total_price - ${Number.isFinite(delta) ? delta : 0}, 0)`,
+        })
+        .where('id = :id', { id: oldPostId })
+        .execute();
+    } catch (err) {
+      this.logger.warn(
+        `NEW post counter release failed for post=${oldPostId} order=${order.id}: ${(err as Error)?.message ?? err}`,
+      );
+    }
   }
 
   async scanAssignOrder(
@@ -3007,12 +3348,17 @@ export class LogisticsServiceService implements OnModuleInit {
       // uzilmaydi. Guardlar order-service tomonida (paket SENT, manzil = shu
       // filial, yo'nalish FORWARD) — busiz kuryer yetib kelmagan posilkani
       // o'ziga yozib olishi mumkin bo'lardi.
-      const received = await this.receiveOrderIntoBranchByScan(
+      const scanReceive = await this.receiveOrderIntoBranchByScan(
         String(order.id),
         courierBranchId,
         requester,
       );
-      if (!received) {
+      if (!scanReceive.received) {
+        if (scanReceive.reason === 'transit') {
+          this.badRequest(
+            "Bu buyurtma boshqa hudud uchun (tranzit) — u filialga qabul qilindi, lekin kuryerga berilmaydi: filial uni o'sha hududga qayta jo'natadi",
+          );
+        }
         this.forbidden('Boshqa filial orderi — qabul qila olmaysiz');
       }
 
@@ -3065,6 +3411,23 @@ export class LogisticsServiceService implements OnModuleInit {
       });
     }
 
+    // CODE-25 — idempotent javob pochta YARATILISHIDAN OLDIN qaytadi. Ilgari
+    // kuryerda SENT pochta bo'lmasa, qayta skan bo'sh SENT pochta yaratib
+    // qo'yardi (buyurtma unga biriktirilmasdi — abadiy bo'sh pochta).
+    if (isAlreadyAssignedToCurrentCourier) {
+      return successRes(
+        {
+          idempotent: true,
+          order_id: String(order.id),
+          post_id:
+            targetPost?.id ?? (String(order.post_id ?? '').trim() || null),
+          post_created: false,
+        },
+        200,
+        'Order already assigned to this courier',
+      );
+    }
+
     const createdNewPost = !targetPost;
     if (!targetPost) {
       const created = this.postRepo.create({
@@ -3077,19 +3440,6 @@ export class LogisticsServiceService implements OnModuleInit {
       });
       targetPost = await this.postRepo.save(created);
       void this.syncPostToSearch(targetPost);
-    }
-
-    if (isAlreadyAssignedToCurrentCourier) {
-      return successRes(
-        {
-          idempotent: true,
-          order_id: String(order.id),
-          post_id: targetPost.id,
-          post_created: false,
-        },
-        200,
-        'Order already assigned to this courier',
-      );
     }
 
     if (currentStatus === Order_status.NEW) {
@@ -3150,6 +3500,7 @@ export class LogisticsServiceService implements OnModuleInit {
           `Post counter update failed for post=${targetPost.id} order=${order.id}: ${(err as Error)?.message ?? err}`,
         );
       }
+      await this.releaseOrderFromNewRegionPost(order);
     }
 
     await this.activityLog.log({
@@ -3291,6 +3642,41 @@ export class LogisticsServiceService implements OnModuleInit {
       this.badRequest(
         `Order #${assignedToAnotherCourier.id} allaqachon boshqa courierga biriktirilgan`,
       );
+    }
+
+    // CODE-11 — tashqi manbadan (hamkor) kelgan NEW posilka bu yerda avto-qabul
+    // (NEW → RECEIVED) qilinmaydi: u faqat skan bilan qabul qilinadi (HQ
+    // intake'dagi qoida bilan bir xil). Aks holda skan darvozasi chetlab
+    // o'tilardi. Tekshiruv HECH NARSA yozilmasdan oldin.
+    const unscannedExternalOrder = orders.find(
+      (order) =>
+        order.status === Order_status.NEW &&
+        String(order.source ?? '')
+          .trim()
+          .toLowerCase() === 'external',
+    );
+    if (unscannedExternalOrder) {
+      this.badRequest(
+        `Order #${unscannedExternalOrder.id} tashqi manbadan kelgan va hali qabul qilinmagan — avval skanerlab qabul qiling (Kiruvchi posilkalar ekrani)`,
+      );
+    }
+
+    // CODE-11 — o'chirilgan yoki faol bo'lmagan (bloklangan) kuryerga buyurtma
+    // berilmaydi: u ilovaga kira olmaydi va posilkalar unda qotib qolardi.
+    // Identity javob bermasa tekshiruv o'tkazib yuboriladi (filial a'zoligi
+    // yuqorida allaqachon tekshirilgan) — bu yangi qo'shimcha to'siq.
+    const courierStatus = await this.findCourierStatus(courierId);
+    if (courierStatus && !courierStatus.found) {
+      this.badRequest(
+        "Kuryer topilmadi yoki o'chirilgan — unga buyurtma biriktirib bo'lmaydi",
+      );
+    }
+    if (
+      courierStatus?.found &&
+      courierStatus.status &&
+      courierStatus.status !== 'active'
+    ) {
+      this.badRequest("Kuryer faol emas — unga buyurtma biriktirib bo'lmaydi");
     }
 
     let targetPost = await this.postRepo.findOne({
@@ -3778,6 +4164,13 @@ export class LogisticsServiceService implements OnModuleInit {
     targetBranchId: string;
     fallbackBranchId?: string | null;
     isHqReceipt: boolean;
+    /**
+     * Qabul qilinmagan posilka jo'natuvchi KURYERGA qaytadimi (custody =
+     * kuryer). Filial qabulida — doim (kuryer → filial pochtasi). HQ qabulida —
+     * faqat jo'natuvchi HQ kuryeri bo'lsa; menejer jo'natgan bo'lsa posilka
+     * uning filialiga qaytadi, kuryer biriktirilmaydi.
+     */
+    returnToCourier: boolean;
     requester: RequesterContext;
   }): Promise<string[]> {
     const {
@@ -3786,6 +4179,7 @@ export class LogisticsServiceService implements OnModuleInit {
       targetBranchId,
       fallbackBranchId,
       isHqReceipt,
+      returnToCourier,
       requester,
     } = params;
     const requeuedPostIds = new Set<string>();
@@ -3801,12 +4195,22 @@ export class LogisticsServiceService implements OnModuleInit {
     for (const order of orders) {
       const regionId =
         String(order.region_id ?? sourcePost.region_id ?? '').trim() || null;
+      // LC-06 — HQ ga yuborilgan bekor pochta JO'NATILGANDA buyurtma allaqachon
+      // HQ ga yoziladi (branch_id = HQ, holder HQ). Shuning uchun HQ doirasi
+      // jo'natuvchini ko'rsatmaydi: qabul qilinmagan posilka jo'natuvchining
+      // filialiga (fallbackBranchId) qaytadi. Buyurtmada HQ dan boshqa filial
+      // doirasi bo'lsa (jo'natishdan oldingi eski holat) — u ustun, avvalgidek.
+      // Jo'natuvchi aniqlanmasa — HQ da qoladi (avvalgi xatti-harakat).
+      const orderScope = this.getOrderBranchScope(order);
+      const orderNonHqScope =
+        orderScope && orderScope !== String(targetBranchId).trim()
+          ? orderScope
+          : '';
       const branchId = isHqReceipt
         ? String(
-            order.holder_branch_id ??
-              order.branch_id ??
-              fallbackBranchId ??
-              sourcePost.branch_id ??
+            orderNonHqScope ||
+              String(fallbackBranchId ?? '').trim() ||
+              sourcePost.branch_id ||
               targetBranchId,
           ).trim()
         : String(sourcePost.branch_id ?? targetBranchId).trim();
@@ -3853,7 +4257,7 @@ export class LogisticsServiceService implements OnModuleInit {
           {
             status: Order_status.CANCELLED_SENT,
             branch_id: group.branchId,
-            courier_id: isHqReceipt ? null : sourcePost.courier_id,
+            courier_id: returnToCourier ? sourcePost.courier_id : null,
             assigned_at: null,
             canceled_post_id: returnPost.id,
           },
@@ -3861,7 +4265,9 @@ export class LogisticsServiceService implements OnModuleInit {
             id: requester.id,
             roles: requester.roles ?? [Roles.MANAGER],
             note: isHqReceipt
-              ? 'Canceled order returned to branch after partial HQ receive'
+              ? returnToCourier
+                ? 'Canceled order returned to courier after partial HQ receive'
+                : 'Canceled order returned to branch after partial HQ receive'
               : 'Canceled order returned to courier after partial branch receive',
           },
         );
@@ -3990,22 +4396,33 @@ export class LogisticsServiceService implements OnModuleInit {
 
     let requeuedPostIds: string[] = [];
     if (remainingOrders.length) {
+      // LC-06 — pochta egasi (post.courier_id) kim: kuryermi yoki menejermi.
+      // Qabul qilinmagan posilka shu jo'natuvchiga qaytadi. Qidiruv yiqilsa
+      // (null) — avvalgi xatti-harakat: filial qabulida kuryerga, HQ qabulida
+      // HQ da, kuryersiz.
+      const senderAssignment = await this.findBranchAssignmentByUserId(
+        String(post.courier_id),
+        {
+          id: String(post.courier_id),
+          roles: [Roles.MANAGER],
+        },
+      );
+      const senderRole = String(senderAssignment?.role ?? '')
+        .trim()
+        .toUpperCase();
       const fallbackReturnBranchId = isHqReceipt
-        ? String(
-            (
-              await this.findBranchAssignmentByUserId(String(post.courier_id), {
-                id: String(post.courier_id),
-                roles: [Roles.MANAGER],
-              })
-            )?.branch_id ?? '',
-          ).trim()
+        ? String(senderAssignment?.branch_id ?? '').trim()
         : targetBranchId;
+      const returnToCourier = senderRole
+        ? senderRole === 'COURIER'
+        : !isHqReceipt;
       requeuedPostIds = await this.requeueUnreceivedCanceledOrders({
         sourcePost: post,
         orders: remainingOrders,
         targetBranchId,
         fallbackBranchId: fallbackReturnBranchId,
         isHqReceipt,
+        returnToCourier,
         requester,
       });
     }
@@ -4126,7 +4543,20 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(districts);
   }
 
-  async updateDistrict(id: string, dto: UpdateDistrictDto) {
+  async updateDistrict(
+    id: string,
+    dto: UpdateDistrictDto,
+    requester?: RequesterContext,
+  ) {
+    // LC-08 / RBAC-06 — tumanni boshqa hududga biriktirish HQ intake'dagi
+    // hudud pochtasini o'zgartiradi (butun kompaniya bo'yicha). Faqat
+    // superadmin/admin; gateway ham shuni talab qiladi (ikkinchi qatlam).
+    if (!this.isSystemPrivileged(requester)) {
+      this.forbidden(
+        'Tumanni boshqa viloyatga faqat admin yoki superadmin biriktira oladi',
+      );
+    }
+
     const district = await this.districtRepo.findOne({ where: { id } });
     if (!district) {
       this.notFound('District not found');
@@ -4157,6 +4587,7 @@ export class LogisticsServiceService implements OnModuleInit {
       action: ActivityAction.UPDATED,
       old_value: before,
       new_value: { assigned_region: saved.assigned_region },
+      ...this.auditActor(requester),
     });
 
     return successRes(saved, 200, 'District assigned to new region');

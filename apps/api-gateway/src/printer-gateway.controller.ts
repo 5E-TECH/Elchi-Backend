@@ -13,7 +13,12 @@ import { ApiBearerAuth, ApiBody, ApiOperation, ApiTags } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { Roles as RoleEnum } from '@app/common';
-import { ArrayNotEmpty, IsArray, IsString } from 'class-validator';
+import {
+  ArrayMaxSize,
+  ArrayNotEmpty,
+  IsArray,
+  IsString,
+} from 'class-validator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
@@ -23,24 +28,32 @@ import {
   renderThermalPdf,
 } from './printer/printer.util';
 
-class PrintOrdersDto {
+/**
+ * Bitta so'rovdagi buyurtmalar chegarasi (fix3 RBAC-08). Ilgari cheksiz edi:
+ * minglab id bitta HTML'ga butun kompaniya mijozlari ma'lumoti va QR
+ * tokenlarini chiqarar, minglab QR rasmi esa 7 GB serverni bosardi.
+ */
+export const PRINT_MAX_ORDER_IDS = 200;
+
+export class PrintOrdersDto {
   @IsArray()
   @ArrayNotEmpty()
+  @ArrayMaxSize(PRINT_MAX_ORDER_IDS)
   @IsString({ each: true })
   order_ids!: string[];
 }
 
+/**
+ * ⚠️ fix3 RBAC-08: faqat SUPERADMIN/ADMIN. Endpointlar filial doirasisiz
+ * (order-service `id IN (...)`) va frontend ularni ishlatmaydi — yorliqlar
+ * brauzerda chiqariladi (printLabelPdf). Ilgari REGISTRATOR/MANAGER/BRANCH
+ * ham istalgan buyurtmani (mijoz PII + QR token) chop eta olardi.
+ */
 @ApiTags('Printer')
 @ApiBearerAuth()
 @Controller('printer')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(
-  RoleEnum.ADMIN,
-  RoleEnum.SUPERADMIN,
-  RoleEnum.REGISTRATOR,
-  RoleEnum.MANAGER,
-  RoleEnum.BRANCH,
-)
+@Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
 export class PrinterGatewayController {
   constructor(@Inject('ORDER') private readonly orderClient: ClientProxy) {}
 
@@ -50,6 +63,12 @@ export class PrinterGatewayController {
       : [];
     if (!ids.length) {
       throw new BadRequestException('order_ids majburiy');
+    }
+    // DTO'dagi @ArrayMaxSize bilan bir xil — ValidationPipe'siz chaqiruvda ham.
+    if (ids.length > PRINT_MAX_ORDER_IDS) {
+      throw new BadRequestException(
+        `Bir so'rovda ko'pi bilan ${PRINT_MAX_ORDER_IDS} ta buyurtma chop etish mumkin`,
+      );
     }
 
     const res = await firstValueFrom(

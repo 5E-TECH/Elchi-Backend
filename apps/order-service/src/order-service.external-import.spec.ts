@@ -52,6 +52,11 @@ function svc() {
        */
       resolveDistrictIdOrNull: jest.fn().mockResolvedValue('12'),
       resolveDistrictId: jest.fn().mockResolvedValue('12'),
+      /**
+       * fix3b (LC-13): `region` son bo'lmasa (yoki yo'q bo'lsa) viloyat
+       * tumandan olinadi (`logistics.district.find_by_id`).
+       */
+      resolveRegionIdForDistrict: jest.fn().mockResolvedValue('9'),
     },
     create: jest.fn((dto: Record<string, any>) => {
       created.push(dto);
@@ -92,32 +97,38 @@ const runFull = async (
 const VALID = { id: 'X1', phone: '+998901112233', total_price: 100 };
 
 describe("EI-06 — `region` matn bo'lsa 500 bermaydi", () => {
-  it('⭐ MATN region `null` ga tushadi (ilgari xom yozilardi)', async () => {
+  /**
+   * fix3b (LC-13): son bo'lmagan / bo'sh `region` endi NULL emas — viloyat
+   * tumandan aniqlanadi (mock: '9'). Xom matn baribir HECH QACHON
+   * yozilmaydi (EI-06).
+   */
+  it('⭐ MATN region xom yozilmaydi — viloyat tumandan olinadi (LC-13)', async () => {
     const dto = await run({
       id: 'X1',
       phone: '+998901112233',
       full_name: 'Ali',
       region: 'Toshkent',
     });
-    expect(dto.region_id).toBeNull();
+    expect(dto.region_id).toBe('9');
   });
 
-  it('SON region saqlanadi', async () => {
-    const dto = await run({
-      id: 'X2',
-      phone: '+998901112233',
-      region: '14',
+  it('SON region saqlanadi — tumandan so`ralmaydi', async () => {
+    const { s, created } = svc();
+    await (s as any).receiveExternalOrders({
+      integration_id: '5',
+      orders: [{ id: 'X2', phone: '+998901112233', region: '14' }],
     });
-    expect(dto.region_id).toBe('14');
+    expect(created[0].region_id).toBe('14');
+    expect((s as any).lookup.resolveRegionIdForDistrict).not.toHaveBeenCalled();
   });
 
-  it("bo'sh va yo'q qiymat `null`", async () => {
+  it("bo'sh va yo'q qiymat — tumandan olinadi (endi NULL emas)", async () => {
     expect(
       (await run({ id: 'X3', phone: '+998901112233', region: '' })).region_id,
-    ).toBeNull();
-    expect(
-      (await run({ id: 'X4', phone: '+998901112233' })).region_id,
-    ).toBeNull();
+    ).toBe('9');
+    expect((await run({ id: 'X4', phone: '+998901112233' })).region_id).toBe(
+      '9',
+    );
   });
 
   it('⭐ aralash qiymat ham rad etiladi (SQL injektsiya shakli ham)', async () => {
@@ -130,19 +141,48 @@ describe("EI-06 — `region` matn bo'lsa 500 bermaydi", () => {
       phone: '+998901112233',
       region: '14; DROP TABLE orders',
     });
-    expect(dto.region_id).toBeNull();
+    expect(dto.region_id).toBe('9');
   });
 
-  it('marshrutlash region_id ga tayanmaydi — tuman saqlanadi', async () => {
-    // Pochtaga ajratish tumandan olingan `assigned_region` bo'yicha ishlaydi.
-    const dto = await run({
-      id: 'X6',
-      phone: '+998901112233',
-      region: 'Buxoro',
-      district: '1726269',
+  it('viloyat aniqlangan TUMANDAN olinadi', async () => {
+    const { s, created } = svc();
+    await (s as any).receiveExternalOrders({
+      integration_id: '5',
+      orders: [
+        {
+          id: 'X6',
+          phone: '+998901112233',
+          region: 'Buxoro',
+          district: '1726269',
+        },
+      ],
     });
-    expect(dto.region_id).toBeNull();
-    expect(dto.district_id).toBe('12');
+    expect(created[0].region_id).toBe('9');
+    expect(created[0].district_id).toBe('12');
+    expect((s as any).lookup.resolveRegionIdForDistrict).toHaveBeenCalledWith(
+      '12',
+    );
+  });
+
+  it('⭐ viloyat baribir aniqlanmasa — qator YARATILMAYDI, mijoz ham yaratilmaydi (region_unresolved)', async () => {
+    rmqSend.mockClear();
+    const { res, created } = await runFull(
+      { ...VALID, region: 'Toshkent' },
+      undefined,
+      (svcObj) => {
+        svcObj.lookup.resolveRegionIdForDistrict = jest
+          .fn()
+          .mockResolvedValue(null);
+      },
+    );
+
+    expect(created).toHaveLength(0);
+    expect(res.data.skipped[0]).toMatchObject({
+      external_id: 'X1',
+      reason: 'region_unresolved',
+    });
+    // Mijoz (identity.customer.create) yetim qolmasin.
+    expect(rmqSend).not.toHaveBeenCalled();
   });
 });
 
