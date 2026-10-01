@@ -244,8 +244,9 @@ describe('BranchGatewayController — R3 timeout`lari', () => {
         controller.assignUserToBranch('15', { user_id: '263' } as never, req),
     ],
     [
+      // C8: sof-nol PENDING yopish (3 s) + qayta tekshiruv (5 s) qo'shiladi.
       'DELETE branches/:id/users/:userId',
-      15_000,
+      20_000,
       () => controller.removeUserFromBranch('15', '263', req),
     ],
     [
@@ -254,8 +255,9 @@ describe('BranchGatewayController — R3 timeout`lari', () => {
       () => controller.courierTransferCheck('263', req),
     ],
     [
+      // C8: oldindan tekshiruv sof-nol holatida 13 s gacha (eng yomon ~32,5 s).
       'PATCH couriers/:id/branch',
-      30_000,
+      40_000,
       () =>
         controller.transferCourierBranch(
           '263',

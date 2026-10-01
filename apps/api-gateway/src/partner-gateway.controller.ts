@@ -120,6 +120,31 @@ type PartnerEnvelope<T> = {
   data: T;
 };
 
+/**
+ * Market SHU hamkor tomonidan ochilganmi (fix3 RBAC-13).
+ *
+ * `partner_market_refs` qatori FAQAT `integration.partner.provision_market`
+ * da yoziladi va u marketni har doim `mp<partner_id>_<external_seller_id>`
+ * (kichik harf) username bilan ochadi (`buildMarketUsername`). Market
+ * username'ini keyin o'zgartirib bo'lmaydi (UpdateMarketDto'da yo'q) — shu
+ * sababli prefiks egalikning ishonchli belgisi. Ilgari `GET /partner/tariff`
+ * istalgan Elchi marketining tarifini istalgan hamkorga qaytarardi.
+ * Hamkor aniqlanmasa — false (fail-closed).
+ */
+export function isPartnerProvisionedMarket(
+  market: { username?: string | null } | null | undefined,
+  partnerId: string | number | null | undefined,
+): boolean {
+  const id = String(partnerId ?? '').trim();
+  if (!/^\d+$/.test(id)) {
+    return false;
+  }
+  const username = String(market?.username ?? '')
+    .trim()
+    .toLowerCase();
+  return username.startsWith(`mp${id}_`);
+}
+
 @ApiTags('Partner')
 @ApiHeader({
   name: 'X-Api-Key',
@@ -274,10 +299,13 @@ export class PartnerGatewayController {
     description:
       '{ statusCode, message, data: { elchi_market_id, where_deliver, market_tariff } }',
   })
-  @ApiNotFoundResponse({ description: 'Market topilmadi' })
+  @ApiNotFoundResponse({
+    description: 'Market topilmadi yoki shu hamkorga tegishli emas',
+  })
   async getTariff(
     @Query('elchi_market_id') elchiMarketId?: string,
     @Query('where_deliver') whereDeliver?: string,
+    @Req() request?: { partner?: PartnerPrincipal },
   ): Promise<
     PartnerEnvelope<{
       elchi_market_id: string;
@@ -294,6 +322,7 @@ export class PartnerGatewayController {
         .send<{
           data?: Array<{
             id: string | number;
+            username?: string | null;
             tariff_home?: number;
             tariff_center?: number;
           }>;
@@ -301,7 +330,9 @@ export class PartnerGatewayController {
         .pipe(timeout(8000)),
     );
     const market = (res?.data ?? [])[0];
-    if (!market) {
+    // fix3 RBAC-13: faqat shu hamkor ochgan market. Begona market ham
+    // "topilmadi" (404) — mavjudligi haqida ma'lumot sizmasin.
+    if (!market || !isPartnerProvisionedMarket(market, request?.partner?.id)) {
       throw new NotFoundException('Market topilmadi');
     }
     const tariff =

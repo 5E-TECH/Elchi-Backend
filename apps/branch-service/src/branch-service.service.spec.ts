@@ -929,7 +929,11 @@ describe('BranchServiceService', () => {
     // The raw downstream error ("file down") is intentionally sanitised to a
     // generic message so internal failure detail is not surfaced to clients.
     expect(res.data.qr_generation_errors).toEqual([
-      { batch_id: '601', message: 'File service unavailable' },
+      {
+        batch_id: '601',
+        message:
+          "Fayl xizmati javob bermadi — birozdan so'ng qayta urinib ko'ring",
+      },
     ]);
     expect(orderClient.send).not.toHaveBeenCalledWith(
       { cmd: 'order.transfer_batch.cancel_many' },
@@ -1109,7 +1113,8 @@ describe('BranchServiceService', () => {
         status: 'active',
         isDeleted: false,
       });
-    branchUserRepo.findOne.mockResolvedValueOnce(null);
+    // Manzil filialda MANAGER qatori yo'q.
+    branchUserRepo.find.mockResolvedValue([]);
 
     await expect(
       service.dispatchPostToBranch('10', '900', '20', ['1001'], {
@@ -1370,16 +1375,48 @@ describe('BranchServiceService', () => {
     // logistics.post.orders_by_post javoblari.
     let postRow: Record<string, unknown> | null;
     let postOrders: Array<Record<string, unknown>>;
+    // So'rovchining faol branch_users qatorlari (ruxsat) — testlar almashtiradi.
+    let requesterRows: Array<Record<string, unknown>>;
+    // Manzil filiallar menejerlari (CODE-07: identity'da FAOL bo'lishi shart).
+    let managerRows: Array<Record<string, unknown>>;
 
     beforeEach(() => {
       // Kuryersiz HQ pochtasi: logistics uni courier_id = '0' bilan yaratadi.
       postRow = { id: '900', courier_id: '0', status: 'new', branch_id: null };
       postOrders = [hqOrder('1001')];
+      requesterRows = [];
+      managerRows = [
+        { branch_id: '20', user_id: '198', role: 'MANAGER' },
+        { branch_id: '21', user_id: '199', role: 'MANAGER' },
+      ];
       branchRepo.findOne.mockImplementation(({ where }: any) =>
         Promise.resolve(branchesById[String(where?.id)] ?? null),
       );
-      // Manzilda menejer bor (assertBranchHasManager).
-      branchUserRepo.findOne.mockResolvedValue({ id: 'manager-row' });
+      // MANAGER qatorlari (assertBranchHasManager) va so'rovchi qatorlari.
+      branchUserRepo.find.mockImplementation(({ where }: any) =>
+        Promise.resolve(
+          where?.role === 'MANAGER'
+            ? managerRows.filter(
+                (row) => row.branch_id === String(where?.branch_id),
+              )
+            : requesterRows,
+        ),
+      );
+      // Identity: so'ralgan menejerlar faol.
+      identityClient.send.mockImplementation(
+        ({ cmd }: { cmd: string }, payload: any) =>
+          cmd === 'identity.user.find_all'
+            ? of({
+                data: {
+                  items: (payload?.query?.user_ids ?? []).map((id: string) => ({
+                    id,
+                    role: 'manager',
+                    status: 'active',
+                  })),
+                },
+              })
+            : of({ data: { id: 'u1' } }),
+      );
       logisticsClient.send.mockImplementation(
         ({ cmd }: { cmd: string }, payload: any) => {
           if (cmd === 'logistics.post.find_by_ids') {
@@ -1403,13 +1440,24 @@ describe('BranchServiceService', () => {
           return of({ data: {} });
         },
       );
-      orderClient.send.mockReturnValue(of({ data: {} }));
+      // LC-02: jo'natishdan keyin pochta bo'shligi qayta so'raladi.
+      orderClient.send.mockImplementation(({ cmd }: { cmd: string }) =>
+        cmd === 'order.find_all'
+          ? of({ data: [], total: 0 })
+          : of({ data: {} }),
+      );
     });
 
-    const registratorOnHq = () =>
-      branchUserRepo.find.mockResolvedValue([
-        { branch_id: '10', role: 'REGISTRATOR' },
-      ]);
+    const registratorOnHq = () => {
+      requesterRows = [{ branch_id: '10', role: 'REGISTRATOR' }];
+    };
+
+    /** Manzil filial menejer qatorlari so'rovlari (CODE-07). */
+    const managerRowLookups = () =>
+      branchUserRepo.find.mock.calls.filter(
+        ([options]: [{ where?: { role?: string } }]) =>
+          options?.where?.role === 'MANAGER',
+      );
 
     const updatedOrderIds = () =>
       orderClient.send.mock.calls
@@ -1424,9 +1472,7 @@ describe('BranchServiceService', () => {
       );
 
     it("HQ registratori menejeri bor REGIONAL filialga jo'nata oladi", async () => {
-      branchUserRepo.find.mockResolvedValue([
-        { branch_id: '10', role: 'REGISTRATOR' },
-      ]);
+      requesterRows = [{ branch_id: '10', role: 'REGISTRATOR' }];
 
       const res = await service.dispatchPostToBranch(
         '10',
@@ -1477,9 +1523,7 @@ describe('BranchServiceService', () => {
     });
 
     it("HQ registratori HYBRID filialga ham jo'nata oladi", async () => {
-      branchUserRepo.find.mockResolvedValue([
-        { branch_id: '10', role: 'registrator' },
-      ]);
+      requesterRows = [{ branch_id: '10', role: 'registrator' }];
 
       const res = await service.dispatchPostToBranch(
         '10',
@@ -1493,9 +1537,7 @@ describe('BranchServiceService', () => {
     });
 
     it("HQ'dagi MANAGER qatori 403 (faqat REGISTRATOR qatori jo'nata oladi; HQ'da menejer yo'q)", async () => {
-      branchUserRepo.find.mockResolvedValue([
-        { branch_id: '10', role: 'MANAGER' },
-      ]);
+      requesterRows = [{ branch_id: '10', role: 'MANAGER' }];
 
       const err = await rpcErrorOf(
         service.dispatchPostToBranch('10', '900', '20', ['1001'], {
@@ -1516,7 +1558,7 @@ describe('BranchServiceService', () => {
 
     it("o'chirilgan REGISTRATOR qatori hisobga olinmaydi (so'rov faqat faol qatorlar bo'yicha)", async () => {
       // Repo so'rovi isDeleted: false bilan ketadi — o'chirilgan qator kelmaydi.
-      branchUserRepo.find.mockResolvedValue([]);
+      requesterRows = [];
 
       const err = await rpcErrorOf(
         service.dispatchPostToBranch(
@@ -1537,9 +1579,7 @@ describe('BranchServiceService', () => {
     });
 
     it('boshqa filial registratori 403; logistics/order chaqirilmaydi', async () => {
-      branchUserRepo.find.mockResolvedValue([
-        { branch_id: '30', role: 'REGISTRATOR' },
-      ]);
+      requesterRows = [{ branch_id: '30', role: 'REGISTRATOR' }];
 
       const err = await rpcErrorOf(
         service.dispatchPostToBranch('10', '900', '20', ['1001'], {
@@ -1554,9 +1594,7 @@ describe('BranchServiceService', () => {
     });
 
     it("HQ'dagi COURIER qatori 403", async () => {
-      branchUserRepo.find.mockResolvedValue([
-        { branch_id: '10', role: 'COURIER' },
-      ]);
+      requesterRows = [{ branch_id: '10', role: 'COURIER' }];
 
       const err = await rpcErrorOf(
         service.dispatchPostToBranch('10', '900', '20', ['1001'], {
@@ -1570,8 +1608,8 @@ describe('BranchServiceService', () => {
     });
 
     it("ruxsatsiz so'rovchi + menejersiz manzil → 403 (400 emas): ruxsat oldin tekshiriladi", async () => {
-      branchUserRepo.find.mockResolvedValue([]);
-      branchUserRepo.findOne.mockResolvedValue(null);
+      requesterRows = [];
+      managerRows = [];
 
       const err = await rpcErrorOf(
         service.dispatchPostToBranch('10', '900', '20', ['1001'], {
@@ -1607,9 +1645,7 @@ describe('BranchServiceService', () => {
     ])(
       'manzil %s → 400; jo‘natish boshlanmaydi',
       async (_label, destinationId, message) => {
-        branchUserRepo.find.mockResolvedValue([
-          { branch_id: '10', role: 'REGISTRATOR' },
-        ]);
+        requesterRows = [{ branch_id: '10', role: 'REGISTRATOR' }];
 
         const err = await rpcErrorOf(
           service.dispatchPostToBranch(
@@ -1625,7 +1661,8 @@ describe('BranchServiceService', () => {
           expect.objectContaining({ statusCode: 400, message }),
         );
         // Manzil tekshiruvi menejer tekshiruvidan ham, jo'natishdan ham oldin.
-        expect(branchUserRepo.findOne).not.toHaveBeenCalled();
+        expect(managerRowLookups()).toEqual([]);
+        expect(identityClient.send).not.toHaveBeenCalled();
         expect(logisticsClient.send).not.toHaveBeenCalled();
         expect(orderClient.send).not.toHaveBeenCalled();
       },
@@ -1650,20 +1687,34 @@ describe('BranchServiceService', () => {
       expect(orderClient.send).not.toHaveBeenCalled();
     };
 
-    it("holati 'new' bo'lgan HQ buyurtmasi ham jo'natiladi", async () => {
+    // CODE-11: NEW→ON_THE_ROAD noqonuniy — HQ qabul qilmagan (NEW) buyurtma
+    // jo'natilmaydi: butun so'rov 400, id xabarda, hech narsa ko'chirilmaydi.
+    it("holati 'new' bo'lgan HQ buyurtmasi jo'natilmaydi → 400, id xabarda; hech narsa ko'chirilmaydi", async () => {
       registratorOnHq();
-      postOrders = [hqOrder('1001', { status: 'new' })];
+      postOrders = [hqOrder('1000'), hqOrder('1001', { status: 'new' })];
 
-      const res = await service.dispatchPostToBranch(
-        '10',
-        '900',
-        '20',
-        ['1001'],
-        hqRegistrator,
+      const err = await rpcErrorOf(
+        service.dispatchPostToBranch(
+          '10',
+          '900',
+          '20',
+          ['1000', '1001'],
+          hqRegistrator,
+        ),
       );
 
-      expect(res.statusCode).toBe(200);
-      expect(updatedOrderIds()).toEqual(['1001']);
+      expect(err.statusCode).toBe(400);
+      expect(err.message).toContain('#1001');
+      expect(err.message).not.toContain('#1000');
+      expect(err.message).toContain("holati 'received'");
+      expect(err.message).not.toContain("'new'");
+      expect((err as any).data).toEqual(
+        expect.objectContaining({
+          non_dispatchable_order_ids: ['1001'],
+          reasons: { wrong_status_count: 1, courier_held_count: 0 },
+        }),
+      );
+      expectNothingMoved();
     });
 
     it("registrator kuryerdagi buyurtmani jo'natsa → 400, xabarda id bor; hech narsa ko'chirilmaydi", async () => {
@@ -1705,14 +1756,17 @@ describe('BranchServiceService', () => {
       [
         "holati 'received', lekin holder_courier_id bor",
         { holder_courier_id: '263' },
+        0,
       ],
       [
         "holati 'new', lekin courier_id bor",
         { status: 'new', courier_id: '263' },
+        // CODE-11: 'new' endi o'zi ham jo'natilmaydigan holat.
+        1,
       ],
     ])(
       '%s → 400 (kuryer izi holatdan qat’iy nazar taqiqlanadi)',
-      async (_label, extra) => {
+      async (_label, extra, wrongStatusCount) => {
         registratorOnHq();
         postOrders = [hqOrder('1003', extra)];
 
@@ -1729,7 +1783,7 @@ describe('BranchServiceService', () => {
         expect(err.statusCode).toBe(400);
         expect(err.message).toContain('#1003');
         expect((err as any).data.reasons).toEqual({
-          wrong_status_count: 0,
+          wrong_status_count: wrongStatusCount,
           courier_held_count: 1,
         });
         expectNothingMoved();
@@ -1933,9 +1987,9 @@ describe('BranchServiceService', () => {
     });
 
     it('regressiya: HQ registratori filialga yozish amallarida hamon 403 oladi', async () => {
-      branchUserRepo.find.mockResolvedValue([
+      requesterRows = [
         { branch_id: '10', role: 'REGISTRATOR', isDeleted: false },
-      ]);
+      ];
 
       const attempts = [
         () =>
@@ -2030,6 +2084,7 @@ describe('BranchServiceService', () => {
                   name: 'Sirdaryo menejeri',
                   phone_number: '+998903009002',
                   role: 'manager',
+                  status: 'active',
                   salary: 3000000,
                 },
               ],

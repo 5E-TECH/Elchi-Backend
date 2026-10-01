@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  OnModuleDestroy,
   OnModuleInit,
 } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
@@ -55,10 +56,40 @@ import { FindShiftsDto } from './dto/shift/find-shifts.dto';
 import { CreateSalaryDto } from './dto/salary/create-salary.dto';
 import { UpdateSalaryDto } from './dto/salary/update-salary.dto';
 import { FindSalaryByUserDto } from './dto/salary/find-salary-by-user.dto';
+
+/**
+ * `order.find_all` qatoridan market to'lovi sinxroni o'qiydigan maydonlar
+ * (audit M9). Pul maydonlari numeric ustunlar — matn bo'lib ham kelishi
+ * mumkin, shu bois `Number(...)` bilan o'qiladi.
+ */
+interface MarketPayableOrder {
+  id: string;
+  status?: Order_status | string | null;
+  to_be_paid?: number | string | null;
+  paid_amount?: number | string | null;
+  extra_cost?: number | string | null;
+  createdAt?: string | Date | null;
+}
+
 @Injectable()
-export class FinanceServiceService implements OnModuleInit {
+export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
   private static readonly MAIN_CASHBOX_USER_ID = '0';
   private readonly logger = new Logger(FinanceServiceService.name);
+
+  /**
+   * Market bo'yicha to'lovdan KEYINGI buyurtma sinxronlari navbati (audit M2).
+   * Sinxron javobni kutdirmaydi (fonda ishlaydi), lekin bitta marketning
+   * sinxronlari KETMA-KET bajariladi: ikki to'lov bir xil SOLD buyurtmalarni
+   * parallel o'qib, ularga to'lovni ikki marta yozmasligi uchun.
+   */
+  private readonly marketOrderSyncChains = new Map<string, Promise<void>>();
+
+  /**
+   * Fondagi ishlar (buyurtma sinxroni, hamkor xabari) — servis to'xtaganda
+   * (deploy) ular yarmida uzilmasligi uchun `onModuleDestroy` biroz kutadi.
+   */
+  private readonly pendingFollowUps = new Set<Promise<void>>();
+  private static readonly FOLLOW_UP_DRAIN_TIMEOUT_MS = 5_000;
 
   constructor(
     @InjectRepository(Cashbox)
@@ -100,6 +131,30 @@ export class FinanceServiceService implements OnModuleInit {
         balance_card: 0,
       });
       await this.cashboxRepo.save(entity);
+    }
+  }
+
+  /**
+   * Deploy/to'xtatishda fondagi to'lov ishlarini (buyurtma sinxroni, hamkor
+   * xabari) qisqa muddat kutadi. Ular best-effort: muddat tugasa yoki xato
+   * bo'lsa — faqat kutish to'xtaydi, pul harakati allaqachon commit bo'lgan.
+   */
+  async onModuleDestroy() {
+    if (!this.pendingFollowUps.size) {
+      return;
+    }
+    let timer: NodeJS.Timeout | undefined;
+    await Promise.race([
+      Promise.allSettled([...this.pendingFollowUps]),
+      new Promise<void>((resolve) => {
+        timer = setTimeout(
+          resolve,
+          FinanceServiceService.FOLLOW_UP_DRAIN_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    if (timer) {
+      clearTimeout(timer);
     }
   }
 
@@ -248,6 +303,28 @@ export class FinanceServiceService implements OnModuleInit {
     return Number(row?.total ?? 0);
   }
 
+  /**
+   * Faqat MUSBAT balanslar yig'indisi (audit M16) — "berilishi kerak": HQ
+   * marketlarga haqiqatan to'lashi kerak bo'lgan summa.
+   *
+   * Imzoli SUM (`sumCashboxBalanceByType`) manfiy kassalarni (market bizga
+   * qarzdor: onlayn to'lov, 0 so'mlik buyurtma, qo'shimcha xarajat) boshqa
+   * marketlarga qarzdan AYIRARDI — A marketga 1 000 000, B market −200 000
+   * bo'lsa karta 800 000 ko'rsatardi, holbuki A ga to'liq 1 000 000 to'lanadi.
+   * Imzoli yig'indi kompaniya holati (`financialBalance`) uchun qoladi.
+   */
+  private async sumPositiveCashboxBalanceByType(
+    cashboxType: Cashbox_type,
+  ): Promise<number> {
+    const row = await this.cashboxRepo
+      .createQueryBuilder('c')
+      .select('COALESCE(SUM(GREATEST(c.balance, 0)), 0)', 'total')
+      .where('c.cashbox_type = :cashboxType', { cashboxType })
+      .andWhere('c.isDeleted = :active', { active: false })
+      .getRawOne<{ total: string }>();
+    return Number(row?.total ?? 0);
+  }
+
   private calcIncomeOutcome(histories: CashboxHistory[]) {
     let income = 0;
     let outcome = 0;
@@ -274,113 +351,190 @@ export class FinanceServiceService implements OnModuleInit {
     return tashkentDayRange(fromDate, toDate);
   }
 
-  private async findMarketPayableOrders(marketId: string) {
-    const partly = await rmqSend<{ data: any[] }>(
-      this.orderClient,
-      { cmd: 'order.find_all' },
-      {
-        query: {
-          market_id: marketId,
-          status: Order_status.PARTLY_PAID,
-          page: 1,
-          limit: 1000,
-        },
-      },
-    ).catch(() => ({ data: [] }));
+  /** `order.find_all` sahifasi — order-service `MAX_LIMIT` (100) bilan bir xil. */
+  private static readonly MARKET_SYNC_PAGE_SIZE = 100;
+  /**
+   * Bitta to'lov sinxronida o'qiladigan sahifalar chegarasi (50 × 100 = 5 000
+   * buyurtma) — cheksiz aylanishdan himoya.
+   */
+  private static readonly MARKET_SYNC_MAX_PAGES = 50;
 
-    const sold = await rmqSend<{ data: any[] }>(
-      this.orderClient,
-      { cmd: 'order.find_all' },
-      {
-        query: {
-          market_id: marketId,
-          status: Order_status.SOLD,
-          page: 1,
-          limit: 1000,
-        },
-      },
-    ).catch(() => ({ data: [] }));
-
-    /**
-     * ⚠️ SETTLEMENT FIFO BILAN TEKISLASH (7AWmSQ1p).
-     *
-     * Settlement ledger to'lovni buyurtmalarga `createdAt ASC` (eng eski
-     * birinchi) tartibida taqsimlaydi (order-settlement.service.ts). Bu yerda
-     * esa buyurtmalar `order.find_all` ning sukut tartibida (`createdAt DESC`)
-     * keladi va PARTLY_PAID+SOLD ketma-ket qo'shiladi — ya'ni order.status
-     * (bu metod yozadi) BOSHQA buyurtmalarga tegardi, natijada buyurtma
-     * 'paid', settlement esa 'pending' bo'lib ajralardi. Endi birlashtirilgan
-     * ro'yxat `createdAt ASC` bo'yicha saralanib, ikkala tomon AYNI
-     * buyurtmalarga tegadi.
-     */
-    return [...(partly?.data ?? []), ...(sold?.data ?? [])].sort((a, b) => {
-      const ta = new Date(a?.createdAt ?? a?.created_at ?? 0).getTime();
-      const tb = new Date(b?.createdAt ?? b?.created_at ?? 0).getTime();
-      return ta - tb;
-    });
+  /** RPC xatosining matni (mikroservis xatosi oddiy obyekt bo'lib keladi). */
+  private rpcErrorMessage(error: unknown, fallback: string): string {
+    if (error instanceof Error && error.message) {
+      return error.message;
+    }
+    if (error && typeof error === 'object') {
+      const message = (error as { message?: unknown }).message;
+      if (typeof message === 'string' && message) {
+        return message;
+      }
+    }
+    return fallback;
   }
 
+  /** RPC xatosining HTTP holat kodi. Aniqlanmasa — null. */
+  private rpcErrorStatus(error: unknown): number | null {
+    if (error instanceof RpcException) {
+      const inner = error.getError();
+      const code =
+        inner && typeof inner === 'object'
+          ? (inner as { statusCode?: unknown }).statusCode
+          : undefined;
+      return typeof code === 'number' ? code : null;
+    }
+    if (error && typeof error === 'object') {
+      const code = (error as { statusCode?: unknown }).statusCode;
+      if (typeof code === 'number' && Number.isInteger(code)) {
+        return code;
+      }
+    }
+    return null;
+  }
+
+  /**
+   * Buyurtmaning marketga hali to'lanmagan SOF qismi (audit M9).
+   *
+   * `to_be_paid` = yig'ilgan naqd − market tarifi. Sotuvda market kassasidan
+   * qo'shimcha xarajat (`extra_cost`) ALOHIDA yechiladi, ya'ni market bu
+   * buyurtma uchun `to_be_paid − extra_cost` oladi — settlement ledger'idagi
+   * `market_amount` (collectible − tarif − extra_cost) bilan bir xil. Ilgari
+   * to'liq `to_be_paid` talab qilinardi: market kassasi 0 ga tushsa ham
+   * qo'shimcha xarajatli buyurtmalar SOLD bo'lib qolardi. Allaqachon
+   * to'langan qism (`paid_amount`) ham ayriladi.
+   */
+  private marketOrderRemaining(order: MarketPayableOrder): number {
+    const toBePaid = Math.max(Number(order?.to_be_paid ?? 0) || 0, 0);
+    const extraCost = Math.max(Number(order?.extra_cost ?? 0) || 0, 0);
+    const paid = Math.max(Number(order?.paid_amount ?? 0) || 0, 0);
+    return Math.max(toBePaid - extraCost - paid, 0);
+  }
+
+  /**
+   * Marketga to'lanadigan buyurtmalar (SOLD + PARTLY_PAID), ENG ESKISI
+   * BIRINCHI (`sort_by=created_at`, `sort_dir=asc`), sahifama-sahifa.
+   *
+   * ⚠️ AUDIT M9. Ilgari ikkita `order.find_all` `limit: 1000` bilan
+   * chaqirilardi, lekin order-service `limit` ni 100 ga qisadi va sukut
+   * tartibi `createdAt DESC` — ya'ni faqat ENG YANGI 100 ta buyurtma
+   * ko'rilardi, eskilari abadiy SOLD qolardi (7AWmSQ1p shu 100 tani qayta
+   * saralagan, xolos). Endi tartib bazada, sahifalar to'lovni qoplaguncha
+   * o'qiladi.
+   *
+   * O'qish YOZISHDAN OLDIN tugaydi: yozish holatni o'zgartiradi (PAID filtrdan
+   * chiqadi) va keyingi sahifalarni siljitardi.
+   */
+  private async findMarketPayableOrders(
+    marketId: string,
+    amount: number,
+  ): Promise<MarketPayableOrder[]> {
+    const pageSize = FinanceServiceService.MARKET_SYNC_PAGE_SIZE;
+    const orders: MarketPayableOrder[] = [];
+    let covered = 0;
+    for (
+      let page = 1;
+      page <= FinanceServiceService.MARKET_SYNC_MAX_PAGES;
+      page += 1
+    ) {
+      const response = await rmqSend<{ data?: MarketPayableOrder[] }>(
+        this.orderClient,
+        { cmd: 'order.find_all' },
+        {
+          query: {
+            market_id: marketId,
+            status: [Order_status.PARTLY_PAID, Order_status.SOLD],
+            sort_by: 'created_at',
+            sort_dir: 'asc',
+            page,
+            limit: pageSize,
+          },
+        },
+      );
+      const rows = Array.isArray(response?.data) ? response.data : [];
+      for (const row of rows) {
+        orders.push(row);
+        covered += this.marketOrderRemaining(row);
+      }
+      if (rows.length < pageSize || covered >= amount) {
+        break;
+      }
+    }
+    return orders;
+  }
+
+  /**
+   * Buyurtmaga to'lov holatini yozadi.
+   *
+   * SOLD → PARTLY_PAID o'tishi order-service holat mashinasida hali yo'q
+   * bo'lishi mumkin — rad etilsa (4xx) faqat `paid_amount` yoziladi: qisman
+   * to'langan summa yo'qolmaydi (ilgari butun yozuv tashlab yuborilardi),
+   * holat esa SOLD bo'lib qoladi.
+   */
+  private async writeOrderPayment(
+    order: MarketPayableOrder,
+    dto: { paid_amount: number; status: Order_status },
+  ): Promise<void> {
+    try {
+      await rmqSend(
+        this.orderClient,
+        { cmd: 'order.update_normalized' },
+        { id: order.id, dto },
+      );
+    } catch (error) {
+      const status = this.rpcErrorStatus(error);
+      const isRejectedPartial =
+        dto.status === Order_status.PARTLY_PAID &&
+        order.status !== Order_status.PARTLY_PAID &&
+        status !== null &&
+        status >= 400 &&
+        status < 500;
+      if (!isRejectedPartial) {
+        throw error;
+      }
+      await rmqSend(
+        this.orderClient,
+        { cmd: 'order.update_normalized' },
+        { id: order.id, dto: { paid_amount: dto.paid_amount } },
+      );
+    }
+  }
+
+  /**
+   * Market to'lovini buyurtmalarga FIFO bo'yicha yozadi (eng eskisi birinchi):
+   * qoplangan buyurtma — PAID (`paid_amount = to_be_paid`), chegaradagisi —
+   * PARTLY_PAID. Har bir buyurtmadan uning SOF qoldig'i
+   * (`marketOrderRemaining`) olinadi. Birinchi xatoda to'xtaydi — FIFO
+   * ketma-ketligida "teshik" qolmasin.
+   */
   private async applyPaymentToOrders(marketId: string, amount: number) {
     let paymentInProcess = Number(amount);
-    if (paymentInProcess <= 0) {
+    if (!(paymentInProcess > 0)) {
       return;
     }
 
-    const allSoldOrders = await this.findMarketPayableOrders(marketId);
-    const partlyPaidOrder = allSoldOrders.find(
-      (o) => o.status === Order_status.PARTLY_PAID,
+    const orders = await this.findMarketPayableOrders(
+      marketId,
+      paymentInProcess,
     );
 
-    if (partlyPaidOrder && paymentInProcess > 0) {
-      const remaining =
-        Number(partlyPaidOrder.to_be_paid ?? 0) -
-        Number(partlyPaidOrder.paid_amount ?? 0);
-      let paidAmount = Number(partlyPaidOrder.paid_amount ?? 0);
-      let nextStatus = Order_status.PARTLY_PAID;
+    for (const order of orders) {
+      if (paymentInProcess <= 0) break;
+      const remaining = this.marketOrderRemaining(order);
 
       if (paymentInProcess >= remaining) {
         paymentInProcess -= remaining;
-        paidAmount = Number(partlyPaidOrder.to_be_paid ?? 0);
-        nextStatus = Order_status.PAID;
+        await this.writeOrderPayment(order, {
+          paid_amount: Math.max(Number(order.to_be_paid ?? 0) || 0, 0),
+          status: Order_status.PAID,
+        });
       } else {
-        paidAmount += paymentInProcess;
+        const paidBefore = Math.max(Number(order.paid_amount ?? 0) || 0, 0);
+        await this.writeOrderPayment(order, {
+          paid_amount: paidBefore + paymentInProcess,
+          status: Order_status.PARTLY_PAID,
+        });
         paymentInProcess = 0;
       }
-
-      await rmqSend(
-        this.orderClient,
-        { cmd: 'order.update_normalized' },
-        {
-          id: partlyPaidOrder.id,
-          dto: { paid_amount: paidAmount, status: nextStatus },
-        },
-      );
-    }
-
-    const soldOrders = allSoldOrders.filter(
-      (o) => o.status === Order_status.SOLD,
-    );
-
-    for (const order of soldOrders) {
-      if (paymentInProcess <= 0) break;
-      const orderToBePaid = Number(order.to_be_paid ?? 0);
-      let paidAmount = Number(order.paid_amount ?? 0);
-      let nextStatus = Order_status.PARTLY_PAID;
-
-      if (paymentInProcess >= orderToBePaid) {
-        paymentInProcess -= orderToBePaid;
-        paidAmount = orderToBePaid;
-        nextStatus = Order_status.PAID;
-      } else {
-        paidAmount += paymentInProcess;
-        paymentInProcess = 0;
-      }
-
-      await rmqSend(
-        this.orderClient,
-        { cmd: 'order.update_normalized' },
-        { id: order.id, dto: { paid_amount: paidAmount, status: nextStatus } },
-      );
     }
   }
 
@@ -388,12 +542,63 @@ export class FinanceServiceService implements OnModuleInit {
     try {
       await this.applyPaymentToOrders(marketId, amount);
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : 'unknown sync error';
+      const message = this.rpcErrorMessage(error, 'unknown sync error');
       this.logger.warn(
         `transfer committed, but order sync failed (market_id=${marketId}, amount=${amount}): ${message}`,
       );
     }
+  }
+
+  /**
+   * To'lovdan KEYINGI ishlar — buyurtma holati sinxroni va hamkorga xabar
+   * (audit M2). Ular endi javobni KUTDIRMAYDI: commit'dan keyin fonda
+   * bajariladi.
+   *
+   * ⚠️ NEGA. Ilgari javob shu ishlar tugashini kutardi: sinxron har bir
+   * buyurtma uchun alohida `order.update_normalized` (to'liq updateFull)
+   * yuborardi, hamkor xabari esa 5 s × 3 urinish. ~100 buyurtmali marketda bu
+   * gateway'ning 8 s chegarasidan oshib, admin pul KO'CHGAN bo'lsa ham 504
+   * ko'rardi va qayta bosardi. Endi javob commit (va 2 s bilan cheklangan
+   * ledger publish) dan keyin darhol qaytadi.
+   *
+   * Bitta marketning sinxronlari navbat bilan (`marketOrderSyncChains`) —
+   * ikki to'lov bir xil buyurtmalarni parallel o'qib ikki marta yozmasin.
+   * Hamkor xabari navbatni kutmaydi. Xatolar ichkarida yutiladi (log);
+   * qaytgan promise HECH QACHON reject bo'lmaydi.
+   */
+  private scheduleMarketPaymentFollowUp(input: {
+    market_id: string;
+    amount: number;
+    payment_date?: number | string | null;
+    dedup_key?: string | null;
+  }): Promise<void> {
+    const marketId = String(input.market_id);
+    const amount = Number(input.amount);
+
+    const previous = this.marketOrderSyncChains.get(marketId);
+    const sync = (previous ?? Promise.resolve())
+      .then(() => this.syncMarketPaymentsSafely(marketId, amount))
+      .catch(() => undefined);
+    this.marketOrderSyncChains.set(marketId, sync);
+    void sync.then(() => {
+      if (this.marketOrderSyncChains.get(marketId) === sync) {
+        this.marketOrderSyncChains.delete(marketId);
+      }
+    });
+
+    const emit = this.emitSettlementPaymentSafely({
+      market_id: marketId,
+      amount,
+      payment_date: input.payment_date,
+      dedup_key: input.dedup_key,
+    }).catch(() => undefined);
+
+    const followUp = Promise.all([sync, emit]).then(() => undefined);
+    this.pendingFollowUps.add(followUp);
+    void followUp.then(() => {
+      this.pendingFollowUps.delete(followUp);
+    });
+    return followUp;
   }
 
   /**
@@ -496,6 +701,15 @@ export class FinanceServiceService implements OnModuleInit {
       Source_type.COURIER_PAYMENT,
       Source_type.MARKET_PAYMENT,
     ]);
+    /**
+     * Kassa egasi FOYDALANUVCHI bo'lgan turlar (audit CODE-08). BRANCH
+     * kassasining `user_id` si — FILIAL id si, MAIN niki — '0'. Ilgari ular
+     * ham identity'dan foydalanuvchi sifatida so'ralardi va id raqami mos
+     * kelgan BEGONA odamning ismi/telefoni kassa egasi bo'lib ko'rinardi.
+     */
+    const isUserOwnedCashbox = (cashbox?: Cashbox | null) =>
+      cashbox?.cashbox_type === Cashbox_type.FOR_COURIER ||
+      cashbox?.cashbox_type === Cashbox_type.FOR_MARKET;
 
     for (const history of histories) {
       if (history?.created_by) {
@@ -507,7 +721,7 @@ export class FinanceServiceService implements OnModuleInit {
       ) {
         ids.push(String(history.source_user_id));
       }
-      if (history?.cashbox?.user_id) {
+      if (history?.cashbox?.user_id && isUserOwnedCashbox(history.cashbox)) {
         ids.push(String(history.cashbox.user_id));
       }
     }
@@ -535,7 +749,9 @@ export class FinanceServiceService implements OnModuleInit {
         };
       }
 
-      const cashboxUser = usersMap.get(String(history.cashbox.user_id)) ?? null;
+      const cashboxUser = isUserOwnedCashbox(history.cashbox)
+        ? (usersMap.get(String(history.cashbox.user_id)) ?? null)
+        : null;
 
       return {
         ...history,
@@ -638,6 +854,31 @@ export class FinanceServiceService implements OnModuleInit {
     }
 
     return byUserType;
+  }
+
+  /**
+   * BRANCH kassasini manfiyga tushirishi mumkin bo'lgan TIZIM oyoqlari —
+   * order-service outbox'i (`finance.cashbox.update_balance`) yozadigan sotuv,
+   * qo'shimcha xarajat, tuzatish va bekor qilish oyoqlari (audit I13).
+   *
+   * ⚠️ AUDIT M12. Ilgari ruxsat BARCHA BRANCH yozuvlariga berilardi: menejer
+   * kassada 100 000 turganda PATCH /finance/cashbox/spend bilan 500 000
+   * "sarflasa" qabul qilinardi va filial kassasi −400 000 bo'lardi (yo'q pul
+   * sarflangan, filial → HQ topshirish bloklanardi). Qo'lda chiqim
+   * (MANUAL_EXPENSE) bu ro'yxatda YO'Q — u MAIN kabi qat'iy tekshiriladi.
+   */
+  private static isBranchNegativeAllowedSource(
+    sourceType: Source_type | undefined,
+  ): boolean {
+    if (!sourceType) {
+      return false;
+    }
+    return (
+      sourceType === Source_type.SELL ||
+      sourceType === Source_type.EXTRA_COST ||
+      sourceType === Source_type.CORRECTION ||
+      sourceType === Source_type.CANCEL
+    );
   }
 
   private updateBalancesByMethod(
@@ -831,6 +1072,22 @@ export class FinanceServiceService implements OnModuleInit {
           },
         );
       }
+      // Sana filtri (FE-PAY-04) — turi berilgan yo'l bilan bir xil Toshkent
+      // kuni. Ilgari bu yo'l sanani umuman e'tiborsiz qoldirardi.
+      const { start: historyFrom, end: historyTo } = this.parseDateRange(
+        dto.fromDate,
+        dto.toDate,
+      );
+      if (historyFrom) {
+        historyQuery.andWhere('history.createdAt >= :historyFrom', {
+          historyFrom,
+        });
+      }
+      if (historyTo) {
+        historyQuery.andWhere('history.createdAt <= :historyTo', {
+          historyTo,
+        });
+      }
 
       const [history, total] = await historyQuery.getManyAndCount();
 
@@ -924,7 +1181,12 @@ export class FinanceServiceService implements OnModuleInit {
           paymentMethod,
           // System sale/settlement leg: a BRANCH cashbox may go negative here
           // (sub-share sale; HQ tops up) so the leg is never poison-dropped.
-          cashbox.cashbox_type === Cashbox_type.BRANCH,
+          // Faqat TIZIM oyoqlari (audit M12): menejerning qo'lda chiqimi
+          // (MANUAL_EXPENSE) filial kassasini manfiyga tushira olmaydi.
+          cashbox.cashbox_type === Cashbox_type.BRANCH &&
+            FinanceServiceService.isBranchNegativeAllowedSource(
+              dto.source_type,
+            ),
         );
 
         const savedCashbox = await queryRunner.manager.save(cashbox);
@@ -1244,7 +1506,7 @@ export class FinanceServiceService implements OnModuleInit {
 
       if (openShift) {
         throw new BadRequestException(
-          'An open shift already exists for this user',
+          'Sizda allaqachon ochiq smena bor — avval uni yoping',
         );
       }
 
@@ -1283,7 +1545,7 @@ export class FinanceServiceService implements OnModuleInit {
           (insertError as QueryFailedError & { code?: string }).code === '23505'
         ) {
           throw new BadRequestException(
-            'An open shift already exists for this user',
+            'Sizda allaqachon ochiq smena bor — avval uni yoping',
           );
         }
         throw insertError;
@@ -1318,7 +1580,7 @@ export class FinanceServiceService implements OnModuleInit {
       }
 
       if (!shiftId) {
-        throw new NotFoundException('Open shift not found');
+        throw new NotFoundException('Ochiq smena topilmadi');
       }
 
       const queryRunner = this.dataSource.createQueryRunner();
@@ -1336,11 +1598,11 @@ export class FinanceServiceService implements OnModuleInit {
         });
 
         if (!shift) {
-          throw new NotFoundException('Open shift not found');
+          throw new NotFoundException('Ochiq smena topilmadi');
         }
 
         if (shift.status !== ShiftStatus.OPEN) {
-          throw new BadRequestException('Shift is already closed');
+          throw new BadRequestException('Smena allaqachon yopilgan');
         }
 
         const closeTime = new Date();
@@ -2002,12 +2264,31 @@ export class FinanceServiceService implements OnModuleInit {
     try {
       this.assertBigIntId(data.courier_id, 'courier_id');
       this.assertPositiveAmount(Number(data.amount));
-      if (
-        data.payment_method === PaymentMethod.CLICK_TO_MARKET &&
-        !data.market_id
-      ) {
+      const isClickToMarket =
+        data.payment_method === PaymentMethod.CLICK_TO_MARKET;
+      if (isClickToMarket && !data.market_id) {
         throw new BadRequestException(
           "Click_to_market usulida market_id bo'lishi shart va majburiy !!!",
+        );
+      }
+      /**
+       * ⚠️ AUDIT M4. "Marketga o'tkazma" filial kassasi orqali TAQIQLANADI.
+       *
+       * Menejer yo'lida qabul qiluvchi — filial kassasi: unga +X, darhol −X
+       * (MARKET_PAYMENT) yozilardi, market kassasi esa −X. Ledger'da faqat
+       * `courier_to_branch` siljirdi — kuryer qatorlari COURIER_SETTLED
+       * ("pul filialda, HQ'ga qarz") bo'lardi, filial kassasi esa 0. Natijada
+       * abadiy soxta filial qarzi paydo bo'lardi (filial → HQ "Insufficient
+       * cash balance" bilan to'xtardi) va kompaniya holati X ga oshib
+       * ko'rinardi. Bu usul faqat HQ (MAIN) kassasi orqali qoladi.
+       */
+      if (
+        isClickToMarket &&
+        (data.receiver_cashbox_type ?? Cashbox_type.MAIN) ===
+          Cashbox_type.BRANCH
+      ) {
+        throw new BadRequestException(
+          "Marketga o'tkazma (click_to_market) faqat HQ kassasi orqali qabul qilinadi — filial kassasi bu usulda qabul qila olmaydi",
         );
       }
 
@@ -2085,6 +2366,32 @@ export class FinanceServiceService implements OnModuleInit {
         );
       }
 
+      /**
+       * Marketga o'tkazmada market kassasi ham shu yerda qulflanadi (tartib:
+       * courier → main → market) va pul ko'chishidan OLDIN tekshiriladi
+       * (audit M4): to'lov marketga qarzdan oshmasin — `paymentsToMarket`
+       * dagi qo'riqchi bilan bir xil. Ilgari tekshiruv yo'q edi va noto'g'ri
+       * tanlangan market kassasi jimgina manfiyga ketardi.
+       */
+      let clickMarketCashbox: Cashbox | null = null;
+      if (isClickToMarket) {
+        clickMarketCashbox = await queryRunner.manager.findOne(Cashbox, {
+          where: {
+            user_id: data.market_id,
+            cashbox_type: Cashbox_type.FOR_MARKET,
+          },
+          lock: { mode: 'pessimistic_write' },
+        });
+        if (!clickMarketCashbox)
+          throw new NotFoundException('Market cashbox topilmadi');
+        const marketPayable = Number(clickMarketCashbox.balance ?? 0);
+        if (Number(data.amount) > marketPayable) {
+          throw new BadRequestException(
+            `To'lov miqdori marketga qarzdan oshib ketdi (qarz: ${marketPayable})`,
+          );
+        }
+      }
+
       this.updateBalancesByMethod(
         courierCashbox,
         Number(data.amount),
@@ -2135,19 +2442,8 @@ export class FinanceServiceService implements OnModuleInit {
       });
       await queryRunner.manager.save(receiverHistory);
 
-      if (
-        data.payment_method === PaymentMethod.CLICK_TO_MARKET &&
-        data.market_id
-      ) {
-        const marketCashbox = await queryRunner.manager.findOne(Cashbox, {
-          where: {
-            user_id: data.market_id,
-            cashbox_type: Cashbox_type.FOR_MARKET,
-          },
-          lock: { mode: 'pessimistic_write' },
-        });
-        if (!marketCashbox)
-          throw new NotFoundException('Market cashbox topilmadi');
+      if (clickMarketCashbox) {
+        const marketCashbox = clickMarketCashbox;
 
         this.updateBalancesByMethod(
           receiverCashbox,
@@ -2209,23 +2505,38 @@ export class FinanceServiceService implements OnModuleInit {
         data.created_by,
         dedupKey,
       );
+      /**
+       * Marketga o'tkazma — market bo'g'ini ham yopiladi (audit M4): ayni
+       * tranzaksiyada `hq_to_market` siljishi navbatga qo'yiladi. Ilgari
+       * faqat `courier_to_branch` siljirdi va market qatorlari hech qachon
+       * MARKET_SETTLED bo'lmasdi (db-reconcile marketni −X deb ko'rsatardi).
+       * Token alohida (`:m`) — order-service ikki siljishni bir-biridan
+       * farqlab dedup qiladi; token bo'lmasa dedup ham yo'q (avvalgidek).
+       */
+      const marketAdvancePayload = clickMarketCashbox
+        ? await this.enqueueSettlementAdvance(
+            queryRunner.manager,
+            'hq_to_market',
+            String(data.market_id),
+            Number(data.amount),
+            data.created_by,
+            dedupKey ? `${dedupKey}:m` : '',
+          )
+        : null;
 
       await queryRunner.commitTransaction();
       // Immediate best-effort publish to close the outbox-poll lag (Faza 2c).
       await this.tryPublishAdvanceNow(advancePayload);
+      if (marketAdvancePayload) {
+        await this.tryPublishAdvanceNow(marketAdvancePayload);
+      }
       auditedCourierCashboxId = String(courierCashbox.id);
 
-      if (
-        data.payment_method === PaymentMethod.CLICK_TO_MARKET &&
-        data.market_id
-      ) {
-        await this.syncMarketPaymentsSafely(
-          data.market_id,
-          Number(data.amount),
-        );
-        // Hamkor marketga bevosita o'tkazma ham hisob-kitob to'lovi — hamkorga
-        // xabar beramiz (best-effort).
-        await this.emitSettlementPaymentSafely({
+      if (clickMarketCashbox) {
+        // Buyurtma holati sinxroni va hamkor xabari javobni KUTDIRMAYDI —
+        // fonda (audit M2). Hamkor marketga bevosita o'tkazma ham hisob-kitob
+        // to'lovi.
+        void this.scheduleMarketPaymentFollowUp({
           market_id: String(data.market_id),
           amount: Number(data.amount),
           payment_date: data.payment_date,
@@ -2612,12 +2923,17 @@ export class FinanceServiceService implements OnModuleInit {
 
       await queryRunner.commitTransaction();
       // Immediate best-effort publish to close the outbox-poll lag (Faza 2c).
+      // 2 s bilan cheklangan — gateway'ning 8 s chegarasidan ancha kichik.
       await this.tryPublishAdvanceNow(advancePayload);
       auditedMarketCashboxId = String(marketCashbox.id);
-      await this.syncMarketPaymentsSafely(data.market_id, Number(data.amount));
-      // Agar market bir hamkorniki bo'lsa, hamkorga "to'ladim" webhookini
-      // yuboramiz (best-effort — asosiy to'lovni yiqitmaydi).
-      await this.emitSettlementPaymentSafely({
+      /**
+       * ⚠️ AUDIT M2. Buyurtma holati sinxroni va hamkor webhooki (agar market
+       * hamkorniki bo'lsa) endi FONDA — javob ularni kutmaydi. Ilgari ~100
+       * buyurtmali marketda javob gateway'ning 8 s chegarasidan oshardi: pul
+       * ko'chgan bo'lsa ham admin 504 ko'rib, qayta bosardi. Ikkalasi ham
+       * best-effort (pul harakati allaqachon commit bo'lgan).
+       */
+      void this.scheduleMarketPaymentFollowUp({
         market_id: String(data.market_id),
         amount: Number(data.amount),
         payment_date: data.payment_date,
@@ -2725,26 +3041,37 @@ export class FinanceServiceService implements OnModuleInit {
         qb.andWhere('cashbox.cashbox_type = :cashboxType', {
           cashboxType,
         });
-      if (fromDate)
+      // Toshkent kuni (SqVMuhKo / CODE-22) — boshqa kassa ro'yxatlari bilan
+      // bir xil: 'YYYY-MM-DD' butun kun, to'liq ISO o'zgarishsiz.
+      const { start: fromBound, end: toBound } = this.parseDateRange(
+        fromDate,
+        toDate,
+      );
+      if (fromBound)
         qb.andWhere('h.createdAt >= :fromDate', {
-          fromDate: this.parseDate(fromDate),
+          fromDate: fromBound,
         });
-      if (toDate)
+      if (toBound)
         qb.andWhere('h.createdAt <= :toDate', {
-          toDate: this.parseDate(toDate),
+          toDate: toBound,
         });
 
       const [allCashboxHistories, total] = await qb.getManyAndCount();
-      const [courierCashboxTotal, marketCashboxTotal] = await Promise.all([
-        this.sumCashboxBalanceByType(Cashbox_type.FOR_COURIER),
-        this.sumCashboxBalanceByType(Cashbox_type.FOR_MARKET),
-      ]);
+      const [courierCashboxTotal, marketCashboxTotal, marketPayableTotal] =
+        await Promise.all([
+          this.sumCashboxBalanceByType(Cashbox_type.FOR_COURIER),
+          this.sumCashboxBalanceByType(Cashbox_type.FOR_MARKET),
+          this.sumPositiveCashboxBalanceByType(Cashbox_type.FOR_MARKET),
+        ]);
 
       return this.successRes(
         {
           mainCashboxTotal: Number(mainCashbox.balance),
           courierCashboxTotal,
+          // Imzoli yig'indi (sof holat) — avvalgidek.
           marketCashboxTotal,
+          // Faqat musbat kassalar — HQ marketlarga to'lashi kerak (audit M16).
+          marketPayableTotal,
           allCashboxHistories,
           pagination: {
             total,
@@ -3391,8 +3718,12 @@ export class FinanceServiceService implements OnModuleInit {
       if (input.source_type) {
         where.source_type = input.source_type;
       }
-      const from = this.parseDate(input.from_date);
-      const to = this.parseDate(input.to_date);
+      // Toshkent kuni (C2 / CODE-22): 'YYYY-MM-DD' — butun kun (ilgari UTC
+      // yarim tuni, oxirgi kun esa umuman kirmasdi); to'liq ISO o'zgarishsiz.
+      const { start: from, end: to } = this.parseDateRange(
+        input.from_date,
+        input.to_date,
+      );
       if (from && to) {
         where.createdAt = Between(from, to);
       } else if (from) {
@@ -3443,8 +3774,11 @@ export class FinanceServiceService implements OnModuleInit {
     qb: ReturnType<Repository<FinancialBalanceHistory>['createQueryBuilder']>,
     input: { from_date?: string; to_date?: string },
   ) {
-    const from = this.parseDate(input.from_date);
-    const to = this.parseDate(input.to_date);
+    // Toshkent kuni (C2 / CODE-22) — tarix ro'yxati bilan bir xil qoida.
+    const { start: from, end: to } = this.parseDateRange(
+      input.from_date,
+      input.to_date,
+    );
 
     if (from) {
       qb.andWhere('h.createdAt >= :from', { from });

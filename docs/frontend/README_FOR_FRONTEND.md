@@ -21,11 +21,18 @@ distinct app surface. Read §1 and §6–§8 of the guide before writing UI.
 2. **Auth:** `Authorization: Bearer <accessToken>` on every authed request.
    Access token comes from `POST /auth/login` body. Refresh token is an
    **httpOnly cookie** — call `POST /auth/refresh` with `credentials: 'include'`.
-   Implement **401 → refresh once → retry → else login**.
+   Implement **401 → refresh once → retry → else login**. A `429`/`5xx` (or no
+   answer) from `/auth/refresh` is **not** a logout: back off and retry (max 3);
+   route to login on `401`/`403` or other non-transient errors (guide §2). Auth
+   limits: login 30/min per IP, refresh 60/min per IP.
 3. **Response envelope:** unwrap `{ statusCode, message, data }` → use `data`.
    Some endpoints return binary (exports, files, printer) — don't JSON-parse those.
 4. **Strict bodies:** the gateway rejects unknown fields (`400`). Send only
-   fields defined in `openapi.json` for that operation.
+   fields defined in `openapi.json` for that operation. Some documented fields are
+   role-limited: on order create the lifecycle fields (`status`, `post_id`,
+   `courier_id`, …) and `customer_id` are honoured only for superadmin/admin, and
+   `PATCH /orders/{id}` rejects `status`/`market_id`/`to_be_paid`/`paid_amount`
+   (guide §6 rules).
 5. **Roles drive the UI.** Decode the JWT (`roles`, `branch_id`) for menus, but
    the server enforces access — client gating is UX only. Use the role→endpoint
    matrix in §11 of the guide to build each role's navigation.
@@ -38,7 +45,8 @@ distinct app surface. Read §1 and §6–§8 of the guide before writing UI.
    npx openapi-typescript docs/frontend/openapi.json -o src/api/schema.d.ts
    ```
    Wrap fetch with: base URL, bearer injection, envelope unwrap, 401-refresh-retry,
-   error normalization (handle 400/401/403/404/409/429/504).
+   error normalization (handle 400/401/403/404/409/410/429/504), and an
+   `Idempotency-Key` on the cash payment endpoints (guide §7).
 2. **Auth & session.** Login, validate-on-load (`GET /auth/validate`), profile,
    logout, role-based routing/guards.
 3. **Shared UI primitives.** Enum constants, status badges, paginated table,
@@ -56,7 +64,9 @@ distinct app surface. Read §1 and §6–§8 of the guide before writing UI.
    (§11) and `GET /analytics/dashboard` (role-aware).
 
 ## Coverage targets (don't skip these — they're easy to miss)
-- All **order create paths** (manual, telegram bot, external/provider, operator bulk).
+- All **order create paths** (manual, telegram bot, external/provider) and HQ
+  intake (`POST /orders/receive` — superadmin/admin/registrator/manager, not
+  market_operator).
 - Courier **sell/cancel with mandatory proof media** when the market's
   expense-proof conditions match (guide §5).
 - **Settlement** screens for all three legs + per-order settlement status.

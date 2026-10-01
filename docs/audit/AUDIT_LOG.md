@@ -29,6 +29,83 @@
 
 ## Servislar bo'yicha audit
 
+### fix3 — ishga tushirish kuni audit tuzatishlari (barcha servislar + frontend) — 2026-10-01
+
+**Qamrov:** wave2 auditining tasdiqlangan topilmalari — fix3 (10 agent: L1, L2, A2–A9) va
+fix3b (BE-1, BE-2, FE-1, FE-2) + lead tuzatishlari. Majburiy shartnomalar C1–C15;
+foydalanuvchi qarorlari #1–#7 (ayniqsa #7: filial puli HQ ga faqat SA/admin
+"Qabul qilinishi kerak" orqali — menejer o'zi topshirmaydi). Tafsilot:
+[`BACKEND_MAP.md`](../BACKEND_MAP.md) "fix3" belgilari, frontend:
+[`FRONTEND_CHANGELOG.md`](../frontend/FRONTEND_CHANGELOG.md) 2026-10-01.
+
+**Tuzatildi (✅ 2026-10-01):**
+- 🔴 **Pul:** **M1/LC-01** rollback teskari oyoqlarni so'rovchidan emas, settlement qatoridan oladi
+  (prod: 289-kuryerda 140 000 soxta qarz); **M5** xarajat qaytarish `order.extra_cost` dan;
+  **M13** P&L dedup kalitlari; **M10** qisman sotuv ≤ `total_price`; **M15** filial kassasi
+  yo'q bo'lsa 404; **M2/FE-PAY-03** `Idempotency-Key` market va branch-to-main da, market to'lovi
+  timeoutdan oldin javob beradi; **M4** `click_to_market` faqat HQ orqali + qarz chegarasi;
+  **M7/RBAC-07/BE-PAY-14** menejer kassasi faqat o'z filiali; **M8** pul outbox hodisalari
+  hech qachon "failed" emas + `settlement.advance` "applied" belgisi; **M9** to'lov sinxroni
+  eski→yangi; **M11/CODE-03** PATCH qoidalari faqat HTTP yo'lida (`order.update_from_api`);
+  **M12** filial kassasi qo'lda chiqimda manfiy bo'lmaydi; **M16** `marketPayableTotal`;
+  **CODE-05** filial ulushi tizim so'rovchisi bilan (xatoda log + 0 — faqat launch uchun);
+  **CODE-06/C8** sof-nol PENDING qatorlarni yopish; **CODE-28** qat'iy carry o'qish;
+  hamkor prepaid `paid_online_amount` saqlanadi; `markByProvider` snapshotlari; `sold → partly_paid`.
+- 🔴 **RBAC / doira:** **RBAC-01** `customer_id` faqat SA/admin; **RBAC-05/LC-07/LC-14** yaratishda
+  hayot sikli maydonlari olib tashlanadi (doim NEW); **RBAC-04/CODE-01** market faqat o'z NEW
+  buyurtmasini o'chiradi; **RBAC-02/CODE-08** market dashboard, `GET /markets`, reports/couriers
+  minimallashtirildi; **RBAC-03/CODE-04** `/orders` ro'yxat va QR doiralari; **RBAC-15**
+  tracking doirasi; **GET /orders/:id va /tracking** tekshiruvlari endi haqiqatan ishlaydi
+  (ilgari `response.data` o'qilardi — lead); **RBAC-06/LC-08** tuman faqat SA/admin; **RBAC-08**
+  printer; **RBAC-09** parol/telefon almashsa sessiya bekor; **RBAC-10** (minimal) eski qurilma
+  yangi sessiyani o'chirmaydi; **RBAC-11** login 30/min, refresh 60/min + FE refresh retry;
+  **RBAC-12** partner IP = CF-Connecting-IP; **RBAC-13** partner tarifi o'z marketi; **RBAC-14**
+  hudud statistikasi; **RBAC-19** admin o'z profili; **RBAC-20** menejer rollbacki faqat
+  SOLD/CANCELLED; **RBAC-21/LC-10** HQ registratori bekor qilinganlar; `/orders/:id/settlement`
+  filial doirasi; **CODE-02** Telegram guruh faqat maxfiy token bilan, token almashtirilmaydi,
+  mavjud ulanish qayta yozilmaydi, `/id`; **CODE-18** `/status` faqat o'z buyurtmasi.
+- 🟠 **Hayot sikli / logistika / filial:** **LC-02, LC-03, LC-06, LC-11, LC-13**, HQ qabuli filial
+  qo'lidagi buyurtmani rad etadi; **LC-04** menejer kuryer qo'lidagini sotmaydi; **LC-05**
+  kuryer faqat o'z qo'lidagi bekor buyurtmani tiklaydi; **LC-09** dispatch manba pochta hududi
+  bo'yicha + boshqa hudud filiali 400 (lead); **CODE-07, CODE-09, CODE-10, CODE-11** (NEW
+  dispatch qilinmaydi, tranzit skan → NEW + kuryerga 400), **CODE-12** `PATCH /post/:id` va
+  `/post/reassign/:id` → 410, **CODE-13, CODE-14, CODE-20, CODE-21** (`GET /branches/new-orders`
+  route tartibi — lead), **CODE-22** Toshkent kunlari, **CODE-23, CODE-25** (qisman),
+  **CODE-26**, **M3**, **E2E-DISPATCH-SKIP**.
+- 🟡 **Frontend (Elchi-Frontend):** FE-ORD-02/12, FE-CB-09, FE-RET-05, FE-USR-11, FE-MAIL-10,
+  LC-15 (yashirildi), FE-PAY-03/04/06/07/08/13/15/16, CODE-15/16/17/19/21/27, RBAC-16/17/18, smena
+  ochish/yopish (SA/admin), market Telegram token kartasi. **FE-PAY-01 ataylab o'zgartirilmadi**
+  (qaror #7; A8 tuzatishi qaytarildi).
+
+**Rollback qoidasi (yakuniy):** chegara — **HQ**. Pul HQ ga yetgan (BRANCH_/MARKET_SETTLED)
+buyurtmani hech kim qaytarmaydi. Kuryer pulni filialga topshirgan (COURIER_SETTLED, kuryer bor,
+summa ≠ 0) bo'lsa kuryer va menejer 400 oladi; **superadmin** tuzata oladi — tranzaksiya
+ichida, `runFifoSettlement` bilan bir xil qulflar ostida qatordagi `courier_amount` kuryerning
+`courier_to_branch` qoldig'iga (keyingi topshirig'iga kredit) qo'shiladi, so'ng oyoqlar PENDING
+sotuvdagidek teskari yoziladi (xavfsiz bo'lmagan holatlar aniq 400/503 bilan rad etiladi).
+Kuryer — faqat SOLD/CANCELLED (bekorni faqat posilka o'zida bo'lsa); menejer — faqat
+SOLD/CANCELLED, o'z filiali; PARTLY_PAID — faqat superadmin; `sold_at`siz "sotilgan" — hech kim.
+
+**Qilinmadi / qarorlar:** RBAC-01 servis-darajasidagi tekshiruv (umumiy mijozlarda 403 berardi);
+RBAC-10 qurilma-bo'yicha sessiya (redizayn); CODE-25 compare-and-set; CODE-08 identity
+`sanitize()`; RBAC-14 kuryer `region/stats/all` da qoldi; FE-PAY-13 100 qator chegarasi; LC-15 SA
+uchun "pochtadan ajratish" endpointi yo'q; M8 kassa↔daftar solishtirish joby; DEC-01, CODE-24,
+CODE-29 — C15 bo'yicha faqat hisobot.
+
+**Test:** har agent o'z spec/test fayllarini bittadan yugurtirdi (masalan order + integration:
+85 spec fayl, 1154 test ✅; M6 tuzatishi in-memory daftar invarianti bilan 21 test). To'liq jest
+suite, barcha servislar `tsc` va FE vitest/lint — deploydan oldin lead yakuniy tekshiruvida.
+
+**Deploydan keyin (ops):** 289-kuryer 140 000 fantomi va 65-buyurtma pochtasi (test ma'lumoti),
+fix3 dan oldin "failed" bo'lgan pul outbox hodisalari, eski qisman sotilgan buyurtmalar
+`extra_cost`i, `region_id` NULL tashqi buyurtmalar.
+
+**Frontend ta'siri:** bor — FRONTEND_CHANGELOG 2026-10-01 (⚠️ 410 pochta route'lari, PATCH
+qoidalari, yaratishda maydonlar, settlement/`GET /orders/:id` doirasi, dispatch hudud 400, HQ
+qabuli 400, Telegram qayta yozilmaydi).
+
+---
+
 ### api-gateway — 2026-06-07 (RBAC guard qamrovi)
 
 **Audit qamrovi:** barcha gateway controller'larining route↔`@Roles` qamrovi skanerlandi.

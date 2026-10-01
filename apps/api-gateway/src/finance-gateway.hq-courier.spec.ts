@@ -386,6 +386,17 @@ describe('C4 — POST cashbox/payment/courier (superadmin/admin)', () => {
       }),
       'branch.find_by_id': () => ({ data: { id: '15', parent_id: null } }),
       'branch.user.find_by_user': () => ({ data: { branch_id: '15' } }),
+      // C3 (fix3): menejer yo'lida kuryerning faol qatori AYNAN filial 15 da.
+      'branch.user.find_by_branch': () => ({
+        data: [
+          {
+            user_id: '209',
+            branch_id: '15',
+            role: 'COURIER',
+            isDeleted: false,
+          },
+        ],
+      }),
     });
     route(env.financeClient, {
       'finance.cashbox.payment_courier': () => ({ statusCode: 200 }),

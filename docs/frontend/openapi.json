@@ -724,7 +724,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Market list"
+            "description": "Market list. SUPERADMIN/ADMIN: to'liq qator + cashbox. MANAGER/REGISTRATOR/BRANCH: faqat {id, name, phone_number, status}. COURIER: faqat {id, name, status}."
           }
         },
         "security": [
@@ -3448,9 +3448,7 @@
             "required": true,
             "in": "path",
             "description": "Post ID (id)",
-            "schema": {
-              "type": "string"
-            }
+            "schema": {}
           }
         ],
         "requestBody": {
@@ -3473,7 +3471,7 @@
             "bearer": []
           }
         ],
-        "summary": "Send post (assign orders to post)",
+        "summary": "Send post (assign orders to post) — disabled for launch (410)",
         "tags": [
           "Logistics"
         ]
@@ -3488,9 +3486,7 @@
             "required": true,
             "in": "path",
             "description": "Post ID (id)",
-            "schema": {
-              "type": "string"
-            }
+            "schema": {}
           }
         ],
         "requestBody": {
@@ -3513,7 +3509,7 @@
             "bearer": []
           }
         ],
-        "summary": "Reassign sent post to another courier",
+        "summary": "Reassign sent post to another courier — disabled for launch (410)",
         "tags": [
           "Logistics"
         ]
@@ -4707,6 +4703,26 @@
             "schema": {
               "example": true,
               "type": "boolean"
+            }
+          },
+          {
+            "name": "fromDate",
+            "required": false,
+            "in": "query",
+            "description": "Tarix boshlanishi: YYYY-MM-DD (Toshkent kuni 00:00) yoki to‘liq ISO",
+            "schema": {
+              "example": "2026-10-01",
+              "type": "string"
+            }
+          },
+          {
+            "name": "toDate",
+            "required": false,
+            "in": "query",
+            "description": "Tarix oxiri: YYYY-MM-DD (Toshkent kuni 23:59:59.999) yoki to‘liq ISO",
+            "schema": {
+              "example": "2026-10-01",
+              "type": "string"
             }
           },
           {
@@ -8717,6 +8733,26 @@
         ]
       }
     },
+    "/branches/new-orders": {
+      "get": {
+        "operationId": "BranchGatewayController_findBranchesWithNewOrders",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Branches that currently have NEW orders",
+        "tags": [
+          "Branch"
+        ]
+      }
+    },
     "/branches/{id}": {
       "get": {
         "operationId": "BranchGatewayController_findBranchById",
@@ -8868,26 +8904,6 @@
           }
         ],
         "summary": "Branch market analytics (orders, delivered, total price)",
-        "tags": [
-          "Branch"
-        ]
-      }
-    },
-    "/branches/new-orders": {
-      "get": {
-        "operationId": "BranchGatewayController_findBranchesWithNewOrders",
-        "parameters": [],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "Branches that currently have NEW orders",
         "tags": [
           "Branch"
         ]
@@ -9313,7 +9329,7 @@
                       "101",
                       "102"
                     ],
-                    "description": "Optional: only selected orders from post are dispatched"
+                    "description": "Majburiy: pochtadan jo'natiladigan buyurtmalar. Birortasi shu pochtada bo'lmasa — 409 (id'lar xabarda), hech narsa jo'natilmaydi"
                   }
                 }
               }
@@ -11063,7 +11079,7 @@
             "description": "{ statusCode, message, data: { elchi_market_id, where_deliver, market_tariff } }"
           },
           "404": {
-            "description": "Market topilmadi"
+            "description": "Market topilmadi yoki shu hamkorga tegishli emas"
           }
         },
         "summary": "Yetkazish tarifi (market bo‘yicha, narx preview)",
@@ -12202,7 +12218,7 @@
           "customer_id": {
             "type": "string",
             "example": "1",
-            "description": "Customer ID (as string/bigint)"
+            "description": "Customer ID (as string/bigint) — faqat superadmin/admin uchun. Boshqa rollarda mijoz `customer` obyektidan aniqlanadi (fix3 RBAC-01)."
           },
           "customer": {
             "$ref": "#/components/schemas/CreateOrderCustomerDto"
@@ -12236,7 +12252,8 @@
               "cancelled (sent)",
               "closed"
             ],
-            "default": "new"
+            "default": "new",
+            "description": "Faqat superadmin/admin; boshqa rollarda e’tiborsiz (buyurtma doim NEW)"
           },
           "comment": {
             "type": "object",
@@ -12248,7 +12265,8 @@
           },
           "post_id": {
             "type": "string",
-            "example": "1"
+            "example": "1",
+            "description": "Faqat superadmin/admin; boshqa rollarda e’tiborsiz"
           },
           "district_id": {
             "type": "string",
@@ -12261,25 +12279,27 @@
           "branch_id": {
             "type": "string",
             "example": "12",
-            "description": "Branch ID (as string/bigint)"
+            "description": "Branch ID (as string/bigint) — superadmin/admin; filial xodimida o‘z filiali majburan, boshqalarda e’tiborsiz"
           },
           "current_batch_id": {
             "type": "string",
             "example": "1001",
-            "description": "Current batch ID (as string/bigint)"
+            "description": "Current batch ID (as string/bigint) — faqat superadmin/admin; boshqa rollarda e’tiborsiz"
           },
           "courier_id": {
             "type": "string",
             "example": "77",
-            "description": "Courier ID (as string/bigint)"
+            "description": "Courier ID (as string/bigint) — faqat superadmin/admin; boshqa rollarda e’tiborsiz"
           },
           "assigned_at": {
             "type": "object",
-            "example": "2026-04-25T14:30:00+05:00"
+            "example": "2026-04-25T14:30:00+05:00",
+            "description": "Faqat superadmin/admin; boshqa rollarda e’tiborsiz"
           },
           "return_reason": {
             "type": "object",
-            "example": "Mijoz uyda yo‘q edi"
+            "example": "Mijoz uyda yo‘q edi",
+            "description": "Faqat superadmin/admin; boshqa rollarda e’tiborsiz"
           },
           "address": {
             "type": "object",
@@ -12292,7 +12312,8 @@
               "external",
               "branch"
             ],
-            "default": "internal"
+            "default": "internal",
+            "description": "Superadmin/admin; filial xodimida majburan `branch`, boshqalarda e’tiborsiz"
           },
           "items": {
             "type": "array",
@@ -12570,7 +12591,7 @@
           "customer_id": {
             "type": "string",
             "example": "1",
-            "description": "Customer ID (as string/bigint)"
+            "description": "Customer ID (as string/bigint) — faqat superadmin/admin uchun. Boshqa rollarda mijoz `customer` obyektidan aniqlanadi (fix3 RBAC-01)."
           },
           "customer": {
             "$ref": "#/components/schemas/CreateOrderCustomerDto"
@@ -12604,7 +12625,8 @@
               "cancelled (sent)",
               "closed"
             ],
-            "default": "new"
+            "default": "new",
+            "description": "Faqat superadmin/admin; boshqa rollarda e’tiborsiz (buyurtma doim NEW)"
           },
           "comment": {
             "type": "object",
@@ -12616,7 +12638,8 @@
           },
           "post_id": {
             "type": "string",
-            "example": "1"
+            "example": "1",
+            "description": "Faqat superadmin/admin; boshqa rollarda e’tiborsiz"
           },
           "district_id": {
             "type": "string",
@@ -12629,25 +12652,27 @@
           "branch_id": {
             "type": "string",
             "example": "12",
-            "description": "Branch ID (as string/bigint)"
+            "description": "Branch ID (as string/bigint) — superadmin/admin; filial xodimida o‘z filiali majburan, boshqalarda e’tiborsiz"
           },
           "current_batch_id": {
             "type": "string",
             "example": "1001",
-            "description": "Current batch ID (as string/bigint)"
+            "description": "Current batch ID (as string/bigint) — faqat superadmin/admin; boshqa rollarda e’tiborsiz"
           },
           "courier_id": {
             "type": "string",
             "example": "77",
-            "description": "Courier ID (as string/bigint)"
+            "description": "Courier ID (as string/bigint) — faqat superadmin/admin; boshqa rollarda e’tiborsiz"
           },
           "assigned_at": {
             "type": "object",
-            "example": "2026-04-25T14:30:00+05:00"
+            "example": "2026-04-25T14:30:00+05:00",
+            "description": "Faqat superadmin/admin; boshqa rollarda e’tiborsiz"
           },
           "return_reason": {
             "type": "object",
-            "example": "Mijoz uyda yo‘q edi"
+            "example": "Mijoz uyda yo‘q edi",
+            "description": "Faqat superadmin/admin; boshqa rollarda e’tiborsiz"
           },
           "address": {
             "type": "object",
@@ -12660,7 +12685,8 @@
               "external",
               "branch"
             ],
-            "default": "internal"
+            "default": "internal",
+            "description": "Superadmin/admin; filial xodimida majburan `branch`, boshqalarda e’tiborsiz"
           },
           "items": {
             "type": "array",
@@ -12993,7 +13019,9 @@
               "partly_paid",
               "cancelled (sent)",
               "closed"
-            ]
+            ],
+            "deprecated": true,
+            "description": "PATCH orqali o'zgartirib bo'lmaydi (400) — holat sotish/bekor qilish/qaytarish amallari orqali o'zgaradi"
           },
           "comment": {
             "type": "object",
@@ -13005,7 +13033,8 @@
           },
           "post_id": {
             "type": "string",
-            "example": "1"
+            "example": "1",
+            "description": "Faqat superadmin o'zgartira oladi (aks holda 403)"
           },
           "district_id": {
             "type": "string",
@@ -13028,24 +13057,30 @@
           "market_id": {
             "type": "string",
             "example": "1",
-            "description": "Market ID (as string/bigint)"
+            "deprecated": true,
+            "description": "Market ID — PATCH orqali o'zgartirib bo'lmaydi (400)"
           },
           "customer_id": {
             "type": "string",
             "example": "1",
-            "description": "Customer ID (as string/bigint)"
+            "description": "Customer ID (as string/bigint) — faqat superadmin o'zgartira oladi (aks holda 403)"
           },
           "to_be_paid": {
             "type": "number",
-            "example": 0
+            "example": 0,
+            "deprecated": true,
+            "description": "PATCH orqali o'zgartirib bo'lmaydi (400)"
           },
           "paid_amount": {
             "type": "number",
-            "example": 0
+            "example": 0,
+            "deprecated": true,
+            "description": "PATCH orqali o'zgartirib bo'lmaydi (400)"
           },
           "qr_code_token": {
             "type": "object",
-            "example": "qr_token"
+            "example": "qr_token",
+            "description": "Faqat superadmin o'zgartira oladi (aks holda 403)"
           },
           "source": {
             "type": "string",
@@ -13054,7 +13089,8 @@
               "external",
               "branch"
             ],
-            "default": "internal"
+            "default": "internal",
+            "description": "Faqat superadmin o'zgartira oladi (aks holda 403)"
           }
         }
       },
@@ -13966,7 +14002,8 @@
         "properties": {
           "text": {
             "type": "string",
-            "example": "group_token-2-create"
+            "example": "group_token-0123456789abcdef0123456789abcdef",
+            "description": "The market's secret market_tg_token (`group_token-<32 hex>`), readable only by SUPERADMIN/ADMIN via GET /users/:id. Optional suffix `-create` (default) or `-cancel` selects the group type, e.g. `group_token-<32 hex>-cancel`. The old `group_token-<marketId>` form is rejected. A bind does NOT rotate the token (it stays the order-bot credential), and an existing (market, group type) binding is never overwritten: re-bind only via PATCH/DELETE /notifications/:id."
           },
           "group_id": {
             "type": "string",

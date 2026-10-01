@@ -94,9 +94,14 @@ function formatCurrency(amount: number | string): string {
   return num.toLocaleString('en-US') + " so'm";
 }
 
-function formatDateStr(date: number | string): string {
+/**
+ * Yorliqdagi sana — TOSHKENT kuni (fix3 CODE-22). Prod konteyner UTC'da
+ * ishlaydi: `timeZone` siz 00:00-05:00 oralig'ida yaratilgan buyurtma
+ * yorlig'ida oldingi kun chiqardi (Toshkent doimiy UTC+5).
+ */
+export function formatDateStr(date: number | string): string {
   const createdDate = new Date(Number(date) || Date.now());
-  return createdDate.toLocaleDateString('uz-UZ');
+  return createdDate.toLocaleDateString('uz-UZ', { timeZone: 'Asia/Tashkent' });
 }
 
 function formatRegionName(regionName?: string): string {

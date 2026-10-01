@@ -51,11 +51,18 @@ import {
 const BATCH_RPC_TIMEOUT_MS = 120_000;
 
 // Kuryerni filialdan filialga o'tkazish (R3) byudjeti. branch-service: uch
-// tekshiruv manbasi parallel (5 s), tranzaksiya, 1,5 s kutish, qayta
-// tekshiruv (5 s), identity hududi (5 s) va xatoda qaytarish + hudud tiklash
-// (3 s) — eng yomon holat ~25 s, odatda ~2 s. Gateway undan uzun bo'lishi
-// SHART: aks holda mijoz 504 olib, o'tkazish orqada baribir yakunlanadi.
-const COURIER_TRANSFER_RPC_TIMEOUT_MS = 30_000;
+// tekshiruv manbasi parallel (5 s; sof-nol PENDING holatida C8 yopish 3 s +
+// qayta yuklash 5 s qo'shiladi), tranzaksiya, 1,5 s kutish, qayta tekshiruv
+// (5 s), identity hududi (5 s) va xatoda qaytarish + hudud tiklash (3 s) —
+// eng yomon holat ~32,5 s, odatda ~2 s. Gateway undan uzun bo'lishi SHART:
+// aks holda mijoz 504 olib, o'tkazish orqada baribir yakunlanadi. FE bu
+// so'rovni 120 s kutadi (LONG_REQUEST_TIMEOUT_MS).
+const COURIER_TRANSFER_RPC_TIMEOUT_MS = 40_000;
+
+// Filialdan xodimni chiqarish: kuryer qatori uchun (R3) finance, order va
+// logistics parallel tekshiriladi (5 s); sof-nol PENDING holatida (C8) yopish
+// (3 s) va qayta tekshiruv (5 s) — eng yomon holat ~13 s.
+const BRANCH_USER_REMOVE_RPC_TIMEOUT_MS = 20_000;
 
 @ApiTags('Branch')
 @ApiBearerAuth()
@@ -99,7 +106,7 @@ export class BranchGatewayController {
       );
       const hqBranchId = String(hqResponse?.data?.id ?? '').trim();
       if (!hqBranchId) {
-        throw new BadRequestException('HQ branch topilmadi (code=HQ-TSHKNT)');
+        throw new BadRequestException('HQ filial topilmadi (code=HQ-TSHKNT)');
       }
       return hqBranchId;
     }
@@ -117,7 +124,7 @@ export class BranchGatewayController {
     ).trim();
     if (!assignedBranchId) {
       throw new BadRequestException(
-        'Foydalanuvchi hech qaysi branchga biriktirilmagan',
+        'Foydalanuvchi hech qaysi filialga biriktirilmagan',
       );
     }
 
@@ -234,6 +241,28 @@ export class BranchGatewayController {
       .pipe(timeout(8000));
   }
 
+  // ⚠️ `branches/:id` dan OLDIN turishi SHART — aks holda `:id` marshruti
+  // so'rovni `id='new-orders'` bilan tutib oladi (branch-gateway.route-order.spec.ts).
+  @Get('branches/new-orders')
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.BRANCH,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
+  @ApiOperation({ summary: 'Branches that currently have NEW orders' })
+  findBranchesWithNewOrders(
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient
+      .send(
+        { cmd: 'branch.new_orders.branches' },
+        { requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
+  }
+
   @Get('branches/:id')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Find branch by id' })
@@ -280,26 +309,6 @@ export class BranchGatewayController {
       .send(
         { cmd: 'branch.analytics.markets' },
         { id, requester: this.toRequester(req) },
-      )
-      .pipe(timeout(8000));
-  }
-
-  @Get('branches/new-orders')
-  @Roles(
-    RoleEnum.SUPERADMIN,
-    RoleEnum.ADMIN,
-    RoleEnum.BRANCH,
-    RoleEnum.MANAGER,
-    RoleEnum.REGISTRATOR,
-  )
-  @ApiOperation({ summary: 'Branches that currently have NEW orders' })
-  findBranchesWithNewOrders(
-    @Req() req: { user?: { sub?: string; roles?: string[] } },
-  ) {
-    return this.branchClient
-      .send(
-        { cmd: 'branch.new_orders.branches' },
-        { requester: this.toRequester(req) },
       )
       .pipe(timeout(8000));
   }
@@ -589,7 +598,7 @@ export class BranchGatewayController {
           items: { type: 'string' },
           example: ['101', '102'],
           description:
-            'Optional: only selected orders from post are dispatched',
+            "Majburiy: pochtadan jo'natiladigan buyurtmalar. Birortasi shu pochtada bo'lmasa — 409 (id'lar xabarda), hech narsa jo'natilmaydi",
         },
       },
     },
@@ -604,7 +613,9 @@ export class BranchGatewayController {
       ? orderIds.map((id) => String(id ?? '').trim()).filter(Boolean)
       : [];
     if (!normalizedOrderIds.length) {
-      throw new BadRequestException('order_ids is required');
+      throw new BadRequestException(
+        'order_ids majburiy — kamida bitta buyurtma tanlang',
+      );
     }
 
     const sourceBranchId = await this.resolveSourceBranchIdForDispatch(req);
@@ -683,14 +694,12 @@ export class BranchGatewayController {
     @Param('userId') userId: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
-    // 15 s: kuryer qatori uchun (R3) branch-service finance, order va
-    // logistics'ni tekshiradi (parallel, har biri 5 s).
     return this.branchClient
       .send(
         { cmd: 'branch.user.remove' },
         { branch_id: id, user_id: userId, requester: this.toRequester(req) },
       )
-      .pipe(timeout(15000));
+      .pipe(timeout(BRANCH_USER_REMOVE_RPC_TIMEOUT_MS));
   }
 
   @Get('couriers/:id/transfer-check')

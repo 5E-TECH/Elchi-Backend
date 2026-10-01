@@ -42,6 +42,10 @@ import { SyncQueueScheduler } from './sync-queue.scheduler';
     RmqModule.register({ name: 'NOTIFICATION' }),
     // Kargo hisob-kitobi endi MAIN kassaga kirim yozadi (audit M5).
     RmqModule.register({ name: 'FINANCE' }),
+    // fix3b (LC-13): hamkor posilkasida `region_id` berilmasa viloyat
+    // tumandan olinadi (`logistics.district.find_by_id`). Navbat nomi
+    // (`RABBITMQ_LOGISTICS_QUEUE`) umumiy `.env.production` da bor.
+    RmqModule.register({ name: 'LOGISTICS' }),
     DatabaseModule,
     ScheduleModule.forRoot(),
     ActivityLogModule.forService('integration-service'),

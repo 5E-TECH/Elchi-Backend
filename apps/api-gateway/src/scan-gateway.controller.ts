@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  ForbiddenException,
   Get,
   GatewayTimeoutException,
   HttpCode,
@@ -23,6 +24,10 @@ import {
 import { IsNotEmpty, IsString } from 'class-validator';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import {
+  assertQrOrderVisible,
+  canLookupOrderByQr,
+} from './auth/order-qr-visibility';
 
 type ScanResponseType =
   | 'order'
@@ -135,12 +140,20 @@ export class ScanGatewayController {
     }
 
     // ORD- prefixed and legacy prefixless tokens both resolve as order.
-    const response = await this.sendWithTimeout(
+    // fix3 C11 (CODE-04): `GET /orders/qr-code/:token` bilan AYNI qoida —
+    // ilgari bu yo'l rol tekshiruvisiz edi (mijoz/investor/operator ham
+    // buyurtma va mijoz ma'lumotini olardi), market esa begona posilkani.
+    if (!canLookupOrderByQr(req?.user?.roles)) {
+      throw new ForbiddenException("Bu buyurtmani ko'rishga ruxsat yo'q");
+    }
+    const response: unknown = await this.sendWithTimeout(
       'order',
       { cmd: 'order.find_by_qr' },
       { token: normalizedToken },
     );
-    return this.shapeResponse('order', response);
+    const shaped = this.shapeResponse('order', response);
+    assertQrOrderVisible(req?.user, shaped.data);
+    return shaped;
   }
 
   @Post('market-cancelled')

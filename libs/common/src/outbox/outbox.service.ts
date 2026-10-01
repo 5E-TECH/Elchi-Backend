@@ -1,8 +1,22 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, LessThanOrEqual, Repository } from 'typeorm';
+import {
+  EntityManager,
+  LessThanOrEqual,
+  MoreThanOrEqual,
+  Repository,
+} from 'typeorm';
 import { randomUUID } from 'crypto';
 import { OutboxEvent } from './outbox-event.entity';
+import { DEFAULT_OUTBOX_MAX_ATTEMPTS } from './tokens';
+
+/** `requeueFailed` filtri — berilmagan maydon cheklamaydi. */
+export interface RequeueFailedFilter {
+  /** Faqat shu id'lar. */
+  ids?: string[];
+  /** Faqat shu patternlar (aniq moslik). */
+  patterns?: string[];
+}
 
 export interface EnqueueOptions {
   /** When set, write inside the caller's transaction. */
@@ -62,6 +76,48 @@ export class OutboxService {
     return this.repo.count({ where: { status: 'failed' } });
   }
 
+  /**
+   * Hamon `pending`, lekin kamida `minAttempts` marta yiqilgan hodisalar soni
+   * (audit M8). Doimiy (pul) hodisalar endi `failed` bo'lmaydi — ular uzoq
+   * vaqt yetkazilmasa monitor shu son orqali ko'radi.
+   */
+  async countStuckPending(minAttempts: number): Promise<number> {
+    return this.repo.count({
+      where: { status: 'pending', attempts: MoreThanOrEqual(minAttempts) },
+    });
+  }
+
+  /**
+   * Operator uchun qayta o'ynash (audit M8): `failed` hodisalarni yana
+   * `pending` qiladi — `attempts` 0 dan, darhol navbatga. `last_error`
+   * tashxis uchun saqlanadi. Filtr berilmasa BARCHA `failed` hodisalar.
+   *
+   * ⚠️ Faqat tekshirilgandan keyin chaqiring: hodisa qo'lda (SQL bilan)
+   * allaqachon qo'llangan bo'lsa, qabul qiluvchining dedup kaliti bo'lmagan
+   * yo'lda ikki marta yozilishi mumkin. Qaytaradi — o'zgargan qatorlar soni.
+   */
+  async requeueFailed(filter: RequeueFailedFilter = {}): Promise<number> {
+    const ids = (filter.ids ?? [])
+      .map((id) => String(id ?? '').trim())
+      .filter(Boolean);
+    const patterns = (filter.patterns ?? [])
+      .map((pattern) => String(pattern ?? '').trim())
+      .filter(Boolean);
+    const query = this.repo
+      .createQueryBuilder()
+      .update(OutboxEvent)
+      .set({ status: 'pending', attempts: 0, scheduled_at: () => 'NOW()' })
+      .where('status = :status', { status: 'failed' });
+    if (ids.length) {
+      query.andWhere('id IN (:...ids)', { ids });
+    }
+    if (patterns.length) {
+      query.andWhere('pattern IN (:...patterns)', { patterns });
+    }
+    const result = await query.execute();
+    return result.affected ?? 0;
+  }
+
   async markPublished(id: string): Promise<void> {
     await this.repo.update(
       { id },
@@ -72,12 +128,14 @@ export class OutboxService {
   /**
    * Increment attempts, store last error, schedule next attempt with backoff.
    * After `maxAttempts`, mark as failed (poison) — operator must inspect.
+   * `maxAttempts = Infinity` — hech qachon poison emas (doimiy pul hodisasi,
+   * audit M8): faqat urinish soni va keyingi muddat yangilanadi.
    */
   async markFailed(
     id: string,
     error: string,
     backoffMs: number,
-    maxAttempts = 10,
+    maxAttempts = DEFAULT_OUTBOX_MAX_ATTEMPTS,
   ): Promise<void> {
     const event = await this.repo.findOne({ where: { id } });
     if (!event) return;

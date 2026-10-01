@@ -27,15 +27,50 @@ import type { Request, Response } from 'express';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
 
-// Decorator metadata evaluates at class load — read env directly so the values
-// pick up the same .env defaults that gatewayValidationSchema declares.
-const AUTH_THROTTLE_LIMIT = Number(process.env.AUTH_THROTTLE_LIMIT ?? '10');
-const AUTH_THROTTLE_TTL_MS = Number(
-  process.env.AUTH_THROTTLE_TTL_MS ?? '60000',
-);
-const AUTH_THROTTLE = {
-  default: { limit: AUTH_THROTTLE_LIMIT, ttl: AUTH_THROTTLE_TTL_MS },
+// Decorator metadata evaluates at class load — read env directly (the
+// ConfigModule/Joi defaults are applied later, so they do not reach here).
+/** Musbat butun son; bo'sh yoki noto'g'ri qiymatda — sukut. */
+const positiveIntEnv = (raw: string | undefined, fallback: number): number => {
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) && parsed >= 1 ? Math.floor(parsed) : fallback;
 };
+
+/**
+ * Auth endpointlari rate limiti (fix3 C10, RBAC-11), har ikkisi per IP
+ * (`ClientIpThrottlerGuard` — CF-Connecting-IP) va har route o'z hisoblagichi:
+ *
+ *  - LOGIN — sukut 30/daqiqa (`AUTH_THROTTLE_LIMIT`/`AUTH_THROTTLE_TTL_MS`).
+ *    Ilgari 10 edi: ofis Wi-Fi yoki operator NAT ortidagi 10+ xodim smena
+ *    boshida bir vaqtda kirsa 429 olardi.
+ *  - REFRESH — sukut 60/daqiqa, login'dan ALOHIDA o'zgaruvchi
+ *    (`AUTH_REFRESH_THROTTLE_LIMIT`/`AUTH_REFRESH_THROTTLE_TTL_MS`). Refresh
+ *    parol tekshirmaydi (brute-force nishoni emas), lekin smena boshida har
+ *    tab tokenini yangilaydi — 10/min da 429 foydalanuvchini chiqarib
+ *    yuborardi. Prod `.env` dagi eski `AUTH_THROTTLE_LIMIT=10` refresh'ga
+ *    endi ta'sir qilmaydi.
+ */
+export function authThrottleConfig(
+  env: Record<string, string | undefined> = process.env,
+) {
+  return {
+    login: {
+      default: {
+        limit: positiveIntEnv(env.AUTH_THROTTLE_LIMIT, 30),
+        ttl: positiveIntEnv(env.AUTH_THROTTLE_TTL_MS, 60_000),
+      },
+    },
+    refresh: {
+      default: {
+        limit: positiveIntEnv(env.AUTH_REFRESH_THROTTLE_LIMIT, 60),
+        ttl: positiveIntEnv(env.AUTH_REFRESH_THROTTLE_TTL_MS, 60_000),
+      },
+    },
+  };
+}
+
+const AUTH_THROTTLES = authThrottleConfig();
+export const AUTH_THROTTLE = AUTH_THROTTLES.login;
+export const AUTH_REFRESH_THROTTLE = AUTH_THROTTLES.refresh;
 import {
   LoginRequestDto,
   MinimalAuthResponseDto,
@@ -215,7 +250,7 @@ export class AuthGatewayController {
     return this.sanitizeAuthPayload(response);
   }
 
-  @Throttle(AUTH_THROTTLE)
+  @Throttle(AUTH_REFRESH_THROTTLE)
   @Public()
   @Post('refresh')
   @ApiOperation({ summary: 'Refresh access token' })

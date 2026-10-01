@@ -123,12 +123,14 @@ afterEach(() => {
 describe('OrderBotUpdateService — per-chat navbat (Gy8Lt6KT)', () => {
   it('#8: A chatning 15 s lik ishi davomida B chat darhol javob oladi', async () => {
     const svc = make();
+    // CODE-18: /status faqat market tokeni bilan ulangan chatga javob beradi.
+    svc.links.set('111', { id: '5', name: 'Market', token: 'group_token-x' });
     // A: `/status 101` — buyurtma so'rovi 15 s "osilib" turadi.
     rmqSendMock.mockImplementation(
       () =>
         new Promise((resolve) =>
           setTimeout(
-            () => resolve({ data: { id: '101', status: 'new' } }),
+            () => resolve({ id: '101', status: 'new', market_id: '5' }),
             15_000,
           ),
         ),

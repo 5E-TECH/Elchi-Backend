@@ -335,22 +335,29 @@ describe("deleteUser — kuryer pul/buyurtma bilan o'chirilmaydi", () => {
     );
   });
 
+  // fix3b (CODE-07): menejer/registrator o'chirilganda faqat uning faol
+  // branch_users qatori qidiriladi (bu yerda yo'q — remove chaqirilmaydi);
+  // kuryer tekshiruvi hech kimga chaqirilmaydi.
   it.each([
-    [Roles.MARKET],
-    [Roles.MANAGER],
-    [Roles.REGISTRATOR],
-    [Roles.ADMIN],
-  ])("%s o'chirilganda filial tekshiruvi chaqirilmaydi", async (role) => {
-    const h = makeService({
-      rows: [courierRow({ id: '77', role, phone_number: '+998900000777' })],
-    });
+    [Roles.MARKET, []],
+    [Roles.MANAGER, ['branch.user.find_by_user']],
+    [Roles.REGISTRATOR, ['branch.user.find_by_user']],
+    [Roles.ADMIN, []],
+  ])(
+    "%s o'chirilganda filial tekshiruvi chaqirilmaydi",
+    async (role, expectedCmds) => {
+      const h = makeService({
+        rows: [courierRow({ id: '77', role, phone_number: '+998900000777' })],
+      });
 
-    const res = await h.service.deleteUser('77', superadmin);
+      const res = await h.service.deleteUser('77', superadmin);
 
-    expect(res.statusCode).toBe(200);
-    expect(h.branchClient.send).not.toHaveBeenCalled();
-    expect(h.repo.save).toHaveBeenCalledTimes(1);
-  });
+      expect(res.statusCode).toBe(200);
+      expect(sentCmds(h.branchClient)).not.toContain(CHECK_CMD);
+      expect(sentCmds(h.branchClient)).toEqual(expectedCmds);
+      expect(h.repo.save).toHaveBeenCalledTimes(1);
+    },
+  );
 });
 
 describe("kuryerni bloklash (status → inactive) tekshiruvsiz — qaror: bloklash qo'riqlanmaydi", () => {

@@ -92,18 +92,63 @@ const HQ_MANAGER_FORBIDDEN_MESSAGE =
   "HQ (bosh ofis) ga menejer biriktirib bo'lmaydi. HQ ishlarini superadmin, admin va registratorlar bajaradi.";
 
 /**
- * Pochta bilan filialga jo'natiladigan buyurtma holatlari — faqat HQ'da
- * turganlari (qabul qilingan yoki yangi). CANCELLED/CLOSED bu ro'yxatda YO'Q:
- * dispatchPostToBranch ularni avvalgidek jimgina chetlab o'tadi (ko'chirmaydi,
- * so'rovni rad etmaydi).
+ * C12 — boshqa servis javob bermadi (timeout, ulanish uzildi, statusCode'siz
+ * javob). Mijozga o'zbekcha chiqadi (ilgari inglizcha "X service unavailable").
+ */
+const ORDER_SERVICE_UNAVAILABLE_MESSAGE =
+  "Buyurtmalar xizmati javob bermadi — birozdan so'ng qayta urinib ko'ring";
+const LOGISTICS_SERVICE_UNAVAILABLE_MESSAGE =
+  "Logistika xizmati javob bermadi — birozdan so'ng qayta urinib ko'ring";
+const FILE_SERVICE_UNAVAILABLE_MESSAGE =
+  "Fayl xizmati javob bermadi — birozdan so'ng qayta urinib ko'ring";
+const FINANCE_SERVICE_UNAVAILABLE_MESSAGE =
+  "Moliya xizmati javob bermadi — birozdan so'ng qayta urinib ko'ring";
+const IDENTITY_SERVICE_UNAVAILABLE_MESSAGE =
+  "Foydalanuvchilar xizmati javob bermadi — birozdan so'ng qayta urinib ko'ring";
+const ORDER_IDS_REQUIRED_MESSAGE =
+  'order_ids majburiy — kamida bitta buyurtma tanlang';
+/** FE (backendBranchErrors) "aylanma" so'zi bo'yicha ota filial maydoniga bog'laydi. */
+const PARENT_CYCLE_MESSAGE =
+  "Ota filiallar zanjiri aylanma bo'lib qoladi — bunday bog'lanishga ruxsat yo'q";
+
+/**
+ * Pochta bilan filialga jo'natiladigan buyurtma holatlari — faqat HQ QABUL
+ * QILGANI (RECEIVED). CANCELLED/CLOSED bu ro'yxatda YO'Q: dispatchPostToBranch
+ * ularni avvalgidek jimgina chetlab o'tadi (ko'chirmaydi, so'rovni rad etmaydi).
+ *
+ * CODE-11: NEW olib tashlandi. NEW→ON_THE_ROAD noqonuniy o'tish — NEW
+ * buyurtmali jo'natma manzil hisoblagichlari oshgandan KEYIN yarmida yiqilardi,
+ * HQ'ning qo'lda qabul qilishini (NEW→RECEIVED) ham chetlab o'tardi. Endi bunday
+ * so'rov boshidanoq 400, id'lar xabarda, hech narsa ko'chirilmaydi.
  */
 const DISPATCHABLE_ORDER_STATUSES: ReadonlySet<string> = new Set<string>([
   Order_status.RECEIVED,
-  Order_status.NEW,
 ]);
 
 /** Xabarda ko'rsatiladigan buyurtma id'lari soni (qolgani "+N ta"). */
 const DISPATCH_MESSAGE_ORDER_ID_LIMIT = 20;
+
+/**
+ * LC-02 — jo'natishdan keyin manba pochtani o'chirishdan OLDIN unga hali
+ * buyurtma ishora qiladimi, qayta so'raladi (`order.find_all`, post_id).
+ */
+const DISPATCH_POST_RECHECK_TIMEOUT_MS = 5000;
+
+/**
+ * CODE-07 — jo'natish manzil filialining FAOL menejerini identity'dan
+ * tekshirib bo'lmadi (fail-closed: pochta jo'natilmaydi).
+ */
+const DISPATCH_MANAGER_CHECK_UNAVAILABLE_MESSAGE =
+  "Manzil filial menejerini tekshirib bo'lmadi (foydalanuvchilar xizmati javob bermadi) — pochta jo'natilmadi. Birozdan so'ng qayta urinib ko'ring.";
+
+/**
+ * C9 (CODE-23) — filial paneli raqamlari uchun order-service chaqiruvi.
+ * analytics-service `branch.dashboard` ni 5 s kutadi (rmqSend), shuning uchun
+ * bu muddat undan QISQA bo'lishi shart: aks holda sekin order-service'da
+ * analytics avval uzilib, `stats_unavailable` belgisi FE'ga hech qachon
+ * yetib bormaydi (va analytics qayta urinib yukni oshiradi).
+ */
+const BRANCH_DASHBOARD_STATS_TIMEOUT_MS = 4000;
 
 /**
  * R3 — kuryer filialdan filialga FAQAT qo'lida pul ham, buyurtma ham
@@ -147,18 +192,27 @@ const COURIER_REGION_SYNC_FAILED_MESSAGE =
  * filialning FAOL menejeri (identity, 5 s) oldindan tekshiruv bilan PARALLEL;
  * hudud yangilash 5 s, qaytarish 3 s (identity `set_region` mahalliy — tashqi
  * chaqiruvsiz); qayta tekshiruvdan oldin 1,5 s kutish. Gateway: tekshiruv
- * 15 s, o'tkazish 30 s (COURIER_TRANSFER_RPC_TIMEOUT_MS).
+ * 15 s, o'tkazish 40 s (COURIER_TRANSFER_RPC_TIMEOUT_MS).
  *
  * PATCH /couriers/:id/branch eng yomon holati: kuryer (identity) 5 s +
- * max(oldindan tekshiruv 5 s, faol menejer 5 s) + 1,5 s kutish + qayta
- * tekshiruv 5 s + hudud 5 s + tiklash 3 s ≈ 24,5 s (+ baza) < 30 s. Menejer
- * tekshiruvi ketma-ket bo'lganda ≈ 29,5 s bo'lardi — gateway chegarasiga
- * juda yaqin, shuning uchun u oldindan tekshiruv bilan birga yuboriladi.
+ * max(oldindan tekshiruv, faol menejer 5 s) + 1,5 s kutish + qayta
+ * tekshiruv 5 s + hudud 5 s + tiklash 3 s. Oldindan tekshiruv odatda 5 s;
+ * sof-nol PENDING holatida (C8) esa 5 s + yopish 3 s + qayta yuklash 5 s =
+ * 13 s — jami ≈ 32,5 s (+ baza) < gateway 40 s. Menejer tekshiruvi oldindan
+ * tekshiruv bilan PARALLEL yuboriladi (ketma-ket bo'lsa budjet yana o'sardi).
+ * DELETE /branches/:id/users/:userId (kuryer qatori): 5 + 3 + 5 = 13 s
+ * (+ baza) < gateway 20 s.
  */
 const COURIER_HOLDINGS_RPC_TIMEOUT_MS = 5000;
 const COURIER_TARGET_MANAGER_RPC_TIMEOUT_MS = 5000;
 const COURIER_REGION_SYNC_TIMEOUT_MS = 5000;
 const COURIER_REGION_RESTORE_TIMEOUT_MS = 3000;
+/**
+ * C8 (CODE-06) — `order.settlement.close_zero_courier_rows` (order-service):
+ * kuryerning sof-nol PENDING qatorlarini (yig'indisi ham, qoldig'i ham aynan
+ * 0 tiyin) nol summali FIFO bilan yopadi. Best-effort, qisqa muddat.
+ */
+const COURIER_ZERO_ROWS_CLOSE_TIMEOUT_MS = 3000;
 /**
  * O'tkazish yozilgandan keyin qayta tekshiruvgacha kutish: a'zolikni swap'dan
  * sal oldin o'qigan "kuryerga biriktirish" / skan amali o'z yozuvini tugatib
@@ -408,18 +462,39 @@ export class BranchServiceService implements OnModuleInit {
     }
   }
 
-  private async assertBranchHasManager(branchId: string): Promise<void> {
-    const managerAssignment = await this.branchUserRepo.findOne({
-      where: {
-        branch_id: String(branchId),
-        role: BranchUserRole.MANAGER,
-        isDeleted: false,
-      },
-      select: ['id'],
-    });
+  /**
+   * Pochta jo'natiladigan filialda pochtani QABUL QILA OLADIGAN menejer bormi
+   * (CODE-07). branch_users qatorining o'zi yetarli emas: identity `deleteUser`
+   * qatorni o'chirmaydi, bloklash esa faqat statusni o'zgartiradi — o'chirilgan
+   * yoki bloklangan menejerning qatori qoladi, u esa tizimga kira olmaydi va
+   * pochta filialda qotib qoladi. Qator yo'q — 400; identity javob bermasa —
+   * 503 (fail-closed); faol menejer yo'q — 400.
+   */
+  private async assertBranchHasManager(branch: Branch): Promise<void> {
+    const managerUserIds = await this.findBranchManagerUserIds(
+      String(branch.id),
+    );
+    if (!managerUserIds.length) {
+      this.badRequest(
+        "Avval bu filialga menejer biriktiring — menejersiz filialga pochta jo'natib bo'lmaydi",
+      );
+    }
 
-    if (!managerAssignment) {
-      this.badRequest('Siz birinchi bu branchga manager biriktiring');
+    let activeManagers: number;
+    try {
+      activeManagers = await this.countActiveManagers(managerUserIds);
+    } catch (error) {
+      this.logger.warn(
+        `dispatch destination manager check failed (branch=${String(branch.id)}): ${this.describeRpcFailure(error)}`,
+      );
+      throw new RpcException(
+        errorRes(DISPATCH_MANAGER_CHECK_UNAVAILABLE_MESSAGE, 503),
+      );
+    }
+    if (!activeManagers) {
+      this.badRequest(
+        `'${branch.name}' filialida faol menejer yo'q (menejer o'chirilgan yoki bloklangan) — pochtani qabul qiladigan odam bo'lmaydi. Avval filialga faol menejer biriktiring`,
+      );
     }
   }
 
@@ -440,7 +515,7 @@ export class BranchServiceService implements OnModuleInit {
 
     const normalized = String(status).toLowerCase();
     if (normalized !== Status.ACTIVE && normalized !== Status.INACTIVE) {
-      this.badRequest("status must be either 'active' or 'inactive'");
+      this.badRequest("status faqat 'active' yoki 'inactive' bo'lishi mumkin");
     }
     return normalized as Status;
   }
@@ -461,7 +536,7 @@ export class BranchServiceService implements OnModuleInit {
       !Object.values(BranchType).includes(normalized as BranchType)
     ) {
       this.badRequest(
-        `type must be one of: ${Object.values(BranchType).join(', ')}`,
+        `Filial turi (type) quyidagilardan biri bo'lishi kerak: ${Object.values(BranchType).join(', ')}`,
       );
     }
     return normalized as BranchType;
@@ -472,10 +547,12 @@ export class BranchServiceService implements OnModuleInit {
       .trim()
       .toUpperCase();
     if (!normalized) {
-      this.badRequest('code is required');
+      this.badRequest('Filial kodi (code) majburiy');
     }
     if (!/^[A-Z0-9-]{2,32}$/.test(normalized)) {
-      this.badRequest('code must match /^[A-Z0-9-]{2,32}$/');
+      this.badRequest(
+        "Filial kodi (code) 2–32 belgidan iborat bo'lishi va faqat A–Z, 0–9 hamda '-' belgilaridan tuzilishi kerak",
+      );
     }
     return normalized;
   }
@@ -492,7 +569,7 @@ export class BranchServiceService implements OnModuleInit {
       .andWhere('b.is_deleted = false')
       .getOne();
     if (found && (!exceptId || found.id !== exceptId)) {
-      this.conflict('Branch with this name already exists');
+      this.conflict('Bu nomli filial allaqachon bor — boshqa nom tanlang');
     }
   }
 
@@ -504,12 +581,20 @@ export class BranchServiceService implements OnModuleInit {
       where: { code, isDeleted: false },
     });
     if (exists && exists.id !== exceptId) {
-      this.conflict('Branch with this code already exists');
+      this.conflict(
+        'Bu kodli (code) filial allaqachon mavjud — boshqa kod tanlang',
+      );
     }
   }
 
   private async getParentBranchOrThrow(parentId: string): Promise<Branch> {
-    return this.getBranchOrThrow(parentId);
+    const parent = await this.branchRepo.findOne({
+      where: { id: String(parentId), isDeleted: false },
+    });
+    if (!parent) {
+      this.notFound('Ota filial topilmadi');
+    }
+    return parent;
   }
 
   private async ensureNotCyclicParent(
@@ -517,7 +602,9 @@ export class BranchServiceService implements OnModuleInit {
     parentId: string,
   ): Promise<void> {
     if (branchId === parentId) {
-      this.badRequest('Branch cannot be parent of itself');
+      this.badRequest(
+        "Filial o'ziga o'zi ota filial bo'la olmaydi (aylanma bog'lanish)",
+      );
     }
 
     const visited = new Set<string>();
@@ -525,17 +612,17 @@ export class BranchServiceService implements OnModuleInit {
 
     while (currentId) {
       if (currentId === branchId) {
-        this.badRequest('Cyclic parent relation is not allowed');
+        this.badRequest(PARENT_CYCLE_MESSAGE);
       }
       if (visited.has(currentId)) {
-        this.badRequest('Cyclic parent relation is not allowed');
+        this.badRequest(PARENT_CYCLE_MESSAGE);
       }
       visited.add(currentId);
       const current = await this.branchRepo.findOne({
         where: { id: currentId, isDeleted: false },
       });
       if (!current) {
-        this.notFound('Parent branch not found');
+        this.notFound('Ota filial topilmadi');
       }
       currentId = current.parent_id ?? null;
     }
@@ -639,7 +726,7 @@ export class BranchServiceService implements OnModuleInit {
     });
 
     if (!branch) {
-      this.notFound('Branch not found');
+      this.notFound('Filial topilmadi');
     }
 
     return branch;
@@ -661,7 +748,7 @@ export class BranchServiceService implements OnModuleInit {
           .pipe(timeout(5000)),
       );
       if (!res?.data?.id) {
-        this.notFound('User not found');
+        this.notFound('Foydalanuvchi topilmadi');
       }
       return {
         id: String(res.data.id),
@@ -680,7 +767,7 @@ export class BranchServiceService implements OnModuleInit {
         const statusCode =
           typeof err === 'object' && err ? Number(err.statusCode ?? 500) : 500;
         if (statusCode === 404) {
-          this.notFound('User not found');
+          this.notFound('Foydalanuvchi topilmadi');
         }
         throw error;
       }
@@ -690,9 +777,11 @@ export class BranchServiceService implements OnModuleInit {
         'statusCode' in error &&
         Number((error as { statusCode?: number }).statusCode) === 404
       ) {
-        this.notFound('User not found');
+        this.notFound('Foydalanuvchi topilmadi');
       }
-      throw new RpcException(errorRes('Identity service unavailable', 502));
+      throw new RpcException(
+        errorRes(IDENTITY_SERVICE_UNAVAILABLE_MESSAGE, 502),
+      );
     }
   }
 
@@ -813,12 +902,13 @@ export class BranchServiceService implements OnModuleInit {
    * getUsersByIds'ning BATCH varianti: har foydalanuvchiga alohida
    * `identity.user.find_by_id` o'rniga bitta `identity.user.find_all`
    * (`user_ids` filtri; identity sahifani 100 bilan cheklaydi — shuning uchun
-   * 100 talik bo'laklar). Xato/timeout bo'lsa bo'sh Map qaytadi: chaqiruvchi
-   * ism/telefonsiz davom etadi, ro'yxat yiqilmaydi.
+   * 100 talik bo'laklar). Xato/timeout/buzuq javob bo'lsa — null: chaqiruvchi
+   * ism/telefonsiz davom etadi, ro'yxat yiqilmaydi, lekin "identity javob
+   * bermadi"ni "foydalanuvchi yo'q"dan ajrata oladi.
    */
   private async getUsersByIdsBatch(
     userIds: string[],
-  ): Promise<Map<string, Record<string, unknown>>> {
+  ): Promise<Map<string, Record<string, unknown>> | null> {
     const ids = Array.from(
       new Set(userIds.map((id) => String(id ?? '').trim()).filter(Boolean)),
     );
@@ -841,7 +931,10 @@ export class BranchServiceService implements OnModuleInit {
             )
             .pipe(timeout(5000)),
         );
-        const items = Array.isArray(res?.data?.items) ? res.data.items : [];
+        const items = res?.data?.items;
+        if (!Array.isArray(items)) {
+          throw new Error('identity.user.find_all: items massiv emas');
+        }
         for (const user of items) {
           const id = String((user?.id ?? '') as string).trim();
           if (id) {
@@ -853,6 +946,7 @@ export class BranchServiceService implements OnModuleInit {
       this.logger.warn(
         `identity.user.find_all failed (user_ids=${ids.length}): ${(err as Error)?.message ?? err}`,
       );
+      return null;
     }
     return usersById;
   }
@@ -938,7 +1032,7 @@ export class BranchServiceService implements OnModuleInit {
     end: string | null;
     today_start: string;
     week_start: string;
-  }): Promise<BranchDashboardStats> {
+  }): Promise<{ stats: BranchDashboardStats; unavailable: boolean }> {
     const empty: BranchDashboardStats = {
       today_orders_count: 0,
       week_orders_count: 0,
@@ -958,23 +1052,42 @@ export class BranchServiceService implements OnModuleInit {
     };
 
     if (!payload.branch_ids.length && !payload.courier_ids.length) {
-      return empty;
+      return { stats: empty, unavailable: false };
     }
 
+    // C9 (CODE-23): xato, timeout yoki buzuq javobda ham nollar (shakl
+    // saqlanadi), lekin `unavailable: true` — panel "0 ta buyurtma" deb jim
+    // yolg'on ko'rsatmasin, FE "Statistika vaqtincha mavjud emas" desin.
     try {
       const response = await lastValueFrom(
         this.orderClient
           .send<
             { data?: BranchDashboardStats } | BranchDashboardStats
           >({ cmd: 'order.analytics.branch_dashboard' }, payload)
-          .pipe(timeout(10000)),
+          .pipe(timeout(BRANCH_DASHBOARD_STATS_TIMEOUT_MS)),
       );
       const data =
         (response as { data?: BranchDashboardStats })?.data ??
         (response as BranchDashboardStats);
-      return data ?? empty;
-    } catch {
-      return empty;
+      if (
+        !data ||
+        typeof data !== 'object' ||
+        !data.orders_card ||
+        typeof data.orders_card !== 'object' ||
+        !Array.isArray(data.markets) ||
+        !data.packages ||
+        typeof data.packages !== 'object'
+      ) {
+        throw new Error(
+          "order.analytics.branch_dashboard: javob shakli noto'g'ri",
+        );
+      }
+      return { stats: data, unavailable: false };
+    } catch (error) {
+      this.logger.warn(
+        `order.analytics.branch_dashboard failed (branches=${payload.branch_ids.length}): ${this.describeRpcFailure(error)}`,
+      );
+      return { stats: empty, unavailable: true };
     }
   }
 
@@ -1057,7 +1170,7 @@ export class BranchServiceService implements OnModuleInit {
       normalized !== BranchTransferDirection.RETURN
     ) {
       this.badRequest(
-        `direction must be one of: ${BranchTransferDirection.FORWARD}, ${BranchTransferDirection.RETURN}`,
+        `direction quyidagilardan biri bo'lishi kerak: ${BranchTransferDirection.FORWARD}, ${BranchTransferDirection.RETURN}`,
       );
     }
     return normalized as BranchTransferDirection;
@@ -1066,10 +1179,12 @@ export class BranchServiceService implements OnModuleInit {
   private normalizeTransferRequestKey(value?: string): string {
     const normalized = String(value ?? '').trim();
     if (!normalized) {
-      this.badRequest('request_key is required');
+      this.badRequest('request_key majburiy');
     }
     if (!/^[A-Za-z0-9_-]{8,80}$/.test(normalized)) {
-      this.badRequest('request_key must match /^[A-Za-z0-9_-]{8,80}$/');
+      this.badRequest(
+        "request_key 8–80 belgidan iborat bo'lishi va faqat A–Z, a–z, 0–9, '_' hamda '-' belgilaridan tuzilishi kerak",
+      );
     }
     return normalized;
   }
@@ -1243,9 +1358,10 @@ export class BranchServiceService implements OnModuleInit {
    * `data` yo'qligi, massiv bo'lmagan logistics javobi, son bo'lmagan
    * qiymat — 503 va HECH NARSA yozilmaydi: "bilmasak — ko'chirmaymiz".
    *
-   * `sendFinanceCommand` ATAYLAB ishlatilmaydi: `extractRpcError` faqat ichki
-   * `error.statusCode` ni o'qiydi, finance esa 404'ni yuqori darajada otadi —
-   * u 500 bo'lib qolardi va kassasi yo'q kuryer abadiy bloklanardi.
+   * `sendFinanceCommand` ATAYLAB ishlatilmaydi: bu yerda finance'ning 404'i
+   * xato emas, "kassa yo'q" (nol) — va qolgan har qanday xato 502 emas, 503
+   * bo'lishi kerak (ilgari u 500 bo'lib qolib, kassasi yo'q kuryer abadiy
+   * bloklanardi).
    */
   private async loadCourierHoldings(
     courierId: string,
@@ -1446,15 +1562,17 @@ export class BranchServiceService implements OnModuleInit {
       // yangi filial puli bilan yopardi). Lekin sof-nol holatda (PENDING
       // qatorlar yig'indisi ham, kassa — sof qoldiq va naqd+karta — ham 0)
       // "kutib qayta tekshiring" hech qachon yordam bermaydi: 0 so'm topshirib
-      // bo'lmaydi, qatorlar faqat kuryerning keyingi pul topshirishidagi FIFO
-      // bilan yopiladi. Shuning uchun haqiqiy yo'l aytiladi.
+      // bo'lmaydi. C8: kuryerni filialdan chiqarish va o'tkazish bu qatorlarni
+      // avval o'zi yopishga urinadi — shuning uchun haqiqiy yo'l aytiladi.
       if (
         holdings.tiyin.pending === 0 &&
         holdings.tiyin.balance === 0 &&
         holdings.tiyin.legs === 0
       ) {
         reasons.push(
-          `kuryerning ${holdings.pending_settlement_count} ta sotuvi bo'yicha hisob-kitob ochiq qolgan, lekin ularning jami summasi 0 so'm — bu yozuvlar kuryerning keyingi pul topshirishida yopiladi; shoshilinch bo'lsa, tizim administratoriga murojaat qiling.`,
+          holdings.tiyin.carry === 0
+            ? `kuryerning ${holdings.pending_settlement_count} ta sotuvi bo'yicha hisob-kitob ochiq qolgan, lekin ularning jami summasi 0 so'm — kuryerni filialdan chiqarganda yoki boshqa filialga o'tkazganda bu 0 so'mlik yozuvlar avtomatik yopiladi; yopilmasa, tizim administratoriga murojaat qiling.`
+            : `kuryerning ${holdings.pending_settlement_count} ta sotuvi bo'yicha hisob-kitob ochiq qolgan, lekin ularning jami summasi 0 so'm — bu yozuvlar kuryerning keyingi pul topshirishida yopiladi; shoshilinch bo'lsa, tizim administratoriga murojaat qiling.`,
         );
       } else {
         const amount =
@@ -1504,17 +1622,108 @@ export class BranchServiceService implements OnModuleInit {
 
   /**
    * Kuryerda pul yoki buyurtma bo'lsa — 409 (prefiks + sabablar). Manba javob
-   * bermasa — 503 (`loadCourierHoldings`). Hech narsa yozmaydi.
+   * bermasa — 503 (`loadCourierHoldings`).
+   *
+   * C8 (CODE-06) — `closeNetZeroRows` (faqat o'tkazish va filialdan chiqarish):
+   * kassa ham (sof qoldiq va naqd+karta), PENDING yig'indisi ham, qoldiq ham
+   * aynan 0 tiyin, lekin PENDING qatorlar bor bo'lsa — ularni order-service
+   * nol summali FIFO bilan yopishga BEST-EFFORT urinib ko'riladi va tekshiruv
+   * QAYTA bajariladi. MONEY-02: kassa 0 va PENDING yig'indisi qoldiqqa AYNAN
+   * teng bo'lsa ham (`isNetZeroPendingOnly`) — qatorlar qoldiq hisobidan
+   * yopiladi. Bu qatorlar faqat musbat pul topshirishda yopilardi —
+   * 0 so'm topshirib bo'lmaydi, kuryer abadiy bloklanardi. Yopish
+   * muvaffaqiyatsiz bo'lsa — avvalgi 409 (to'siq hech qachon zaiflashmaydi).
    */
   private async assertCourierHoldsNothing(
     courierId: string,
     currentBranch: Branch | null,
     prefix: string,
+    options: { closeNetZeroRows?: boolean; requester?: RequesterContext } = {},
   ): Promise<void> {
-    const holdings = await this.loadCourierHoldings(courierId);
+    let holdings = await this.loadCourierHoldings(courierId);
+    if (options.closeNetZeroRows && this.isNetZeroPendingOnly(holdings)) {
+      const maybeClosed = await this.closeNetZeroCourierRowsBestEffort(
+        courierId,
+        options.requester,
+      );
+      if (maybeClosed) {
+        holdings = await this.loadCourierHoldings(courierId);
+      }
+    }
     const reasons = this.describeCourierHoldings(holdings, currentBranch);
     if (reasons.length) {
       this.conflict(prefix + reasons.join(' '));
+    }
+  }
+
+  /**
+   * Sof-nol PENDING: hisob-kitob qatorlari bor, kuryer kassasi (sof qoldiq
+   * va naqd+karta) aynan 0 tiyin, qatorlar yig'indisi esa taqsimlanmagan
+   * qoldiqqa AYNAN teng (tiyin):
+   *   • ikkalasi 0 (C8);
+   *   • yoki qoldiq musbat va qatorlarni to'liq qoplaydi (MONEY-02 —
+   *     superadmin topshirilgan sotuvni qaytargach, kuryer uni AYNI summaga
+   *     qayta sotgan: kassa 0, lekin 0 so'm topshirib bo'lmaydi).
+   * Yakuniy qarorni order-service qoldiq QULFI ostida qayta tekshiradi
+   * (mos kelmasa hech narsa yopilmaydi). SOF funksiya.
+   */
+  private isNetZeroPendingOnly(holdings: CourierHoldings): boolean {
+    return (
+      holdings.pending_settlement_count > 0 &&
+      holdings.tiyin.balance === 0 &&
+      holdings.tiyin.legs === 0 &&
+      holdings.tiyin.carry >= 0 &&
+      holdings.tiyin.pending === holdings.tiyin.carry
+    );
+  }
+
+  /**
+   * `order.settlement.close_zero_courier_rows` {courier_id, requester} →
+   * {closed_count}. Xato, timeout, deploy paytida RPC yo'qligi — YUTILADI (faqat
+   * log): bu to'siqni olib tashlashga urinish, natijani baribir qayta tekshiruv
+   * hal qiladi. false — hech narsa o'zgarmagani aniq (xato yoki closed_count
+   * 0); true — qatorlar yopilgan bo'lishi mumkin, qayta tekshirish kerak.
+   */
+  private async closeNetZeroCourierRowsBestEffort(
+    courierId: string,
+    requester?: RequesterContext,
+  ): Promise<boolean> {
+    try {
+      const response = await lastValueFrom(
+        this.orderClient
+          .send<{
+            data?: { closed_count?: unknown } | null;
+            closed_count?: unknown;
+          } | null>(
+            { cmd: 'order.settlement.close_zero_courier_rows' },
+            {
+              courier_id: courierId,
+              requester: {
+                id: String(requester?.id ?? ''),
+                roles: requester?.roles ?? [],
+              },
+            },
+          )
+          .pipe(timeout(COURIER_ZERO_ROWS_CLOSE_TIMEOUT_MS)),
+      );
+      const closedValue =
+        response?.data?.closed_count ?? response?.closed_count;
+      const closed =
+        typeof closedValue === 'number' || typeof closedValue === 'string'
+          ? Number(closedValue)
+          : NaN;
+      if (Number.isFinite(closed) && closed <= 0) {
+        return false;
+      }
+      this.logger.log(
+        `courier ${courierId}: net-zero PENDING rows closed (closed_count=${Number.isFinite(closed) ? closed : '?'})`,
+      );
+      return true;
+    } catch (error) {
+      this.logger.warn(
+        `order.settlement.close_zero_courier_rows failed (courier=${courierId}) — ignored: ${this.describeRpcFailure(error)}`,
+      );
+      return false;
     }
   }
 
@@ -1540,33 +1749,45 @@ export class BranchServiceService implements OnModuleInit {
   }
 
   /**
-   * Maqsad filialda kuryer pulini QONUNIY qabul qila oladigan FAOL menejer
-   * bormi. branch_users qatorining o'zi yetarli emas: identity `deleteUser`
-   * qatorni o'chirmaydi, bloklash esa faqat statusni o'zgartiradi — o'chirilgan
-   * yoki bloklangan menejerning qatori qolib ketadi, u esa tizimga kira olmaydi.
-   *
-   * `getUsersByIdsBatch` ATAYLAB ishlatilmaydi: u xatoni yutib bo'sh Map
-   * qaytaradi — identity ishlamay qolsa, soxta "faol menejer yo'q" (400) chiqardi.
-   * Bu yerda har qanday xato yoki buzuq javob — 503 (fail-closed). Identity
-   * filtrlari (role, status, user_ids) javobda ham qayta tekshiriladi.
+   * Identity'dagi FAOL menejer: o'chirilmagan, roli manager, statusi active.
+   * Identity filtrlari javobda ham qayta tekshiriladi.
    */
-  private async assertTransferTargetHasActiveManager(
-    target: Branch,
-    managerUserIds: string[],
-  ): Promise<void> {
-    let activeManagers: number;
-    try {
+  private isActiveManagerUser(
+    user: Record<string, unknown> | null | undefined,
+  ) {
+    return (
+      Boolean(user) &&
+      String((user?.role ?? '') as string)
+        .trim()
+        .toLowerCase() === String(Roles.MANAGER) &&
+      String((user?.status ?? '') as string)
+        .trim()
+        .toLowerCase() === String(Status.ACTIVE) &&
+      user?.isDeleted !== true
+    );
+  }
+
+  /**
+   * `managerUserIds` dan nechtasi identity'da FAOL menejer. Xato, timeout yoki
+   * buzuq javob — throw (chaqiruvchi 503 ga o'raydi: "bilmasak — yo'q demaymiz").
+   * Identity sahifani 100 bilan cheklaydi — 100 talik bo'laklar.
+   */
+  private async countActiveManagers(managerUserIds: string[]): Promise<number> {
+    const requested = new Set(managerUserIds);
+    const activeIds = new Set<string>();
+    const chunkSize = 100;
+    for (let offset = 0; offset < managerUserIds.length; offset += chunkSize) {
       const response = await lastValueFrom(
         this.identityClient
           .send<{ data?: { items?: unknown } | null }>(
             { cmd: 'identity.user.find_all' },
             {
               query: {
-                user_ids: managerUserIds,
+                user_ids: managerUserIds.slice(offset, offset + chunkSize),
                 role: Roles.MANAGER,
                 status: Status.ACTIVE,
                 page: 1,
-                limit: 100,
+                limit: chunkSize,
               },
             },
           )
@@ -1576,18 +1797,35 @@ export class BranchServiceService implements OnModuleInit {
       if (!Array.isArray(items)) {
         throw new Error('identity.user.find_all: items massiv emas');
       }
-      const requested = new Set(managerUserIds);
-      activeManagers = (items as Array<Record<string, unknown> | null>).filter(
-        (user) =>
-          requested.has(String((user?.id ?? '') as string).trim()) &&
-          String((user?.role ?? '') as string)
-            .trim()
-            .toLowerCase() === String(Roles.MANAGER) &&
-          String((user?.status ?? '') as string)
-            .trim()
-            .toLowerCase() === String(Status.ACTIVE) &&
-          user?.isDeleted !== true,
-      ).length;
+      for (const user of items as Array<Record<string, unknown> | null>) {
+        const id = String((user?.id ?? '') as string).trim();
+        if (requested.has(id) && this.isActiveManagerUser(user)) {
+          activeIds.add(id);
+        }
+      }
+    }
+    return activeIds.size;
+  }
+
+  /**
+   * Maqsad filialda kuryer pulini QONUNIY qabul qila oladigan FAOL menejer
+   * bormi. branch_users qatorining o'zi yetarli emas: identity `deleteUser`
+   * qatorni o'chirmaydi, bloklash esa faqat statusni o'zgartiradi — o'chirilgan
+   * yoki bloklangan menejerning qatori qolib ketadi, u esa tizimga kira olmaydi.
+   *
+   * `getUsersByIdsBatch` ATAYLAB ishlatilmaydi: u ro'yxat ekranlari uchun
+   * xatoni yutadi. Bu yerda (`countActiveManagers`) har qanday xato yoki
+   * buzuq javob — 503 (fail-closed), aks holda identity ishlamay qolganda
+   * soxta "faol menejer yo'q" (400) chiqardi. Identity filtrlari (role,
+   * status, user_ids) javobda ham qayta tekshiriladi.
+   */
+  private async assertTransferTargetHasActiveManager(
+    target: Branch,
+    managerUserIds: string[],
+  ): Promise<void> {
+    let activeManagers: number;
+    try {
+      activeManagers = await this.countActiveManagers(managerUserIds);
     } catch (error) {
       this.logger.warn(
         `courier transfer target manager check failed (branch=${String(target.id)}): ${this.describeRpcFailure(error)}`,
@@ -1758,7 +1996,7 @@ export class BranchServiceService implements OnModuleInit {
   private async assertPostCanBeDispatched(
     postId: string,
     context: { source_branch_id: string; destination_branch_id: string },
-  ): Promise<void> {
+  ): Promise<Record<string, unknown>> {
     const postsResponse = await this.sendLogisticsCommand<{
       data?: Array<Record<string, unknown>>;
     }>('logistics.post.find_by_ids', { ids: [postId] });
@@ -1805,6 +2043,7 @@ export class BranchServiceService implements OnModuleInit {
         ),
       );
     }
+    return post;
   }
 
   /**
@@ -1909,31 +2148,61 @@ export class BranchServiceService implements OnModuleInit {
     }
   }
 
+  /**
+   * Boshqa servis xatosini `{statusCode, message}` ga keltiradi (C12/CODE-13).
+   *
+   * RabbitMQ orqali kelgan rad javobi hech qachon RpcException nusxasi emas —
+   * u oddiy `{statusCode, message, data}` obyekti (YUQORI darajada). Ilgari
+   * faqat ichki `error.statusCode` o'qilardi, shuning uchun boshqa servisning
+   * haqiqiy 400/403/404/409 javobi mijozga 500 bo'lib borardi. Endi:
+   *   - RpcException (shu servis ichida otilgan) — `getError()`;
+   *   - yuqori darajadagi yoki ichki (`error`) statusCode — faqat 400..599;
+   *   - timeout, mahalliy `Error` (ulanish uzildi va h.k.) va statusCode'siz
+   *     javob (masalan "no matching message handler") — null: chaqiruvchi
+   *     o'zining "xizmati javob bermadi" (502) xabarini beradi.
+   */
   private extractRpcError(
     error: unknown,
   ): { statusCode: number; message: string } | null {
-    const fallback = { statusCode: 500, message: 'Internal service error' };
-    const source = error as
-      | {
-          message?: string;
-          error?: { statusCode?: number; message?: string | string[] };
-        }
-      | undefined;
-
-    const nested = source?.error;
-    const nestedMessage = Array.isArray(nested?.message)
-      ? nested?.message?.join('. ')
-      : nested?.message;
-    const topMessage = source?.message;
-
-    const statusCode = Number(nested?.statusCode ?? NaN);
-    const message = String(nestedMessage ?? topMessage ?? '').trim();
-
-    if (Number.isFinite(statusCode) && message) {
-      return { statusCode, message };
+    if (error instanceof TimeoutError) {
+      return null;
     }
-    if (message) {
-      return { ...fallback, message };
+    const source: unknown =
+      error instanceof RpcException ? error.getError() : error;
+    if (!source || typeof source !== 'object' || source instanceof Error) {
+      return null;
+    }
+
+    const toMessage = (value: unknown): string =>
+      Array.isArray(value)
+        ? value
+            .map((item) => String(item as string))
+            .join('. ')
+            .trim()
+        : typeof value === 'string'
+          ? value.trim()
+          : '';
+    const toStatus = (value: unknown): number | null => {
+      const status = Number(value);
+      return Number.isInteger(status) && status >= 400 && status <= 599
+        ? status
+        : null;
+    };
+
+    const top = source as {
+      statusCode?: unknown;
+      message?: unknown;
+      error?: unknown;
+    };
+    const nested =
+      top.error && typeof top.error === 'object'
+        ? (top.error as { statusCode?: unknown; message?: unknown })
+        : null;
+
+    const statusCode = toStatus(nested?.statusCode) ?? toStatus(top.statusCode);
+    const message = toMessage(nested?.message) || toMessage(top.message);
+    if (statusCode && message) {
+      return { statusCode, message };
     }
     return null;
   }
@@ -1951,7 +2220,7 @@ export class BranchServiceService implements OnModuleInit {
       if (parsed) {
         throw new RpcException(errorRes(parsed.message, parsed.statusCode));
       }
-      throw new RpcException(errorRes('Order service unavailable', 502));
+      throw new RpcException(errorRes(ORDER_SERVICE_UNAVAILABLE_MESSAGE, 502));
     }
   }
 
@@ -1968,7 +2237,9 @@ export class BranchServiceService implements OnModuleInit {
       if (parsed) {
         throw new RpcException(errorRes(parsed.message, parsed.statusCode));
       }
-      throw new RpcException(errorRes('Logistics service unavailable', 502));
+      throw new RpcException(
+        errorRes(LOGISTICS_SERVICE_UNAVAILABLE_MESSAGE, 502),
+      );
     }
   }
 
@@ -1981,7 +2252,7 @@ export class BranchServiceService implements OnModuleInit {
         this.fileClient.send<T>({ cmd }, payload).pipe(timeout(15000)),
       );
     } catch {
-      throw new RpcException(errorRes('File service unavailable', 502));
+      throw new RpcException(errorRes(FILE_SERVICE_UNAVAILABLE_MESSAGE, 502));
     }
   }
 
@@ -1998,7 +2269,9 @@ export class BranchServiceService implements OnModuleInit {
       if (parsed) {
         throw new RpcException(errorRes(parsed.message, parsed.statusCode));
       }
-      throw new RpcException(errorRes('Finance service unavailable', 502));
+      throw new RpcException(
+        errorRes(FINANCE_SERVICE_UNAVAILABLE_MESSAGE, 502),
+      );
     }
   }
 
@@ -2035,7 +2308,7 @@ export class BranchServiceService implements OnModuleInit {
     this.assertBranchCanCreateBatches(sourceBranch, 'transfer');
     const destinationBranchId = String(sourceBranch.parent_id ?? '').trim();
     if (!destinationBranchId) {
-      this.badRequest("Source branch ota branch'i topilmadi");
+      this.badRequest('Manba filialning ota filiali topilmadi');
     }
 
     await this.getBranchOrThrow(destinationBranchId);
@@ -2049,7 +2322,7 @@ export class BranchServiceService implements OnModuleInit {
       ),
     );
     if (!orderIds.length) {
-      this.badRequest('order_ids is required');
+      this.badRequest(ORDER_IDS_REQUIRED_MESSAGE);
     }
 
     const requesterId = String(requester?.id ?? '').trim() || '0';
@@ -2175,7 +2448,7 @@ export class BranchServiceService implements OnModuleInit {
     requester?: RequesterContext,
   ): Promise<string> {
     if (this.isSystemPrivileged(requester)) {
-      this.badRequest('source branch id is required');
+      this.badRequest('Manba filial (id) majburiy');
     }
 
     const requesterId = String(requester?.id ?? '').trim();
@@ -2189,7 +2462,7 @@ export class BranchServiceService implements OnModuleInit {
     });
 
     if (!assignment?.branch_id) {
-      this.forbidden('Branch assignment topilmadi');
+      this.forbidden('Foydalanuvchi hech qaysi filialga biriktirilmagan');
     }
 
     const role = this.normalizeBranchUserRole(assignment.role);
@@ -2214,7 +2487,7 @@ export class BranchServiceService implements OnModuleInit {
   ) {
     const sourceBranchId = String(branchId ?? '').trim();
     if (!sourceBranchId) {
-      this.badRequest('source branch is required');
+      this.badRequest('Manba filial (id) majburiy');
     }
 
     const sourceBranch = await this.getBranchOrThrow(sourceBranchId);
@@ -2229,7 +2502,7 @@ export class BranchServiceService implements OnModuleInit {
       ),
     );
     if (!orderIds.length) {
-      this.badRequest('order_ids is required');
+      this.badRequest(ORDER_IDS_REQUIRED_MESSAGE);
     }
 
     const requestKey = this.normalizeTransferRequestKey(dto?.request_key);
@@ -2360,7 +2633,7 @@ export class BranchServiceService implements OnModuleInit {
   ) {
     const id = String(batchId ?? '').trim();
     if (!id) {
-      this.badRequest('batch id is required');
+      this.badRequest('Partiya (batch) id majburiy');
     }
 
     const orderIds = Array.from(
@@ -2371,7 +2644,7 @@ export class BranchServiceService implements OnModuleInit {
       ),
     );
     if (!orderIds.length) {
-      this.badRequest('orderIds is required');
+      this.badRequest(ORDER_IDS_REQUIRED_MESSAGE);
     }
 
     const vehiclePlate = String(dto?.vehicle_plate ?? 'N/A').trim() || 'N/A';
@@ -2386,7 +2659,7 @@ export class BranchServiceService implements OnModuleInit {
       batchRes?.data?.source_branch_id ?? '',
     ).trim();
     if (!sourceBranchId) {
-      this.notFound('Transfer batch not found');
+      this.notFound('Partiya (transfer batch) topilmadi');
     }
 
     await this.assertCanCreateTransferBatch(sourceBranchId, requester);
@@ -2428,7 +2701,7 @@ export class BranchServiceService implements OnModuleInit {
   ) {
     const batchId = String(id ?? '').trim();
     if (!batchId) {
-      this.badRequest('batch id is required');
+      this.badRequest('Partiya (batch) id majburiy');
     }
 
     const response = await this.sendOrderCommand<{
@@ -2727,7 +3000,7 @@ export class BranchServiceService implements OnModuleInit {
   async findTransferBatchById(id: string, requester?: RequesterContext) {
     const batchId = String(id ?? '').trim();
     if (!batchId) {
-      this.badRequest('batch id is required');
+      this.badRequest('Partiya (batch) id majburiy');
     }
 
     const response = await this.sendOrderCommand<{
@@ -2830,7 +3103,7 @@ export class BranchServiceService implements OnModuleInit {
   async receiveTransferBatch(batchId: string, requester?: RequesterContext) {
     const id = String(batchId ?? '').trim();
     if (!id) {
-      this.badRequest('batch id is required');
+      this.badRequest('Partiya (batch) id majburiy');
     }
 
     const batchRes = await this.sendOrderCommand<{
@@ -2840,7 +3113,7 @@ export class BranchServiceService implements OnModuleInit {
       batchRes?.data?.destination_branch_id ?? '',
     ).trim();
     if (!destinationBranchId) {
-      this.notFound('Transfer batch not found');
+      this.notFound('Partiya (transfer batch) topilmadi');
     }
     const destinationBranch = await this.getBranchOrThrow(destinationBranchId);
     this.assertBranchCanReceiveBatches(destinationBranch);
@@ -2879,7 +3152,7 @@ export class BranchServiceService implements OnModuleInit {
   ) {
     const id = String(batchId ?? '').trim();
     if (!id) {
-      this.badRequest('batch id is required');
+      this.badRequest('Partiya (batch) id majburiy');
     }
 
     const orderIds = Array.from(
@@ -2902,7 +3175,7 @@ export class BranchServiceService implements OnModuleInit {
       batchRes?.data?.destination_branch_id ?? '',
     ).trim();
     if (!destinationBranchId) {
-      this.notFound('Transfer batch not found');
+      this.notFound('Partiya (transfer batch) topilmadi');
     }
     const destinationBranch = await this.getBranchOrThrow(destinationBranchId);
     this.assertBranchCanReceiveBatches(destinationBranch);
@@ -2946,7 +3219,7 @@ export class BranchServiceService implements OnModuleInit {
   ) {
     const id = String(batchId ?? '').trim();
     if (!id) {
-      this.badRequest('batch id is required');
+      this.badRequest('Partiya (batch) id majburiy');
     }
 
     const reason = String(dto?.reason ?? '').trim();
@@ -2963,7 +3236,7 @@ export class BranchServiceService implements OnModuleInit {
       batchRes?.data?.source_branch_id ?? '',
     ).trim();
     if (!sourceBranchId) {
-      this.notFound('Transfer batch not found');
+      this.notFound('Partiya (transfer batch) topilmadi');
     }
 
     await this.assertCanCreateTransferBatch(sourceBranchId, requester);
@@ -3029,7 +3302,7 @@ export class BranchServiceService implements OnModuleInit {
     const destinationBranch = await this.getBranchOrThrow(destinationBranchId);
 
     if (sourceBranch.type !== BranchType.HQ) {
-      this.forbidden("Post dispatch faqat HQ branch'dan ruxsat etilgan");
+      this.forbidden("Pochta faqat HQ filialdan jo'natiladi");
     }
     // Ruxsat manzil haqidagi 400'lardan OLDIN tekshiriladi: ruxsatsiz
     // so'rovchi manzil filial haqida hech narsa bilmasdan 403 oladi.
@@ -3037,13 +3310,41 @@ export class BranchServiceService implements OnModuleInit {
     // ruxsat berardi, HQ registratori 403 olardi.)
     await this.assertCanDispatchPostFromBranch(sourceBranchId, requester);
     this.assertValidDispatchDestination(sourceBranch, destinationBranch);
-    await this.assertBranchHasManager(destinationBranchId);
+    await this.assertBranchHasManager(destinationBranch);
     // Pochtaning o'zi: kuryer pochtasi yoki 'new' bo'lmagan pochta — butun
     // so'rov 400 (buyurtmalar o'qilishidan va ko'chirilishidan oldin).
-    await this.assertPostCanBeDispatched(postId, {
+    const sourcePost = await this.assertPostCanBeDispatched(postId, {
       source_branch_id: sourceBranchId,
       destination_branch_id: destinationBranchId,
     });
+    // LC-09: HQ pochtasi hudud (tumanning assigned_region'i) bo'yicha
+    // yig'iladi — u faqat SHU hududdagi filialga jo'natiladi. Ikkala hudud
+    // ma'lum bo'lib, farq qilsa — butun so'rov 400, hech narsa ko'chirilmaydi.
+    const sourcePostRegionId = this.normalizeRegionId(sourcePost?.region_id);
+    const destinationRegionId = this.normalizeRegionId(
+      destinationBranch.region_id,
+    );
+    if (
+      sourcePostRegionId &&
+      destinationRegionId &&
+      sourcePostRegionId !== destinationRegionId
+    ) {
+      throw new RpcException(
+        errorRes(
+          `Pochta #${postId} boshqa hudud uchun yig'ilgan (hudud #${sourcePostRegionId}), manzil filial esa hudud #${destinationRegionId} da. ` +
+            "Pochtani o'z hududidagi filialga jo'nating. Hech narsa jo'natilmadi",
+          400,
+          {
+            post_id: postId,
+            source_branch_id: sourceBranchId,
+            destination_branch_id: destinationBranchId,
+            post_region_id: sourcePostRegionId,
+            destination_region_id: destinationRegionId,
+            reasons: { region_mismatch: true },
+          },
+        ),
+      );
+    }
 
     const requesterPayload = {
       id: String(requester?.id ?? ''),
@@ -3080,31 +3381,52 @@ export class BranchServiceService implements OnModuleInit {
       );
     }
 
-    const selectedOrderIds = Array.isArray(orderIdsInput)
-      ? orderIdsInput.map((id) => String(id ?? '').trim()).filter(Boolean)
-      : [];
+    // Id'lar kanonik ko'rinishda solishtiriladi ('064' = '64') va takrorsiz.
+    const selectedOrderIds = Array.from(
+      new Set(
+        (Array.isArray(orderIdsInput) ? orderIdsInput : [])
+          .map((id) => this.canonicalId(id))
+          .filter(Boolean),
+      ),
+    );
     if (!selectedOrderIds.length) {
-      this.badRequest('order_ids is required');
+      this.badRequest(ORDER_IDS_REQUIRED_MESSAGE);
+    }
+
+    // E2E-DISPATCH-SKIP: tanlangan, lekin shu pochtada YO'Q buyurtma jimgina
+    // tashlab ketilmaydi (ilgari 201 "5 tadan 5 tasi ko'chdi" qaytib, 6-si
+    // HQ'da qolib ketardi). Bittasi bo'lsa ham BUTUN so'rov 409, hech narsa
+    // ko'chirilmaydi — operator sahifani yangilab, qayta tanlaydi.
+    const postOrderIdSet = new Set(
+      orders.map((order) => this.canonicalId(order?.id)),
+    );
+    const missingSelectedIds = selectedOrderIds.filter(
+      (id) => !postOrderIdSet.has(id),
+    );
+    if (missingSelectedIds.length) {
+      throw new RpcException(
+        errorRes(
+          `Tanlangan ${missingSelectedIds.length} ta buyurtma bu pochtada yo'q: ${this.formatOrderIdsForMessage(missingSelectedIds)}. ` +
+            "Ular boshqa pochtada yoki pochtasiz bo'lishi mumkin — sahifani yangilab, buyurtmalarni qayta tanlang. Hech narsa jo'natilmadi",
+          409,
+          {
+            post_id: postId,
+            source_branch_id: sourceBranchId,
+            destination_branch_id: destinationBranchId,
+            selected_order_ids: selectedOrderIds,
+            missing_order_ids: missingSelectedIds,
+          },
+        ),
+      );
     }
 
     const selectedSet = new Set(selectedOrderIds);
     const candidateOrders = orders.filter((order) =>
-      selectedSet.has(String((order?.id ?? '') as string).trim()),
+      selectedSet.has(this.canonicalId(order?.id)),
     );
 
-    if (!candidateOrders.length) {
-      throw new RpcException(
-        errorRes('Tanlangan order_ids post ichida topilmadi', 400, {
-          post_id: postId,
-          source_branch_id: sourceBranchId,
-          destination_branch_id: destinationBranchId,
-          selected_order_ids: selectedOrderIds,
-        }),
-      );
-    }
-
     const orderIds = candidateOrders
-      .map((order) => String((order?.id ?? '') as string))
+      .map((order) => this.canonicalId(order?.id))
       .filter(Boolean);
     const mismatchedOrders = candidateOrders.filter(
       (order) => String((order?.branch_id ?? '') as string) !== sourceBranchId,
@@ -3123,7 +3445,7 @@ export class BranchServiceService implements OnModuleInit {
 
     const ineligibleOrderIds = new Set(
       [...mismatchedOrders, ...deletedOrders, ...blockedStatusOrders]
-        .map((order) => String((order?.id ?? '') as string).trim())
+        .map((order) => this.canonicalId(order?.id))
         .filter(Boolean),
     );
 
@@ -3150,9 +3472,16 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     if (mismatchedOrders.length) {
+      // Gateway xato tanasidan `data` ni tashlab yuboradi — id'lar XABARDA.
+      // CODE-11: tekshiruv TANLOV bo'yicha ishlaydi, pochtadan chiqarish
+      // yo'li esa yo'q — operatorga tanlovdan olib tashlash aytiladi.
+      const mismatchedIds = mismatchedOrders
+        .map((order) => this.canonicalId(order?.id))
+        .filter(Boolean);
       throw new RpcException(
         errorRes(
-          "Post ichida manba branch'ga tegishli bo'lmagan order bor. Avval postni tozalang yoki to'g'rilang",
+          `Tanlangan buyurtmalar orasida manba filialga (HQ) tegishli bo'lmagan ${mismatchedIds.length} ta buyurtma bor: ${this.formatOrderIdsForMessage(mismatchedIds)}. ` +
+            "Ularni tanlovdan olib tashlang va qayta jo'nating. Hech narsa jo'natilmadi",
           400,
           {
             post_id: postId,
@@ -3165,25 +3494,22 @@ export class BranchServiceService implements OnModuleInit {
               deleted_count: deletedOrders.length,
               blocked_status_count: blockedStatusOrders.length,
             },
-            mismatched_order_ids: mismatchedOrders
-              .map((order) => String((order?.id ?? '') as string).trim())
-              .filter(Boolean)
-              .slice(0, 20),
+            mismatched_order_ids: mismatchedIds.slice(0, 20),
           },
         ),
       );
     }
 
     // Ko'chiriladigan HAR BIR buyurtma HQ'da turgan bo'lishi shart: holati
-    // 'received' yoki 'new', kuryerda EMAS (courier_id ham, holder_courier_id
-    // ham bo'sh). Kuryerdagi, sotilgan, yo'ldagi va h.k. buyurtmani filialga
+    // 'received' (HQ qabul qilgan; CODE-11 — 'new' EMAS), kuryerda EMAS
+    // (courier_id ham, holder_courier_id ham bo'sh). Kuryerdagi, sotilgan, yo'ldagi va h.k. buyurtmani filialga
     // "ko'chirish" hech qachon to'g'ri emas — superadmin/admin uchun ham.
     // Birortasi bo'lsa BUTUN so'rov rad etiladi (qolganini jimgina
     // jo'natmaymiz), hech narsa ko'chirilmaydi. CANCELLED/CLOSED va o'chirilgan
     // buyurtmalar yuqoridagidek jimgina chetlab o'tiladi (eligible emas).
     const eligibleIdSet = new Set(eligibleOrderIds);
     const nonDispatchableOrders = candidateOrders.filter((order) => {
-      const orderId = String((order?.id ?? '') as string);
+      const orderId = this.canonicalId(order?.id);
       if (!eligibleIdSet.has(orderId)) {
         return false;
       }
@@ -3198,7 +3524,7 @@ export class BranchServiceService implements OnModuleInit {
     });
     if (nonDispatchableOrders.length) {
       const offendingIds = nonDispatchableOrders
-        .map((order) => String((order?.id ?? '') as string).trim())
+        .map((order) => this.canonicalId(order?.id))
         .filter(Boolean);
       const wrongStatusCount = nonDispatchableOrders.filter(
         (order) =>
@@ -3216,7 +3542,7 @@ export class BranchServiceService implements OnModuleInit {
       throw new RpcException(
         errorRes(
           `${offendingIds.length} ta buyurtmani filialga jo'natib bo'lmaydi: ${this.formatOrderIdsForMessage(offendingIds)}. ` +
-            "Faqat HQ'da turgan (holati 'received' yoki 'new') va kuryerga biriktirilmagan buyurtma jo'natiladi",
+            "Faqat HQ qabul qilgan (holati 'received') va kuryerga biriktirilmagan buyurtma jo'natiladi — yangi buyurtmani avval HQ qabul qilsin",
           400,
           {
             post_id: postId,
@@ -3234,30 +3560,69 @@ export class BranchServiceService implements OnModuleInit {
       );
     }
 
+    // LC-13/LC-09: manzil SENT pochtasi MANBA pochtaning hududi bo'yicha
+    // guruhlanadi (HQ pochtasi aynan shu hudud bo'yicha yig'ilgan; buyurtmaning
+    // geografik region_id'si tuman boshqa hududga o'tkazilgan bo'lsa farq
+    // qiladi). Manba pochtada hudud bo'lmasa — buyurtmaning hududi. Ikkalasi
+    // ham yo'q bo'lsa ('' bigint ustunga ketib 22P02/5xx berardi) — HECH NARSA
+    // yozilmasdan 400, id'lar bilan.
+    const eligibleOrders = candidateOrders.filter((order) =>
+      eligibleIdSet.has(this.canonicalId(order?.id)),
+    );
+    const regionByOrderId = new Map<string, string>();
+    const regionlessOrderIds: string[] = [];
+    for (const order of eligibleOrders) {
+      const orderId = this.canonicalId(order?.id);
+      const regionId =
+        sourcePostRegionId ?? this.normalizeRegionId(order?.region_id);
+      if (regionId) {
+        regionByOrderId.set(orderId, regionId);
+      } else {
+        regionlessOrderIds.push(orderId);
+      }
+    }
+    if (regionlessOrderIds.length) {
+      throw new RpcException(
+        errorRes(
+          `${regionlessOrderIds.length} ta buyurtmaning hududi (viloyati) aniqlanmadi: ${this.formatOrderIdsForMessage(regionlessOrderIds)}. ` +
+            "Buyurtmaga hudud belgilang yoki uni tanlovdan chiqaring. Hech narsa jo'natilmadi",
+          400,
+          {
+            post_id: postId,
+            source_branch_id: sourceBranchId,
+            destination_branch_id: destinationBranchId,
+            regionless_order_ids: regionlessOrderIds,
+          },
+        ),
+      );
+    }
+
     const requesterId = String(requester?.id ?? '').trim() || '0';
     const note = `Post #${postId} HQ'dan branch #${destinationBranchId} ga dispatch qilindi`;
 
     const destinationPostAssignmentsRes = await this.sendLogisticsCommand<{
       data?: Array<{ order_id?: string; post_id?: string }>;
     }>('logistics.post.receive_orders', {
-      orders: candidateOrders
-        .filter((order) =>
-          eligibleOrderIds.includes(String((order?.id ?? '') as string)),
-        )
-        .map((order) => ({
-          order_id: String((order?.id ?? '') as string),
-          assigned_region: String((order?.region_id ?? '') as string),
+      orders: eligibleOrders.map((order) => {
+        const orderId = this.canonicalId(order?.id);
+        return {
+          order_id: orderId,
+          assigned_region: regionByOrderId.get(orderId) as string,
           assigned_branch: destinationBranchId,
           assigned_post_status: Post_status.SENT,
           total_price: Number(order?.total_price ?? 0),
-        })),
+        };
+      }),
     });
 
     const assignmentMap = new Map<string, string>(
       (destinationPostAssignmentsRes?.data ?? [])
         .map(
           (row) =>
-            [String(row?.order_id ?? ''), String(row?.post_id ?? '')] as const,
+            [
+              this.canonicalId(row?.order_id),
+              String(row?.post_id ?? ''),
+            ] as const,
         )
         .filter(([orderId, postId]) => Boolean(orderId) && Boolean(postId)),
     );
@@ -3283,7 +3648,16 @@ export class BranchServiceService implements OnModuleInit {
       });
     }
 
-    const shouldDeletePost = eligibleOrderIds.length === orders.length;
+    // LC-02: buyurtmalar bittalab ko'chayotgan soniyalarda HQ qabuli (POST
+    // /orders/receive) shu NEW pochtaga YANGI buyurtma qo'shishi mumkin.
+    // Pochta snapshot bo'yicha "bo'shadi" deb o'chirilsa, u buyurtma yo'q
+    // pochtaga ishora qilib qotib qolardi (hech bir kartada ko'rinmaydi,
+    // jo'natib ham bo'lmaydi). Shuning uchun pochta FAQAT unga hech qanday
+    // buyurtma ishora qilmay qolganda o'chiriladi; tekshirib bo'lmasa — qoladi
+    // (bo'sh NEW pochta zararsiz: keyingi qabul unga tushadi).
+    const shouldDeletePost =
+      eligibleOrderIds.length === orders.length &&
+      (await this.isPostFreeOfOrders(postId));
     if (shouldDeletePost) {
       await this.sendLogisticsCommand('logistics.post.delete', { id: postId });
     }
@@ -3315,6 +3689,61 @@ export class BranchServiceService implements OnModuleInit {
       200,
       'Post HQ dan branchga muvaffaqiyatli dispatch qilindi',
     );
+  }
+
+  /** Raqamli hudud id'si (kanonik) yoki null (bo'sh, '0' emas, raqam emas). */
+  private normalizeRegionId(value: unknown): string | null {
+    const normalized = String((value ?? '') as string).trim();
+    if (!/^\d+$/.test(normalized) || /^0+$/.test(normalized)) {
+      return null;
+    }
+    return this.canonicalId(normalized);
+  }
+
+  /**
+   * LC-02 — pochtaga hali biror (o'chirilmagan) buyurtma ishora qiladimi.
+   * true FAQAT order-service "0 ta" deb aniq javob berganda; xato, timeout
+   * yoki tushunarsiz javob — false (pochta o'chirilmaydi).
+   */
+  private async isPostFreeOfOrders(postId: string): Promise<boolean> {
+    try {
+      const response = await lastValueFrom(
+        this.orderClient
+          .send<Record<
+            string,
+            unknown
+          > | null>({ cmd: 'order.find_all' }, { query: { post_id: postId, page: 1, limit: 1 } })
+          .pipe(timeout(DISPATCH_POST_RECHECK_TIMEOUT_MS)),
+      );
+      // order.find_all: { data: Order[], total, ... } (ba'zan successRes ichida).
+      const body: Record<string, unknown> = response ?? {};
+      const inner =
+        body.data && typeof body.data === 'object' && !Array.isArray(body.data)
+          ? (body.data as Record<string, unknown>)
+          : {};
+      const totalValue = body.total ?? inner.total;
+      const total =
+        typeof totalValue === 'number' || typeof totalValue === 'string'
+          ? Number(totalValue)
+          : NaN;
+      if (Number.isInteger(total) && total >= 0) {
+        return total === 0;
+      }
+      const rows = Array.isArray(body.data)
+        ? (body.data as unknown[])
+        : Array.isArray(inner.data)
+          ? (inner.data as unknown[])
+          : null;
+      if (rows) {
+        return rows.length === 0;
+      }
+      throw new Error("order.find_all: javob shakli noto'g'ri");
+    } catch (error) {
+      this.logger.warn(
+        `dispatch: post #${postId} bo'shligini tekshirib bo'lmadi — pochta o'chirilmaydi: ${this.describeRpcFailure(error)}`,
+      );
+      return false;
+    }
   }
 
   /**
@@ -3364,14 +3793,20 @@ export class BranchServiceService implements OnModuleInit {
         })
       : [];
 
-    const managerIdByBranchId = new Map<string, string>();
+    // Filialning HAMMA menejer qatorlari (eng eskisi birinchi): birinchisi
+    // o'chirilgan/bloklangan bo'lsa, keyingi faoli ko'rsatiladi (CODE-07).
+    const managerIdsByBranchId = new Map<string, string[]>();
     for (const assignment of managerAssignments) {
       const branchId = String(assignment.branch_id ?? '').trim();
       const userId = String(assignment.user_id ?? '').trim();
-      if (!branchId || !userId || managerIdByBranchId.has(branchId)) {
+      if (!branchId || !userId) {
         continue;
       }
-      managerIdByBranchId.set(branchId, userId);
+      const list = managerIdsByBranchId.get(branchId) ?? [];
+      if (!list.includes(userId)) {
+        list.push(userId);
+      }
+      managerIdsByBranchId.set(branchId, list);
     }
 
     const regionIds = Array.from(
@@ -3382,7 +3817,7 @@ export class BranchServiceService implements OnModuleInit {
       ),
     );
     const [managersById, regionsById] = await Promise.all([
-      this.getUsersByIdsBatch(Array.from(managerIdByBranchId.values())),
+      this.getUsersByIdsBatch(Array.from(managerIdsByBranchId.values()).flat()),
       this.getRegionsByIds(regionIds),
     ]);
 
@@ -3393,10 +3828,21 @@ export class BranchServiceService implements OnModuleInit {
             | Record<string, unknown>
             | undefined) ?? null)
         : null;
-      const managerId = managerIdByBranchId.get(String(branch.id)) ?? null;
-      const managerUser = managerId
-        ? (managersById.get(managerId) ?? null)
-        : null;
+      const candidateIds = managerIdsByBranchId.get(String(branch.id)) ?? [];
+      // CODE-07: has_manager — identity'da FAOL menejer (o'chirilgan yoki
+      // bloklangan menejerning qolib ketgan qatori hisoblanmaydi; jo'natish
+      // ham shu qoida bilan tekshiriladi). Identity javob bermasa — avvalgidek
+      // branch_users qatori bo'yicha (ism/telefonsiz): ro'yxat yiqilmaydi,
+      // jo'natishning o'zi esa fail-closed tekshiriladi.
+      const managerId = managersById
+        ? (candidateIds.find((id) =>
+            this.isActiveManagerUser(managersById.get(id)),
+          ) ?? null)
+        : (candidateIds[0] ?? null);
+      const managerUser =
+        managerId && managersById
+          ? (managersById.get(managerId) ?? null)
+          : null;
       const managerName = managerUser?.name;
       const managerPhone = managerUser?.phone_number;
 
@@ -3416,8 +3862,8 @@ export class BranchServiceService implements OnModuleInit {
           : null,
         has_manager: Boolean(managerId),
         // manager faqat has_manager=false bo'lganda null. Identity javob
-        // bermasa ham id qoladi (ism/telefon bo'sh) — menejer borligi
-        // branch_users'dan aniq.
+        // bermasa ham id qoladi (ism/telefon bo'sh) — u holda menejer
+        // borligi branch_users qatoridan olinadi.
         manager: managerId
           ? {
               id: managerId,
@@ -3439,7 +3885,7 @@ export class BranchServiceService implements OnModuleInit {
   async findTransferBatchByToken(token: string, requester?: RequesterContext) {
     const normalizedToken = String(token ?? '').trim();
     if (!normalizedToken) {
-      this.badRequest('token is required');
+      this.badRequest('token majburiy');
     }
 
     let response: {
@@ -3457,10 +3903,14 @@ export class BranchServiceService implements OnModuleInit {
           .pipe(timeout(15000)),
       );
     } catch (error) {
-      if (error instanceof TimeoutError) {
-        throw new RpcException(errorRes('Order service unavailable', 502));
+      // C12: xom xato (oddiy obyekt) qayta otilsa Nest uni 500 qiladi va RMQ
+      // xabarni qayta navbatga qo'yadi — 4xx (masalan noto'g'ri QR, 404)
+      // saqlanib RpcException bo'lib ketadi.
+      const parsed = this.extractRpcError(error);
+      if (parsed) {
+        throw new RpcException(errorRes(parsed.message, parsed.statusCode));
       }
-      throw error;
+      throw new RpcException(errorRes(ORDER_SERVICE_UNAVAILABLE_MESSAGE, 502));
     }
 
     const payload = (response?.data ?? null) as {
@@ -3499,7 +3949,7 @@ export class BranchServiceService implements OnModuleInit {
   ) {
     const name = String(dto?.name ?? '').trim();
     if (!name) {
-      this.badRequest('name is required');
+      this.badRequest('Filial nomi majburiy');
     }
 
     await this.ensureBranchNameUnique(name);
@@ -3513,17 +3963,19 @@ export class BranchServiceService implements OnModuleInit {
 
     if (type === BranchType.HQ) {
       if (parentId) {
-        this.badRequest('HQ branch cannot have parent_id');
+        this.badRequest("HQ filialning ota filiali (parent_id) bo'lmaydi");
       }
       const existingHq = await this.branchRepo.findOne({
         where: { type: BranchType.HQ, isDeleted: false },
       });
       if (existingHq) {
-        this.conflict('Only one HQ branch is allowed');
+        this.conflict("Tizimda faqat bitta HQ filial bo'lishi mumkin");
       }
     } else {
       if (!parentId) {
-        this.badRequest('parent_id is required for non-HQ branches');
+        this.badRequest(
+          "HQ bo'lmagan filial uchun ota filial (parent_id) majburiy",
+        );
       }
       const parent = await this.getParentBranchOrThrow(parentId);
       level = Number(parent.level) + 1;
@@ -3851,13 +4303,13 @@ export class BranchServiceService implements OnModuleInit {
       .trim()
       .toUpperCase();
     if (!normalized) {
-      this.badRequest('code is required');
+      this.badRequest('Filial kodi (code) majburiy');
     }
     const branch = await this.branchRepo.findOne({
       where: { code: normalized, isDeleted: false },
     });
     if (!branch) {
-      this.notFound('Branch not found by code');
+      this.notFound('Bu kodli filial topilmadi');
     }
     return successRes(branch, 200, 'Branch found');
   }
@@ -3873,7 +4325,7 @@ export class BranchServiceService implements OnModuleInit {
       where: { type: BranchType.HQ, isDeleted: false },
     });
     if (!fallback) {
-      this.notFound('HQ branch topilmadi');
+      this.notFound('HQ filial topilmadi');
     }
     return successRes(fallback, 200, 'HQ branch');
   }
@@ -4003,14 +4455,15 @@ export class BranchServiceService implements OnModuleInit {
     const todayStart = this.toTashkentStartOfDay(now);
     const weekStart = this.toTashkentStartOfWeek(now);
 
-    const stats = await this.fetchBranchDashboardStats({
-      branch_ids: targetBranchIds,
-      courier_ids: courierIds,
-      start: selectedRange.start?.toISOString() ?? null,
-      end: selectedRange.end.toISOString(),
-      today_start: todayStart.toISOString(),
-      week_start: weekStart.toISOString(),
-    });
+    const { stats, unavailable: statsUnavailable } =
+      await this.fetchBranchDashboardStats({
+        branch_ids: targetBranchIds,
+        courier_ids: courierIds,
+        start: selectedRange.start?.toISOString() ?? null,
+        end: selectedRange.end.toISOString(),
+        today_start: todayStart.toISOString(),
+        week_start: weekStart.toISOString(),
+      });
 
     const couriersCount = courierIds.length;
     const canSeeAll =
@@ -4027,6 +4480,9 @@ export class BranchServiceService implements OnModuleInit {
 
     return successRes(
       {
+        // C9: true — order-service javob bermadi, quyidagi nollar HAQIQIY
+        // EMAS (FE ularni ko'rsatmaydi, "sahifani yangilang" deydi).
+        stats_unavailable: statsUnavailable,
         today_orders_count: stats.today_orders_count,
         week_orders_count: stats.week_orders_count,
         selected_orders_count: stats.selected_orders_count,
@@ -4065,7 +4521,7 @@ export class BranchServiceService implements OnModuleInit {
     const targetBranchIds = await this.resolveAnalyticsBranchIds(id, requester);
     const courierIds = await this.getCourierIdsByBranchIds(targetBranchIds);
 
-    const stats = await this.fetchBranchDashboardStats({
+    const { stats } = await this.fetchBranchDashboardStats({
       branch_ids: targetBranchIds,
       courier_ids: courierIds,
       start: null,
@@ -4216,7 +4672,7 @@ export class BranchServiceService implements OnModuleInit {
     if (typeof dto?.name !== 'undefined') {
       const nextName = String(dto.name).trim();
       if (!nextName) {
-        this.badRequest('name cannot be empty');
+        this.badRequest("Filial nomi bo'sh bo'lishi mumkin emas");
       }
       if (nextName.toLowerCase() !== (branch.name ?? '').toLowerCase()) {
         await this.ensureBranchNameUnique(nextName, branch.id);
@@ -4276,21 +4732,23 @@ export class BranchServiceService implements OnModuleInit {
 
     if (nextType === BranchType.HQ) {
       if (nextParentId) {
-        this.badRequest('HQ branch cannot have parent_id');
+        this.badRequest("HQ filialning ota filiali (parent_id) bo'lmaydi");
       }
 
       const existingHq = await this.branchRepo.findOne({
         where: { type: BranchType.HQ, isDeleted: false },
       });
       if (existingHq && existingHq.id !== branch.id) {
-        this.conflict('Only one HQ branch is allowed');
+        this.conflict("Tizimda faqat bitta HQ filial bo'lishi mumkin");
       }
 
       branch.parent_id = null;
       branch.level = 0;
     } else {
       if (!nextParentId) {
-        this.badRequest('parent_id is required for non-HQ branches');
+        this.badRequest(
+          "HQ bo'lmagan filial uchun ota filial (parent_id) majburiy",
+        );
       }
 
       await this.ensureNotCyclicParent(branch.id, nextParentId);
@@ -4308,6 +4766,14 @@ export class BranchServiceService implements OnModuleInit {
     if (typeof dto?.status !== 'undefined') {
       branch.status = this.parseStatus(dto.status) ?? branch.status;
     }
+
+    // CODE-20: kuryerlar (va ochiq ishlar) turgan filialning turi, holati
+    // yoki hududi ularni "osilib" qoldiradigan tarzda o'zgarmaydi. Hech narsa
+    // yozilishidan OLDIN.
+    await this.assertBranchUpdateKeepsCouriersAndWork(String(branch.id), {
+      before: beforeSnapshot,
+      after: branch,
+    });
 
     const saved = await this.branchRepo.save(branch);
     await this.rebalanceDescendantLevels(saved.id, saved.level);
@@ -4332,12 +4798,123 @@ export class BranchServiceService implements OnModuleInit {
     return successRes(saved, 200, 'Branch updated');
   }
 
+  /**
+   * CODE-20 — updateBranch to'sig'i. Faqat filialda ishlayotganlarni osilib
+   * qoldiradigan o'zgarishlar tekshiriladi:
+   *   - tur kuryer saqlay olmaydigan turga (PICKUP) o'zgarsa — PICKUP pochta
+   *     ham, partiya ham qabul qilmaydi, unga kuryer biriktirilmaydi;
+   *   - filial nofaol qilinsa — nofaol filialga pochta jo'natilmaydi, kuryer
+   *     o'tkazilmaydi;
+   *   - hudud o'zgarsa — kuryerning identity'dagi hududi filialniki bilan
+   *     bir xil bo'lishi kerak (R3), aks holda eskirib qoladi.
+   * Kuryer qatori bor — 409. Tur/holat uchun yakunlanmagan buyurtma yoki faol
+   * partiya bor — 409; buni tekshirib bo'lmasa — 503 (fail-closed). REGIONAL ↔
+   * HYBRID va boshqa maydonlar (nom, telefon, ota filial...) tekshirilmaydi.
+   */
+  private async assertBranchUpdateKeepsCouriersAndWork(
+    branchId: string,
+    change: {
+      before: { type: BranchType; status: Status; region_id: string | null };
+      after: { type: BranchType; status: Status; region_id: string | null };
+    },
+  ): Promise<void> {
+    const { before, after } = change;
+    const courierHostTypes: ReadonlySet<string> = new Set<string>([
+      BranchType.HQ,
+      BranchType.REGIONAL,
+      BranchType.HYBRID,
+    ]);
+    const losesCourierHosting =
+      before.type !== after.type && !courierHostTypes.has(after.type);
+    const deactivates =
+      before.status !== Status.INACTIVE && after.status === Status.INACTIVE;
+    const regionChanges =
+      String(before.region_id ?? '').trim() !==
+      String(after.region_id ?? '').trim();
+    if (!losesCourierHosting && !deactivates && !regionChanges) {
+      return;
+    }
+
+    const action = losesCourierHosting
+      ? `filial turini ${after.type} ga o'zgartirib bo'lmaydi`
+      : deactivates
+        ? "filialni nofaol qilib bo'lmaydi"
+        : "filial hududini o'zgartirib bo'lmaydi (kuryer hududi filialga ergashadi)";
+
+    const couriers = await this.branchUserRepo.count({
+      where: {
+        branch_id: branchId,
+        role: BranchUserRole.COURIER,
+        isDeleted: false,
+      },
+    });
+    if (couriers > 0) {
+      this.conflict(
+        `Filialga ${couriers} ta kuryer biriktirilgan — ${action}. Avval kuryerlarni boshqa filialga o'tkazing yoki filialdan chiqaring`,
+      );
+    }
+
+    if (!losesCourierHosting && !deactivates) {
+      return;
+    }
+    let work: { orders: number; batches: number };
+    try {
+      work = await this.loadBranchOpenWork(branchId);
+    } catch (error) {
+      this.logger.warn(
+        `updateBranch: order.branch_can_delete failed (branch=${branchId}): ${this.describeRpcFailure(error)}`,
+      );
+      throw new RpcException(
+        errorRes(
+          "Filialdagi yakunlanmagan buyurtmalarni tekshirib bo'lmadi (buyurtmalar xizmati javob bermadi) — o'zgarish saqlanmadi. Birozdan so'ng qayta urinib ko'ring",
+          503,
+        ),
+      );
+    }
+    if (work.orders > 0 || work.batches > 0) {
+      this.conflict(
+        `Filialda ${work.orders} ta yakunlanmagan buyurtma va ${work.batches} ta faol partiya bor — ${action}. Avval ularni yakunlang`,
+      );
+    }
+  }
+
+  /**
+   * Filialga bog'langan yakunlanmagan buyurtmalar va faol partiyalar
+   * (`order.branch_can_delete`). Xato yoki buzuq javob — throw.
+   */
+  private async loadBranchOpenWork(
+    branchId: string,
+  ): Promise<{ orders: number; batches: number }> {
+    const response = await lastValueFrom(
+      this.orderClient
+        .send<{
+          data?: { active_orders?: unknown; active_batches?: unknown } | null;
+        }>({ cmd: 'order.branch_can_delete' }, { branch_id: branchId })
+        .pipe(timeout(5000)),
+    );
+    const data = response?.data;
+    const orders = Number(data?.active_orders);
+    const batches = Number(data?.active_batches);
+    if (
+      !data ||
+      !Number.isFinite(orders) ||
+      orders < 0 ||
+      !Number.isFinite(batches) ||
+      batches < 0
+    ) {
+      throw new Error("order.branch_can_delete: javob shakli noto'g'ri");
+    }
+    return { orders, batches };
+  }
+
   async deleteBranch(id: string, requester?: RequesterContext) {
     await this.assertCanWriteBranch(id, requester);
     const branch = await this.getBranchOrThrow(id);
 
     if (await this.hasActiveChildren(branch.id)) {
-      this.badRequest('Cannot delete branch with child branches');
+      this.badRequest(
+        "Ichki (bola) filiallari bor filialni o'chirib bo'lmaydi — avval ularni o'chiring yoki boshqa filialga ko'chiring",
+      );
     }
 
     const activeUsers = await this.branchUserRepo.count({
@@ -4345,7 +4922,7 @@ export class BranchServiceService implements OnModuleInit {
     });
     if (activeUsers > 0) {
       this.badRequest(
-        `Cannot delete branch — ${activeUsers} active user(s) assigned. Reassign or remove them first.`,
+        `Filialni o'chirib bo'lmaydi — unga ${activeUsers} ta faol xodim biriktirilgan. Avval ularni boshqa filialga o'tkazing yoki filialdan chiqaring.`,
       );
     }
 
@@ -4364,8 +4941,11 @@ export class BranchServiceService implements OnModuleInit {
       );
       canDelete = response?.data ?? null;
     } catch (error) {
+      this.logger.warn(
+        `deleteBranch: order.branch_can_delete failed (branch=${String(branch.id)}): ${this.describeRpcFailure(error)}`,
+      );
       this.badRequest(
-        `Cannot verify branch is safe to delete (order-service unreachable): ${(error as Error)?.message ?? 'unknown'}`,
+        "Filialni o'chirib bo'lmaydi — buyurtmalar xizmati javob bermadi, filialdagi faol buyurtmalarni tekshirib bo'lmadi. Birozdan so'ng qayta urinib ko'ring",
       );
     }
 
@@ -4374,7 +4954,7 @@ export class BranchServiceService implements OnModuleInit {
       const batches = Number(canDelete.active_batches ?? 0);
       if (orders > 0 || batches > 0) {
         this.badRequest(
-          `Cannot delete branch — ${orders} active order(s) and ${batches} active transfer batch(es) reference it.`,
+          `Filialni o'chirib bo'lmaydi — unga ${orders} ta yakunlanmagan buyurtma va ${batches} ta faol partiya bog'langan.`,
         );
       }
     }
@@ -4405,10 +4985,10 @@ export class BranchServiceService implements OnModuleInit {
     const userId = String(data?.user_id ?? '').trim();
 
     if (!branchId) {
-      this.badRequest('branch_id is required');
+      this.badRequest('branch_id majburiy');
     }
     if (!userId) {
-      this.badRequest('user_id is required');
+      this.badRequest('user_id majburiy');
     }
 
     await this.assertCanWriteBranch(branchId, requester);
@@ -4483,7 +5063,9 @@ export class BranchServiceService implements OnModuleInit {
       },
     });
     if (anotherBranch && anotherBranch.branch_id !== branchId) {
-      this.conflict('User already assigned to another branch');
+      this.conflict(
+        "Foydalanuvchi boshqa filialga biriktirilgan — avval uni o'sha filialdan chiqaring",
+      );
     }
 
     const existing = await this.branchUserRepo.findOne({
@@ -4491,7 +5073,7 @@ export class BranchServiceService implements OnModuleInit {
     });
 
     if (existing && !existing.isDeleted) {
-      this.conflict('User already assigned to branch');
+      this.conflict('Foydalanuvchi bu filialga allaqachon biriktirilgan');
     }
 
     // R3: filialsiz (yetim) kuryerni BOSHQA filialga biriktirish — amalda
@@ -4564,10 +5146,10 @@ export class BranchServiceService implements OnModuleInit {
     const userId = String(data?.user_id ?? '').trim();
 
     if (!branchId) {
-      this.badRequest('branch_id is required');
+      this.badRequest('branch_id majburiy');
     }
     if (!userId) {
-      this.badRequest('user_id is required');
+      this.badRequest('user_id majburiy');
     }
 
     await this.assertCanWriteBranch(branchId, requester);
@@ -4576,7 +5158,7 @@ export class BranchServiceService implements OnModuleInit {
       where: { branch_id: branchId, user_id: userId, isDeleted: false },
     });
     if (!row) {
-      this.notFound('Branch user relation not found');
+      this.notFound('Foydalanuvchi bu filialga biriktirilmagan');
     }
 
     // R3: kuryerni filialdan chiqarish — faqat qo'lida pul ham, buyurtma ham
@@ -4590,6 +5172,7 @@ export class BranchServiceService implements OnModuleInit {
         userId,
         branch ?? null,
         COURIER_UNASSIGN_BLOCKED_PREFIX,
+        { closeNetZeroRows: true, requester },
       );
     }
 
@@ -4815,6 +5398,7 @@ export class BranchServiceService implements OnModuleInit {
         userId,
         currentBranch,
         COURIER_TRANSFER_BLOCKED_PREFIX,
+        { closeNetZeroRows: true, requester },
       ),
     ]);
     for (const outcome of [targetManagerCheck, holdingsCheck]) {
@@ -5159,7 +5743,7 @@ export class BranchServiceService implements OnModuleInit {
   async findUsersByBranch(branch_id: string, requester?: RequesterContext) {
     const branchId = String(branch_id ?? '').trim();
     if (!branchId) {
-      this.badRequest('branch_id is required');
+      this.badRequest('branch_id majburiy');
     }
 
     await this.assertCanReadBranch(branchId, requester);
@@ -5195,7 +5779,7 @@ export class BranchServiceService implements OnModuleInit {
   async findUserBranch(user_id: string, requester?: RequesterContext) {
     const userId = String(user_id ?? '').trim();
     if (!userId) {
-      this.badRequest('user_id is required');
+      this.badRequest('user_id majburiy');
     }
 
     if (!this.isSystemPrivileged(requester)) {
@@ -5235,6 +5819,25 @@ export class BranchServiceService implements OnModuleInit {
     );
   }
 
+  /**
+   * Menejerning kassa doirasi — finance-gateway kassa ko'rish va kuryerdan
+   * pul qabul qilish (POST /finance/cashbox/payment/courier) ruxsati uchun.
+   *
+   * C3 (M7/RBAC-07) — FAQAT menejerning O'Z filiali. Ilgari ota filiallar
+   * zanjiri ham ruxsat etilgan hisoblanardi (u doim HQ'ga yetadi): viloyat
+   * menejeri HQ kuryeri yoki ota filial kuryeri naqdini o'z filial kassasiga
+   * "qabul qila" olardi, FIFO esa HQ qatorlarini BRANCH_SETTLED ("naqd HQ'da")
+   * qilardi — pul HQ hisobidan yo'qolardi. Endi:
+   *   - so'rovchining o'zi → o'z filiali;
+   *   - faol branch_users qatori bor foydalanuvchi → qatori AYNAN menejer
+   *     filialida bo'lsagina (HQ, ota va bola filiallar — yo'q);
+   *   - foydalanuvchi bo'lmagan id menejer filialining o'z id'siga teng →
+   *     o'z filiali;
+   *   - qolgan hammasi → null (ruxsat yo'q).
+   * Foydalanuvchi id'si filial id'lari bilan solishtirilmaydi: id'lar har xil
+   * jadvallardan, raqamlar to'qnashadi (kuryer #15 va filial #15) — shuning
+   * uchun foydalanuvchi qatori birinchi tekshiriladi.
+   */
   async resolveCashboxBranchForManager(
     requested_id: string,
     requester?: RequesterContext,
@@ -5242,7 +5845,7 @@ export class BranchServiceService implements OnModuleInit {
     const requesterId = String(requester?.id ?? '').trim();
     const requestedId = String(requested_id ?? '').trim();
     if (!requesterId || !requestedId) {
-      this.badRequest('requester_id and requested_id are required');
+      this.badRequest('requester_id va requested_id majburiy');
     }
 
     const requesterRoles = (requester?.roles ?? []).map((role) =>
@@ -5251,7 +5854,7 @@ export class BranchServiceService implements OnModuleInit {
         .toLowerCase(),
     );
     if (!requesterRoles.includes('manager')) {
-      this.forbidden('Requester branch manager emas');
+      this.forbidden("So'rovchi filial menejeri emas");
     }
 
     const managerAssignment = await this.branchUserRepo.findOne({
@@ -5269,42 +5872,14 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const managerBranch = await this.getBranchOrThrow(managerBranchId);
-    if (
-      requestedId === requesterId ||
-      requestedId === String(managerBranch.id)
-    ) {
-      return successRes(
-        { branch_id: String(managerBranch.id) },
-        200,
-        'Manager cashbox branch resolved',
-      );
-    }
+    const ownBranchId = String(managerBranch.id);
+    const resolved = (message: string) =>
+      successRes({ branch_id: ownBranchId }, 200, message);
+    const notResolved = () =>
+      successRes(null, 200, 'Manager cashbox branch not resolved');
 
-    const accessibleBranches = new Map<string, Branch>([
-      [String(managerBranch.id), managerBranch],
-    ]);
-    const visitedBranchIds = new Set<string>([String(managerBranch.id)]);
-    let ancestorBranchId = String(managerBranch.parent_id ?? '').trim();
-
-    while (ancestorBranchId && !visitedBranchIds.has(ancestorBranchId)) {
-      visitedBranchIds.add(ancestorBranchId);
-      const ancestorBranch = await this.branchRepo.findOne({
-        where: { id: ancestorBranchId, isDeleted: false },
-      });
-      if (!ancestorBranch) {
-        break;
-      }
-
-      accessibleBranches.set(String(ancestorBranch.id), ancestorBranch);
-      ancestorBranchId = String(ancestorBranch.parent_id ?? '').trim();
-    }
-
-    if (accessibleBranches.has(requestedId)) {
-      return successRes(
-        { branch_id: requestedId },
-        200,
-        'Manager accessible cashbox branch resolved',
-      );
+    if (requestedId === requesterId) {
+      return resolved('Manager cashbox branch resolved');
     }
 
     const requestedUserAssignment = await this.branchUserRepo.findOne({
@@ -5314,18 +5889,18 @@ export class BranchServiceService implements OnModuleInit {
       },
       order: { createdAt: 'DESC' },
     });
-    const requestedUserBranchId = String(
-      requestedUserAssignment?.branch_id ?? '',
-    );
-    if (accessibleBranches.has(requestedUserBranchId)) {
-      return successRes(
-        { branch_id: requestedUserBranchId },
-        200,
-        'Manager accessible user cashbox branch resolved',
-      );
+    if (requestedUserAssignment) {
+      return String(requestedUserAssignment.branch_id ?? '').trim() ===
+        ownBranchId
+        ? resolved('Manager branch user cashbox branch resolved')
+        : notResolved();
     }
 
-    return successRes(null, 200, 'Manager cashbox branch not resolved');
+    if (requestedId === ownBranchId) {
+      return resolved('Manager cashbox branch resolved');
+    }
+
+    return notResolved();
   }
 
   async setBranchConfig(
@@ -5340,10 +5915,10 @@ export class BranchServiceService implements OnModuleInit {
     const configKey = String(data?.config_key ?? '').trim();
 
     if (!branchId) {
-      this.badRequest('branch_id is required');
+      this.badRequest('branch_id majburiy');
     }
     if (!configKey) {
-      this.badRequest('config_key is required');
+      this.badRequest('config_key majburiy');
     }
 
     await this.assertCanWriteBranch(branchId, requester);
@@ -5397,7 +5972,7 @@ export class BranchServiceService implements OnModuleInit {
   async getBranchConfig(branch_id: string, requester?: RequesterContext) {
     const branchId = String(branch_id ?? '').trim();
     if (!branchId) {
-      this.badRequest('branch_id is required');
+      this.badRequest('branch_id majburiy');
     }
 
     await this.assertCanReadBranch(branchId, requester);
@@ -5420,10 +5995,10 @@ export class BranchServiceService implements OnModuleInit {
     const configKey = String(data?.config_key ?? '').trim();
 
     if (!branchId) {
-      this.badRequest('branch_id is required');
+      this.badRequest('branch_id majburiy');
     }
     if (!configKey) {
-      this.badRequest('config_key is required');
+      this.badRequest('config_key majburiy');
     }
 
     await this.assertCanReadBranch(branchId, requester);
@@ -5435,7 +6010,7 @@ export class BranchServiceService implements OnModuleInit {
     });
 
     if (!item) {
-      this.notFound('Branch config not found');
+      this.notFound('Filial sozlamasi topilmadi');
     }
 
     return successRes(item, 200, 'Branch config found');
@@ -5453,10 +6028,10 @@ export class BranchServiceService implements OnModuleInit {
     const configKey = String(data?.config_key ?? '').trim();
 
     if (!branchId) {
-      this.badRequest('branch_id is required');
+      this.badRequest('branch_id majburiy');
     }
     if (!configKey) {
-      this.badRequest('config_key is required');
+      this.badRequest('config_key majburiy');
     }
 
     await this.assertCanWriteBranch(branchId, requester);
@@ -5467,7 +6042,7 @@ export class BranchServiceService implements OnModuleInit {
       where: { branch_id: branchId, config_key: configKey, isDeleted: false },
     });
     if (!item) {
-      this.notFound('Branch config not found');
+      this.notFound('Filial sozlamasi topilmadi');
     }
 
     const beforeConfig = { config_value: item.config_value };
@@ -5499,10 +6074,10 @@ export class BranchServiceService implements OnModuleInit {
     const configKey = String(data?.config_key ?? '').trim();
 
     if (!branchId) {
-      this.badRequest('branch_id is required');
+      this.badRequest('branch_id majburiy');
     }
     if (!configKey) {
-      this.badRequest('config_key is required');
+      this.badRequest('config_key majburiy');
     }
 
     await this.assertCanWriteBranch(branchId, requester);
@@ -5513,7 +6088,7 @@ export class BranchServiceService implements OnModuleInit {
       where: { branch_id: branchId, config_key: configKey, isDeleted: false },
     });
     if (!item) {
-      this.notFound('Branch config not found');
+      this.notFound('Filial sozlamasi topilmadi');
     }
 
     item.isDeleted = true;

@@ -4,6 +4,7 @@ import {
   Delete,
   GatewayTimeoutException,
   Get,
+  GoneException,
   Inject,
   Param,
   Patch,
@@ -56,6 +57,10 @@ interface OrderRowForEnrichment {
   region_id?: string | null;
   [key: string]: unknown;
 }
+
+/** CODE-12 — o'chirilgan eski pochta route'lari (PATCH post/:id, post/reassign/:id). */
+export const LEGACY_POST_ROUTE_DISABLED_MESSAGE =
+  "Bu eski pochta amali o'chirilgan (buyurtma custody'sini tekshiruvsiz o'zgartirardi). Pochtani filialga POST /branches/posts/:postId/dispatch, kuryerga esa POST /orders/assign-to-courier yoki skan orqali bering";
 
 /** logistics.post.return_requests javobi: kuryer bo'yicha guruhlangan qatorlar. */
 interface ReturnRequestsResponse {
@@ -432,41 +437,38 @@ export class LogisticsGatewayController {
   // pul zanjirini buzishi mumkin edi. Frontend bu endpointni chaqirmaydi;
   // registratorlar POST /orders/assign-to-courier (filial tekshiruvi bor) va
   // POST /branches/posts/:postId/dispatch dan foydalanadi.
+  //
+  // CODE-12 — ishga tushirishda superadmin/admin uchun ham O'CHIQ (410):
+  // pochtani filial tekshiruvisiz istalgan kuryerga berardi va tanlanmagan
+  // buyurtmalarga RECEIVED yozardi. Logistics'ga umuman yuborilmaydi.
   @Patch('post/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Send post (assign orders to post)' })
+  @ApiOperation({
+    summary: 'Send post (assign orders to post) — disabled for launch (410)',
+  })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   @ApiBody({ type: SendPostRequestDto })
-  sendPost(
-    @Param('id') id: string,
-    @Body() dto: SendPostRequestDto,
-    @Req() req: { user: JwtUser },
-  ) {
-    return this.logisticsClient
-      .send(
-        { cmd: 'logistics.post.update' },
-        {
-          id,
-          dto,
-          requester: { id: req.user.sub, roles: req.user.roles ?? [] },
-        },
-      )
-      .pipe(timeout(8000));
+  sendPost(): never {
+    throw new GoneException(LEGACY_POST_ROUTE_DISABLED_MESSAGE);
   }
 
+  // CODE-12 — O'CHIQ (410): faqat post.courier_id almashardi, buyurtmalar
+  // custody'si (courier_id/holder) eski kuryerda qolardi va sotuvni ikkala
+  // kuryer ham tasdiqlay olardi.
   @Patch('post/reassign/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Reassign sent post to another courier' })
+  @ApiOperation({
+    summary:
+      'Reassign sent post to another courier — disabled for launch (410)',
+  })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
   @ApiBody({ type: ReassignPostRequestDto })
-  reassignPost(@Param('id') id: string, @Body() dto: ReassignPostRequestDto) {
-    return this.logisticsClient
-      .send({ cmd: 'logistics.post.reassign' }, { id, dto })
-      .pipe(timeout(8000));
+  reassignPost(): never {
+    throw new GoneException(LEGACY_POST_ROUTE_DISABLED_MESSAGE);
   }
 
   @Get('post/scan/:id')
@@ -828,6 +830,10 @@ export class LogisticsGatewayController {
     );
   }
 
+  // RBAC-14 — MARKET YO'Q: tashqi marketga kompaniya daromadi (hudud
+  // bo'yicha) ko'rinmasin; market panelida hududlar sahifasi yo'q. COURIER
+  // qoladi: kuryerning /regions sahifasi shu agregatlarni o'qiydi (bu javobda
+  // kuryer ism/telefoni yo'q).
   @Get('region/stats/all')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -835,7 +841,6 @@ export class LogisticsGatewayController {
     RoleEnum.SUPERADMIN,
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
-    RoleEnum.MARKET,
     RoleEnum.COURIER,
   )
   @ApiBearerAuth()
@@ -861,6 +866,10 @@ export class LogisticsGatewayController {
       .pipe(timeout(8000));
   }
 
+  // RBAC-14 — MARKET va COURIER YO'Q: bu javobda HAR BIR kuryerning ismi,
+  // telefoni va daromadi bor. Frontend kuryer uchun bu endpointni chaqirmaydi
+  // (dashboard hudud kartasi va /regions sahifasining batafsil so'rovi kuryer
+  // uchun o'chiq), market paneli esa umuman chaqirmaydi.
   @Get('region/stats/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -868,8 +877,6 @@ export class LogisticsGatewayController {
     RoleEnum.SUPERADMIN,
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
-    RoleEnum.MARKET,
-    RoleEnum.COURIER,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get region detailed stats by id' })
@@ -1026,16 +1033,33 @@ export class LogisticsGatewayController {
       .pipe(timeout(8000));
   }
 
+  // LC-08 / RBAC-06 — tumanni boshqa hududga biriktirish HQ intake'da
+  // buyurtmalar tushadigan hudud pochtasini butun kompaniya bo'yicha
+  // o'zgartiradi. Avval COURIER va MARKET ham ruxsat etilgan edi (nusxa
+  // xatosi); endi faqat admin/superadmin — district/name va district/sato
+  // bilan bir xil. So'rovchi logistics'ga uzatiladi: u ham rolni tekshiradi
+  // va activity log'ga kim o'zgartirganini yozadi.
   @Patch('district/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN, RoleEnum.COURIER, RoleEnum.MARKET)
+  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Assign district to another region' })
   @ApiParam({ name: 'id', description: 'District ID (id)' })
   @ApiBody({ type: UpdateDistrictRequestDto })
-  update(@Param('id') id: string, @Body() dto: UpdateDistrictRequestDto) {
+  update(
+    @Param('id') id: string,
+    @Body() dto: UpdateDistrictRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
     return this.logisticsClient
-      .send({ cmd: 'logistics.district.update' }, { id, dto })
+      .send(
+        { cmd: 'logistics.district.update' },
+        {
+          id,
+          dto,
+          requester: { id: req.user.sub, roles: req.user.roles ?? [] },
+        },
+      )
       .pipe(timeout(8000));
   }
 

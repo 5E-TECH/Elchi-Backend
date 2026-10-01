@@ -1,9 +1,12 @@
 import {
   Controller,
+  ForbiddenException,
   GatewayTimeoutException,
   Get,
   Inject,
+  Optional,
   Query,
+  Req,
   Res,
   UseGuards,
 } from '@nestjs/common';
@@ -30,6 +33,13 @@ import {
 const EXPORT_TIMEOUT = 20000;
 const MAX_ROWS = 50000; // hard ceiling so an export can't run unbounded
 const PAGE_SIZE = 500;
+const BRANCH_LOOKUP_TIMEOUT = 8000;
+
+interface JwtUser {
+  sub: string;
+  roles?: string[];
+  branch_id?: string | null;
+}
 
 interface EnrichedOrderRow {
   id: string;
@@ -59,7 +69,52 @@ export class ExcelGatewayController {
   constructor(
     @Inject('ORDER') private readonly orderClient: ClientProxy,
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
+    // fix3 C11: filial xodimi eksporti uchun filialni aniqlash. Oxirida va
+    // @Optional — mavjud pozitsion konstruktor chaqiruvlari buzilmasin.
+    @Optional() @Inject('BRANCH') private readonly branchClient?: ClientProxy,
   ) {}
+
+  /**
+   * Filial xodimining (MANAGER/REGISTRATOR/BRANCH) filiali: JWT `branch_id`,
+   * bo'lmasa `branch.user.find_by_user`. Aniqlanmasa — 403 (fail-closed).
+   */
+  private async resolveStaffBranchId(user: JwtUser | undefined) {
+    const jwtBranchId = String(user?.branch_id ?? '').trim();
+    if (jwtBranchId) {
+      return jwtBranchId;
+    }
+    const lookup: unknown =
+      this.branchClient && user?.sub
+        ? await firstValueFrom(
+            this.branchClient
+              .send(
+                { cmd: 'branch.user.find_by_user' },
+                {
+                  user_id: user.sub,
+                  requester: { id: user.sub, roles: user.roles ?? [] },
+                },
+              )
+              .pipe(timeout(BRANCH_LOOKUP_TIMEOUT)),
+          ).catch((err: unknown) => {
+            if (err instanceof TimeoutError) {
+              throw new GatewayTimeoutException('Branch service javob bermadi');
+            }
+            throw err;
+          })
+        : null;
+    const rawBranchId = (lookup as { data?: { branch_id?: unknown } } | null)
+      ?.data?.branch_id;
+    const branchId =
+      typeof rawBranchId === 'string' || typeof rawBranchId === 'number'
+        ? String(rawBranchId).trim()
+        : '';
+    if (!branchId) {
+      throw new ForbiddenException(
+        'Filial xodimi hech qaysi filialga biriktirilmagan',
+      );
+    }
+    return branchId;
+  }
 
   private send<T>(
     client: ClientProxy,
@@ -111,15 +166,35 @@ export class ExcelGatewayController {
     @Query('branch_id') branch_id?: string,
     @Query('from_date') from_date?: string,
     @Query('to_date') to_date?: string,
+    @Req() req?: { user?: JwtUser },
   ): Promise<void> {
+    const roles = (req?.user?.roles ?? []).map((role) =>
+      String(role ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+    const isSystemPrivileged =
+      roles.includes(RoleEnum.SUPERADMIN) || roles.includes(RoleEnum.ADMIN);
+    // fix3 C11 (CODE-04): filial xodimi — FAQAT o'z filiali. Ilgari branch_id
+    // so'rovdan olinardi: uni yubormasa BUTUN kompaniya buyurtmalari mijoz
+    // ma'lumoti bilan eksport bo'lardi.
+    const scopedBranchId = isSystemPrivileged
+      ? branch_id
+      : await this.resolveStaffBranchId(req?.user);
+
+    /**
+     * ⚠️ fix3 CODE-22: order-service `find_all` sana filtrini `start_day`/
+     * `end_day` (Toshkent kuni), kuryerni `courier_ids` dan o'qiydi —
+     * `from_date`/`to_date`/`courier_id` ni JIMGINA e'tiborsiz qoldirardi.
+     */
     const baseQuery = {
       status,
       market_id,
       region_id,
-      courier_id,
-      branch_id,
-      from_date,
-      to_date,
+      courier_ids: courier_id ? [courier_id] : undefined,
+      branch_id: scopedBranchId,
+      start_day: from_date,
+      end_day: to_date,
     };
 
     const rows: EnrichedOrderRow[] = [];
