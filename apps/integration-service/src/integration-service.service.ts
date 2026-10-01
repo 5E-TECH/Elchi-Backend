@@ -2469,9 +2469,22 @@ export class IntegrationServiceService {
      * Sandbox nusxasi ham yuborilmaydi (shu satr `fetch`largacha turadi):
      * buzuq hodisaning nusxasi sinov muhitini ham chalg'itadi.
      */
-    const idRejection = externalOrderIdRejection(
-      String(row.payload?.external_order_id ?? row.external_order_id ?? ''),
-    );
+    /**
+     * ⚠️ `settlement.payment` ISTISNO. Bu hodisa MARKET darajasida —
+     * buyurtmaga bog'liq EMAS, shuning uchun `external_order_id` ATAYLAB
+     * bo'sh. external_order_id tekshiruvini qo'llasak, u DOIM yaroqsiz deb
+     * `permanently_failed` bo'lardi va hamkorga HECH QACHON yetmasdi
+     * (settlement.payment emiti). Shu bois faqat buyurtma-hodisalari uchun
+     * tekshiramiz.
+     */
+    const idRejection =
+      row.event_type === 'settlement.payment'
+        ? null
+        : externalOrderIdRejection(
+            String(
+              row.payload?.external_order_id ?? row.external_order_id ?? '',
+            ),
+          );
     if (idRejection) {
       throw new PartnerWebhookPermanentError(
         `external_order_id yaroqsiz: ${idRejection} — qayta urinish foyda bermaydi`,
