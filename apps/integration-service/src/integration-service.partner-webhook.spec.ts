@@ -149,6 +149,53 @@ describe('IntegrationServiceService — partner outbound webhook (C2.3)', () => 
     expect(patches[patches.length - 1].status).toBe('permanently_failed');
   });
 
+  it('⭐ settlement.payment: external_order_id bo`sh bo`lsa ham YETKAZILADI (permanently_failed EMAS)', async () => {
+    /**
+     * ⚠️ REGRESSIYA QO'RIQCHISI (485). settlement.payment MARKET darajasida —
+     * buyurtmasi yo'q, external_order_id ATAYLAB bo'sh. Ilgari yetkazish
+     * tekshiruvi uni "external_order_id yaroqsiz: bo'sh" deb DARHOL
+     * permanently_failed qilardi va hamkorga HECH QACHON yetmasdi. Endi
+     * settlement.payment uchun bu tekshiruv o'tkazib yuboriladi.
+     */
+    const patches: any[] = [];
+    const svc: any = makeSvc({
+      outboxUpdate: jest.fn((_c: any, p: any) => {
+        patches.push(p);
+        return Promise.resolve({ affected: 1 });
+      }),
+    });
+    global.fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve('{"received":true}'),
+      }),
+    ) as unknown as typeof fetch;
+
+    const row = {
+      id: '1',
+      partner_id: '7',
+      attempts: 0,
+      max_attempts: 4,
+      event_type: 'settlement.payment',
+      external_order_id: '', // settlement — buyurtmasi yo'q, bo'sh NORMAL
+      payload: {
+        event: 'settlement.payment',
+        event_id: 'e1',
+        payment_id: '259:abc',
+        amount: 5000,
+        paid_at: 1750000000000,
+      },
+    };
+    await svc.deliverPartnerWebhookRow(row);
+
+    // external_order_id bo'sh bo'lsa ham YETKAZISHGA urindi (rad etilmadi):
+    expect(global.fetch).toHaveBeenCalled();
+    const last = patches[patches.length - 1];
+    expect(last.status).not.toBe('permanently_failed');
+    expect(last.status).toBe('completed'); // 200 -> yetkazildi
+  });
+
   it('claim affected=0 (boshqa worker oldi) -> yubormaydi', async () => {
     const svc: any = makeSvc({
       outboxUpdate: jest.fn(() => Promise.resolve({ affected: 0 })),
