@@ -1328,6 +1328,41 @@ export class UserServiceService implements OnModuleInit {
         this.conflict('Bu telefon raqam boshqa rolda allaqachon mavjud');
       }
 
+      /**
+       * MAVJUD MIJOZNI YANGILASH (j70YS4zJ).
+       *
+       * Elchi mijozni telefon bo'yicha topsa, ilgari mavjud yozuvni HECH
+       * NARSA yangilamasdan qaytarardi — kuryer esa eski (ehtimol noto'g'ri)
+       * ism/tumanni ko'rib qolardi. Endi berilgan va FARQ QILADIGAN
+       * maydonlarni yozamiz.
+       *
+       * ⚠️ FAQAT berilgan (non-null) qiymatlar yoziladi — bo'sh/kelmagan DTO
+       * eski ism/tuman/manzilni O'CHIRMASLIGI kerak.
+       */
+      const patch: Partial<User> = {};
+      if (dto.name != null && dto.name !== existing.name) {
+        patch.name = dto.name;
+      }
+      if (dto.district_id != null && dto.district_id !== existing.district_id) {
+        patch.district_id = dto.district_id;
+      }
+      if (dto.address != null && dto.address !== existing.address) {
+        patch.address = dto.address;
+      }
+      if (
+        dto.extra_number != null &&
+        dto.extra_number !== existing.extra_number
+      ) {
+        patch.extra_number = dto.extra_number;
+      }
+
+      if (Object.keys(patch).length > 0) {
+        Object.assign(existing, patch);
+        const updated = await this.users.save(existing);
+        void this.syncUserToSearch(updated);
+        return successRes(this.sanitize(updated), 200, 'Customer yangilandi');
+      }
+
       return successRes(
         this.sanitize(existing),
         200,

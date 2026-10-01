@@ -296,7 +296,23 @@ export class FinanceServiceService implements OnModuleInit {
       },
     ).catch(() => ({ data: [] }));
 
-    return [...(partly?.data ?? []), ...(sold?.data ?? [])];
+    /**
+     * ⚠️ SETTLEMENT FIFO BILAN TEKISLASH (7AWmSQ1p).
+     *
+     * Settlement ledger to'lovni buyurtmalarga `createdAt ASC` (eng eski
+     * birinchi) tartibida taqsimlaydi (order-settlement.service.ts). Bu yerda
+     * esa buyurtmalar `order.find_all` ning sukut tartibida (`createdAt DESC`)
+     * keladi va PARTLY_PAID+SOLD ketma-ket qo'shiladi — ya'ni order.status
+     * (bu metod yozadi) BOSHQA buyurtmalarga tegardi, natijada buyurtma
+     * 'paid', settlement esa 'pending' bo'lib ajralardi. Endi birlashtirilgan
+     * ro'yxat `createdAt ASC` bo'yicha saralanib, ikkala tomon AYNI
+     * buyurtmalarga tegadi.
+     */
+    return [...(partly?.data ?? []), ...(sold?.data ?? [])].sort((a, b) => {
+      const ta = new Date(a?.createdAt ?? a?.created_at ?? 0).getTime();
+      const tb = new Date(b?.createdAt ?? b?.created_at ?? 0).getTime();
+      return ta - tb;
+    });
   }
 
   private async applyPaymentToOrders(marketId: string, amount: number) {

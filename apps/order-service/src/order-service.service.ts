@@ -975,7 +975,14 @@ export class OrderServiceService {
     page?: number;
     limit?: number;
   }) {
-    return this.findAll({
+    /**
+     * ⚠️ ENRICH YO'LI (DL6FCdrh). Ilgari `findAll` chaqirilardi — u mijoz va
+     * tuman relationlarini JOIN qilmaydi, natijada skanerlash ekranida mijoz
+     * ismi va tumani '—' bo'lib qolardi (faqat xom customer_id/district_id
+     * qaytardi). `findAllEnriched` mijoz (identity) + tuman ma'lumotini
+     * qo'shadi — oddiy /orders sahifasi ishlatadigan AYNI yo'l.
+     */
+    return this.findAllEnriched({
       ...query,
       source: Order_source.EXTERNAL,
     });
@@ -1507,6 +1514,11 @@ export class OrderServiceService {
     district_id?: string;
     sort_by?: string;
     sort_dir?: string;
+    // `source`/`fetch_all` — tashqi (EXTERNAL) posilkalar ro'yxati uchun
+    // (findAllExternal shu yo'lni ishlatadi, DL6FCdrh). findAll ularni
+    // qo'llab-quvvatlaydi; bu yerda faqat tip ochiladi.
+    source?: Order_source | 'internal' | 'external' | 'branch';
+    fetch_all?: boolean | string;
     page?: number;
     limit?: number;
   }) {

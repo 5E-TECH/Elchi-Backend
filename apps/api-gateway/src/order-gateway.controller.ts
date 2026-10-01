@@ -3462,7 +3462,9 @@ export class OrderGatewayController {
   )
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Settle a courier lump-sum payment to the branch (FIFO per order)',
+    deprecated: true,
+    summary:
+      'DEPRECATED (410 Gone): lump-sum settlement olib tashlandi — endi har-buyurtma FIFO ledger ishlaydi. Bu yo’l 410 qaytaradi (uEPILERk).',
   })
   settlementCourierToBranch(
     @Body() dto: SettlementCourierToBranchDto,
@@ -3500,7 +3502,9 @@ export class OrderGatewayController {
   @Roles(RoleEnum.MANAGER, RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Settle a branch lump-sum remittance to HQ (FIFO per order)',
+    deprecated: true,
+    summary:
+      'DEPRECATED (410 Gone): lump-sum remittance olib tashlandi — FIFO ledger ishlaydi. 410 qaytaradi (uEPILERk).',
   })
   settlementBranchToHq(
     @Body() dto: SettlementBranchToHqDto,
@@ -3538,7 +3542,9 @@ export class OrderGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({
-    summary: 'Settle an HQ lump-sum payment to a market (FIFO per order)',
+    deprecated: true,
+    summary:
+      'DEPRECATED (410 Gone): HQ lump-sum payment olib tashlandi — FIFO ledger ishlaydi. 410 qaytaradi (uEPILERk).',
   })
   settlementHqToMarket(
     @Body() dto: SettlementHqToMarketDto,

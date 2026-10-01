@@ -2842,6 +2842,7 @@
     },
     "/orders/settlement/courier-to-branch": {
       "post": {
+        "deprecated": true,
         "operationId": "OrderGatewayController_settlementCourierToBranch",
         "parameters": [],
         "requestBody": {
@@ -2864,7 +2865,7 @@
             "bearer": []
           }
         ],
-        "summary": "Settle a courier lump-sum payment to the branch (FIFO per order)",
+        "summary": "DEPRECATED (410 Gone): lump-sum settlement olib tashlandi — endi har-buyurtma FIFO ledger ishlaydi. Bu yo’l 410 qaytaradi (uEPILERk).",
         "tags": [
           "Orders"
         ]
@@ -2872,6 +2873,7 @@
     },
     "/orders/settlement/branch-to-hq": {
       "post": {
+        "deprecated": true,
         "operationId": "OrderGatewayController_settlementBranchToHq",
         "parameters": [],
         "requestBody": {
@@ -2894,7 +2896,7 @@
             "bearer": []
           }
         ],
-        "summary": "Settle a branch lump-sum remittance to HQ (FIFO per order)",
+        "summary": "DEPRECATED (410 Gone): lump-sum remittance olib tashlandi — FIFO ledger ishlaydi. 410 qaytaradi (uEPILERk).",
         "tags": [
           "Orders"
         ]
@@ -2902,6 +2904,7 @@
     },
     "/orders/settlement/hq-to-market": {
       "post": {
+        "deprecated": true,
         "operationId": "OrderGatewayController_settlementHqToMarket",
         "parameters": [],
         "requestBody": {
@@ -2924,7 +2927,7 @@
             "bearer": []
           }
         ],
-        "summary": "Settle an HQ lump-sum payment to a market (FIFO per order)",
+        "summary": "DEPRECATED (410 Gone): HQ lump-sum payment olib tashlandi — FIFO ledger ishlaydi. 410 qaytaradi (uEPILERk).",
         "tags": [
           "Orders"
         ]
@@ -15101,6 +15104,11 @@
             "type": "number",
             "description": "Shu qopda ketayotgan posilka soni — HAMKOR aytgan son. Elchi uni o‘zi sanagan son bilan solishtiradi (qop to‘liq yetib keldimi).",
             "example": 12
+          },
+          "comment": {
+            "type": "string",
+            "description": "Operator izohi — Elchi kuryeri yetkazishda ko‘radi (TzuuOKI3).",
+            "example": "Eshik kodi 1234; faqat ertalab"
           }
         },
         "required": [
