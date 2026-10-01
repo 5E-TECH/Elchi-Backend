@@ -2384,6 +2384,32 @@ export class IntegrationServiceService {
   }
 
   /**
+   * Webhook sekreti rotatsiya oynasi hali OCHIQmi? (Q82QPgih). Eski sekret
+   * (`webhook_secret_previous`) FAQAT shu oyna ichida qabul qilinadi; aks holda
+   * sizib chiqqan eski sekret abadiy amal qilardi. `webhook_secret_previous_at`
+   * YO'Q bo'lsa (rotatsiya emas yoki legacy tozalangan) oyna YOPIQ hisoblanadi.
+   */
+  private isWebhookPreviousSecretWithinWindow(
+    integration: ExternalIntegration,
+  ): boolean {
+    if (!integration.webhook_secret_previous) return false;
+    const at = integration.webhook_secret_previous_at;
+    if (!at) return false;
+    const windowMs = this.getWebhookSecretRotationWindowMs();
+    return Date.now() - new Date(at).getTime() <= windowMs;
+  }
+
+  /**
+   * Eski webhook sekreti amal qiladigan oyna uzunligi (ms). Tashqi tizim
+   * sekretni bir zumda almashtira olmaydi — qisqa oyna beriladi, so'ng eski
+   * sekret rad etiladi. Env: `WEBHOOK_SECRET_ROTATION_WINDOW_MS`, sukut 24 soat.
+   */
+  private getWebhookSecretRotationWindowMs(): number {
+    const raw = Number(process.env.WEBHOOK_SECRET_ROTATION_WINDOW_MS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 24 * 60 * 60 * 1000;
+  }
+
+  /**
    * Bitta outbox qatorini yetkazadi. Atomik claim (`pending`→`processing`) →
    * HMAC POST → muvaffaqiyat: `completed`+`delivered_at`; xato: attempts<max bo'lsa
    * `pending`+backoff (`getRetryDelayMs`), aks holda `permanently_failed`.
@@ -4423,6 +4449,7 @@ export class IntegrationServiceService {
       ),
       // Rotatsiya oynasi TIZIM tomonidan boshqariladi — yaratishda bo'sh.
       webhook_secret_previous: null,
+      webhook_secret_previous_at: null,
       webhook_signature_header: dto.webhook_signature_header ?? null,
       webhook_signature_prefix: dto.webhook_signature_prefix ?? null,
       webhook_algorithm: dto.webhook_algorithm ?? null,
@@ -4736,6 +4763,12 @@ export class IntegrationServiceService {
           : null;
         if (previousPlain !== next) {
           row.webhook_secret_previous = before_webhook_secret;
+          // ⚠️ Oyna FAQAT haqiqiy rotatsiyada ochiladi (eski sekret BOR edi) —
+          // va `now()` dan boshlab muddatli (Q82QPgih). Birinchi marta sekret
+          // qo'yilganda (eski yo'q) oyna ham, vaqt ham bo'lmaydi.
+          row.webhook_secret_previous_at = before_webhook_secret
+            ? new Date()
+            : null;
         }
         row.webhook_secret = this.encryptCredential(next);
       } else {
@@ -4743,6 +4776,7 @@ export class IntegrationServiceService {
         // sekret `previous` orqali ishlashda davom etardi.
         row.webhook_secret = null;
         row.webhook_secret_previous = null;
+        row.webhook_secret_previous_at = null;
       }
     }
     if (typeof dto.auth_type !== 'undefined') {
@@ -5782,9 +5816,12 @@ export class IntegrationServiceService {
       rawBody,
       signature,
       secret,
-      previousSecret: this.decryptCredential(
-        integration.webhook_secret_previous,
-      ),
+      // ⚠️ Eski sekret FAQAT rotatsiya oynasi OCHIQ bo'lsa sinaladi (Q82QPgih).
+      // Oyna yopiq (yoki vaqt yo'q) bo'lsa `null` uzatiladi — sizib chiqqan
+      // eski sekret endi abadiy amal qilmaydi.
+      previousSecret: this.isWebhookPreviousSecretWithinWindow(integration)
+        ? this.decryptCredential(integration.webhook_secret_previous)
+        : null,
       stripPrefix: integration.webhook_signature_prefix ?? undefined,
       algorithm,
     });

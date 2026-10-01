@@ -163,3 +163,105 @@ describe('webhook_secret — rotatsiya oynasi', () => {
     expect(dec(svc, enc(svc, 'a'))).toBe('a');
   });
 });
+
+describe('webhook_secret — rotatsiya oynasini YOPISH (Q82QPgih)', () => {
+  /**
+   * ⚠️ XAVFSIZLIK. Ilgari eski sekret `webhook_secret_previous`da MUDDATSIZ
+   * qolardi — oyna hech qachon yopilmasdi va sizib chiqqan eski sekret ABADIY
+   * to'g'ri imzo berardi. Endi rotatsiya VAQTI (`webhook_secret_previous_at`)
+   * yoziladi va eski sekret faqat oyna ichida qabul qilinadi.
+   */
+  it("⭐ rotatsiyada `webhook_secret_previous_at` now() ga o'rnatiladi", async () => {
+    const tmp = makeService({});
+    const oldEnc = enc(tmp.svc, 'eski-sir');
+    const { svc, saved } = makeService({
+      id: '1',
+      slug: 'd',
+      webhook_secret: oldEnc,
+      webhook_secret_previous: null,
+      webhook_secret_previous_at: null,
+      isDeleted: false,
+    });
+
+    const before = Date.now();
+    await (svc as any).updateIntegration('1', { webhook_secret: 'yangi-sir' });
+
+    const at = saved[0].webhook_secret_previous_at as Date;
+    expect(at).toBeInstanceOf(Date);
+    expect(at.getTime()).toBeGreaterThanOrEqual(before);
+  });
+
+  it("⭐ bo'sh satr (tozalash) oyna VAQTINI ham null qiladi", async () => {
+    const { svc, saved } = makeService({
+      id: '1',
+      slug: 'd',
+      webhook_secret: 'enc:eski',
+      webhook_secret_previous: 'enc:juda-eski',
+      webhook_secret_previous_at: new Date(),
+      isDeleted: false,
+    });
+
+    await (svc as any).updateIntegration('1', { webhook_secret: '' });
+
+    expect(saved[0].webhook_secret_previous).toBeNull();
+    expect(saved[0].webhook_secret_previous_at).toBeNull();
+  });
+
+  it("birinchi marta sekret qo'yilsa (eski YO'Q) oyna vaqti null qoladi", async () => {
+    const { svc, saved } = makeService({
+      id: '1',
+      slug: 'd',
+      webhook_secret: null,
+      webhook_secret_previous: null,
+      webhook_secret_previous_at: null,
+      isDeleted: false,
+    });
+
+    await (svc as any).updateIntegration('1', { webhook_secret: 'birinchi' });
+
+    expect(saved[0].webhook_secret_previous).toBeNull();
+    expect(saved[0].webhook_secret_previous_at).toBeNull();
+  });
+
+  it('⭐ isWebhookPreviousSecretWithinWindow: ochiq / yopiq / vaqtsiz / previoussiz', () => {
+    const { svc } = makeService({});
+    const within = (o: any) =>
+      (svc as any).isWebhookPreviousSecretWithinWindow(o);
+    // ochiq — hozirgina rotatsiya
+    expect(
+      within({ webhook_secret_previous: 'enc:x', webhook_secret_previous_at: new Date() }),
+    ).toBe(true);
+    // yopiq — 48 soat oldin (sukut oyna 24s)
+    expect(
+      within({
+        webhook_secret_previous: 'enc:x',
+        webhook_secret_previous_at: new Date(Date.now() - 48 * 60 * 60 * 1000),
+      }),
+    ).toBe(false);
+    // vaqt yo'q -> yopiq (legacy, migratsiyadan oldin)
+    expect(
+      within({ webhook_secret_previous: 'enc:x', webhook_secret_previous_at: null }),
+    ).toBe(false);
+    // previous yo'q -> yopiq
+    expect(
+      within({ webhook_secret_previous: null, webhook_secret_previous_at: new Date() }),
+    ).toBe(false);
+  });
+
+  it('getWebhookSecretRotationWindowMs: sukut 24s, env override, yaroqsiz -> sukut', () => {
+    const { svc } = makeService({});
+    const real = process.env.WEBHOOK_SECRET_ROTATION_WINDOW_MS;
+    delete process.env.WEBHOOK_SECRET_ROTATION_WINDOW_MS;
+    expect((svc as any).getWebhookSecretRotationWindowMs()).toBe(
+      24 * 60 * 60 * 1000,
+    );
+    process.env.WEBHOOK_SECRET_ROTATION_WINDOW_MS = '3600000';
+    expect((svc as any).getWebhookSecretRotationWindowMs()).toBe(3600000);
+    process.env.WEBHOOK_SECRET_ROTATION_WINDOW_MS = 'xato';
+    expect((svc as any).getWebhookSecretRotationWindowMs()).toBe(
+      24 * 60 * 60 * 1000,
+    );
+    if (real === undefined) delete process.env.WEBHOOK_SECRET_ROTATION_WINDOW_MS;
+    else process.env.WEBHOOK_SECRET_ROTATION_WINDOW_MS = real;
+  });
+});

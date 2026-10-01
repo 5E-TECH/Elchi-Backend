@@ -307,11 +307,13 @@ describe('IntegrationServiceService.receiveWebhook', () => {
     expect(webhookLogRepo.save).not.toHaveBeenCalled();
   });
 
-  it('accepts a signature signed with the previous secret during rotation', async () => {
+  it('accepts a signature signed with the previous secret during rotation (oyna OCHIQ)', async () => {
     const { service } = makeService(
       baseIntegration({
         webhook_secret: 'new-secret',
         webhook_secret_previous: 'old-secret',
+        // Q82QPgih: oyna hozirgina ochilgan — eski sekret hali qabul qilinadi.
+        webhook_secret_previous_at: new Date(),
       }),
     );
     const sig = computeHmacSignature(BODY, 'old-secret');
@@ -324,6 +326,60 @@ describe('IntegrationServiceService.receiveWebhook', () => {
     );
 
     expect(res).toMatchObject({ ok: true, reason: 'accepted' });
+  });
+
+  it('⭐ Q82QPgih: oyna YOPILGACH eski sekret bilan imzo RAD etiladi', async () => {
+    const { service, webhookLogRepo } = makeService(
+      baseIntegration({
+        webhook_secret: 'new-secret',
+        webhook_secret_previous: 'old-secret',
+        // Oyna 48 soat oldin ochilgan (sukut 24s) — YOPIQ.
+        webhook_secret_previous_at: new Date(Date.now() - 48 * 60 * 60 * 1000),
+      }),
+    );
+    const sig = computeHmacSignature(BODY, 'old-secret');
+
+    const res = await service.receiveWebhook(
+      bodyToInput('acme-cargo', BODY, {
+        'x-signature': sig,
+        'x-delivery-id': 'evt_old',
+      }),
+    );
+
+    // Sizib chiqqan eski sekret endi ABADIY amal qilmaydi.
+    expect(res).toMatchObject({ ok: false, code: 401, reason: 'invalid_signature' });
+    expect(webhookLogRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ signature_valid: false, status: 'rejected' }),
+    );
+  });
+
+  it('⭐ Q82QPgih: oyna vaqti YO`Q (legacy) bo`lsa eski sekret RAD etiladi, YANGISI ishlaydi', async () => {
+    const { service } = makeService(
+      baseIntegration({
+        webhook_secret: 'new-secret',
+        webhook_secret_previous: 'old-secret',
+        webhook_secret_previous_at: null, // legacy / migratsiyadan oldin
+      }),
+    );
+    // Eski sekret — rad
+    const oldSig = computeHmacSignature(BODY, 'old-secret');
+    const rejected = await service.receiveWebhook(
+      bodyToInput('acme-cargo', BODY, {
+        'x-signature': oldSig,
+        'x-delivery-id': 'evt_legacy_old',
+      }),
+    );
+    expect(rejected).toMatchObject({ ok: false, code: 401 });
+
+    // Yangi (joriy) sekret — qabul
+    const newSig = computeHmacSignature(BODY, 'new-secret');
+    const accepted = await service.receiveWebhook(
+      bodyToInput('acme-cargo', BODY, {
+        'x-signature': newSig,
+        'x-delivery-id': 'evt_legacy_new',
+      }),
+    );
+    expect(accepted).toMatchObject({ ok: true, reason: 'accepted' });
   });
 
   it('honours a custom signature header and prefix', async () => {
