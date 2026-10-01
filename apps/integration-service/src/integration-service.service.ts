@@ -2297,6 +2297,14 @@ export class IntegrationServiceService {
     limit = 20,
   ): Promise<{ processed: number; delivered: number; failed: number }> {
     const now = new Date();
+
+    // REAPER (sY4BsVGH): claim (`pending`→`processing`) bilan HTTP natijasi
+    // orasida jarayon KRASH bo'lsa, qator abadiy `processing`da qolardi
+    // (scheduler faqat `pending`ni tanlaydi) va qisman unique indeks o'sha
+    // (partner, order, status) juftligini ABADIY bloklardi. Eskirgan claim'larni
+    // `pending`ga qaytaramiz — quyidagi `find` ularni AYNI tick'da qayta oladi.
+    await this.reapStalePartnerWebhooks(now);
+
     const rows = await this.partnerWebhookOutboxRepo.find({
       where: [
         { status: 'pending', next_retry_at: IsNull(), isDeleted: false },
@@ -2321,6 +2329,61 @@ export class IntegrationServiceService {
   }
 
   /**
+   * Krashda `processing`da qotib qolgan outbox qatorlarini `pending`ga
+   * qaytaradi (sY4BsVGH). Ikki holatni qamrab oladi:
+   *   1) `processing_started_at` yozilgan, lekin timeout'dan oshgan — claim'dan
+   *      keyin jarayon o'lgan;
+   *   2) LEGACY: `processing` lekin `processing_started_at` YO'Q (shu
+   *      migratsiyadan oldin qotib qolgan). Yangi kod vaqtni claim bilan ATOMIK
+   *      yozadi, demak vaqtsiz `processing` = eski qator; `createdAt` darvozasi
+   *      yangi qatorni xato tiklamaslikni kafolatlaydi.
+   *
+   * `attempts` O'ZGARTIRILMAYDI (claim'da allaqachon oshirilgan): doimiy krash
+   * qiladigan "zaharli" qator max_attempts'dan o'tib `permanently_failed`ga
+   * tushadi — cheksiz reap-sikliga tushmaydi.
+   */
+  private async reapStalePartnerWebhooks(now: Date): Promise<number> {
+    const staleBefore = new Date(now.getTime() - this.getProcessingStaleMs());
+    const reapedTimed = await this.partnerWebhookOutboxRepo.update(
+      {
+        status: 'processing',
+        processing_started_at: LessThanOrEqual(staleBefore),
+        isDeleted: false,
+      },
+      { status: 'pending', next_retry_at: null },
+    );
+    const reapedLegacy = await this.partnerWebhookOutboxRepo.update(
+      {
+        status: 'processing',
+        processing_started_at: IsNull(),
+        createdAt: LessThanOrEqual(staleBefore),
+        isDeleted: false,
+      },
+      { status: 'pending', next_retry_at: null },
+    );
+    const total =
+      Number(reapedTimed.affected ?? 0) + Number(reapedLegacy.affected ?? 0);
+    if (total > 0) {
+      this.logger.warn(
+        `partner webhook reaper: ${total} ta qotib qolgan 'processing' qator ` +
+          `'pending'ga qaytarildi (krash-tiklash).`,
+      );
+    }
+    return total;
+  }
+
+  /**
+   * `processing` claim shu muddatdan uzoq tursa — jarayon krash deb
+   * hisoblanadi. Yetkazish POST'i soniyalar ichida tugaydi (statement_timeout
+   * 30s), shuning uchun DAQIQALAB davom etgan claim = o'lgan jarayon. Env bilan
+   * sozlanadi (`PARTNER_WEBHOOK_PROCESSING_STALE_MS`), sukut 5 daqiqa.
+   */
+  private getProcessingStaleMs(): number {
+    const raw = Number(process.env.PARTNER_WEBHOOK_PROCESSING_STALE_MS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 5 * 60_000;
+  }
+
+  /**
    * Bitta outbox qatorini yetkazadi. Atomik claim (`pending`→`processing`) →
    * HMAC POST → muvaffaqiyat: `completed`+`delivered_at`; xato: attempts<max bo'lsa
    * `pending`+backoff (`getRetryDelayMs`), aks holda `permanently_failed`.
@@ -2332,7 +2395,9 @@ export class IntegrationServiceService {
     // Atomik claim — faqat hali `pending` bo'lsa. affected=0 → boshqa worker oldi.
     const claim = await this.partnerWebhookOutboxRepo.update(
       { id: row.id, status: 'pending' },
-      { status: 'processing', attempts },
+      // `processing_started_at` claim bilan BIR update'da yoziladi (sY4BsVGH):
+      // reaper shu vaqtga qarab krashda qotib qolgan qatorni aniqlaydi.
+      { status: 'processing', attempts, processing_started_at: new Date() },
     );
     if (!claim.affected) return false;
 
@@ -2354,6 +2419,7 @@ export class IntegrationServiceService {
           last_error: null,
           last_response: result,
           next_retry_at: null,
+          processing_started_at: null,
           duration_ms: Date.now() - startedAt,
         },
       );
@@ -2378,6 +2444,7 @@ export class IntegrationServiceService {
             attempts: Number(row.attempts ?? 0),
             last_error: message,
             next_retry_at: null,
+            processing_started_at: null,
           },
         );
         // Sabab XATODAN olinadi: sozlanmagani `webhook_url` ham,
@@ -2410,6 +2477,7 @@ export class IntegrationServiceService {
             status: 'permanently_failed',
             last_error: message,
             next_retry_at: null,
+            processing_started_at: null,
             duration_ms: durationMs,
           },
         );
@@ -2429,6 +2497,7 @@ export class IntegrationServiceService {
             next_retry_at: new Date(
               Date.now() + this.getRetryDelayMs(attempts),
             ),
+            processing_started_at: null,
             duration_ms: durationMs,
           },
         );
@@ -2439,6 +2508,7 @@ export class IntegrationServiceService {
             status: 'permanently_failed',
             last_error: message,
             next_retry_at: null,
+            processing_started_at: null,
             duration_ms: durationMs,
           },
         );
