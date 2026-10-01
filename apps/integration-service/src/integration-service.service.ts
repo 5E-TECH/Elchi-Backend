@@ -2410,6 +2410,98 @@ export class IntegrationServiceService {
   }
 
   /**
+   * Noma'lum-slug webhook'lari uchun audit log THROTTLE'i (3nZ3dsgR). Xotirada,
+   * instance darajasida. `Object.create` bilan qurilgan testlarda konstruktor
+   * ishlamagani uchun Map LAZY yaratiladi (`??=`).
+   */
+  private unknownSlugLogAt?: Map<string, number>;
+  private shouldLogUnknownSlug(slug: string): boolean {
+    const now = Date.now();
+    const windowMs = this.getUnknownSlugLogWindowMs();
+    const map = (this.unknownSlugLogAt ??= new Map<string, number>());
+    const key = slug || '(empty)';
+    const last = map.get(key) ?? 0;
+    if (now - last < windowMs) return false;
+    // ⚠️ Map CHEKSIZ o'smasin — har xil soxta slug bilan hujum bo'lsa, xotira
+    // o'zi yangi vektor bo'lardi. Chegaradan oshsa tozalaymiz.
+    if (map.size > 5000) map.clear();
+    map.set(key, now);
+    return true;
+  }
+  private getUnknownSlugLogWindowMs(): number {
+    const raw = Number(process.env.WEBHOOK_UNKNOWN_SLUG_LOG_WINDOW_MS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 60_000;
+  }
+
+  /**
+   * Davriy RETENTION (3nZ3dsgR): eski `provider_webhook_logs` + `activity_logs`
+   * ni tozalaydi. Ilgari ikkisida ham retention YO'Q edi — `prune()` ni hech
+   * kim chaqirmasdi va jadvallar cheksiz o'sardi (disk, sekin so'rov).
+   *
+   * Scheduler tick'idan (har 30s) chaqiriladi, lekin O'ZI gate qiladi: DELETE
+   * sukut bo'yicha soatiga ~1 marta bajariladi. Barcha xato YUTILADI — retention
+   * tick'ni yiqitmasligi kerak.
+   */
+  private lastRetentionPruneAt?: number;
+  async maybePruneWebhookRetention(): Promise<{
+    skipped?: boolean;
+    webhookLogs?: number;
+    activityLogs?: number;
+  }> {
+    const now = Date.now();
+    const last = this.lastRetentionPruneAt ?? 0;
+    if (now - last < this.getRetentionPruneIntervalMs()) {
+      return { skipped: true };
+    }
+    this.lastRetentionPruneAt = now;
+
+    let webhookLogs = 0;
+    try {
+      const cutoff = new Date(now - this.getProviderWebhookLogRetentionMs());
+      const r = await this.webhookLogRepo.delete({
+        createdAt: LessThanOrEqual(cutoff),
+      });
+      webhookLogs = r.affected ?? 0;
+    } catch (e) {
+      this.logger.warn(
+        `provider_webhook_logs retention xato: ${(e as Error).message}`,
+      );
+    }
+
+    let activityLogs = 0;
+    try {
+      activityLogs = await this.activityLog.prune(
+        this.getActivityLogRetentionMs(),
+      );
+    } catch (e) {
+      this.logger.warn(`activity_logs retention xato: ${(e as Error).message}`);
+    }
+
+    if (webhookLogs || activityLogs) {
+      this.logger.log(
+        `retention: provider_webhook_logs=${webhookLogs}, activity_logs=${activityLogs} o'chirildi`,
+      );
+    }
+    return { webhookLogs, activityLogs };
+  }
+  private getRetentionPruneIntervalMs(): number {
+    const raw = Number(process.env.WEBHOOK_RETENTION_PRUNE_INTERVAL_MS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 60 * 60 * 1000; // 1 soat
+  }
+  private getProviderWebhookLogRetentionMs(): number {
+    const raw = Number(process.env.PROVIDER_WEBHOOK_LOG_RETENTION_MS);
+    return Number.isFinite(raw) && raw > 0
+      ? raw
+      : 30 * 24 * 60 * 60 * 1000; // 30 kun (replay/debug oynasi)
+  }
+  private getActivityLogRetentionMs(): number {
+    const raw = Number(process.env.ACTIVITY_LOG_RETENTION_MS);
+    return Number.isFinite(raw) && raw > 0
+      ? raw
+      : 90 * 24 * 60 * 60 * 1000; // 90 kun (audit tarixi)
+  }
+
+  /**
    * Bitta outbox qatorini yetkazadi. Atomik claim (`pending`→`processing`) →
    * HMAC POST → muvaffaqiyat: `completed`+`delivered_at`; xato: attempts<max bo'lsa
    * `pending`+backoff (`getRetryDelayMs`), aks holda `permanently_failed`.
@@ -5771,20 +5863,31 @@ export class IntegrationServiceService {
       : null;
 
     if (!integration) {
-      // Unknown provider — log with no integration_id so abuse is visible,
-      // then reject. Don't reveal whether the slug exists.
-      await this.saveWebhookLog({
-        integration_id: null,
-        provider_slug: slug || null,
-        delivery_id: null,
-        event_type: null,
-        signature_valid: false,
-        status: 'rejected',
-        raw_body: this.truncateBody(rawBody.toString('utf8')),
-        parsed_payload: null,
-        error: 'integration not found',
-        trace_id: input.trace_id ?? null,
-      });
+      /**
+       * ⚠️ AUTENTIFIKATSIYASIZ VEKTOR (3nZ3dsgR). Bu yo'lga IMZO
+       * TEKSHIRUVIDAN OLDIN, ochiq internetdan har kim kiradi. Ilgari HAR
+       * noma'lum-slug so'rovi uchun ~20KB `raw_body` bilan audit qatori
+       * yozilardi — ya'ni autentifikatsiyasiz so'rovchi audit jadvalini
+       * cheksiz shishira olardi (DoS / disk). Endi:
+       *   (a) `raw_body` SAQLANMAYDI — u hujumchi nazoratidagi bulk;
+       *   (b) slug boshiga THROTTLE (sukut 60s) — takroriy suiiste'mol qator
+       *       SELINI yozmaydi.
+       * Suiiste'mol hali KO'RINADI (slug + rejected), lekin arzon.
+       */
+      if (this.shouldLogUnknownSlug(slug)) {
+        await this.saveWebhookLog({
+          integration_id: null,
+          provider_slug: slug || null,
+          delivery_id: null,
+          event_type: null,
+          signature_valid: false,
+          status: 'rejected',
+          raw_body: null,
+          parsed_payload: null,
+          error: 'integration not found',
+          trace_id: input.trace_id ?? null,
+        });
+      }
       return { ok: false, code: 401, reason: 'unknown_provider' };
     }
 

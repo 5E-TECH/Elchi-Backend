@@ -276,6 +276,32 @@ describe('IntegrationServiceService.receiveWebhook', () => {
     );
   });
 
+  it('⭐ 3nZ3dsgR: noma`lum slug log`ida raw_body SAQLANMAYDI (null)', async () => {
+    const { service, webhookLogRepo } = makeService(null);
+    await service.receiveWebhook(
+      bodyToInput('boshqa-slug', BODY, { 'x-signature': 'x' }),
+    );
+    // Autentifikatsiyasiz so'rovchi nazoratidagi bulk audit jadvaliga tushmaydi.
+    expect(webhookLogRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'rejected',
+        raw_body: null,
+        error: 'integration not found',
+      }),
+    );
+  });
+
+  it('⭐ 3nZ3dsgR: noma`lum slug IKKINCHI marta (oyna ichida) log YOZMAYDI (throttle)', async () => {
+    const { service, webhookLogRepo } = makeService(null);
+    const input = bodyToInput('takror-slug', BODY, { 'x-signature': 'x' });
+    const r1 = await service.receiveWebhook(input);
+    const r2 = await service.receiveWebhook(input);
+    expect(r1).toMatchObject({ ok: false, code: 401, reason: 'unknown_provider' });
+    expect(r2).toMatchObject({ ok: false, code: 401, reason: 'unknown_provider' });
+    // Suiiste'mol seli emas — oyna ichida faqat BIR qator yoziladi.
+    expect(webhookLogRepo.save).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects when no webhook secret is configured', async () => {
     const { service } = makeService(baseIntegration({ webhook_secret: null }));
 
@@ -920,5 +946,44 @@ describe("⭐ BIR VAQTDA kelgan nusxa — hodisa QO'LLANMAYDI (audit P1)", () =>
     expect(res.code).toBe(400);
     expect(res.reason).toBe('missing_delivery_id');
     expect(shipmentRepo.save).not.toHaveBeenCalled();
+  });
+});
+
+describe('IntegrationServiceService — retention prune (3nZ3dsgR)', () => {
+  it('⭐ maybePruneWebhookRetention: provider_webhook_logs + activity_logs ni tozalaydi', async () => {
+    const { service, webhookLogRepo, activityLog } = makeService(null);
+    webhookLogRepo.delete = jest.fn().mockResolvedValue({ affected: 12 });
+    activityLog.prune = jest.fn().mockResolvedValue(5);
+
+    const res: any = await service.maybePruneWebhookRetention();
+
+    expect(res.webhookLogs).toBe(12);
+    expect(res.activityLogs).toBe(5);
+    expect(webhookLogRepo.delete).toHaveBeenCalled();
+    expect(activityLog.prune).toHaveBeenCalled();
+  });
+
+  it('⭐ oyna ichida IKKINCHI chaqiruv SKIP qiladi (gate — har tick emas)', async () => {
+    const { service, webhookLogRepo, activityLog } = makeService(null);
+    webhookLogRepo.delete = jest.fn().mockResolvedValue({ affected: 0 });
+    activityLog.prune = jest.fn().mockResolvedValue(0);
+
+    await service.maybePruneWebhookRetention(); // 1-chi: bajaradi
+    const second: any = await service.maybePruneWebhookRetention(); // 2-chi: gate
+
+    expect(second.skipped).toBe(true);
+    expect(webhookLogRepo.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it('retention xatosi YUTILADI (tick yiqilmasin)', async () => {
+    const { service, webhookLogRepo, activityLog } = makeService(null);
+    webhookLogRepo.delete = jest
+      .fn()
+      .mockRejectedValue(new Error('db down'));
+    activityLog.prune = jest.fn().mockResolvedValue(0);
+
+    // throw qilmasligi kerak
+    const res: any = await service.maybePruneWebhookRetention();
+    expect(res.webhookLogs).toBe(0);
   });
 });
