@@ -243,6 +243,7 @@ export class IntegrationServiceController {
       }>;
       cod_amount?: number;
       subtotal?: number;
+      comment?: string | null;
     },
     @Ctx() context: RmqContext,
   ) {

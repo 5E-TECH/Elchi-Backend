@@ -322,6 +322,9 @@ describe('IntegrationServiceService — partner webhook outbox (P5d)', () => {
       pending: 2,
       failed: 1,
       completed: 10,
+      // `awaiting_config` (webhook_url hali qo'yilmagan) endi alohida sanaladi
+      // (W1zECdbv). Bu testda awaiting_config qatori yo'q -> 0.
+      awaiting: 0,
       last_delivered_at: new Date(5),
     });
     // Yozuvi yo'q hamkor ham nol bilan keladi — UI `undefined` ko'rmasin.
