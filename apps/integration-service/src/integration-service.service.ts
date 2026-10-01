@@ -2297,6 +2297,14 @@ export class IntegrationServiceService {
     limit = 20,
   ): Promise<{ processed: number; delivered: number; failed: number }> {
     const now = new Date();
+
+    // REAPER (sY4BsVGH): claim (`pending`→`processing`) bilan HTTP natijasi
+    // orasida jarayon KRASH bo'lsa, qator abadiy `processing`da qolardi
+    // (scheduler faqat `pending`ni tanlaydi) va qisman unique indeks o'sha
+    // (partner, order, status) juftligini ABADIY bloklardi. Eskirgan claim'larni
+    // `pending`ga qaytaramiz — quyidagi `find` ularni AYNI tick'da qayta oladi.
+    await this.reapStalePartnerWebhooks(now);
+
     const rows = await this.partnerWebhookOutboxRepo.find({
       where: [
         { status: 'pending', next_retry_at: IsNull(), isDeleted: false },
@@ -2321,6 +2329,179 @@ export class IntegrationServiceService {
   }
 
   /**
+   * Krashda `processing`da qotib qolgan outbox qatorlarini `pending`ga
+   * qaytaradi (sY4BsVGH). Ikki holatni qamrab oladi:
+   *   1) `processing_started_at` yozilgan, lekin timeout'dan oshgan — claim'dan
+   *      keyin jarayon o'lgan;
+   *   2) LEGACY: `processing` lekin `processing_started_at` YO'Q (shu
+   *      migratsiyadan oldin qotib qolgan). Yangi kod vaqtni claim bilan ATOMIK
+   *      yozadi, demak vaqtsiz `processing` = eski qator; `createdAt` darvozasi
+   *      yangi qatorni xato tiklamaslikni kafolatlaydi.
+   *
+   * `attempts` O'ZGARTIRILMAYDI (claim'da allaqachon oshirilgan): doimiy krash
+   * qiladigan "zaharli" qator max_attempts'dan o'tib `permanently_failed`ga
+   * tushadi — cheksiz reap-sikliga tushmaydi.
+   */
+  private async reapStalePartnerWebhooks(now: Date): Promise<number> {
+    const staleBefore = new Date(now.getTime() - this.getProcessingStaleMs());
+    const reapedTimed = await this.partnerWebhookOutboxRepo.update(
+      {
+        status: 'processing',
+        processing_started_at: LessThanOrEqual(staleBefore),
+        isDeleted: false,
+      },
+      { status: 'pending', next_retry_at: null },
+    );
+    const reapedLegacy = await this.partnerWebhookOutboxRepo.update(
+      {
+        status: 'processing',
+        processing_started_at: IsNull(),
+        createdAt: LessThanOrEqual(staleBefore),
+        isDeleted: false,
+      },
+      { status: 'pending', next_retry_at: null },
+    );
+    const total =
+      Number(reapedTimed.affected ?? 0) + Number(reapedLegacy.affected ?? 0);
+    if (total > 0) {
+      this.logger.warn(
+        `partner webhook reaper: ${total} ta qotib qolgan 'processing' qator ` +
+          `'pending'ga qaytarildi (krash-tiklash).`,
+      );
+    }
+    return total;
+  }
+
+  /**
+   * `processing` claim shu muddatdan uzoq tursa — jarayon krash deb
+   * hisoblanadi. Yetkazish POST'i soniyalar ichida tugaydi (statement_timeout
+   * 30s), shuning uchun DAQIQALAB davom etgan claim = o'lgan jarayon. Env bilan
+   * sozlanadi (`PARTNER_WEBHOOK_PROCESSING_STALE_MS`), sukut 5 daqiqa.
+   */
+  private getProcessingStaleMs(): number {
+    const raw = Number(process.env.PARTNER_WEBHOOK_PROCESSING_STALE_MS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 5 * 60_000;
+  }
+
+  /**
+   * Webhook sekreti rotatsiya oynasi hali OCHIQmi? (Q82QPgih). Eski sekret
+   * (`webhook_secret_previous`) FAQAT shu oyna ichida qabul qilinadi; aks holda
+   * sizib chiqqan eski sekret abadiy amal qilardi. `webhook_secret_previous_at`
+   * YO'Q bo'lsa (rotatsiya emas yoki legacy tozalangan) oyna YOPIQ hisoblanadi.
+   */
+  private isWebhookPreviousSecretWithinWindow(
+    integration: ExternalIntegration,
+  ): boolean {
+    if (!integration.webhook_secret_previous) return false;
+    const at = integration.webhook_secret_previous_at;
+    if (!at) return false;
+    const windowMs = this.getWebhookSecretRotationWindowMs();
+    return Date.now() - new Date(at).getTime() <= windowMs;
+  }
+
+  /**
+   * Eski webhook sekreti amal qiladigan oyna uzunligi (ms). Tashqi tizim
+   * sekretni bir zumda almashtira olmaydi — qisqa oyna beriladi, so'ng eski
+   * sekret rad etiladi. Env: `WEBHOOK_SECRET_ROTATION_WINDOW_MS`, sukut 24 soat.
+   */
+  private getWebhookSecretRotationWindowMs(): number {
+    const raw = Number(process.env.WEBHOOK_SECRET_ROTATION_WINDOW_MS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 24 * 60 * 60 * 1000;
+  }
+
+  /**
+   * Noma'lum-slug webhook'lari uchun audit log THROTTLE'i (3nZ3dsgR). Xotirada,
+   * instance darajasida. `Object.create` bilan qurilgan testlarda konstruktor
+   * ishlamagani uchun Map LAZY yaratiladi (`??=`).
+   */
+  private unknownSlugLogAt?: Map<string, number>;
+  private shouldLogUnknownSlug(slug: string): boolean {
+    const now = Date.now();
+    const windowMs = this.getUnknownSlugLogWindowMs();
+    const map = (this.unknownSlugLogAt ??= new Map<string, number>());
+    const key = slug || '(empty)';
+    const last = map.get(key) ?? 0;
+    if (now - last < windowMs) return false;
+    // ⚠️ Map CHEKSIZ o'smasin — har xil soxta slug bilan hujum bo'lsa, xotira
+    // o'zi yangi vektor bo'lardi. Chegaradan oshsa tozalaymiz.
+    if (map.size > 5000) map.clear();
+    map.set(key, now);
+    return true;
+  }
+  private getUnknownSlugLogWindowMs(): number {
+    const raw = Number(process.env.WEBHOOK_UNKNOWN_SLUG_LOG_WINDOW_MS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 60_000;
+  }
+
+  /**
+   * Davriy RETENTION (3nZ3dsgR): eski `provider_webhook_logs` + `activity_logs`
+   * ni tozalaydi. Ilgari ikkisida ham retention YO'Q edi — `prune()` ni hech
+   * kim chaqirmasdi va jadvallar cheksiz o'sardi (disk, sekin so'rov).
+   *
+   * Scheduler tick'idan (har 30s) chaqiriladi, lekin O'ZI gate qiladi: DELETE
+   * sukut bo'yicha soatiga ~1 marta bajariladi. Barcha xato YUTILADI — retention
+   * tick'ni yiqitmasligi kerak.
+   */
+  private lastRetentionPruneAt?: number;
+  async maybePruneWebhookRetention(): Promise<{
+    skipped?: boolean;
+    webhookLogs?: number;
+    activityLogs?: number;
+  }> {
+    const now = Date.now();
+    const last = this.lastRetentionPruneAt ?? 0;
+    if (now - last < this.getRetentionPruneIntervalMs()) {
+      return { skipped: true };
+    }
+    this.lastRetentionPruneAt = now;
+
+    let webhookLogs = 0;
+    try {
+      const cutoff = new Date(now - this.getProviderWebhookLogRetentionMs());
+      const r = await this.webhookLogRepo.delete({
+        createdAt: LessThanOrEqual(cutoff),
+      });
+      webhookLogs = r.affected ?? 0;
+    } catch (e) {
+      this.logger.warn(
+        `provider_webhook_logs retention xato: ${(e as Error).message}`,
+      );
+    }
+
+    let activityLogs = 0;
+    try {
+      activityLogs = await this.activityLog.prune(
+        this.getActivityLogRetentionMs(),
+      );
+    } catch (e) {
+      this.logger.warn(`activity_logs retention xato: ${(e as Error).message}`);
+    }
+
+    if (webhookLogs || activityLogs) {
+      this.logger.log(
+        `retention: provider_webhook_logs=${webhookLogs}, activity_logs=${activityLogs} o'chirildi`,
+      );
+    }
+    return { webhookLogs, activityLogs };
+  }
+  private getRetentionPruneIntervalMs(): number {
+    const raw = Number(process.env.WEBHOOK_RETENTION_PRUNE_INTERVAL_MS);
+    return Number.isFinite(raw) && raw > 0 ? raw : 60 * 60 * 1000; // 1 soat
+  }
+  private getProviderWebhookLogRetentionMs(): number {
+    const raw = Number(process.env.PROVIDER_WEBHOOK_LOG_RETENTION_MS);
+    return Number.isFinite(raw) && raw > 0
+      ? raw
+      : 30 * 24 * 60 * 60 * 1000; // 30 kun (replay/debug oynasi)
+  }
+  private getActivityLogRetentionMs(): number {
+    const raw = Number(process.env.ACTIVITY_LOG_RETENTION_MS);
+    return Number.isFinite(raw) && raw > 0
+      ? raw
+      : 90 * 24 * 60 * 60 * 1000; // 90 kun (audit tarixi)
+  }
+
+  /**
    * Bitta outbox qatorini yetkazadi. Atomik claim (`pending`→`processing`) →
    * HMAC POST → muvaffaqiyat: `completed`+`delivered_at`; xato: attempts<max bo'lsa
    * `pending`+backoff (`getRetryDelayMs`), aks holda `permanently_failed`.
@@ -2332,7 +2513,9 @@ export class IntegrationServiceService {
     // Atomik claim — faqat hali `pending` bo'lsa. affected=0 → boshqa worker oldi.
     const claim = await this.partnerWebhookOutboxRepo.update(
       { id: row.id, status: 'pending' },
-      { status: 'processing', attempts },
+      // `processing_started_at` claim bilan BIR update'da yoziladi (sY4BsVGH):
+      // reaper shu vaqtga qarab krashda qotib qolgan qatorni aniqlaydi.
+      { status: 'processing', attempts, processing_started_at: new Date() },
     );
     if (!claim.affected) return false;
 
@@ -2354,6 +2537,7 @@ export class IntegrationServiceService {
           last_error: null,
           last_response: result,
           next_retry_at: null,
+          processing_started_at: null,
           duration_ms: Date.now() - startedAt,
         },
       );
@@ -2378,6 +2562,7 @@ export class IntegrationServiceService {
             attempts: Number(row.attempts ?? 0),
             last_error: message,
             next_retry_at: null,
+            processing_started_at: null,
           },
         );
         // Sabab XATODAN olinadi: sozlanmagani `webhook_url` ham,
@@ -2410,6 +2595,7 @@ export class IntegrationServiceService {
             status: 'permanently_failed',
             last_error: message,
             next_retry_at: null,
+            processing_started_at: null,
             duration_ms: durationMs,
           },
         );
@@ -2429,6 +2615,7 @@ export class IntegrationServiceService {
             next_retry_at: new Date(
               Date.now() + this.getRetryDelayMs(attempts),
             ),
+            processing_started_at: null,
             duration_ms: durationMs,
           },
         );
@@ -2439,6 +2626,7 @@ export class IntegrationServiceService {
             status: 'permanently_failed',
             last_error: message,
             next_retry_at: null,
+            processing_started_at: null,
             duration_ms: durationMs,
           },
         );
@@ -4353,6 +4541,7 @@ export class IntegrationServiceService {
       ),
       // Rotatsiya oynasi TIZIM tomonidan boshqariladi — yaratishda bo'sh.
       webhook_secret_previous: null,
+      webhook_secret_previous_at: null,
       webhook_signature_header: dto.webhook_signature_header ?? null,
       webhook_signature_prefix: dto.webhook_signature_prefix ?? null,
       webhook_algorithm: dto.webhook_algorithm ?? null,
@@ -4666,6 +4855,12 @@ export class IntegrationServiceService {
           : null;
         if (previousPlain !== next) {
           row.webhook_secret_previous = before_webhook_secret;
+          // ⚠️ Oyna FAQAT haqiqiy rotatsiyada ochiladi (eski sekret BOR edi) —
+          // va `now()` dan boshlab muddatli (Q82QPgih). Birinchi marta sekret
+          // qo'yilganda (eski yo'q) oyna ham, vaqt ham bo'lmaydi.
+          row.webhook_secret_previous_at = before_webhook_secret
+            ? new Date()
+            : null;
         }
         row.webhook_secret = this.encryptCredential(next);
       } else {
@@ -4673,6 +4868,7 @@ export class IntegrationServiceService {
         // sekret `previous` orqali ishlashda davom etardi.
         row.webhook_secret = null;
         row.webhook_secret_previous = null;
+        row.webhook_secret_previous_at = null;
       }
     }
     if (typeof dto.auth_type !== 'undefined') {
@@ -5667,20 +5863,31 @@ export class IntegrationServiceService {
       : null;
 
     if (!integration) {
-      // Unknown provider — log with no integration_id so abuse is visible,
-      // then reject. Don't reveal whether the slug exists.
-      await this.saveWebhookLog({
-        integration_id: null,
-        provider_slug: slug || null,
-        delivery_id: null,
-        event_type: null,
-        signature_valid: false,
-        status: 'rejected',
-        raw_body: this.truncateBody(rawBody.toString('utf8')),
-        parsed_payload: null,
-        error: 'integration not found',
-        trace_id: input.trace_id ?? null,
-      });
+      /**
+       * ⚠️ AUTENTIFIKATSIYASIZ VEKTOR (3nZ3dsgR). Bu yo'lga IMZO
+       * TEKSHIRUVIDAN OLDIN, ochiq internetdan har kim kiradi. Ilgari HAR
+       * noma'lum-slug so'rovi uchun ~20KB `raw_body` bilan audit qatori
+       * yozilardi — ya'ni autentifikatsiyasiz so'rovchi audit jadvalini
+       * cheksiz shishira olardi (DoS / disk). Endi:
+       *   (a) `raw_body` SAQLANMAYDI — u hujumchi nazoratidagi bulk;
+       *   (b) slug boshiga THROTTLE (sukut 60s) — takroriy suiiste'mol qator
+       *       SELINI yozmaydi.
+       * Suiiste'mol hali KO'RINADI (slug + rejected), lekin arzon.
+       */
+      if (this.shouldLogUnknownSlug(slug)) {
+        await this.saveWebhookLog({
+          integration_id: null,
+          provider_slug: slug || null,
+          delivery_id: null,
+          event_type: null,
+          signature_valid: false,
+          status: 'rejected',
+          raw_body: null,
+          parsed_payload: null,
+          error: 'integration not found',
+          trace_id: input.trace_id ?? null,
+        });
+      }
       return { ok: false, code: 401, reason: 'unknown_provider' };
     }
 
@@ -5712,9 +5919,12 @@ export class IntegrationServiceService {
       rawBody,
       signature,
       secret,
-      previousSecret: this.decryptCredential(
-        integration.webhook_secret_previous,
-      ),
+      // ⚠️ Eski sekret FAQAT rotatsiya oynasi OCHIQ bo'lsa sinaladi (Q82QPgih).
+      // Oyna yopiq (yoki vaqt yo'q) bo'lsa `null` uzatiladi — sizib chiqqan
+      // eski sekret endi abadiy amal qilmaydi.
+      previousSecret: this.isWebhookPreviousSecretWithinWindow(integration)
+        ? this.decryptCredential(integration.webhook_secret_previous)
+        : null,
       stripPrefix: integration.webhook_signature_prefix ?? undefined,
       algorithm,
     });
