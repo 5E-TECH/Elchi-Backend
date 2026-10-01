@@ -47,6 +47,13 @@ export interface DeleteUserPayload {
 
 export interface FindUserByIdPayload {
   id: string;
+  /**
+   * Faqat identity.user.find_by_id uchun: `true` bo'lsa market qatori
+   * market_tg_token bilan qaytadi. Uni faqat api-gateway GET /users/:id va
+   * faqat SUPERADMIN/ADMIN so'rovida yuboradi. Qat'iy `=== true` —
+   * 'true' yoki 1 hisobga olinmaydi.
+   */
+  include_tg_token?: boolean;
 }
 
 export interface UserFilterQuery {
@@ -67,4 +74,22 @@ export interface UpdateUserStatusPayload {
   id: string;
   status: Status;
   requester?: RequesterContext;
+}
+
+/**
+ * identity.courier.set_region (ichki; chaqiruvchi — branch-service kuryer
+ * o'tkazish). region_id: faqat raqamlar yoki null (HQ'ning hududi bo'sh
+ * bo'lishi mumkin).
+ */
+export interface SetCourierRegionPayload {
+  id: string;
+  region_id?: string | null;
+  requester?: RequesterContext;
+  /**
+   * Epoch ms. Branch-service o'tkazishdagi set_region'ga yuboradi (yuborish
+   * vaqti + uning timeout'i): shundan keyin — qator qulfi olingach — hudud
+   * YOZILMAYDI (409), chunki chaqiruvchi vaqt tugaganini ko'rib o'tkazishni
+   * allaqachon qaytargan. Tiklash va qayta moslash uni yubormaydi.
+   */
+  deadline_at?: number;
 }

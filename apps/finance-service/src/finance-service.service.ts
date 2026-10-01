@@ -41,6 +41,7 @@ import {
   Source_type,
   rmqSend,
   OutboxService,
+  tashkentDayRange,
 } from '@app/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, timeout } from 'rxjs';
@@ -260,13 +261,17 @@ export class FinanceServiceService implements OnModuleInit {
     return { income, outcome };
   }
 
+  /**
+   * Kassa tarixi sana filtri — Toshkent kuni, dashboard va GET /orders bilan
+   * AYNI qoida (SqVMuhKo). Ilgari 'YYYY-MM-DD' UTC yarim tuni, oxiri esa
+   * server TZ'idagi setHours edi (prod UTC → kun Toshkentda 05:00-04:59).
+   * To'liq ISO qiymat o'zgarishsiz ishlatiladi. Yaroqsiz qiymat avvalgidek
+   * 400 'Invalid date format: <v>'.
+   */
   private parseDateRange(fromDate?: string, toDate?: string) {
-    const start = this.parseDate(fromDate ?? null);
-    const end = this.parseDate(toDate ?? null);
-    if (end && toDate && /^\d{4}-\d{2}-\d{2}$/.test(toDate.trim())) {
-      end.setHours(23, 59, 59, 999);
-    }
-    return { start, end };
+    this.parseDate(fromDate ?? null);
+    this.parseDate(toDate ?? null);
+    return tashkentDayRange(fromDate, toDate);
   }
 
   private async findMarketPayableOrders(marketId: string) {
@@ -1079,8 +1084,13 @@ export class FinanceServiceService implements OnModuleInit {
         }
       }
 
-      const from = this.parseDate(dto.from_date);
-      const to = this.parseDate(dto.to_date);
+      // Toshkent kuni (SqVMuhKo) — asosiy kassa sahifasidagi xulosa
+      // (getMainCashbox) bilan bir xil. Ilgari bitta kun tanlansa
+      // Between(x, x) bo'lib, jadval bo'sh qaytardi.
+      const { start: from, end: to } = this.parseDateRange(
+        dto.from_date,
+        dto.to_date,
+      );
 
       if (from && to) {
         where.createdAt = Between(from, to);

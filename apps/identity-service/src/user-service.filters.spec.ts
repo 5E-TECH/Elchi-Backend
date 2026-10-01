@@ -96,3 +96,36 @@ describe('UserServiceService — list filter normalisation', () => {
     expect(roleFilter?.[1]).toEqual({ role: Roles.COURIER });
   });
 });
+
+/**
+ * C7 — gateway filial kuryerlarini (branch_users) oldindan beradi, identity esa
+ * ularni SAHIFALASHDAN OLDIN `IN` bilan filtrlaydi. Busiz kuryerlar 100 tadan
+ * oshsa, filial kuryerlari birinchi sahifaga sig'masdan tushib qolardi.
+ */
+describe('UserServiceService.findAllCouriers — user_ids filtri', () => {
+  const idFilterOf = (calls: QbCall[]) =>
+    calls.find(([sql]) => sql === 'courier.id IN (:...user_ids)');
+
+  it("user_ids berilsa IN sharti qo'shiladi (bo'sh qiymatlar tashlanadi)", async () => {
+    const { service, calls } = makeService();
+    await service.findAllCouriers({ user_ids: ['263', ' 300 ', ''] });
+
+    expect(idFilterOf(calls)?.[1]).toEqual({ user_ids: ['263', '300'] });
+  });
+
+  it("user_ids berilmasa yoki bo'sh bo'lsa filtr qo'shilmaydi (eski xatti-harakat)", async () => {
+    for (const query of [{}, { user_ids: [] }, { search: 'Ali' }]) {
+      const { service, calls } = makeService();
+      await service.findAllCouriers(query);
+
+      expect(idFilterOf(calls)).toBeUndefined();
+      // Asosiy shartlar o'zgarmagan.
+      expect(calls).toEqual(
+        expect.arrayContaining([
+          ['courier.isDeleted = :isDeleted', { isDeleted: false }],
+          ['courier.role = :role', { role: Roles.COURIER }],
+        ]),
+      );
+    }
+  });
+});

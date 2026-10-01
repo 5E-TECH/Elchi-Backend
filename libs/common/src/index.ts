@@ -52,3 +52,4 @@ export * from './upload/file-signature';
 export * from './ai-text';
 export * from './ai';
 export * from './pii/mask-phones';
+export * from './time/tashkent-time';

@@ -35,6 +35,7 @@ import {
   ReceiveTransferBatchOrdersRequestDto,
   SendTransferBatchRequestDto,
   SetBranchConfigRequestDto,
+  TransferCourierBranchRequestDto,
   UpdateBranchConfigRequestDto,
   UpdateBranchRequestDto,
 } from './dto/branch.swagger.dto';
@@ -49,6 +50,13 @@ import {
 // downstream loop atomic — tracked separately.)
 const BATCH_RPC_TIMEOUT_MS = 120_000;
 
+// Kuryerni filialdan filialga o'tkazish (R3) byudjeti. branch-service: uch
+// tekshiruv manbasi parallel (5 s), tranzaksiya, 1,5 s kutish, qayta
+// tekshiruv (5 s), identity hududi (5 s) va xatoda qaytarish + hudud tiklash
+// (3 s) — eng yomon holat ~25 s, odatda ~2 s. Gateway undan uzun bo'lishi
+// SHART: aks holda mijoz 504 olib, o'tkazish orqada baribir yakunlanadi.
+const COURIER_TRANSFER_RPC_TIMEOUT_MS = 30_000;
+
 @ApiTags('Branch')
 @ApiBearerAuth()
 @Controller()
@@ -61,6 +69,15 @@ export class BranchGatewayController {
       id: String(req?.user?.sub ?? ''),
       roles: req?.user?.roles ?? [],
     };
+  }
+
+  /** Kuryer id (URL) — faqat raqamlar, aks holda 400. */
+  private parseCourierIdParam(id: string): string {
+    const normalized = String(id ?? '').trim();
+    if (!/^\d+$/.test(normalized)) {
+      throw new BadRequestException("Kuryer id noto'g'ri");
+    }
+    return normalized;
   }
 
   private async resolveSourceBranchIdForDispatch(req: {
@@ -184,6 +201,37 @@ export class BranchGatewayController {
         },
       )
       .pipe(timeout(BATCH_RPC_TIMEOUT_MS));
+  }
+
+  /**
+   * Pochta jo'natish oynasi uchun manzil filiallar: faol REGIONAL/HYBRID,
+   * menejer ma'lumoti bilan, PUL MAYDONLARISIZ. Kirish tekshiruvi
+   * branch-service'da (superadmin/admin yoki HQ registratori, qolganlar 403).
+   *
+   * ⚠️ `branches/:id` dan OLDIN e'lon qilinishi SHART — aks holda `:id`
+   * marshruti so'rovni `id='dispatch-destinations'` bilan tutib oladi va
+   * registrator 403 oladi (branch-gateway.route-order.spec.ts tekshiradi).
+   */
+  @Get('branches/dispatch-destinations')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @ApiOperation({
+    summary:
+      "Pochta jo'natish uchun manzil filiallar (faol REGIONAL/HYBRID, pul maydonlarisiz)",
+  })
+  @ApiQuery({ name: 'region_id', required: false, type: String })
+  findDispatchDestinations(
+    @Query('region_id') regionId: string | undefined,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.branchClient
+      .send(
+        { cmd: 'branch.dispatch_destinations' },
+        {
+          requester: this.toRequester(req),
+          query: { region_id: regionId },
+        },
+      )
+      .pipe(timeout(8000));
   }
 
   @Get('branches/:id')
@@ -615,12 +663,14 @@ export class BranchGatewayController {
     @Body() dto: AssignBranchUserRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
+    // 15 s: yetim kuryerni boshqa filialga biriktirishda (R3) branch-service
+    // identity (5 s) va uch parallel tekshiruv manbasini (5 s) kutadi.
     return this.branchClient
       .send(
         { cmd: 'branch.user.assign' },
         { requester: this.toRequester(req), dto: { branch_id: id, ...dto } },
       )
-      .pipe(timeout(8000));
+      .pipe(timeout(15000));
   }
 
   @Delete('branches/:id/users/:userId')
@@ -633,12 +683,60 @@ export class BranchGatewayController {
     @Param('userId') userId: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
+    // 15 s: kuryer qatori uchun (R3) branch-service finance, order va
+    // logistics'ni tekshiradi (parallel, har biri 5 s).
     return this.branchClient
       .send(
         { cmd: 'branch.user.remove' },
         { branch_id: id, user_id: userId, requester: this.toRequester(req) },
       )
-      .pipe(timeout(8000));
+      .pipe(timeout(15000));
+  }
+
+  @Get('couriers/:id/transfer-check')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      'Courier branch-transfer check: cashbox, orders in hand, unreceived cancelled posts (read-only)',
+  })
+  @ApiParam({ name: 'id', description: 'Courier user ID (bigint string)' })
+  courierTransferCheck(
+    @Param('id') id: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    const courierId = this.parseCourierIdParam(id);
+    return this.branchClient
+      .send(
+        { cmd: 'branch.user.courier_transfer_check' },
+        { user_id: courierId, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(15000));
+  }
+
+  @Patch('couriers/:id/branch')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      'Move courier to another branch (only when the courier holds no money and no orders)',
+  })
+  @ApiParam({ name: 'id', description: 'Courier user ID (bigint string)' })
+  @ApiBody({ type: TransferCourierBranchRequestDto })
+  transferCourierBranch(
+    @Param('id') id: string,
+    @Body() dto: TransferCourierBranchRequestDto,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    const courierId = this.parseCourierIdParam(id);
+    return this.branchClient
+      .send(
+        { cmd: 'branch.user.transfer_courier' },
+        {
+          user_id: courierId,
+          branch_id: dto.branch_id,
+          requester: this.toRequester(req),
+        },
+      )
+      .pipe(timeout(COURIER_TRANSFER_RPC_TIMEOUT_MS));
   }
 
   @Get('branches/:id/users')

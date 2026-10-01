@@ -17,6 +17,11 @@ import {
   BranchTransferBatchStatus,
   BranchTransferDirection,
   Order_status,
+  endOfTashkentDay,
+  endOfTashkentMonth,
+  startOfTashkentDay,
+  startOfTashkentMonth,
+  startOfTashkentWeek,
 } from '@app/common';
 import { successRes } from '../../../../libs/common/helpers/response';
 import { OrderCustodyService } from '../custody/order-custody.service';
@@ -1211,20 +1216,13 @@ export class BranchTransferBatchService {
       return parsed;
     };
 
-    const getUzNow = () => {
-      const now = new Date();
-      return new Date(now.getTime() + 5 * 60 * 60 * 1000);
-    };
-
-    const uzToUtc = (uzDate: Date) =>
-      new Date(uzDate.getTime() - 5 * 60 * 60 * 1000);
-
+    // Kun/davr chegaralari — Toshkent vaqti, libs/common'dagi yagona helper
+    // (SqVMuhKo). Ilgari server TZ'idagi setHours va qo'lda +5/-5 soat edi:
+    // natija faqat konteyner UTC'da bo'lganda to'g'ri chiqardi.
     if (dateRaw) {
       const parsedDate = parseDate(dateRaw, 'date');
-      const dayStart = new Date(parsedDate);
-      dayStart.setHours(0, 0, 0, 0);
-      const dayEnd = new Date(parsedDate);
-      dayEnd.setHours(23, 59, 59, 999);
+      const dayStart = startOfTashkentDay(parsedDate);
+      const dayEnd = endOfTashkentDay(parsedDate);
       qb.andWhere('batch.createdAt BETWEEN :dayStart AND :dayEnd', {
         dayStart,
         dayEnd,
@@ -1235,33 +1233,19 @@ export class BranchTransferBatchService {
         this.badRequest('period must be one of: today, week, month');
       }
 
-      const uzNow = getUzNow();
-      const periodStartUz = new Date(uzNow);
-      periodStartUz.setHours(0, 0, 0, 0);
-      let periodEndUz = new Date(uzNow);
-      periodEndUz.setHours(23, 59, 59, 999);
+      const now = new Date();
+      let periodStart = startOfTashkentDay(now);
+      let periodEnd = endOfTashkentDay(now);
 
       if (periodRaw === 'week') {
-        const day = periodStartUz.getDay(); // Sunday=0
-        const diffToMonday = day === 0 ? 6 : day - 1;
-        periodStartUz.setDate(periodStartUz.getDate() - diffToMonday);
+        periodStart = startOfTashkentWeek(now);
       }
 
       if (periodRaw === 'month') {
-        periodStartUz.setDate(1);
-        periodEndUz = new Date(
-          periodStartUz.getFullYear(),
-          periodStartUz.getMonth() + 1,
-          0,
-          23,
-          59,
-          59,
-          999,
-        );
+        periodStart = startOfTashkentMonth(now);
+        periodEnd = endOfTashkentMonth(now);
       }
 
-      const periodStart = uzToUtc(periodStartUz);
-      const periodEnd = uzToUtc(periodEndUz);
       qb.andWhere('batch.createdAt BETWEEN :periodStart AND :periodEnd', {
         periodStart,
         periodEnd,

@@ -29,6 +29,7 @@ import {
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
+import { successRes } from '../../../libs/common/helpers/response';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
 import { Roles } from './auth/roles.decorator';
@@ -94,6 +95,41 @@ export class ApiGatewayController {
     );
 
     return (response?.data ?? null) as BranchAssignment | null;
+  }
+
+  /**
+   * Filialning faol COURIER qatorlaridagi user_id'lar (branch_users). Rol
+   * katta-kichik harfga qaramay solishtiriladi.
+   */
+  private async findBranchCourierIds(
+    branchId: string,
+    req: { user: JwtUser },
+  ): Promise<string[]> {
+    const branchUsersResponse = await firstValueFrom(
+      this.branchClient
+        .send(
+          { cmd: 'branch.user.find_by_branch' },
+          {
+            branch_id: branchId,
+            requester: this.toRequester(req),
+          },
+        )
+        .pipe(timeout(8000)),
+    );
+
+    const branchUsers = Array.isArray(branchUsersResponse?.data)
+      ? branchUsersResponse.data
+      : [];
+    return Array.from(
+      new Set<string>(
+        branchUsers
+          .filter(
+            (row: any) => String(row?.role ?? '').toUpperCase() === 'COURIER',
+          )
+          .map((row: any) => String(row?.user_id ?? '').trim())
+          .filter(Boolean),
+      ),
+    );
   }
 
   private async findUserCashbox(userId: string, cashboxType: Cashbox_type) {
@@ -457,6 +493,26 @@ export class ApiGatewayController {
       }
     }
 
+    // Filialga bog'langan (SA/ADMIN bo'lmagan) so'rovchi: filial kuryerlari
+    // AVVAL branch_users'dan olinadi va identity shu `user_ids` bilan
+    // sahifalanadi. Ilgari identity avval sahifalardi (limit ≤ 100), filial
+    // filtri esa KEYIN qo'llanardi — kuryerlar 100 tadan oshsa, filial (masalan
+    // HQ) kuryerlari ro'yxatdan jimgina tushib qolardi va meta.total noto'g'ri
+    // edi. SA/ADMIN yo'li o'zgarmagan.
+    let branchCourierIds: string[] | null = null;
+    if (!isSystemPrivileged && resolvedBranchId && req?.user) {
+      branchCourierIds = await this.findBranchCourierIds(resolvedBranchId, req);
+      if (!branchCourierIds.length) {
+        const emptyPage = Number(page) > 0 ? Number(page) : 1;
+        const emptyLimit =
+          Number(limit) > 0 ? Math.min(Number(limit), 100) : 10;
+        return successRes({
+          items: [],
+          meta: { page: emptyPage, limit: emptyLimit, total: 0, totalPages: 1 },
+        });
+      }
+    }
+
     const response = await firstValueFrom(
       this.identityClient
         .send(
@@ -468,6 +524,7 @@ export class ApiGatewayController {
               region_id: resolvedRegionId,
               page: page ? Number(page) : undefined,
               limit: limit ? Number(limit) : undefined,
+              ...(branchCourierIds ? { user_ids: branchCourierIds } : {}),
             },
           },
         )
@@ -477,28 +534,10 @@ export class ApiGatewayController {
     let items = Array.isArray(response?.data?.items) ? response.data.items : [];
 
     if (resolvedBranchId && req?.user) {
-      const branchUsersResponse = await firstValueFrom(
-        this.branchClient
-          .send(
-            { cmd: 'branch.user.find_by_branch' },
-            {
-              branch_id: resolvedBranchId,
-              requester: this.toRequester(req),
-            },
-          )
-          .pipe(timeout(8000)),
-      );
-
-      const branchUsers = Array.isArray(branchUsersResponse?.data)
-        ? branchUsersResponse.data
-        : [];
+      // Ikkinchi qatlam: identity qaytargan har bir kuryer shu filialnikimi.
       const courierIdsInBranch = new Set(
-        branchUsers
-          .filter(
-            (row: any) => String(row?.role ?? '').toUpperCase() === 'COURIER',
-          )
-          .map((row: any) => String(row?.user_id ?? '').trim())
-          .filter(Boolean),
+        branchCourierIds ??
+          (await this.findBranchCourierIds(resolvedBranchId, req)),
       );
       items = items.filter((courier: any) =>
         courierIdsInBranch.has(String(courier?.id ?? '').trim()),
@@ -511,6 +550,18 @@ export class ApiGatewayController {
         response.data.meta.totalPages = 1;
       }
       response.data.items = [];
+      return response;
+    }
+
+    // Kuryer kassasi (balance / balance_cash / balance_card) faqat pul bilan
+    // ishlaydigan rollarga qo'shiladi: SUPERADMIN, ADMIN, MANAGER. REGISTRATOR
+    // va BRANCH kuryerlar ro'yxatini (masalan /dispatch kuryer tanlovi) ko'radi,
+    // balanslarni emas — finance'ga murojaat ham qilinmaydi. Ruxsat ro'yxati
+    // (allow-list): @Roles'ga keyin qo'shiladigan rol ham balanssiz qoladi.
+    const canSeeCourierBalances =
+      isSystemPrivileged || roles.includes(RoleEnum.MANAGER);
+    if (!canSeeCourierBalances) {
+      response.data.items = items;
       return response;
     }
 
@@ -980,9 +1031,15 @@ export class ApiGatewayController {
       }
     }
 
+    // market_tg_token (marketning Telegram kaliti) faqat SUPERADMIN/ADMIN'ga:
+    // admin uni marketga shu sahifadan beradi. Menejer so'rovida flag umuman
+    // yuborilmaydi (identity javobida token bo'lmaydi).
     return firstValueFrom(
       this.identityClient
-        .send({ cmd: 'identity.user.find_by_id' }, { id })
+        .send(
+          { cmd: 'identity.user.find_by_id' },
+          requesterIsPrivileged ? { id, include_tg_token: true } : { id },
+        )
         .pipe(timeout(8000)),
     );
   }
@@ -1090,12 +1147,15 @@ export class ApiGatewayController {
   @ApiOkResponse({ description: 'User deleted' })
   @ApiNotFoundResponse({ description: 'Not found' })
   deleteUser(@Param('id') id: string, @Req() req: { user: JwtUser }) {
+    // 15 s: kuryer o'chirilishidan oldin identity filial tekshiruvini
+    // (branch.user.courier_transfer_check → finance/order/logistics) 12 s
+    // gacha kutadi — gateway limiti undan uzunroq bo'lishi shart.
     return this.identityClient
       .send(
         { cmd: 'identity.user.delete' },
         { id, requester: this.toRequester(req) },
       )
-      .pipe(timeout(8000));
+      .pipe(timeout(15000));
   }
 
   @Patch('users/:id/status')

@@ -1,5 +1,5 @@
 import { RpcException } from '@nestjs/microservices';
-import { of } from 'rxjs';
+import { of, throwError } from 'rxjs';
 import { BranchServiceService } from './branch-service.service';
 
 jest.mock('@app/common', () => {
@@ -527,10 +527,12 @@ describe('BranchServiceService', () => {
       on_the_road: 0,
       delivered: 1,
       returned: 0,
+      cancelled: 0,
     },
     markets: [
       {
         market_id: '10',
+        market_name: 'Yandex',
         orders_count: 2,
         delivered_count: 1,
         total_price: 250000,
@@ -571,6 +573,129 @@ describe('BranchServiceService', () => {
     );
     expect(cmds).toContain('order.analytics.branch_dashboard');
     expect(cmds).not.toContain('order.find_all');
+  });
+
+  /**
+   * Menejer statistikasi (harakat sanasi bo'yicha): order-service yangi
+   * `orders_card.cancelled` va `markets[].market_name` ni beradi — filial
+   * servisi ularni O'ZGARTIRMASDAN uzatadi (market qatori ham, token ham emas —
+   * faqat nom).
+   */
+  it("getBranchStats: cancelled va market_name o'zgarmasdan uzatiladi", async () => {
+    branchRepo.findOne.mockResolvedValue({ id: '1', isDeleted: false });
+    branchRepo.find
+      .mockResolvedValueOnce([{ id: '2' }])
+      .mockResolvedValueOnce([]);
+    branchRepo.manager.query.mockResolvedValue([{ id: '1' }, { id: '2' }]);
+    branchUserRepo.find.mockResolvedValue([
+      { user_id: 'c1' },
+      { user_id: 'c2' },
+      { user_id: 'c3' },
+    ]);
+    orderClient.send.mockReturnValue(
+      of({
+        data: dashboardStats({
+          orders_card: {
+            total: 8,
+            new: 1,
+            on_the_road: 2,
+            delivered: 6,
+            returned: 0,
+            cancelled: 2,
+          },
+          markets: [
+            {
+              market_id: '10',
+              market_name: 'Yandex',
+              orders_count: 2,
+              delivered_count: 1,
+              total_price: 250000,
+            },
+          ],
+        }),
+      }),
+    );
+
+    const res = await service.getBranchStats('1', {
+      id: '1',
+      roles: ['admin'],
+    });
+
+    expect(res.data.cards.orders).toEqual(
+      expect.objectContaining({ delivered: 6, cancelled: 2 }),
+    );
+    // delivered_count avvalgidek tashlab yuboriladi; market_name qo'shiladi.
+    expect(res.data.cards.markets).toEqual([
+      {
+        market_id: '10',
+        market_name: 'Yandex',
+        orders_count: 2,
+        total_price: 250000,
+      },
+    ]);
+    expect(res.data.cards.couriers).toEqual({
+      branch_couriers: 3,
+      active_today: 1,
+    });
+  });
+
+  it('getBranchStats: eski order-service market_name bermasa — null', async () => {
+    branchRepo.findOne.mockResolvedValue({ id: '1', isDeleted: false });
+    branchRepo.find.mockResolvedValueOnce([]);
+    branchRepo.manager.query.mockResolvedValue([{ id: '1' }]);
+    branchUserRepo.find.mockResolvedValue([{ user_id: 'c1' }]);
+    orderClient.send.mockReturnValue(
+      of({
+        data: dashboardStats({
+          markets: [
+            {
+              market_id: '10',
+              orders_count: 2,
+              delivered_count: 1,
+              total_price: 250000,
+            },
+          ],
+        }),
+      }),
+    );
+
+    const res = await service.getBranchStats('1', {
+      id: '1',
+      roles: ['admin'],
+    });
+
+    expect(res.data.cards.markets).toEqual([
+      {
+        market_id: '10',
+        market_name: null,
+        orders_count: 2,
+        total_price: 250000,
+      },
+    ]);
+  });
+
+  it('getBranchStats: order-service ishlamasa — nollar, cancelled ham 0', async () => {
+    branchRepo.findOne.mockResolvedValue({ id: '1', isDeleted: false });
+    branchRepo.find.mockResolvedValueOnce([]);
+    branchRepo.manager.query.mockResolvedValue([{ id: '1' }]);
+    branchUserRepo.find.mockResolvedValue([{ user_id: 'c1' }]);
+    orderClient.send.mockReturnValue(throwError(() => new Error('down')));
+
+    const res = await service.getBranchStats('1', {
+      id: '1',
+      roles: ['admin'],
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data.cards.orders).toEqual({
+      total: 0,
+      new: 0,
+      on_the_road: 0,
+      delivered: 0,
+      returned: 0,
+      cancelled: 0,
+    });
+    expect(res.data.cards.markets).toEqual([]);
   });
 
   it('getBranchMarketsAnalytics returns grouped market data', async () => {
@@ -995,5 +1120,1067 @@ describe('BranchServiceService', () => {
 
     expect(logisticsClient.send).not.toHaveBeenCalled();
     expect(orderClient.send).not.toHaveBeenCalled();
+  });
+
+  /** Rad etilgan chaqiruvdan RpcException yukini ({statusCode, message}) oladi. */
+  const rpcErrorOf = async (
+    promise: Promise<unknown>,
+  ): Promise<{ statusCode?: number; message?: string }> => {
+    try {
+      await promise;
+    } catch (error) {
+      expect(error).toBeInstanceOf(RpcException);
+      return (error as RpcException).getError() as {
+        statusCode?: number;
+        message?: string;
+      };
+    }
+    throw new Error('chaqiruv rad etilishi kutilgandi');
+  };
+
+  const HQ_MANAGER_MESSAGE =
+    "HQ (bosh ofis) ga menejer biriktirib bo'lmaydi. HQ ishlarini superadmin, admin va registratorlar bajaradi.";
+  const adminRequester = { id: '1', roles: ['admin'] };
+
+  /**
+   * C8 — HQ'da menejer bo'lmaydi. POST /branches/:id/users ham, identity
+   * createManager saga'si ham shu assignUserToBranch'dan o'tadi.
+   */
+  describe("HQ'da menejer yo'q (assignUserToBranch / updateBranch)", () => {
+    const hqRow = () => ({
+      id: '1',
+      name: 'HQ Toshkent',
+      code: 'HQ-TSHKNT',
+      type: 'HQ',
+      level: 0,
+      parent_id: null,
+      status: 'active',
+      manager_id: null,
+      isDeleted: false,
+    });
+
+    const identityUser = (id: string, role: string) =>
+      identityClient.send.mockReturnValue(of({ data: { id, role } }));
+
+    it("MANAGER → HQ: 400 o'zbekcha xabar bilan; qator ham, kassa ham yaratilmaydi", async () => {
+      branchRepo.findOne.mockResolvedValue(hqRow());
+      identityUser('u9', 'manager');
+
+      const err = await rpcErrorOf(
+        service.assignUserToBranch(
+          { branch_id: '1', user_id: 'u9' },
+          adminRequester,
+        ),
+      );
+
+      expect(err).toEqual(
+        expect.objectContaining({
+          statusCode: 400,
+          message: HQ_MANAGER_MESSAGE,
+        }),
+      );
+      // Tekshiruv qator qidiruvi/tiklash va ensureBranchCashbox'dan OLDIN.
+      expect(branchUserRepo.findOne).not.toHaveBeenCalled();
+      expect(branchUserRepo.save).not.toHaveBeenCalled();
+      expect(financeClient.send).not.toHaveBeenCalled();
+    });
+
+    it("HQ'dagi o'chirilgan MANAGER qatori qayta tiklanmaydi", async () => {
+      branchRepo.findOne.mockResolvedValue(hqRow());
+      identityUser('u9', 'manager');
+      branchUserRepo.findOne.mockResolvedValue({
+        id: 'bu-old',
+        branch_id: '1',
+        user_id: 'u9',
+        role: 'MANAGER',
+        isDeleted: true,
+      });
+
+      const err = await rpcErrorOf(
+        service.assignUserToBranch(
+          { branch_id: '1', user_id: 'u9', role: 'MANAGER' },
+          adminRequester,
+        ),
+      );
+
+      expect(err.statusCode).toBe(400);
+      expect(branchUserRepo.save).not.toHaveBeenCalled();
+      expect(financeClient.send).not.toHaveBeenCalled();
+    });
+
+    it('REGISTRATOR → HQ ruxsat etiladi (201), filial kassasi yaratilmaydi', async () => {
+      branchRepo.findOne.mockResolvedValue(hqRow());
+      identityUser('u5', 'registrator');
+      branchUserRepo.findOne.mockResolvedValue(null);
+      branchUserRepo.save.mockImplementation((row: any) =>
+        Promise.resolve({ id: 'bu-new', ...row }),
+      );
+
+      const res = await service.assignUserToBranch(
+        { branch_id: '1', user_id: 'u5' },
+        adminRequester,
+      );
+
+      expect(res.statusCode).toBe(201);
+      expect(branchUserRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          branch_id: '1',
+          user_id: 'u5',
+          role: 'REGISTRATOR',
+        }),
+      );
+      expect(financeClient.send).not.toHaveBeenCalled();
+    });
+
+    it('COURIER → HQ ruxsat etiladi (201)', async () => {
+      branchRepo.findOne.mockResolvedValue(hqRow());
+      identityUser('263', 'courier');
+      branchUserRepo.findOne.mockResolvedValue(null);
+      branchUserRepo.save.mockImplementation((row: any) =>
+        Promise.resolve({ id: 'bu-new', ...row }),
+      );
+
+      const res = await service.assignUserToBranch(
+        { branch_id: '1', user_id: '263' },
+        adminRequester,
+      );
+
+      expect(res.statusCode).toBe(201);
+      expect(branchUserRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({
+          branch_id: '1',
+          user_id: '263',
+          role: 'COURIER',
+        }),
+      );
+    });
+
+    it("MANAGER → REGIONAL o'zgarmagan: 201 va filial kassasi yaratiladi", async () => {
+      branchRepo.findOne.mockResolvedValue({
+        id: '20',
+        type: 'REGIONAL',
+        status: 'active',
+        isDeleted: false,
+      });
+      identityUser('u9', 'manager');
+      branchUserRepo.findOne.mockResolvedValue(null);
+      branchUserRepo.save.mockImplementation((row: any) =>
+        Promise.resolve({ id: 'bu-new', ...row }),
+      );
+
+      const res = await service.assignUserToBranch(
+        { branch_id: '20', user_id: 'u9' },
+        adminRequester,
+      );
+
+      expect(res.statusCode).toBe(201);
+      expect(financeClient.send).toHaveBeenCalledWith(
+        { cmd: 'finance.cashbox.create' },
+        { user_id: '20', cashbox_type: 'branch' },
+      );
+    });
+
+    it("updateBranch: HQ turini boshqa turga o'zgartirib bo'lmaydi (400)", async () => {
+      branchRepo.findOne.mockResolvedValue(hqRow());
+
+      const err = await rpcErrorOf(
+        service.updateBranch(
+          '1',
+          { type: 'REGIONAL', parent_id: '5' } as any,
+          adminRequester,
+        ),
+      );
+
+      expect(err).toEqual(
+        expect.objectContaining({
+          statusCode: 400,
+          message: "HQ filial turini o'zgartirib bo'lmaydi",
+        }),
+      );
+      expect(branchRepo.save).not.toHaveBeenCalled();
+    });
+
+    it("updateBranch: HQ'ga manager_id yozib bo'lmaydi (400)", async () => {
+      branchRepo.findOne.mockResolvedValue(hqRow());
+
+      const err = await rpcErrorOf(
+        service.updateBranch('1', { manager_id: '5' } as any, adminRequester),
+      );
+
+      expect(err).toEqual(
+        expect.objectContaining({
+          statusCode: 400,
+          message: HQ_MANAGER_MESSAGE,
+        }),
+      );
+      expect(branchRepo.save).not.toHaveBeenCalled();
+    });
+
+    it("updateBranch: HQ'da manager_id: null ruxsat (legacy ko'rsatkichni tozalash)", async () => {
+      branchRepo.findOne.mockResolvedValue({ ...hqRow(), manager_id: '7' });
+      branchRepo.find.mockResolvedValue([]);
+      branchRepo.save.mockImplementation((row: any) => Promise.resolve(row));
+
+      const res = await service.updateBranch(
+        '1',
+        { type: 'HQ', manager_id: null } as any,
+        adminRequester,
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(res.data.type).toBe('HQ');
+      expect(res.data.manager_id).toBeNull();
+    });
+  });
+
+  /**
+   * C6 — HQ registratori pochtani filialga jo'nata oladi. Ruxsat faqat
+   * dispatch uchun alohida helper orqali (assertCanWriteBranch kengaytirilmaydi).
+   */
+  describe('dispatchPostToBranch — HQ registratori va manzil tekshiruvi', () => {
+    const branchesById: Record<string, Record<string, unknown>> = {
+      '10': { id: '10', type: 'HQ', status: 'active', isDeleted: false },
+      '20': { id: '20', type: 'REGIONAL', status: 'active', isDeleted: false },
+      '21': { id: '21', type: 'HYBRID', status: 'active', isDeleted: false },
+      '40': { id: '40', type: 'PICKUP', status: 'active', isDeleted: false },
+      '50': {
+        id: '50',
+        type: 'REGIONAL',
+        status: 'inactive',
+        isDeleted: false,
+      },
+      '60': { id: '60', type: 'HQ', status: 'active', isDeleted: false },
+    };
+    const hqRegistrator = { id: '269', roles: ['registrator'] };
+
+    /** HQ'da qabul qilingan (kuryerga berilmagan) buyurtma. */
+    const hqOrder = (id: string, extra: Record<string, unknown> = {}) => ({
+      id,
+      branch_id: '10',
+      status: 'received',
+      region_id: '14',
+      total_price: 150000,
+      courier_id: null,
+      holder_type: 'HQ',
+      holder_courier_id: null,
+      ...extra,
+    });
+
+    // Testlar bularni almashtiradi: logistics.post.find_by_ids va
+    // logistics.post.orders_by_post javoblari.
+    let postRow: Record<string, unknown> | null;
+    let postOrders: Array<Record<string, unknown>>;
+
+    beforeEach(() => {
+      // Kuryersiz HQ pochtasi: logistics uni courier_id = '0' bilan yaratadi.
+      postRow = { id: '900', courier_id: '0', status: 'new', branch_id: null };
+      postOrders = [hqOrder('1001')];
+      branchRepo.findOne.mockImplementation(({ where }: any) =>
+        Promise.resolve(branchesById[String(where?.id)] ?? null),
+      );
+      // Manzilda menejer bor (assertBranchHasManager).
+      branchUserRepo.findOne.mockResolvedValue({ id: 'manager-row' });
+      logisticsClient.send.mockImplementation(
+        ({ cmd }: { cmd: string }, payload: any) => {
+          if (cmd === 'logistics.post.find_by_ids') {
+            return of({
+              statusCode: 200,
+              message: 'Posts found',
+              data: postRow ? [postRow] : [],
+            });
+          }
+          if (cmd === 'logistics.post.orders_by_post') {
+            return of({ data: postOrders });
+          }
+          if (cmd === 'logistics.post.receive_orders') {
+            return of({
+              data: (payload?.orders ?? []).map((row: any) => ({
+                order_id: row.order_id,
+                post_id: '777',
+              })),
+            });
+          }
+          return of({ data: {} });
+        },
+      );
+      orderClient.send.mockReturnValue(of({ data: {} }));
+    });
+
+    const registratorOnHq = () =>
+      branchUserRepo.find.mockResolvedValue([
+        { branch_id: '10', role: 'REGISTRATOR' },
+      ]);
+
+    const updatedOrderIds = () =>
+      orderClient.send.mock.calls
+        .filter(
+          ([pattern]: [{ cmd: string }]) => pattern.cmd === 'order.update',
+        )
+        .map(([, payload]: [unknown, { id: string }]) => payload.id);
+
+    const logisticsCmds = () =>
+      logisticsClient.send.mock.calls.map(
+        ([pattern]: [{ cmd: string }]) => pattern.cmd,
+      );
+
+    it("HQ registratori menejeri bor REGIONAL filialga jo'nata oladi", async () => {
+      branchUserRepo.find.mockResolvedValue([
+        { branch_id: '10', role: 'REGISTRATOR' },
+      ]);
+
+      const res = await service.dispatchPostToBranch(
+        '10',
+        '900',
+        '20',
+        ['1001'],
+        hqRegistrator,
+      );
+
+      expect(res.statusCode).toBe(200);
+      // Ruxsat — so'rovchining AYNAN manba filialdagi faol qatori bo'yicha.
+      expect(branchUserRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { user_id: '269', branch_id: '10', isDeleted: false },
+        }),
+      );
+      // Pochta avval (buyurtmalardan oldin) faqat-o'qish chaqiruvi bilan
+      // tekshiriladi, keyin buyurtmalar o'qiladi va ko'chiriladi.
+      expect(logisticsCmds()).toEqual([
+        'logistics.post.find_by_ids',
+        'logistics.post.orders_by_post',
+        'logistics.post.receive_orders',
+        'logistics.post.delete',
+      ]);
+      expect(logisticsClient.send).toHaveBeenCalledWith(
+        { cmd: 'logistics.post.find_by_ids' },
+        { ids: ['900'] },
+      );
+      expect(orderClient.send).toHaveBeenCalledWith(
+        { cmd: 'order.update' },
+        expect.objectContaining({
+          id: '1001',
+          dto: expect.objectContaining({
+            branch_id: '20',
+            holder_branch_id: '20',
+            holder_courier_id: null,
+            status: 'on the road',
+          }),
+        }),
+      );
+      expect(res.data).toEqual(
+        expect.objectContaining({
+          moved_orders_count: 1,
+          moved_order_ids: ['1001'],
+          post_deleted: true,
+        }),
+      );
+    });
+
+    it("HQ registratori HYBRID filialga ham jo'nata oladi", async () => {
+      branchUserRepo.find.mockResolvedValue([
+        { branch_id: '10', role: 'registrator' },
+      ]);
+
+      const res = await service.dispatchPostToBranch(
+        '10',
+        '900',
+        '21',
+        ['1001'],
+        hqRegistrator,
+      );
+
+      expect(res.statusCode).toBe(200);
+    });
+
+    it("HQ'dagi MANAGER qatori 403 (faqat REGISTRATOR qatori jo'nata oladi; HQ'da menejer yo'q)", async () => {
+      branchUserRepo.find.mockResolvedValue([
+        { branch_id: '10', role: 'MANAGER' },
+      ]);
+
+      const err = await rpcErrorOf(
+        service.dispatchPostToBranch('10', '900', '20', ['1001'], {
+          id: '198',
+          roles: ['manager'],
+        }),
+      );
+
+      expect(err).toEqual(
+        expect.objectContaining({
+          statusCode: 403,
+          message: "Bu filialdan pochta jo'natishga ruxsat yo'q",
+        }),
+      );
+      expect(logisticsClient.send).not.toHaveBeenCalled();
+      expect(orderClient.send).not.toHaveBeenCalled();
+    });
+
+    it("o'chirilgan REGISTRATOR qatori hisobga olinmaydi (so'rov faqat faol qatorlar bo'yicha)", async () => {
+      // Repo so'rovi isDeleted: false bilan ketadi — o'chirilgan qator kelmaydi.
+      branchUserRepo.find.mockResolvedValue([]);
+
+      const err = await rpcErrorOf(
+        service.dispatchPostToBranch(
+          '10',
+          '900',
+          '20',
+          ['1001'],
+          hqRegistrator,
+        ),
+      );
+
+      expect(err.statusCode).toBe(403);
+      expect(branchUserRepo.find).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({ isDeleted: false }),
+        }),
+      );
+    });
+
+    it('boshqa filial registratori 403; logistics/order chaqirilmaydi', async () => {
+      branchUserRepo.find.mockResolvedValue([
+        { branch_id: '30', role: 'REGISTRATOR' },
+      ]);
+
+      const err = await rpcErrorOf(
+        service.dispatchPostToBranch('10', '900', '20', ['1001'], {
+          id: '301',
+          roles: ['registrator'],
+        }),
+      );
+
+      expect(err.statusCode).toBe(403);
+      expect(logisticsClient.send).not.toHaveBeenCalled();
+      expect(orderClient.send).not.toHaveBeenCalled();
+    });
+
+    it("HQ'dagi COURIER qatori 403", async () => {
+      branchUserRepo.find.mockResolvedValue([
+        { branch_id: '10', role: 'COURIER' },
+      ]);
+
+      const err = await rpcErrorOf(
+        service.dispatchPostToBranch('10', '900', '20', ['1001'], {
+          id: '263',
+          roles: ['courier'],
+        }),
+      );
+
+      expect(err.statusCode).toBe(403);
+      expect(logisticsClient.send).not.toHaveBeenCalled();
+    });
+
+    it("ruxsatsiz so'rovchi + menejersiz manzil → 403 (400 emas): ruxsat oldin tekshiriladi", async () => {
+      branchUserRepo.find.mockResolvedValue([]);
+      branchUserRepo.findOne.mockResolvedValue(null);
+
+      const err = await rpcErrorOf(
+        service.dispatchPostToBranch('10', '900', '20', ['1001'], {
+          id: '301',
+          roles: ['registrator'],
+        }),
+      );
+
+      expect(err.statusCode).toBe(403);
+    });
+
+    it.each([
+      [
+        'PICKUP',
+        '40',
+        "Pochta faqat REGIONAL yoki HYBRID filialga jo'natiladi (manzil filial turi: PICKUP)",
+      ],
+      [
+        'HQ',
+        '60',
+        "Pochta faqat REGIONAL yoki HYBRID filialga jo'natiladi (manzil filial turi: HQ)",
+      ],
+      [
+        'nofaol',
+        '50',
+        "Manzil filial faol emas — nofaol filialga pochta jo'natib bo'lmaydi",
+      ],
+      [
+        "manbaning o'zi",
+        '10',
+        "Pochtani manba filialning o'ziga jo'natib bo'lmaydi — boshqa filialni tanlang",
+      ],
+    ])(
+      'manzil %s → 400; jo‘natish boshlanmaydi',
+      async (_label, destinationId, message) => {
+        branchUserRepo.find.mockResolvedValue([
+          { branch_id: '10', role: 'REGISTRATOR' },
+        ]);
+
+        const err = await rpcErrorOf(
+          service.dispatchPostToBranch(
+            '10',
+            '900',
+            destinationId,
+            ['1001'],
+            hqRegistrator,
+          ),
+        );
+
+        expect(err).toEqual(
+          expect.objectContaining({ statusCode: 400, message }),
+        );
+        // Manzil tekshiruvi menejer tekshiruvidan ham, jo'natishdan ham oldin.
+        expect(branchUserRepo.findOne).not.toHaveBeenCalled();
+        expect(logisticsClient.send).not.toHaveBeenCalled();
+        expect(orderClient.send).not.toHaveBeenCalled();
+      },
+    );
+
+    it("superadmin ham PICKUP'ga jo'nata olmaydi (400)", async () => {
+      const err = await rpcErrorOf(
+        service.dispatchPostToBranch('10', '900', '40', ['1001'], {
+          id: '1',
+          roles: ['superadmin'],
+        }),
+      );
+
+      expect(err.statusCode).toBe(400);
+      expect(logisticsClient.send).not.toHaveBeenCalled();
+    });
+
+    /** Hech narsa ko'chirilmaganini tekshiradi (logistics ham, order ham). */
+    const expectNothingMoved = () => {
+      expect(logisticsCmds()).not.toContain('logistics.post.receive_orders');
+      expect(logisticsCmds()).not.toContain('logistics.post.delete');
+      expect(orderClient.send).not.toHaveBeenCalled();
+    };
+
+    it("holati 'new' bo'lgan HQ buyurtmasi ham jo'natiladi", async () => {
+      registratorOnHq();
+      postOrders = [hqOrder('1001', { status: 'new' })];
+
+      const res = await service.dispatchPostToBranch(
+        '10',
+        '900',
+        '20',
+        ['1001'],
+        hqRegistrator,
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(updatedOrderIds()).toEqual(['1001']);
+    });
+
+    it("registrator kuryerdagi buyurtmani jo'natsa → 400, xabarda id bor; hech narsa ko'chirilmaydi", async () => {
+      registratorOnHq();
+      postOrders = [
+        hqOrder('1001'),
+        hqOrder('1002', {
+          status: 'on the road',
+          courier_id: '263',
+          holder_type: 'COURIER',
+          holder_courier_id: '263',
+        }),
+      ];
+
+      const err = await rpcErrorOf(
+        service.dispatchPostToBranch(
+          '10',
+          '900',
+          '20',
+          ['1001', '1002'],
+          hqRegistrator,
+        ),
+      );
+
+      expect(err.statusCode).toBe(400);
+      expect(err.message).toContain('#1002');
+      expect(err.message).not.toContain('#1001');
+      expect(err.message).toContain("jo'natib bo'lmaydi");
+      expect((err as any).data).toEqual(
+        expect.objectContaining({
+          non_dispatchable_order_ids: ['1002'],
+          reasons: { wrong_status_count: 1, courier_held_count: 1 },
+        }),
+      );
+      expectNothingMoved();
+    });
+
+    it.each([
+      [
+        "holati 'received', lekin holder_courier_id bor",
+        { holder_courier_id: '263' },
+      ],
+      [
+        "holati 'new', lekin courier_id bor",
+        { status: 'new', courier_id: '263' },
+      ],
+    ])(
+      '%s → 400 (kuryer izi holatdan qat’iy nazar taqiqlanadi)',
+      async (_label, extra) => {
+        registratorOnHq();
+        postOrders = [hqOrder('1003', extra)];
+
+        const err = await rpcErrorOf(
+          service.dispatchPostToBranch(
+            '10',
+            '900',
+            '20',
+            ['1003'],
+            hqRegistrator,
+          ),
+        );
+
+        expect(err.statusCode).toBe(400);
+        expect(err.message).toContain('#1003');
+        expect((err as any).data.reasons).toEqual({
+          wrong_status_count: 0,
+          courier_held_count: 1,
+        });
+        expectNothingMoved();
+      },
+    );
+
+    it("sotilgan buyurtma → 400 (kuryer izi bo'lmasa ham); hech narsa ko'chirilmaydi", async () => {
+      registratorOnHq();
+      postOrders = [hqOrder('1001'), hqOrder('1004', { status: 'sold' })];
+
+      const err = await rpcErrorOf(
+        service.dispatchPostToBranch(
+          '10',
+          '900',
+          '20',
+          ['1001', '1004'],
+          hqRegistrator,
+        ),
+      );
+
+      expect(err.statusCode).toBe(400);
+      expect(err.message).toContain('#1004');
+      expect((err as any).data).toEqual(
+        expect.objectContaining({
+          non_dispatchable_order_ids: ['1004'],
+          reasons: { wrong_status_count: 1, courier_held_count: 0 },
+        }),
+      );
+      expectNothingMoved();
+    });
+
+    it.each([['superadmin'], ['admin']])(
+      "%s ham sotilgan/kuryerdagi buyurtmani jo'nata olmaydi (400)",
+      async (role) => {
+        postOrders = [
+          hqOrder('1004', { status: 'sold', courier_id: '263' }),
+          hqOrder('1005', { status: 'waiting', holder_courier_id: '263' }),
+        ];
+
+        const err = await rpcErrorOf(
+          service.dispatchPostToBranch('10', '900', '20', ['1004', '1005'], {
+            id: '1',
+            roles: [role],
+          }),
+        );
+
+        expect(err.statusCode).toBe(400);
+        expect(err.message).toContain('#1004, #1005');
+        expectNothingMoved();
+      },
+    );
+
+    it.each([
+      [
+        'kuryer pochtasi (courier_id bor, holati sent)',
+        { courier_id: '263', status: 'sent' },
+        'kuryerga biriktirilgan (kuryer #263)',
+      ],
+      [
+        "kuryer pochtasi (courier_id bor, holati 'new')",
+        { courier_id: '263', status: 'new' },
+        'kuryerga biriktirilgan (kuryer #263)',
+      ],
+      [
+        "kuryersiz, lekin 'sent' pochta",
+        { courier_id: '0', status: 'sent' },
+        'holati "sent"',
+      ],
+      [
+        "kuryersiz, lekin 'received' pochta",
+        { courier_id: null, status: 'received' },
+        'holati "received"',
+      ],
+    ])(
+      "%s → butun so'rov 400; buyurtmalar o'qilmaydi",
+      async (_label, overrides, messagePart) => {
+        registratorOnHq();
+        postRow = { ...(postRow as Record<string, unknown>), ...overrides };
+
+        const err = await rpcErrorOf(
+          service.dispatchPostToBranch(
+            '10',
+            '900',
+            '20',
+            ['1001'],
+            hqRegistrator,
+          ),
+        );
+
+        expect(err.statusCode).toBe(400);
+        expect(err.message).toContain('Pochta #900');
+        expect(err.message).toContain(messagePart);
+        // Faqat pochta o'qildi: orders_by_post ham, ko'chirish ham yo'q.
+        expect(logisticsCmds()).toEqual(['logistics.post.find_by_ids']);
+        expect(orderClient.send).not.toHaveBeenCalled();
+      },
+    );
+
+    it("superadmin ham kuryer pochtasini jo'nata olmaydi (400)", async () => {
+      postRow = { id: '900', courier_id: '263', status: 'sent' };
+
+      const err = await rpcErrorOf(
+        service.dispatchPostToBranch('10', '900', '20', ['1001'], {
+          id: '1',
+          roles: ['superadmin'],
+        }),
+      );
+
+      expect(err.statusCode).toBe(400);
+      expect(logisticsCmds()).toEqual(['logistics.post.find_by_ids']);
+      expect(orderClient.send).not.toHaveBeenCalled();
+    });
+
+    it("pochta topilmasa → 404; buyurtmalar o'qilmaydi", async () => {
+      registratorOnHq();
+      postRow = null;
+
+      const err = await rpcErrorOf(
+        service.dispatchPostToBranch(
+          '10',
+          '900',
+          '20',
+          ['1001'],
+          hqRegistrator,
+        ),
+      );
+
+      expect(err).toEqual(
+        expect.objectContaining({
+          statusCode: 404,
+          message: 'Pochta #900 topilmadi',
+        }),
+      );
+      expect(logisticsCmds()).toEqual(['logistics.post.find_by_ids']);
+    });
+
+    it("CANCELLED/CLOSED avvalgidek jimgina chetlab o'tiladi (kuryer izi bo'lsa ham) — qolgani jo'natiladi", async () => {
+      registratorOnHq();
+      postOrders = [
+        hqOrder('1001'),
+        hqOrder('1006', { status: 'cancelled', courier_id: '263' }),
+        hqOrder('1007', { status: 'closed', holder_courier_id: '263' }),
+      ];
+
+      const res = await service.dispatchPostToBranch(
+        '10',
+        '900',
+        '20',
+        ['1001', '1006', '1007'],
+        hqRegistrator,
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(res.data.moved_order_ids).toEqual(['1001']);
+      expect(updatedOrderIds()).toEqual(['1001']);
+      // Postda ko'chirilmagan buyurtmalar qoldi — post o'chirilmaydi.
+      expect(res.data.post_deleted).toBe(false);
+      expect(logisticsCmds()).not.toContain('logistics.post.delete');
+    });
+
+    it("faqat CANCELLED/CLOSED tanlansa — avvalgi 400 (mos order yo'q)", async () => {
+      registratorOnHq();
+      postOrders = [
+        hqOrder('1006', { status: 'cancelled', courier_id: '263' }),
+      ];
+
+      const err = await rpcErrorOf(
+        service.dispatchPostToBranch(
+          '10',
+          '900',
+          '20',
+          ['1006'],
+          hqRegistrator,
+        ),
+      );
+
+      expect(err).toEqual(
+        expect.objectContaining({
+          statusCode: 400,
+          message: "Post ichida jo'natishga mos order topilmadi",
+        }),
+      );
+      expectNothingMoved();
+    });
+
+    it('ko\'p buyurtma: xabarda 20 ta id, qolgani "+N ta"; data\'da hammasi', async () => {
+      registratorOnHq();
+      const soldIds = Array.from({ length: 23 }, (_, i) => String(2000 + i));
+      postOrders = soldIds.map((id) => hqOrder(id, { status: 'sold' }));
+
+      const err = await rpcErrorOf(
+        service.dispatchPostToBranch('10', '900', '20', soldIds, hqRegistrator),
+      );
+
+      expect(err.statusCode).toBe(400);
+      expect(err.message).toContain('23 ta buyurtmani');
+      expect(err.message).toContain('#2019 (+3 ta)');
+      expect(err.message).not.toContain('#2020');
+      expect((err as any).data.non_dispatchable_order_ids).toEqual(soldIds);
+      expectNothingMoved();
+    });
+
+    it('regressiya: HQ registratori filialga yozish amallarida hamon 403 oladi', async () => {
+      branchUserRepo.find.mockResolvedValue([
+        { branch_id: '10', role: 'REGISTRATOR', isDeleted: false },
+      ]);
+
+      const attempts = [
+        () =>
+          service.assignUserToBranch(
+            { branch_id: '10', user_id: '500' },
+            hqRegistrator,
+          ),
+        () =>
+          service.removeUserFromBranch(
+            { branch_id: '10', user_id: '500' },
+            hqRegistrator,
+          ),
+        () =>
+          service.setBranchConfig(
+            { branch_id: '10', config_key: 'k', config_value: { a: 1 } },
+            hqRegistrator,
+          ),
+      ];
+      for (const attempt of attempts) {
+        const err = await rpcErrorOf(attempt());
+        expect(err.statusCode).toBe(403);
+      }
+      expect(branchUserRepo.save).not.toHaveBeenCalled();
+      expect(branchConfigRepo.save).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * C5 — pochta jo'natish oynasi uchun manzil filiallar (pul maydonlarisiz).
+   */
+  describe('findDispatchDestinations', () => {
+    const destinationRows = [
+      {
+        id: '14',
+        name: 'E2E Filial Sirdaryo',
+        code: 'SIR',
+        type: 'REGIONAL',
+        status: 'active',
+        phone_number: '+998712000014',
+        region_id: '7',
+        manager_id: null,
+        ownership: 'partner',
+        per_order_share: 5000,
+        isDeleted: false,
+      },
+      {
+        id: '17',
+        name: 'Hybrid filial',
+        code: 'HYB',
+        type: 'HYBRID',
+        status: 'active',
+        phone_number: null,
+        region_id: null,
+        manager_id: null,
+        isDeleted: false,
+      },
+    ];
+
+    const assignmentsByUser: Record<string, Array<Record<string, unknown>>> = {
+      // HQ registratori
+      '269': [{ branch_id: '1', role: 'REGISTRATOR' }],
+      // REGIONAL filial registratori
+      '301': [{ branch_id: '20', role: 'REGISTRATOR' }],
+      // HQ kuryeri
+      '263': [{ branch_id: '1', role: 'COURIER' }],
+    };
+
+    beforeEach(() => {
+      branchRepo.find.mockResolvedValue(destinationRows);
+      // HQ tekshiruvi: branchRepo.findOne({ id: In([...]), type: HQ }).
+      branchRepo.findOne.mockImplementation(({ where }: any) => {
+        const ids: string[] = where?.id?.value ?? [];
+        return Promise.resolve(
+          where?.type === 'HQ' && ids.includes('1') ? { id: '1' } : null,
+        );
+      });
+      branchUserRepo.find.mockImplementation(({ where }: any) => {
+        if (where?.role === 'MANAGER') {
+          return Promise.resolve([
+            { id: 'bu-m', branch_id: '14', user_id: '198' },
+          ]);
+        }
+        return Promise.resolve(assignmentsByUser[String(where?.user_id)] ?? []);
+      });
+      identityClient.send.mockImplementation(({ cmd }: { cmd: string }) => {
+        if (cmd === 'identity.user.find_all') {
+          return of({
+            data: {
+              items: [
+                {
+                  id: '198',
+                  name: 'Sirdaryo menejeri',
+                  phone_number: '+998903009002',
+                  role: 'manager',
+                  salary: 3000000,
+                },
+              ],
+            },
+          });
+        }
+        return of({ data: null });
+      });
+      logisticsClient.send.mockImplementation(({ cmd }: { cmd: string }) => {
+        if (cmd === 'logistics.region.find_by_ids') {
+          return of({
+            data: [{ id: '7', name: 'Sirdaryo viloyati', sato_code: '1724' }],
+          });
+        }
+        return of({ data: [] });
+      });
+    });
+
+    const expectedItems = [
+      {
+        id: '14',
+        name: 'E2E Filial Sirdaryo',
+        code: 'SIR',
+        type: 'REGIONAL',
+        status: 'active',
+        phone_number: '+998712000014',
+        region_id: '7',
+        region: { id: '7', name: 'Sirdaryo viloyati' },
+        has_manager: true,
+        manager: {
+          id: '198',
+          name: 'Sirdaryo menejeri',
+          phone_number: '+998903009002',
+        },
+      },
+      {
+        id: '17',
+        name: 'Hybrid filial',
+        code: 'HYB',
+        type: 'HYBRID',
+        status: 'active',
+        phone_number: null,
+        region_id: null,
+        region: null,
+        has_manager: false,
+        manager: null,
+      },
+    ];
+
+    it('superadmin: faol REGIONAL/HYBRID filiallar menejeri bilan; pul maydonlari yo‘q', async () => {
+      const res = await service.findDispatchDestinations(
+        {},
+        { id: '1', roles: ['superadmin'] },
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(res.data).toEqual({ items: expectedItems, total: 2 });
+
+      const [{ where }] = branchRepo.find.mock.calls[0];
+      expect(where).toEqual(
+        expect.objectContaining({ isDeleted: false, status: 'active' }),
+      );
+      expect(where.type.value).toEqual(['REGIONAL', 'HYBRID']);
+      expect(where).not.toHaveProperty('region_id');
+
+      for (const item of res.data.items) {
+        for (const key of [
+          'payment',
+          'olinishi_kerak',
+          'berilishi_kerak',
+          'per_order_share',
+          'ownership',
+          'cashbox',
+        ]) {
+          expect(item).not.toHaveProperty(key);
+        }
+      }
+      expect(financeClient.send).not.toHaveBeenCalled();
+      expect(orderClient.send).not.toHaveBeenCalled();
+
+      // Menejer profillari BITTA identity chaqiruvida (filial boshiga emas).
+      const identityCalls = identityClient.send.mock.calls;
+      expect(identityCalls).toHaveLength(1);
+      expect(identityCalls[0][0]).toEqual({ cmd: 'identity.user.find_all' });
+      expect(identityCalls[0][1]).toEqual({
+        query: { user_ids: ['198'], page: 1, limit: 100 },
+      });
+    });
+
+    it('HQ registratori xuddi shu ro‘yxatni oladi', async () => {
+      const res = await service.findDispatchDestinations(
+        {},
+        { id: '269', roles: ['registrator'] },
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(res.data.items).toEqual(expectedItems);
+    });
+
+    it('region_id filtri so‘rovga qo‘shiladi', async () => {
+      await service.findDispatchDestinations(
+        { region_id: '7' },
+        { id: '1', roles: ['admin'] },
+      );
+
+      const [{ where }] = branchRepo.find.mock.calls[0];
+      expect(where.region_id).toBe('7');
+    });
+
+    it("noto'g'ri region_id → 400", async () => {
+      const err = await rpcErrorOf(
+        service.findDispatchDestinations(
+          { region_id: 'abc' },
+          { id: '1', roles: ['admin'] },
+        ),
+      );
+
+      expect(err.statusCode).toBe(400);
+      expect(branchRepo.find).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['REGIONAL filial registratori', { id: '301', roles: ['registrator'] }],
+      ['HQ kuryeri', { id: '263', roles: ['courier'] }],
+      ['biriktirilmagan foydalanuvchi', { id: '999', roles: ['registrator'] }],
+    ])('%s → 403', async (_label, requester) => {
+      const err = await rpcErrorOf(
+        service.findDispatchDestinations({}, requester),
+      );
+
+      expect(err.statusCode).toBe(403);
+      expect(branchRepo.find).not.toHaveBeenCalled();
+    });
+
+    it("identity javob bermasa ham ro'yxat qaytadi (menejer id bilan, ismsiz)", async () => {
+      identityClient.send.mockImplementation(() => {
+        throw new Error('identity down');
+      });
+
+      const res = await service.findDispatchDestinations(
+        {},
+        { id: '1', roles: ['admin'] },
+      );
+
+      expect(res.statusCode).toBe(200);
+      expect(res.data.items[0]).toEqual(
+        expect.objectContaining({
+          has_manager: true,
+          manager: { id: '198', name: '', phone_number: null },
+        }),
+      );
+    });
   });
 });

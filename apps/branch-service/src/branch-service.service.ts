@@ -54,9 +54,17 @@ type BranchDashboardStats = {
     on_the_road: number;
     delivered: number;
     returned: number;
+    /**
+     * Tanlangan oraliqda BEKOR QILINGAN buyurtmalar (bekor qilingan kun
+     * bo'yicha). Ixtiyoriy: eski order-service uni yubormaydi — FE u holda
+     * `returned` ga qaytadi.
+     */
+    cancelled?: number;
   };
   markets: Array<{
     market_id: string;
+    /** Market nomi (identity); topilmasa/eski order-service — null/yo'q. */
+    market_name?: string | null;
     orders_count: number;
     delivered_count: number;
     total_price: number;
@@ -70,6 +78,129 @@ type BranchDashboardFilter = {
   endDate?: string;
   period?: string;
   all?: boolean;
+};
+
+/**
+ * HQ (bosh ofis) da MENEJER bo'lmaydi. HQ'ning ishlarini (qabul, pochta
+ * jo'natish, HQ kuryerlaridan pul olish) superadmin, admin va HQ
+ * registratorlari bajaradi.
+ *
+ * ⚠️ Matn identity-service `createManager` dagi bilan BIR XIL — POST /managers
+ * va POST /branches/:id/users mijozga aynan bitta xabarni qaytaradi.
+ */
+const HQ_MANAGER_FORBIDDEN_MESSAGE =
+  "HQ (bosh ofis) ga menejer biriktirib bo'lmaydi. HQ ishlarini superadmin, admin va registratorlar bajaradi.";
+
+/**
+ * Pochta bilan filialga jo'natiladigan buyurtma holatlari — faqat HQ'da
+ * turganlari (qabul qilingan yoki yangi). CANCELLED/CLOSED bu ro'yxatda YO'Q:
+ * dispatchPostToBranch ularni avvalgidek jimgina chetlab o'tadi (ko'chirmaydi,
+ * so'rovni rad etmaydi).
+ */
+const DISPATCHABLE_ORDER_STATUSES: ReadonlySet<string> = new Set<string>([
+  Order_status.RECEIVED,
+  Order_status.NEW,
+]);
+
+/** Xabarda ko'rsatiladigan buyurtma id'lari soni (qolgani "+N ta"). */
+const DISPATCH_MESSAGE_ORDER_ID_LIMIT = 20;
+
+/**
+ * R3 — kuryer filialdan filialga FAQAT qo'lida pul ham, buyurtma ham
+ * qolmaganda o'tkaziladi (o'tkazish, filialdan chiqarish, yetim kuryerni boshqa
+ * filialga biriktirish). Gateway xato tanasida faqat `message` qoladi
+ * (`data` tashlab yuboriladi), shuning uchun sabablar XABAR ICHIDA —
+ * prefiks + sabablar ' ' bilan. FE ularni aynan shu ko'rinishda ko'rsatadi.
+ */
+const COURIER_TRANSFER_BLOCKED_PREFIX =
+  "Kuryerni boshqa filialga o'tkazib bo'lmaydi: ";
+const COURIER_UNASSIGN_BLOCKED_PREFIX =
+  "Kuryerni filialdan chiqarib bo'lmaydi: ";
+const COURIER_REHOME_BLOCKED_PREFIX =
+  "Kuryerni boshqa filialga biriktirib bo'lmaydi: ";
+const COURIER_TRANSFER_REVERTED_PREFIX =
+  "Kuryer o'tkazilmadi — o'tkazish paytida kuryerda yangi buyurtma yoki pul paydo bo'ldi, o'zgarish bekor qilindi: ";
+/** Tekshiruv manbalaridan biri javob bermadi — hech narsa ko'chirilmaydi (503). */
+const COURIER_CHECK_UNAVAILABLE_MESSAGE =
+  "Kuryer kassasi va qo'lidagi buyurtmalarni tekshirib bo'lmadi (xizmat javob bermadi). Birozdan so'ng qayta urinib ko'ring.";
+const COURIER_CHECK_FORBIDDEN_MESSAGE =
+  "Kuryer o'tkazish tekshiruvini faqat superadmin yoki admin ko'ra oladi";
+const COURIER_TRANSFER_FORBIDDEN_MESSAGE =
+  "Kuryerni boshqa filialga faqat superadmin yoki admin o'tkaza oladi";
+const COURIER_NOT_A_COURIER_MESSAGE =
+  "Bu foydalanuvchi kuryer emas — filialdan filialga faqat kuryer o'tkaziladi";
+const COURIER_NOT_FOUND_MESSAGE = 'Kuryer topilmadi';
+const COURIER_TARGET_NOT_FOUND_MESSAGE = 'Tanlangan filial topilmadi';
+const COURIER_TARGET_INACTIVE_MESSAGE =
+  "Yangi filial faol emas — nofaol filialga kuryer o'tkazib bo'lmaydi";
+const COURIER_ALREADY_IN_BRANCH_MESSAGE = 'Kuryer allaqachon shu filialda';
+const COURIER_ROW_CHANGED_MESSAGE =
+  "Kuryerning filiali shu paytda o'zgardi — sahifani yangilab, qayta urinib ko'ring";
+const COURIER_TRANSFER_TX_FAILED_MESSAGE =
+  "Kuryerni o'tkazishda ma'lumotlar bazasi xatosi — o'tkazish bajarilmadi. Qayta urinib ko'ring";
+const COURIER_REGION_SYNC_FAILED_MESSAGE =
+  "Kuryer hududini yangilab bo'lmadi — o'tkazish bekor qilindi. Birozdan so'ng qayta urinib ko'ring";
+
+/**
+ * R3 vaqt byudjeti — har qatlam o'zidan pastdagisidan uzun bo'lishi SHART:
+ * uch manba (finance, order, logistics) PARALLEL, har biri 5 s; maqsad
+ * filialning FAOL menejeri (identity, 5 s) oldindan tekshiruv bilan PARALLEL;
+ * hudud yangilash 5 s, qaytarish 3 s (identity `set_region` mahalliy — tashqi
+ * chaqiruvsiz); qayta tekshiruvdan oldin 1,5 s kutish. Gateway: tekshiruv
+ * 15 s, o'tkazish 30 s (COURIER_TRANSFER_RPC_TIMEOUT_MS).
+ *
+ * PATCH /couriers/:id/branch eng yomon holati: kuryer (identity) 5 s +
+ * max(oldindan tekshiruv 5 s, faol menejer 5 s) + 1,5 s kutish + qayta
+ * tekshiruv 5 s + hudud 5 s + tiklash 3 s ≈ 24,5 s (+ baza) < 30 s. Menejer
+ * tekshiruvi ketma-ket bo'lganda ≈ 29,5 s bo'lardi — gateway chegarasiga
+ * juda yaqin, shuning uchun u oldindan tekshiruv bilan birga yuboriladi.
+ */
+const COURIER_HOLDINGS_RPC_TIMEOUT_MS = 5000;
+const COURIER_TARGET_MANAGER_RPC_TIMEOUT_MS = 5000;
+const COURIER_REGION_SYNC_TIMEOUT_MS = 5000;
+const COURIER_REGION_RESTORE_TIMEOUT_MS = 3000;
+/**
+ * O'tkazish yozilgandan keyin qayta tekshiruvgacha kutish: a'zolikni swap'dan
+ * sal oldin o'qigan "kuryerga biriktirish" / skan amali o'z yozuvini tugatib
+ * olsin — qayta tekshiruv uni ko'rsin.
+ */
+const COURIER_TRANSFER_RECHECK_DELAY_MS = 1500;
+/** Sabab matnidagi va javobdagi namuna id'lar soni. */
+const COURIER_HOLDINGS_SAMPLE_LIMIT = 5;
+
+/**
+ * Kuryer "qo'lidagi" hamma narsa — finance (kassa), order (PENDING savdo,
+ * qoldiq, qo'lidagi buyurtmalar, qo'shimcha xarajat so'rovlari) va logistics
+ * (qabul qilinmagan bekor pochtalar) javoblaridan. Pul so'mda (JSON son);
+ * solishtirish `tiyin` da, chunki ustunlar numeric(…,2) va JS float siljiydi.
+ */
+type CourierHoldings = {
+  has_cashbox: boolean;
+  balance: number;
+  balance_cash: number;
+  balance_card: number;
+  pending_settlement_count: number;
+  pending_settlement_amount: number;
+  carry_amount: number;
+  orders_in_hand: number;
+  orders_sample: Array<{ id: string; status: string }>;
+  open_return_posts: number;
+  return_posts_sample: Array<{
+    id: string;
+    branch_id: string | null;
+    order_quantity: number;
+  }>;
+  pending_extra_cost_approvals: number;
+  /** Solishtirish uchun (javobga chiqmaydi): `legs` = naqd + karta. */
+  tiyin: { balance: number; legs: number; pending: number; carry: number };
+};
+
+/** O'tkazish tranzaksiyasi natijasi — qaytarish (revert) shu bilan ishlaydi. */
+type CourierBranchSwap = {
+  fromRowId: string | null;
+  fromBranchId: string | null;
+  toRowId: string;
+  toBranchId: string;
 };
 
 @Injectable()
@@ -516,19 +647,28 @@ export class BranchServiceService implements OnModuleInit {
 
   private async ensureUserExists(
     userId: string,
-  ): Promise<{ id: string; role?: string | null }> {
+  ): Promise<{ id: string; role?: string | null; region_id?: string | null }> {
     try {
       const res = await lastValueFrom(
         this.identityClient
           .send<{
-            data?: { id?: string; role?: string | null };
+            data?: {
+              id?: string;
+              role?: string | null;
+              region_id?: string | number | null;
+            };
           }>({ cmd: 'identity.user.find_by_id' }, { id: userId })
           .pipe(timeout(5000)),
       );
       if (!res?.data?.id) {
         this.notFound('User not found');
       }
-      return { id: String(res.data.id), role: res.data.role ?? null };
+      return {
+        id: String(res.data.id),
+        role: res.data.role ?? null,
+        // R3: kuryer hududi filialga ergashadi — o'tkazishda solishtiriladi.
+        region_id: String(res.data.region_id ?? '').trim() || null,
+      };
     } catch (error) {
       if (error instanceof RpcException) {
         const err = error.getError() as
@@ -669,6 +809,54 @@ export class BranchServiceService implements OnModuleInit {
     return new Map(results);
   }
 
+  /**
+   * getUsersByIds'ning BATCH varianti: har foydalanuvchiga alohida
+   * `identity.user.find_by_id` o'rniga bitta `identity.user.find_all`
+   * (`user_ids` filtri; identity sahifani 100 bilan cheklaydi — shuning uchun
+   * 100 talik bo'laklar). Xato/timeout bo'lsa bo'sh Map qaytadi: chaqiruvchi
+   * ism/telefonsiz davom etadi, ro'yxat yiqilmaydi.
+   */
+  private async getUsersByIdsBatch(
+    userIds: string[],
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const ids = Array.from(
+      new Set(userIds.map((id) => String(id ?? '').trim()).filter(Boolean)),
+    );
+    const usersById = new Map<string, Record<string, unknown>>();
+    if (!ids.length) {
+      return usersById;
+    }
+
+    const chunkSize = 100;
+    try {
+      for (let offset = 0; offset < ids.length; offset += chunkSize) {
+        const chunk = ids.slice(offset, offset + chunkSize);
+        const res = await lastValueFrom(
+          this.identityClient
+            .send<{
+              data?: { items?: Array<Record<string, unknown>> };
+            }>(
+              { cmd: 'identity.user.find_all' },
+              { query: { user_ids: chunk, page: 1, limit: chunkSize } },
+            )
+            .pipe(timeout(5000)),
+        );
+        const items = Array.isArray(res?.data?.items) ? res.data.items : [];
+        for (const user of items) {
+          const id = String((user?.id ?? '') as string).trim();
+          if (id) {
+            usersById.set(id, user);
+          }
+        }
+      }
+    } catch (err) {
+      this.logger.warn(
+        `identity.user.find_all failed (user_ids=${ids.length}): ${(err as Error)?.message ?? err}`,
+      );
+    }
+    return usersById;
+  }
+
   private toTashkentStartOfDay(date: Date): Date {
     const tzOffsetMs = 5 * 60 * 60 * 1000;
     const shifted = new Date(date.getTime() + tzOffsetMs);
@@ -762,6 +950,7 @@ export class BranchServiceService implements OnModuleInit {
         on_the_road: 0,
         delivered: 0,
         returned: 0,
+        cancelled: 0,
       },
       markets: [],
       packages: { on_the_way: 0, waiting_for_acceptance: 0 },
@@ -928,6 +1117,774 @@ export class BranchServiceService implements OnModuleInit {
     const managerTree = await this.collectDescendantBranchIds(managerRoots);
     if (!managerTree.has(String(branchId))) {
       this.forbidden('Transfer batch yaratishga ruxsat yo‘q');
+    }
+  }
+
+  /**
+   * branch_users rolini katta harfli string sifatida solishtirish.
+   * `normalizeBranchUserRole` ATAYLAB ishlatilmaydi: u noma'lum rolda 400
+   * tashlaydi, ruxsat tekshiruvida esa kutilgan javob — 403.
+   */
+  private isBranchUserRoleOneOf(
+    role: string | null | undefined,
+    allowed: readonly BranchUserRole[],
+  ): boolean {
+    const normalized = String(role ?? '')
+      .trim()
+      .toUpperCase();
+    return (allowed as readonly string[]).includes(normalized);
+  }
+
+  // ===== R3: kuryer qo'lidagi pul va buyurtmalar (umumiy tekshiruv) =====
+
+  /** Xato matni log uchun (RPC xatosi oddiy obyekt bo'lib keladi). */
+  private describeRpcFailure(error: unknown): string {
+    const message = (error as { message?: unknown } | null | undefined)
+      ?.message;
+    if (typeof message === 'string' && message) {
+      return message;
+    }
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return 'unknown error';
+    }
+  }
+
+  /** RPC xatosi 404 mi — yuqori darajadagi yoki ichki (`error`) statusCode. */
+  private isRpcNotFound(error: unknown): boolean {
+    const source = (
+      error instanceof RpcException ? error.getError() : error
+    ) as
+      | { statusCode?: unknown; error?: { statusCode?: unknown } }
+      | null
+      | undefined;
+    return Number(source?.statusCode ?? source?.error?.statusCode) === 404;
+  }
+
+  /** Raqamli id (kanonik ko'rinishda: '015' → '15') yoki 400. */
+  private parseCourierTransferId(value: unknown, message: string): string {
+    const normalized = String((value ?? '') as string).trim();
+    if (!/^\d+$/.test(normalized)) {
+      this.badRequest(message);
+    }
+    return this.canonicalId(normalized);
+  }
+
+  /**
+   * So'm → tiyin (butun son). Ustunlar numeric(…,2), JS float esa siljiydi —
+   * pul faqat tiyinda solishtiriladi. Son bo'lmagan qiymat (yo'q maydon ham)
+   * XATO: "noma'lum" hech qachon "nol" deb o'qilmaydi (tekshiruv → 503).
+   */
+  private toTiyin(value: unknown, label: string): number {
+    const amount =
+      typeof value === 'number' ||
+      (typeof value === 'string' && value.trim() !== '')
+        ? Number(value)
+        : NaN;
+    if (!Number.isFinite(amount)) {
+      throw new Error(`${label} son emas: ${String(value as string)}`);
+    }
+    return Math.round(amount * 100);
+  }
+
+  /** Manfiy bo'lmagan butun son (sanoq) yoki xato (tekshiruv → 503). */
+  private toHoldingsCount(value: unknown, label: string): number {
+    const count =
+      typeof value === 'number' ||
+      (typeof value === 'string' && value.trim() !== '')
+        ? Number(value)
+        : NaN;
+    if (!Number.isFinite(count) || count < 0) {
+      throw new Error(`${label} son emas: ${String(value as string)}`);
+    }
+    return Math.trunc(count);
+  }
+
+  /**
+   * Tiyin → xabardagi so'm: minglar bo'sh joy bilan, tiyin qismi faqat noldan
+   * farq qilsa (",NN"). 15000000 → "150 000"; 12345 → "123,45".
+   */
+  private formatSomAmount(tiyin: number): string {
+    const sign = tiyin < 0 ? '-' : '';
+    const abs = Math.abs(Math.round(tiyin));
+    const som = Math.floor(abs / 100);
+    const rest = abs % 100;
+    const grouped = String(som).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+    return rest
+      ? `${sign}${grouped},${String(rest).padStart(2, '0')}`
+      : `${sign}${grouped}`;
+  }
+
+  /** " (#101, #102 va yana K ta)"; namuna bo'sh bo'lsa — bo'sh satr. */
+  private formatHoldingsSample(ids: string[], total: number): string {
+    const shown = ids.slice(0, COURIER_HOLDINGS_SAMPLE_LIMIT);
+    if (!shown.length) {
+      return '';
+    }
+    const rest = total - shown.length;
+    return ` (${shown.map((id) => `#${id}`).join(', ')}${rest > 0 ? ` va yana ${rest} ta` : ''})`;
+  }
+
+  /**
+   * Kuryer qo'lidagi pul va buyurtmalar — uch manba PARALLEL, har biri 5 s:
+   * finance (FOR_COURIER kassa), order (`order.courier_transfer_check`) va
+   * logistics (`logistics.post.open_return_posts_for_courier` — kuryer
+   * topshirgan, hali qabul qilinmagan bekor pochtalar).
+   *
+   * Logistics uchun ATAYLAB yengil RPC: `logistics.post.rejected_for_courier`
+   * avval identity'ni (5 s) kutadi, keyin har pochta guruhi uchun
+   * `order.find_all` (5 s) yuboradi — ichki eng yomon holat ~10 s, bu yerdagi
+   * 5 s dan uzun edi (soxta 503). Yangi RPC'da identity yo'q, har pochtaga
+   * bitta `order.find_all` parallel, har biri 3,5 s — 5 s ichiga sig'adi.
+   *
+   * ⚠️ FAIL-CLOSED. Faqat finance'ning 404'i ("kassa yo'q") nol deb olinadi.
+   * Qolgan har qanday holat — timeout, 5xx, deploy paytida hali yo'q RPC,
+   * `data` yo'qligi, massiv bo'lmagan logistics javobi, son bo'lmagan
+   * qiymat — 503 va HECH NARSA yozilmaydi: "bilmasak — ko'chirmaymiz".
+   *
+   * `sendFinanceCommand` ATAYLAB ishlatilmaydi: `extractRpcError` faqat ichki
+   * `error.statusCode` ni o'qiydi, finance esa 404'ni yuqori darajada otadi —
+   * u 500 bo'lib qolardi va kassasi yo'q kuryer abadiy bloklanardi.
+   */
+  private async loadCourierHoldings(
+    courierId: string,
+  ): Promise<CourierHoldings> {
+    try {
+      const [cashboxResponse, orderResponse, postsResponse] = await Promise.all(
+        [
+          lastValueFrom(
+            this.financeClient
+              .send<{
+                data?: Record<string, unknown> | null;
+              }>(
+                { cmd: 'finance.cashbox.find_by_user' },
+                { user_id: courierId, cashbox_type: Cashbox_type.FOR_COURIER },
+              )
+              .pipe(timeout(COURIER_HOLDINGS_RPC_TIMEOUT_MS)),
+          ).catch((error: unknown) => {
+            if (this.isRpcNotFound(error)) {
+              return null;
+            }
+            throw error;
+          }),
+          lastValueFrom(
+            this.orderClient
+              .send<{
+                data?: Record<string, unknown> | null;
+              }>(
+                { cmd: 'order.courier_transfer_check' },
+                { courier_id: courierId },
+              )
+              .pipe(timeout(COURIER_HOLDINGS_RPC_TIMEOUT_MS)),
+          ),
+          lastValueFrom(
+            this.logisticsClient
+              .send<{
+                data?: unknown;
+              }>(
+                { cmd: 'logistics.post.open_return_posts_for_courier' },
+                { courier_id: courierId },
+              )
+              .pipe(timeout(COURIER_HOLDINGS_RPC_TIMEOUT_MS)),
+          ),
+        ],
+      );
+      return this.parseCourierHoldings(
+        cashboxResponse,
+        orderResponse,
+        postsResponse,
+      );
+    } catch (error) {
+      this.logger.warn(
+        `courier holdings check failed (courier=${courierId}): ${this.describeRpcFailure(error)}`,
+      );
+      throw new RpcException(errorRes(COURIER_CHECK_UNAVAILABLE_MESSAGE, 503));
+    }
+  }
+
+  /** Uch javobni tekshiradi va birlashtiradi; buzuq javob — xato (→ 503). */
+  private parseCourierHoldings(
+    cashboxResponse: { data?: Record<string, unknown> | null } | null,
+    orderResponse: { data?: Record<string, unknown> | null } | undefined,
+    postsResponse: { data?: unknown } | undefined,
+  ): CourierHoldings {
+    // null — finance 404: kassa yo'q, ya'ni pul ham yo'q.
+    let hasCashbox = false;
+    let balanceTiyin = 0;
+    let cashTiyin = 0;
+    let cardTiyin = 0;
+    if (cashboxResponse !== null) {
+      const cashbox = cashboxResponse?.data;
+      if (!cashbox || typeof cashbox !== 'object') {
+        throw new Error("finance.cashbox.find_by_user: data yo'q");
+      }
+      hasCashbox = true;
+      balanceTiyin = this.toTiyin(cashbox.balance, 'balance');
+      cashTiyin = this.toTiyin(cashbox.balance_cash, 'balance_cash');
+      cardTiyin = this.toTiyin(cashbox.balance_card, 'balance_card');
+    }
+
+    const order = orderResponse?.data;
+    if (!order || typeof order !== 'object') {
+      throw new Error("order.courier_transfer_check: data yo'q");
+    }
+    const pendingCount = this.toHoldingsCount(
+      order.pending_settlement_count,
+      'pending_settlement_count',
+    );
+    const pendingTiyin = this.toTiyin(
+      order.pending_settlement_amount,
+      'pending_settlement_amount',
+    );
+    const carryTiyin = this.toTiyin(order.carry_amount, 'carry_amount');
+    const ordersInHand = this.toHoldingsCount(
+      order.orders_in_hand,
+      'orders_in_hand',
+    );
+    const approvals = this.toHoldingsCount(
+      order.pending_extra_cost_approvals,
+      'pending_extra_cost_approvals',
+    );
+    const ordersSample = (
+      Array.isArray(order.orders_sample)
+        ? (order.orders_sample as Array<Record<string, unknown>>)
+        : []
+    )
+      .map((row) => ({
+        id: String((row?.id ?? '') as string).trim(),
+        status: String((row?.status ?? '') as string),
+      }))
+      .filter((row) => row.id)
+      .slice(0, COURIER_HOLDINGS_SAMPLE_LIMIT);
+
+    // Har bekor pochtaning `order_quantity` si — uning O'Z CANCELLED_SENT
+    // buyurtmalari soni (guruh soni emas). Sabab POCHTALAR bilan aytiladi:
+    // `order_quantity > 0` bo'lganlar sanaladi, sonlar qo'shilmaydi; 0 li
+    // (bo'sh qobiq) pochta to'siq emas.
+    const posts = postsResponse?.data;
+    if (!Array.isArray(posts)) {
+      throw new Error(
+        'logistics.post.open_return_posts_for_courier: javob massiv emas',
+      );
+    }
+    const openPosts = (posts as Array<Record<string, unknown>>).filter(
+      (post) =>
+        this.toHoldingsCount(post?.order_quantity, 'order_quantity') > 0,
+    );
+
+    return {
+      has_cashbox: hasCashbox,
+      balance: balanceTiyin / 100,
+      balance_cash: cashTiyin / 100,
+      balance_card: cardTiyin / 100,
+      pending_settlement_count: pendingCount,
+      pending_settlement_amount: pendingTiyin / 100,
+      carry_amount: carryTiyin / 100,
+      orders_in_hand: ordersInHand,
+      orders_sample: ordersSample,
+      open_return_posts: openPosts.length,
+      return_posts_sample: openPosts
+        .slice(0, COURIER_HOLDINGS_SAMPLE_LIMIT)
+        .map((post) => ({
+          id: String((post.id ?? '') as string),
+          branch_id: String((post.branch_id ?? '') as string).trim() || null,
+          order_quantity: Number(post.order_quantity),
+        })),
+      pending_extra_cost_approvals: approvals,
+      tiyin: {
+        balance: balanceTiyin,
+        legs: cashTiyin + cardTiyin,
+        pending: pendingTiyin,
+        carry: carryTiyin,
+      },
+    };
+  }
+
+  /**
+   * To'siq sabablari (o'zbekcha, qat'iy tartibda). SOF funksiya.
+   *
+   * Pul: sof qoldiq (balance) YOKI naqd+karta yig'indisi noldan farq qilsa —
+   * musbat ham, manfiy ham. Oyoqlar ALOHIDA nol bo'lishi shart emas: Click
+   * topshirig'i naqd +X / karta −X (sof 0) holatini qoldiradi — bu yopilgan,
+   * to'g'ri holat (finance ham sof qoldiq bilan ishlaydi). Musbat pulni kim
+   * qabul qilishi ko'rsatiladi: HQ kuryeri — Asosiy kassa; filial kuryeri —
+   * o'sha filial menejeri (superadmin EMAS); filialsiz — administrator.
+   */
+  private describeCourierHoldings(
+    holdings: CourierHoldings,
+    currentBranch: Branch | null,
+  ): string[] {
+    const reasons: string[] = [];
+    const moneyTiyin =
+      holdings.tiyin.balance !== 0
+        ? holdings.tiyin.balance
+        : holdings.tiyin.legs;
+    if (moneyTiyin > 0) {
+      const amount = this.formatSomAmount(moneyTiyin);
+      if (!currentBranch) {
+        reasons.push(
+          `kuryer qo'lida ${amount} so'm pul bor — kuryer hech qaysi filialga biriktirilmagan, pulni qabul qilish uchun administratorga murojaat qiling.`,
+        );
+      } else if (currentBranch.type === BranchType.HQ) {
+        reasons.push(
+          `kuryer qo'lida ${amount} so'm pul bor — avval uni Asosiy kassaga qabul qiling (To'lovlar → Qabul qilinishi kerak).`,
+        );
+      } else {
+        reasons.push(
+          `kuryer qo'lida ${amount} so'm pul bor — avval uni '${currentBranch.name}' filiali menejeri qabul qilib olsin.`,
+        );
+      }
+    } else if (moneyTiyin < 0) {
+      reasons.push(
+        `kuryer kassasi manfiy (-${this.formatSomAmount(-moneyTiyin)} so'm) — kuryerga to'lanishi kerak bo'lgan pul bor, avval hisob-kitobni yoping.`,
+      );
+    }
+
+    if (holdings.pending_settlement_count > 0) {
+      // Blok QOLADI (aks holda courier_to_branch FIFO eski filial qatorlarini
+      // yangi filial puli bilan yopardi). Lekin sof-nol holatda (PENDING
+      // qatorlar yig'indisi ham, kassa — sof qoldiq va naqd+karta — ham 0)
+      // "kutib qayta tekshiring" hech qachon yordam bermaydi: 0 so'm topshirib
+      // bo'lmaydi, qatorlar faqat kuryerning keyingi pul topshirishidagi FIFO
+      // bilan yopiladi. Shuning uchun haqiqiy yo'l aytiladi.
+      if (
+        holdings.tiyin.pending === 0 &&
+        holdings.tiyin.balance === 0 &&
+        holdings.tiyin.legs === 0
+      ) {
+        reasons.push(
+          `kuryerning ${holdings.pending_settlement_count} ta sotuvi bo'yicha hisob-kitob ochiq qolgan, lekin ularning jami summasi 0 so'm — bu yozuvlar kuryerning keyingi pul topshirishida yopiladi; shoshilinch bo'lsa, tizim administratoriga murojaat qiling.`,
+        );
+      } else {
+        const amount =
+          holdings.tiyin.pending !== 0
+            ? ` (${this.formatSomAmount(holdings.tiyin.pending)} so'm)`
+            : '';
+        reasons.push(
+          `kuryerning ${holdings.pending_settlement_count} ta sotuvi bo'yicha hisob-kitob hali yopilmagan${amount}. Pul topshirilgan bo'lsa, bir necha soniyadan so'ng qayta tekshiring.`,
+        );
+      }
+    }
+
+    if (holdings.tiyin.carry > 0) {
+      reasons.push(
+        `kuryerda taqsimlanmagan qoldiq bor (${this.formatSomAmount(holdings.tiyin.carry)} so'm) — hisob-kitob yakunlanmagan.`,
+      );
+    }
+
+    if (holdings.orders_in_hand > 0) {
+      const sample = this.formatHoldingsSample(
+        holdings.orders_sample.map((row) => row.id),
+        holdings.orders_in_hand,
+      );
+      reasons.push(
+        `kuryer qo'lida ${holdings.orders_in_hand} ta yakunlanmagan buyurtma bor${sample} — avval ularni yetkazing yoki filialga qaytaring.`,
+      );
+    }
+
+    if (holdings.open_return_posts > 0) {
+      const sample = this.formatHoldingsSample(
+        holdings.return_posts_sample.map((row) => row.id),
+        holdings.open_return_posts,
+      );
+      reasons.push(
+        `kuryer topshirgan ${holdings.open_return_posts} ta bekor qilingan pochta hali qabul qilinmagan${sample} — avval filial ularni qabul qilsin.`,
+      );
+    }
+
+    if (holdings.pending_extra_cost_approvals > 0) {
+      reasons.push(
+        `kuryerning ${holdings.pending_extra_cost_approvals} ta qo'shimcha xarajat so'rovi hali ko'rib chiqilmagan.`,
+      );
+    }
+
+    return reasons;
+  }
+
+  /**
+   * Kuryerda pul yoki buyurtma bo'lsa — 409 (prefiks + sabablar). Manba javob
+   * bermasa — 503 (`loadCourierHoldings`). Hech narsa yozmaydi.
+   */
+  private async assertCourierHoldsNothing(
+    courierId: string,
+    currentBranch: Branch | null,
+    prefix: string,
+  ): Promise<void> {
+    const holdings = await this.loadCourierHoldings(courierId);
+    const reasons = this.describeCourierHoldings(holdings, currentBranch);
+    if (reasons.length) {
+      this.conflict(prefix + reasons.join(' '));
+    }
+  }
+
+  /**
+   * Filialdagi o'chirilmagan (is_deleted=false) MANAGER qatorlari egalari —
+   * takrorsiz. Ularning identity'dagi holati bu yerda tekshirilmaydi.
+   */
+  private async findBranchManagerUserIds(branchId: string): Promise<string[]> {
+    const rows =
+      (await this.branchUserRepo.find({
+        where: {
+          branch_id: branchId,
+          role: BranchUserRole.MANAGER,
+          isDeleted: false,
+        },
+        select: ['user_id'],
+      })) ?? [];
+    return Array.from(
+      new Set(
+        rows.map((row) => String(row.user_id ?? '').trim()).filter(Boolean),
+      ),
+    );
+  }
+
+  /**
+   * Maqsad filialda kuryer pulini QONUNIY qabul qila oladigan FAOL menejer
+   * bormi. branch_users qatorining o'zi yetarli emas: identity `deleteUser`
+   * qatorni o'chirmaydi, bloklash esa faqat statusni o'zgartiradi — o'chirilgan
+   * yoki bloklangan menejerning qatori qolib ketadi, u esa tizimga kira olmaydi.
+   *
+   * `getUsersByIdsBatch` ATAYLAB ishlatilmaydi: u xatoni yutib bo'sh Map
+   * qaytaradi — identity ishlamay qolsa, soxta "faol menejer yo'q" (400) chiqardi.
+   * Bu yerda har qanday xato yoki buzuq javob — 503 (fail-closed). Identity
+   * filtrlari (role, status, user_ids) javobda ham qayta tekshiriladi.
+   */
+  private async assertTransferTargetHasActiveManager(
+    target: Branch,
+    managerUserIds: string[],
+  ): Promise<void> {
+    let activeManagers: number;
+    try {
+      const response = await lastValueFrom(
+        this.identityClient
+          .send<{ data?: { items?: unknown } | null }>(
+            { cmd: 'identity.user.find_all' },
+            {
+              query: {
+                user_ids: managerUserIds,
+                role: Roles.MANAGER,
+                status: Status.ACTIVE,
+                page: 1,
+                limit: 100,
+              },
+            },
+          )
+          .pipe(timeout(COURIER_TARGET_MANAGER_RPC_TIMEOUT_MS)),
+      );
+      const items = response?.data?.items;
+      if (!Array.isArray(items)) {
+        throw new Error('identity.user.find_all: items massiv emas');
+      }
+      const requested = new Set(managerUserIds);
+      activeManagers = (items as Array<Record<string, unknown> | null>).filter(
+        (user) =>
+          requested.has(String((user?.id ?? '') as string).trim()) &&
+          String((user?.role ?? '') as string)
+            .trim()
+            .toLowerCase() === String(Roles.MANAGER) &&
+          String((user?.status ?? '') as string)
+            .trim()
+            .toLowerCase() === String(Status.ACTIVE) &&
+          user?.isDeleted !== true,
+      ).length;
+    } catch (error) {
+      this.logger.warn(
+        `courier transfer target manager check failed (branch=${String(target.id)}): ${this.describeRpcFailure(error)}`,
+      );
+      throw new RpcException(errorRes(COURIER_CHECK_UNAVAILABLE_MESSAGE, 503));
+    }
+    if (!activeManagers) {
+      this.badRequest(
+        `'${target.name}' filialida faol menejer yo'q — kuryer pulini qabul qiladigan odam bo'lmaydi. Avval filialga menejer biriktiring`,
+      );
+    }
+  }
+
+  /**
+   * Foydalanuvchi mavjud va KURYER. 404 → 'Kuryer topilmadi'; identity javob
+   * bermasa — 503 (fail-closed); boshqa rol — 400. Identity'dagi hududi ham
+   * qaytadi (kuryer hududi filialga ergashadi).
+   */
+  private async assertIsCourierUser(
+    userId: string,
+  ): Promise<{ id: string; region_id: string | null }> {
+    let user: { id: string; role?: string | null; region_id?: string | null };
+    try {
+      user = await this.ensureUserExists(userId);
+    } catch (error) {
+      if (this.isRpcNotFound(error)) {
+        this.notFound(COURIER_NOT_FOUND_MESSAGE);
+      }
+      this.logger.warn(
+        `courier identity lookup failed (user=${userId}): ${this.describeRpcFailure(error)}`,
+      );
+      throw new RpcException(errorRes(COURIER_CHECK_UNAVAILABLE_MESSAGE, 503));
+    }
+    if (
+      String(user.role ?? '')
+        .trim()
+        .toLowerCase() !== String(Roles.COURIER)
+    ) {
+      this.badRequest(COURIER_NOT_A_COURIER_MESSAGE);
+    }
+    return { id: user.id, region_id: user.region_id ?? null };
+  }
+
+  /** `findHqBranch` bilan bir xil qidiruv — lekin 404 o'rniga null. */
+  private async findHqBranchRow(): Promise<Branch | null> {
+    const byCode = await this.branchRepo.findOne({
+      where: { code: this.hqCode, isDeleted: false },
+    });
+    if (byCode) {
+      return byCode;
+    }
+    return (
+      (await this.branchRepo.findOne({
+        where: { type: BranchType.HQ, isDeleted: false },
+      })) ?? null
+    );
+  }
+
+  /** Foydalanuvchining faol branch_users qatori (qisman unique indeks: ≤1). */
+  private async findActiveBranchUserRow(
+    userId: string,
+  ): Promise<BranchUser | null> {
+    return (
+      (await this.branchUserRepo.findOne({
+        where: { user_id: userId, isDeleted: false },
+        order: { createdAt: 'DESC' },
+      })) ?? null
+    );
+  }
+
+  /** Faol qator filiali (o'chirilgan filial — null, ya'ni "filialsiz"). */
+  private async findBranchOfRow(
+    row: BranchUser | null,
+  ): Promise<Branch | null> {
+    if (!row) {
+      return null;
+    }
+    return (
+      (await this.branchRepo.findOne({
+        where: { id: String(row.branch_id), isDeleted: false },
+      })) ?? null
+    );
+  }
+
+  /**
+   * FAQAT pochtani filialga jo'natish (dispatchPostToBranch) uchun ruxsat.
+   *
+   * - superadmin/admin — o'tadi;
+   * - qolganlar — MANBA filialda (HQ) faol REGISTRATOR qatori bo'lishi shart,
+   *   aks holda 403. MANAGER qatori ham 403: HQ'da menejer bo'lmaydi (C8), eski
+   *   qator qolib ketgan bo'lsa ham u orqali jo'natib bo'lmaydi.
+   *
+   * ⚠️ resolveAccessScope / assertCanWriteBranch ATAYLAB kengaytirilmaydi: ular
+   * filialni tahrirlash/o'chirish, xodim biriktirish/chiqarish va config
+   * yozishni ham himoya qiladi — registratorga bular ochilib qolmasligi kerak.
+   */
+  private async assertCanDispatchPostFromBranch(
+    sourceBranchId: string,
+    requester?: RequesterContext,
+  ): Promise<void> {
+    if (this.isSystemPrivileged(requester)) {
+      return;
+    }
+
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId) {
+      this.forbidden('Requester aniqlanmadi');
+    }
+
+    const assignments = await this.branchUserRepo.find({
+      where: {
+        user_id: requesterId,
+        branch_id: String(sourceBranchId),
+        isDeleted: false,
+      },
+      select: ['branch_id', 'role'],
+    });
+
+    const canDispatch = assignments.some(
+      (item) =>
+        String(item.branch_id) === String(sourceBranchId) &&
+        this.isBranchUserRoleOneOf(item.role, [BranchUserRole.REGISTRATOR]),
+    );
+    if (!canDispatch) {
+      this.forbidden("Bu filialdan pochta jo'natishga ruxsat yo'q");
+    }
+  }
+
+  /**
+   * Kuryer havolasi bormi. Bo'sh/null va '0' — kuryer yo'q: logistics
+   * kuryersiz (HQ/filial) pochtani `courier_id = '0'` bilan yaratadi.
+   */
+  private hasCourierRef(value: unknown): boolean {
+    const normalized = String((value ?? '') as string).trim();
+    return normalized !== '' && !/^0+$/.test(normalized);
+  }
+
+  /** Raqamli id'ni kanonik ko'rinishga keltiradi ('0900' → '900'). */
+  private canonicalId(value: unknown): string {
+    const normalized = String((value ?? '') as string).trim();
+    return /^\d+$/.test(normalized)
+      ? BigInt(normalized).toString()
+      : normalized;
+  }
+
+  /** Buyurtma id'lari xabar uchun: "#1, #2 … (+N ta)". */
+  private formatOrderIdsForMessage(orderIds: string[]): string {
+    const shown = orderIds
+      .slice(0, DISPATCH_MESSAGE_ORDER_ID_LIMIT)
+      .map((id) => `#${id}`)
+      .join(', ');
+    const rest = orderIds.length - DISPATCH_MESSAGE_ORDER_ID_LIMIT;
+    return rest > 0 ? `${shown} (+${rest} ta)` : shown;
+  }
+
+  /**
+   * Filialga faqat HQ'da yig'ilgan, hali hech kimga berilmagan pochta
+   * jo'natiladi: holati 'new' va kuryer biriktirilmagan. Kuryer pochtasi yoki
+   * allaqachon jo'natilgan/qabul qilingan pochta BUTUN so'rov bilan 400 —
+   * superadmin/admin uchun ham (kuryerdagi pochtani filialga "ko'chirish"
+   * hech qachon to'g'ri emas). Buyurtmalar o'qilishidan va hech narsa
+   * ko'chirilishidan OLDIN tekshiriladi.
+   *
+   * `logistics.post.find_by_ids` — faqat o'qish: `find_by_id`/`orders_by_post`
+   * dan farqli, pochtaning branch_id'sini qayta yozmaydi. Doira (scope)
+   * tekshiruvi keyingi `orders_by_post` chaqiruvida saqlanadi.
+   */
+  private async assertPostCanBeDispatched(
+    postId: string,
+    context: { source_branch_id: string; destination_branch_id: string },
+  ): Promise<void> {
+    const postsResponse = await this.sendLogisticsCommand<{
+      data?: Array<Record<string, unknown>>;
+    }>('logistics.post.find_by_ids', { ids: [postId] });
+
+    const posts = Array.isArray(postsResponse?.data) ? postsResponse.data : [];
+    const targetPostId = this.canonicalId(postId);
+    const post = posts.find(
+      (row) => this.canonicalId(row?.id) === targetPostId,
+    );
+    if (!post) {
+      this.notFound(`Pochta #${postId} topilmadi`);
+    }
+
+    const courierId = String((post.courier_id ?? '') as string).trim();
+    if (this.hasCourierRef(courierId)) {
+      throw new RpcException(
+        errorRes(
+          `Pochta #${postId} kuryerga biriktirilgan (kuryer #${courierId}) — kuryer pochtasini filialga jo'natib bo'lmaydi`,
+          400,
+          {
+            post_id: postId,
+            ...context,
+            post_courier_id: courierId,
+            reasons: { post_has_courier: true },
+          },
+        ),
+      );
+    }
+
+    const postStatus = String((post.status ?? '') as string)
+      .trim()
+      .toLowerCase();
+    if (postStatus !== Post_status.NEW) {
+      throw new RpcException(
+        errorRes(
+          `Pochta #${postId} holati "${postStatus || "noma'lum"}" — filialga faqat yangi ('new') holatdagi HQ pochtasi jo'natiladi`,
+          400,
+          {
+            post_id: postId,
+            ...context,
+            post_status: postStatus || null,
+            reasons: { post_status_not_new: true },
+          },
+        ),
+      );
+    }
+  }
+
+  /**
+   * Jo'natish uchun filiallar ro'yxati (branch.dispatch_destinations) ruxsati:
+   * superadmin/admin yoki HQ filialida faol REGISTRATOR qatori bor foydalanuvchi.
+   * Qolganlar — 403.
+   */
+  private async assertCanListDispatchDestinations(
+    requester?: RequesterContext,
+  ): Promise<void> {
+    if (this.isSystemPrivileged(requester)) {
+      return;
+    }
+
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId) {
+      this.forbidden('Requester aniqlanmadi');
+    }
+
+    const assignments = await this.branchUserRepo.find({
+      where: { user_id: requesterId, isDeleted: false },
+      select: ['branch_id', 'role'],
+    });
+    const registratorBranchIds = Array.from(
+      new Set(
+        assignments
+          .filter((item) =>
+            this.isBranchUserRoleOneOf(item.role, [BranchUserRole.REGISTRATOR]),
+          )
+          .map((item) => String(item.branch_id ?? '').trim())
+          .filter(Boolean),
+      ),
+    );
+
+    const hqBranch = registratorBranchIds.length
+      ? await this.branchRepo.findOne({
+          where: {
+            id: In(registratorBranchIds),
+            type: BranchType.HQ,
+            isDeleted: false,
+          },
+          select: ['id'],
+        })
+      : null;
+    if (!hqBranch) {
+      this.forbidden(
+        "Jo'natish uchun filiallar ro'yxatini faqat superadmin, admin yoki HQ registratori ko'ra oladi",
+      );
+    }
+  }
+
+  /**
+   * Pochta faqat FAOL REGIONAL yoki HYBRID filialga jo'natiladi:
+   * - manba filialning o'ziga — yo'q;
+   * - HQ'ga — yo'q (pochta HQ'dan chiqadi);
+   * - PICKUP'ga — yo'q: PICKUP pochtani qabul qila olmaydi (menejerida 'mails'
+   *   imkoniyati yo'q, batch ham qabul qilmaydi) — buyurtmalar u yerda qotib
+   *   qoladi.
+   */
+  private assertValidDispatchDestination(
+    sourceBranch: Branch,
+    destinationBranch: Branch,
+  ): void {
+    if (String(destinationBranch.id) === String(sourceBranch.id)) {
+      this.badRequest(
+        "Pochtani manba filialning o'ziga jo'natib bo'lmaydi — boshqa filialni tanlang",
+      );
+    }
+    if (destinationBranch.status !== Status.ACTIVE) {
+      this.badRequest(
+        "Manzil filial faol emas — nofaol filialga pochta jo'natib bo'lmaydi",
+      );
+    }
+    if (
+      destinationBranch.type !== BranchType.REGIONAL &&
+      destinationBranch.type !== BranchType.HYBRID
+    ) {
+      this.badRequest(
+        `Pochta faqat REGIONAL yoki HYBRID filialga jo'natiladi (manzil filial turi: ${destinationBranch.type})`,
+      );
     }
   }
 
@@ -2069,13 +3026,24 @@ export class BranchServiceService implements OnModuleInit {
     }
 
     const sourceBranch = await this.getBranchOrThrow(sourceBranchId);
-    await this.getBranchOrThrow(destinationBranchId);
+    const destinationBranch = await this.getBranchOrThrow(destinationBranchId);
 
     if (sourceBranch.type !== BranchType.HQ) {
       this.forbidden("Post dispatch faqat HQ branch'dan ruxsat etilgan");
     }
+    // Ruxsat manzil haqidagi 400'lardan OLDIN tekshiriladi: ruxsatsiz
+    // so'rovchi manzil filial haqida hech narsa bilmasdan 403 oladi.
+    // (Ilgari bu yerda assertCanWriteBranch bor edi — u faqat MANAGER'ga
+    // ruxsat berardi, HQ registratori 403 olardi.)
+    await this.assertCanDispatchPostFromBranch(sourceBranchId, requester);
+    this.assertValidDispatchDestination(sourceBranch, destinationBranch);
     await this.assertBranchHasManager(destinationBranchId);
-    await this.assertCanWriteBranch(sourceBranchId, requester);
+    // Pochtaning o'zi: kuryer pochtasi yoki 'new' bo'lmagan pochta — butun
+    // so'rov 400 (buyurtmalar o'qilishidan va ko'chirilishidan oldin).
+    await this.assertPostCanBeDispatched(postId, {
+      source_branch_id: sourceBranchId,
+      destination_branch_id: destinationBranchId,
+    });
 
     const requesterPayload = {
       id: String(requester?.id ?? ''),
@@ -2206,6 +3174,66 @@ export class BranchServiceService implements OnModuleInit {
       );
     }
 
+    // Ko'chiriladigan HAR BIR buyurtma HQ'da turgan bo'lishi shart: holati
+    // 'received' yoki 'new', kuryerda EMAS (courier_id ham, holder_courier_id
+    // ham bo'sh). Kuryerdagi, sotilgan, yo'ldagi va h.k. buyurtmani filialga
+    // "ko'chirish" hech qachon to'g'ri emas — superadmin/admin uchun ham.
+    // Birortasi bo'lsa BUTUN so'rov rad etiladi (qolganini jimgina
+    // jo'natmaymiz), hech narsa ko'chirilmaydi. CANCELLED/CLOSED va o'chirilgan
+    // buyurtmalar yuqoridagidek jimgina chetlab o'tiladi (eligible emas).
+    const eligibleIdSet = new Set(eligibleOrderIds);
+    const nonDispatchableOrders = candidateOrders.filter((order) => {
+      const orderId = String((order?.id ?? '') as string);
+      if (!eligibleIdSet.has(orderId)) {
+        return false;
+      }
+      const status = String((order?.status ?? '') as string)
+        .trim()
+        .toLowerCase();
+      return (
+        !DISPATCHABLE_ORDER_STATUSES.has(status) ||
+        this.hasCourierRef(order?.courier_id) ||
+        this.hasCourierRef(order?.holder_courier_id)
+      );
+    });
+    if (nonDispatchableOrders.length) {
+      const offendingIds = nonDispatchableOrders
+        .map((order) => String((order?.id ?? '') as string).trim())
+        .filter(Boolean);
+      const wrongStatusCount = nonDispatchableOrders.filter(
+        (order) =>
+          !DISPATCHABLE_ORDER_STATUSES.has(
+            String((order?.status ?? '') as string)
+              .trim()
+              .toLowerCase(),
+          ),
+      ).length;
+      const courierHeldCount = nonDispatchableOrders.filter(
+        (order) =>
+          this.hasCourierRef(order?.courier_id) ||
+          this.hasCourierRef(order?.holder_courier_id),
+      ).length;
+      throw new RpcException(
+        errorRes(
+          `${offendingIds.length} ta buyurtmani filialga jo'natib bo'lmaydi: ${this.formatOrderIdsForMessage(offendingIds)}. ` +
+            "Faqat HQ'da turgan (holati 'received' yoki 'new') va kuryerga biriktirilmagan buyurtma jo'natiladi",
+          400,
+          {
+            post_id: postId,
+            source_branch_id: sourceBranchId,
+            destination_branch_id: destinationBranchId,
+            total_in_post: orderIds.length,
+            eligible_orders_count: eligibleOrderIds.length,
+            reasons: {
+              wrong_status_count: wrongStatusCount,
+              courier_held_count: courierHeldCount,
+            },
+            non_dispatchable_order_ids: offendingIds,
+          },
+        ),
+      );
+    }
+
     const requesterId = String(requester?.id ?? '').trim() || '0';
     const note = `Post #${postId} HQ'dan branch #${destinationBranchId} ga dispatch qilindi`;
 
@@ -2286,6 +3314,125 @@ export class BranchServiceService implements OnModuleInit {
       },
       200,
       'Post HQ dan branchga muvaffaqiyatli dispatch qilindi',
+    );
+  }
+
+  /**
+   * Pochta jo'natish oynasi uchun manzil filiallar ro'yxati.
+   *
+   * - Kirish: superadmin/admin yoki HQ registratori (qolganlar — 403).
+   * - Faqat FAOL REGIONAL/HYBRID filiallar (HQ va PICKUP hech qachon), ixtiyoriy
+   *   region_id filtri bilan — dispatchPostToBranch qabul qiladigan manzillar
+   *   bilan bir xil qoida.
+   * - PUL MAYDONLARI YO'Q (branch.find_all'dan farqli: u menejer oyligi,
+   *   kuryer balanslari va olinishi_kerak/berilishi_kerak ni qaytaradi —
+   *   registrator ularni ko'rmasligi kerak).
+   * - Menejerlar bitta `In(ids)` so'rovida, ism/telefonlar bitta identity
+   *   chaqiruvida olinadi (filial boshiga alohida chaqiruv yo'q).
+   */
+  async findDispatchDestinations(
+    query?: { region_id?: string | number | null },
+    requester?: RequesterContext,
+  ) {
+    await this.assertCanListDispatchDestinations(requester);
+
+    const regionId = this.normalizeNullableBigint(query?.region_id)?.trim();
+    if (regionId && !/^\d+$/.test(regionId)) {
+      this.badRequest("region_id noto'g'ri");
+    }
+
+    const branches = await this.branchRepo.find({
+      where: {
+        isDeleted: false,
+        status: Status.ACTIVE,
+        type: In([BranchType.REGIONAL, BranchType.HYBRID]),
+        ...(regionId ? { region_id: regionId } : {}),
+      },
+      order: { name: 'ASC' },
+    });
+
+    const branchIds = branches.map((branch) => String(branch.id));
+    const managerAssignments = branchIds.length
+      ? await this.branchUserRepo.find({
+          where: {
+            isDeleted: false,
+            role: BranchUserRole.MANAGER,
+            branch_id: In(branchIds),
+          },
+          select: ['id', 'branch_id', 'user_id', 'createdAt'],
+          order: { createdAt: 'ASC' },
+        })
+      : [];
+
+    const managerIdByBranchId = new Map<string, string>();
+    for (const assignment of managerAssignments) {
+      const branchId = String(assignment.branch_id ?? '').trim();
+      const userId = String(assignment.user_id ?? '').trim();
+      if (!branchId || !userId || managerIdByBranchId.has(branchId)) {
+        continue;
+      }
+      managerIdByBranchId.set(branchId, userId);
+    }
+
+    const regionIds = Array.from(
+      new Set(
+        branches
+          .map((branch) => String(branch.region_id ?? '').trim())
+          .filter(Boolean),
+      ),
+    );
+    const [managersById, regionsById] = await Promise.all([
+      this.getUsersByIdsBatch(Array.from(managerIdByBranchId.values())),
+      this.getRegionsByIds(regionIds),
+    ]);
+
+    const items = branches.map((branch) => {
+      const branchRegionId = String(branch.region_id ?? '').trim() || null;
+      const region = branchRegionId
+        ? ((regionsById.get(branchRegionId) as
+            | Record<string, unknown>
+            | undefined) ?? null)
+        : null;
+      const managerId = managerIdByBranchId.get(String(branch.id)) ?? null;
+      const managerUser = managerId
+        ? (managersById.get(managerId) ?? null)
+        : null;
+      const managerName = managerUser?.name;
+      const managerPhone = managerUser?.phone_number;
+
+      return {
+        id: String(branch.id),
+        name: branch.name,
+        code: branch.code ?? null,
+        type: branch.type,
+        status: branch.status,
+        phone_number: branch.phone_number ?? null,
+        region_id: branchRegionId,
+        region: region
+          ? {
+              id: String((region.id ?? branchRegionId) as string),
+              name: typeof region.name === 'string' ? region.name : '',
+            }
+          : null,
+        has_manager: Boolean(managerId),
+        // manager faqat has_manager=false bo'lganda null. Identity javob
+        // bermasa ham id qoladi (ism/telefon bo'sh) — menejer borligi
+        // branch_users'dan aniq.
+        manager: managerId
+          ? {
+              id: managerId,
+              name: typeof managerName === 'string' ? managerName : '',
+              phone_number:
+                typeof managerPhone === 'string' ? managerPhone : null,
+            }
+          : null,
+      };
+    });
+
+    return successRes(
+      { items, total: items.length },
+      200,
+      "Jo'natish uchun filiallar",
     );
   }
 
@@ -2873,6 +4020,7 @@ export class BranchServiceService implements OnModuleInit {
 
     const marketsCard = stats.markets.map((row) => ({
       market_id: row.market_id,
+      market_name: row.market_name ?? null,
       orders_count: row.orders_count,
       total_price: row.total_price,
     }));
@@ -3105,6 +4253,21 @@ export class BranchServiceService implements OnModuleInit {
         ? this.normalizeNullableBigint(dto.parent_id)
         : branch.parent_id;
 
+    // HQ qulfi. HQ oddiy filialga aylansa, "HQ'da menejer yo'q" qoidasi
+    // (assignUserToBranch) chetlab o'tilardi — tahrirlash oynasida tur tanlovi
+    // bor. HQ'ning legacy `manager_id` ko'rsatkichiga ham faqat null yozish
+    // mumkin (eski qiymatni tozalash uchun).
+    if (branch.type === BranchType.HQ && nextType !== BranchType.HQ) {
+      this.badRequest("HQ filial turini o'zgartirib bo'lmaydi");
+    }
+    if (
+      nextType === BranchType.HQ &&
+      typeof dto?.manager_id !== 'undefined' &&
+      this.normalizeNullableBigint(dto.manager_id) !== null
+    ) {
+      this.badRequest(HQ_MANAGER_FORBIDDEN_MESSAGE);
+    }
+
     if (typeof dto?.code !== 'undefined') {
       const nextCode = this.normalizeBranchCode(dto.code);
       await this.ensureBranchCodeUnique(nextCode, branch.id);
@@ -3250,7 +4413,7 @@ export class BranchServiceService implements OnModuleInit {
 
     await this.assertCanWriteBranch(branchId, requester);
 
-    await this.getBranchOrThrow(branchId);
+    const branch = await this.getBranchOrThrow(branchId);
     const user = await this.ensureUserExists(userId);
     const derivedRole = this.resolveBranchRoleFromUserRole(user.role);
     const requestedRole = String(data?.role ?? '').trim()
@@ -3263,6 +4426,14 @@ export class BranchServiceService implements OnModuleInit {
     }
     const role = derivedRole;
 
+    // HQ'da menejer bo'lmaydi. Tekshiruv so'rovchiga bog'liq EMAS (ichki saga
+    // chaqiruvlari ham) va o'chirilgan qatorni tiklash hamda
+    // ensureBranchCashbox'dan OLDIN turadi — HQ uchun 'branch' kassasi hech
+    // qachon yaratilmaydi. HQ REGISTRATOR va COURIER ruxsati saqlanadi.
+    if (role === BranchUserRole.MANAGER && branch.type === BranchType.HQ) {
+      this.badRequest(HQ_MANAGER_FORBIDDEN_MESSAGE);
+    }
+
     if (role === BranchUserRole.COURIER) {
       const requesterRoles = (requester?.roles ?? []).map((item) =>
         String(item ?? '')
@@ -3273,7 +4444,6 @@ export class BranchServiceService implements OnModuleInit {
         requesterRoles.includes('superadmin') ||
         requesterRoles.includes('admin');
 
-      const branch = await this.getBranchOrThrow(branchId);
       if (
         branch.type !== BranchType.HQ &&
         branch.type !== BranchType.REGIONAL &&
@@ -3322,6 +4492,29 @@ export class BranchServiceService implements OnModuleInit {
 
     if (existing && !existing.isDeleted) {
       this.conflict('User already assigned to branch');
+    }
+
+    // R3: filialsiz (yetim) kuryerni BOSHQA filialga biriktirish — amalda
+    // o'tkazish (bugungi yagona yo'l: chiqarish + biriktirish). Oldin boshqa
+    // filialda bo'lgan bo'lsa, qo'lida pul ham, buyurtma ham qolmagan bo'lishi
+    // SHART. Qatori umuman yo'q kuryer (yaratish saga'si — kassasi hali
+    // yaratilmagan) yoki faqat shu filialda bo'lgan kuryer uchun tashqi
+    // chaqiruv yo'q: yaratish sekinlashmaydi va 503 rejimini olmaydi.
+    if (role === BranchUserRole.COURIER) {
+      const priorRows =
+        (await this.branchUserRepo.find({
+          where: { user_id: userId, isDeleted: true },
+          select: ['id', 'branch_id'],
+        })) ?? [];
+      if (
+        priorRows.some((row) => String(row.branch_id) !== String(branch.id))
+      ) {
+        await this.assertCourierHoldsNothing(
+          userId,
+          null,
+          COURIER_REHOME_BLOCKED_PREFIX,
+        );
+      }
     }
 
     if (existing) {
@@ -3386,6 +4579,20 @@ export class BranchServiceService implements OnModuleInit {
       this.notFound('Branch user relation not found');
     }
 
+    // R3: kuryerni filialdan chiqarish — faqat qo'lida pul ham, buyurtma ham
+    // qolmaganda (aks holda uning pulini qabul qiladigan menejer qolmaydi,
+    // posilkalari esa qotib qoladi). Menejer/registrator qatorlari o'zgarmagan.
+    if (this.isBranchUserRoleOneOf(row.role, [BranchUserRole.COURIER])) {
+      const branch = await this.branchRepo.findOne({
+        where: { id: branchId, isDeleted: false },
+      });
+      await this.assertCourierHoldsNothing(
+        userId,
+        branch ?? null,
+        COURIER_UNASSIGN_BLOCKED_PREFIX,
+      );
+    }
+
     row.isDeleted = true;
     await this.branchUserRepo.save(row);
 
@@ -3402,6 +4609,551 @@ export class BranchServiceService implements OnModuleInit {
       200,
       'Branch user removed',
     );
+  }
+
+  /**
+   * R3 — kuryerni o'tkazish tekshiruvi (FAQAT O'QIYDI). Faqat superadmin/admin:
+   * javobda kuryerning pul raqamlari bor (filiallar kesimida). To'siqlar xato
+   * EMAS — 200 + `reasons` + `can_transfer` (FE oynasi ko'rsatadi); manba
+   * javob bermasa — 503. identity `deleteUser` ham shu RPC'ni chaqiradi.
+   */
+  async courierTransferCheck(
+    data: { user_id?: string },
+    requester?: RequesterContext,
+  ) {
+    try {
+      return await this.buildCourierTransferCheck(data, requester);
+    } catch (error) {
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      // Xom (baza) xato RMQ'da qayta navbatga qo'yilardi — RpcException'ga.
+      this.logger.error(
+        `courier transfer check failed (user=${String(data?.user_id ?? '')}): ${this.describeRpcFailure(error)}`,
+      );
+      throw new RpcException(errorRes(COURIER_CHECK_UNAVAILABLE_MESSAGE, 503));
+    }
+  }
+
+  private async buildCourierTransferCheck(
+    data: { user_id?: string },
+    requester?: RequesterContext,
+  ) {
+    if (!this.isSystemPrivileged(requester)) {
+      this.forbidden(COURIER_CHECK_FORBIDDEN_MESSAGE);
+    }
+    const userId = this.parseCourierTransferId(
+      data?.user_id,
+      "user_id noto'g'ri",
+    );
+    await this.assertIsCourierUser(userId);
+
+    const [currentBranch, hqBranch, holdings] = await Promise.all([
+      this.findActiveBranchUserRow(userId).then((row) =>
+        this.findBranchOfRow(row),
+      ),
+      this.findHqBranchRow(),
+      this.loadCourierHoldings(userId),
+    ]);
+    const reasons = this.describeCourierHoldings(holdings, currentBranch);
+
+    return successRes(
+      {
+        user_id: userId,
+        current_branch: currentBranch
+          ? {
+              id: String(currentBranch.id),
+              name: currentBranch.name,
+              type: currentBranch.type,
+            }
+          : null,
+        hq_branch: hqBranch
+          ? { id: String(hqBranch.id), name: hqBranch.name }
+          : null,
+        has_cashbox: holdings.has_cashbox,
+        balance: holdings.balance,
+        balance_cash: holdings.balance_cash,
+        balance_card: holdings.balance_card,
+        pending_settlement_count: holdings.pending_settlement_count,
+        pending_settlement_amount: holdings.pending_settlement_amount,
+        carry_amount: holdings.carry_amount,
+        orders_in_hand: holdings.orders_in_hand,
+        orders_sample: holdings.orders_sample,
+        open_return_posts: holdings.open_return_posts,
+        return_posts_sample: holdings.return_posts_sample,
+        pending_extra_cost_approvals: holdings.pending_extra_cost_approvals,
+        reasons,
+        can_transfer: reasons.length === 0,
+      },
+      200,
+      "Kuryer o'tkazish tekshiruvi",
+    );
+  }
+
+  /**
+   * R3 — kuryerni boshqa filialga o'tkazish (faqat superadmin/admin). Kuryer
+   * qo'lida pul ham, buyurtma ham qolmagan bo'lishi SHART.
+   *
+   * Tartib:
+   *   1. oldindan tekshiruv (to'siq → 409, manba javob bermasa → 503; hech
+   *      narsa yozilmaydi) — HQ bo'lmagan maqsadda u bilan PARALLEL maqsad
+   *      filialning FAOL menejeri tekshiriladi (yo'q → 400, identity javob
+   *      bermasa → 503);
+   *   2. qator almashtirish — bitta tranzaksiya, qulf bilan (swap);
+   *   3. 1,5 s kutib QAYTA tekshiruv: swap'dan sal oldin a'zolikni o'qigan
+   *      biriktirish/skan o'z yozuvini tugatgan bo'lsa, shu yerda ko'rinadi →
+   *      o'zgarish qaytariladi (409 REVERTED / 503);
+   *   4. identity'da hudud — yangi filialniki (HQ'da odatda null), `deadline_at`
+   *      bilan; yiqilsa — qaytariladi, eski hudud tiklashga urinib ko'riladi
+   *      (muddatsiz), 503;
+   *   5. audit.
+   * Qaytarishning o'zi yiqilsa — 500 (administrator tekshirishi kerak).
+   *
+   * ⚠️ RpcException bo'lmagan HAR QANDAY xato (swap'dan oldingi baza o'qishi
+   * ham) 503'ga o'raladi: xom xatoda RMQ xabarni qayta navbatga qo'yadi va
+   * ikkinchi urinish mijoz allaqachon xato olganidan keyin kuryerni jimgina
+   * o'tkazib yuborishi mumkin edi.
+   */
+  async transferCourierToBranch(
+    data: { user_id?: string; branch_id?: string },
+    requester?: RequesterContext,
+  ) {
+    try {
+      return await this.performCourierTransfer(data, requester);
+    } catch (error) {
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.logger.error(
+        `courier transfer failed (user=${String(data?.user_id ?? '')}, to=${String(data?.branch_id ?? '')}): ${this.describeRpcFailure(error)}`,
+      );
+      throw new RpcException(errorRes(COURIER_TRANSFER_TX_FAILED_MESSAGE, 503));
+    }
+  }
+
+  private async performCourierTransfer(
+    data: { user_id?: string; branch_id?: string },
+    requester?: RequesterContext,
+  ) {
+    if (!this.isSystemPrivileged(requester)) {
+      this.forbidden(COURIER_TRANSFER_FORBIDDEN_MESSAGE);
+    }
+    const userId = this.parseCourierTransferId(
+      data?.user_id,
+      "user_id noto'g'ri",
+    );
+    const targetId = this.parseCourierTransferId(
+      data?.branch_id,
+      "branch_id noto'g'ri",
+    );
+    const courier = await this.assertIsCourierUser(userId);
+
+    // getBranchOrThrow ATAYLAB ishlatilmaydi — uning 404 matni inglizcha.
+    const target = await this.branchRepo.findOne({
+      where: { id: targetId, isDeleted: false },
+    });
+    if (!target) {
+      this.notFound(COURIER_TARGET_NOT_FOUND_MESSAGE);
+    }
+    if (target.status !== Status.ACTIVE) {
+      this.badRequest(COURIER_TARGET_INACTIVE_MESSAGE);
+    }
+    if (
+      target.type !== BranchType.HQ &&
+      target.type !== BranchType.REGIONAL &&
+      target.type !== BranchType.HYBRID
+    ) {
+      this.badRequest(
+        `Kuryer faqat HQ, REGIONAL yoki HYBRID filialga o'tkaziladi (tanlangan filial turi: ${target.type})`,
+      );
+    }
+    // Menejersiz filialda kuryerning keyingi pulini qonuniy qabul qiladigan
+    // odam yo'q (superadmin filial kuryeridan pul olmaydi). HQ'da menejer
+    // bo'lmaydi — u yerda pulni superadmin/admin Asosiy kassaga oladi.
+    // Qator yo'qligi — darhol 400 (tashqi chaqiruvsiz); qatori borlarning
+    // identity'dagi holati (faol, o'chirilmagan) quyida, oldindan tekshiruv
+    // bilan PARALLEL tekshiriladi.
+    const needsActiveManager = target.type !== BranchType.HQ;
+    const managerUserIds = needsActiveManager
+      ? await this.findBranchManagerUserIds(String(target.id))
+      : [];
+    if (needsActiveManager && !managerUserIds.length) {
+      this.badRequest(
+        `'${target.name}' filialida menejer yo'q — kuryer pulini qabul qiladigan odam bo'lmaydi. Avval filialga menejer biriktiring`,
+      );
+    }
+
+    const targetBranchId = String(target.id);
+    const targetRegionId = String(target.region_id ?? '').trim() || null;
+    const currentRow = await this.findActiveBranchUserRow(userId);
+    if (currentRow && String(currentRow.branch_id) === targetBranchId) {
+      // Kuryer allaqachon shu filialda, lekin hududi farq qiladi — masalan,
+      // swap yozilib, servis `set_region` dan oldin qulagan va RMQ xabarni
+      // qayta yetkazgan. Hudud best-effort moslanadi, javob baribir 409.
+      if (courier.region_id !== targetRegionId) {
+        await this.setCourierRegionBestEffort(
+          userId,
+          targetRegionId,
+          requester,
+          COURIER_REGION_SYNC_TIMEOUT_MS,
+          'same_branch_resync',
+        );
+      }
+      this.conflict(COURIER_ALREADY_IN_BRANCH_MESSAGE);
+    }
+    const currentBranch = await this.findBranchOfRow(currentRow);
+
+    // Faol menejer va oldindan tekshiruv PARALLEL — eng yomon holat o'smaydi
+    // (vaqt byudjeti: COURIER_HOLDINGS_RPC_TIMEOUT_MS izohi). Xato ustuvorligi
+    // ketma-ket tartibdagidek: avval maqsad filial (400/503), keyin kuryer
+    // qo'lidagilar (503/409).
+    const [targetManagerCheck, holdingsCheck] = await Promise.allSettled([
+      needsActiveManager
+        ? this.assertTransferTargetHasActiveManager(target, managerUserIds)
+        : Promise.resolve(),
+      this.assertCourierHoldsNothing(
+        userId,
+        currentBranch,
+        COURIER_TRANSFER_BLOCKED_PREFIX,
+      ),
+    ]);
+    for (const outcome of [targetManagerCheck, holdingsCheck]) {
+      if (outcome.status === 'rejected') {
+        throw outcome.reason;
+      }
+    }
+
+    const swap = await this.swapCourierBranchRow(
+      userId,
+      currentRow ? String(currentRow.id) : null,
+      targetBranchId,
+    );
+
+    await this.waitBeforeCourierTransferRecheck();
+
+    // Sabab matnlari ESKI filial bo'yicha: o'zgarish qaytariladi, pulni eski
+    // filial (yoki HQ) qabul qiladi.
+    let recheckReasons: string[];
+    try {
+      recheckReasons = this.describeCourierHoldings(
+        await this.loadCourierHoldings(userId),
+        currentBranch,
+      );
+    } catch (error) {
+      await this.revertCourierBranchSwap(
+        userId,
+        swap,
+        requester,
+        'recheck_unavailable',
+      );
+      throw error;
+    }
+    if (recheckReasons.length) {
+      await this.revertCourierBranchSwap(
+        userId,
+        swap,
+        requester,
+        'recheck_blocked',
+      );
+      this.conflict(
+        COURIER_TRANSFER_REVERTED_PREFIX + recheckReasons.join(' '),
+      );
+    }
+
+    try {
+      // `timeout` RMQ xabarini bekor qilmaydi: identity navbati orqada qolsa,
+      // set_region(yangi) bu yerda vaqt tugab, o'tkazish qaytarilganidan KEYIN
+      // ham bajarilishi mumkin edi. `deadline_at` (yuborish vaqti + shu
+      // timeout) dan keyin identity — qator qulfini olgach — hududni YOZMAYDI
+      // (409). Servislar bitta xost soatida.
+      const deadlineAt = Date.now() + COURIER_REGION_SYNC_TIMEOUT_MS;
+      await lastValueFrom(
+        this.identityClient
+          .send(
+            { cmd: 'identity.courier.set_region' },
+            {
+              id: userId,
+              region_id: targetRegionId,
+              requester,
+              deadline_at: deadlineAt,
+            },
+          )
+          .pipe(timeout(COURIER_REGION_SYNC_TIMEOUT_MS)),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `identity.courier.set_region failed (courier=${userId}, region=${targetRegionId ?? 'null'}): ${this.describeRpcFailure(error)}`,
+      );
+      await this.revertCourierBranchSwap(
+        userId,
+        swap,
+        requester,
+        'region_sync_failed',
+      );
+      // Tiklash: filiali bor kuryer — eski filial hududi (hudud filialga
+      // ergashadi); filialsiz kuryer — o'tkazishdan OLDIN identity'dan
+      // o'qilgan hududi. Tiklash MUDDATSIZ yuboriladi: identity qulfi tufayli
+      // u yo yarim yo'lda qolgan set_region(yangi) tugashini kutib uni ustidan
+      // yozadi, yo undan oldin bajariladi — u holda kech kelgan set_region
+      // muddati o'tganini ko'rib hech narsa yozmaydi.
+      await this.setCourierRegionBestEffort(
+        userId,
+        currentBranch
+          ? String(currentBranch.region_id ?? '').trim() || null
+          : courier.region_id,
+        requester,
+        COURIER_REGION_RESTORE_TIMEOUT_MS,
+        'restore',
+      );
+      throw new RpcException(errorRes(COURIER_REGION_SYNC_FAILED_MESSAGE, 503));
+    }
+
+    if (swap.fromBranchId) {
+      await this.activityLog.log({
+        entity_type: 'BranchUser',
+        entity_id: swap.fromBranchId,
+        action: ActivityAction.UNASSIGN,
+        metadata: {
+          user_id: userId,
+          role: BranchUserRole.COURIER,
+          reason: 'courier_transfer',
+          to_branch_id: targetBranchId,
+        },
+        ...this.auditActor(requester),
+      });
+    }
+    await this.activityLog.log({
+      entity_type: 'BranchUser',
+      entity_id: targetBranchId,
+      action: ActivityAction.ASSIGN,
+      metadata: {
+        user_id: userId,
+        role: BranchUserRole.COURIER,
+        reason: 'courier_transfer',
+        from_branch_id: swap.fromBranchId,
+      },
+      ...this.auditActor(requester),
+    });
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: userId,
+      action: 'courier_transfer',
+      old_value: { branch_id: swap.fromBranchId },
+      new_value: { branch_id: targetBranchId, region_id: targetRegionId },
+      ...this.auditActor(requester),
+    });
+
+    return successRes(
+      {
+        user_id: userId,
+        from_branch_id: swap.fromBranchId,
+        to_branch_id: targetBranchId,
+        region_id: targetRegionId,
+      },
+      200,
+      `Kuryer '${target.name}' filialiga o'tkazildi`,
+    );
+  }
+
+  /**
+   * Kuryer qatorini BITTA tranzaksiyada almashtiradi. Foydalanuvchining HAMMA
+   * qatorlari `FOR UPDATE` bilan qulflanadi: ikki marta bosish va parallel
+   * o'tkazishlar ketma-ket bajariladi — ikkinchisi o'zgargan faol qatorni
+   * ko'rib 409 oladi. Faol qator oldindan tekshiruvdagi bilan bir xil
+   * bo'lishi SHART.
+   *
+   * ⚠️ TARTIB MUHIM: eski faol qator AVVAL o'chiriladi — `user_id` bo'yicha
+   * qisman unique indeks (is_deleted = false) aks holda yangi/tiklangan
+   * qatorni rad etadi. Keyin maqsad filialdagi eng oxirgi o'chirilgan qator
+   * tiklanadi (rol — COURIER), bo'lmasa yangisi yoziladi.
+   *
+   * RpcException bo'lmagan har qanday xato (23505 ham) — 503: xom xato RMQ'da
+   * qayta navbatga qo'yilib, o'tkazish ikki marta ishga tushardi.
+   */
+  private async swapCourierBranchRow(
+    userId: string,
+    expectedActiveRowId: string | null,
+    targetBranchId: string,
+  ): Promise<CourierBranchSwap> {
+    try {
+      return await this.branchUserRepo.manager.transaction(async (manager) => {
+        const repo = manager.getRepository(BranchUser);
+        const rows =
+          (await repo.find({
+            where: { user_id: userId },
+            order: { updatedAt: 'DESC' },
+            lock: { mode: 'pessimistic_write' },
+          })) ?? [];
+        const activeRows = rows.filter((row) => !row.isDeleted);
+        const active = activeRows[0] ?? null;
+        if (
+          activeRows.length > 1 ||
+          String(active?.id ?? '') !== String(expectedActiveRowId ?? '')
+        ) {
+          this.conflict(COURIER_ROW_CHANGED_MESSAGE);
+        }
+
+        if (active) {
+          active.isDeleted = true;
+          await repo.save(active);
+        }
+
+        const revivable = rows.find(
+          (row) =>
+            row !== active &&
+            row.isDeleted &&
+            String(row.branch_id) === targetBranchId,
+        );
+        let saved: BranchUser;
+        if (revivable) {
+          revivable.isDeleted = false;
+          revivable.role = BranchUserRole.COURIER;
+          saved = await repo.save(revivable);
+        } else {
+          saved = await repo.save(
+            repo.create({
+              branch_id: targetBranchId,
+              user_id: userId,
+              role: BranchUserRole.COURIER,
+            }),
+          );
+        }
+
+        return {
+          fromRowId: active ? String(active.id) : null,
+          fromBranchId: active ? String(active.branch_id) : null,
+          toRowId: String(saved.id),
+          toBranchId: targetBranchId,
+        };
+      });
+    } catch (error) {
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.logger.error(
+        `courier transfer swap failed (courier=${userId}, to=${targetBranchId}): ${this.describeRpcFailure(error)}`,
+      );
+      throw new RpcException(errorRes(COURIER_TRANSFER_TX_FAILED_MESSAGE, 503));
+    }
+  }
+
+  /**
+   * O'tkazishni QAYTARADI — xuddi shu qulf bilan: AVVAL yangi qator o'chiriladi,
+   * keyin eski qator (faqat boshqa faol qator bo'lmasa) tiklanadi. Filialsiz
+   * kuryerda faqat yangi qator o'chiriladi. Qaytarishning o'zi yiqilsa — 500:
+   * kuryer holatini administrator qo'lda tekshirishi kerak.
+   */
+  private async revertCourierBranchSwap(
+    userId: string,
+    swap: CourierBranchSwap,
+    requester: RequesterContext | undefined,
+    reason: string,
+  ): Promise<void> {
+    let fromRowRestored = false;
+    try {
+      await this.branchUserRepo.manager.transaction(async (manager) => {
+        const repo = manager.getRepository(BranchUser);
+        const rows =
+          (await repo.find({
+            where: { user_id: userId },
+            order: { updatedAt: 'DESC' },
+            lock: { mode: 'pessimistic_write' },
+          })) ?? [];
+
+        const toRow = rows.find((row) => String(row.id) === swap.toRowId);
+        if (toRow && !toRow.isDeleted) {
+          toRow.isDeleted = true;
+          await repo.save(toRow);
+        }
+
+        if (!swap.fromRowId) {
+          return;
+        }
+        const fromRow = rows.find((row) => String(row.id) === swap.fromRowId);
+        const anotherActive = rows.some(
+          (row) => row !== fromRow && !row.isDeleted,
+        );
+        if (fromRow && fromRow.isDeleted && !anotherActive) {
+          fromRow.isDeleted = false;
+          await repo.save(fromRow);
+          fromRowRestored = true;
+        }
+      });
+    } catch (error) {
+      this.logger.error(
+        `courier transfer revert FAILED (courier=${userId}, reason=${reason}): ${this.describeRpcFailure(error)}`,
+      );
+      await this.activityLog.log({
+        entity_type: 'User',
+        entity_id: userId,
+        action: 'courier_transfer_revert_failed',
+        metadata: {
+          reason,
+          from_branch_id: swap.fromBranchId,
+          to_branch_id: swap.toBranchId,
+        },
+        ...this.auditActor(requester),
+      });
+      throw new RpcException(
+        errorRes(
+          `Kuryerni oldingi filialiga qaytarib bo'lmadi — administrator tekshirishi kerak (kuryer #${userId})`,
+          500,
+        ),
+      );
+    }
+
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: userId,
+      action: 'courier_transfer_reverted',
+      metadata: {
+        reason,
+        from_branch_id: swap.fromBranchId,
+        to_branch_id: swap.toBranchId,
+        from_row_restored: fromRowRestored,
+      },
+      ...this.auditActor(requester),
+    });
+  }
+
+  /**
+   * Qayta tekshiruvdan oldingi kutish (COURIER_TRANSFER_RECHECK_DELAY_MS).
+   * `protected` — testlarda stub qilinadi. RMQ prefetch har consumer uchun 20,
+   * shuning uchun bu kutish navbatni to'sib qo'ymaydi.
+   */
+  protected async waitBeforeCourierTransferRecheck(): Promise<void> {
+    await new Promise<void>((resolve) =>
+      setTimeout(resolve, COURIER_TRANSFER_RECHECK_DELAY_MS),
+    );
+  }
+
+  /**
+   * `identity.courier.set_region` — xatosi FAQAT log qilinadi (eski hududni
+   * tiklash va "allaqachon shu filialda" yo'lidagi qayta moslash uchun).
+   * ATAYLAB `deadline_at` siz: ikkala holatda ham yoziladigan qiymat to'g'ri
+   * yakuniy holat, kech bajarilsa ham zarari yo'q.
+   */
+  private async setCourierRegionBestEffort(
+    userId: string,
+    regionId: string | null,
+    requester: RequesterContext | undefined,
+    timeoutMs: number,
+    context: string,
+  ): Promise<void> {
+    try {
+      await lastValueFrom(
+        this.identityClient
+          .send(
+            { cmd: 'identity.courier.set_region' },
+            { id: userId, region_id: regionId, requester },
+          )
+          .pipe(timeout(timeoutMs)),
+      );
+    } catch (error) {
+      this.logger.warn(
+        `identity.courier.set_region (${context}) failed (courier=${userId}, region=${regionId ?? 'null'}): ${this.describeRpcFailure(error)}`,
+      );
+    }
   }
 
   async findUsersByBranch(branch_id: string, requester?: RequesterContext) {

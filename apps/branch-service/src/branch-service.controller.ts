@@ -293,6 +293,20 @@ export class BranchServiceController {
     );
   }
 
+  // Pochta jo'natish oynasi uchun manzil filiallar (pul maydonlarisiz).
+  @MessagePattern({ cmd: 'branch.dispatch_destinations' })
+  findDispatchDestinations(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.branchService.findDispatchDestinations(
+        data?.query ?? {},
+        this.getRequester(data),
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'branch.update' })
   update(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
@@ -330,6 +344,37 @@ export class BranchServiceController {
           branch_id: data?.branch_id ?? data?.id,
           user_id: data?.user_id,
         },
+        this.getRequester(data),
+      ),
+    );
+  }
+
+  /**
+   * R3 — kuryer o'tkazish tekshiruvi (faqat o'qiydi). Gateway GET
+   * /couriers/:id/transfer-check va identity deleteUser chaqiradi.
+   */
+  @MessagePattern({ cmd: 'branch.user.courier_transfer_check' })
+  courierTransferCheck(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.branchService.courierTransferCheck(
+        { user_id: data?.user_id },
+        this.getRequester(data),
+      ),
+    );
+  }
+
+  /** R3 — kuryerni boshqa filialga o'tkazish (PATCH /couriers/:id/branch). */
+  @MessagePattern({ cmd: 'branch.user.transfer_courier' })
+  transferCourier(
+    @Payload() data: Record<string, any>,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.branchService.transferCourierToBranch(
+        { user_id: data?.user_id, branch_id: data?.branch_id },
         this.getRequester(data),
       ),
     );

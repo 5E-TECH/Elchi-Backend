@@ -1,3 +1,5 @@
+import { RpcException } from '@nestjs/microservices';
+import { Between, LessThanOrEqual, MoreThanOrEqual } from 'typeorm';
 import { FinanceServiceService } from './finance-service.service';
 
 const captureExceptionMock = jest.fn();
@@ -5,6 +7,9 @@ const captureExceptionMock = jest.fn();
 const rmqSendMock = jest.fn();
 
 jest.mock('@app/common', () => ({
+  // Haqiqiy Toshkent kun helperlari (SqVMuhKo) — servis ularni barrel'dan
+  // oladi, sana filtri chegaralari haqiqiy kod bilan hisoblanishi kerak.
+  ...jest.requireActual('@app/common/time/tashkent-time'),
   Cashbox_type: {
     MAIN: 'main',
     FOR_COURIER: 'for_courier',
@@ -1418,5 +1423,197 @@ describe('FinanceServiceService.allCashboxesTotal', () => {
     expect(response.data.mainCashboxTotal).toBe(5000);
     expect(response.data.courierCashboxTotal).toBe(1200);
     expect(response.data.marketCashboxTotal).toBe(800);
+  });
+});
+
+/**
+ * SqVMuhKo. Kassa tarixi sana filtri ilgari UTC kuni edi ('YYYY-MM-DD' — UTC
+ * yarim tuni, oxiri server TZ'idagi setHours), findAllHistory esa kun oxirini
+ * umuman qo'ymasdi (bitta kun → Between(x, x) → bo'sh jadval). Endi hammasi
+ * Toshkent kuni — dashboard va GET /orders bilan bir xil.
+ */
+describe('Toshkent kun chegarasi (SqVMuhKo)', () => {
+  const OCT_1_START = new Date('2026-09-30T19:00:00.000Z');
+  const OCT_1_END = new Date('2026-10-01T18:59:59.999Z');
+
+  function setup() {
+    const ctx = makeService(makeManager());
+    ctx.cashboxRepo.findOne.mockResolvedValue({
+      id: '1',
+      user_id: '1',
+      cashbox_type: 'main',
+      balance: 0,
+    });
+    ctx.historyRepo.find.mockResolvedValue([]);
+    ctx.historyRepo.findAndCount.mockResolvedValue([[], 0]);
+    return ctx;
+  }
+
+  const whereOf = (mock: jest.Mock) =>
+    (mock.mock.calls[0][0] as { where: Record<string, unknown> }).where;
+
+  describe('getMainCashbox', () => {
+    it('bitta kun — Toshkent 00:00 dan 23:59:59.999 gacha', async () => {
+      const { service, historyRepo } = setup();
+
+      await service.getMainCashbox({
+        fromDate: '2026-10-01',
+        toDate: '2026-10-01',
+      });
+
+      expect(whereOf(historyRepo.find).createdAt).toEqual(
+        Between(OCT_1_START, OCT_1_END),
+      );
+    });
+
+    it('faqat boshlanish yoki faqat oxiri', async () => {
+      const onlyFrom = setup();
+      await onlyFrom.service.getMainCashbox({ fromDate: '2026-10-01' });
+      expect(whereOf(onlyFrom.historyRepo.find).createdAt).toEqual(
+        MoreThanOrEqual(OCT_1_START),
+      );
+
+      const onlyTo = setup();
+      await onlyTo.service.getMainCashbox({ toDate: '2026-10-01' });
+      expect(whereOf(onlyTo.historyRepo.find).createdAt).toEqual(
+        LessThanOrEqual(OCT_1_END),
+      );
+    });
+
+    it("to'liq ISO qiymat o'zgarishsiz ishlatiladi", async () => {
+      const { service, historyRepo } = setup();
+
+      await service.getMainCashbox({
+        fromDate: '2026-10-01T00:00:00.000Z',
+        toDate: '2026-10-01T23:59:59.999Z',
+      });
+
+      expect(whereOf(historyRepo.find).createdAt).toEqual(
+        Between(
+          new Date('2026-10-01T00:00:00.000Z'),
+          new Date('2026-10-01T23:59:59.999Z'),
+        ),
+      );
+    });
+
+    it('yaroqsiz sana — avvalgidek 400', async () => {
+      const { service, historyRepo } = setup();
+
+      const error: unknown = await service
+        .getMainCashbox({ fromDate: 'abc' })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(RpcException);
+      expect((error as RpcException).getError()).toEqual({
+        statusCode: 400,
+        message: 'Invalid date format: abc',
+      });
+      expect(historyRepo.find).not.toHaveBeenCalled();
+    });
+
+    it("sana filtrisiz — createdAt sharti yo'q (avvalgidek)", async () => {
+      const { service, historyRepo } = setup();
+
+      await service.getMainCashbox({});
+
+      expect(whereOf(historyRepo.find)).not.toHaveProperty('createdAt');
+    });
+  });
+
+  it('findCashboxByUser — oy/yil chegarasi ham Toshkent kuni', async () => {
+    const { service, historyRepo } = setup();
+
+    await service.findCashboxByUser({
+      user_id: '24',
+      cashbox_type: 'markets' as any,
+      with_history: true,
+      fromDate: '2026-12-31',
+      toDate: '2027-01-01',
+      page: 1,
+      limit: 20,
+    });
+
+    expect(whereOf(historyRepo.findAndCount).createdAt).toEqual(
+      Between(
+        new Date('2026-12-30T19:00:00.000Z'),
+        new Date('2027-01-01T18:59:59.999Z'),
+      ),
+    );
+  });
+
+  describe('myCashbox (getCashboxByUserId)', () => {
+    it('YYYY-MM-DD — Toshkent kuni', async () => {
+      const { service, historyRepo } = setup();
+
+      await service.myCashbox({
+        user_id: '8',
+        roles: ['courier'],
+        fromDate: '2026-10-01',
+        toDate: '2026-10-01',
+      });
+
+      expect(whereOf(historyRepo.find).createdAt).toEqual(
+        Between(OCT_1_START, OCT_1_END),
+      );
+    });
+
+    it("MyCashboxPage'ning UTC ISO chegaralari o'zgarishsiz qoladi", async () => {
+      const { service, historyRepo } = setup();
+
+      await service.myCashbox({
+        user_id: '8',
+        roles: ['courier'],
+        fromDate: '2026-10-01T00:00:00.000Z',
+        toDate: '2026-10-01T23:59:59.999Z',
+      });
+
+      expect(whereOf(historyRepo.find).createdAt).toEqual(
+        Between(
+          new Date('2026-10-01T00:00:00.000Z'),
+          new Date('2026-10-01T23:59:59.999Z'),
+        ),
+      );
+    });
+  });
+
+  describe('findAllHistory (GET /finance/history)', () => {
+    it('bitta kun endi bo`sh emas — Toshkent kunining butun oynasi', async () => {
+      const { service, historyRepo } = setup();
+
+      await service.findAllHistory({
+        from_date: '2026-10-01',
+        to_date: '2026-10-01',
+        page: 1,
+        limit: 20,
+      });
+
+      // Ilgari Between(2026-10-01T00:00Z, 2026-10-01T00:00Z) edi.
+      expect(whereOf(historyRepo.findAndCount).createdAt).toEqual(
+        Between(OCT_1_START, OCT_1_END),
+      );
+    });
+
+    it('yaroqsiz sana — avvalgidek 400', async () => {
+      const { service, historyRepo } = setup();
+
+      const error: unknown = await service
+        .findAllHistory({ from_date: 'abc', page: 1, limit: 20 })
+        .catch((caught: unknown) => caught);
+
+      expect(error).toBeInstanceOf(RpcException);
+      expect((error as RpcException).getError()).toEqual({
+        statusCode: 400,
+        message: 'Invalid date format: abc',
+      });
+      expect(historyRepo.findAndCount).not.toHaveBeenCalled();
+    });
+
+    it("sana filtrisiz — createdAt sharti yo'q (avvalgidek)", async () => {
+      const { service, historyRepo } = setup();
+
+      await service.findAllHistory({ page: 1, limit: 20 });
+
+      expect(whereOf(historyRepo.findAndCount)).not.toHaveProperty('createdAt');
+    });
   });
 });

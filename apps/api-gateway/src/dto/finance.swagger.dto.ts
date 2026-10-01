@@ -679,3 +679,80 @@ export class CreateOperatorPaymentRequestDto {
   @IsString()
   note?: string;
 }
+
+// --- GET /finance/cashbox/hq-couriers (C1) — faqat javob hujjati ---
+
+export class HqCourierCashboxDto {
+  @ApiProperty({ example: '812' })
+  id!: string;
+
+  @ApiProperty({ example: 1250000 })
+  balance!: number;
+
+  @ApiProperty({ example: 1250000 })
+  balance_cash!: number;
+
+  @ApiProperty({ example: 0 })
+  balance_card!: number;
+}
+
+export class HqCourierReceivableItemDto {
+  @ApiProperty({ example: '263', description: 'Kuryer user id' })
+  id!: string;
+
+  @ApiProperty({
+    example: 'Ali Valiyev',
+    description:
+      "Manba tartibi: identity (`identity.courier.find_by_ids`, bo'lsa) → branch_users qatori ma'lumoti (`row.user`) → ''. Soft-delete qilingan kuryerni identity bermaydi — uning qatori puli bor ekan ro'yxatda qoladi (odatda ''), naqdi C4 orqali qabul qilinadi",
+  })
+  name!: string;
+
+  @ApiPropertyOptional({
+    example: '+998901234567',
+    nullable: true,
+    description: 'identity → branch_users qatori → null',
+  })
+  phone_number!: string | null;
+
+  @ApiProperty({
+    example: 'active',
+    description:
+      "identity → branch_users qatori → ''. Bloklangan/nofaol kuryer ham ro'yxatda qoladi (puli bor)",
+  })
+  status!: string;
+
+  @ApiProperty({
+    example: 1250000,
+    description: 'FOR_COURIER kassa balansi (> 0)',
+  })
+  balance!: number;
+
+  @ApiProperty({ type: HqCourierCashboxDto })
+  cashbox!: HqCourierCashboxDto;
+}
+
+export class HqCourierReceivablesDataDto {
+  @ApiProperty({
+    type: [HqCourierReceivableItemDto],
+    description:
+      "Faol HQ branch_users qatori (COURIER) bo'lgan, kassasi > 0 kuryerlar; balans bo'yicha kamayish tartibida",
+  })
+  items!: HqCourierReceivableItemDto[];
+
+  @ApiProperty({ example: 1, description: 'items dagi kuryerlar soni' })
+  total!: number;
+
+  @ApiProperty({ example: '1' })
+  hq_branch_id!: string;
+}
+
+export class HqCourierReceivablesResponseDto {
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiProperty({ example: 'HQ kuryerlari (qabul qilinishi kerak)' })
+  message!: string;
+
+  @ApiProperty({ type: HqCourierReceivablesDataDto })
+  data!: HqCourierReceivablesDataDto;
+}

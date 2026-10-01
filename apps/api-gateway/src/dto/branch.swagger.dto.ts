@@ -147,6 +147,21 @@ export class AssignBranchUserRequestDto {
   role?: BranchUserRole;
 }
 
+/**
+ * PATCH /couriers/:id/branch — kuryerni boshqa filialga o'tkazish (R3).
+ * `IsNumberString` ATAYLAB ishlatilmaydi: u '1.5' va '-1' ni ham o'tkazadi.
+ */
+export class TransferCourierBranchRequestDto {
+  @ApiProperty({
+    example: '15',
+    description: 'Yangi filial ID (faqat raqamlar)',
+  })
+  @Matches(/^\d+$/, {
+    message: "branch_id faqat raqamlardan iborat bo'lishi kerak",
+  })
+  branch_id!: string;
+}
+
 export class SetBranchConfigRequestDto {
   @ApiProperty({ example: 'working_hours' })
   @IsString()

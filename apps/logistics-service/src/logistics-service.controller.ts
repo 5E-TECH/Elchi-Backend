@@ -172,6 +172,18 @@ export class LogisticsServiceController {
     );
   }
 
+  // Kuryer ko'chirish/o'chirish tekshiruvi (branch-service) uchun yengil
+  // o'qish: identity boyitishsiz, har bir bekor pochta — o'z soni bilan.
+  @MessagePattern({ cmd: 'logistics.post.open_return_posts_for_courier' })
+  openReturnPostsForCourier(
+    @Payload() data: { courier_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.openReturnPostsForCourier(data?.courier_id),
+    );
+  }
+
   @MessagePattern({ cmd: 'logistics.post.my_for_courier' })
   myPostsForCourier(
     @Payload()
@@ -424,17 +436,28 @@ export class LogisticsServiceController {
     );
   }
 
+  // Qaytarish so'rovlari so'rovchi doirasida: menejer/registrator — o'z
+  // filiali, superadmin/admin (va HQ registratori) — HQ kuryerlari.
   @MessagePattern({ cmd: 'logistics.post.return_requests' })
-  getReturnRequests(@Ctx() context: RmqContext) {
+  getReturnRequests(
+    @Payload()
+    data: {
+      requester?: { id: string; roles?: string[]; branch_id?: string | null };
+    },
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.logisticsService.getReturnRequests(),
+      this.logisticsService.getReturnRequests(data?.requester),
     );
   }
 
   @MessagePattern({ cmd: 'logistics.post.return_requests.approve' })
   approveReturnRequests(
     @Payload()
-    data: { dto: ReceivePostDto; requester?: { id: string; roles?: string[] } },
+    data: {
+      dto: ReceivePostDto;
+      requester?: { id: string; roles?: string[]; branch_id?: string | null };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -445,7 +468,10 @@ export class LogisticsServiceController {
   @MessagePattern({ cmd: 'logistics.post.return_requests.reject' })
   rejectReturnRequests(
     @Payload()
-    data: { dto: ReceivePostDto; requester?: { id: string; roles?: string[] } },
+    data: {
+      dto: ReceivePostDto;
+      requester?: { id: string; roles?: string[]; branch_id?: string | null };
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>

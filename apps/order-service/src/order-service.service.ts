@@ -29,6 +29,7 @@ import {
   Where_deliver,
   rmqSend,
   RMQ_SERVICE_TIMEOUT,
+  tashkentDayRange,
 } from '@app/common';
 import { successRes } from '../../../libs/common/helpers/response';
 import { resolveCourierShare as resolveCourierShareShare } from './domain/order-money';
@@ -772,8 +773,14 @@ export class OrderServiceService {
         });
       }
     }
-    if (start_day) {
-      const startDate = new Date(start_day);
+    // Sana filtri — Toshkent kuni, dashboard bilan AYNI qoida (SqVMuhKo).
+    // Ilgari 'YYYY-MM-DD' UTC yarim tuni + server TZ'idagi setHours edi: prod
+    // konteyner UTC'da, ya'ni "1-oktabr" Toshkentda 05:00 dan ertasi 04:59
+    // gacha bo'lardi. To'liq ISO qiymat (analytics shunday yuboradi)
+    // o'zgarishsiz ishlatiladi.
+    const dayRange = tashkentDayRange(start_day, end_day);
+    if (dayRange.start) {
+      const startDate = dayRange.start;
       if (Number.isNaN(startDate.getTime())) {
         throw new RpcException({
           statusCode: 400,
@@ -782,16 +789,13 @@ export class OrderServiceService {
       }
       qb.andWhere('order.createdAt >= :startDate', { startDate });
     }
-    if (end_day) {
-      const endDate = new Date(end_day);
+    if (dayRange.end) {
+      const endDate = dayRange.end;
       if (Number.isNaN(endDate.getTime())) {
         throw new RpcException({
           statusCode: 400,
           message: "end_day noto'g'ri sana formatida",
         });
-      }
-      if (!end_day.includes('T')) {
-        endDate.setHours(23, 59, 59, 999);
       }
       qb.andWhere('order.createdAt <= :endDate', { endDate });
     }
