@@ -1,22 +1,27 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   ForbiddenException,
   GatewayTimeoutException,
   Get,
   Headers,
+  HttpException,
   Inject,
+  NotFoundException,
   Param,
   Patch,
   Post,
   Query,
   Req,
+  ServiceUnavailableException,
   UseGuards,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiQuery,
@@ -44,6 +49,7 @@ import {
   FindCashboxByUserQueryDto,
   FindHistoryQueryDto,
   FindShiftQueryDto,
+  HqCourierReceivablesResponseDto,
   MainCashboxFilterQueryDto,
   MainCashboxManualRequestDto,
   OpenShiftRequestDto,
@@ -59,6 +65,108 @@ interface JwtUser {
   role?: string;
   roles?: string[];
   branch_id?: string | null;
+}
+
+/** `order.settlement.courier_scope` javobi (B4, order-service). */
+interface CourierSettlementScope {
+  hq_pending_count: number;
+  hq_pending_amount: number;
+  branch_pending_count: number;
+  branch_pending_amount: number;
+  branch_ids: string[];
+  carry_amount: number;
+}
+
+/** Kuryer kassasi sahifasi uchun foydalanuvchi qisqa ma'lumoti (C3). */
+interface UserSummary {
+  id: string;
+  name: string;
+  phone_number: string | null;
+  role: string | null;
+  status: string | null;
+}
+
+/**
+ * `identity.user.find_by_id` natijasi. `not_found` — identity 404 (odatda
+ * soft-delete qilingan foydalanuvchi); `unavailable` — timeout, 5xx yoki
+ * bo'sh javob (holat noma'lum).
+ */
+type UserLookup =
+  | { kind: 'found'; user: UserSummary; isCourier: boolean }
+  | { kind: 'not_found' }
+  | { kind: 'unavailable' };
+
+/** Foydalanuvchining joriy (oxirgi faol) `branch_users` qatori (C3/C4). */
+interface BranchAssignment {
+  branch_id: string;
+  /** `branch_users.role` katta harfda (COURIER / MANAGER / REGISTRATOR) yoki ''. */
+  role: string;
+  /** Qatorga qo'shilgan foydalanuvchi ma'lumoti (`row.user`) — bo'lsa. */
+  name: string;
+  phone_number: string | null;
+}
+
+/** C3 — superadmin/admin kuryer kassasi sahifasiga qo'shiladigan maydonlar. */
+interface CourierReceiveInfo {
+  user: UserSummary | null;
+  /** null — filial yoki ledger tekshiruvi javob bermadi. */
+  is_hq_courier: boolean | null;
+  /** null — filial yoki ledger tekshiruvi javob bermadi. */
+  can_receive: boolean | null;
+  olinishi_kerak: number;
+  receive_check_failed: boolean;
+  counterparty: 'HQ';
+}
+
+/** RPC yukidagi primitiv qiymat → matn (obyekt, null, undefined → ''). */
+function toText(value: unknown): string {
+  return typeof value === 'string' || typeof value === 'number'
+    ? String(value)
+    : '';
+}
+
+/**
+ * RPC xatosining HTTP holat kodi. Mikroservisdagi `RpcException(errorRes(...))`
+ * gateway'ga oddiy `{ statusCode, message }` obyekti bo'lib keladi; gateway'ning
+ * o'z `HttpException`i ham hisobga olinadi. Aniqlanmasa — null.
+ */
+function rpcErrorStatus(error: unknown): number | null {
+  if (error instanceof HttpException) {
+    return error.getStatus();
+  }
+  if (!error || typeof error !== 'object') {
+    return null;
+  }
+  const obj = error as {
+    statusCode?: unknown;
+    status?: unknown;
+    response?: unknown;
+  };
+  const nested =
+    obj.response && typeof obj.response === 'object'
+      ? (obj.response as { statusCode?: unknown })
+      : null;
+  for (const candidate of [obj.statusCode, obj.status, nested?.statusCode]) {
+    if (typeof candidate === 'number' && Number.isInteger(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+/**
+ * RPC 404 xatosi → gateway `NotFoundException` (xabari saqlanadi). HTTP
+ * javobi xom RPC obyekti uzatilgandagi bilan bir xil: 404 + o'sha matn.
+ */
+function toNotFoundException(
+  error: unknown,
+  fallbackMessage: string,
+): NotFoundException {
+  const message =
+    error && typeof error === 'object'
+      ? toText((error as { message?: unknown }).message)
+      : '';
+  return new NotFoundException(message || fallbackMessage);
 }
 
 @ApiTags('Finance')
@@ -278,19 +386,571 @@ export class FinanceGatewayController {
     };
   }
 
+  /**
+   * Foydalanuvchining joriy (oxirgi faol) `branch_users` qatori — filial VA
+   * rol bilan. `branch.user.find_by_user` faqat `branch_users` ni o'qiydi
+   * (identity'ga qaramaydi), shuning uchun identity'da soft-delete qilingan
+   * kuryerning qatori ham qaytadi (o'chirish `branch_users` ga tegmaydi).
+   * Xatoni YUTMAYDI: pul tekshiruvida "filial xizmati javob bermadi" bilan
+   * "filialga biriktirilmagan" farqlanishi shart. Biriktiruv yo'q → null.
+   */
+  private async findBranchAssignmentOrThrow(
+    userId: string,
+    requester?: JwtUser,
+  ): Promise<BranchAssignment | null> {
+    const response = await this.sendBranch<{
+      data?: Record<string, any> | null;
+    }>(
+      { cmd: 'branch.user.find_by_user' },
+      { user_id: userId, requester: this.toRequester(requester) },
+    );
+    const row = response?.data;
+    const branchId = row ? this.extractBranchId(row) : '';
+    if (!row || !branchId) {
+      return null;
+    }
+    const rowUser =
+      row.user && typeof row.user === 'object'
+        ? (row.user as Record<string, unknown>)
+        : null;
+    return {
+      branch_id: branchId,
+      role: toText(row.role).trim().toUpperCase(),
+      name: toText(rowUser?.name),
+      phone_number: toText(rowUser?.phone_number) || null,
+    };
+  }
+
+  /**
+   * Foydalanuvchining joriy (oxirgi faol `branch_users` qatori) filiali.
+   * Xatoni YUTMAYDI. Biriktiruv yo'q → ''.
+   */
+  private async findBranchIdByUserIdOrThrow(
+    userId: string,
+    requester?: JwtUser,
+  ): Promise<string> {
+    const assignment = await this.findBranchAssignmentOrThrow(
+      userId,
+      requester,
+    );
+    return assignment?.branch_id ?? '';
+  }
+
   private async resolveBranchIdByUserId(
     userId: string,
     requester?: JwtUser,
   ): Promise<string> {
     try {
-      const assignment = await this.sendBranch<{ data?: Record<string, any> }>(
-        { cmd: 'branch.user.find_by_user' },
-        { user_id: userId, requester: this.toRequester(requester) },
-      );
-      return this.extractBranchId(assignment?.data);
+      return await this.findBranchIdByUserIdOrThrow(userId, requester);
     } catch {
       return '';
     }
+  }
+
+  /**
+   * Superadmin/admin kuryerdan naqd olishidagi rad javoblari (C4). Matnlar
+   * frontend va E2E bilan kelishilgan — o'zgartirilmasin.
+   */
+  private static readonly NOT_A_COURIER_MESSAGE =
+    'Bu foydalanuvchi courier emas';
+  private static readonly BRANCH_COURIER_NOT_RECEIVABLE_MESSAGE =
+    'Bu kuryer filialga tegishli — pulni filial menejeri qabul qiladi (kuryer → filial → HQ)';
+  private static readonly RECEIVE_CHECK_UNAVAILABLE_MESSAGE =
+    "Tekshiruv xizmati javob bermadi, keyinroq urinib ko'ring";
+
+  /** `branch_users.role` dagi kuryer qiymati (BranchUserRole.COURIER). */
+  private static readonly COURIER_BRANCH_ROLE = 'COURIER';
+  /** C3: identity'da soft-delete qilingan (404) foydalanuvchi holati. */
+  private static readonly DELETED_USER_STATUS = 'deleted';
+
+  /** HQ id si o'zgarmaydi (tizimda bitta HQ) — qisqa kesh yetarli. */
+  private static readonly HQ_BRANCH_CACHE_TTL_MS = 60_000;
+  private hqBranchIdCache: { id: string; at: number } | null = null;
+
+  /**
+   * HQ filial id si (`branch.find_hq`), 60 s keshlanadi. Xato YUTILMAYDI —
+   * chaqiruvchi hal qiladi (to'lov tekshiruvi 503 qaytaradi).
+   */
+  private async resolveHqBranchId(): Promise<string> {
+    const cached = this.hqBranchIdCache;
+    if (
+      cached &&
+      Date.now() - cached.at < FinanceGatewayController.HQ_BRANCH_CACHE_TTL_MS
+    ) {
+      return cached.id;
+    }
+    const response = await this.sendBranch<{
+      data?: { id?: string | number } | null;
+    }>({ cmd: 'branch.find_hq' }, {});
+    const hqBranchId = String(response?.data?.id ?? '').trim();
+    if (!hqBranchId) {
+      throw new NotFoundException('HQ filial topilmadi');
+    }
+    this.hqBranchIdCache = { id: hqBranchId, at: Date.now() };
+    return hqBranchId;
+  }
+
+  /** Identity foydalanuvchisi kuryermi (`roles[]` yoki `role`). */
+  private isCourierIdentity(user: Record<string, any>): boolean {
+    const roleList = Array.isArray(user.roles)
+      ? user.roles
+      : user.role
+        ? [user.role]
+        : [];
+    return roleList.some(
+      (role: unknown) =>
+        this.roleToString(role).toLowerCase() === RoleEnum.COURIER,
+    );
+  }
+
+  /**
+   * `courier_id` haqiqatan kuryer foydalanuvchimi (identity). Menejer va
+   * superadmin/admin to'lov yo'llari uchun BITTA tekshiruv (C4). Identity
+   * xatolari (404, timeout) o'zgarishsiz uzatiladi — soft-delete (404) ni
+   * faqat superadmin/admin yo'li (`assertHqCourierReceivable`) hal qiladi.
+   */
+  private async assertCourierUser(courierId: string): Promise<void> {
+    const courierResponse = await this.sendIdentity<{
+      data?: Record<string, any>;
+    }>({ cmd: 'identity.user.find_by_id' }, { id: courierId });
+    const courier = courierResponse?.data;
+    if (!courier) {
+      throw new ForbiddenException('Courier topilmadi');
+    }
+    if (!this.isCourierIdentity(courier)) {
+      throw new ForbiddenException(
+        FinanceGatewayController.NOT_A_COURIER_MESSAGE,
+      );
+    }
+  }
+
+  /**
+   * HQ filial id si va kuryerning joriy (oxirgi faol) filial qatori —
+   * parallel. Xatolar YUTILMAYDI (C4 → 503, C3 → receive_check_failed).
+   */
+  private async loadCourierPlacement(
+    courierId: string,
+    requester?: JwtUser,
+  ): Promise<{ hqBranchId: string; assignment: BranchAssignment | null }> {
+    const [hqBranchId, assignment] = await Promise.all([
+      this.resolveHqBranchId(),
+      this.findBranchAssignmentOrThrow(courierId, requester),
+    ]);
+    return { hqBranchId, assignment };
+  }
+
+  /**
+   * O'chirilgan kuryer uchun isbot: FOR_COURIER kassasi bormi. 404 → false;
+   * boshqa xato (timeout, 5xx) → 503 — tekshirib bo'lmadi, pul KO'CHIRILMAYDI.
+   */
+  private async courierCashboxExists(courierId: string): Promise<boolean> {
+    try {
+      const response = await this.send<{ data?: { id?: unknown } | null }>(
+        { cmd: 'finance.cashbox.find_by_user' },
+        { user_id: courierId, cashbox_type: Cashbox_type.FOR_COURIER },
+      );
+      return Boolean(toText(response?.data?.id));
+    } catch (error) {
+      if (rpcErrorStatus(error) === 404) {
+        return false;
+      }
+      throw new ServiceUnavailableException(
+        FinanceGatewayController.RECEIVE_CHECK_UNAVAILABLE_MESSAGE,
+      );
+    }
+  }
+
+  /**
+   * B4 — kuryerning PENDING savdosi HQ / filial kesimida (order-service).
+   * `.catch` YO'Q: xato va timeout chaqiruvchiga chiqadi. Javob shakli buzuq
+   * bo'lsa ham xato — "filial qatori yo'q" deb taxmin QILINMAYDI.
+   */
+  private async loadCourierSettlementScope(
+    courierId: string,
+  ): Promise<CourierSettlementScope> {
+    const response = await this.sendOrder<{
+      data?: Partial<CourierSettlementScope> | null;
+    }>({ cmd: 'order.settlement.courier_scope' }, { courier_id: courierId });
+    const data = response?.data;
+    const branchPendingCount = Number(data?.branch_pending_count);
+    if (!data || !Number.isFinite(branchPendingCount)) {
+      throw new Error("order.settlement.courier_scope: javob shakli noto'g'ri");
+    }
+    return {
+      hq_pending_count: Number(data.hq_pending_count ?? 0) || 0,
+      hq_pending_amount: Number(data.hq_pending_amount ?? 0) || 0,
+      branch_pending_count: branchPendingCount,
+      branch_pending_amount: Number(data.branch_pending_amount ?? 0) || 0,
+      branch_ids: Array.isArray(data.branch_ids)
+        ? data.branch_ids.map((id) => String(id))
+        : [],
+      carry_amount: Number(data.carry_amount ?? 0) || 0,
+    };
+  }
+
+  /**
+   * C4 — superadmin/admin kuryerdan naqdni FAQAT HQ kuryeridan va faqat
+   * kuryerda filialga tegishli topshirilmagan savdo bo'lmasa oladi (naqd
+   * to'g'ridan-to'g'ri MAIN'ga tushadi).
+   *
+   * ⚠️ NEGA. Filial kuryerining naqdi zanjir bo'ylab keladi: kuryer →
+   * filial menejeri → HQ. Superadmin undan to'g'ridan-to'g'ri olsa FIFO
+   * filial qatorlarini COURIER_SETTLED qiladi, naqd esa MAIN'da bo'ladi —
+   * filialda hech qachon yopilmaydigan soxta qarz paydo bo'ladi (jonli
+   * tasdiqlangan). Summa chegarasi — kuryer kassasi (finance-service).
+   * Tekshiruv xizmatlaridan biri javob bermasa pul KO'CHIRILMAYDI (503).
+   *
+   * O'CHIRILGAN (soft-delete) KURYER. Identity uni 404 bilan rad etadi, lekin
+   * `branch_users` qatori ham, FOR_COURIER kassasidagi naqd ham joyida qoladi.
+   * 404 da to'xtasak bu naqd hech qachon olinmaydi. Shuning uchun kuryerlikni
+   * identity o'rniga joriy filial qatori (roli COURIER, filiali HQ) va kuryer
+   * kassasining mavjudligi isbotlaydi; filialga tegishli PENDING tekshiruvi
+   * odatdagidek. Isbot bo'lmasa — avvalgi javob: faol qator yoki kassa yo'q →
+   * identity'ning 404 i, qator boshqa rolda → 403, filialda → 403. Tirik,
+   * lekin kuryer bo'lmagan foydalanuvchi — avvalgidek 403.
+   */
+  private async assertHqCourierReceivable(
+    courierId: string,
+    requester: JwtUser,
+  ): Promise<void> {
+    // 1) Identity. Tirik foydalanuvchi kuryer bo'lmasa 403 (filialga
+    //    bormaymiz). 404 — soft-delete: qaror filial qatoriga o'tadi. Boshqa
+    //    xatolar (timeout, 5xx) avvalgidek o'zgarishsiz uzatiladi.
+    let deletedUserError: NotFoundException | null = null;
+    try {
+      await this.assertCourierUser(courierId);
+    } catch (error) {
+      if (rpcErrorStatus(error) !== 404) {
+        throw error;
+      }
+      deletedUserError = toNotFoundException(error, 'User topilmadi');
+    }
+
+    // 2) Filial: kuryerning joriy qatori HQ'da bo'lishi shart.
+    let placement: { hqBranchId: string; assignment: BranchAssignment | null };
+    try {
+      placement = await this.loadCourierPlacement(courierId, requester);
+    } catch {
+      throw new ServiceUnavailableException(
+        FinanceGatewayController.RECEIVE_CHECK_UNAVAILABLE_MESSAGE,
+      );
+    }
+    const { hqBranchId, assignment } = placement;
+    if (deletedUserError) {
+      if (!assignment) {
+        throw deletedUserError;
+      }
+      if (assignment.role !== FinanceGatewayController.COURIER_BRANCH_ROLE) {
+        throw new ForbiddenException(
+          FinanceGatewayController.NOT_A_COURIER_MESSAGE,
+        );
+      }
+    }
+    if (!assignment || assignment.branch_id !== hqBranchId) {
+      throw new ForbiddenException(
+        FinanceGatewayController.BRANCH_COURIER_NOT_RECEIVABLE_MESSAGE,
+      );
+    }
+    if (deletedUserError && !(await this.courierCashboxExists(courierId))) {
+      throw deletedUserError;
+    }
+
+    // 3) Ledger: filialga tegishli topshirilmagan savdo bo'lmasligi shart.
+    let scope: CourierSettlementScope;
+    try {
+      scope = await this.loadCourierSettlementScope(courierId);
+    } catch {
+      throw new ServiceUnavailableException(
+        FinanceGatewayController.RECEIVE_CHECK_UNAVAILABLE_MESSAGE,
+      );
+    }
+    if (scope.branch_pending_count > 0) {
+      throw new BadRequestException(
+        `Kuryerda filialga tegishli ${scope.branch_pending_count} ta topshirilmagan savdo bor — ularni filial menejeri qabul qiladi`,
+      );
+    }
+  }
+
+  /**
+   * Foydalanuvchi qisqa ma'lumoti (identity) va holati: topildi / 404
+   * (soft-delete qilingan) / javob yo'q (timeout, 5xx, bo'sh javob).
+   */
+  private async lookupUserSummary(userId: string): Promise<UserLookup> {
+    let user: Record<string, any> | null | undefined;
+    try {
+      const response = await this.sendIdentity<{
+        data?: Record<string, any> | null;
+      }>({ cmd: 'identity.user.find_by_id' }, { id: userId });
+      user = response?.data;
+    } catch (error) {
+      return rpcErrorStatus(error) === 404
+        ? { kind: 'not_found' }
+        : { kind: 'unavailable' };
+    }
+    if (!user) {
+      return { kind: 'unavailable' };
+    }
+    return {
+      kind: 'found',
+      user: {
+        id: toText(user.id) || userId,
+        name: toText(user.name),
+        phone_number: toText(user.phone_number) || null,
+        role: this.roleToString(user.role) || null,
+        status: toText(user.status) || null,
+      },
+      isCourier: this.isCourierIdentity(user),
+    };
+  }
+
+  /** Foydalanuvchi qisqa ma'lumoti (identity). Xato yoki topilmasa — null. */
+  private async loadUserSummary(userId: string): Promise<UserSummary | null> {
+    const lookup = await this.lookupUserSummary(userId);
+    return lookup.kind === 'found' ? lookup.user : null;
+  }
+
+  /**
+   * C3 — identity'da soft-delete qilingan (404) kuryer uchun `user`. Identity
+   * endi hech narsa bermaydi: ism va telefon — filial qatorida bo'lsa o'sha
+   * yerdan, aks holda '' / null.
+   */
+  private deletedCourierSummary(
+    courierId: string,
+    assignment: BranchAssignment | null,
+  ): UserSummary {
+    return {
+      id: courierId,
+      name: assignment?.name ?? '',
+      phone_number: assignment?.phone_number ?? null,
+      role: RoleEnum.COURIER,
+      status: FinanceGatewayController.DELETED_USER_STATUS,
+    };
+  }
+
+  /**
+   * C3 — superadmin/admin uchun kuryer kassasi sahifasi (`cashbox_type=couriers`):
+   * ism-familiya va "Qabul qilinishi kerak" summasi router state'siz (F5,
+   * ulashilgan havola) ham to'g'ri chiqishi uchun. Qoidalar C4 bilan BIR XIL:
+   *   • is_hq_courier — kuryer (tirik bo'lsa identity roli; soft-delete —
+   *     identity 404 — bo'lsa filial qatori roli COURIER) va joriy filial
+   *     qatori HQ'da;
+   *   • can_receive — HQ kuryeri VA filialga tegishli PENDING savdo yo'q;
+   *   • olinishi_kerak — can_receive bo'lsa kassadagi musbat balans, aks holda 0;
+   *   • receive_check_failed — filial yoki ledger (order) tekshiruvi javob
+   *     bermadi: is_hq_courier va can_receive = null (noma'lum),
+   *     olinishi_kerak = musbat balans. Frontend formani ogohlantirish bilan
+   *     ko'rsatadi, to'lovning o'zi C4 da 503 matni bilan to'xtaydi — sahifa
+   *     jimgina "0 / olib bo'lmaydi" demaydi.
+   * Identity javob bermasa `user` null va rol `couriers` kassasining o'zidan
+   * (kuryer) olinadi; 404 bo'lsa `user.status = 'deleted'`.
+   */
+  private async buildCourierReceiveInfo(
+    courierId: string,
+    cashbox: { balance?: unknown } | null | undefined,
+    requester?: JwtUser,
+  ): Promise<CourierReceiveInfo> {
+    const [identity, placement] = await Promise.all([
+      this.lookupUserSummary(courierId),
+      this.loadCourierPlacement(courierId, requester).catch(() => null),
+    ]);
+    const isDeletedUser = identity.kind === 'not_found';
+    const user =
+      identity.kind === 'found'
+        ? identity.user
+        : isDeletedUser
+          ? this.deletedCourierSummary(courierId, placement?.assignment ?? null)
+          : null;
+    const balance = Number(cashbox?.balance ?? 0);
+    const positiveBalance = Number.isFinite(balance) ? Math.max(0, balance) : 0;
+    const checked = (
+      isHqCourier: boolean,
+      canReceive: boolean,
+    ): CourierReceiveInfo => ({
+      user,
+      is_hq_courier: isHqCourier,
+      can_receive: canReceive,
+      olinishi_kerak: canReceive ? positiveBalance : 0,
+      receive_check_failed: false,
+      counterparty: 'HQ',
+    });
+    const checkFailed = (): CourierReceiveInfo => ({
+      user,
+      is_hq_courier: null,
+      can_receive: null,
+      olinishi_kerak: positiveBalance,
+      receive_check_failed: true,
+      counterparty: 'HQ',
+    });
+
+    // Tirik, lekin kuryer emas — HQ kuryeri emas (C4: 403); filial natijasi
+    // bu yerda ahamiyatsiz.
+    if (identity.kind === 'found' && !identity.isCourier) {
+      return checked(false, false);
+    }
+    if (!placement) {
+      return checkFailed();
+    }
+    const { hqBranchId, assignment } = placement;
+    const isHqCourier =
+      assignment !== null &&
+      assignment.branch_id === hqBranchId &&
+      (!isDeletedUser ||
+        assignment.role === FinanceGatewayController.COURIER_BRANCH_ROLE);
+    if (!isHqCourier) {
+      return checked(false, false);
+    }
+    try {
+      const scope = await this.loadCourierSettlementScope(courierId);
+      return checked(true, scope.branch_pending_count === 0);
+    } catch {
+      return checkFailed();
+    }
+  }
+
+  /**
+   * Kuryerlarning identity ma'lumoti BITTA so'rovda
+   * (`identity.courier.find_by_ids`). Xato bo'lsa bo'sh Map — chaqiruvchi
+   * filial qatori ma'lumotiga tushadi. Soft-delete qilingan kuryer bu
+   * javobda bo'lmaydi (identity faqat `isDeleted=false` ni qaytaradi).
+   */
+  private async loadCourierIdentities(
+    ids: string[],
+  ): Promise<Map<string, Record<string, unknown>>> {
+    const byId = new Map<string, Record<string, unknown>>();
+    if (!ids.length) {
+      return byId;
+    }
+    try {
+      const response = await this.sendIdentity<{ data?: unknown }>(
+        { cmd: 'identity.courier.find_by_ids' },
+        { ids },
+      );
+      const users: unknown[] = Array.isArray(response?.data)
+        ? response.data
+        : [];
+      for (const user of users) {
+        if (!user || typeof user !== 'object') {
+          continue;
+        }
+        const record = user as Record<string, unknown>;
+        const id = toText(record.id).trim();
+        if (id) {
+          byId.set(id, record);
+        }
+      }
+    } catch {
+      // Identity javob bermadi — ism/telefon filial qatoridan olinadi.
+    }
+    return byId;
+  }
+
+  /**
+   * C1 — HQ kuryerlari va ularning kassasidagi naqd (superadmin/admin
+   * "Qabul qilinishi kerak" oynasi uchun).
+   *
+   * ⚠️ GET /couriers ustiga QURILMAYDI: u identity'da 100 talik sahifani
+   * filial filtridan OLDIN oladi, ya'ni HQ kuryerlari ro'yxatdan jimgina
+   * tushib qolardi. Bu yerda manba — HQ'ning faol `branch_users` qatorlari.
+   * Ism/telefon/status: identity (bitta batch so'rov, bo'lsa) → branch_users
+   * qatori ma'lumoti (`row.user`) → ''. Soft-delete qilingan kuryerni
+   * identity bermaydi, lekin uning qatori va puli qoladi — u ro'yxatda
+   * (odatda ismsiz) ko'rinadi va C4 orqali qabul qilinadi. Bloklangan/nofaol
+   * kuryer ham qoladi: puli bor ekan, u ko'rinishi shart. Kassa xato bersa
+   * balans 0.
+   */
+  private async buildHqCourierReceivables(requester?: JwtUser) {
+    type BranchUserRow = {
+      user_id?: string | number | null;
+      role?: string | null;
+      user?: {
+        name?: unknown;
+        phone_number?: unknown;
+        status?: unknown;
+      } | null;
+    };
+    type CourierCashbox = {
+      id?: string | number | null;
+      balance?: unknown;
+      balance_cash?: unknown;
+      balance_card?: unknown;
+    };
+
+    const hqBranchId = await this.resolveHqBranchId();
+    const branchUsersResponse = await this.sendBranch<{
+      data?: BranchUserRow[];
+    }>(
+      { cmd: 'branch.user.find_by_branch' },
+      { branch_id: hqBranchId, requester: this.toRequester(requester) },
+    );
+    const branchUsers = Array.isArray(branchUsersResponse?.data)
+      ? branchUsersResponse.data
+      : [];
+
+    const seen = new Set<string>();
+    const courierIds: Array<{ userId: string; row: BranchUserRow }> = [];
+    for (const row of branchUsers) {
+      const userId = String(row?.user_id ?? '').trim();
+      if (
+        userId &&
+        !seen.has(userId) &&
+        String(row?.role ?? '').toUpperCase() ===
+          FinanceGatewayController.COURIER_BRANCH_ROLE
+      ) {
+        seen.add(userId);
+        courierIds.push({ userId, row });
+      }
+    }
+
+    const toAmount = (value: unknown) => {
+      const amount = Number(value ?? 0);
+      return Number.isFinite(amount) ? amount : 0;
+    };
+    const [identityUsers, cashboxes] = await Promise.all([
+      this.loadCourierIdentities(courierIds.map(({ userId }) => userId)),
+      Promise.all(
+        courierIds.map(({ userId }) =>
+          this.send<{ data?: CourierCashbox | null }>(
+            { cmd: 'finance.cashbox.find_by_user' },
+            { user_id: userId, cashbox_type: Cashbox_type.FOR_COURIER },
+          )
+            .then((response) => response?.data ?? null)
+            .catch(() => null),
+        ),
+      ),
+    ]);
+    const items = courierIds.map(({ userId, row }, index) => {
+      const cashbox = cashboxes[index];
+      // Manba tartibi: identity → branch_users qatori ma'lumoti → ''.
+      const identityUser = identityUsers.get(userId) ?? null;
+      const rowUser = row?.user ?? null;
+      const balance = cashbox?.id ? toAmount(cashbox.balance) : 0;
+      return {
+        id: userId,
+        name: toText(identityUser?.name) || toText(rowUser?.name),
+        phone_number:
+          toText(identityUser?.phone_number) ||
+          toText(rowUser?.phone_number) ||
+          null,
+        status: toText(identityUser?.status) || toText(rowUser?.status),
+        balance,
+        cashbox: {
+          id: String(cashbox?.id ?? ''),
+          balance,
+          balance_cash: toAmount(cashbox?.balance_cash),
+          balance_card: toAmount(cashbox?.balance_card),
+        },
+      };
+    });
+
+    const receivable = items
+      .filter((item) => item.balance > 0)
+      .sort((a, b) => b.balance - a.balance || Number(a.id) - Number(b.id));
+
+    return {
+      items: receivable,
+      total: receivable.length,
+      hq_branch_id: hqBranchId,
+    };
   }
 
   private async resolveManagerBranchCashboxId(
@@ -644,6 +1304,30 @@ export class FinanceGatewayController {
     return this.send({ cmd: 'finance.cashbox.create' }, dto);
   }
 
+  /**
+   * C1 — HQ kuryerlari (superadmin/admin ularning naqdini to'g'ridan-to'g'ri
+   * Asosiy kassaga qabul qiladi). Statik segment: boshqa `cashbox/...` GET
+   * marshrutlaridan OLDIN e'lon qilingan — kelajakda `cashbox/:id` qo'shilsa
+   * ham uni tutib qolmasligi uchun.
+   */
+  @Get('cashbox/hq-couriers')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'HQ kuryerlari va kassasidagi naqd (superadmin/admin qabul qiladi)',
+  })
+  @ApiOkResponse({ type: HqCourierReceivablesResponseDto })
+  async hqCourierReceivables(@Req() req: { user: JwtUser }) {
+    const data = await this.buildHqCourierReceivables(req?.user);
+    return {
+      statusCode: 200,
+      message: 'HQ kuryerlari (qabul qilinishi kerak)',
+      data,
+    };
+  }
+
   @Get('cashbox/user/:user_id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -851,6 +1535,24 @@ export class FinanceGatewayController {
           privilegedBranchSettlement?.berilishi_kerak ?? 0,
         );
         response.data.counterparty = 'HQ';
+      }
+      // C3: kuryer kassasi sahifasi router state'siz ham ism va summani
+      // ko'rsatishi uchun.
+      if (requestQuery.cashbox_type === Cashbox_type.FOR_COURIER) {
+        if (this.isPrivileged(req?.user)) {
+          Object.assign(
+            response.data,
+            await this.buildCourierReceiveInfo(
+              requestUserId,
+              response.data.cashbox,
+              req.user,
+            ),
+          );
+        } else if (this.isManager(req?.user)) {
+          // Menejerga FAQAT `user`: `olinishi_kerak` qo'shilsa cashDetail
+          // sahifasidagi menejer balansi hisobi buziladi.
+          response.data.user = await this.loadUserSummary(requestUserId);
+        }
       }
       const enrichedHistory = await this.attachCreatedByUsers(
         response.data.history,
@@ -1151,26 +1853,7 @@ export class FinanceGatewayController {
       if (!receiverBranchId) {
         throw new ForbiddenException("Managerning branch'i topilmadi");
       }
-      const courierResponse = await this.sendIdentity<{
-        data?: Record<string, any>;
-      }>({ cmd: 'identity.user.find_by_id' }, { id: dto.courier_id });
-      const courier = courierResponse?.data;
-      if (!courier) {
-        throw new ForbiddenException('Courier topilmadi');
-      }
-
-      const roleList = Array.isArray(courier.roles)
-        ? courier.roles
-        : courier.role
-          ? [courier.role]
-          : [];
-      const isCourier = roleList.some(
-        (role: unknown) =>
-          this.roleToString(role).toLowerCase() === RoleEnum.COURIER,
-      );
-      if (!isCourier) {
-        throw new ForbiddenException('Bu foydalanuvchi courier emas');
-      }
+      await this.assertCourierUser(dto.courier_id);
 
       const managerCanAccess = await this.canManagerAccessUser(
         req?.user,
@@ -1181,6 +1864,11 @@ export class FinanceGatewayController {
           "Siz faqat o'z branch'ingiz courieridan to'lov qabul qilasiz",
         );
       }
+    } else {
+      // C4: superadmin/admin — faqat HQ kuryeridan, naqd MAIN'ga (pastda
+      // receiver_user_id YUBORILMAYDI). Filial kuryeri → 403. Kuryerlik
+      // tekshiruvi (identity; soft-delete bo'lsa filial qatori) shu ichida.
+      await this.assertHqCourierReceivable(dto.courier_id, req.user);
     }
 
     // Idempotency token: prefer the client's Idempotency-Key (stops a UI
@@ -1387,14 +2075,26 @@ export class FinanceGatewayController {
       ).catch(() => null),
     ]);
 
+    /**
+     * C2 — "Qabul qilinishi kerak" kartasi = filial menejerlari + HQ
+     * kuryerlari. HQ qatorining `olinishi_kerak` i branch-service'da
+     * HQ kuryerlari kassalarining MUSBAT balanslari yig'indisi sifatida
+     * allaqachon hisoblangan (hq-couriers oynasi bilan bir xil formula) —
+     * shuning uchun yangi chaqiruv yo'q, /payments sekinlashmaydi.
+     */
     const branches = branchesResponse?.data?.items ?? [];
-    const branchManagersReceivable = branches.reduce((sum, branch) => {
-      if (String(branch?.type ?? '').toUpperCase() === 'HQ') {
-        return sum;
-      }
+    let branchManagersReceivable = 0;
+    let hqCouriersReceivable = 0;
+    for (const branch of branches) {
       const amount = Number(branch?.olinishi_kerak ?? 0);
-      return sum + (Number.isFinite(amount) && amount > 0 ? amount : 0);
-    }, 0);
+      const positive = Number.isFinite(amount) && amount > 0 ? amount : 0;
+      if (String(branch?.type ?? '').toUpperCase() === 'HQ') {
+        hqCouriersReceivable += positive;
+      } else {
+        branchManagersReceivable += positive;
+      }
+    }
+    const totalReceivable = branchManagersReceivable + hqCouriersReceivable;
 
     if (financeResponse?.data) {
       financeResponse.data.kassadagi_summa = Number(
@@ -1403,8 +2103,11 @@ export class FinanceGatewayController {
       financeResponse.data.berilishi_kerak = Number(
         financeResponse.data.marketCashboxTotal ?? 0,
       );
-      financeResponse.data.olinishi_kerak = branchManagersReceivable;
-      financeResponse.data.courierCashboxTotal = branchManagersReceivable;
+      financeResponse.data.branch_managers_receivable =
+        branchManagersReceivable;
+      financeResponse.data.hq_couriers_receivable = hqCouriersReceivable;
+      financeResponse.data.olinishi_kerak = totalReceivable;
+      financeResponse.data.courierCashboxTotal = totalReceivable;
     }
 
     return financeResponse;

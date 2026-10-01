@@ -1,3 +1,4 @@
+import { RpcException } from '@nestjs/microservices';
 import { OrderServiceService } from './order-service.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { OrderAnalyticsService } from './analytics/order-analytics.service';
@@ -504,6 +505,195 @@ describe('OrderServiceService filters', () => {
       for (const call of joinOrders) {
         expect(call).toBeGreaterThan(cloneOrder);
       }
+    });
+  });
+
+  /**
+   * SqVMuhKo. GET /orders sana filtri ilgari UTC kuni edi ('YYYY-MM-DD' — UTC
+   * yarim tuni, oxiri server TZ'ida setHours): Toshkentda 00:00-05:00 da
+   * yaratilgan buyurtma ro'yxatda oldingi kunga, dashboardda esa to'g'ri
+   * kunga tushardi. Endi ikkalasi ham Toshkent kunini ishlatadi.
+   */
+  describe('sana filtri — Toshkent kuni (SqVMuhKo)', () => {
+    const createdAtCalls = (qb: { andWhere: jest.Mock }) =>
+      qb.andWhere.mock.calls.filter(
+        ([sql]) => typeof sql === 'string' && sql.includes('order.createdAt'),
+      );
+
+    it('bir kun — dashboard bilan ayni Toshkent chegaralari (jami soni ham shu oynada)', async () => {
+      const { service, qb } = setup();
+
+      await service.findAll({
+        start_day: '2026-10-01',
+        end_day: '2026-10-01',
+        page: 1,
+        limit: 10,
+      });
+
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        'order.createdAt >= :startDate',
+        { startDate: new Date('2026-09-30T19:00:00.000Z') },
+      );
+      expect(qb.andWhere).toHaveBeenCalledWith('order.createdAt <= :endDate', {
+        endDate: new Date('2026-10-01T18:59:59.999Z'),
+      });
+      // Sana sharti hisob nusxasidan OLDIN qo'shiladi — `total` ham shu
+      // Toshkent kuni bo'yicha sanaladi.
+      const cloneOrder = qb.clone.mock.invocationCallOrder[0];
+      const dateCallOrders = qb.andWhere.mock.calls
+        .map((call, index) => ({
+          call,
+          order: qb.andWhere.mock.invocationCallOrder[index],
+        }))
+        .filter(
+          ({ call }) =>
+            typeof call[0] === 'string' && call[0].includes('order.createdAt'),
+        )
+        .map(({ order }) => order);
+      expect(dateCallOrders).toHaveLength(2);
+      for (const order of dateCallOrders) {
+        expect(order).toBeLessThan(cloneOrder);
+      }
+    });
+
+    it('00:00-05:00 dagi buyurtma ayni kunga tushadi, ertangi tungi buyurtma esa tushmaydi', async () => {
+      const { service, qb } = setup();
+
+      await service.findAll({
+        start_day: '2026-10-01',
+        end_day: '2026-10-01',
+        page: 1,
+        limit: 10,
+      });
+
+      const [startCall, endCall] = createdAtCalls(qb);
+      const start = (startCall[1] as { startDate: Date }).startDate.getTime();
+      const end = (endCall[1] as { endDate: Date }).endDate.getTime();
+      const inside = (value: string) => {
+        const time = new Date(value).getTime();
+        return time >= start && time <= end;
+      };
+
+      expect(inside('2026-10-01T02:30:00+05:00')).toBe(true);
+      expect(inside('2026-10-01T06:00:00+05:00')).toBe(true);
+      expect(inside('2026-10-02T03:00:00+05:00')).toBe(false);
+      // Eski UTC oynasi [2026-10-01T00:00Z, 2026-10-01T23:59:59.999Z] uni
+      // 1-oktabrga qo'shib yuborardi.
+      expect(new Date('2026-10-02T03:00:00+05:00').getTime()).toBeLessThan(
+        new Date('2026-10-01T23:59:59.999Z').getTime(),
+      );
+    });
+
+    it("to'liq ISO qiymat o'zgarishsiz ishlatiladi (analytics order.find_all yo'li)", async () => {
+      const { service, qb } = setup();
+
+      await service.findAll({
+        start_day: '2026-09-30T19:00:00.000Z',
+        end_day: '2026-10-01T18:59:59.999Z',
+        page: 1,
+        limit: 10,
+      });
+
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        'order.createdAt >= :startDate',
+        { startDate: new Date('2026-09-30T19:00:00.000Z') },
+      );
+      expect(qb.andWhere).toHaveBeenCalledWith('order.createdAt <= :endDate', {
+        endDate: new Date('2026-10-01T18:59:59.999Z'),
+      });
+    });
+
+    it('oy va yil chegarasi', async () => {
+      const yearEdge = setup();
+      await yearEdge.service.findAll({
+        start_day: '2026-12-31',
+        end_day: '2027-01-01',
+        page: 1,
+        limit: 10,
+      });
+      expect(yearEdge.qb.andWhere).toHaveBeenCalledWith(
+        'order.createdAt >= :startDate',
+        { startDate: new Date('2026-12-30T19:00:00.000Z') },
+      );
+      expect(yearEdge.qb.andWhere).toHaveBeenCalledWith(
+        'order.createdAt <= :endDate',
+        { endDate: new Date('2027-01-01T18:59:59.999Z') },
+      );
+
+      const monthEnd = setup();
+      await monthEnd.service.findAll({
+        end_day: '2026-10-31',
+        page: 1,
+        limit: 10,
+      });
+      expect(createdAtCalls(monthEnd.qb)).toEqual([
+        [
+          'order.createdAt <= :endDate',
+          { endDate: new Date('2026-10-31T18:59:59.999Z') },
+        ],
+      ]);
+    });
+
+    it('faqat start_day — yuqori chegara qo`yilmaydi', async () => {
+      const { service, qb } = setup();
+
+      await service.findAll({ start_day: '2026-10-01', page: 1, limit: 10 });
+
+      expect(createdAtCalls(qb)).toEqual([
+        [
+          'order.createdAt >= :startDate',
+          { startDate: new Date('2026-09-30T19:00:00.000Z') },
+        ],
+      ]);
+    });
+
+    it("yaroqsiz sana — avvalgidek 400, so'rov bazaga ketmaydi", async () => {
+      const badStart = setup();
+      const startError: unknown = await badStart.service
+        .findAll({ start_day: 'abc', page: 1, limit: 10 })
+        .catch((error: unknown) => error);
+      expect(startError).toBeInstanceOf(RpcException);
+      expect((startError as RpcException).getError()).toEqual({
+        statusCode: 400,
+        message: "start_day noto'g'ri sana formatida",
+      });
+      expect(badStart.qb.getMany).not.toHaveBeenCalled();
+
+      const badEnd = setup();
+      const endError: unknown = await badEnd.service
+        .findAll({ end_day: '2026-13-45', page: 1, limit: 10 })
+        .catch((error: unknown) => error);
+      expect(endError).toBeInstanceOf(RpcException);
+      expect((endError as RpcException).getError()).toEqual({
+        statusCode: 400,
+        message: "end_day noto'g'ri sana formatida",
+      });
+      expect(badEnd.qb.getMany).not.toHaveBeenCalled();
+    });
+
+    it("sana filtrisiz (barcha vaqt) — createdAt sharti yo'q, avvalgidek", async () => {
+      const { service, qb } = setup();
+
+      await service.findAll({ page: 1, limit: 10 });
+
+      expect(createdAtCalls(qb)).toEqual([]);
+    });
+
+    it('GET /orders/external (`date` → start_day/end_day) ham Toshkent kuni', async () => {
+      const { service, qb } = setup();
+
+      await service.findAllExternal({
+        start_day: '2026-10-01',
+        end_day: '2026-10-01',
+      });
+
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        'order.createdAt >= :startDate',
+        { startDate: new Date('2026-09-30T19:00:00.000Z') },
+      );
+      expect(qb.andWhere).toHaveBeenCalledWith('order.createdAt <= :endDate', {
+        endDate: new Date('2026-10-01T18:59:59.999Z'),
+      });
     });
   });
 

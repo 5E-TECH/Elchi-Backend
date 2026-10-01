@@ -1,6 +1,15 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { Order_status, Roles, rmqSend } from '@app/common';
+import {
+  Order_status,
+  Roles,
+  endOfTashkentDay,
+  parseDateOnly,
+  rmqSend,
+  startOfTashkentDay,
+  startOfTashkentMonth,
+  startOfTashkentWeek,
+} from '@app/common';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 
 interface RequesterContext {
@@ -23,7 +32,6 @@ type RevenuePeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 @Injectable()
 export class AnalyticsServiceService {
-  private static readonly TASHKENT_OFFSET_MINUTES = 5 * 60;
   private static readonly COURIER_REPORT_TTL_MS = 30_000;
 
   private readonly logger = new Logger(AnalyticsServiceService.name);
@@ -73,27 +81,27 @@ export class AnalyticsServiceService {
 
     if (!startDate || !endDate) {
       const now = new Date();
-      const start = this.startOfTashkentDay(now);
-      const end = this.endOfTashkentDay(now);
+      const start = startOfTashkentDay(now);
+      const end = endOfTashkentDay(now);
       return {
         startDate: start.toISOString(),
         endDate: end.toISOString(),
       };
     }
 
-    const startOnly = this.parseDateOnly(startDate);
-    const endOnly = this.parseDateOnly(endDate);
+    const startOnly = parseDateOnly(startDate);
+    const endOnly = parseDateOnly(endDate);
 
     const start = startOnly
-      ? this.startOfTashkentDay(startOnly)
+      ? startOfTashkentDay(startOnly)
       : new Date(startDate);
-    const end = endOnly ? this.endOfTashkentDay(endOnly) : new Date(endDate);
+    const end = endOnly ? endOfTashkentDay(endOnly) : new Date(endDate);
 
     if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime())) {
       const now = new Date();
       return {
-        startDate: this.startOfTashkentDay(now).toISOString(),
-        endDate: this.endOfTashkentDay(now).toISOString(),
+        startDate: startOfTashkentDay(now).toISOString(),
+        endDate: endOfTashkentDay(now).toISOString(),
       };
     }
 
@@ -114,79 +122,21 @@ export class AnalyticsServiceService {
 
     const period = String(filter.period ?? 'today').toLowerCase();
     const now = new Date();
-    const end = this.endOfTashkentDay(now);
-    let start = this.startOfTashkentDay(now);
+    const end = endOfTashkentDay(now);
+    let start = startOfTashkentDay(now);
 
+    // Tashkent day/week/month bounds come from the shared libs/common helper
+    // (SqVMuhKo), so GET /orders and the dashboard read a day the same way.
     if (period === 'week') {
-      const offsetMs =
-        AnalyticsServiceService.TASHKENT_OFFSET_MINUTES * 60 * 1000;
-      const tashkentNow = new Date(now.getTime() + offsetMs);
-      const daysSinceMonday = (tashkentNow.getUTCDay() + 6) % 7;
-      start = new Date(start.getTime() - daysSinceMonday * 24 * 60 * 60 * 1000);
+      start = startOfTashkentWeek(now);
     } else if (period === 'month') {
-      const offsetMs =
-        AnalyticsServiceService.TASHKENT_OFFSET_MINUTES * 60 * 1000;
-      const tashkentNow = new Date(now.getTime() + offsetMs);
-      const daysSinceMonthStart = tashkentNow.getUTCDate() - 1;
-      start = new Date(
-        start.getTime() - daysSinceMonthStart * 24 * 60 * 60 * 1000,
-      );
+      start = startOfTashkentMonth(now);
     }
 
     return {
       startDate: start.toISOString(),
       endDate: end.toISOString(),
     };
-  }
-
-  private parseDateOnly(value?: string): Date | null {
-    if (!value) return null;
-    const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
-    if (!match) return null;
-
-    const year = Number(match[1]);
-    const month = Number(match[2]);
-    const day = Number(match[3]);
-    if (
-      !Number.isFinite(year) ||
-      !Number.isFinite(month) ||
-      !Number.isFinite(day)
-    ) {
-      return null;
-    }
-
-    return new Date(Date.UTC(year, month - 1, day, 12, 0, 0, 0));
-  }
-
-  private startOfTashkentDay(date: Date): Date {
-    return this.tashkentBoundaryToUtc(date, false);
-  }
-
-  private endOfTashkentDay(date: Date): Date {
-    return this.tashkentBoundaryToUtc(date, true);
-  }
-
-  private tashkentBoundaryToUtc(date: Date, isEnd: boolean): Date {
-    const offsetMs =
-      AnalyticsServiceService.TASHKENT_OFFSET_MINUTES * 60 * 1000;
-    const shifted = new Date(date.getTime() + offsetMs);
-
-    const y = shifted.getUTCFullYear();
-    const m = shifted.getUTCMonth();
-    const d = shifted.getUTCDate();
-
-    const utcMs =
-      Date.UTC(
-        y,
-        m,
-        d,
-        isEnd ? 23 : 0,
-        isEnd ? 59 : 0,
-        isEnd ? 59 : 0,
-        isEnd ? 999 : 0,
-      ) - offsetMs;
-
-    return new Date(utcMs);
   }
 
   private normalizeDateRangeAny(filter: RevenueFilter = {}) {

@@ -665,6 +665,30 @@ export class OrderAnalyticsService {
    *
    * Endi tashiladigan narsa — bir necha o'nlab qator: hisoblar va market
    * kesimi.
+   *
+   * ⚠️ HAR KARTANING O'Z SANASI BOR (menejer statistikasi):
+   *   - "Sotilgan" (`orders_card.delivered`) — `sold_at` oynaga tushgan
+   *     sotuvlar: sotuv QAYSI KUNI bo'lgan bo'lsa, o'sha kunda sanaladi
+   *     (ilgari buyurtma YARATILGAN kun bo'yicha sanalardi). Doira — joriy
+   *     ustunlar: sotilgan buyurtma boshqa joyga ko'chmaydi.
+   *   - "Bekor qilingan" (`orders_card.cancelled`) — bekor QILINGAN kun
+   *     bo'yicha, bekor paytida buyurtma shu filial yoki uning kuryerida
+   *     bo'lgan bo'lsa (`countBranchCancelledOrders`). Tovar keyin HQ ga
+   *     jo'natilsa ham raqam o'zgarmaydi. `returned` (RETURNED_TO_MARKET)
+   *     o'zgarmagan holda qoladi.
+   *   - Jami / bugun / hafta / market kartasi — hamon YARATILGAN kun
+   *     bo'yicha, lekin doiraga saqlov tarixi (`order_custody_events`) ham
+   *     qo'shilgan: filialdan chiqib ketgan buyurtma o'tgan kunlardan
+   *     "yo'qolib" qolmaydi.
+   *   - Yangi, Yo'lda, paketlar, faol kuryerlar — "hozir qo'lda nima bor"
+   *     suratlari, joriy doirada qoladi.
+   *
+   * ⚠️ KECHIKISH. analytics-service `branch.dashboard` ni 5 s lik muddat va
+   * qayta urinishlar bilan kutadi (gateway byudjeti 8 s). Shuning uchun yangi
+   * hisoblar (sotilgan, bekor) MAVJUD `Promise.all` ichida parallel ketadi —
+   * ikkinchi ketma-ket to'plam yo'q. Market nomlari esa market qatorlari
+   * kelishi bilan (qolgan hisoblarni kutmasdan) 1,5 s lik, qayta urinishsiz
+   * so'rov bilan olinadi va hech qachon xato otmaydi.
    */
   async getBranchDashboardStats(input: {
     branch_ids?: string[];
@@ -685,15 +709,18 @@ export class OrderAnalyticsService {
       return this.emptyBranchDashboardStats();
     }
 
-    const scoped = () => this.branchScopedQuery(branchIds, courierIds);
+    // Jami/bugun/hafta/market kartasi uchun: saqlov tarixi bilan doira.
+    const withCustodyHistory = { includeCustodyHistory: true };
+    const scoped = (options: { includeCustodyHistory?: boolean } = {}) =>
+      this.branchScopedQuery(branchIds, courierIds, options);
     const now = new Date();
     const todayStart = new Date(input.today_start);
     const weekStart = new Date(input.week_start);
     const rangeStart = input.start ? new Date(input.start) : null;
     const rangeEnd = input.end ? new Date(input.end) : now;
 
-    const inRange = () => {
-      const qb = scoped();
+    const inRange = (options: { includeCustodyHistory?: boolean } = {}) => {
+      const qb = scoped(options);
       if (rangeStart) {
         qb.andWhere('o.createdAt BETWEEN :rangeStart AND :rangeEnd', {
           rangeStart,
@@ -714,6 +741,43 @@ export class OrderAnalyticsService {
     ];
     const deliveredStatuses = this.soldStatuses();
 
+    // "Sotilgan" — SOTUV sanasi (`sold_at`, epoch ms) bo'yicha, joriy doirada.
+    // "Barchasi" (start yo'q) — sana filtri qo'yilmaydi.
+    const soldQuery = scoped().andWhere('o.status IN (:...soldStatuses)', {
+      soldStatuses: deliveredStatuses,
+    });
+    if (rangeStart) {
+      soldQuery.andWhere('o.sold_at BETWEEN :soldStartMs AND :soldEndMs', {
+        soldStartMs: String(rangeStart.getTime()),
+        soldEndMs: String(rangeEnd.getTime()),
+      });
+    }
+
+    const marketRowsQuery = inRange(withCustodyHistory)
+      .andWhere('o.market_id IS NOT NULL')
+      .select('o.market_id', 'market_id')
+      .addSelect('COUNT(*)', 'orders_count')
+      .addSelect('COALESCE(SUM(o.total_price), 0)', 'total_price')
+      .addSelect(
+        'SUM(CASE WHEN o.status IN (:...delivered) THEN 1 ELSE 0 END)',
+        'delivered_count',
+      )
+      .setParameter('delivered', deliveredStatuses)
+      .groupBy('o.market_id')
+      .orderBy('COUNT(*)', 'DESC')
+      .getRawMany<{
+        market_id: string;
+        orders_count: string;
+        total_price: string;
+        delivered_count: string;
+      }>();
+    // Market nomlari market qatorlari kelishi bilan so'raladi — qolgan
+    // hisoblarni kutmaydi, ular bilan parallel ketadi. getMarketNames hech
+    // qachon xato otmaydi (xatoda bo'sh xarita).
+    const marketNamesQuery = marketRowsQuery.then((rows) =>
+      this.getMarketNames(rows.map((row) => String(row.market_id))),
+    );
+
     const [
       todayCount,
       weekCount,
@@ -723,17 +787,20 @@ export class OrderAnalyticsService {
       marketRows,
       packageRows,
       activeCouriers,
+      soldCount,
+      cancelledCount,
+      marketNames,
     ] = await Promise.all([
-      scoped()
+      scoped(withCustodyHistory)
         .andWhere('o.createdAt BETWEEN :todayStart AND :now', {
           todayStart,
           now,
         })
         .getCount(),
-      scoped()
+      scoped(withCustodyHistory)
         .andWhere('o.createdAt BETWEEN :weekStart AND :now', { weekStart, now })
         .getCount(),
-      inRange().getCount(),
+      inRange(withCustodyHistory).getCount(),
       scoped()
         .andWhere('o.current_batch_id IS NOT NULL')
         .andWhere('o.status IN (:...statuses)', {
@@ -746,24 +813,7 @@ export class OrderAnalyticsService {
         .addSelect('COUNT(*)', 'count')
         .groupBy('o.status')
         .getRawMany<{ status: string; count: string }>(),
-      inRange()
-        .andWhere('o.market_id IS NOT NULL')
-        .select('o.market_id', 'market_id')
-        .addSelect('COUNT(*)', 'orders_count')
-        .addSelect('COALESCE(SUM(o.total_price), 0)', 'total_price')
-        .addSelect(
-          'SUM(CASE WHEN o.status IN (:...delivered) THEN 1 ELSE 0 END)',
-          'delivered_count',
-        )
-        .setParameter('delivered', deliveredStatuses)
-        .groupBy('o.market_id')
-        .orderBy('COUNT(*)', 'DESC')
-        .getRawMany<{
-          market_id: string;
-          orders_count: string;
-          total_price: string;
-          delivered_count: string;
-        }>(),
+      marketRowsQuery,
       inRange()
         .andWhere('o.current_batch_id IS NOT NULL')
         .andWhere('o.status IN (:...statuses)', {
@@ -777,6 +827,23 @@ export class OrderAnalyticsService {
         .andWhere('o.courier_id IS NOT NULL')
         .select('COUNT(DISTINCT o.courier_id)', 'count')
         .getRawOne<{ count: string }>(),
+      soldQuery.getCount(),
+      // Bekor hisobi yiqilsa butun panel nolga tushmasin (branch-service
+      // har qanday xatoda hamma raqamni 0 qiladi) — faqat shu karta 0.
+      this.countBranchCancelledOrders({
+        branchIds,
+        courierIds,
+        rangeStart,
+        rangeEnd,
+      }).catch((error: unknown) => {
+        this.logger.warn(
+          `Filial paneli: bekor qilinganlar hisobi olinmadi ` +
+            `(branch_ids=${branchIds.join(',')}): ` +
+            `${error instanceof Error ? error.message : String(error)}`,
+        );
+        return 0;
+      }),
+      marketNamesQuery,
     ]);
 
     const countOf = (statuses: string[]): number =>
@@ -797,11 +864,13 @@ export class OrderAnalyticsService {
         total: selectedCount,
         new: countOf([Order_status.NEW]),
         on_the_road: countOf([Order_status.ON_THE_ROAD]),
-        delivered: countOf(deliveredStatuses),
+        delivered: soldCount,
         returned: countOf([Order_status.RETURNED_TO_MARKET]),
+        cancelled: cancelledCount,
       },
       markets: marketRows.map((row) => ({
         market_id: String(row.market_id),
+        market_name: marketNames.get(String(row.market_id)) ?? null,
         orders_count: Number(row.orders_count) || 0,
         delivered_count: Number(row.delivered_count) || 0,
         total_price: Number(row.total_price) || 0,
@@ -848,8 +917,23 @@ export class OrderAnalyticsService {
    * Filial + uning kuryerlari doirasidagi buyurtmalar uchun bazaviy so'rov.
    * `getOrdersByBranchIds` ning SQL ekvivalenti: ilgari u ikki alohida
    * chaqiruv qilib, natijalarni JS'da birlashtirardi.
+   *
+   * `includeCustodyHistory` — buyurtma HOZIR filialda bo'lmasa ham, qachondir
+   * filial yoki uning kuryeri qo'lidan o'tgan bo'lsa (`order_custody_events`)
+   * doiraga kiradi. Aks holda HQ ga jo'natilgan tovar (HQ egasida
+   * `holder_branch_id` NULL) filialning o'tgan kunlaridan yo'qolib qolardi.
+   * Faqat "yaratilgan buyurtmalar" kartalari uchun; "hozir qo'lda nima bor"
+   * kartalari joriy doirada qoladi.
+   *
+   * ⚠️ Ichki so'rov `getQuery()` bilan satr sifatida qo'shiladi — uning
+   * parametrlari (`branchIds`, `courierIds`) TASHQI so'rovda ro'yxatga
+   * olinadi. Bo'sh ro'yxat uchun `IN ()` hech qachon yozilmaydi.
    */
-  private branchScopedQuery(branchIds: string[], courierIds: string[]) {
+  private branchScopedQuery(
+    branchIds: string[],
+    courierIds: string[],
+    options: { includeCustodyHistory?: boolean } = {},
+  ) {
     const qb = this.orderRepo
       .createQueryBuilder('o')
       .where('o.isDeleted = :isDeleted', { isDeleted: false });
@@ -865,8 +949,193 @@ export class OrderAnalyticsService {
         '(o.courier_id IN (:...courierIds) OR o.holder_courier_id IN (:...courierIds))',
       );
     }
+    if (options.includeCustodyHistory) {
+      const historyConditions: string[] = [];
+      if (branchIds.length) {
+        historyConditions.push(
+          'oce_hist.from_branch_id IN (:...branchIds)',
+          'oce_hist.to_branch_id IN (:...branchIds)',
+        );
+      }
+      if (courierIds.length) {
+        historyConditions.push(
+          'oce_hist.from_courier_id IN (:...courierIds)',
+          'oce_hist.to_courier_id IN (:...courierIds)',
+        );
+      }
+      if (historyConditions.length) {
+        const custodyHistorySubQuery = this.orderCustodyEventRepo
+          .createQueryBuilder('oce_hist')
+          .select('1')
+          .where('oce_hist.order_id = o.id')
+          .andWhere(`(${historyConditions.join(' OR ')})`)
+          .getQuery();
+        conditions.push(`EXISTS (${custodyHistorySubQuery})`);
+      }
+    }
     qb.andWhere(`(${conditions.join(' OR ')})`, { branchIds, courierIds });
     return qb;
+  }
+
+  /**
+   * "Bekor qilingan" kartasi — bekor QILINGAN kun bo'yicha.
+   *
+   * Sanaladi: oynada `to_status = cancelled` ga o'tgan va hali ham bekor
+   * holatida turgan buyurtma, agar bekor paytida:
+   *   - buyurtma shu filial yoki uning kuryerida bo'lgan bo'lsa — bekor
+   *     paytigacha bo'lgan OXIRGI saqlov yozuvi (`holder_at`);
+   *   - yoki bekorni filial kuryeri qilgan bo'lsa (`t.changed_by`);
+   *   - yoki buyurtma shu filialda yaratilgan bo'lsa (`home_branch_id` —
+   *     PICKUP o'zi yaratgan buyurtmalarning bekorini ham ko'radi; Sotilgan
+   *     va Jami ham shunday sanaydi).
+   *
+   * Filtrlar:
+   *   - `from_status` bekor oilasidan emas — bekor pochtasini qabul qilish
+   *     (cancelled (sent) → cancelled) qayta sanalmaydi, qisman sotuv
+   *     qoldig'i (from_status NULL) esa sanaladi;
+   *   - `cancel_undo` — keyin bekordan chiqarilgan (masalan WAITING ga
+   *     qaytarib sotilgan) buyurtma sanalmaydi, xuddi ortga qaytarilgan
+   *     sotuvning `sold_at` i o'chgani kabi.
+   *
+   * Buyurtmaning JORIY branch/courier ustunlari ishlatilmaydi — tovar keyin
+   * HQ ga jo'natilsa ham o'tgan kunning raqami o'zgarmaydi.
+   *
+   * ⚠️ SQL QOIDALARI (xato faqat Postgres'da ko'rinadi, mock testda emas):
+   *   - ichki so'rovlar `getQuery()` bilan satr bo'lib qo'shiladi — ularning
+   *     parametrlari TASHQI (`t`) so'rovda ro'yxatga olinadi;
+   *   - bitta skalyar parametr ikki xil enum ustunida ishlatilmaydi (Postgres
+   *     bitta `$N` ning turini aniqlay olmaydi). Massiv parametr har
+   *     ishlatilishda alohida `$N` larga yoyiladi, shuning uchun
+   *     `cancelFamily` ning bir necha enum ustunida ishlatilishi xavfsiz;
+   *   - bo'sh ro'yxat uchun `IN ()` yozilmaydi.
+   */
+  private async countBranchCancelledOrders(input: {
+    branchIds: string[];
+    courierIds: string[];
+    rangeStart: Date | null;
+    rangeEnd: Date;
+  }): Promise<number> {
+    const { branchIds, courierIds, rangeStart, rangeEnd } = input;
+    if (!branchIds.length && !courierIds.length) {
+      return 0;
+    }
+    const cancelFamily = this.cancelledMarketStatuses();
+
+    const cancelUndoSubQuery = this.orderTrackingRepo
+      .createQueryBuilder('cancel_undo')
+      .select('1')
+      .where('cancel_undo.order_id = t.order_id')
+      .andWhere('cancel_undo.created_at > t.created_at')
+      .andWhere('cancel_undo.to_status NOT IN (:...cancelFamily)')
+      .getQuery();
+
+    const holderLaterSubQuery = this.orderCustodyEventRepo
+      .createQueryBuilder('holder_later')
+      .select('1')
+      .where('holder_later.order_id = holder_at.order_id')
+      .andWhere('holder_later.created_at > holder_at.created_at')
+      .andWhere('holder_later.created_at <= t.created_at')
+      .getQuery();
+
+    const holderConditions: string[] = [];
+    if (branchIds.length) {
+      holderConditions.push('holder_at.to_branch_id IN (:...branchIds)');
+    }
+    if (courierIds.length) {
+      holderConditions.push('holder_at.to_courier_id IN (:...courierIds)');
+    }
+    // Bir tranzaksiyadagi yozuvlarning created_at i bir xil (Postgres now()),
+    // shuning uchun `<=`: qisman sotuv qoldig'ining saqlov yozuvi ham topiladi.
+    const holderAtSubQuery = this.orderCustodyEventRepo
+      .createQueryBuilder('holder_at')
+      .select('1')
+      .where('holder_at.order_id = t.order_id')
+      .andWhere('holder_at.created_at <= t.created_at')
+      .andWhere(`(${holderConditions.join(' OR ')})`)
+      .andWhere(`NOT EXISTS (${holderLaterSubQuery})`)
+      .getQuery();
+
+    // Arzon ustun tekshiruvlari oldin, ichki so'rov oxirida.
+    const attribution: string[] = [];
+    if (courierIds.length) {
+      attribution.push('t.changed_by IN (:...courierIds)');
+    }
+    if (branchIds.length) {
+      attribution.push('o.home_branch_id IN (:...branchIds)');
+    }
+    attribution.push(`EXISTS (${holderAtSubQuery})`);
+
+    const query = this.orderTrackingRepo
+      .createQueryBuilder('t')
+      .innerJoin(Order, 'o', 'o.id = t.order_id')
+      .select('COUNT(DISTINCT t.order_id)', 'count')
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('o.status IN (:...cancelFamily)', { cancelFamily })
+      .andWhere('t.to_status = :cancelledStatus', {
+        cancelledStatus: Order_status.CANCELLED,
+      })
+      .andWhere(
+        '(t.from_status IS NULL OR t.from_status NOT IN (:...cancelFamily))',
+        { cancelFamily },
+      )
+      .andWhere(`NOT EXISTS (${cancelUndoSubQuery})`, { cancelFamily })
+      .andWhere(`(${attribution.join(' OR ')})`, { branchIds, courierIds });
+
+    if (rangeStart) {
+      query.andWhere('t.created_at BETWEEN :cancelStart AND :cancelEnd', {
+        cancelStart: rangeStart,
+        cancelEnd: rangeEnd,
+      });
+    }
+
+    const row = await query.getRawOne<{ count?: string | number }>();
+    return Number(row?.count ?? 0);
+  }
+
+  /**
+   * Market kartasi uchun nomlar. `identity.market.find_by_ids` javobidan
+   * FAQAT `name` olinadi — market qatori to'liq uzatilmaydi (unda maxfiy
+   * maydonlar, masalan `market_tg_token`, bor).
+   *
+   * ⚠️ 1,5 s, QAYTA URINISHSIZ. `lookup.getMarketsByIds` rmqSend sukutlarida
+   * ishlaydi (5 s × 3 urinish) — bu filial panelining 8 s lik gateway
+   * byudjetini buzardi. Hech qachon xato otmaydi: identity javob bermasa bo'sh
+   * xarita qaytadi va frontend "Market N" yorlig'ini ko'rsatadi.
+   */
+  private async getMarketNames(
+    marketIds: string[],
+  ): Promise<Map<string, string | null>> {
+    const names = new Map<string, string | null>();
+    const ids = Array.from(
+      new Set(marketIds.map((id) => String(id ?? '').trim()).filter(Boolean)),
+    );
+    if (!ids.length) {
+      return names;
+    }
+
+    const response = await rmqSend<{
+      data?: Array<{ id?: string | number | null; name?: string | null }>;
+    }>(
+      this.identityClient,
+      { cmd: 'identity.market.find_by_ids' },
+      { ids },
+      { timeoutMs: 1500, retries: 0, attachRequestId: false },
+    ).catch((error: unknown) => {
+      this.logger.warn(
+        `Filial paneli: market nomlari olinmadi (ids=${ids.length}): ` +
+          `${error instanceof Error ? error.message : String(error)}`,
+      );
+      return null;
+    });
+
+    const rows = Array.isArray(response?.data) ? response.data : [];
+    for (const row of rows) {
+      const id = String(row?.id ?? '').trim();
+      if (!id) continue;
+      const name = typeof row?.name === 'string' ? row.name.trim() : '';
+      names.set(id, name || null);
+    }
+    return names;
   }
 
   private emptyBranchDashboardStats() {
@@ -881,9 +1150,11 @@ export class OrderAnalyticsService {
         on_the_road: 0,
         delivered: 0,
         returned: 0,
+        cancelled: 0,
       },
       markets: [] as Array<{
         market_id: string;
+        market_name: string | null;
         orders_count: number;
         delivered_count: number;
         total_price: number;

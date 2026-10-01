@@ -651,6 +651,37 @@ export class OrderServiceController {
   }
 
   /**
+   * Bitta kuryerning PENDING savdo qatorlari HQ / filial kesimida (B4). Faqat
+   * o'qiydi — gateway superadmin/admin kuryerdan pul olishidan oldin
+   * filialga tegishli topshirilmagan savdo yo'qligini shu bilan tekshiradi.
+   */
+  @MessagePattern({ cmd: 'order.settlement.courier_scope' })
+  settlementCourierScope(
+    @Payload() data: { courier_id?: string | null },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.settlementService.getCourierSettlementScope(data ?? {}),
+    );
+  }
+
+  /**
+   * R3 — kuryerni filialdan filialga o'tkazish tekshiruvining order qismi:
+   * PENDING savdo, qat'iy o'qilgan qoldiq, qo'lidagi buyurtmalar va ko'rib
+   * chiqilmagan qo'shimcha xarajat so'rovlari. Faqat o'qiydi — branch-service
+   * chaqiradi (`branch.user.courier_transfer_check`).
+   */
+  @MessagePattern({ cmd: 'order.courier_transfer_check' })
+  courierTransferCheck(
+    @Payload() data: { courier_id?: string | null },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.settlementService.getCourierTransferCheck(data ?? {}),
+    );
+  }
+
+  /**
    * Kargo hisob-kitob qilgan buyurtmalarni HQ'ga yetgan deb belgilash
    * (audit M5).
    */

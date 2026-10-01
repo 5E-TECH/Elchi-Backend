@@ -7,6 +7,7 @@ import {
   IsPhoneNumber,
   IsString,
   IsBoolean,
+  Matches,
   Max,
   Min,
   MinLength,
@@ -299,8 +300,15 @@ export class CreateManagerRequestDto {
   @Min(0)
   tariff_center?: number;
 
+  // Faqat raqamlar: Postgres '+1', ' 1 ', '0x1' kabi qiymatlarni ham bigint'ga
+  // (masalan HQ id'siga) aylantiradi va identity'dagi "HQ'ga menejer yo'q"
+  // tekshiruvini chetlab o'tardi. identity createManager ham xuddi shu
+  // qoidani qo'llaydi ("branch_id noto'g'ri").
   @ApiProperty({ example: '1', description: 'Branch ID' })
   @IsString()
+  @Matches(/^\d+$/, {
+    message: "branch_id faqat raqamlardan iborat bo'lishi kerak",
+  })
   branch_id!: string;
 }
 

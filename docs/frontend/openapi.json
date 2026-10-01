@@ -3900,7 +3900,7 @@
             "bearer": []
           }
         ],
-        "summary": "List return requests grouped by courier",
+        "summary": "List courier return requests grouped by courier (SA/admin/HQ registrator: HQ couriers; manager/registrator: own-branch couriers)",
         "tags": [
           "Logistics"
         ]
@@ -3930,7 +3930,7 @@
             "bearer": []
           }
         ],
-        "summary": "Approve return requests",
+        "summary": "Approve courier return requests: orders go back to the custody stock (own branch for manager/registrator, HQ for SA/admin/HQ registrator)",
         "tags": [
           "Logistics"
         ]
@@ -3960,7 +3960,7 @@
             "bearer": []
           }
         ],
-        "summary": "Reject return requests",
+        "summary": "Reject courier return requests: orders stay with the courier (same scope as approve)",
         "tags": [
           "Logistics"
         ]
@@ -4618,6 +4618,33 @@
           }
         ],
         "summary": "Create cashbox",
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/finance/cashbox/hq-couriers": {
+      "get": {
+        "operationId": "FinanceGatewayController_hqCourierReceivables",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HqCourierReceivablesResponseDto"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "HQ kuryerlari va kassasidagi naqd (superadmin/admin qabul qiladi)",
         "tags": [
           "Finance"
         ]
@@ -8658,6 +8685,35 @@
         ]
       }
     },
+    "/branches/dispatch-destinations": {
+      "get": {
+        "operationId": "BranchGatewayController_findDispatchDestinations",
+        "parameters": [
+          {
+            "name": "region_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Pochta jo'natish uchun manzil filiallar (faol REGIONAL/HYBRID, pul maydonlarisiz)",
+        "tags": [
+          "Branch"
+        ]
+      }
+    },
     "/branches/{id}": {
       "get": {
         "operationId": "BranchGatewayController_findBranchById",
@@ -9379,6 +9435,76 @@
           }
         ],
         "summary": "Remove user from branch",
+        "tags": [
+          "Branch"
+        ]
+      }
+    },
+    "/couriers/{id}/transfer-check": {
+      "get": {
+        "operationId": "BranchGatewayController_courierTransferCheck",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Courier user ID (bigint string)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Courier branch-transfer check: cashbox, orders in hand, unreceived cancelled posts (read-only)",
+        "tags": [
+          "Branch"
+        ]
+      }
+    },
+    "/couriers/{id}/branch": {
+      "patch": {
+        "operationId": "BranchGatewayController_transferCourierBranch",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Courier user ID (bigint string)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TransferCourierBranchRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Move courier to another branch (only when the courier holds no money and no orders)",
         "tags": [
           "Branch"
         ]
@@ -13138,6 +13264,121 @@
           "cashbox_type"
         ]
       },
+      "HqCourierCashboxDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "812"
+          },
+          "balance": {
+            "type": "number",
+            "example": 1250000
+          },
+          "balance_cash": {
+            "type": "number",
+            "example": 1250000
+          },
+          "balance_card": {
+            "type": "number",
+            "example": 0
+          }
+        },
+        "required": [
+          "id",
+          "balance",
+          "balance_cash",
+          "balance_card"
+        ]
+      },
+      "HqCourierReceivableItemDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "263",
+            "description": "Kuryer user id"
+          },
+          "name": {
+            "type": "string",
+            "example": "Ali Valiyev",
+            "description": "Manba tartibi: identity (`identity.courier.find_by_ids`, bo'lsa) → branch_users qatori ma'lumoti (`row.user`) → ''. Soft-delete qilingan kuryerni identity bermaydi — uning qatori puli bor ekan ro'yxatda qoladi (odatda ''), naqdi C4 orqali qabul qilinadi"
+          },
+          "phone_number": {
+            "type": "object",
+            "example": "+998901234567",
+            "nullable": true,
+            "description": "identity → branch_users qatori → null"
+          },
+          "status": {
+            "type": "string",
+            "example": "active",
+            "description": "identity → branch_users qatori → ''. Bloklangan/nofaol kuryer ham ro'yxatda qoladi (puli bor)"
+          },
+          "balance": {
+            "type": "number",
+            "example": 1250000,
+            "description": "FOR_COURIER kassa balansi (> 0)"
+          },
+          "cashbox": {
+            "$ref": "#/components/schemas/HqCourierCashboxDto"
+          }
+        },
+        "required": [
+          "id",
+          "name",
+          "status",
+          "balance",
+          "cashbox"
+        ]
+      },
+      "HqCourierReceivablesDataDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "description": "Faol HQ branch_users qatori (COURIER) bo'lgan, kassasi > 0 kuryerlar; balans bo'yicha kamayish tartibida",
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HqCourierReceivableItemDto"
+            }
+          },
+          "total": {
+            "type": "number",
+            "example": 1,
+            "description": "items dagi kuryerlar soni"
+          },
+          "hq_branch_id": {
+            "type": "string",
+            "example": "1"
+          }
+        },
+        "required": [
+          "items",
+          "total",
+          "hq_branch_id"
+        ]
+      },
+      "HqCourierReceivablesResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "HQ kuryerlari (qabul qilinishi kerak)"
+          },
+          "data": {
+            "$ref": "#/components/schemas/HqCourierReceivablesDataDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
       "UpdateCashboxBalanceRequestDto": {
         "type": "object",
         "properties": {
@@ -14857,6 +15098,19 @@
         },
         "required": [
           "user_id"
+        ]
+      },
+      "TransferCourierBranchRequestDto": {
+        "type": "object",
+        "properties": {
+          "branch_id": {
+            "type": "string",
+            "example": "15",
+            "description": "Yangi filial ID (faqat raqamlar)"
+          }
+        },
+        "required": [
+          "branch_id"
         ]
       },
       "SetBranchConfigRequestDto": {

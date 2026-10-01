@@ -57,6 +57,18 @@ interface OrderRowForEnrichment {
   [key: string]: unknown;
 }
 
+/** logistics.post.return_requests javobi: kuryer bo'yicha guruhlangan qatorlar. */
+interface ReturnRequestsResponse {
+  data?: {
+    groups?: Array<{
+      orders?: OrderRowForEnrichment[];
+      [key: string]: unknown;
+    }>;
+    [key: string]: unknown;
+  };
+  [key: string]: unknown;
+}
+
 @ApiTags('Logistics')
 @Controller()
 export class LogisticsGatewayController {
@@ -177,6 +189,42 @@ export class LogisticsGatewayController {
     return {
       ...response,
       data: enrichedRows,
+    };
+  }
+
+  /**
+   * Qaytarish so'rovlari kuryer bo'yicha guruhlangan keladi. order.find_all
+   * faqat items/branch ni qo'shadi — mijoz, tuman va marketsiz kartada
+   * "Mijoz #id" / "Telefon yo'q" chiqardi va menejer posilkani topa olmasdi.
+   * Barcha guruh qatorlari BIR marta boyitiladi, so'ng tartib bo'yicha
+   * guruhlarga qaytariladi.
+   */
+  private async enrichReturnRequestsResponse(response: ReturnRequestsResponse) {
+    const groups = Array.isArray(response?.data?.groups)
+      ? response.data.groups
+      : [];
+    const ordersOf = (group: (typeof groups)[number]) =>
+      Array.isArray(group?.orders) ? group.orders : [];
+    const rows = groups.flatMap((group) => ordersOf(group));
+    if (!rows.length) {
+      return response;
+    }
+
+    const enrichedRows = await this.enrichOrderRows(rows);
+    let offset = 0;
+    const enrichedGroups = groups.map((group) => {
+      const count = ordersOf(group).length;
+      const orders = enrichedRows.slice(offset, offset + count);
+      offset += count;
+      return { ...group, orders };
+    });
+
+    return {
+      ...response,
+      data: {
+        ...(response?.data ?? {}),
+        groups: enrichedGroups,
+      },
     };
   }
 
@@ -378,9 +426,15 @@ export class LogisticsGatewayController {
       .pipe(timeout(8000));
   }
 
+  // ⚠️ REGISTRATOR ataylab YO'Q (xavfsizlik): logistics sendPost na post
+  // holatini, na filialni tekshiradi — istalgan filial registratori istalgan
+  // pochtani istalgan kuryerga berib, HQ qatorini filial kuryeriga tushirib
+  // pul zanjirini buzishi mumkin edi. Frontend bu endpointni chaqirmaydi;
+  // registratorlar POST /orders/assign-to-courier (filial tekshiruvi bor) va
+  // POST /branches/posts/:postId/dispatch dan foydalanadi.
   @Patch('post/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Send post (assign orders to post)' })
   @ApiParam({ name: 'id', description: 'Post ID (id)' })
@@ -660,51 +714,97 @@ export class LogisticsGatewayController {
     );
   }
 
+  // Pochta → Qaytarish. MANAGER ham kiradi — doira logistics tomonida:
+  // menejer/registrator faqat o'z filiali kuryerlarini, superadmin/admin va HQ
+  // registratori HQ kuryerlarini ko'radi va ko'rib chiqadi. `branch_id` JWT
+  // dan uzatiladi (resolveScopedBranchId birinchi uni oladi).
   @Get('post/return-requests/list')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'List return requests grouped by courier' })
-  getReturnRequests() {
-    return this.logisticsClient
-      .send({ cmd: 'logistics.post.return_requests' }, {})
-      .pipe(timeout(8000));
+  @ApiOperation({
+    summary:
+      'List courier return requests grouped by courier (SA/admin/HQ registrator: HQ couriers; manager/registrator: own-branch couriers)',
+  })
+  async getReturnRequests(@Req() req: { user: JwtUser }) {
+    const response = (await this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.post.return_requests' },
+      {
+        requester: {
+          id: req.user.sub,
+          roles: req.user.roles ?? [],
+          branch_id: req.user.branch_id ?? null,
+        },
+      },
+    )) as ReturnRequestsResponse;
+    return this.enrichReturnRequestsResponse(response);
   }
 
   @Post('post/return-requests/approve')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Approve return requests' })
+  @ApiOperation({
+    summary:
+      'Approve courier return requests: orders go back to the custody stock (own branch for manager/registrator, HQ for SA/admin/HQ registrator)',
+  })
   @ApiBody({ type: ReturnRequestsActionRequestDto })
   approveReturnRequests(
     @Body() dto: ReturnRequestsActionRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return this.logisticsClient
-      .send(
-        { cmd: 'logistics.post.return_requests.approve' },
-        { dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-      )
-      .pipe(timeout(8000));
+    return this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.post.return_requests.approve' },
+      {
+        dto,
+        requester: {
+          id: req.user.sub,
+          roles: req.user.roles ?? [],
+          branch_id: req.user.branch_id ?? null,
+        },
+      },
+    );
   }
 
   @Post('post/return-requests/reject')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Reject return requests' })
+  @ApiOperation({
+    summary:
+      'Reject courier return requests: orders stay with the courier (same scope as approve)',
+  })
   @ApiBody({ type: ReturnRequestsActionRequestDto })
   rejectReturnRequests(
     @Body() dto: ReturnRequestsActionRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return this.logisticsClient
-      .send(
-        { cmd: 'logistics.post.return_requests.reject' },
-        { dto, requester: { id: req.user.sub, roles: req.user.roles ?? [] } },
-      )
-      .pipe(timeout(8000));
+    return this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.post.return_requests.reject' },
+      {
+        dto,
+        requester: {
+          id: req.user.sub,
+          roles: req.user.roles ?? [],
+          branch_id: req.user.branch_id ?? null,
+        },
+      },
+    );
   }
 
   // ---------- Region ----------

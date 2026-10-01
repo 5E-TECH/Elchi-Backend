@@ -18,6 +18,7 @@ import type {
   FindCouriersByIdsPayload,
   FindUserByIdPayload,
   CreateManagerPayload,
+  SetCourierRegionPayload,
   UpdateUserStatusPayload,
   UpdateUserPayload,
 } from './contracts/user.payloads';
@@ -162,6 +163,27 @@ export class IdentityController {
     );
   }
 
+  /**
+   * Ichki: branch-service kuryerni boshqa filialga o'tkazganda (yoki
+   * o'tkazishni bekor qilganda) kuryer hududini filial hududiga moslaydi.
+   * Gateway'da bu RPC'ga HTTP route yo'q. `deadline_at` o'zgarishsiz uzatiladi
+   * (servis faqat chekli son bo'lsa hisobga oladi).
+   */
+  @MessagePattern({ cmd: 'identity.courier.set_region' })
+  setCourierRegion(
+    @Payload() payload: SetCourierRegionPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.setCourierRegion(
+        payload.id,
+        payload.region_id ?? null,
+        payload.requester,
+        payload.deadline_at,
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'identity.user.delete' })
   deleteAdmin(
     @Payload() payload: DeleteUserPayload,
@@ -177,8 +199,12 @@ export class IdentityController {
     @Payload() payload: FindUserByIdPayload,
     @Ctx() context: RmqContext,
   ) {
+    // market_tg_token faqat qat'iy `true` flag bilan (gateway uni faqat
+    // SUPERADMIN/ADMIN GET /users/:id da yuboradi); 'true' yoki 1 — yo'q.
     return this.executeAndAck(context, () =>
-      this.userService.findUserById(payload.id),
+      this.userService.findUserById(payload.id, {
+        includeTgToken: payload?.include_tg_token === true,
+      }),
     );
   }
 

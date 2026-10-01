@@ -31,6 +31,77 @@ import {
 } from '../../../libs/common/helpers/response';
 import { RequesterContext } from './contracts/user.payloads';
 
+/**
+ * HQ (bosh ofis) da MENEJER bo'lmaydi. Matn branch-service
+ * `assignUserToBranch` dagi bilan BIR XIL — POST /managers va
+ * POST /branches/:id/users mijozga aynan bitta xabarni qaytaradi.
+ */
+const HQ_MANAGER_FORBIDDEN_MESSAGE =
+  "HQ (bosh ofis) ga menejer biriktirib bo'lmaydi. HQ ishlarini superadmin, admin va registratorlar bajaradi.";
+
+/**
+ * Kuryerni o'chirish qo'riqchisi (deleteUser → branch.user.courier_transfer_check).
+ * O'chirilgan filial kuryerining pulini hech kim qabul qila olmaydi (identity
+ * uni 404 qiladi), qo'lidagi buyurtmalar esa osilib qoladi — shuning uchun
+ * kuryerda pul yoki buyurtma bo'lsa o'chirish rad etiladi (409), tekshiruvning
+ * o'zi bajarilmasa ham rad etiladi (503, fail-closed).
+ *
+ * Vaqt byudjeti: branch tekshiruvi ≈ ensureUserExists 5 s + parallel
+ * finance/order/logistics 5 s ≈ 10 s < shu 12 s < gateway DELETE /users/:id
+ * 15 s. Qayta urinish YO'Q (retries 0): tekshiruv o'zi 3 ta servisga boradi.
+ */
+const COURIER_DELETE_BLOCKED_PREFIX = "Kuryerni o'chirib bo'lmaydi: ";
+const COURIER_DELETE_CHECK_UNAVAILABLE =
+  "Kuryer kassasi va qo'lidagi buyurtmalarni tekshirib bo'lmadi — kuryer o'chirilmadi. Birozdan so'ng qayta urinib ko'ring.";
+const COURIER_DELETE_CHECK_TIMEOUT_MS = 12_000;
+
+/**
+ * identity.courier.set_region'da DB xatosi. Xom xato qayta navbatga qo'yilib,
+ * handler branch-service o'tkazishni bekor qilganidan KEYIN yangi hududni
+ * yozib qo'yishi mumkin edi — shuning uchun u RpcException bo'lib ketadi.
+ */
+const COURIER_REGION_SAVE_FAILED =
+  "Kuryer hududini saqlashda ma'lumotlar bazasi xatosi — hudud o'zgarmadi. Qayta urinib ko'ring.";
+
+/**
+ * identity.courier.set_region `deadline_at` dan KEYIN keldi (yoki qulfni
+ * kutib turib o'tkazib yubordi): chaqiruvchi (branch-service) vaqt tugaganini
+ * ko'rib o'tkazishni allaqachon qaytargan — kech yozuv kuryerni eski filialda
+ * yangi filial hududi bilan qoldirardi. RpcException: navbatga qayta qo'yilmaydi.
+ */
+const COURIER_REGION_DEADLINE_PASSED =
+  "Kuryer hududini yangilash muddati o'tdi — hudud o'zgarmadi";
+
+/**
+ * Boshqa servisning rad javobini YAKUNIY mijoz xatosiga aylantiradi.
+ *
+ * RabbitMQ orqali kelgan xato hech qachon RpcException nusxasi emas — u oddiy
+ * `{statusCode, message, data}` obyekti bo'lib keladi. Uni xom holda qayta
+ * otsak, executeAndAck (nackForError) uni "vaqtinchalik" deb navbatga qayta
+ * qo'yadi: handler (masalan createCourier) IKKINCHI marta ishlab, yana bitta
+ * user yaratadi va o'chiradi; Nest esa xatoni 'Internal server error' bilan
+ * almashtiradi — mijoz aniq 4xx o'rniga HTTP 500 oladi.
+ *
+ * 4xx — biznes rad javobi, qayta urinish natijani o'zgartirmaydi. Shuning
+ * uchun u RpcException'ga o'raladi: xabar navbatga qayta qo'yilmaydi, status
+ * va matn mijozga o'zgarishsiz yetadi. RpcException, 5xx, timeout va boshqa
+ * xatolar O'ZGARISHSIZ qaytariladi — mavjud vaqtinchalik qayta urinish
+ * saqlanadi. Xuddi shu andoza: logistics-service `updateOrder`.
+ */
+function toFinalClientError(error: unknown): unknown {
+  if (error instanceof RpcException || !error || typeof error !== 'object') {
+    return error;
+  }
+  const statusCode = Number((error as { statusCode?: unknown }).statusCode);
+  if (!Number.isInteger(statusCode) || statusCode < 400 || statusCode > 499) {
+    return error;
+  }
+  return new RpcException({
+    ...(error as Record<string, unknown>),
+    statusCode,
+  });
+}
+
 @Injectable()
 export class UserServiceService implements OnModuleInit {
   private readonly logger = new Logger(UserServiceService.name);
@@ -49,7 +120,36 @@ export class UserServiceService implements OnModuleInit {
     private readonly activityLog: ActivityLogService,
   ) {}
 
-  private sanitize(user: User): Omit<User, 'password' | 'refresh_token'> {
+  /**
+   * Umumiy RPC javoblariga HECH QACHON kirmaydigan maydonlar:
+   * - password — bcrypt hash;
+   * - refresh_token — faol refresh JWT'ning sha256 hashi;
+   * - market_tg_token — marketning Telegram bot/guruh kaliti (bearer).
+   *
+   * market_tg_token ilgari order/analytics/finance/catalog/branch javoblaridagi
+   * market obyektlari orqali menejer, registrator, kuryer va boshqa
+   * marketlarga ham yetib borardi. Endi u faqat sanitizeWithTgToken orqali
+   * qaytadi — superadmin/admin market profilini ochganda (GET /users/:id).
+   */
+  private sanitize(
+    user: User,
+  ): Omit<User, 'password' | 'refresh_token' | 'market_tg_token'> {
+    const safeUser = { ...user };
+    delete (safeUser as { password?: unknown }).password;
+    delete (safeUser as { refresh_token?: unknown }).refresh_token;
+    delete (safeUser as { market_tg_token?: unknown }).market_tg_token;
+    return safeUser;
+  }
+
+  /**
+   * sanitize() bilan bir xil, lekin market_tg_token SAQLANADI. Faqat
+   * identity.user.find_by_id `include_tg_token === true` bilan va faqat market
+   * qatori uchun ishlatiladi. Gateway bu flagni faqat SUPERADMIN/ADMIN
+   * so'rovida yuboradi — admin tokenni marketga shu sahifadan beradi.
+   */
+  private sanitizeWithTgToken(
+    user: User,
+  ): Omit<User, 'password' | 'refresh_token'> {
     const safeUser = { ...user };
     delete (safeUser as { password?: unknown }).password;
     delete (safeUser as { refresh_token?: unknown }).refresh_token;
@@ -99,7 +199,10 @@ export class UserServiceService implements OnModuleInit {
       );
     } catch (assignError) {
       await this.softCompensateUser(userId).catch(() => undefined);
-      throw assignError;
+      // 4xx rad javobi (masalan PICKUP filialiga kuryer — 403) RpcException
+      // bo'lib ketadi: mijoz aniq xabarni oladi, xabar qayta navbatga
+      // qo'yilmaydi va user ikkinchi marta yaratilmaydi.
+      throw toFinalClientError(assignError);
     }
   }
 
@@ -869,6 +972,206 @@ export class UserServiceService implements OnModuleInit {
     return successRes(this.sanitize(saved), 200, 'User yangilandi');
   }
 
+  /**
+   * identity.courier.set_region — kuryer boshqa filialga o'tkazilganda uning
+   * hududini yangi filial hududiga moslaydi. Chaqiruvchi: branch-service
+   * (o'tkazish; bekor qilinganda eski hudud ham shu yo'l bilan tiklanadi).
+   *
+   * Masofaviy chaqiruv YO'Q (validateRegionExists ishlatilmaydi): u logistics'ni
+   * 5 s gacha kutadi, branch-service esa set_region'ni 5 s, tiklashni 3 s
+   * kutadi — sekin logistics'da o'tkazish bekor qilinib bo'lgach, identity
+   * yangi hududni baribir yozib qo'yardi. region_id filial qatoridan
+   * (branches.region_id) keladi va HQ'da bo'sh bo'lishi mumkin, shuning uchun
+   * faqat raqamli qiymat yoki null qabul qilinadi.
+   *
+   * Idempotent: hudud o'zgarmagan va tuman allaqachon bo'sh bo'lsa, saqlamasdan
+   * 200 qaytadi. district_id har doim tozalanadi — eski tuman yangi hududga
+   * tegishli emas.
+   *
+   * O'qish va yozish BITTA tranzaksiyada, qator `FOR UPDATE` qulfi bilan:
+   * o'tkazishdagi set_region(yangi) va uni tiklash (eski) bir vaqtda kelsa,
+   * ular ketma-ket bajariladi. `deadlineAt` (epoch ms) QULF OLINGANDAN keyin
+   * tekshiriladi: muddat o'tgan bo'lsa — hech narsa yozilmaydi, 409. Shunda
+   * kech kelgan set_region(yangi) tiklashdan keyin hech qachon yozilmaydi:
+   * tiklash undan oldin bajarilsa — u muddati o'tganini ko'radi; u yarim
+   * yo'lda bo'lsa — tiklash qulfni kutib, uning ustidan yozadi. Tiklash va
+   * qayta moslash muddatsiz keladi.
+   */
+  async setCourierRegion(
+    id: string,
+    regionId: string | null,
+    requester?: RequesterContext,
+    deadlineAt?: number,
+  ) {
+    if (
+      requester &&
+      !this.hasRole(requester, Roles.SUPERADMIN) &&
+      !this.hasRole(requester, Roles.ADMIN)
+    ) {
+      this.forbidden(
+        "Kuryer hududini faqat superadmin yoki admin o'zgartira oladi",
+      );
+    }
+
+    let nextRegionId: string | null = null;
+    if (regionId !== null && regionId !== undefined) {
+      const rawRegionId = String(regionId);
+      if (!/^\d+$/.test(rawRegionId)) {
+        this.badRequest("region_id noto'g'ri");
+      }
+      // Kanonik ko'rinish ('013' ≡ '13') — bigint ustun ham shunday saqlaydi.
+      nextRegionId = BigInt(rawRegionId).toString();
+    }
+
+    const userId = String(id ?? '');
+    if (!/^\d+$/.test(userId)) {
+      // Raqamli bo'lmagan id hech qaysi userga mos kelmaydi (bigint PK).
+      this.notFound('User topilmadi');
+    }
+
+    try {
+      const outcome = await this.users.manager.transaction(
+        async (entityManager) => {
+          const repo = entityManager.getRepository(User);
+          const user = await repo.findOne({
+            where: { id: userId, isDeleted: false },
+            lock: { mode: 'pessimistic_write' },
+          });
+          if (!user) {
+            this.notFound('User topilmadi');
+          }
+          if (user.role !== Roles.COURIER) {
+            this.badRequest(
+              "Faqat kuryer hududi shu yo'l bilan o'zgartiriladi",
+            );
+          }
+          // Muddat qulfdan KEYIN: qulfni kutish paytida o'tib ketgan muddat
+          // ham ushlanadi. Muddati o'tgan xabar hech narsa yozmaydi (o'zgarmas
+          // qiymatda ham — eskirgan xabar hech qachon ishlamaydi).
+          if (
+            typeof deadlineAt === 'number' &&
+            Number.isFinite(deadlineAt) &&
+            Date.now() > deadlineAt
+          ) {
+            throw new RpcException(
+              errorRes(COURIER_REGION_DEADLINE_PASSED, 409),
+            );
+          }
+
+          const previousRegionId =
+            user.region_id === null || user.region_id === undefined
+              ? null
+              : String(user.region_id);
+          const previousDistrictId =
+            user.district_id === null || user.district_id === undefined
+              ? null
+              : String(user.district_id);
+          if (
+            previousRegionId === nextRegionId &&
+            previousDistrictId === null
+          ) {
+            return {
+              userId: user.id,
+              previousRegionId,
+              previousDistrictId,
+              saved: null,
+            };
+          }
+
+          user.region_id = nextRegionId;
+          user.district_id = null;
+          return {
+            userId: user.id,
+            previousRegionId,
+            previousDistrictId,
+            saved: await repo.save(user),
+          };
+        },
+      );
+
+      // Qidiruv va audit — commit'dan KEYIN (qulf ushlab turilmaydi).
+      if (outcome.saved) {
+        void this.syncUserToSearch(outcome.saved);
+        await this.activityLog.logChange({
+          entity_type: 'User',
+          entity_id: outcome.saved.id,
+          action: ActivityAction.UPDATED,
+          old_value: {
+            region_id: outcome.previousRegionId,
+            district_id: outcome.previousDistrictId,
+          },
+          new_value: { region_id: nextRegionId, district_id: null },
+          metadata: { reason: 'courier_transfer' },
+          ...this.auditActor(requester),
+        });
+      }
+
+      return successRes(
+        {
+          id: outcome.userId,
+          region_id: nextRegionId,
+          previous_region_id: outcome.previousRegionId,
+          district_id: null,
+        },
+        200,
+        'Kuryer hududi yangilandi',
+      );
+    } catch (error) {
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.logger.error(
+        `identity.courier.set_region failed for user ${userId}: ${(error as Error)?.message ?? error}`,
+      );
+      throw new RpcException(errorRes(COURIER_REGION_SAVE_FAILED, 503));
+    }
+  }
+
+  /**
+   * Kuryer o'chirilishidan OLDIN: branch.user.courier_transfer_check (o'tkazish
+   * bilan bir xil tekshiruv — kassa, hisob-kitob, qo'ldagi buyurtmalar,
+   * qaytarilmagan pochtalar, xarajat so'rovlari).
+   * - sabablar bor → 409 "Kuryerni o'chirib bo'lmaydi: " + sabablar;
+   * - tekshiruv xato bersa, javob bermasa yoki javob buzuq bo'lsa → 503
+   *   (fail-closed: ishonch bo'lmasa, kuryer o'chirilmaydi).
+   * Kuryerni bloklash (status → inactive) bu tekshiruvdan o'tmaydi: u filial
+   * va kassani o'zgartirmaydi, pulni esa baribir qabul qilish mumkin.
+   */
+  private async assertCourierCanBeDeleted(
+    courierId: string,
+    requester?: RequesterContext,
+  ): Promise<void> {
+    let reasons: unknown;
+    try {
+      const response = await rmqSend<{ data?: { reasons?: unknown } }>(
+        this.branchClient,
+        { cmd: 'branch.user.courier_transfer_check' },
+        { user_id: courierId, requester },
+        {
+          attachRequestId: false,
+          retries: 0,
+          timeoutMs: COURIER_DELETE_CHECK_TIMEOUT_MS,
+        },
+      );
+      reasons = response?.data?.reasons;
+    } catch (error) {
+      this.logger.warn(
+        `branch.user.courier_transfer_check failed for courier ${courierId}: ${(error as Error)?.message ?? error}`,
+      );
+      throw new RpcException(errorRes(COURIER_DELETE_CHECK_UNAVAILABLE, 503));
+    }
+
+    if (
+      !Array.isArray(reasons) ||
+      !reasons.every((reason) => typeof reason === 'string')
+    ) {
+      throw new RpcException(errorRes(COURIER_DELETE_CHECK_UNAVAILABLE, 503));
+    }
+    if (reasons.length) {
+      this.conflict(COURIER_DELETE_BLOCKED_PREFIX + reasons.join(' '));
+    }
+  }
+
   async deleteAdmin(id: string) {
     return this.deleteUser(id);
   }
@@ -884,6 +1187,12 @@ export class UserServiceService implements OnModuleInit {
 
     if (admin.role === Roles.SUPERADMIN) {
       this.badRequest('Superadminni o‘chirib bo‘lmaydi');
+    }
+
+    // Kuryerda pul yoki buyurtma qolgan bo'lsa o'chirilmaydi — HECH QANDAY
+    // o'zgarishdan oldin (branch_users qatori va kassa o'z holicha qoladi).
+    if (admin.role === Roles.COURIER) {
+      await this.assertCourierCanBeDeleted(String(admin.id), requester);
     }
 
     if (admin.role === Roles.MARKET) {
@@ -928,7 +1237,7 @@ export class UserServiceService implements OnModuleInit {
     return successRes({ id }, 200, 'User o‘chirildi');
   }
 
-  async findUserById(id: string) {
+  async findUserById(id: string, options: { includeTgToken?: boolean } = {}) {
     const user = await this.users.findOne({
       where: { id, isDeleted: false },
     });
@@ -936,7 +1245,12 @@ export class UserServiceService implements OnModuleInit {
       this.notFound('User topilmadi');
     }
 
-    const safeUser = this.sanitize(user);
+    // market_tg_token faqat aniq `true` flag bilan VA faqat market qatorida
+    // qaytadi — xodim qatorida qolib ketgan eski qiymat ham chiqmaydi.
+    const safeUser =
+      options?.includeTgToken === true && user.role === Roles.MARKET
+        ? this.sanitizeWithTgToken(user)
+        : this.sanitize(user);
     const profileRegion = await this.getRegionById(safeUser.region_id);
     return successRes({
       ...safeUser,
@@ -1094,7 +1408,7 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async findAllCouriers(query: UserFilterQuery = {}) {
-    const { search, status, region_id, page, limit, skip } =
+    const { search, status, region_id, user_ids, page, limit, skip } =
       this.normalizeQuery(query);
 
     const qb = this.users
@@ -1123,6 +1437,12 @@ export class UserServiceService implements OnModuleInit {
 
     if (region_id) {
       qb.andWhere('courier.region_id = :region_id', { region_id });
+    }
+
+    // Gateway filial kuryerlarini (branch_users) oldindan beradi — filtr
+    // SAHIFALASHDAN OLDIN qo'llanadi, shuning uchun meta.total ham to'g'ri.
+    if (user_ids.length) {
+      qb.andWhere('courier.id IN (:...user_ids)', { user_ids });
     }
 
     const [rows, total] = await qb
@@ -1266,8 +1586,67 @@ export class UserServiceService implements OnModuleInit {
     return successRes(this.sanitize(saved), 201, 'Courier yaratildi');
   }
 
+  /**
+   * HQ'ga menejer biriktirilmaydi — user yaratilishidan OLDIN tekshiriladi.
+   *
+   * Nega bu yerda ham (branch-service assignUserToBranch ham rad etadi):
+   * saga (assignUserToBranchOrCompensate) 4xx rad javobini endi
+   * toFinalClientError orqali aniq status bilan qaytaradi, lekin u user
+   * SAQLANGANIDAN keyin keladi — user yoziladi, so'ng soxta telefon bilan
+   * o'chiriladi. Bu yerda — RpcException 400, hech qanday user yozilmaydi,
+   * parol hashlanmaydi.
+   *
+   * branch.find_hq xato bersa — 502 (fail-closed: HQ'ni aniqlay olmasak,
+   * menejer yaratilmaydi). Timeout 3s × (1 + 1 retry) ≈ 6.2s — gateway'ning
+   * 8s byudjetidan kichik, shuning uchun mijoz gateway timeout'i emas, aniq
+   * 502 xabarini oladi (find_hq — bitta indeksli o'qish).
+   *
+   * branch_id FAQAT raqamlardan iborat bo'lishi shart, aks holda 400
+   * "branch_id noto'g'ri". Sabab: Postgres '+1', ' 1 ', '0x1' kabi satrlarni
+   * ham bigint 1 ga (HQ'ga) aylantiradi, satr sifatida esa ular HQ id'siga
+   * teng chiqmasdi — tekshiruv chetlab o'tilardi. Trim ATAYLAB yo'q:
+   * createManager xom dto.branch_id'ni saga va kassa chaqiruvlariga
+   * uzatadi; gateway DTO'si (@Matches(/^\d+$/)) ham aynan shularni rad etadi.
+   * Solishtirish kanonik ko'rinishda (BigInt(x).toString()): '01' ≡ '1'.
+   */
+  private async assertManagerBranchIsNotHq(branchId?: string | null) {
+    if (branchId === undefined || branchId === null || branchId === '') {
+      // Filialsiz so'rov: createManager ham hech qayerga biriktirmaydi.
+      return;
+    }
+    const rawBranchId = String(branchId);
+    if (!/^\d+$/.test(rawBranchId)) {
+      this.badRequest("branch_id noto'g'ri");
+    }
+    const targetBranchId = BigInt(rawBranchId).toString();
+
+    let hqBranchId = '';
+    try {
+      const response = await rmqSend<{ data?: { id?: string | number } }>(
+        this.branchClient,
+        { cmd: 'branch.find_hq' },
+        {},
+        { attachRequestId: false, retries: 1, timeoutMs: 3000 },
+      );
+      const rawHqId = String(response?.data?.id ?? '').trim();
+      // Raqamli bo'lmagan HQ id'si — HQ aniqlanmadi deb hisoblanadi (502).
+      hqBranchId = /^\d+$/.test(rawHqId) ? BigInt(rawHqId).toString() : '';
+    } catch {
+      hqBranchId = '';
+    }
+    if (!hqBranchId) {
+      throw new RpcException(errorRes('Filial xizmati javob bermadi', 502));
+    }
+
+    if (hqBranchId === targetBranchId) {
+      this.badRequest(HQ_MANAGER_FORBIDDEN_MESSAGE);
+    }
+  }
+
   async createManager(dto: CreateManagerDto, requester?: RequesterContext) {
     this.assertRequesterCanCreateManager(requester);
+
+    await this.assertManagerBranchIsNotHq(dto?.branch_id);
 
     await this.ensurePhoneUnique(dto.phone_number);
 
@@ -1570,6 +1949,12 @@ export class UserServiceService implements OnModuleInit {
     };
   }
 
+  /**
+   * market_tg_token'ni QAYTARADIGAN yagona RPC (identity.market.rotate_tg_token).
+   * Faqat ichki: uni notification-service guruh ulangandan keyin chaqiradi va
+   * javobini o'qimaydi. Gateway'da bu RPC'ga olib boradigan HTTP route
+   * bo'lmasligi SHART — aks holda token yana ochiq qoladi.
+   */
   async rotateMarketTelegramToken(id: string) {
     const market = await this.users.findOne({
       where: { id, role: Roles.MARKET, isDeleted: false },

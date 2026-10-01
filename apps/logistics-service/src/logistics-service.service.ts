@@ -19,10 +19,12 @@ import { SendPostDto } from './dto/send-post.dto';
 import { PostIdDto } from './dto/post-id.dto';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 import { matchDistricts } from './utils/sato-matcher';
+import { assessHqCourierScan } from './utils/scan-assign-eligibility';
 import {
   ActivityAction,
   ActivityLogService,
   ActivityLogQuery,
+  BranchType,
   Order_status,
   Post_status,
   Roles,
@@ -54,6 +56,7 @@ interface OrderRow {
   customer_id?: string;
   where_deliver?: Where_deliver;
   qr_code_token?: string | null;
+  current_batch_id?: string | null;
 }
 
 interface CourierRow {
@@ -66,6 +69,39 @@ interface BranchAssignmentRow {
   branch_id?: string | null;
   role?: string | null;
 }
+
+/**
+ * Pochta → Qaytarish ko'rinish doirasi. `branchId` — so'rovlarni ko'rib
+ * chiqadigan ombor (HQ doirasida u HQ ning o'zi).
+ */
+type ReturnRequestScope = {
+  type: 'HQ' | 'BRANCH';
+  branchId: string;
+  hqBranchId: string;
+};
+
+/**
+ * Kuryer qaytarish so'rovi holatlari. WAITING — eski (PCS) oqim; ON_THE_ROAD —
+ * yagona web-manba: kuryer pochtani qisman qabul qilganda qolgan buyurtmalar
+ * `ON_THE_ROAD + return_requested` bo'lib qoladi (receivePost).
+ */
+const RETURN_REQUEST_STATUSES: Order_status[] = [
+  Order_status.WAITING,
+  Order_status.ON_THE_ROAD,
+];
+
+/** findOrders ning odatiy order.find_all kutish vaqti. */
+const FIND_ORDERS_TIMEOUT_MS = 5000;
+
+/**
+ * logistics.post.open_return_posts_for_courier: har bir pochtaning
+ * order.find_all kutish vaqti. Chaqiruvchi (branch-service loadCourierHoldings)
+ * 5000 ms kutadi — bitta DB so'rovi + parallel 3500 ms chaqiruvlar shu
+ * byudjetga sig'adi (har bir qatlam o'zidan pastdagidan uzoqroq kutadi).
+ */
+const OPEN_RETURN_POSTS_ORDER_TIMEOUT_MS = 3500;
+const OPEN_RETURN_POSTS_UNAVAILABLE_MESSAGE =
+  "Bekor qilingan pochtalarni tekshirib bo'lmadi — birozdan so'ng qayta urinib ko'ring";
 
 @Injectable()
 export class LogisticsServiceService implements OnModuleInit {
@@ -459,20 +495,27 @@ export class LogisticsServiceService implements OnModuleInit {
     return false;
   }
 
-  private async findOrders(query: {
-    post_id?: string;
-    post_ids?: string[];
-    canceled_post_id?: string;
-    status?: Order_status | Order_status[] | string | string[];
-    return_requested?: boolean;
-    customer_id?: string;
-    qr_code_token?: string;
-    start_day?: string;
-    end_day?: string;
-    fetch_all?: boolean;
-    page?: number;
-    limit?: number;
-  }): Promise<OrderRow[]> {
+  private async findOrders(
+    query: {
+      post_id?: string;
+      post_ids?: string[];
+      canceled_post_id?: string;
+      status?: Order_status | Order_status[] | string | string[];
+      return_requested?: boolean;
+      // order.find_all o'zi filtrlaydi (order.holder_type = :holder_type).
+      holder_type?: 'HQ' | 'BRANCH' | 'COURIER';
+      customer_id?: string;
+      qr_code_token?: string;
+      start_day?: string;
+      end_day?: string;
+      fetch_all?: boolean;
+      page?: number;
+      limit?: number;
+    },
+    // Byudjeti tor chaqiruvchi o'z kutish vaqtini beradi; berilmasa — odatiy
+    // FIND_ORDERS_TIMEOUT_MS (boshqa chaqiruvchilar uchun o'zgarmaydi).
+    options?: { timeoutMs?: number },
+  ): Promise<OrderRow[]> {
     try {
       const requestedLimit = Number(query.limit ?? 100);
       const allowedLimits = [10, 25, 50, 100];
@@ -495,7 +538,7 @@ export class LogisticsServiceService implements OnModuleInit {
               },
             },
           )
-          .pipe(timeout(5000)),
+          .pipe(timeout(options?.timeoutMs ?? FIND_ORDERS_TIMEOUT_MS)),
       );
 
       // Support multiple RMQ response shapes:
@@ -750,9 +793,17 @@ export class LogisticsServiceService implements OnModuleInit {
     this.notFound('Order topilmadi');
   }
 
-  private async findCourierBranchId(
+  /**
+   * Kuryerning filial biriktiruvi: filial id + filial turi.
+   *
+   * `branch.user.find_by_user` javobi `branch` qatorini ham olib keladi
+   * (`type` bilan) — HQ kuryerini aniqlash uchun qo'shimcha RPC kerak emas.
+   * Filial qatori yo'q bo'lsa (eski javob yoki o'chirilgan filial) `branchType`
+   * `null` bo'ladi va HQ aniqlash `isHqCourierAssignment` zaxira yo'liga o'tadi.
+   */
+  private async findCourierAssignment(
     requester: RequesterContext,
-  ): Promise<string> {
+  ): Promise<{ branchId: string; branchType: string | null }> {
     const requesterId = String(requester?.id ?? '').trim();
     if (!requesterId) {
       this.forbidden('Courier aniqlanmadi');
@@ -761,7 +812,12 @@ export class LogisticsServiceService implements OnModuleInit {
     try {
       const response = await lastValueFrom(
         this.branchClient
-          .send(
+          .send<{
+            data?: {
+              branch_id?: string | null;
+              branch?: { type?: string | null } | null;
+            } | null;
+          }>(
             { cmd: 'branch.user.find_by_user' },
             {
               user_id: requesterId,
@@ -779,13 +835,40 @@ export class LogisticsServiceService implements OnModuleInit {
         this.forbidden('Courier filialga biriktirilmagan');
       }
 
-      return branchId;
+      const branchType =
+        String(response?.data?.branch?.type ?? '')
+          .trim()
+          .toUpperCase() || null;
+
+      return { branchId, branchType };
     } catch (error) {
       if (error instanceof RpcException) {
         throw error;
       }
       this.forbidden("Courier filialini aniqlab bo'lmadi");
     }
+  }
+
+  private async findCourierBranchId(
+    requester: RequesterContext,
+  ): Promise<string> {
+    return (await this.findCourierAssignment(requester)).branchId;
+  }
+
+  /**
+   * HQ kuryerimi? Odatda `branch.type` yetarli. Tur noma'lum bo'lsa filial id
+   * `branch.find_hq` bilan solishtiriladi — bu so'rov yiqilsa xato YUQORIGA
+   * ketadi (fail closed): HQ kuryerini jimgina filial kuryeri deb hisoblab,
+   * uning qoidalarini chetlab o'tib bo'lmaydi.
+   */
+  private async isHqCourierAssignment(assignment: {
+    branchId: string;
+    branchType: string | null;
+  }): Promise<boolean> {
+    if (assignment.branchType) {
+      return assignment.branchType === String(BranchType.HQ);
+    }
+    return (await this.findHqBranchId()) === assignment.branchId;
   }
 
   private async findHqBranchId(): Promise<string> {
@@ -1474,6 +1557,75 @@ export class LogisticsServiceService implements OnModuleInit {
       }),
     );
     return successRes(enrichedRows, 200, 'All rejected posts for courier');
+  }
+
+  /**
+   * Kuryer ko'chirish/o'chirish tekshiruvi (branch-service
+   * loadCourierHoldings) uchun: kuryer topshirgan, filial hali qabul qilmagan
+   * bekor (CANCELED) pochtalar.
+   *
+   * rejectedPostsForCourier dan farqi (u o'zgarmaydi — kuryer ekrani uni
+   * o'qiydi):
+   * - identity boyitish YO'Q: tekshiruv uni o'qimaydi, u esa 5 s kutishi mumkin;
+   * - `order_quantity` — pochtaning O'Z buyurtmalari (canceled_post_id =
+   *   post.id, CANCELLED_SENT), guruh soni EMAS: findCanceledPostGroup
+   *   ishlatilmaydi. Bo'sh pochta 0 oladi — iste'molchi faqat > 0 larini
+   *   sanaydi;
+   * - har bir pochtaga bitta order.find_all, parallel, 3500 ms dan — butun
+   *   javob chaqiruvchining 5000 ms byudjetiga sig'adi. Pochta yo'q — order
+   *   chaqiruvi ham yo'q.
+   *
+   * Xato doim RpcException: noto'g'ri courier_id — 400, qolgan har qanday
+   * xato — 503 (xom xato executeAndAck da xabarni qayta navbatga qo'yardi).
+   */
+  async openReturnPostsForCourier(courierId?: string | null) {
+    const normalizedCourierId = String(courierId ?? '').trim();
+    if (!/^\d+$/.test(normalizedCourierId)) {
+      this.badRequest("courier_id noto'g'ri");
+    }
+
+    try {
+      const posts = await this.postRepo.find({
+        where: {
+          status: Post_status.CANCELED,
+          courier_id: normalizedCourierId,
+        },
+        order: { createdAt: 'DESC' },
+      });
+
+      const rows = await Promise.all(
+        posts.map(async (post) => {
+          const orders = await this.findOrders(
+            {
+              canceled_post_id: String(post.id),
+              status: Order_status.CANCELLED_SENT,
+              fetch_all: true,
+              page: 1,
+              limit: 100,
+            },
+            { timeoutMs: OPEN_RETURN_POSTS_ORDER_TIMEOUT_MS },
+          );
+          return {
+            id: String(post.id),
+            branch_id: String(post.branch_id ?? '').trim() || null,
+            order_quantity: orders.length,
+          };
+        }),
+      );
+
+      return successRes(
+        rows,
+        200,
+        'Kuryerning qabul qilinmagan bekor pochtalari',
+      );
+    } catch (error) {
+      this.logger.warn(
+        `openReturnPostsForCourier failed (courier=${normalizedCourierId}): ${(error as Error)?.message ?? error}`,
+      );
+      throw new RpcException(
+        errorRes(OPEN_RETURN_POSTS_UNAVAILABLE_MESSAGE, 503),
+      );
+    }
   }
 
   async myPostsForCourier(
@@ -2231,34 +2383,242 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
-  async getReturnRequests() {
-    const orders = await this.findOrders({
-      status: Order_status.WAITING,
+  // ===== Pochta → Qaytarish (kuryer qaytarish so'rovlari) =====
+  //
+  // Qaytarish so'rovi — kuryer o'z pochtasidan QABUL QILMAGAN buyurtma
+  // ("bu posilka menga yetib kelmadi"). Uni kuryer turgan ombor ko'rib
+  // chiqadi: filial menejeri/registratori — o'z filiali kuryerlarini;
+  // superadmin/admin va HQ registratori — HQ kuryerlarini. "Rad etilgan"
+  // pochtalar bilan bir xil qoida: posilka javonga qaytdi deb tasdiqlovchi
+  // odam javon turgan joyda bo'lishi kerak.
+
+  private async resolveReturnRequestScope(
+    requester?: RequesterContext,
+  ): Promise<ReturnRequestScope> {
+    if (this.isSystemPrivileged(requester)) {
+      const hqBranchId = await this.findHqBranchId();
+      return { type: 'HQ', branchId: hqBranchId, hqBranchId };
+    }
+
+    // Bitta filial, daraxtsiz: kuryer faqat HQ/REGIONAL/HYBRID filialda
+    // bo'ladi va uning buyurtmalari o'z filialida turadi.
+    const scopedBranchId = String(
+      (await this.resolveScopedBranchId(requester)) ?? '',
+    ).trim();
+    if (!scopedBranchId) {
+      this.forbidden('Foydalanuvchi branchga biriktirilmagan');
+    }
+
+    const hqBranchId = await this.findHqBranchId();
+    return scopedBranchId === hqBranchId
+      ? { type: 'HQ', branchId: hqBranchId, hqBranchId }
+      : { type: 'BRANCH', branchId: scopedBranchId, hqBranchId };
+  }
+
+  /** Buyurtma turgan ombor: custody filiali (`holder_branch_id ?? branch_id`), bo'sh bo'lsa HQ. */
+  private resolveReturnCustodyBranchId(
+    order: OrderRow,
+    hqBranchId: string,
+  ): string {
+    return this.getOrderBranchScope(order) || hqBranchId;
+  }
+
+  /**
+   * Ko'rib chiqilmagan KURYER qaytarish so'rovi. Kuryersiz qatorlar
+   * (HQ → filial pochtasining filial qabul qilmagan qoldig'i, HQ/filialdagi
+   * initiate-return belgisi) bu ro'yxatga kirmaydi.
+   */
+  private isPendingCourierReturnRequest(order: OrderRow): boolean {
+    return (
+      order?.return_requested === true &&
+      RETURN_REQUEST_STATUSES.some((status) => status === order.status) &&
+      String(order.holder_type ?? '')
+        .trim()
+        .toUpperCase() === 'COURIER'
+    );
+  }
+
+  /**
+   * Har bir tanlangan buyurtma HECH NARSA yozilishidan OLDIN doiraga
+   * tekshiriladi: bitta begona id — butun so'rov 403 (fail closed). Doira
+   * so'rov belgisidan qat'i nazar tekshiriladi, shuning uchun begona buyurtmada
+   * so'rov bor-yo'qligi oshkor bo'lmaydi.
+   */
+  private assertReturnRequestsInScope(
+    orders: OrderRow[],
+    scope: ReturnRequestScope,
+  ): void {
+    const hasForeignOrder = orders.some(
+      (order) =>
+        this.resolveReturnCustodyBranchId(order, scope.hqBranchId) !==
+        scope.branchId,
+    );
+    if (!hasForeignOrder) {
+      return;
+    }
+
+    this.forbidden(
+      scope.type === 'HQ'
+        ? "Bu buyurtma filial kuryerida — qaytarish so'rovini shu filial menejeri ko'rib chiqadi"
+        : "Siz faqat o'z filialingiz kuryerlarining qaytarish so'rovlarini ko'rib chiqa olasiz",
+    );
+  }
+
+  private normalizeReturnRequestOrderIds(dto?: ReceivePostDto): string[] {
+    const orderIds = [
+      ...new Set(
+        (Array.isArray(dto?.order_ids) ? dto.order_ids : [])
+          .map((id) => String(id ?? '').trim())
+          .filter(Boolean),
+      ),
+    ];
+    if (!orderIds.length) {
+      this.badRequest("Qaytarish so'rovi uchun buyurtma tanlanmagan");
+    }
+    return orderIds;
+  }
+
+  /**
+   * Tasdiqlangan buyurtmalar kuryerning manba pochtasidan chiqadi: hisoblagich
+   * kamayadi (`GREATEST(..., 0)` — manfiyga tushmaydi). Pochta SENT bo'lib, unda
+   * qabul qilinadigan (ON_THE_ROAD) buyurtma qolmagan bo'lsa — RECEIVED
+   * (`receiveOrderWithScannerCourier` qoidasi). Aks holda kuryer pochtasi
+   * abadiy SENT va shishgan hisob bilan qolardi.
+   *
+   * HAR BIR pochta ishlanadi: bitta pochtaning xatosi (xom DB xatosi ham,
+   * order.find_all RpcException i ham) log qilinadi va qolganlari baribir
+   * yangilanadi — qayta urinish ularni tuzata olmaydi (buyurtmalar endi
+   * kutilayotgan so'rov emas, 404). Oxirida BITTA RpcException faqat yiqilgan
+   * pochtalarni nomlaydi; xom xato tashqariga chiqmaydi, aks holda
+   * executeAndAck xabarni qayta navbatga qo'yardi.
+   */
+  private async releaseReturnSourcePosts(
+    deltas: Map<string, { count: number; total: number }>,
+  ): Promise<void> {
+    const failedPostIds: string[] = [];
+
+    for (const [postId, delta] of deltas) {
+      try {
+        const count = Number.isFinite(delta.count) ? delta.count : 0;
+        const total = Number.isFinite(delta.total) ? delta.total : 0;
+        await this.postRepo
+          .createQueryBuilder()
+          .update(Post)
+          .set({
+            order_quantity: () => `GREATEST(order_quantity - ${count}, 0)`,
+            post_total_price: () => `GREATEST(post_total_price - ${total}, 0)`,
+          })
+          .where('id = :id', { id: postId })
+          .execute();
+
+        const post = await this.postRepo.findOne({ where: { id: postId } });
+        if (!post) {
+          continue;
+        }
+
+        if (post.status === Post_status.SENT) {
+          const remaining = await this.findOrders({
+            post_id: postId,
+            status: Order_status.ON_THE_ROAD,
+            page: 1,
+            limit: 10,
+          });
+          if (!remaining.length) {
+            post.status = Post_status.RECEIVED;
+            const savedPost = await this.postRepo.save(post);
+            void this.syncPostToSearch(savedPost);
+            continue;
+          }
+        }
+
+        void this.syncPostToSearch(post);
+      } catch (error) {
+        this.logger.error(
+          `releaseReturnSourcePosts failed for post=${postId}: ${(error as Error)?.message ?? error}`,
+        );
+        failedPostIds.push(postId);
+      }
+    }
+
+    if (failedPostIds.length) {
+      throw new RpcException(
+        errorRes(
+          `Buyurtmalar omborga qaytarildi, lekin kuryer pochtasi ${failedPostIds.map((id) => `#${id}`).join(', ')} hisobini yangilab bo'lmadi — administrator tekshirishi kerak`,
+          500,
+        ),
+      );
+    }
+  }
+
+  async getReturnRequests(requester?: RequesterContext) {
+    const scope = await this.resolveReturnRequestScope(requester);
+    const candidates = await this.findOrders({
+      status: RETURN_REQUEST_STATUSES,
       return_requested: true,
+      holder_type: 'COURIER',
+      fetch_all: true,
       page: 1,
       limit: 1000,
     });
 
-    const postIds = Array.from(
-      new Set(
-        orders
-          .map((order) => order.post_id)
-          .filter((id): id is string => Boolean(id)),
-      ),
+    // Doira shu yerda, custody bo'yicha: order.find_all ning `branch_id`
+    // filtri (branch_id / holder_branch_id / home_branch_id — OR) kengroq.
+    const orders = candidates.filter(
+      (order) =>
+        this.isPendingCourierReturnRequest(order) &&
+        this.resolveReturnCustodyBranchId(order, scope.hqBranchId) ===
+          scope.branchId,
     );
-    const posts = postIds.length
-      ? await this.postRepo.find({ where: { id: In(postIds) } })
-      : [];
-    const postMap = new Map(posts.map((post) => [post.id, post]));
 
-    const courierIds = Array.from(
-      new Set(
-        posts
-          .map((post) => post.courier_id)
-          .filter((id): id is string => Boolean(id)),
+    // Kuryer — buyurtmani ushlab turgan kuryer (`holder_courier_id`). U yo'q
+    // eski qatorlar uchun zaxira — buyurtma pochtasining kuryeri.
+    const fallbackPostIds = [
+      ...new Set(
+        orders
+          .filter((order) => !String(order.holder_courier_id ?? '').trim())
+          .map((order) => String(order.post_id ?? '').trim())
+          .filter(Boolean),
       ),
+    ];
+    const postCourierById = new Map<string, string>();
+    if (fallbackPostIds.length) {
+      try {
+        const posts = await this.postRepo.find({
+          where: { id: In(fallbackPostIds) },
+        });
+        for (const post of posts) {
+          postCourierById.set(
+            String(post.id),
+            String(post.courier_id ?? '').trim(),
+          );
+        }
+      } catch (error) {
+        this.logger.error(
+          `getReturnRequests post lookup failed: ${(error as Error)?.message ?? error}`,
+        );
+        throw new RpcException(
+          errorRes(
+            "Qaytarish so'rovlari pochtalarini o'qib bo'lmadi — birozdan so'ng qayta urinib ko'ring",
+            503,
+          ),
+        );
+      }
+    }
+
+    const courierIdOf = (order: OrderRow): string | null => {
+      const courierId =
+        String(order.holder_courier_id ?? '').trim() ||
+        postCourierById.get(String(order.post_id ?? '').trim()) ||
+        '';
+      // '0' — filial/hudud pochtasi (kuryersiz).
+      return courierId && courierId !== '0' ? courierId : null;
+    };
+
+    const courierMap = await this.findCouriersByIds(
+      orders
+        .map((order) => courierIdOf(order))
+        .filter((id): id is string => Boolean(id)),
     );
-    const courierMap = await this.findCouriersByIds(courierIds);
 
     const groups = new Map<
       string,
@@ -2270,213 +2630,229 @@ export class LogisticsServiceService implements OnModuleInit {
     >();
 
     for (const order of orders) {
-      const post = order.post_id
-        ? postMap.get(String(order.post_id))
-        : undefined;
-      const courierId = post?.courier_id ?? null;
+      const courierId = courierIdOf(order);
       const key = courierId ?? 'unknown';
-
-      if (!groups.has(key)) {
-        groups.set(key, {
-          courier: courierId ? (courierMap.get(courierId) ?? null) : null,
-          courier_id: courierId,
-          orders: [],
-        });
-      }
-      groups.get(key)!.orders.push(order);
+      const group = groups.get(key) ?? {
+        courier: courierId ? (courierMap.get(courierId) ?? null) : null,
+        courier_id: courierId,
+        orders: [],
+      };
+      group.orders.push(order);
+      groups.set(key, group);
     }
 
     return successRes(
-      { total: orders.length, groups: Array.from(groups.values()) },
+      {
+        total: orders.length,
+        scope: { type: scope.type, branch_id: scope.branchId },
+        groups: Array.from(groups.values()),
+      },
       200,
-      'Return requests',
+      "Qaytarish so'rovlari",
     );
   }
 
+  /**
+   * Tasdiqlash — buyurtma kuryerdan o'z omboriga qaytadi:
+   * WAITING + kuryersiz + pochtasiz, `branch_id` = custody filiali. updateFull
+   * shunda holder'ni BRANCH (filial) yoki HQ qiladi va COURIER → BRANCH/HQ
+   * custody hodisasini yozadi. Bu filial HQ pochtasini qabul qilgandagi
+   * holatning aynan o'zi — /dispatch uni qayta biriktira oladi.
+   *
+   * RECEIVED EMAS: WAITING/ON_THE_ROAD dan RECEIVED ga qonuniy o'tish yo'q.
+   * Hudud NEW pochtasi EMAS: NEW pochtadagi WAITING buyurtma sendPost va
+   * dispatchPostToBranch ni buzardi. `post_id: null` — eski kuryer nomidan
+   * kutilayotgan sotuv/bekor tasdig'i keyin ishlab ketmasin.
+   */
   async approveReturnRequests(
     dto: ReceivePostDto,
     requester?: RequesterContext,
   ) {
-    const orderIds = [
-      ...new Set((dto.order_ids ?? []).map((id) => String(id)).filter(Boolean)),
-    ];
-    if (!orderIds.length) {
-      this.badRequest('Order IDs required');
-    }
-
-    const eligibleOrders: OrderRow[] = [];
-    for (const orderId of orderIds) {
-      const order = await this.findOrderById(orderId);
-      if (
-        order.status === Order_status.WAITING &&
-        order.return_requested === true
-      ) {
-        eligibleOrders.push(order);
-      }
-    }
-
-    if (!eligibleOrders.length) {
-      this.notFound('No return-requested orders found');
-    }
-
-    const postIds = Array.from(
-      new Set(
-        eligibleOrders
-          .map((order) => order.post_id)
-          .filter((postId): postId is string => Boolean(postId)),
-      ),
+    const orderIds = this.normalizeReturnRequestOrderIds(dto);
+    const scope = await this.resolveReturnRequestScope(requester);
+    const orders = await Promise.all(
+      orderIds.map((orderId) => this.findOrderById(orderId)),
     );
-    const currentPosts = postIds.length
-      ? await this.postRepo.find({ where: { id: In(postIds) } })
-      : [];
-    const currentPostMap = new Map(currentPosts.map((post) => [post.id, post]));
+    this.assertReturnRequestsInScope(orders, scope);
 
-    const ordersByRegion = new Map<string, OrderRow[]>();
-    for (const order of eligibleOrders) {
-      const fallbackRegion = order.post_id
-        ? currentPostMap.get(order.post_id)?.region_id
-        : null;
-      const regionId = String(order.region_id ?? fallbackRegion ?? '');
-      if (!regionId) {
-        this.badRequest(`Order #${order.id} has no region`);
-      }
-      const bucket = ordersByRegion.get(regionId) ?? [];
-      bucket.push(order);
-      ordersByRegion.set(regionId, bucket);
+    const eligibleOrders = orders.filter((order) =>
+      this.isPendingCourierReturnRequest(order),
+    );
+    // Eskirgan tanlov (ikki marta bosish, kuryer shu orada qabul qilgan) —
+    // o'tkazib yuboriladi va javobda qaytariladi.
+    const skippedOrderIds = orders
+      .filter((order) => !this.isPendingCourierReturnRequest(order))
+      .map((order) => String(order.id));
+    if (!eligibleOrders.length) {
+      this.notFound(
+        "Tanlangan buyurtmalarda ko'rib chiqilmagan qaytarish so'rovi topilmadi",
+      );
     }
 
-    const targetPostIds: string[] = [];
+    const note =
+      requester?.note ??
+      (scope.type === 'HQ'
+        ? "Qaytarish so'rovi tasdiqlandi — buyurtma kuryerdan HQ omboriga qaytarildi"
+        : "Qaytarish so'rovi tasdiqlandi — buyurtma kuryerdan filial omboriga qaytarildi");
+    const approvedOrderIds: string[] = [];
+    const destinationBranchIds = new Set<string>();
+    const postDeltas = new Map<string, { count: number; total: number }>();
+    let updateError: RpcException | null = null;
 
-    for (const [regionId, regionOrders] of ordersByRegion.entries()) {
-      let newPost = await this.postRepo.findOne({
-        where: { region_id: regionId, status: Post_status.NEW },
-      });
-
-      if (!newPost) {
-        newPost = await this.postRepo.save(
-          this.postRepo.create({
-            courier_id: '0',
-            region_id: regionId,
-            order_quantity: 0,
-            post_total_price: 0,
-            status: Post_status.NEW,
-            qr_code_token: this.generateToken(),
-          }),
-        );
-      }
-
-      let addedTotal = 0;
-      for (const order of regionOrders) {
+    for (const order of eligibleOrders) {
+      const custodyBranchId = this.resolveReturnCustodyBranchId(
+        order,
+        scope.hqBranchId,
+      );
+      try {
         await this.updateOrder(
-          order.id,
+          String(order.id),
           {
-            status: Order_status.RECEIVED,
+            status: Order_status.WAITING,
             return_requested: false,
-            post_id: newPost.id,
+            courier_id: null,
+            assigned_at: null,
+            post_id: null,
+            branch_id: custodyBranchId,
           },
           {
             id: requester?.id ?? 'system',
             roles: requester?.roles ?? [],
-            note:
-              requester?.note ??
-              "Qaytarish so'rovi tasdiqlandi — buyurtma pochtaga qaytarildi",
+            note,
           },
         );
-        addedTotal += Number(order.total_price ?? 0);
+      } catch (error) {
+        // Bir nechta RPC — atomik emas. To'xtaymiz, lekin allaqachon
+        // qaytarilganlarning pochta hisobi pastda baribir yangilanadi (aks
+        // holda qayta urinish ularni o'tkazib yuborib, hisob abadiy noto'g'ri
+        // qolardi). updateOrder faqat RpcException tashlaydi; boshqasi ham
+        // o'raladi — xabar qayta navbatga tushmasin.
+        updateError =
+          error instanceof RpcException
+            ? error
+            : new RpcException(
+                errorRes(`Order #${String(order.id)} update failed`, 502),
+              );
+        break;
       }
 
-      const incrementCount = regionOrders.length;
-      const incrementTotal = Number.isFinite(addedTotal) ? addedTotal : 0;
-      await this.postRepo
-        .createQueryBuilder()
-        .update(Post)
-        .set({
-          order_quantity: () => `order_quantity + ${incrementCount}`,
-          post_total_price: () => `post_total_price + ${incrementTotal}`,
-        })
-        .where('id = :id', { id: newPost.id })
-        .execute();
-      const savedNewPost = await this.postRepo.findOne({
-        where: { id: newPost.id },
-      });
-      if (savedNewPost) {
-        void this.syncPostToSearch(savedNewPost);
+      approvedOrderIds.push(String(order.id));
+      destinationBranchIds.add(custodyBranchId);
+      const sourcePostId = String(order.post_id ?? '').trim();
+      if (sourcePostId) {
+        const delta = postDeltas.get(sourcePostId) ?? { count: 0, total: 0 };
+        delta.count += 1;
+        delta.total += Number(order.total_price ?? 0);
+        postDeltas.set(sourcePostId, delta);
       }
-      targetPostIds.push(String(newPost.id));
     }
 
-    await this.activityLog.log({
-      // Subject is the returned Order(s); entity_id must be an Order id (mirrors
-      // rejectReturnRequests). The created post(s) are carried in metadata.
-      entity_type: 'Order',
-      entity_id: String(eligibleOrders[0]?.id ?? 'bulk'),
-      action: 'logistics.return_approve',
-      ...this.auditActor(requester),
-      metadata: {
-        order_count: eligibleOrders.length,
-        order_ids: eligibleOrders.slice(0, 10).map((order) => String(order.id)),
-        post_ids: targetPostIds.slice(0, 10),
-      },
-    });
+    if (approvedOrderIds.length) {
+      await this.activityLog.log({
+        // Subject is the returned Order(s); entity_id must be an Order id
+        // (mirrors rejectReturnRequests). Source posts go in metadata.
+        entity_type: 'Order',
+        entity_id: approvedOrderIds[0],
+        action: 'logistics.return_approve',
+        ...this.auditActor(requester),
+        metadata: {
+          order_count: approvedOrderIds.length,
+          order_ids: approvedOrderIds.slice(0, 10),
+          source_post_ids: [...postDeltas.keys()].slice(0, 10),
+          destination_branch_ids: [...destinationBranchIds],
+          scope: scope.type,
+        },
+      });
+
+      if (updateError) {
+        // Asosiy xato muhimroq — hisoblagich xatosi uni yashirmasin (u
+        // releaseReturnSourcePosts ichida log qilinadi).
+        await this.releaseReturnSourcePosts(postDeltas).catch(() => undefined);
+      } else {
+        await this.releaseReturnSourcePosts(postDeltas);
+      }
+    }
+
+    if (updateError) {
+      throw updateError;
+    }
 
     return successRes(
-      { approved: eligibleOrders.length },
+      {
+        approved: approvedOrderIds.length,
+        order_ids: approvedOrderIds,
+        skipped_order_ids: skippedOrderIds,
+      },
       200,
-      'Return requests approved',
+      "Qaytarish so'rovlari tasdiqlandi — buyurtmalar omborga qaytarildi",
     );
   }
 
+  /**
+   * Rad etish — buyurtma kuryerda qoladi: faqat belgi olinadi, holat va
+   * custody o'zgarmaydi. ON_THE_ROAD qoldiq kuryerning SENT pochtasida qoladi
+   * va kuryer uni baribir qabul qilishi kerak.
+   */
   async rejectReturnRequests(
     dto: ReceivePostDto,
     requester?: RequesterContext,
   ) {
-    const orderIds = [
-      ...new Set((dto.order_ids ?? []).map((id) => String(id)).filter(Boolean)),
-    ];
-    if (!orderIds.length) {
-      this.badRequest('Order IDs required');
+    const orderIds = this.normalizeReturnRequestOrderIds(dto);
+    const scope = await this.resolveReturnRequestScope(requester);
+    const orders = await Promise.all(
+      orderIds.map((orderId) => this.findOrderById(orderId)),
+    );
+    this.assertReturnRequestsInScope(orders, scope);
+
+    const eligibleOrders = orders.filter((order) =>
+      this.isPendingCourierReturnRequest(order),
+    );
+    const skippedOrderIds = orders
+      .filter((order) => !this.isPendingCourierReturnRequest(order))
+      .map((order) => String(order.id));
+    if (!eligibleOrders.length) {
+      this.notFound(
+        "Tanlangan buyurtmalarda ko'rib chiqilmagan qaytarish so'rovi topilmadi",
+      );
     }
 
-    let rejected = 0;
     const rejectedOrderIds: string[] = [];
-    for (const orderId of orderIds) {
-      const order = await this.findOrderById(orderId);
-      if (
-        order.status === Order_status.WAITING &&
-        order.return_requested === true
-      ) {
-        await this.updateOrder(
-          order.id,
-          { return_requested: false },
-          {
-            id: requester?.id ?? 'system',
-            roles: requester?.roles ?? [],
-            note:
-              requester?.note ??
-              "Qaytarish so'rovi rad etildi — buyurtma kuryerda qoldi",
-          },
-        );
-        rejected += 1;
-        rejectedOrderIds.push(String(order.id));
-      }
-    }
-
-    if (!rejected) {
-      this.notFound('No return-requested orders found');
+    for (const order of eligibleOrders) {
+      await this.updateOrder(
+        String(order.id),
+        { return_requested: false },
+        {
+          id: requester?.id ?? 'system',
+          roles: requester?.roles ?? [],
+          note:
+            requester?.note ??
+            "Qaytarish so'rovi rad etildi — buyurtma kuryerda qoldi",
+        },
+      );
+      rejectedOrderIds.push(String(order.id));
     }
 
     await this.activityLog.log({
       entity_type: 'Order',
-      entity_id: String(rejectedOrderIds[0] ?? 'bulk'),
+      entity_id: rejectedOrderIds[0],
       action: 'logistics.return_reject',
       ...this.auditActor(requester),
       metadata: {
-        order_count: rejected,
+        order_count: rejectedOrderIds.length,
         order_ids: rejectedOrderIds.slice(0, 10),
+        scope: scope.type,
       },
     });
 
-    return successRes({ rejected }, 200, 'Return requests rejected');
+    return successRes(
+      {
+        rejected: rejectedOrderIds.length,
+        order_ids: rejectedOrderIds,
+        skipped_order_ids: skippedOrderIds,
+      },
+      200,
+      "Qaytarish so'rovlari rad etildi — buyurtmalar kuryerda qoldi",
+    );
   }
 
   async receivePostWithScanner(requester: RequesterContext, token: string) {
@@ -2583,15 +2959,42 @@ export class LogisticsServiceService implements OnModuleInit {
     }
 
     let order = await this.findOrderByQrToken(qrToken);
-    const courierBranchId = await this.findCourierBranchId(requester);
+    const courierAssignment = await this.findCourierAssignment(requester);
+    const courierBranchId = courierAssignment.branchId;
     let orderBranchId = String(order.branch_id ?? '').trim();
 
     if (!orderBranchId) {
       this.badRequest('Order filialga biriktirilmagan');
     }
 
-    if (orderBranchId !== courierBranchId) {
-      // P1b — SKAN BILAN AVTOMATIK FILIAL QABULI.
+    const requesterId = String(requester.id);
+    const isHqCourier = await this.isHqCourierAssignment(courierAssignment);
+
+    if (isHqCourier) {
+      // ITEM 5 — HQ KURYERI FAQAT HQ QABUL QILGAN, HQ DA TURGAN BUYURTMANI OLADI.
+      //
+      // Tekshiruv HAR QANDAY yozuvdan OLDIN: NEW buyurtma NEW bo'lib qoladi
+      // (status, pochta, hisoblagich, log — hech biri yozilmaydi). Pastdagi
+      // NEW → RECEIVED avto-qabul HQ kuryeriga yetib bormaydi, P1b esa HQ
+      // kuryeri uchun umuman chaqirilmaydi: HQ ga kelgan paketni HQ xodimi
+      // qabul qiladi, kuryer skani emas.
+      const orderPost = order.post_id
+        ? await this.postRepo.findOne({ where: { id: String(order.post_id) } })
+        : null;
+      const rejection = assessHqCourierScan({
+        order,
+        orderPost,
+        hqBranchId: courierBranchId,
+        requesterId,
+      });
+      if (rejection) {
+        throw new RpcException(
+          errorRes(rejection.message, rejection.statusCode),
+        );
+      }
+    } else if (orderBranchId !== courierBranchId) {
+      // P1b — SKAN BILAN AVTOMATIK FILIAL QABULI (faqat filial kuryeri;
+      // HQ kuryeri bu yo'ldan hech qachon foydalanmaydi — yuqoriga qarang).
       //
       // Buyurtma HQ'dan kuryer filialiga paket bilan jo'natilgan bo'lsa, uning
       // `branch_id`'si HAMON jo'natuvchi filial bo'ladi (u faqat filial paketni
@@ -2626,7 +3029,6 @@ export class LogisticsServiceService implements OnModuleInit {
       }
     }
 
-    const requesterId = String(requester.id);
     const currentCourierId = String(order.courier_id ?? '').trim();
     if (currentCourierId && currentCourierId !== requesterId) {
       this.badRequest('Order allaqachon boshqa courierga biriktirilgan');

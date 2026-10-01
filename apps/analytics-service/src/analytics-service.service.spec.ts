@@ -3,6 +3,9 @@ import { AnalyticsServiceService } from './analytics-service.service';
 const rmqSendMock = jest.fn();
 
 jest.mock('@app/common', () => ({
+  // Real Tashkent day helpers (SqVMuhKo): the service imports them from the
+  // barrel, and dashboard ranges must be computed by the actual code.
+  ...jest.requireActual('@app/common/time/tashkent-time'),
   Order_status: {
     NEW: 'new',
     RECEIVED: 'received',
@@ -521,5 +524,141 @@ describe('AnalyticsServiceService', () => {
 
     expect(res.statusCode).toBe(200);
     expect(res.data.items.length).toBeGreaterThan(0);
+  });
+
+  // SqVMuhKo: the dashboard now reads its Tashkent day bounds from the shared
+  // libs/common helper. Its output must stay exactly what it was.
+  describe('Tashkent day bounds (SqVMuhKo)', () => {
+    const superadmin = { id: 'admin', roles: ['superadmin'] };
+    const overviewPayload = (): unknown =>
+      (
+        rmqSendMock.mock.calls as Array<
+          [unknown, { cmd?: string } | undefined, unknown]
+        >
+      ).find(([, pattern]) => pattern?.cmd === 'order.analytics.overview')?.[2];
+
+    it('sends the same single-day bounds that GET /orders now uses', async () => {
+      rmqSendMock.mockResolvedValue({ data: [] });
+
+      await service.getDashboard(superadmin, {
+        startDate: '2026-10-01',
+        endDate: '2026-10-01',
+      });
+
+      expect(overviewPayload()).toEqual({
+        startDate: '2026-09-30T19:00:00.000Z',
+        endDate: '2026-10-01T18:59:59.999Z',
+      });
+    });
+
+    it('keeps the all-time range unchanged', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-10-01T10:00:00.000Z'));
+      rmqSendMock.mockResolvedValue({ data: [] });
+
+      await service.getDashboard(superadmin, { all: true });
+
+      expect(overviewPayload()).toEqual({
+        startDate: '1969-12-31T19:00:00.000Z',
+        endDate: '2026-10-01T10:00:00.000Z',
+      });
+    });
+
+    it.each([
+      [
+        'today',
+        '2026-09-30T21:30:00.000Z',
+        '2026-09-30T19:00:00.000Z',
+        '2026-10-01T18:59:59.999Z',
+      ],
+      [
+        'week',
+        '2026-10-04T20:00:00.000Z',
+        '2026-10-04T19:00:00.000Z',
+        '2026-10-05T18:59:59.999Z',
+      ],
+      [
+        'month',
+        '2026-10-31T19:30:00.000Z',
+        '2026-10-31T19:00:00.000Z',
+        '2026-11-01T18:59:59.999Z',
+      ],
+    ])(
+      'resolves %s at the 00:00-05:00 Tashkent edge (now %s)',
+      async (period, now, expectedStart, expectedEnd) => {
+        jest.useFakeTimers().setSystemTime(new Date(now));
+        rmqSendMock.mockResolvedValue({ data: [] });
+
+        await service.getDashboard(superadmin, { period });
+
+        expect(overviewPayload()).toEqual({
+          startDate: expectedStart,
+          endDate: expectedEnd,
+        });
+      },
+    );
+
+    // Parity pins: the expected ranges were produced by the pre-SqVMuhKo
+    // analytics code (garbage falls back to today, ISO passes through,
+    // '2026-13-45' rolls over), so none of them may move.
+    it.each([
+      [
+        { startDate: 'abc', endDate: '2026-10-01' },
+        '2026-09-30T19:00:00.000Z',
+        '2026-10-01T18:59:59.999Z',
+      ],
+      [
+        {
+          startDate: '2026-10-01T03:00:00.000Z',
+          endDate: '2026-10-01T04:00:00.000Z',
+        },
+        '2026-10-01T03:00:00.000Z',
+        '2026-10-01T04:00:00.000Z',
+      ],
+      [
+        { startDate: '2026-10-01', endDate: '2026-10-02T04:00:00+05:00' },
+        '2026-09-30T19:00:00.000Z',
+        '2026-10-01T23:00:00.000Z',
+      ],
+      [
+        { startDate: '2026-13-45', endDate: '2026-13-45' },
+        '2027-02-13T19:00:00.000Z',
+        '2027-02-14T18:59:59.999Z',
+      ],
+      [
+        { startDate: ' 2026-09-30 ', endDate: '2026-10-01' },
+        '2026-09-29T19:00:00.000Z',
+        '2026-10-01T18:59:59.999Z',
+      ],
+      [
+        { startDate: '2026-10-01' },
+        '2026-09-30T19:00:00.000Z',
+        '2026-10-01T18:59:59.999Z',
+      ],
+      [
+        { period: 'WEEK' },
+        '2026-09-27T19:00:00.000Z',
+        '2026-10-01T18:59:59.999Z',
+      ],
+      [
+        { period: 'bogus' },
+        '2026-09-30T19:00:00.000Z',
+        '2026-10-01T18:59:59.999Z',
+      ],
+    ])(
+      'keeps the legacy range for %j',
+      async (filter, expectedStart, expectedEnd) => {
+        jest
+          .useFakeTimers()
+          .setSystemTime(new Date('2026-10-01T10:00:00.000Z'));
+        rmqSendMock.mockResolvedValue({ data: [] });
+
+        await service.getDashboard(superadmin, filter);
+
+        expect(overviewPayload()).toEqual({
+          startDate: expectedStart,
+          endDate: expectedEnd,
+        });
+      },
+    );
   });
 });

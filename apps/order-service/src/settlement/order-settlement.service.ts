@@ -1,15 +1,24 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import {
+  Brackets,
   DataSource,
   EntityManager,
   QueryFailedError,
   Repository,
 } from 'typeorm';
+import { Order, OrderHolderType } from '../entities/order.entity';
+import { OrderExtraCostApproval } from '../entities/order-extra-cost-approval.entity';
 import { OrderSettlement } from '../entities/order-settlement.entity';
 import { OrderSettlementCarry } from '../entities/order-settlement-carry.entity';
-import { Cashbox_type, SettlementStatus, rmqSend } from '@app/common';
+import { OrderLookupService } from '../lookup/order-lookup.service';
+import {
+  Cashbox_type,
+  Order_status,
+  SettlementStatus,
+  rmqSend,
+} from '@app/common';
 import { successRes } from '../../../../libs/common/helpers/response';
 
 /**
@@ -28,8 +37,44 @@ import { successRes } from '../../../../libs/common/helpers/response';
  */
 type SettlementLevel = 'courier_to_branch' | 'branch_to_hq' | 'hq_to_market';
 
+/**
+ * HQ id sini kutishning yuqori chegarasi. Kesh odatda issiq (OrderLookupService
+ * modul ishga tushganda to'ldiradi); sovuq kesh + branch-service ishlamayotgan
+ * holatda yig'indilar va advance 2×5 s RPC timeout'ini kutib qolmasligi uchun.
+ */
+const HQ_BRANCH_LOOKUP_MAX_WAIT_MS = 3000;
+
+/**
+ * R3 — kuryer qo'lidagi buyurtma: ushlovchisi (holder) KURYER bo'lib, shu
+ * holatlardan birida BO'LMAGANI. Bu holatlardagi buyurtma yakunlangan —
+ * `holder_type` hali COURIER bo'lsa ham kuryerni o'tkazishga to'sqinlik
+ * qilmaydi.
+ */
+const COURIER_DONE_ORDER_STATUSES: Order_status[] = [
+  Order_status.SOLD,
+  Order_status.PAID,
+  Order_status.PARTLY_PAID,
+  Order_status.CLOSED,
+  Order_status.RETURNED_TO_MARKET,
+];
+
+/**
+ * R3 — `courier_id` shu kuryer bo'lsa (ushlovchi boshqa bo'lsa ham) u hali
+ * amal bajara oladigan holatlar: sotuv yo'li eski `courier_id` ni ham qabul
+ * qiladi. SENT pochta ichidagilar ham shu yerga tushadi (yo'lda + courier_id).
+ */
+const COURIER_ACTIONABLE_ORDER_STATUSES: Order_status[] = [
+  Order_status.ON_THE_ROAD,
+  Order_status.WAITING,
+  Order_status.WAITING_CUSTOMER,
+];
+
+/** Tekshiruv javobidagi namuna buyurtmalar soni (id bo'yicha o'sib borish). */
+const COURIER_TRANSFER_SAMPLE_LIMIT = 5;
+
 @Injectable()
 export class OrderSettlementService {
+  private readonly logger = new Logger(OrderSettlementService.name);
   /** `order_settlement_carry` jadvali bormi (migratsiya ishlaganmi) — kesh. */
   private carryTableReady: boolean | null = null;
   private carryCheckedAt = 0;
@@ -39,6 +84,13 @@ export class OrderSettlementService {
     @InjectRepository(OrderSettlement)
     private readonly orderSettlementRepo: Repository<OrderSettlement>,
     @Inject('FINANCE') private readonly financeClient: ClientProxy,
+    /**
+     * HQ filial id si — `resolveSettlementBranchId` ishlatadigan AYNAN o'sha
+     * issiq kesh (sotuv qatoriga `branch_id` NULL yozilishini hal qiladigan
+     * manba). Ixtiyoriy: berilmasa HQ "noma'lum" deb qaraladi va qoldiq
+     * mexanizmi avvalgidek ishlaydi (C10 izohiga qarang).
+     */
+    @Optional() private readonly lookup?: OrderLookupService,
   ) {}
 
   // ===== leaf helpers duplicated from OrderServiceService =====
@@ -152,6 +204,39 @@ export class OrderSettlementService {
     return this.carryTableReady;
   }
 
+  /**
+   * HQ filial id si yoki `null` (aniqlab bo'lmadi). Xato YUTILADI: chaqiruvchi
+   * `null` da avvalgi (C10 dan oldingi) xatti-harakatni tanlaydi.
+   *
+   * ⚠️ C10 — NEGA KERAK. HQ "filial → HQ" bo'g'inining tomoni EMAS: HQ
+   * sotuvlarida `resolveSettlementBranchId` ataylab `null` yozadi, ya'ni
+   * `branch_id` = HQ bo'lgan COURIER_SETTLED qator deyarli yo'q. HQ'ning
+   * 'branch' kassasidan (eski HQ menejerlari) branch-to-main qilinsa FIFO
+   * hech narsani yopmaydi va BUTUN summa `branch_to_hq` qoldig'i bo'lib HQ
+   * nomiga yozilardi (2026-09-30 regressiyasi). Yig'indilar esa uni filial
+   * qarzidan ayirib, moliyaviy balansni sun'iy og'dirardi — o'sha naqd
+   * aslida HQ kuryerlari topshirganda allaqachon hisobga olingan.
+   */
+  private async resolveHqBranchId(): Promise<string | null> {
+    if (!this.lookup) {
+      return null;
+    }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const hqId = await Promise.race([
+        this.lookup.getHqBranchId(),
+        new Promise<null>((resolve) => {
+          timer = setTimeout(() => resolve(null), HQ_BRANCH_LOOKUP_MAX_WAIT_MS);
+        }),
+      ]);
+      return String(hqId ?? '').trim() || null;
+    } catch {
+      return null;
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
   /** Musbat qoldiqlar (bo'g'in bo'yicha). Jadval bo'lmasa — bo'sh ro'yxat. */
   private async loadCarries(
     level?: SettlementLevel,
@@ -169,6 +254,47 @@ export class OrderSettlementService {
     } catch {
       return [];
     }
+  }
+
+  /**
+   * Bitta kuryerning `courier_to_branch` qoldig'i — QAT'IY o'qish (R3).
+   *
+   * ⚠️ `loadCarries` dan farqi: xato YUTILMAYDI. U yerda xato `[]` bo'lib
+   * qaytadi (fail-open) — pul oqimi to'xtamasligi uchun to'g'ri, lekin kuryerni
+   * o'tkazish tekshiruvida "qoldiq yo'q" deb adashib o'tkazib yuborardi. Jadval
+   * mavjudligi keshdan faqat `true` bo'lsagina olinadi: `false` keshni
+   * `isCarryEnabled` yutilgan xatodan ham yozadi. Jadval haqiqatan yo'q
+   * (migratsiya ishlamagan) — 0: bunday muhitda qoldiq mexanizmi o'chiq.
+   */
+  private async loadCourierCarryStrict(courierId: string): Promise<number> {
+    if (this.carryTableReady !== true) {
+      const schema =
+        (this.dataSource.options as { schema?: string } | undefined)?.schema ||
+        'public';
+      const tables: Array<{ t: string | null }> = await this.dataSource.query(
+        'SELECT to_regclass($1) AS t',
+        [`${schema}.order_settlement_carry`],
+      );
+      if (!tables?.[0]?.t) {
+        return 0;
+      }
+      this.carryTableReady = true;
+      this.carryCheckedAt = Date.now();
+    }
+
+    const rows = await this.dataSource
+      .getRepository(OrderSettlementCarry)
+      .find({
+        where: {
+          level: 'courier_to_branch',
+          party_id: courierId,
+          isDeleted: false,
+        },
+      });
+    return (rows ?? []).reduce((sum, row) => {
+      const amount = Number(row.amount) || 0;
+      return amount > 0 ? sum + amount : sum;
+    }, 0);
   }
 
   /** Return the per-order settlement row (status + leg stamps) for one order. */
@@ -260,11 +386,21 @@ export class OrderSettlementService {
      *   • HQ kuryeri → HQ qoldig'i (`branch_id` NULL): HQ bandidan. Filial
      *     kuryerining qoldig'i zanjirga ta'sir qilmaydi — naqd hali filialda;
      *   • HQ → market qoldig'i: marketga qarzdan (oldindan to'langan).
+     *
+     * C10: tomoni HQ'ning o'zi bo'lgan `branch_to_hq` qoldig'i HISOBGA
+     * OLINMAYDI (`resolveHqBranchId` izohi). HQ aniqlanmasa — avvalgidek.
      */
-    for (const carry of await this.loadCarries()) {
+    const carries = await this.loadCarries();
+    const hqBranchId = carries.some((carry) => carry.level === 'branch_to_hq')
+      ? await this.resolveHqBranchId()
+      : null;
+    for (const carry of carries) {
       const amount = Number(carry.amount) || 0;
       const partyId = String(carry.party_id);
       if (carry.level === 'branch_to_hq') {
+        if (hqBranchId && partyId === hqBranchId) {
+          continue;
+        }
         const row = branches.find((item) => item.branch_id === partyId);
         if (row) {
           row.amount -= amount;
@@ -370,12 +506,22 @@ export class OrderSettlementService {
     // Taqsimlanmagan qoldiqlar (`order_settlement_carry`) — o'sha naqd
     // allaqachon topshirilgan, menejer uni qayta so'ramasligi kerak.
     const carries = await this.loadCarries();
-    const branchCarry = carries
-      .filter(
-        (row) =>
-          row.level === 'branch_to_hq' && String(row.party_id) === branchId,
-      )
-      .reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+    const ownBranchCarries = branchId
+      ? carries.filter(
+          (row) =>
+            row.level === 'branch_to_hq' && String(row.party_id) === branchId,
+        )
+      : [];
+    // C10: HQ'ning o'z `branch_to_hq` qoldig'i hisobga olinmaydi.
+    const isHqBranch =
+      ownBranchCarries.length > 0 &&
+      (await this.resolveHqBranchId()) === branchId;
+    const branchCarry = isHqBranch
+      ? 0
+      : ownBranchCarries.reduce(
+          (sum, row) => sum + (Number(row.amount) || 0),
+          0,
+        );
     const courierCarry = carries
       .filter(
         (row) =>
@@ -393,6 +539,187 @@ export class OrderSettlementService {
       200,
       'Branch settlement summary',
     );
+  }
+
+  /**
+   * Bitta kuryerning topshirilmagan savdosi (PENDING) — HQ va filial
+   * qismlariga ajratilgan (B4). FAQAT O'QIYDI.
+   *
+   * ⚠️ NEGA KERAK. Superadmin/admin kuryerdan pulni to'g'ridan-to'g'ri MAIN'ga
+   * oladi, FIFO esa kuryerning BARCHA PENDING qatorlarini (filialidan qat'i
+   * nazar) `createdAt` bo'yicha yopadi va holatni har qatorning `branch_id`
+   * sidan hisoblaydi. Kuryerda filialga bog'langan qator bo'lsa, u
+   * COURIER_SETTLED bo'lib qoladi — naqd esa MAIN'da (jonli tasdiqlangan:
+   * soxta filial qarzi). Shu sabab gateway `branch_pending_count > 0` da pul
+   * olishni rad etadi; u pul kuryer → filial → HQ yo'lidan keladi.
+   *
+   * Bitta GROUP BY: `settlement.branch_id` bo'yicha (NULL guruhi — HQ qismi),
+   * shu bilan `branch_ids` ham ARRAY_AGG'siz olinadi. Summalar ishorali va
+   * qirqilmaydi (kredit qatorlari ham kiradi) — boshqa yig'indilar kabi.
+   * `carry_amount` — kuryerning taqsimlanmagan qoldig'i (`courier_to_branch`).
+   * Bo'sh id → nollar, so'rov yuborilmaydi.
+   */
+  async getCourierSettlementScope(data: { courier_id?: string | null }) {
+    const courierId = String(data?.courier_id ?? '').trim();
+    const scope = {
+      hq_pending_count: 0,
+      hq_pending_amount: 0,
+      branch_pending_count: 0,
+      branch_pending_amount: 0,
+      branch_ids: [] as string[],
+      carry_amount: 0,
+    };
+    if (!courierId) {
+      return successRes(scope, 200, 'Courier settlement scope');
+    }
+    if (!/^\d+$/.test(courierId)) {
+      this.badRequest("courier_id raqam ko'rinishida bo'lishi kerak");
+    }
+
+    const rows = await this.orderSettlementRepo
+      .createQueryBuilder('settlement')
+      .select('settlement.branch_id', 'branch_id')
+      .addSelect('COUNT(*)', 'count')
+      .addSelect('COALESCE(SUM(settlement.courier_amount), 0)', 'amount')
+      .where('settlement.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('settlement.status = :status', {
+        status: SettlementStatus.PENDING,
+      })
+      .andWhere('settlement.courier_id = :courierId', { courierId })
+      .groupBy('settlement.branch_id')
+      .getRawMany<{ branch_id: string | null; count: string; amount: string }>()
+      .catch((error: unknown) => this.handleDbError(error));
+
+    const branchIds = new Set<string>();
+    for (const row of rows ?? []) {
+      const count = Number(row.count) || 0;
+      const amount = Number(row.amount) || 0;
+      if (row.branch_id) {
+        scope.branch_pending_count += count;
+        scope.branch_pending_amount += amount;
+        branchIds.add(String(row.branch_id));
+      } else {
+        scope.hq_pending_count += count;
+        scope.hq_pending_amount += amount;
+      }
+    }
+    scope.branch_ids = [...branchIds];
+    scope.carry_amount = (await this.loadCarries('courier_to_branch'))
+      .filter((row) => String(row.party_id) === courierId)
+      .reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
+
+    return successRes(scope, 200, 'Courier settlement scope');
+  }
+
+  /**
+   * R3 — kuryerni filialdan filialga o'tkazish tekshiruvi (order qismi).
+   * FAQAT O'QIYDI; bloklash qarorini branch-service chiqaradi.
+   *
+   *   • PENDING savdo — `getCourierSettlementScope` (o'zgarishsiz qayta
+   *     ishlatiladi);
+   *   • `carry_amount` — `loadCourierCarryStrict` (xato yutilmaydi);
+   *   • qo'lidagi buyurtmalar — ushlovchi KURYER va yakunlanmagan, YOKI
+   *     `courier_id` shu kuryer va yo'lda/kutilmoqda (qisman sotuvning bekor
+   *     qoldig'i ham, qaytarilmagan bekorlar ham birinchi shartga tushadi);
+   *   • ko'rib chiqilmagan qo'shimcha xarajat so'rovlari — tasdiqlansa sotuv
+   *     yoki bekor KURYER nomidan qayta o'ynaladi, ya'ni kuryer puli o'zgaradi.
+   *
+   * ⚠️ Baza xatosi hech qachon yutilmaydi va RpcException'ga o'raladi — xom
+   * xato RMQ'da qayta navbatga qo'yilib, handler ikki marta ishlardi.
+   * `getCourierSettlementScope` ning `handleDbError` i ham tanimagan
+   * QueryFailedError'ni xom holda qayta otadi — u ham shu yerda o'raladi.
+   */
+  async getCourierTransferCheck(data: { courier_id?: string | null }) {
+    const courierId = String(data?.courier_id ?? '').trim();
+    if (!/^\d+$/.test(courierId)) {
+      this.badRequest("courier_id raqam ko'rinishida bo'lishi kerak");
+    }
+
+    const ordersInHandQuery = () =>
+      this.dataSource
+        .getRepository(Order)
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere(
+          new Brackets((w) => {
+            w.where(
+              'o.holder_type = :courierHolder AND o.holder_courier_id = :courierId AND o.status NOT IN (:...doneStatuses)',
+              {
+                courierHolder: OrderHolderType.COURIER,
+                courierId,
+                doneStatuses: COURIER_DONE_ORDER_STATUSES,
+              },
+            ).orWhere(
+              'o.courier_id = :courierId AND o.status IN (:...actionableStatuses)',
+              {
+                courierId,
+                actionableStatuses: COURIER_ACTIONABLE_ORDER_STATUSES,
+              },
+            );
+          }),
+        );
+
+    try {
+      const [scopeResponse, carryAmount, ordersInHand, sampleRows, approvals] =
+        await Promise.all([
+          this.getCourierSettlementScope({ courier_id: courierId }),
+          this.loadCourierCarryStrict(courierId),
+          ordersInHandQuery().getCount(),
+          ordersInHandQuery()
+            .select('o.id', 'id')
+            .addSelect('o.status', 'status')
+            .orderBy('o.id', 'ASC')
+            .limit(COURIER_TRANSFER_SAMPLE_LIMIT)
+            .getRawMany<{ id: string; status: string }>(),
+          this.dataSource.getRepository(OrderExtraCostApproval).count({
+            where: {
+              requested_by_user_id: courierId,
+              status: 'pending',
+              isDeleted: false,
+            },
+          }),
+        ]);
+      const scope = scopeResponse.data as {
+        hq_pending_count: number;
+        hq_pending_amount: number;
+        branch_pending_count: number;
+        branch_pending_amount: number;
+        branch_ids: string[];
+        carry_amount: number;
+      };
+
+      return successRes(
+        {
+          ...scope,
+          courier_id: courierId,
+          pending_settlement_count:
+            scope.hq_pending_count + scope.branch_pending_count,
+          pending_settlement_amount:
+            scope.hq_pending_amount + scope.branch_pending_amount,
+          carry_amount: carryAmount,
+          orders_in_hand: Number(ordersInHand) || 0,
+          orders_sample: (sampleRows ?? []).map((row) => ({
+            id: String(row.id),
+            status: String(row.status),
+          })),
+          pending_extra_cost_approvals: Number(approvals) || 0,
+        },
+        200,
+        'Courier transfer check',
+      );
+    } catch (error) {
+      if (error instanceof RpcException) {
+        throw error;
+      }
+      this.logger.warn(
+        `order.courier_transfer_check failed (courier=${courierId}): ${(error as Error)?.message ?? error}`,
+      );
+      throw new RpcException({
+        statusCode: 500,
+        message:
+          "Kuryer o'tkazish tekshiruvini bajarib bo'lmadi (ma'lumotlar bazasi xatosi)",
+      });
+    }
   }
 
   /**
@@ -814,8 +1141,22 @@ export class OrderSettlementService {
       this.badRequest(`Invalid settlement level: ${String(data?.level)}`);
     }
 
+    /**
+     * C10: tomoni HQ'ning o'zi bo'lgan "filial → HQ" to'lovi qoldiq
+     * mexanizmisiz ishlaydi — qoldiq SAQLANMAYDI va eski qoldiq qo'shilmaydi,
+     * ya'ni qoldiq paydo bo'lishidan oldingidek (FIFO butun qatorlarni yopadi,
+     * ortgani `leftover` da qaytadi, xolos). Sabab — `resolveHqBranchId`
+     * izohida. HQ aniqlanmasa (`null`) tomon HQ deb taxmin QILINMAYDI:
+     * qoldiq avvalgidek saqlanadi — oddiy filialning qoldig'ini yo'qotish
+     * (E2E 30-09 dagi +95 000 xatosi) HQ nomidagi ortiqcha qatordan
+     * xavfliroq, u qator esa yig'indilarda baribir e'tiborsiz qoladi.
+     */
+    const isHqBranchParty =
+      data.level === 'branch_to_hq' &&
+      (await this.resolveHqBranchId()) === matchValue;
+
     const result = await this.runFifoSettlement({
-      carryLevel: cfg.carryLevel,
+      carryLevel: isHqBranchParty ? undefined : cfg.carryLevel,
       matchColumn: cfg.matchColumn,
       matchValue,
       fromStatus: cfg.fromStatus,
@@ -829,9 +1170,14 @@ export class OrderSettlementService {
 
     // Keyingi bo'g'inda kutib turgan qoldiqlarni darhol qo'llash (kaskad).
     if (data.level === 'courier_to_branch') {
+      // C10: HQ nomidagi (eski) `branch_to_hq` qoldig'i kaskadda ham
+      // qo'llanmaydi — u haqiqiy naqd emas (yuqoridagi izoh).
+      const hqBranchId = result.touched.branch_ids.length
+        ? await this.resolveHqBranchId()
+        : null;
       await this.applyPendingCarries(
         'branch_to_hq',
-        result.touched.branch_ids,
+        result.touched.branch_ids.filter((id) => id !== hqBranchId),
         configs,
         requesterId,
       );

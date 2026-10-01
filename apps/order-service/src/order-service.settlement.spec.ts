@@ -1,4 +1,9 @@
+import { RpcException } from '@nestjs/microservices';
+import { Test } from '@nestjs/testing';
+import { getRepositoryToken } from '@nestjs/typeorm';
+import { DataSource } from 'typeorm';
 import { OrderSettlementService } from './settlement/order-settlement.service';
+import { OrderLookupService } from './lookup/order-lookup.service';
 import { SettlementStatus } from '@app/common';
 import { OrderSettlement } from './entities/order-settlement.entity';
 import { OrderSettlementCarry } from './entities/order-settlement-carry.entity';
@@ -366,9 +371,14 @@ describe('OrderSettlementService settlement (FIFO)', () => {
  * qarzida sanab +95 000 soxta holat ko'rsatdi, buyurtma esa abadiy qotdi.
  */
 describe('OrderSettlementService — taqsimlanmagan qoldiq (carry)', () => {
+  /**
+   * `lookup` — HQ id manbasi (OrderLookupService.getHqBranchId). Berilmasa
+   * servis 3 argument bilan quriladi (HQ noma'lum, C10 dan oldingi tartib).
+   */
   function makeCarryService(
     rows: Partial<OrderSettlement>[],
     carries: Partial<OrderSettlementCarry>[] = [],
+    lookup?: { getHqBranchId: jest.Mock },
   ) {
     const store = rows.map((r, i) => ({
       id: String(i + 1),
@@ -467,14 +477,28 @@ describe('OrderSettlementService — taqsimlanmagan qoldiq (carry)', () => {
       dataSource as any,
       settlementRepo as any,
       {} as any,
+      lookup as any,
     );
     const carryOf = (level: string, party: string) =>
       Number(
         carryStore.find((c) => c.level === level && c.party_id === party)
           ?.amount ?? 0,
       );
-    return { service, store, carryStore, carryOf, settlementRepo };
+    return {
+      service,
+      store,
+      carryStore,
+      carryOf,
+      settlementRepo,
+      carryRepo,
+      dataSource,
+    };
   }
+
+  /** HQ = '1' deb javob beradigan OrderLookupService dubli. */
+  const hqLookup = (hqId: string | null = '1') => ({
+    getHqBranchId: jest.fn().mockResolvedValue(hqId),
+  });
 
   const e2eBranchRows = (): Partial<OrderSettlement>[] => [
     {
@@ -711,5 +735,436 @@ describe('OrderSettlementService — taqsimlanmagan qoldiq (carry)', () => {
     expect(res.data.settled_order_ids).toEqual(['O1', 'O3', 'O6']);
     expect(res.data.leftover).toBe(95000);
     expect(store[3].status).toBe(SettlementStatus.COURIER_SETTLED);
+  });
+
+  /**
+   * C10 — 2026-09-30 REGRESSIYASI. HQ sotuvlarida `branch_id` NULL yoziladi,
+   * shuning uchun HQ'ning 'branch' kassasidan (eski HQ menejeri) qilingan
+   * branch-to-main FIFO'da hech narsani yopmaydi va BUTUN summa HQ nomiga
+   * `branch_to_hq` qoldig'i bo'lib yozilardi. Yig'indilar uni filial qarzidan
+   * ayirib, moliyaviy balansni sun'iy og'dirardi.
+   */
+  describe('C10 — HQ nomidagi `branch_to_hq` qoldig`i', () => {
+    it('DI: HQ manbai (OrderLookupService) Nest konteynerida inject qilinadi', async () => {
+      const lookup = hqLookup('1');
+      const moduleRef = await Test.createTestingModule({
+        providers: [
+          OrderSettlementService,
+          { provide: DataSource, useValue: {} },
+          { provide: getRepositoryToken(OrderSettlement), useValue: {} },
+          { provide: 'FINANCE', useValue: {} },
+          { provide: OrderLookupService, useValue: lookup },
+        ],
+      }).compile();
+
+      const service = moduleRef.get(OrderSettlementService);
+
+      expect((service as any).lookup).toBe(lookup);
+    });
+
+    it('HQ tomoniga qoldiq SAQLANMAYDI: qoldiqdan oldingidek leftover qaytadi', async () => {
+      const lookup = hqLookup('1');
+      const { service, carryStore, carryRepo } = makeCarryService(
+        [],
+        [],
+        lookup,
+      );
+
+      const res = (await service.advanceSettlement({
+        level: 'branch_to_hq',
+        match_value: '1',
+        amount: 500000,
+      })) as any;
+
+      expect(res.data).toEqual({
+        settled_order_ids: [],
+        allocated: 0,
+        leftover: 500000,
+      });
+      // Qoldiq qatori na yaratiladi, na yangilanadi.
+      expect(carryStore).toHaveLength(0);
+      expect(carryRepo.createQueryBuilder).not.toHaveBeenCalled();
+      expect(carryRepo.update).not.toHaveBeenCalled();
+      expect(lookup.getHqBranchId).toHaveBeenCalled();
+    });
+
+    it('HQ nomidagi ESKI qoldiq to`lovga qo`shilmaydi va o`zgarmaydi; FIFO esa ishlaydi', async () => {
+      const { service, store, carryOf } = makeCarryService(
+        [
+          {
+            // HQ id bilan yozilgan qator (sotuv paytida HQ aniqlanmagan).
+            order_id: 'Q1',
+            branch_id: '1',
+            market_id: '191',
+            status: SettlementStatus.COURIER_SETTLED,
+            branch_amount: 450000,
+          },
+        ],
+        [{ level: 'branch_to_hq', party_id: '1', amount: 300000 }],
+        hqLookup('1'),
+      );
+
+      // Eski tartibda 200 000 + 300 000 qoldiq Q1 ni yopardi.
+      const first = (await service.advanceSettlement({
+        level: 'branch_to_hq',
+        match_value: '1',
+        amount: 200000,
+      })) as any;
+      expect(first.data.settled_order_ids).toEqual([]);
+      expect(first.data.leftover).toBe(200000);
+      expect(store[0].status).toBe(SettlementStatus.COURIER_SETTLED);
+      expect(carryOf('branch_to_hq', '1')).toBe(300000);
+
+      // Butun qatorni qoplagan to'lov uni odatdagidek yopadi, ortig'i
+      // qoldiq bo'lib saqlanmaydi.
+      const second = (await service.advanceSettlement({
+        level: 'branch_to_hq',
+        match_value: '1',
+        amount: 500000,
+      })) as any;
+      expect(second.data.settled_order_ids).toEqual(['Q1']);
+      expect(second.data.allocated).toBe(450000);
+      expect(second.data.leftover).toBe(50000);
+      expect(store[0].status).toBe(SettlementStatus.BRANCH_SETTLED);
+      expect(carryOf('branch_to_hq', '1')).toBe(300000);
+    });
+
+    it('oddiy filial qoldig`i HQ aniqlangan holatda ham saqlanadi (regressiya yo`q)', async () => {
+      const { service, carryOf } = makeCarryService(
+        e2eBranchRows(),
+        [],
+        hqLookup('1'),
+      );
+
+      const res = (await service.advanceSettlement({
+        level: 'branch_to_hq',
+        match_value: '14',
+        amount: 760000,
+      })) as any;
+
+      expect(res.data.leftover).toBe(95000);
+      expect(carryOf('branch_to_hq', '14')).toBe(95000);
+    });
+
+    it.each([
+      ['null qaytardi', { getHqBranchId: jest.fn().mockResolvedValue(null) }],
+      [
+        'xato berdi',
+        { getHqBranchId: jest.fn().mockRejectedValue(new Error('down')) },
+      ],
+      ['lookup yo`q', undefined],
+    ])(
+      'HQ aniqlanmasa (%s) — tomon HQ deb taxmin qilinmaydi, qoldiq avvalgidek saqlanadi',
+      async (_label, lookup) => {
+        const { service, carryOf } = makeCarryService([], [], lookup);
+
+        const res = (await service.advanceSettlement({
+          level: 'branch_to_hq',
+          match_value: '1',
+          amount: 500000,
+        })) as any;
+
+        expect(res.data.leftover).toBe(500000);
+        expect(carryOf('branch_to_hq', '1')).toBe(500000);
+      },
+    );
+
+    it('HQ so`rovi osilib qolsa — 3 s dan keyin "noma`lum" deb davom etadi (advance to`xtab qolmaydi)', async () => {
+      jest.useFakeTimers();
+      try {
+        const { service, carryOf } = makeCarryService([], [], {
+          // Sovuq kesh + branch-service javob bermayapti.
+          getHqBranchId: jest.fn(() => new Promise<string>(() => undefined)),
+        });
+
+        const pending = service.advanceSettlement({
+          level: 'branch_to_hq',
+          match_value: '1',
+          amount: 500000,
+        });
+        await jest.advanceTimersByTimeAsync(3000);
+        const res = (await pending) as any;
+
+        expect(res.data.leftover).toBe(500000);
+        expect(carryOf('branch_to_hq', '1')).toBe(500000);
+      } finally {
+        jest.useRealTimers();
+      }
+    });
+
+    it('kaskad: kuryer to`lovi HQ nomidagi eski qoldiqni qo`llamaydi', async () => {
+      const { service, store, carryOf } = makeCarryService(
+        [
+          {
+            order_id: 'K9',
+            courier_id: '263',
+            branch_id: '1',
+            market_id: '191',
+            courier_amount: 235000,
+            branch_amount: 235000,
+          },
+        ],
+        [{ level: 'branch_to_hq', party_id: '1', amount: 235000 }],
+        hqLookup('1'),
+      );
+
+      await service.advanceSettlement({
+        level: 'courier_to_branch',
+        match_value: '263',
+        amount: 235000,
+      });
+
+      // Filial '14' bo'lganda bu qator BRANCH_SETTLED bo'lardi (yuqoridagi
+      // kaskad testi); HQ nomidagi qoldiq esa haqiqiy naqd emas.
+      expect(store[0].status).toBe(SettlementStatus.COURIER_SETTLED);
+      expect(carryOf('branch_to_hq', '1')).toBe(235000);
+    });
+
+    const makeSummaryQb = (rows: any[]) => ({
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue(rows),
+    });
+    const hqAndBranchCarries = [
+      { level: 'branch_to_hq', party_id: '14', amount: 95000 },
+      { level: 'branch_to_hq', party_id: '1', amount: 400000 },
+    ];
+
+    it('moliyaviy balans HQ nomidagi qoldiqni hisobga olmaydi', async () => {
+      const lookup = hqLookup('1');
+      const { service, settlementRepo } = makeCarryService(
+        [],
+        hqAndBranchCarries,
+        lookup,
+      );
+      settlementRepo.createQueryBuilder
+        .mockReturnValueOnce(
+          makeSummaryQb([
+            { branch_id: '14', amount: '235000' },
+            { branch_id: null, amount: '90000' },
+          ]),
+        )
+        .mockReturnValueOnce(makeSummaryQb([]));
+
+      const response: any =
+        await service.getFinancialBalanceSettlementSummary();
+
+      // Ilgari: branches ga { branch_id: '1', amount: -400000 } qo'shilib,
+      // branch_receivable −260 000 bo'lardi.
+      expect(response.data.branches).toEqual([
+        { branch_id: '14', amount: 140000 },
+      ]);
+      expect(response.data.branch_receivable).toBe(140000);
+      expect(response.data.hq_receivable).toBe(90000);
+      expect(response.data.chain_receivable).toBe(230000);
+      expect(lookup.getHqBranchId).toHaveBeenCalled();
+    });
+
+    it('moliyaviy balans: HQ aniqlanmasa qoldiq avvalgidek ayiriladi', async () => {
+      const { service, settlementRepo } = makeCarryService(
+        [],
+        hqAndBranchCarries,
+        hqLookup(null),
+      );
+      settlementRepo.createQueryBuilder
+        .mockReturnValueOnce(
+          makeSummaryQb([{ branch_id: '14', amount: '235000' }]),
+        )
+        .mockReturnValueOnce(makeSummaryQb([]));
+
+      const response: any =
+        await service.getFinancialBalanceSettlementSummary();
+
+      expect(response.data.branches).toEqual([
+        { branch_id: '14', amount: 140000 },
+        { branch_id: '1', amount: -400000 },
+      ]);
+    });
+
+    it('moliyaviy balans: `branch_to_hq` qoldig`i bo`lmasa HQ so`ralmaydi', async () => {
+      const lookup = hqLookup('1');
+      const { service, settlementRepo } = makeCarryService(
+        [],
+        [{ level: 'hq_to_market', party_id: '191', amount: 1000 }],
+        lookup,
+      );
+      settlementRepo.createQueryBuilder
+        .mockReturnValueOnce(makeSummaryQb([]))
+        .mockReturnValueOnce(makeSummaryQb([]));
+
+      await service.getFinancialBalanceSettlementSummary();
+
+      expect(lookup.getHqBranchId).not.toHaveBeenCalled();
+    });
+
+    it('filial yig`indisi: HQ o`z qoldig`ini ayirmaydi, oddiy filial ayiradi', async () => {
+      const { service, settlementRepo } = makeCarryService(
+        [],
+        hqAndBranchCarries,
+        hqLookup('1'),
+      );
+      const qbWith = (amount: string) => ({
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getRawOne: jest.fn().mockResolvedValue({ amount }),
+      });
+      // courier_ids bo'sh — har chaqiruvda faqat filial summasi so'raladi.
+      settlementRepo.createQueryBuilder
+        .mockReturnValueOnce(qbWith('50000'))
+        .mockReturnValueOnce(qbWith('235000'));
+
+      const hq: any = await service.getBranchSettlementSummary({
+        branch_id: '1',
+        courier_ids: [],
+      });
+      const branch: any = await service.getBranchSettlementSummary({
+        branch_id: '14',
+        courier_ids: [],
+      });
+
+      expect(hq.data.branch_payable).toBe(50000);
+      expect(branch.data.branch_payable).toBe(140000);
+    });
+  });
+
+  /**
+   * B4 — `order.settlement.courier_scope`. Superadmin/admin kuryerdan pulni
+   * MAIN'ga olishidan oldin gateway kuryerda filialga tegishli PENDING qator
+   * yo'qligini shu bilan tekshiradi (aks holda FIFO filial qatorini
+   * COURIER_SETTLED qiladi, naqd esa MAIN'da bo'ladi).
+   */
+  describe('B4 — kuryer savdosi HQ / filial kesimida', () => {
+    const makeScopeQb = (rows: any[]) => ({
+      select: jest.fn().mockReturnThis(),
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      groupBy: jest.fn().mockReturnThis(),
+      getRawMany: jest.fn().mockResolvedValue(rows),
+    });
+    const zeros = {
+      hq_pending_count: 0,
+      hq_pending_amount: 0,
+      branch_pending_count: 0,
+      branch_pending_amount: 0,
+      branch_ids: [],
+      carry_amount: 0,
+    };
+
+    it('bitta GROUP BY: faqat PENDING va o`chirilmagan qatorlar, HQ/filial ajratiladi, qoldiq qo`shiladi', async () => {
+      const { service, settlementRepo } = makeCarryService(
+        [],
+        [
+          {
+            level: 'courier_to_branch',
+            party_id: '263',
+            branch_id: null,
+            amount: 15000,
+          },
+          // Boshqa kuryer va boshqa bo'g'in qoldiqlari hisobga kirmaydi.
+          { level: 'courier_to_branch', party_id: '999', amount: 70000 },
+          { level: 'branch_to_hq', party_id: '263', amount: 5000 },
+        ],
+      );
+      const qb = makeScopeQb([
+        { branch_id: null, count: '3', amount: '240000' },
+        { branch_id: '15', count: '2', amount: '90000' },
+        // Kredit (manfiy oyoq) — summa ishorali, qirqilmaydi.
+        { branch_id: '16', count: '1', amount: '-5000' },
+      ]);
+      settlementRepo.createQueryBuilder.mockReturnValueOnce(qb);
+
+      const res: any = await service.getCourierSettlementScope({
+        courier_id: '263',
+      });
+
+      expect(res.data).toEqual({
+        hq_pending_count: 3,
+        hq_pending_amount: 240000,
+        branch_pending_count: 3,
+        branch_pending_amount: 85000,
+        branch_ids: ['15', '16'],
+        carry_amount: 15000,
+      });
+      expect(settlementRepo.createQueryBuilder).toHaveBeenCalledTimes(1);
+      expect(qb.where).toHaveBeenCalledWith(
+        'settlement.isDeleted = :isDeleted',
+        { isDeleted: false },
+      );
+      expect(qb.andWhere).toHaveBeenCalledWith('settlement.status = :status', {
+        status: SettlementStatus.PENDING,
+      });
+      expect(qb.andWhere).toHaveBeenCalledWith(
+        'settlement.courier_id = :courierId',
+        { courierId: '263' },
+      );
+      expect(qb.addSelect).toHaveBeenCalledWith(
+        'COALESCE(SUM(settlement.courier_amount), 0)',
+        'amount',
+      );
+      expect(qb.groupBy).toHaveBeenCalledWith('settlement.branch_id');
+      expect(qb.groupBy).toHaveBeenCalledTimes(1);
+    });
+
+    it('faqat HQ qatorlari — filial qismi nol (superadmin qabul qila oladi)', async () => {
+      const { service, settlementRepo } = makeCarryService([]);
+      settlementRepo.createQueryBuilder.mockReturnValueOnce(
+        makeScopeQb([{ branch_id: null, count: '2', amount: '150000' }]),
+      );
+
+      const res: any = await service.getCourierSettlementScope({
+        courier_id: '263',
+      });
+
+      expect(res.data).toEqual({
+        ...zeros,
+        hq_pending_count: 2,
+        hq_pending_amount: 150000,
+      });
+    });
+
+    it('bo`sh id — nollar, so`rov yuborilmaydi', async () => {
+      const { service, settlementRepo } = makeCarryService([]);
+
+      const res: any = await service.getCourierSettlementScope({
+        courier_id: '  ',
+      });
+
+      expect(res.data).toEqual(zeros);
+      expect(settlementRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+
+    it('raqam bo`lmagan id — 400, so`rov yuborilmaydi', async () => {
+      const { service, settlementRepo } = makeCarryService([]);
+
+      const error = await service
+        .getCourierSettlementScope({ courier_id: 'abc' })
+        .catch((e: unknown) => e);
+
+      expect(error).toBeInstanceOf(RpcException);
+      expect((error as RpcException).getError()).toMatchObject({
+        statusCode: 400,
+      });
+      expect(settlementRepo.createQueryBuilder).not.toHaveBeenCalled();
+    });
+
+    it('qoldiq jadvali yo`q bo`lsa — carry 0, xato yo`q', async () => {
+      const { service, settlementRepo, dataSource } = makeCarryService(
+        [],
+        [{ level: 'courier_to_branch', party_id: '263', amount: 15000 }],
+      );
+      dataSource.query.mockResolvedValue([{ t: null }]);
+      settlementRepo.createQueryBuilder.mockReturnValueOnce(makeScopeQb([]));
+
+      const res: any = await service.getCourierSettlementScope({
+        courier_id: '263',
+      });
+
+      expect(res.data).toEqual(zeros);
+    });
   });
 });
