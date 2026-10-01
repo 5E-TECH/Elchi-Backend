@@ -256,6 +256,18 @@ export class OrderServiceController {
     );
   }
 
+  // CyCV4XHR — QOP (external_batch_token) bo'yicha a'zo posilkalar. Skaner
+  // order topa olmaganda (prefiksiz qop yorlig'i) gateway shu yo'lga tushadi.
+  @MessagePattern({ cmd: 'order.find_batch_by_external_token' })
+  findBatchByExternalToken(
+    @Payload() data: { token: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findBatchByExternalToken(data.token),
+    );
+  }
+
   @MessagePattern({ cmd: 'order.tracking' })
   tracking(
     @Payload() data: { id: string; page?: number; limit?: number },

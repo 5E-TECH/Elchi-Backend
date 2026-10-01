@@ -111,4 +111,68 @@ describe('ScanGatewayController', () => {
       NotFoundException,
     );
   });
+
+  it('CyCV4XHR: prefiksiz QOP tokeni — order 404 bo`lsa external_batch_token bo`yicha qidiradi (type=batch)', async () => {
+    const { controller, orderClient } = setup();
+    orderClient.send
+      // 1) order.find_by_qr -> 404 (posilka emas, qop yorlig'i)
+      .mockReturnValueOnce(
+        throwError(() => ({ statusCode: 404, message: 'Order not found' })),
+      )
+      // 2) order.find_batch_by_external_token -> qop a'zolari
+      .mockReturnValueOnce(
+        of({
+          data: {
+            external_batch_token: 'QOP-1',
+            is_external_batch: true,
+            count: 2,
+            members: [{ id: '1' }, { id: '2' }],
+          },
+        }),
+      );
+
+    const res = await controller.scan('QOP-1', req);
+
+    expect(orderClient.send).toHaveBeenNthCalledWith(
+      1,
+      { cmd: 'order.find_by_qr' },
+      { token: 'QOP-1' },
+    );
+    expect(orderClient.send).toHaveBeenNthCalledWith(
+      2,
+      { cmd: 'order.find_batch_by_external_token' },
+      { token: 'QOP-1' },
+    );
+    expect(res.type).toBe('batch');
+    expect((res.data as any).count).toBe(2);
+  });
+
+  it('CyCV4XHR: order ham, qop ham topilmasa 404 propagatsiya qilinadi', async () => {
+    const { controller, orderClient } = setup();
+    orderClient.send
+      .mockReturnValueOnce(
+        throwError(() => ({ statusCode: 404, message: 'Order not found' })),
+      )
+      .mockReturnValueOnce(
+        throwError(() => ({ statusCode: 404, message: 'Batch not found' })),
+      );
+
+    await expect(controller.scan('unknownTok', req)).rejects.toMatchObject({
+      statusCode: 404,
+    });
+    expect(orderClient.send).toHaveBeenCalledTimes(2);
+  });
+
+  it('CyCV4XHR: 404 BO`LMAGAN xato (500) qop qidiruvini BOSHLAMAYDI', async () => {
+    const { controller, orderClient } = setup();
+    orderClient.send.mockReturnValueOnce(
+      throwError(() => ({ statusCode: 500, message: 'boom' })),
+    );
+
+    await expect(controller.scan('tok500', req)).rejects.toMatchObject({
+      statusCode: 500,
+    });
+    // Qop lookup BOSHLANMADI — faqat bitta (order) chaqiruv.
+    expect(orderClient.send).toHaveBeenCalledTimes(1);
+  });
 });
