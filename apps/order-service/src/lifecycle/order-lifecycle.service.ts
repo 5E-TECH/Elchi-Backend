@@ -3847,7 +3847,9 @@ export class OrderLifecycleService {
         const previousHolderBranchId = order.holder_branch_id ?? null;
         const previousHolderCourierId = order.holder_courier_id ?? null;
 
-        order.status = Order_status.CLOSED;
+        // F4 — bekor buyurtma marketga topshirilganda RETURNED_TO_MARKET
+        // (ilgari CLOSED — QR-siz markReturnedToMarket yo'li bilan nomuvofiq edi).
+        order.status = Order_status.RETURNED_TO_MARKET;
         order.holder_type = OrderHolderType.MARKET;
         order.holder_branch_id = null;
         order.holder_courier_id = null;
@@ -3860,7 +3862,7 @@ export class OrderLifecycleService {
           {
             order_id: String(order.id),
             from_status: previousStatus,
-            to_status: Order_status.CLOSED,
+            to_status: Order_status.RETURNED_TO_MARKET,
             changed_by: requesterId,
             changed_by_role: this.custody.toTrackingRole(input.requester.roles),
             note: manualOverrideReason
@@ -3920,7 +3922,7 @@ export class OrderLifecycleService {
       entity_id: marketId,
       action: ActivityAction.STATUS_CHANGE,
       old_value: { status: Order_status.CANCELLED },
-      new_value: { status: Order_status.CLOSED },
+      new_value: { status: Order_status.RETURNED_TO_MARKET },
       ...this.custody.auditActor(input.requester),
       metadata: {
         handover_type: isQrRequired

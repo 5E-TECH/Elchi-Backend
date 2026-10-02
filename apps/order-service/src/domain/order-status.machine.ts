@@ -63,6 +63,10 @@ export const ORDER_STATUS_TRANSITIONS: Record<Order_status, Order_status[]> = {
     Order_status.WAITING,
     Order_status.CANCELLED_SENT,
     Order_status.CLOSED,
+    // F4 — bekor buyurtmani marketga topshirish ham RETURNED_TO_MARKET (ilgari
+    // CLOSED edi; QR-siz yo'l RETURNED_TO_MARKET berardi -> ikki xil status).
+    // Endi ikkala yo'l ham bir xil terminal holat.
+    Order_status.RETURNED_TO_MARKET,
   ],
   [Order_status.RETURNED_TO_MARKET]: [],
   [Order_status.CANCELLED_SENT]: [Order_status.CANCELLED, Order_status.CLOSED],

@@ -266,7 +266,7 @@ describe('OrderServiceService market cancelled handover', () => {
 
     expect(orderRepo.save).toHaveBeenCalledWith(
       expect.objectContaining({
-        status: Order_status.CLOSED,
+        status: Order_status.RETURNED_TO_MARKET,
         holder_type: OrderHolderType.MARKET,
       }),
     );
