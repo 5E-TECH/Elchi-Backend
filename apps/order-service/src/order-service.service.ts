@@ -1148,6 +1148,56 @@ export class OrderServiceService {
     return successRes(enriched[0] ?? order, 200, 'Order by QR code');
   }
 
+  /**
+   * QOP (`external_batch_token`) bo'yicha a'zo posilkalarni qaytaradi (CyCV4XHR).
+   *
+   * NEGA KERAK. BeePost qopni BITTA yorliq bilan chiqaradi, lekin qop yorlig'i
+   * ORD-/BTB- prefiksiz `external_batch_token` bo'lib keladi. Elchi skaneri uni
+   * `order.find_by_qr` bilan izlardi va posilka emasligi uchun 404 olardi — qop
+   * umuman TANILMASDI. Bu yo'l qop tokenini a'zo posilkalariga ochadi; qabul
+   * qilishning O'ZI mavjud receive-scan kengaytmasi orqali davom etadi.
+   *
+   * Faqat qisqa, xavfsiz maydonlar qaytadi (mijoz PII EMAS) — ro'yxat qopni
+   * tasdiqlash + qabul uchun yetarli; har bir posilkaning batafsil ma'lumoti
+   * alohida ko'rinish tekshiruvidan (visibility) o'tadi.
+   */
+  async findBatchByExternalToken(token: string) {
+    const t = String(token ?? '').trim();
+    if (!t) {
+      this.notFound('Batch not found');
+    }
+    let members: Order[] = [];
+    try {
+      members = await this.orderRepo.find({
+        where: { external_batch_token: t, isDeleted: false },
+        select: [
+          'id',
+          'qr_code_token',
+          'status',
+          'source',
+          'external_batch_token',
+        ],
+        order: { createdAt: 'ASC' },
+        take: 500,
+      });
+    } catch (error) {
+      this.handleDbError(error);
+    }
+    if (!members.length) {
+      this.notFound('Batch not found');
+    }
+    return successRes(
+      {
+        external_batch_token: t,
+        is_external_batch: true,
+        count: members.length,
+        members,
+      },
+      200,
+      'Batch by external token',
+    );
+  }
+
   async getTrackingByOrderId(id: string, pageRaw = 1, limitRaw = 20) {
     const orderResult = await this.findById(id);
     const order = (orderResult as { data?: Order })?.data;

@@ -445,3 +445,98 @@ describe('IntegrationServiceService — partner outbound webhook (C2.3)', () => 
     expect(fetchMock).not.toHaveBeenCalled();
   });
 });
+
+describe('IntegrationServiceService — qotgan "processing" reaper (sY4BsVGH)', () => {
+  const realFetch = global.fetch;
+  const realEnv = process.env.PARTNER_WEBHOOK_PROCESSING_STALE_MS;
+  afterEach(() => {
+    global.fetch = realFetch;
+    if (realEnv === undefined) {
+      delete process.env.PARTNER_WEBHOOK_PROCESSING_STALE_MS;
+    } else {
+      process.env.PARTNER_WEBHOOK_PROCESSING_STALE_MS = realEnv;
+    }
+    jest.restoreAllMocks();
+  });
+
+  it('eskirgan VA legacy "processing" qatorlarni "pending"ga qaytaradi; "attempts"ga TEGMAYDI', async () => {
+    const calls: Array<{ where: any; set: any }> = [];
+    const svc: any = makeSvc({
+      outboxUpdate: jest.fn((where: any, set: any) => {
+        calls.push({ where, set });
+        return Promise.resolve({ affected: 1 });
+      }),
+    });
+    const now = new Date('2026-06-01T12:00:00.000Z');
+
+    const reaped = await svc.reapStalePartnerWebhooks(now);
+
+    // Ikki update: (1) vaqtli-eskirgan, (2) legacy-null.
+    expect(calls).toHaveLength(2);
+    for (const c of calls) {
+      expect(c.where.status).toBe('processing');
+      expect(c.where.isDeleted).toBe(false);
+      expect(c.set.status).toBe('pending');
+      expect(c.set.next_retry_at).toBeNull();
+      // ⚠️ attempts O'ZGARTIRILMAYDI — zaharli qator oxiri permanently_failed.
+      expect('attempts' in c.set).toBe(false);
+    }
+    // (1) processing_started_at <= staleBefore
+    expect((calls[0].where.processing_started_at as any).type).toBe(
+      'lessThanOrEqual',
+    );
+    // (2) legacy: processing_started_at IS NULL + createdAt eski
+    expect((calls[1].where.processing_started_at as any).type).toBe('isNull');
+    expect((calls[1].where.createdAt as any).type).toBe('lessThanOrEqual');
+    // Ikkala affected qo'shiladi; log yoziladi.
+    expect(reaped).toBe(2);
+    expect(svc.logger.warn).toHaveBeenCalled();
+  });
+
+  it('getProcessingStaleMs: sukut 5 daqiqa, env bilan override, yaroqsiz -> sukut', () => {
+    const svc: any = makeSvc();
+    delete process.env.PARTNER_WEBHOOK_PROCESSING_STALE_MS;
+    expect(svc.getProcessingStaleMs()).toBe(5 * 60_000);
+    process.env.PARTNER_WEBHOOK_PROCESSING_STALE_MS = '120000';
+    expect(svc.getProcessingStaleMs()).toBe(120000);
+    process.env.PARTNER_WEBHOOK_PROCESSING_STALE_MS = 'garbage';
+    expect(svc.getProcessingStaleMs()).toBe(5 * 60_000);
+  });
+
+  it('claim "processing_started_at" ni vaqt bilan belgilaydi, yetkazilgach TOZALAYDI', async () => {
+    const calls: Array<{ where: any; set: any }> = [];
+    const svc: any = makeSvc({
+      outboxUpdate: jest.fn((where: any, set: any) => {
+        calls.push({ where, set });
+        return Promise.resolve({ affected: 1 });
+      }),
+    });
+    global.fetch = jest.fn(() =>
+      Promise.resolve({
+        ok: true,
+        status: 200,
+        text: () => Promise.resolve('{}'),
+      }),
+    ) as unknown as typeof fetch;
+
+    const row = {
+      id: '1',
+      partner_id: '7',
+      attempts: 0,
+      max_attempts: 4,
+      event_type: 'shipment.status_changed',
+      external_order_id: 'ord-9',
+      payload: SOLD_PAYLOAD,
+    };
+    await svc.deliverPartnerWebhookRow(row);
+
+    // Birinchi update = atomik claim: processing + vaqt yoziladi.
+    expect(calls[0].where.status).toBe('pending');
+    expect(calls[0].set.status).toBe('processing');
+    expect(calls[0].set.processing_started_at instanceof Date).toBe(true);
+    // Yakuniy update = completed: processing_started_at tozalandi (null).
+    const last = calls[calls.length - 1].set;
+    expect(last.status).toBe('completed');
+    expect(last.processing_started_at).toBeNull();
+  });
+});

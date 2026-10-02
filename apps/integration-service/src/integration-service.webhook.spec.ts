@@ -276,6 +276,32 @@ describe('IntegrationServiceService.receiveWebhook', () => {
     );
   });
 
+  it('⭐ 3nZ3dsgR: noma`lum slug log`ida raw_body SAQLANMAYDI (null)', async () => {
+    const { service, webhookLogRepo } = makeService(null);
+    await service.receiveWebhook(
+      bodyToInput('boshqa-slug', BODY, { 'x-signature': 'x' }),
+    );
+    // Autentifikatsiyasiz so'rovchi nazoratidagi bulk audit jadvaliga tushmaydi.
+    expect(webhookLogRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        status: 'rejected',
+        raw_body: null,
+        error: 'integration not found',
+      }),
+    );
+  });
+
+  it('⭐ 3nZ3dsgR: noma`lum slug IKKINCHI marta (oyna ichida) log YOZMAYDI (throttle)', async () => {
+    const { service, webhookLogRepo } = makeService(null);
+    const input = bodyToInput('takror-slug', BODY, { 'x-signature': 'x' });
+    const r1 = await service.receiveWebhook(input);
+    const r2 = await service.receiveWebhook(input);
+    expect(r1).toMatchObject({ ok: false, code: 401, reason: 'unknown_provider' });
+    expect(r2).toMatchObject({ ok: false, code: 401, reason: 'unknown_provider' });
+    // Suiiste'mol seli emas — oyna ichida faqat BIR qator yoziladi.
+    expect(webhookLogRepo.save).toHaveBeenCalledTimes(1);
+  });
+
   it('rejects when no webhook secret is configured', async () => {
     const { service } = makeService(baseIntegration({ webhook_secret: null }));
 
@@ -307,11 +333,13 @@ describe('IntegrationServiceService.receiveWebhook', () => {
     expect(webhookLogRepo.save).not.toHaveBeenCalled();
   });
 
-  it('accepts a signature signed with the previous secret during rotation', async () => {
+  it('accepts a signature signed with the previous secret during rotation (oyna OCHIQ)', async () => {
     const { service } = makeService(
       baseIntegration({
         webhook_secret: 'new-secret',
         webhook_secret_previous: 'old-secret',
+        // Q82QPgih: oyna hozirgina ochilgan — eski sekret hali qabul qilinadi.
+        webhook_secret_previous_at: new Date(),
       }),
     );
     const sig = computeHmacSignature(BODY, 'old-secret');
@@ -324,6 +352,60 @@ describe('IntegrationServiceService.receiveWebhook', () => {
     );
 
     expect(res).toMatchObject({ ok: true, reason: 'accepted' });
+  });
+
+  it('⭐ Q82QPgih: oyna YOPILGACH eski sekret bilan imzo RAD etiladi', async () => {
+    const { service, webhookLogRepo } = makeService(
+      baseIntegration({
+        webhook_secret: 'new-secret',
+        webhook_secret_previous: 'old-secret',
+        // Oyna 48 soat oldin ochilgan (sukut 24s) — YOPIQ.
+        webhook_secret_previous_at: new Date(Date.now() - 48 * 60 * 60 * 1000),
+      }),
+    );
+    const sig = computeHmacSignature(BODY, 'old-secret');
+
+    const res = await service.receiveWebhook(
+      bodyToInput('acme-cargo', BODY, {
+        'x-signature': sig,
+        'x-delivery-id': 'evt_old',
+      }),
+    );
+
+    // Sizib chiqqan eski sekret endi ABADIY amal qilmaydi.
+    expect(res).toMatchObject({ ok: false, code: 401, reason: 'invalid_signature' });
+    expect(webhookLogRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ signature_valid: false, status: 'rejected' }),
+    );
+  });
+
+  it('⭐ Q82QPgih: oyna vaqti YO`Q (legacy) bo`lsa eski sekret RAD etiladi, YANGISI ishlaydi', async () => {
+    const { service } = makeService(
+      baseIntegration({
+        webhook_secret: 'new-secret',
+        webhook_secret_previous: 'old-secret',
+        webhook_secret_previous_at: null, // legacy / migratsiyadan oldin
+      }),
+    );
+    // Eski sekret — rad
+    const oldSig = computeHmacSignature(BODY, 'old-secret');
+    const rejected = await service.receiveWebhook(
+      bodyToInput('acme-cargo', BODY, {
+        'x-signature': oldSig,
+        'x-delivery-id': 'evt_legacy_old',
+      }),
+    );
+    expect(rejected).toMatchObject({ ok: false, code: 401 });
+
+    // Yangi (joriy) sekret — qabul
+    const newSig = computeHmacSignature(BODY, 'new-secret');
+    const accepted = await service.receiveWebhook(
+      bodyToInput('acme-cargo', BODY, {
+        'x-signature': newSig,
+        'x-delivery-id': 'evt_legacy_new',
+      }),
+    );
+    expect(accepted).toMatchObject({ ok: true, reason: 'accepted' });
   });
 
   it('honours a custom signature header and prefix', async () => {
@@ -864,5 +946,44 @@ describe("⭐ BIR VAQTDA kelgan nusxa — hodisa QO'LLANMAYDI (audit P1)", () =>
     expect(res.code).toBe(400);
     expect(res.reason).toBe('missing_delivery_id');
     expect(shipmentRepo.save).not.toHaveBeenCalled();
+  });
+});
+
+describe('IntegrationServiceService — retention prune (3nZ3dsgR)', () => {
+  it('⭐ maybePruneWebhookRetention: provider_webhook_logs + activity_logs ni tozalaydi', async () => {
+    const { service, webhookLogRepo, activityLog } = makeService(null);
+    webhookLogRepo.delete = jest.fn().mockResolvedValue({ affected: 12 });
+    activityLog.prune = jest.fn().mockResolvedValue(5);
+
+    const res: any = await service.maybePruneWebhookRetention();
+
+    expect(res.webhookLogs).toBe(12);
+    expect(res.activityLogs).toBe(5);
+    expect(webhookLogRepo.delete).toHaveBeenCalled();
+    expect(activityLog.prune).toHaveBeenCalled();
+  });
+
+  it('⭐ oyna ichida IKKINCHI chaqiruv SKIP qiladi (gate — har tick emas)', async () => {
+    const { service, webhookLogRepo, activityLog } = makeService(null);
+    webhookLogRepo.delete = jest.fn().mockResolvedValue({ affected: 0 });
+    activityLog.prune = jest.fn().mockResolvedValue(0);
+
+    await service.maybePruneWebhookRetention(); // 1-chi: bajaradi
+    const second: any = await service.maybePruneWebhookRetention(); // 2-chi: gate
+
+    expect(second.skipped).toBe(true);
+    expect(webhookLogRepo.delete).toHaveBeenCalledTimes(1);
+  });
+
+  it('retention xatosi YUTILADI (tick yiqilmasin)', async () => {
+    const { service, webhookLogRepo, activityLog } = makeService(null);
+    webhookLogRepo.delete = jest
+      .fn()
+      .mockRejectedValue(new Error('db down'));
+    activityLog.prune = jest.fn().mockResolvedValue(0);
+
+    // throw qilmasligi kerak
+    const res: any = await service.maybePruneWebhookRetention();
+    expect(res.webhookLogs).toBe(0);
   });
 });

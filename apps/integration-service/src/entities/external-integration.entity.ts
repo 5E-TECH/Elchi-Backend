@@ -143,6 +143,18 @@ export class ExternalIntegration extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   webhook_secret_previous!: string | null;
 
+  /**
+   * Rotatsiya VAQTI — `webhook_secret_previous` qachon yozilgani (Q82QPgih).
+   *
+   * NEGA KERAK. Ilgari eski sekret `webhook_secret_previous`da MUDDATSIZ
+   * qolardi: rotatsiya oynasi hech qachon yopilmasdi va sizib chiqqan eski
+   * sekret ABADIY to'g'ri imzo berardi. `receiveWebhook` endi eski sekretni
+   * FAQAT oyna ichida (now − at <= N, sukut 24s) qabul qiladi. `null` — oyna
+   * yopiq (rotatsiya bo'lmagan yoki sekret tozalangan).
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  webhook_secret_previous_at!: Date | null;
+
   /** Header carrying the signature, e.g. 'x-signature'. Default applied in code. */
   @Column({ type: 'varchar', nullable: true })
   webhook_signature_header!: string | null;

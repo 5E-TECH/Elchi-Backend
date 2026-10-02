@@ -166,6 +166,18 @@ export class SyncQueueScheduler implements OnModuleInit, OnModuleDestroy {
         });
       }
 
+      // 3nZ3dsgR — RETENTION: eski provider_webhook_logs + activity_logs ni
+      // davriy tozalash (ilgari prune() ni hech kim chaqirmasdi -> cheksiz
+      // o'sish). maybePrune O'ZI gate qiladi (DELETE soatiga ~1), shuning uchun
+      // har 30s tick'da ARZON. Xatosi butun tick'ni yiqitmasin.
+      try {
+        await this.integrationService.maybePruneWebhookRetention();
+      } catch (retErr) {
+        const e = retErr as Error;
+        this.logger.error(`retention prune crashed: ${e.message}`, e.stack);
+        captureException(e, { source: 'SyncQueueScheduler.tick.retention' });
+      }
+
       // Only audit ticks that did real work — quiet ticks would flood the
       // audit log with thousands of "0 processed" entries per day.
       if (processed > 0) {

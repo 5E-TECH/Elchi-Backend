@@ -93,6 +93,21 @@ export class ScanGatewayController {
     };
   }
 
+  /**
+   * RMQ xatosi "topilmadi" (404) mi? Order-service `RpcException({statusCode})`
+   * tashlaydi — mikroservis uni plain obyekt ({statusCode,message}) sifatida
+   * yuboradi, lekin ehtiyot uchun RpcException instance holatini ham qamraymiz.
+   * Timeout ALOHIDA ushlanadi (GatewayTimeoutException) — u 404 EMAS.
+   */
+  private isNotFoundRpcError(error: unknown): boolean {
+    if (error instanceof GatewayTimeoutException) return false;
+    const raw: { statusCode?: number; status?: number } =
+      error && typeof (error as { getError?: unknown }).getError === 'function'
+        ? (error as { getError: () => { statusCode?: number; status?: number } }).getError()
+        : (error as { statusCode?: number; status?: number }) ?? {};
+    return raw?.statusCode === 404 || raw?.status === 404;
+  }
+
   @Get(':token')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -146,14 +161,33 @@ export class ScanGatewayController {
     if (!canLookupOrderByQr(req?.user?.roles)) {
       throw new ForbiddenException("Bu buyurtmani ko'rishga ruxsat yo'q");
     }
-    const response: unknown = await this.sendWithTimeout(
-      'order',
-      { cmd: 'order.find_by_qr' },
-      { token: normalizedToken },
-    );
-    const shaped = this.shapeResponse('order', response);
-    assertQrOrderVisible(req?.user, shaped.data);
-    return shaped;
+    try {
+      const response: unknown = await this.sendWithTimeout(
+        'order',
+        { cmd: 'order.find_by_qr' },
+        { token: normalizedToken },
+      );
+      const shaped = this.shapeResponse('order', response);
+      assertQrOrderVisible(req?.user, shaped.data);
+      return shaped;
+    } catch (error) {
+      /**
+       * CyCV4XHR — buyurtma topilmadi. Token QOP (`external_batch_token`)
+       * bo'lishi mumkin: BeePost qop yorlig'i ORD-/BTB- prefiksiz keladi,
+       * shuning uchun shu (prefiksiz) yo'lga tushadi va posilka emasligi uchun
+       * 404 beradi. FAQAT 404 da qop bo'yicha qidiramiz (timeout/boshqa xato
+       * yashirilmasin). Qop ham topilmasa, batch lookup o'z 404'ini tashlaydi.
+       */
+      if (!this.isNotFoundRpcError(error)) {
+        throw error;
+      }
+      const batch: unknown = await this.sendWithTimeout(
+        'order',
+        { cmd: 'order.find_batch_by_external_token' },
+        { token: normalizedToken },
+      );
+      return this.shapeResponse('batch', batch);
+    }
   }
 
   @Post('market-cancelled')

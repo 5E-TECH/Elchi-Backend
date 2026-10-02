@@ -101,6 +101,26 @@ export class PartnerWebhookOutbox extends BaseEntity {
   @Column({ type: 'timestamptz', nullable: true })
   next_retry_at!: Date | null;
 
+  /**
+   * Qator `processing`ga CLAIM qilingan vaqt — atomik claim bilan BIR update'da
+   * yoziladi.
+   *
+   * NEGA KERAK (sY4BsVGH). Claim (`pending`→`processing`) bilan HTTP natijasi
+   * orasida jarayon KRASH bo'lsa (deploy/OOM/qayta ishga tushish), qator abadiy
+   * `processing`da qolardi: scheduler FAQAT `pending` qatorlarni tanlaydi,
+   * shuning uchun u hech qachon qayta urinilmasdi. Battari — qisman unique
+   * indeks (`IDX_PWO_DEDUP`, `status IN ('pending','processing')`) tufayli o'sha
+   * (partner, order, status) juftligi uchun YANGI webhook ham yozib bo'lmasdi
+   * (dedup to'sadi) — hodisa ABADIY yo'qolardi.
+   *
+   * Bu ustun reaper'ga eskirgan claim'ni (`processing_started_at` < now − N)
+   * aniqlab, qatorni `pending`ga qaytarishga imkon beradi. `null` — qator hozir
+   * `processing`da EMAS (yoki shu migratsiyadan oldin qotib qolgan legacy qator;
+   * reaper ularni ham tiklaydi).
+   */
+  @Column({ type: 'timestamptz', nullable: true })
+  processing_started_at!: Date | null;
+
   @Column({ type: 'timestamptz', nullable: true })
   delivered_at!: Date | null;
 
