@@ -1,3 +1,4 @@
+import { of } from 'rxjs';
 import { RpcException } from '@nestjs/microservices';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { OrderCustodyService } from './custody/order-custody.service';
@@ -21,6 +22,7 @@ describe('OrderServiceService return flow', () => {
     holderBranchId?: string | null;
     returnRequested?: boolean;
     handoverSession?: unknown;
+    requesterBranch?: unknown;
   }) {
     const order = {
       id: '101',
@@ -104,6 +106,11 @@ describe('OrderServiceService return flow', () => {
 
     const outbox = { enqueue: jest.fn() };
 
+    // branch.user.find_by_user — F3 filial xodimining filialini qaytaradi.
+    const branchClient = {
+      send: jest.fn(() => of({ data: options?.requesterBranch ?? null })),
+    };
+
     // OrderServiceService konstruktori — 16 ta pozitsion bog'liqlik.
     // Faqat shu test ishlatadigan repolar haqiqiy mock, qolgani {}.
     const custody = new OrderCustodyService(
@@ -123,7 +130,7 @@ describe('OrderServiceService return flow', () => {
       {} as any, // logisticsClient
       {} as any, // financeClient
       {} as any, // integrationClient
-      {} as any, // branchClient
+      branchClient as any, // branchClient
       {} as any, // fileClient
       outbox as any, // outbox
       {
@@ -425,6 +432,48 @@ describe('OrderServiceService return flow', () => {
     await expectRpc(
       service.markReturnedToMarket(
         { id: '9', roles: ['superadmin'] },
+        '101',
+        'MHA-ok',
+      ),
+      403,
+    );
+  });
+
+  // ⭐ F3 — FILIAL darajasi: menejer o'z filialidagi bekor orderni market QR
+  // bilan topshira oladi; begona filial orderi rad etiladi.
+  it('⭐ F3: filial menejeri O`Z filialidagi orderni topshira oladi (200)', async () => {
+    const { service, orderRepo } = makeService({
+      orderStatus: Order_status.RECEIVED,
+      hasReceivedReturnBatch: true,
+      holderType: OrderHolderType.BRANCH,
+      holderBranchId: '10',
+      requesterBranch: { branch_id: '10', branch: { type: 'REGIONAL' } },
+    });
+
+    const res: any = await service.markReturnedToMarket(
+      { id: '9', roles: ['manager'] },
+      '101',
+      'MHA-ok',
+    );
+
+    expect(orderRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ status: Order_status.RETURNED_TO_MARKET }),
+    );
+    expect(res.statusCode).toBe(200);
+  });
+
+  it('⭐ F3: filial menejeri BEGONA filial orderini topshira olmaydi (403)', async () => {
+    const { service } = makeService({
+      orderStatus: Order_status.RECEIVED,
+      hasReceivedReturnBatch: true,
+      holderType: OrderHolderType.BRANCH,
+      holderBranchId: '99', // boshqa filial
+      requesterBranch: { branch_id: '10', branch: { type: 'REGIONAL' } },
+    });
+
+    await expectRpc(
+      service.markReturnedToMarket(
+        { id: '9', roles: ['manager'] },
         '101',
         'MHA-ok',
       ),

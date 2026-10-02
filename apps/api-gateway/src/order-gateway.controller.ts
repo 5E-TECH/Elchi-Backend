@@ -3519,7 +3519,12 @@ export class OrderGatewayController {
   @Post('markets/:marketId/cancelled/handover')
   @HttpCode(200)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
   @ApiBearerAuth()
   @ApiOperation({
     summary:
@@ -4184,7 +4189,12 @@ export class OrderGatewayController {
 
   @Post(':id/mark-returned-to-market')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.MANAGER,
+    RoleEnum.REGISTRATOR,
+  )
   @ApiBearerAuth()
   @ApiOperation({
     summary:

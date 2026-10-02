@@ -544,10 +544,21 @@ export class OrderLifecycleService {
     return `${prefix}-${randomBytes(32).toString('base64url')}`;
   }
 
-  private async assertMarketHandoverHqRequester(requester: {
+  /**
+   * Market QR topshiruvchini aniqlaydi (F3 — filial darajasi).
+   *
+   * SA/ADMIN — HQ darajasi, cheklovsiz. MANAGER/REGISTRATOR — O'Z filiali
+   * doirasida (chaqiruvchilar `branchId` bo'yicha skoplaydi: xodim faqat o'z
+   * filialidagi bekor buyurtmani topshira oladi). Market QR'ning O'ZI asosiy
+   * ruxsat — bu faqat kim jismonan topshirayotganini aniqlaydi.
+   *
+   * @returns `{ isHq, branchId }`. `isHq=true` -> har filialdagi/HQ orderni;
+   *   aks holda faqat `branchId` dagi orderlarni.
+   */
+  private async resolveMarketHandoverRequester(requester: {
     id: string;
     roles?: string[];
-  }): Promise<void> {
+  }): Promise<{ isHq: boolean; branchId: string | null }> {
     const roles = new Set(
       (requester.roles ?? []).map((role) =>
         String(role ?? '')
@@ -557,11 +568,13 @@ export class OrderLifecycleService {
     );
 
     if (roles.has(Roles.SUPERADMIN) || roles.has(Roles.ADMIN)) {
-      return;
+      return { isHq: true, branchId: null };
     }
 
-    if (!roles.has(Roles.REGISTRATOR)) {
-      this.forbidden('QR scan va marketga topshirish faqat HQ xodimlari uchun');
+    if (!roles.has(Roles.MANAGER) && !roles.has(Roles.REGISTRATOR)) {
+      this.forbidden(
+        'QR scan va marketga topshirish faqat filial/HQ xodimlari uchun',
+      );
     }
 
     const response = await rmqSend<{
@@ -582,11 +595,14 @@ export class OrderLifecycleService {
       { attachRequestId: false, retries: 1 },
     );
 
-    if (
-      String(response?.data?.branch?.type ?? '').toUpperCase() !== BranchType.HQ
-    ) {
-      this.forbidden('Faqat HQga tegishli registrator QR scan qila oladi');
+    const branchId = String(response?.data?.branch_id ?? '').trim() || null;
+    if (!branchId) {
+      this.forbidden('Xodimning filiali aniqlanmadi');
     }
+    const isHq =
+      String(response?.data?.branch?.type ?? '').toUpperCase() ===
+      BranchType.HQ;
+    return { isHq, branchId };
   }
 
   /**
@@ -3326,13 +3342,21 @@ export class OrderLifecycleService {
     // (authorization_token) bo'lishi SHART. Market QR ko'rsatmasa — qaytarib
     // bo'lmaydi. (Shikastlangan posilka yorlig'i bu yerda muammo emas: buyurtma
     // id bo'yicha tanlanadi, parcel-QR skan qilinmaydi.)
-    await this.assertMarketHandoverHqRequester(requester);
+    const handoverCtx = await this.resolveMarketHandoverRequester(requester);
     const handoverToken = String(authorizationToken ?? '').trim();
     if (!handoverToken) {
       this.badRequest('authorization_token majburiy (market QR skan qilinsin)');
     }
     if (!handoverToken.startsWith('MHA-')) {
       this.badRequest('authorization_token noto‘g‘ri');
+    }
+    // F3 — filial xodimi FAQAT o'z filialidagi bekor buyurtmani topshira oladi.
+    // SA/ADMIN (isHq) har filialdagi/HQ orderni topshira oladi.
+    if (
+      !handoverCtx.isHq &&
+      String(order.holder_branch_id ?? '') !== String(handoverCtx.branchId ?? '')
+    ) {
+      this.forbidden('Bu buyurtma sizning filialingizda emas');
     }
     // A money-bearing order (COD collected) must be rolled back FIRST — which
     // reverses the sale's cashbox legs + settlement — before it can be returned
@@ -3609,7 +3633,9 @@ export class OrderLifecycleService {
       this.badRequest('QR token yoki requester noto‘g‘ri');
     }
 
-    await this.assertMarketHandoverHqRequester(input.requester);
+    // Skan — HQ yoki filial xodimi (F3). Natija bu yerda kerak emas, faqat
+    // chaqiruvchi haqiqiy xodim ekani tekshiriladi.
+    await this.resolveMarketHandoverRequester(input.requester);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -3721,7 +3747,9 @@ export class OrderLifecycleService {
       );
     }
 
-    await this.assertMarketHandoverHqRequester(input.requester);
+    const handoverCtx = await this.resolveMarketHandoverRequester(
+      input.requester,
+    );
 
     const [market] = await this.lookup.getMarketsByIds([marketId]);
     if (!market) {
@@ -3784,12 +3812,20 @@ export class OrderLifecycleService {
         }
       }
 
+      // F3 — HQ xodimi HQda turgan orderlarni, filial xodimi esa FAQAT o'z
+      // filialida turgan bekor orderlarni topshira oladi.
+      const holderFilter = handoverCtx.isHq
+        ? { holder_type: OrderHolderType.HQ }
+        : {
+            holder_type: OrderHolderType.BRANCH,
+            holder_branch_id: handoverCtx.branchId ?? '',
+          };
       handedOverOrders = await orderRepo.find({
         where: {
           id: In(orderIds),
           market_id: marketId,
           status: Order_status.CANCELLED,
-          holder_type: OrderHolderType.HQ,
+          ...holderFilter,
           canceled_post_id: IsNull(),
           isDeleted: false,
         },
@@ -3798,7 +3834,7 @@ export class OrderLifecycleService {
 
       if (handedOverOrders.length !== orderIds.length) {
         this.badRequest(
-          'Tanlangan orderlarning ayrimlari marketga tegishli emas, CANCELLED emas yoki HQda turmagan',
+          'Tanlangan orderlarning ayrimlari marketga tegishli emas, CANCELLED emas, yoki sizning filialingizda/HQda turmagan',
         );
       }
 
