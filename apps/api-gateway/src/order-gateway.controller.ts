@@ -4186,15 +4186,35 @@ export class OrderGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Mark order as returned to market (branch)' })
+  @ApiOperation({
+    summary:
+      'Mark order as returned to market — MARKET QR MAJBURIY (authorization_token)',
+  })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
-  markReturnedToMarket(@Param('id') id: string, @Req() req: { user: JwtUser }) {
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['authorization_token'],
+      properties: {
+        authorization_token: {
+          type: 'string',
+          description: 'Market QR skanidan olingan ruxsat (MHA-...)',
+        },
+      },
+    },
+  })
+  markReturnedToMarket(
+    @Param('id') id: string,
+    @Body() body: { authorization_token?: string },
+    @Req() req: { user: JwtUser },
+  ) {
     return firstValueFrom(
       this.orderClient
         .send(
           { cmd: 'order.mark_returned_to_market' },
           {
             id,
+            authorization_token: body?.authorization_token,
             requester: {
               id: req.user.sub,
               roles: this.normalizeRoles(req.user.roles),

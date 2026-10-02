@@ -284,33 +284,26 @@ describe('OrderServiceService market cancelled handover', () => {
     expect(response.data.closed_count).toBe(1);
   });
 
-  it('closes HQ-held cancelled orders without authorization when market QR is disabled', async () => {
-    const { service, sessionRepo, orderRepo, queryRunner } = setup({
-      marketQrRequired: false,
-    });
+  it('⭐ market QR MAJBURIY — konfig o`chirilgan bo`lsa ham QR`siz topshirib bo`lmaydi (F1)', async () => {
+    // Ilgari `cancelled_handover_qr_required=false` bilan QR'ni butunlay
+    // chetlab o'tish mumkin edi. Endi konfig E'TIBORSIZ — QR har doim majburiy.
+    const { service, sessionRepo } = setup({ marketQrRequired: false });
 
-    const response: any = await service.completeMarketCancelledHandover({
-      market_id: '16',
-      order_ids: ['101'],
-      requester: { id: '9', roles: ['admin'] },
-    });
-
-    expect(sessionRepo.findOne).not.toHaveBeenCalled();
-    expect(sessionRepo.save).not.toHaveBeenCalledWith(
-      expect.objectContaining({ consumed_at: expect.any(Date) }),
-    );
-    expect(orderRepo.save).toHaveBeenCalledWith(
-      expect.objectContaining({
-        status: Order_status.CLOSED,
-        holder_type: OrderHolderType.MARKET,
+    await expectRpc(
+      service.completeMarketCancelledHandover({
+        market_id: '16',
+        order_ids: ['101'],
+        // authorization_token ATAYLAB berilmadi — market QR ko'rsatilmagan.
+        requester: { id: '9', roles: ['admin'] },
       }),
+      400,
     );
-    expect(queryRunner.commitTransaction).toHaveBeenCalled();
-    expect(response.data.closed_count).toBe(1);
+    // Token yo'q — sessiya umuman qidirilmaydi, topshirish bo'lmaydi.
+    expect(sessionRepo.findOne).not.toHaveBeenCalled();
   });
 
   it('emits a returned_to_market partner signal after closing cancelled orders', async () => {
-    const { service, order } = setup({ marketQrRequired: false });
+    const { service, order } = setup();
     order.external_id = 'BP-777';
 
     const syncSpy = jest
@@ -320,6 +313,7 @@ describe('OrderServiceService market cancelled handover', () => {
     await service.completeMarketCancelledHandover({
       market_id: '16',
       order_ids: ['101'],
+      authorization_token: 'MHA-valid-token',
       requester: { id: '9', roles: ['admin'] },
     });
 
@@ -334,12 +328,13 @@ describe('OrderServiceService market cancelled handover', () => {
   });
 
   it('rejects unknown manual override reasons', async () => {
-    const { service } = setup({ marketQrRequired: false });
+    const { service } = setup();
 
     await expectRpc(
       service.completeMarketCancelledHandover({
         market_id: '16',
         order_ids: ['101'],
+        authorization_token: 'MHA-valid-token',
         manual_overrides: [{ order_id: '101', reason: 'random text' }],
         requester: { id: '9', roles: ['admin'] },
       }),

@@ -3313,10 +3313,26 @@ export class OrderLifecycleService {
   async markReturnedToMarket(
     requester: { id: string; roles?: string[] },
     id: string,
+    authorizationToken?: string,
   ) {
     const order = await this.findById(id);
     if (order.status === Order_status.RETURNED_TO_MARKET) {
       this.badRequest('Order allaqachon RETURNED_TO_MARKET holatida');
+    }
+
+    // ⚠️ MARKET QR MAJBURIY (return-market-qr-majburiy). Bu yo'l ilgari QR'siz
+    // marketga qaytarardi — marketning roziligisiz. Endi topshiruvchi HQ xodimi
+    // bo'lishi + marketning QR'ini skan qilib olingan amaldagi ruxsat
+    // (authorization_token) bo'lishi SHART. Market QR ko'rsatmasa — qaytarib
+    // bo'lmaydi. (Shikastlangan posilka yorlig'i bu yerda muammo emas: buyurtma
+    // id bo'yicha tanlanadi, parcel-QR skan qilinmaydi.)
+    await this.assertMarketHandoverHqRequester(requester);
+    const handoverToken = String(authorizationToken ?? '').trim();
+    if (!handoverToken) {
+      this.badRequest('authorization_token majburiy (market QR skan qilinsin)');
+    }
+    if (!handoverToken.startsWith('MHA-')) {
+      this.badRequest('authorization_token noto‘g‘ri');
     }
     // A money-bearing order (COD collected) must be rolled back FIRST — which
     // reverses the sale's cashbox legs + settlement — before it can be returned
@@ -3402,6 +3418,35 @@ export class OrderLifecycleService {
       const orderRepo = queryRunner.manager.getRepository(Order);
       const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
       const custodyRepo = queryRunner.manager.getRepository(OrderCustodyEvent);
+      const sessionRepo = queryRunner.manager.getRepository(
+        MarketCancelledHandoverSession,
+      );
+
+      // Market QR ruxsatini tekshir: shu buyurtma marketiga tegishli, skan
+      // qilgan xodim o'zi, muddati o'tmagan. ⚠️ `consumed_at` TEKSHIRILMAYDI va
+      // YOZILMAYDI — bitta market QR 5 daqiqa ichida bir nechta buyurtmaga (har
+      // biri alohida markReturnedToMarket) ishlatilishi mumkin; bulk `complete`
+      // yo'li esa bir martalik (consumed) ishlatadi.
+      const marketId = String(order.market_id ?? '').trim();
+      const session = await sessionRepo.findOne({
+        where: {
+          authorization_token_hash: this.hashHandoverToken(handoverToken),
+          isDeleted: false,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!session || !session.authorization_expires_at) {
+        this.forbidden('Topshirish ruxsati topilmadi');
+      }
+      if (String(session.market_id) !== marketId) {
+        this.forbidden('Ruxsat bu buyurtma marketiga tegishli emas');
+      }
+      if (String(session.scanned_by_user_id ?? '') !== String(requester.id)) {
+        this.forbidden('Ruxsat boshqa xodimga tegishli');
+      }
+      if (session.authorization_expires_at.getTime() <= Date.now()) {
+        this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
+      }
 
       // Capture the prior custody holder before closing the chain.
       const priorHolderType = order.holder_type ?? null;
@@ -3682,11 +3727,18 @@ export class OrderLifecycleService {
     if (!market) {
       this.badRequest('Market topilmadi');
     }
-    const isQrRequired = market?.cancelled_handover_qr_required !== false;
-    if (isQrRequired && !authorizationToken) {
-      this.badRequest('authorization_token majburiy');
+    // ⚠️ MARKET QR MAJBURIY (return-market-qr-majburiy). Ilgari
+    // `cancelled_handover_qr_required=false` bilan QR'ni butunlay o'chirib
+    // qo'yish mumkin edi — ya'ni marketning roziligisiz (QR'isiz) bekor
+    // buyurtmani unga «topshirilgan» deb belgilash mumkin edi. Endi QR har doim
+    // talab qilinadi; faqat alohida posilkaning YORLIG'I shikastlangan bo'lsa,
+    // market QR bilan ochilgan sessiya ICHIDA `manual_overrides` orqali qo'lda
+    // tasdiqlanadi (bu market QR'ni emas, parcel-yorliqni chetlab o'tadi).
+    const isQrRequired = true;
+    if (!authorizationToken) {
+      this.badRequest('authorization_token majburiy (market QR skan qilinsin)');
     }
-    if (isQrRequired && !authorizationToken.startsWith('MHA-')) {
+    if (!authorizationToken.startsWith('MHA-')) {
       this.badRequest('authorization_token noto‘g‘ri');
     }
 

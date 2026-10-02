@@ -781,11 +781,16 @@ export class OrderServiceController {
     data: {
       id: string;
       requester: { id: string; roles?: string[] };
+      authorization_token?: string;
     },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.lifecycleService.markReturnedToMarket(data.requester, data.id),
+      this.lifecycleService.markReturnedToMarket(
+        data.requester,
+        data.id,
+        data.authorization_token,
+      ),
     );
   }
 
