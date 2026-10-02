@@ -544,10 +544,21 @@ export class OrderLifecycleService {
     return `${prefix}-${randomBytes(32).toString('base64url')}`;
   }
 
-  private async assertMarketHandoverHqRequester(requester: {
+  /**
+   * Market QR topshiruvchini aniqlaydi (F3 — filial darajasi).
+   *
+   * SA/ADMIN — HQ darajasi, cheklovsiz. MANAGER/REGISTRATOR — O'Z filiali
+   * doirasida (chaqiruvchilar `branchId` bo'yicha skoplaydi: xodim faqat o'z
+   * filialidagi bekor buyurtmani topshira oladi). Market QR'ning O'ZI asosiy
+   * ruxsat — bu faqat kim jismonan topshirayotganini aniqlaydi.
+   *
+   * @returns `{ isHq, branchId }`. `isHq=true` -> har filialdagi/HQ orderni;
+   *   aks holda faqat `branchId` dagi orderlarni.
+   */
+  private async resolveMarketHandoverRequester(requester: {
     id: string;
     roles?: string[];
-  }): Promise<void> {
+  }): Promise<{ isHq: boolean; branchId: string | null }> {
     const roles = new Set(
       (requester.roles ?? []).map((role) =>
         String(role ?? '')
@@ -557,11 +568,13 @@ export class OrderLifecycleService {
     );
 
     if (roles.has(Roles.SUPERADMIN) || roles.has(Roles.ADMIN)) {
-      return;
+      return { isHq: true, branchId: null };
     }
 
-    if (!roles.has(Roles.REGISTRATOR)) {
-      this.forbidden('QR scan va marketga topshirish faqat HQ xodimlari uchun');
+    if (!roles.has(Roles.MANAGER) && !roles.has(Roles.REGISTRATOR)) {
+      this.forbidden(
+        'QR scan va marketga topshirish faqat filial/HQ xodimlari uchun',
+      );
     }
 
     const response = await rmqSend<{
@@ -582,11 +595,14 @@ export class OrderLifecycleService {
       { attachRequestId: false, retries: 1 },
     );
 
-    if (
-      String(response?.data?.branch?.type ?? '').toUpperCase() !== BranchType.HQ
-    ) {
-      this.forbidden('Faqat HQga tegishli registrator QR scan qila oladi');
+    const branchId = String(response?.data?.branch_id ?? '').trim() || null;
+    if (!branchId) {
+      this.forbidden('Xodimning filiali aniqlanmadi');
     }
+    const isHq =
+      String(response?.data?.branch?.type ?? '').toUpperCase() ===
+      BranchType.HQ;
+    return { isHq, branchId };
   }
 
   /**
@@ -3313,10 +3329,34 @@ export class OrderLifecycleService {
   async markReturnedToMarket(
     requester: { id: string; roles?: string[] },
     id: string,
+    authorizationToken?: string,
   ) {
     const order = await this.findById(id);
     if (order.status === Order_status.RETURNED_TO_MARKET) {
       this.badRequest('Order allaqachon RETURNED_TO_MARKET holatida');
+    }
+
+    // ⚠️ MARKET QR MAJBURIY (return-market-qr-majburiy). Bu yo'l ilgari QR'siz
+    // marketga qaytarardi — marketning roziligisiz. Endi topshiruvchi HQ xodimi
+    // bo'lishi + marketning QR'ini skan qilib olingan amaldagi ruxsat
+    // (authorization_token) bo'lishi SHART. Market QR ko'rsatmasa — qaytarib
+    // bo'lmaydi. (Shikastlangan posilka yorlig'i bu yerda muammo emas: buyurtma
+    // id bo'yicha tanlanadi, parcel-QR skan qilinmaydi.)
+    const handoverCtx = await this.resolveMarketHandoverRequester(requester);
+    const handoverToken = String(authorizationToken ?? '').trim();
+    if (!handoverToken) {
+      this.badRequest('authorization_token majburiy (market QR skan qilinsin)');
+    }
+    if (!handoverToken.startsWith('MHA-')) {
+      this.badRequest('authorization_token noto‘g‘ri');
+    }
+    // F3 — filial xodimi FAQAT o'z filialidagi bekor buyurtmani topshira oladi.
+    // SA/ADMIN (isHq) har filialdagi/HQ orderni topshira oladi.
+    if (
+      !handoverCtx.isHq &&
+      String(order.holder_branch_id ?? '') !== String(handoverCtx.branchId ?? '')
+    ) {
+      this.forbidden('Bu buyurtma sizning filialingizda emas');
     }
     // A money-bearing order (COD collected) must be rolled back FIRST — which
     // reverses the sale's cashbox legs + settlement — before it can be returned
@@ -3402,6 +3442,35 @@ export class OrderLifecycleService {
       const orderRepo = queryRunner.manager.getRepository(Order);
       const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
       const custodyRepo = queryRunner.manager.getRepository(OrderCustodyEvent);
+      const sessionRepo = queryRunner.manager.getRepository(
+        MarketCancelledHandoverSession,
+      );
+
+      // Market QR ruxsatini tekshir: shu buyurtma marketiga tegishli, skan
+      // qilgan xodim o'zi, muddati o'tmagan. ⚠️ `consumed_at` TEKSHIRILMAYDI va
+      // YOZILMAYDI — bitta market QR 5 daqiqa ichida bir nechta buyurtmaga (har
+      // biri alohida markReturnedToMarket) ishlatilishi mumkin; bulk `complete`
+      // yo'li esa bir martalik (consumed) ishlatadi.
+      const marketId = String(order.market_id ?? '').trim();
+      const session = await sessionRepo.findOne({
+        where: {
+          authorization_token_hash: this.hashHandoverToken(handoverToken),
+          isDeleted: false,
+        },
+        lock: { mode: 'pessimistic_write' },
+      });
+      if (!session || !session.authorization_expires_at) {
+        this.forbidden('Topshirish ruxsati topilmadi');
+      }
+      if (String(session.market_id) !== marketId) {
+        this.forbidden('Ruxsat bu buyurtma marketiga tegishli emas');
+      }
+      if (String(session.scanned_by_user_id ?? '') !== String(requester.id)) {
+        this.forbidden('Ruxsat boshqa xodimga tegishli');
+      }
+      if (session.authorization_expires_at.getTime() <= Date.now()) {
+        this.forbidden('5 daqiqalik topshirish ruxsati tugagan');
+      }
 
       // Capture the prior custody holder before closing the chain.
       const priorHolderType = order.holder_type ?? null;
@@ -3564,7 +3633,9 @@ export class OrderLifecycleService {
       this.badRequest('QR token yoki requester noto‘g‘ri');
     }
 
-    await this.assertMarketHandoverHqRequester(input.requester);
+    // Skan — HQ yoki filial xodimi (F3). Natija bu yerda kerak emas, faqat
+    // chaqiruvchi haqiqiy xodim ekani tekshiriladi.
+    await this.resolveMarketHandoverRequester(input.requester);
 
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
@@ -3676,17 +3747,26 @@ export class OrderLifecycleService {
       );
     }
 
-    await this.assertMarketHandoverHqRequester(input.requester);
+    const handoverCtx = await this.resolveMarketHandoverRequester(
+      input.requester,
+    );
 
     const [market] = await this.lookup.getMarketsByIds([marketId]);
     if (!market) {
       this.badRequest('Market topilmadi');
     }
-    const isQrRequired = market?.cancelled_handover_qr_required !== false;
-    if (isQrRequired && !authorizationToken) {
-      this.badRequest('authorization_token majburiy');
+    // ⚠️ MARKET QR MAJBURIY (return-market-qr-majburiy). Ilgari
+    // `cancelled_handover_qr_required=false` bilan QR'ni butunlay o'chirib
+    // qo'yish mumkin edi — ya'ni marketning roziligisiz (QR'isiz) bekor
+    // buyurtmani unga «topshirilgan» deb belgilash mumkin edi. Endi QR har doim
+    // talab qilinadi; faqat alohida posilkaning YORLIG'I shikastlangan bo'lsa,
+    // market QR bilan ochilgan sessiya ICHIDA `manual_overrides` orqali qo'lda
+    // tasdiqlanadi (bu market QR'ni emas, parcel-yorliqni chetlab o'tadi).
+    const isQrRequired = true;
+    if (!authorizationToken) {
+      this.badRequest('authorization_token majburiy (market QR skan qilinsin)');
     }
-    if (isQrRequired && !authorizationToken.startsWith('MHA-')) {
+    if (!authorizationToken.startsWith('MHA-')) {
       this.badRequest('authorization_token noto‘g‘ri');
     }
 
@@ -3732,12 +3812,20 @@ export class OrderLifecycleService {
         }
       }
 
+      // F3 — HQ xodimi HQda turgan orderlarni, filial xodimi esa FAQAT o'z
+      // filialida turgan bekor orderlarni topshira oladi.
+      const holderFilter = handoverCtx.isHq
+        ? { holder_type: OrderHolderType.HQ }
+        : {
+            holder_type: OrderHolderType.BRANCH,
+            holder_branch_id: handoverCtx.branchId ?? '',
+          };
       handedOverOrders = await orderRepo.find({
         where: {
           id: In(orderIds),
           market_id: marketId,
           status: Order_status.CANCELLED,
-          holder_type: OrderHolderType.HQ,
+          ...holderFilter,
           canceled_post_id: IsNull(),
           isDeleted: false,
         },
@@ -3746,7 +3834,7 @@ export class OrderLifecycleService {
 
       if (handedOverOrders.length !== orderIds.length) {
         this.badRequest(
-          'Tanlangan orderlarning ayrimlari marketga tegishli emas, CANCELLED emas yoki HQda turmagan',
+          'Tanlangan orderlarning ayrimlari marketga tegishli emas, CANCELLED emas, yoki sizning filialingizda/HQda turmagan',
         );
       }
 

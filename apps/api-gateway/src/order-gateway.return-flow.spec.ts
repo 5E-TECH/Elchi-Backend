@@ -34,17 +34,20 @@ describe('OrderGatewayController return flow', () => {
     );
   });
 
-  it('forwards mark-returned-to-market request to order service', async () => {
+  it('forwards mark-returned-to-market request (market QR token) to order service', async () => {
     const { controller, orderClient } = setup();
-    await controller.markReturnedToMarket('101', {
-      user: { sub: '9', roles: ['operator'] },
-    } as any);
+    await controller.markReturnedToMarket(
+      '101',
+      { authorization_token: 'MHA-token' },
+      { user: { sub: '9', roles: ['superadmin'] } } as any,
+    );
 
     expect(orderClient.send).toHaveBeenCalledWith(
       { cmd: 'order.mark_returned_to_market' },
       {
         id: '101',
-        requester: { id: '9', roles: ['operator'] },
+        authorization_token: 'MHA-token',
+        requester: { id: '9', roles: ['superadmin'] },
       },
     );
   });
