@@ -425,6 +425,57 @@ describe('M9 — buyurtma holati sinxroni: eng eskisi birinchi, sof summa', () =
     ]);
   });
 
+  it('⭐ ishorali net: market BIZGA qarzdor buyurtma (extra_cost > daromad) hovuzni OSHIRADI', async () => {
+    // 31: 10 000 − 50 000 = −40 000 (market bizga qarzdor). 32: 30 000.
+    // Faqat 10 000 to'lasak ham, 31 ning −40 000 qarzi hovuzga qo'shiladi →
+    // 50 000 bo'ladi → 32 ham TO'LIQ yopiladi. (Ilgari clamp tufayli 32 qisman
+    // qolardi va qarz yo'qolardi.)
+    const { service } = makeService();
+    routeRmq({
+      'order.find_all': () => ({
+        data: [
+          orderRow({ id: '31', to_be_paid: 10_000, extra_cost: 50_000 }),
+          orderRow({ id: '32', to_be_paid: 30_000 }),
+        ],
+      }),
+    });
+
+    await (service as any).applyPaymentToOrders('201', 10_000);
+
+    const updates = callsOf('order.update_normalized').map(
+      (call: any[]) => call[2],
+    );
+    expect(updates).toEqual([
+      { id: '31', dto: { paid_amount: 10_000, status: 'paid' } },
+      { id: '32', dto: { paid_amount: 30_000, status: 'paid' } },
+    ]);
+  });
+
+  it('⭐ hovuz tugagach ham manfiy qator uni to`ldiradi (break EMAS, continue)', async () => {
+    // A(100) pulni tugatadi; B(10−60=−50) hovuzni +50 qiladi; C(100) qisman 50.
+    const { service } = makeService();
+    routeRmq({
+      'order.find_all': () => ({
+        data: [
+          orderRow({ id: 'A', to_be_paid: 100 }),
+          orderRow({ id: 'B', to_be_paid: 10, extra_cost: 60 }),
+          orderRow({ id: 'C', to_be_paid: 100 }),
+        ],
+      }),
+    });
+
+    await (service as any).applyPaymentToOrders('201', 100);
+
+    const updates = callsOf('order.update_normalized').map(
+      (call: any[]) => call[2],
+    );
+    expect(updates).toEqual([
+      { id: 'A', dto: { paid_amount: 100, status: 'paid' } },
+      { id: 'B', dto: { paid_amount: 10, status: 'paid' } },
+      { id: 'C', dto: { paid_amount: 50, status: 'partly_paid' } },
+    ]);
+  });
+
   it('PARTLY_PAID buyurtmaning qoldig`i paid_amount ni hisobga oladi', async () => {
     const { service } = makeService();
     routeRmq({

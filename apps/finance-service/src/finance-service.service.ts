@@ -403,11 +403,23 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * qo'shimcha xarajatli buyurtmalar SOLD bo'lib qolardi. Allaqachon
    * to'langan qism (`paid_amount`) ham ayriladi.
    */
+  /**
+   * Buyurtma bo'yicha marketga QANCHA qoldi — ISHORALI (BeePost namunasi).
+   *
+   * ⚠️ `Math.max(..., 0)` ATAYLAB OLIB TASHLANDI. Sof summa `to_be_paid −
+   * extra_cost − paid` MANFIY bo'lishi mumkin: extra_cost (kuryer haqqi) market
+   * daromadidan (to_be_paid) oshsa, market BIZGA qarzdor bo'ladi. Ilgari qisish
+   * tufayli bu qarz hovuzga qaytmasdi va «marketga hamma pulni to'lasam ham
+   * oxirgi buyurtmalar yopilmaydi» nuqsoni chiqardi (qisilgan qoldiqlar
+   * yig'indisi kassa balansidan katta bo'lardi). Endi ishorali — yig'indi aynan
+   * kassa balansiga teng.
+   *   musbat — marketga qarzdormiz;  manfiy — market bizga qarzdor.
+   */
   private marketOrderRemaining(order: MarketPayableOrder): number {
     const toBePaid = Math.max(Number(order?.to_be_paid ?? 0) || 0, 0);
     const extraCost = Math.max(Number(order?.extra_cost ?? 0) || 0, 0);
     const paid = Math.max(Number(order?.paid_amount ?? 0) || 0, 0);
-    return Math.max(toBePaid - extraCost - paid, 0);
+    return toBePaid - extraCost - paid;
   }
 
   /**
@@ -518,13 +530,33 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     );
 
     for (const order of orders) {
-      if (paymentInProcess <= 0) break;
       const remaining = this.marketOrderRemaining(order);
+      const fullPaid = Math.max(Number(order.to_be_paid ?? 0) || 0, 0);
 
-      if (paymentInProcess >= remaining) {
+      if (remaining < 0) {
+        // Market BIZGA qarzdor (extra_cost > daromad) — pul SARFLANMAYDI, aksincha
+        // hovuz OSHADI (qarzni keyingi buyurtmalarга qo'llaymiz), order yopiladi.
+        // ⚠️ `break` EMAS: hovuz bo'sh bo'lsa ham manfiy qator uni to'ldirishi
+        // mumkin — shu bois davom etamiz (BeePost namunasi).
+        paymentInProcess -= remaining; // remaining manfiy → pool oshadi
+        await this.writeOrderPayment(order, {
+          paid_amount: fullPaid,
+          status: Order_status.PAID,
+        });
+      } else if (remaining === 0) {
+        // Hisob teng — statusни yopamiz (pulga tegmaymiz).
+        await this.writeOrderPayment(order, {
+          paid_amount: fullPaid,
+          status: Order_status.PAID,
+        });
+      } else if (paymentInProcess <= 0) {
+        // Pul tugadi — musbat qatorni o'tkazib yuboramiz (oldinda manfiy qator
+        // hovuzni to'ldirib keyingisini yopishi mumkin, shuning uchun break emas).
+        continue;
+      } else if (paymentInProcess >= remaining) {
         paymentInProcess -= remaining;
         await this.writeOrderPayment(order, {
-          paid_amount: Math.max(Number(order.to_be_paid ?? 0) || 0, 0),
+          paid_amount: fullPaid,
           status: Order_status.PAID,
         });
       } else {

@@ -1442,6 +1442,18 @@ export class OrderServiceService {
     return rest as T;
   }
 
+  /**
+   * Mijozga ko'rinadigan buyurtma raqami (chek + QR yorlig'i): "EL-" + (id +
+   * 100000) — masalan id=81 → "EL-100081". Printer `#${order_number}` qo'shadi →
+   * "#EL-100081". id'dan hosil qilinadi (migration shart emas), deterministik va
+   * noyob. Noto'g'ri/bo'sh id → '' (yorliqda raqam ko'rsatilmaydi).
+   */
+  private formatOrderNumber(id: string | number | null | undefined): string {
+    const n = Number(id);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    return 'EL-' + (n + 100000);
+  }
+
   private async enrichOrders(rows: Order[]) {
     if (!rows.length) return [];
 
@@ -1518,6 +1530,8 @@ export class OrderServiceService {
 
     return rows.map((row) => ({
       ...row,
+      // Mijozga ko'rinadigan raqam (chek/ro'yxat/detal) — frontend shuni ko'rsatadi.
+      order_number: this.formatOrderNumber(row.id),
       market: row.market_id ? (marketMap.get(row.market_id) ?? null) : null,
       customer: row.customer_id
         ? {
@@ -1984,7 +1998,10 @@ export class OrderServiceService {
           : undefined;
         return {
           id: String(order.id),
-          order_number: String(order.id),
+          // Chek + QR yorlig'ida mijozga ko'rinadigan raqam: #EL-100081
+          // (ilgari xom tartib raqam — #81). Vertikal QR-yonidagi ko'rinish ham
+          // shu qiymatni oladi (printer.util order-no-v / aylantirilgan matn).
+          order_number: this.formatOrderNumber(order.id),
           qr_code_token: order.qr_code_token ?? '',
           created_at: order.createdAt
             ? new Date(order.createdAt).getTime()
