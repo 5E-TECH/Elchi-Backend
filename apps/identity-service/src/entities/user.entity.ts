@@ -97,6 +97,12 @@ export class User extends BaseEntity {
   @Column({ type: 'boolean', default: false })
   can_add_extra_cost: boolean;
 
+  // Per-manager SELL/CANCEL ruxsati (#4). HYBRID filial menejeriga sotish va
+  // bekor qilish tugmalari faqat shu bayroq TRUE bo'lsagina ishlaydi. Superadmin
+  // boshqaradi; default FALSE — ya'ni ruxsat ATAYLAB berilmaguncha yopiq.
+  @Column({ type: 'boolean', default: false })
+  can_sell_cancel: boolean;
+
   @Column({ type: 'boolean', default: true })
   cancelled_handover_qr_required: boolean;
 
@@ -141,4 +147,10 @@ export class User extends BaseEntity {
   // opaquely. NULL = user has never customized (frontend applies defaults).
   @Column({ type: 'jsonb', nullable: true })
   settings: Record<string, unknown> | null;
+
+  // Kim bu foydalanuvchini YARATGAN (#3). Manager faqat O'ZI yaratgan
+  // foydalanuvchilarni tahrirlay oladi. NULL = eski/tizim yaratgan yoki noma'lum
+  // (bunday yozuvni manager tahrirlay olmaydi). bigint -> TS'da string.
+  @Column({ type: 'bigint', nullable: true })
+  created_by: string | null;
 }

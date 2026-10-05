@@ -114,6 +114,15 @@ export class UpdateAdminRequestDto {
   @IsBoolean()
   can_add_extra_cost?: boolean;
 
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      'HYBRID filial menejerining SOTISH/BEKOR qila olishini boshqaradi (#4). Faqat admin/superadmin o‘zgartira oladi; default false.',
+  })
+  @IsOptional()
+  @IsBoolean()
+  can_sell_cancel?: boolean;
+
   @ApiPropertyOptional({ example: 'center', enum: ['center', 'address'] })
   @IsOptional()
   @IsEnum(['center', 'address'])

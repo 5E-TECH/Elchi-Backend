@@ -277,7 +277,8 @@ describe('RBAC-19: admin o‘z profilini tahrirlaydi', () => {
 
 describe('RBAC-09: parol/telefon o‘zgarsa sessiyalar yopiladi', () => {
   it('menejer kuryer parolini almashtirsa — refresh hashi o‘chiriladi', async () => {
-    const h = makeHarness({ rows: [courierRow()] });
+    // #3 — manager faqat O'ZI yaratgan foydalanuvchini tahrirlaydi: courier.created_by = manager.id ('2').
+    const h = makeHarness({ rows: [{ ...courierRow(), created_by: '2' }] });
 
     await h.service.updateUser('9', { password: 'yangi' } as never, manager);
 

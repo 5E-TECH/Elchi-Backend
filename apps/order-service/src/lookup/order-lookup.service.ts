@@ -127,6 +127,9 @@ export class OrderLookupService implements OnModuleInit {
         role?: string | null;
         compensation_mode?: string | null;
         can_add_extra_cost?: boolean | null;
+        // Faqat tiplar birligi uchun (menejer sell/cancel guard'i union qabul
+        // qiladi); kuryerlar uchun hech qachon o'rnatilmaydi, guard ham no-op.
+        can_sell_cancel?: boolean | null;
       }>;
     }>(
       this.identityClient,
@@ -146,6 +149,7 @@ export class OrderLookupService implements OnModuleInit {
         role?: string | null;
         compensation_mode?: string | null;
         can_add_extra_cost?: boolean | null;
+        can_sell_cancel?: boolean | null;
       };
     }>(
       this.identityClient,

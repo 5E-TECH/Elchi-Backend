@@ -4244,7 +4244,12 @@ export class OrderGatewayController {
   // (audit 2026-06-07: was JwtAuthGuard-only, letting any role rewrite any order).
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update order (full fields, including items)' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
@@ -4259,7 +4264,12 @@ export class OrderGatewayController {
 
   @Patch(':id/full')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.SUPERADMIN,
+    RoleEnum.ADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update order by id (full fields)' })
   @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
@@ -4355,6 +4365,7 @@ export class OrderGatewayController {
     RoleEnum.ADMIN,
     RoleEnum.REGISTRATOR,
     RoleEnum.MARKET,
+    RoleEnum.MANAGER,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete order (status-based role rules)' })

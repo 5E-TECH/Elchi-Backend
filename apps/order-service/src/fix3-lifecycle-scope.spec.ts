@@ -509,8 +509,10 @@ describe('M11 / CODE-03 — PATCH /orders/:id xizmat qatlamida', () => {
     );
   });
 
+  // #2 — menejer endi o'z filialidagi buyurtmani tahrirlay oladi (registrator
+  // bilan bir xil: rol darvozasidan o'tadi, filial doirasi yagona egalik
+  // tekshiruvi). Kuryer/market esa avvalgidek PATCH qila olmaydi.
   it.each([
-    ['menejer', MANAGER],
     ['kuryer', COURIER],
     ['market', MARKET],
   ])('%s PATCH qila olmaydi — 403', async (_label, requester) => {
@@ -521,6 +523,30 @@ describe('M11 / CODE-03 — PATCH /orders/:id xizmat qatlamida', () => {
     );
 
     expect(error.statusCode).toBe(403);
+    expect(h.mocks.updateFull).not.toHaveBeenCalled();
+  });
+
+  it('menejer o`z filiali buyurtmasining manzilini tahrirlaydi (#2)', async () => {
+    const h = makeUpdateHarness({ branch_id: '10' });
+
+    await h.s.updateFromApi('700', { address: 'yangi manzil' }, MANAGER);
+
+    expect(h.mocks.updateFull).toHaveBeenCalledWith(
+      '700',
+      { address: 'yangi manzil' },
+      MANAGER,
+    );
+  });
+
+  it('menejer boshqa filial buyurtmasini tahrirlay olmaydi — 403 (#2)', async () => {
+    const h = makeUpdateHarness({ branch_id: '99' });
+
+    const error = await rpcError(
+      h.s.updateFromApi('700', { address: 'yangi manzil' }, MANAGER),
+    );
+
+    expect(error.statusCode).toBe(403);
+    expect(error.message).toContain('filialingizga tegishli emas');
     expect(h.mocks.updateFull).not.toHaveBeenCalled();
   });
 
@@ -623,11 +649,13 @@ function makeSellHarness(orderOver: Row = {}) {
           tariff_center: 30000,
           tariff_home: 50000,
           can_add_extra_cost: true,
+          can_sell_cancel: true,
         },
       ]),
       getUserById: jest.fn().mockResolvedValue({
         id: '201',
         can_add_extra_cost: true,
+        can_sell_cancel: true,
         tariff_center: 0,
         tariff_home: 0,
       }),
@@ -695,6 +723,21 @@ describe('LC-04 — menejer kuryer qo`lidagi buyurtmani sotmaydi', () => {
     await expect(h.s.sellOrder(MANAGER, '7001', {})).resolves.toMatchObject({
       statusCode: 200,
     });
+  });
+
+  it('⭐ menejer can_sell_cancel=false bo`lsa sotolmaydi — 403 (#4)', async () => {
+    const h = makeSellHarness({ courier_id: '0' });
+    (
+      h.s as unknown as { lookup: { getUserById: jest.Mock } }
+    ).lookup.getUserById.mockResolvedValue({
+      id: '201',
+      can_sell_cancel: false,
+      tariff_center: 0,
+      tariff_home: 0,
+    });
+
+    const error = await rpcError(h.s.sellOrder(MANAGER, '7001', {}));
+    expect(error.statusCode).toBe(403);
   });
 
   it('kuryer o`z qo`lidagi buyurtmani avvalgidek sotadi', async () => {
@@ -919,12 +962,14 @@ function makeApprovalService(pendingApproval: Row | null) {
         tariff_center: 30000,
         tariff_home: 50000,
         can_add_extra_cost: true,
+        can_sell_cancel: true,
       },
     ]),
     getUserById: jest.fn().mockResolvedValue({
       id: '201',
       branch_id: '77',
       can_add_extra_cost: true,
+      can_sell_cancel: true,
       tariff_center: 0,
       tariff_home: 0,
     }),

@@ -761,43 +761,22 @@ export class ApiGatewayController {
     const isSystemPrivileged =
       requesterRoles.includes(RoleEnum.SUPERADMIN) ||
       requesterRoles.includes(RoleEnum.ADMIN);
+    // fix #3: VIEW = hamma. Manager endi admin/superadmin kabi BARCHA userlarni
+    // ko'radi — ro'yxat branch_users bo'yicha cheklanmaydi va "branchga
+    // biriktirilmagan" 403 manager uchun OLIB TASHLANDI. Ilgari shu yerda
+    // bo'lgan manager branch-scope bloki butunlay chiqarib tashlandi; keyingi
+    // post-filter bloki ham (manager-only) olib tashlandi. Tahrirlash huquqi
+    // esa identity-service'da created_by bo'yicha ALOHIDA cheklanadi.
+    //
+    // SECURITY-TODO (alohida karta): identity find_all → sanitize() parol,
+    // refresh_token va market_tg_token'ni olib tashlaydi, LEKIN `salary` (va
+    // payment_day/commission_*) ro'yxat payload'ida qoladi. Endi manager ham
+    // bu ro'yxatni to'liq ko'radi — maosh kabi maxfiy maydonlar menejerga
+    // ochiq. Bu yerda TUZATILMAYDI; alohida xavfsizlik kartasida hal qilinsin.
+    const canViewAllUsers =
+      isSystemPrivileged || requesterRoles.includes(RoleEnum.MANAGER);
 
     let scopedUserIds: string[] | undefined;
-    let managerBranchUserIds: string[] | undefined;
-    if (
-      !isSystemPrivileged &&
-      requesterRoles.includes(RoleEnum.MANAGER) &&
-      req?.user?.sub
-    ) {
-      const assignment = await this.resolveBranchAssignment(req.user);
-      const branchId = String(assignment?.branch_id ?? '').trim();
-
-      if (!branchId) {
-        throw new ForbiddenException(
-          'Manager hech qaysi branchga biriktirilmagan',
-        );
-      }
-
-      const branchUsersResponse = await firstValueFrom(
-        this.branchClient
-          .send(
-            { cmd: 'branch.user.find_by_branch' },
-            { branch_id: branchId, requester: this.toRequester(req) },
-          )
-          .pipe(timeout(8000)),
-      );
-      const branchUsers = Array.isArray(branchUsersResponse?.data)
-        ? branchUsersResponse.data
-        : [];
-      managerBranchUserIds = Array.from(
-        new Set(
-          branchUsers
-            .map((row: any) => String(row?.user_id ?? '').trim())
-            .filter(Boolean),
-        ),
-      );
-      scopedUserIds = managerBranchUserIds;
-    }
 
     const requesterCanHaveCourierScope =
       requesterRoles.includes(RoleEnum.MANAGER) ||
@@ -810,7 +789,9 @@ export class ApiGatewayController {
       const assignment = await this.resolveBranchAssignment(req.user);
       let branchId = String(assignment?.branch_id ?? '').trim();
 
-      if (!branchId && isSystemPrivileged) {
+      // fix #3: manager ham admin/superadmin kabi HQ'ga fallback qiladi —
+      // branchga biriktirilmagan manager bu yerda endi 403 OLMAYDI.
+      if (!branchId && canViewAllUsers) {
         const hqBranch = await firstValueFrom(
           this.branchClient
             .send({ cmd: 'branch.find_hq' }, {})
@@ -923,36 +904,9 @@ export class ApiGatewayController {
       }
     }
 
-    if (
-      requesterRoles.includes(RoleEnum.MANAGER) &&
-      req?.user?.sub &&
-      response?.data
-    ) {
-      const allowed = new Set(
-        (managerBranchUserIds ?? []).map((id) => String(id)),
-      );
-      const requesterId = String(req.user.sub);
-      const branchScoped = (
-        Array.isArray(response.data.items) ? response.data.items : []
-      ).filter((row: any) => {
-        const userId = String(row?.id ?? '').trim();
-        if (!allowed.has(userId)) {
-          return false;
-        }
-        return userId !== requesterId;
-      });
-
-      response.data.items = branchScoped;
-      if (response.data.meta) {
-        response.data.meta.total = branchScoped.length;
-        response.data.meta.totalUsers = branchScoped.length;
-        const limitValue = Number(response.data.meta.limit ?? limit ?? 10);
-        response.data.meta.totalPages =
-          limitValue > 0
-            ? Math.max(1, Math.ceil(branchScoped.length / limitValue))
-            : 1;
-      }
-    }
+    // fix #3: manager-only branch post-filter OLIB TASHLANDI — manager endi
+    // admin/superadmin kabi BARCHA userlarni ko'radi (view parity). Tahrirlash
+    // huquqi identity-service'da created_by bo'yicha cheklanadi.
 
     return response;
   }
@@ -1054,85 +1008,23 @@ export class ApiGatewayController {
   @ApiOkResponse({ description: 'User updated' })
   @ApiConflictResponse({ description: 'Conflict' })
   @ApiNotFoundResponse({ description: 'Not found' })
-  async updateUser(
+  updateUser(
     @Param('id') id: string,
     @Body() dto: UpdateAdminRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    let allowedUserIds: string[] | undefined;
-    const requesterRoles = (req?.user?.roles ?? [])
-      .map((role) =>
-        String(role ?? '')
-          .trim()
-          .toLowerCase(),
-      )
-      .filter(Boolean);
-    const requesterIsPrivileged =
-      requesterRoles.includes(RoleEnum.SUPERADMIN) ||
-      requesterRoles.includes(RoleEnum.ADMIN);
-
-    if (
-      !requesterIsPrivileged &&
-      requesterRoles.includes(RoleEnum.MANAGER) &&
-      req?.user?.sub
-    ) {
-      const assignment = await this.resolveBranchAssignment(req.user);
-      const branchId = String(assignment?.branch_id ?? '').trim();
-      const branchType = String(assignment?.branch?.type ?? '')
-        .trim()
-        .toUpperCase();
-
-      if (!branchId) {
-        throw new ForbiddenException(
-          'Manager hech qaysi branchga biriktirilmagan',
-        );
-      }
-      if (branchType !== 'REGIONAL' && branchType !== 'HYBRID') {
-        throw new ForbiddenException(
-          'Faqat REGIONAL/HYBRID manager user yangilay oladi',
-        );
-      }
-
-      const branchUsersResponse = await firstValueFrom(
-        this.branchClient
-          .send(
-            { cmd: 'branch.user.find_by_branch' },
-            {
-              branch_id: branchId,
-              requester: this.toRequester(req as { user: JwtUser }),
-            },
-          )
-          .pipe(timeout(8000)),
-      );
-
-      allowedUserIds = Array.from(
-        new Set(
-          (Array.isArray(branchUsersResponse?.data)
-            ? branchUsersResponse.data
-            : []
-          )
-            .map((row: any) => String(row?.user_id ?? '').trim())
-            .filter(Boolean),
-        ),
-      );
-
-      if (!allowedUserIds.includes(String(id).trim())) {
-        throw new ForbiddenException(
-          "Manager faqat o'zi boshqaradigan userlarni yangilay oladi",
-        );
-      }
-    }
-
+    // fix #3: gateway endi managerni OLDINDAN 403 qilmaydi (branch_users
+    // scope + REGIONAL/HYBRID tekshiruvi olib tashlandi). Egalik qarorini
+    // identity-service beradi — AUTHORITATIVE: manager faqat O'ZI YARATGAN
+    // (created_by === requester.id) userni tahrirlay oladi, aks holda 403.
+    // Delete/status esa ushbu route'larda admin/superadmin-only (@Roles).
     return this.identityClient
       .send(
         { cmd: 'identity.user.update' },
         {
           id,
           dto,
-          requester: {
-            ...this.toRequester(req),
-            allowed_user_ids: allowedUserIds,
-          },
+          requester: this.toRequester(req),
         },
       )
       .pipe(timeout(8000));

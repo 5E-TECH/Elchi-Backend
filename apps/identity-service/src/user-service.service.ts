@@ -539,7 +539,15 @@ export class UserServiceService implements OnModuleInit {
     requester: RequesterContext | undefined,
     targetUserId: string,
     targetRole: Roles,
-    options: { allowSelf?: boolean } = {},
+    options: {
+      allowSelf?: boolean;
+      // fix #3: manager faqat UPDATE oqimida — va faqat O'ZI YARATGAN
+      // (created_by) userlarni tahrirlay oladi. Delete/status oqimlari bu
+      // bayroqni BERMAYDI, shuning uchun manager u yerda ruxsatsiz qoladi
+      // (admin/superadmin-only). targetCreatedBy — nishon userning created_by'si.
+      allowManagerOwnership?: boolean;
+      targetCreatedBy?: string | null;
+    } = {},
   ) {
     if (!requester) {
       return;
@@ -579,16 +587,21 @@ export class UserServiceService implements OnModuleInit {
         this.forbidden('Manager admin/superadmin/managerni boshqara olmaydi');
       }
 
-      const allowedUserIds = new Set(
-        (requester.allowed_user_ids ?? [])
-          .map((id) => String(id ?? '').trim())
-          .filter(Boolean),
-      );
+      // fix #3: delete/status oqimlari managerga ruxsat bermaydi
+      // (admin/superadmin-only). Faqat UPDATE oqimi allowManagerOwnership
+      // beradi; u yerda ham egalik created_by bo'yicha tekshiriladi.
+      if (!options.allowManagerOwnership) {
+        this.forbidden('Bu amal uchun ruxsat yoq');
+      }
 
-      if (!allowedUserIds.has(String(targetUserId).trim())) {
-        this.forbidden(
-          "Manager faqat o'zi boshqaradigan userlarni yangilay oladi",
-        );
+      // fix #3: branch_users (allowed_user_ids) o'rniga — manager faqat O'ZI
+      // YARATGAN userni (created_by === requester.id) tahrirlay oladi.
+      const targetCreatedBy = String(options.targetCreatedBy ?? '').trim();
+      if (
+        !targetCreatedBy ||
+        targetCreatedBy !== String(requester.id ?? '').trim()
+      ) {
+        this.forbidden("Manager faqat o'zi yaratgan userlarni yangilay oladi");
       }
       return;
     }
@@ -942,6 +955,10 @@ export class UserServiceService implements OnModuleInit {
       payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       role: Roles.ADMIN,
       status: Status.ACTIVE,
+      // fix #3: yaratuvchini yozamiz — manager keyinchalik FAQAT o'zi yaratgan
+      // (created_by) userlarni tahrirlay oladi. requester bo'lmasa (ishonchli
+      // ichki chaqiruv) null qoladi.
+      created_by: requester?.id ? String(requester.id) : null,
       isDeleted: false,
     });
 
@@ -977,6 +994,8 @@ export class UserServiceService implements OnModuleInit {
       payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       role: Roles.REGISTRATOR,
       status: Status.ACTIVE,
+      // fix #3: created_by — manager egaligi uchun.
+      created_by: requester?.id ? String(requester.id) : null,
       isDeleted: false,
     });
 
@@ -1025,6 +1044,10 @@ export class UserServiceService implements OnModuleInit {
     }
     this.assertRequesterCanMutateUser(requester, id, admin.role, {
       allowSelf: true,
+      // fix #3: UPDATE oqimi — manager faqat o'zi yaratgan userni tahrirlay
+      // oladi; egalik nishon userning created_by'si bo'yicha aniqlanadi.
+      allowManagerOwnership: true,
+      targetCreatedBy: admin.created_by,
     });
 
     const auditBefore = {
@@ -1040,6 +1063,7 @@ export class UserServiceService implements OnModuleInit {
       commission_value: admin.commission_value,
       add_order: admin.add_order,
       can_add_extra_cost: admin.can_add_extra_cost,
+      can_sell_cancel: admin.can_sell_cancel,
       password_changed: false,
     };
 
@@ -1113,6 +1137,21 @@ export class UserServiceService implements OnModuleInit {
       admin.can_add_extra_cost = dto.can_add_extra_cost;
     }
 
+    // #4 — Sotish/bekor ruxsati: faqat admin/superadmin bera/ola oladi va faqat
+    // manager rol uchun. HYBRID filial menejeri bu bayroqsiz sell/cancel qila
+    // olmaydi (backend 403 + frontend tugma yashirin).
+    if (typeof dto.can_sell_cancel !== 'undefined') {
+      if (!requesterIsPrivileged) {
+        this.forbidden(
+          "Sotish/bekor ruxsatini faqat admin yoki superadmin o'zgartira oladi",
+        );
+      }
+      if (admin.role !== Roles.MANAGER) {
+        this.badRequest('Sotish/bekor ruxsati faqat manager uchun');
+      }
+      admin.can_sell_cancel = dto.can_sell_cancel;
+    }
+
     if (
       typeof dto.default_tariff !== 'undefined' &&
       (requesterIsPrivileged || !requesterIsSelf)
@@ -1158,6 +1197,7 @@ export class UserServiceService implements OnModuleInit {
         commission_value: saved.commission_value,
         add_order: saved.add_order,
         can_add_extra_cost: saved.can_add_extra_cost,
+        can_sell_cancel: saved.can_sell_cancel,
         // Surface that the password was rotated without ever logging its value.
         password_changed: Boolean(dto.password),
       },
@@ -1759,6 +1799,8 @@ export class UserServiceService implements OnModuleInit {
       avatar_id: null,
       role: Roles.MARKET,
       status: Status.ACTIVE,
+      // fix #3: created_by — manager egaligi uchun.
+      created_by: requester?.id ? String(requester.id) : null,
       tariff_home: dto.tariff_home,
       tariff_center: dto.tariff_center,
       add_order: dto.add_order ?? false,
@@ -1809,6 +1851,8 @@ export class UserServiceService implements OnModuleInit {
       region_id: dto.region_id,
       role: Roles.COURIER,
       status: Status.ACTIVE,
+      // fix #3: created_by — manager egaligi uchun.
+      created_by: requester?.id ? String(requester.id) : null,
       tariff_home: dto.tariff_home ?? 0,
       tariff_center: dto.tariff_center ?? 0,
       add_order: false,
@@ -1926,6 +1970,8 @@ export class UserServiceService implements OnModuleInit {
       payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
       role: Roles.MANAGER,
       status: Status.ACTIVE,
+      // fix #3: created_by — manager egaligi uchun.
+      created_by: requester?.id ? String(requester.id) : null,
       tariff_home: dto.tariff_home ?? null,
       tariff_center: dto.tariff_center ?? null,
       add_order: false,
