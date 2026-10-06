@@ -416,9 +416,9 @@ describe('ORDER_EXTRACT_SCHEMA (C2/C12)', () => {
     expect(p.total_price).toEqual({ type: ['number', 'null'] });
     expect(p.is_replacement).toEqual({ type: 'boolean' });
     // yxwpN5h5 #7 / 32fNx0Ci #8 — model boshqa qiymat qaytara olmaydi.
+    // anyOf SHART: Anthropic type-array+enum birikmasini rad etadi.
     expect(p.where_deliver).toEqual({
-      type: ['string', 'null'],
-      enum: ['center', 'address', null],
+      anyOf: [{ type: 'string', enum: ['center', 'address'] }, { type: 'null' }],
     });
     expect(p.items).toEqual({
       type: 'array',

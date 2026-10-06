@@ -91,14 +91,17 @@ exports[`ORDER_EXTRACT_SCHEMA (C2/C12) snapshot (32fNx0Ci #3 — sxemaga *_id qo
             ],
           },
           "where_deliver": {
-            "enum": [
-              "center",
-              "address",
-              null,
-            ],
-            "type": [
-              "string",
-              "null",
+            "anyOf": [
+              {
+                "enum": [
+                  "center",
+                  "address",
+                ],
+                "type": "string",
+              },
+              {
+                "type": "null",
+              },
             ],
           },
         },
