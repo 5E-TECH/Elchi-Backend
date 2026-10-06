@@ -166,8 +166,12 @@ describe('32fNx0Ci #12 — injection regress (Claude’siz)', () => {
       expect(openObjects).toEqual([]);
     });
 
-    it("where_deliver sxemada faqat 'center' | 'address' | null", () => {
+    it("where_deliver sxemada faqat 'center' | 'address' | null (anyOf)", () => {
+      // Anthropic strukturaviy-chiqishi `type:['string','null']`+`enum` ni rad
+      // etadi; nullable-enum `anyOf: [{enum:['center','address']},{type:'null'}]`
+      // bilan beriladi. Maqsad o'sha: faqat center|address, yoki null.
       const enums: unknown[] = [];
+      let hasNull = false;
       walk(ORDER_EXTRACT_SCHEMA, '$', (node) => {
         const props = node.properties as Record<string, unknown> | undefined;
         const wd = props?.where_deliver;
@@ -175,11 +179,17 @@ describe('32fNx0Ci #12 — injection regress (Claude’siz)', () => {
           walk(wd, 'wd', (inner) => {
             if (Array.isArray(inner.enum))
               enums.push(...(inner.enum as unknown[]));
+            if (
+              inner.type === 'null' ||
+              (Array.isArray(inner.type) &&
+                (inner.type as unknown[]).includes('null'))
+            )
+              hasNull = true;
           });
         }
       });
-      expect(enums.length).toBeGreaterThan(0);
-      expect(new Set(enums)).toEqual(new Set(['center', 'address', null]));
+      expect(new Set(enums)).toEqual(new Set(['center', 'address']));
+      expect(hasNull).toBe(true);
     });
   });
 });
