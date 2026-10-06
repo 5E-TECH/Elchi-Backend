@@ -175,7 +175,12 @@ function makeRollbackService(
         ),
       ),
       getUserById: jest.fn((id: string) =>
-        Promise.resolve({ id, tariff_center: 0, tariff_home: 0 }),
+        Promise.resolve({
+          id,
+          tariff_center: 0,
+          tariff_home: 0,
+          can_sell_cancel: true,
+        }),
       ),
       getCashboxByUser: jest.fn((userId: string, type: Cashbox_type) =>
         Promise.resolve(
@@ -842,11 +847,13 @@ function makeSellService(
           tariff_center: 30000,
           tariff_home: 50000,
           can_add_extra_cost: true,
+          can_sell_cancel: true,
         },
       ]),
       getUserById: jest.fn().mockResolvedValue({
         id: '201',
         can_add_extra_cost: true,
+        can_sell_cancel: true,
         tariff_center: 0,
         tariff_home: 0,
       }),

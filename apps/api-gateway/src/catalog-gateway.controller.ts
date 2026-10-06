@@ -153,7 +153,13 @@ export class CatalogGatewayController {
 
   @Post()
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.MARKET, RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
+  @Roles(
+    RoleEnum.MARKET,
+    RoleEnum.ADMIN,
+    RoleEnum.SUPERADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Create a new product' })
   @ApiCreatedResponse({ description: 'Product created successfully' })
@@ -188,11 +194,13 @@ export class CatalogGatewayController {
       marketId = req.user.sub;
     } else if (
       roles.includes(RoleEnum.ADMIN) ||
-      roles.includes(RoleEnum.SUPERADMIN)
+      roles.includes(RoleEnum.SUPERADMIN) ||
+      roles.includes(RoleEnum.REGISTRATOR) ||
+      roles.includes(RoleEnum.MANAGER)
     ) {
       if (!marketId) {
         throw new BadRequestException(
-          'market_id is required for admin/superadmin',
+          'market_id is required for admin/superadmin/registrator/manager',
         );
       }
     } else {
@@ -366,7 +374,12 @@ export class CatalogGatewayController {
 
   @Patch(':id')
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN, RoleEnum.REGISTRATOR)
+  @Roles(
+    RoleEnum.ADMIN,
+    RoleEnum.SUPERADMIN,
+    RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
+  )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Update product (admin/registrator)' })
   @ApiConsumes('multipart/form-data')
@@ -418,6 +431,7 @@ export class CatalogGatewayController {
     RoleEnum.ADMIN,
     RoleEnum.SUPERADMIN,
     RoleEnum.REGISTRATOR,
+    RoleEnum.MANAGER,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete product (soft delete)' })

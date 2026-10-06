@@ -62,9 +62,12 @@ const ORDER_PROPERTIES: Record<
   comment: { type: ['string', 'null'] },
   // Elchi `Where_deliver` enum'i (libs/common/enums/index.ts: CENTER/ADDRESS) —
   // model boshqa qiymat qaytara olmaydi; null = matnda aytilmagan.
+  // ⚠️ `anyOf` SHART: Anthropic strukturaviy-chiqishi `type:['string','null']`
+  // + `enum` birikmasini RAD etadi ("Enum value 'center' does not match declared
+  // type ['string','null']"). Nullable-enum uchun yagona qabul qilinadigan shakl
+  // — string-enum YOKI null (jonli API bilan tasdiqlangan).
   where_deliver: {
-    type: ['string', 'null'],
-    enum: ['center', 'address', null],
+    anyOf: [{ type: 'string', enum: ['center', 'address'] }, { type: 'null' }],
   },
   is_replacement: { type: 'boolean' },
   operator: { type: ['string', 'null'] },

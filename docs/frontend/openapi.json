@@ -11885,6 +11885,11 @@
             "example": true,
             "description": "Courier/manager buyurtmaga qo'shimcha xarajat yoza olishini boshqaradi. Faqat admin/superadmin o'zgartira oladi."
           },
+          "can_sell_cancel": {
+            "type": "boolean",
+            "example": true,
+            "description": "HYBRID filial menejerining SOTISH/BEKOR qila olishini boshqaradi (#4). Faqat admin/superadmin o‘zgartira oladi; default false."
+          },
           "default_tariff": {
             "type": "string",
             "example": "center",
