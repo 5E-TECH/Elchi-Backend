@@ -56,6 +56,10 @@ export class UpdateUserDto {
   can_add_extra_cost?: boolean;
 
   @IsOptional()
+  @IsBoolean()
+  can_sell_cancel?: boolean;
+
+  @IsOptional()
   @IsEnum(Where_deliver)
   default_tariff?: Where_deliver;
 

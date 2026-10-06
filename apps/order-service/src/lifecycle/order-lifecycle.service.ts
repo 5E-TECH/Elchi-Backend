@@ -2042,6 +2042,23 @@ export class OrderLifecycleService {
   }
 
   /**
+   * MENEJER SOTISH/BEKOR RUXSATI (fix #4): menejer faqat o'z user qatorida
+   * `can_sell_cancel === true` bo'lsagina sota/bekor qila/qisman sota oladi.
+   * Aks holda — xizmat qatlamida 403 (frontend tugmalarni alohida yashiradi).
+   * Faqat MENEJER so'rovchi uchun ishlaydi; kuryerlar bu darvozadan ta'sirlanmaydi.
+   */
+  private assertManagerCanSellCancel(
+    isManagerRequester: boolean,
+    financialActor: { can_sell_cancel?: boolean | null } | null | undefined,
+  ): void {
+    if (isManagerRequester && !financialActor?.can_sell_cancel) {
+      this.forbidden(
+        'Sizda sotish/bekor ruxsati yo‘q — superadminga murojaat qiling',
+      );
+    }
+  }
+
+  /**
    * FILIAL XODIMI DOIRASI (fix3 C6/C13; CODE-03, CODE-09): buyurtma so'rovchi
    * filialiga tegishlimi. Doira gateway bilan AYNI — `branch_id`,
    * `holder_branch_id` yoki `home_branch_id` xodim filialiga teng (HQ
@@ -3354,7 +3371,8 @@ export class OrderLifecycleService {
     // SA/ADMIN (isHq) har filialdagi/HQ orderni topshira oladi.
     if (
       !handoverCtx.isHq &&
-      String(order.holder_branch_id ?? '') !== String(handoverCtx.branchId ?? '')
+      String(order.holder_branch_id ?? '') !==
+        String(handoverCtx.branchId ?? '')
     ) {
       this.forbidden('Bu buyurtma sizning filialingizda emas');
     }
@@ -5979,6 +5997,7 @@ export class OrderLifecycleService {
         isManagerRequester ? 'Manager not found' : 'Courier not found',
       );
     }
+    this.assertManagerCanSellCancel(isManagerRequester, financialActor);
 
     const [marketCashbox, courierCashbox] = await Promise.all([
       this.lookup.getCashboxByUser(
@@ -6521,6 +6540,12 @@ export class OrderLifecycleService {
     if (!market) {
       this.notFound('Market not found');
     }
+    // fix #4: menejer bekor qilish ruxsati — extraCost'dan QAT'I NAZAR
+    // (financialActor menejer uchun yuqorida olindi). Manager bo'lmasa no-op.
+    if (isManagerRequester && !financialActor) {
+      this.notFound('Manager not found');
+    }
+    this.assertManagerCanSellCancel(isManagerRequester, financialActor);
     if (extraCost > 0) {
       if (!financialActor) {
         this.notFound(
@@ -7385,6 +7410,7 @@ export class OrderLifecycleService {
         isManagerRequester ? 'Manager not found' : 'Courier not found',
       );
     }
+    this.assertManagerCanSellCancel(isManagerRequester, financialActor);
 
     const [marketCashbox, courierCashbox] = await Promise.all([
       this.lookup.getCashboxByUser(
@@ -8053,7 +8079,11 @@ export class OrderLifecycleService {
     const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
     const isAdmin = this.hasRole(requester, Roles.ADMIN);
     const isRegistrator = this.hasRole(requester, Roles.REGISTRATOR);
-    if (!isSuperAdmin && !isAdmin && !isRegistrator) {
+    // fix #2: menejer ham tahrirlay oladi (registrator kabi). Filial doirasi
+    // (`assertOrderInRequesterBranchScope`, pastda) va tijorat/yetkazish
+    // maydonlarining o'zgarmasligi (`updateFull`) menejerga ham qo'llanadi.
+    const isManager = this.hasRole(requester, Roles.MANAGER);
+    if (!isSuperAdmin && !isAdmin && !isRegistrator && !isManager) {
       this.forbidden("Buyurtmani tahrirlashga ruxsat yo'q");
     }
 
@@ -8494,6 +8524,7 @@ export class OrderLifecycleService {
     const isSuperAdmin = this.hasRole(requester, Roles.SUPERADMIN);
     const isAdmin = this.hasRole(requester, Roles.ADMIN);
     const isRegistrator = this.hasRole(requester, Roles.REGISTRATOR);
+    const isManager = this.hasRole(requester, Roles.MANAGER);
     const isMarket = this.hasRole(requester, Roles.MARKET);
 
     if (order.status === Order_status.CREATED) {
@@ -8506,10 +8537,13 @@ export class OrderLifecycleService {
       }
     } else if (order.status === Order_status.NEW) {
       const isPrivileged = isSuperAdmin || isAdmin;
-      const canDeleteNew = isPrivileged || isRegistrator || isMarket;
+      // fix #2: menejer ham NEW buyurtmani o'chiradi (registrator kabi) —
+      // faqat o'z filiali doirasida (pastdagi branch-scope darvozasi).
+      const canDeleteNew =
+        isPrivileged || isRegistrator || isManager || isMarket;
       if (!canDeleteNew) {
         this.forbidden(
-          "Faqat superadmin/admin/registrator/market 'new' holatdagi buyurtmani o‘chira oladi",
+          "Faqat superadmin/admin/registrator/menejer/market 'new' holatdagi buyurtmani o‘chira oladi",
         );
       }
       /**
@@ -8517,16 +8551,19 @@ export class OrderLifecycleService {
        * Ilgari egalik faqat CREATED uchun tekshirilardi — istalgan market
        * ketma-ket id'lar bo'yicha boshqa marketlarning HQ qabulini kutayotgan
        * NEW buyurtmalarini o'chirib yubora olardi (tiklash faqat SQL bilan).
+       * Registrator va menejer bu egalik tekshiruvidan ozod — ularga filial
+       * doirasi (pastda) qo'llanadi.
        */
       if (
         !isPrivileged &&
         !isRegistrator &&
+        !isManager &&
         (!requesterId || requesterId !== String(order.market_id ?? ''))
       ) {
         this.forbidden("Market faqat o'z buyurtmasini o'chira oladi");
       }
-      // fix3 C6 (CODE-03): registrator — faqat o'z filiali doirasidagisini.
-      if (!isPrivileged && isRegistrator) {
+      // fix3 C6 (CODE-03): registrator/menejer — faqat o'z filiali doirasidagisini.
+      if (!isPrivileged && (isRegistrator || isManager)) {
         await this.assertOrderInRequesterBranchScope(
           requester,
           order,
