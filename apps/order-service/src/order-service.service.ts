@@ -113,6 +113,8 @@ export const parseOrderListSort = (
   };
 };
 
+/** `findSummariesByIds` — bitta jadval sahifasidan ortiq emas. */
+const ORDER_SUMMARY_MAX_IDS = 100;
 @Injectable()
 export class OrderServiceService {
   private readonly logger = new Logger(OrderServiceService.name);
@@ -1452,6 +1454,58 @@ export class OrderServiceService {
     const n = Number(id);
     if (!Number.isFinite(n) || n <= 0) return '';
     return 'EL-' + (n + 100000);
+  }
+
+  /**
+   * BUYURTMA XULOSALARI id ro'yxati bo'yicha (tokhPLMP — integratsiya
+   * posilkalar jadvali). Bitta sahifa (≤100) uchun BITTA so'rov: N+1 emas.
+   *
+   * ⚠️ Faqat jadvalga kerakli maydonlar — to'liq buyurtma, mahsulotlar va
+   * market yozuvi (token/tarif) qaytarilmaydi.
+   */
+  async findSummariesByIds(ids: unknown) {
+    const unique = Array.from(
+      new Set(
+        (Array.isArray(ids) ? ids : [])
+          .map((id) =>
+            typeof id === 'string' || typeof id === 'number'
+              ? String(id).trim()
+              : '',
+          )
+          .filter((id) => /^\d+$/.test(id)),
+      ),
+    ).slice(0, ORDER_SUMMARY_MAX_IDS);
+    if (!unique.length) {
+      return successRes([], 200, 'Order summaries');
+    }
+
+    const rows = await this.orderRepo.find({
+      where: { id: In(unique), isDeleted: false },
+    });
+    const enriched = await this.enrichOrders(rows);
+    const text = (value: unknown) =>
+      typeof value === 'string' && value.trim() ? value.trim() : null;
+
+    return successRes(
+      enriched.map((order) => {
+        const customer = (order.customer ?? {}) as {
+          name?: unknown;
+          phone_number?: unknown;
+        };
+        return {
+          id: String(order.id),
+          order_number: order.order_number,
+          status: order.status,
+          total_price: Number(order.total_price ?? 0),
+          customer_name: text(customer.name),
+          customer_phone: text(customer.phone_number),
+          region_name: text(order.region?.name),
+          district_name: text(order.district?.name),
+        };
+      }),
+      200,
+      'Order summaries',
+    );
   }
 
   private async enrichOrders(rows: Order[]) {

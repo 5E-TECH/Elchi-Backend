@@ -19,7 +19,7 @@ import {
 } from '@nestjs/swagger';
 import type { Response } from 'express';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
-import { Roles as RoleEnum } from '@app/common';
+import { FinancialSource_type, Roles as RoleEnum } from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
@@ -29,11 +29,21 @@ import {
   excelNumber,
   ExcelColumn,
 } from './excel/excel.util';
+import {
+  FINANCIAL_BALANCE_EXPORT_COLUMNS,
+  resolveFinancialActors,
+  toFinancialBalanceExportRow,
+} from './financial-balance/financial-balance.util';
 
 const EXPORT_TIMEOUT = 20000;
 const MAX_ROWS = 50000; // hard ceiling so an export can't run unbounded
 const PAGE_SIZE = 500;
 const BRANCH_LOOKUP_TIMEOUT = 8000;
+/** finance-service `findFinancialBalanceHistory` bitta sahifani 200 bilan cheklaydi. */
+const FINANCIAL_BALANCE_PAGE_SIZE = 200;
+const FINANCIAL_SOURCE_TYPES = new Set<string>(
+  Object.values(FinancialSource_type),
+);
 
 interface JwtUser {
   sub: string;
@@ -72,6 +82,10 @@ export class ExcelGatewayController {
     // fix3 C11: filial xodimi eksporti uchun filialni aniqlash. Oxirida va
     // @Optional — mavjud pozitsion konstruktor chaqiruvlari buzilmasin.
     @Optional() @Inject('BRANCH') private readonly branchClient?: ClientProxy,
+    // GtAoqHlk: moliyaviy daftar eksportida "Kim kiritgan" ismi uchun.
+    @Optional()
+    @Inject('IDENTITY')
+    private readonly identityClient?: ClientProxy,
   ) {}
 
   /**
@@ -387,5 +401,72 @@ export class ExcelGatewayController {
 
     const buf = await buildXlsx('Smenalar', columns, mapped);
     this.sendFile(res, 'shifts.xlsx', buf);
+  }
+  /**
+   * MOLIYAVIY DAFTAR EKSPORTI (GtAoqHlk) — Balans → Tarix jadvalining AYNAN
+   * o'sha filtrlari (sana + manba turi) bilan; qatorlar soni jadvaldagi
+   * `total` ga teng (MAX_ROWS chegarasigacha).
+   */
+  @Get('financial-balance.xlsx')
+  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
+  @ApiOperation({
+    summary: 'Moliyaviy balans tarixini Excel (.xlsx) ga eksport qilish',
+  })
+  @ApiQuery({ name: 'source_type', required: false, type: String })
+  @ApiQuery({ name: 'from_date', required: false, type: String })
+  @ApiQuery({ name: 'to_date', required: false, type: String })
+  @ApiQuery({ name: 'fromDate', required: false, type: String })
+  @ApiQuery({ name: 'toDate', required: false, type: String })
+  async exportFinancialBalance(
+    @Res() res: Response,
+    @Query('source_type') source_type?: string,
+    @Query('from_date') from_date?: string,
+    @Query('to_date') to_date?: string,
+    @Query('fromDate') fromDate?: string,
+    @Query('toDate') toDate?: string,
+  ): Promise<void> {
+    // Noma'lum manba turi (eski havola) — "barcha manbalar", 500 emas.
+    const filters = {
+      source_type:
+        source_type && FINANCIAL_SOURCE_TYPES.has(source_type)
+          ? source_type
+          : undefined,
+      from_date: from_date ?? fromDate,
+      to_date: to_date ?? toDate,
+    };
+
+    const rows: Array<Record<string, unknown>> = [];
+    for (let offset = 0; rows.length < MAX_ROWS; ) {
+      const result = await this.send<{
+        data?: { items?: Array<Record<string, unknown>>; total?: number };
+      }>(this.financeClient, 'finance.financial_balance.history', {
+        ...filters,
+        limit: FINANCIAL_BALANCE_PAGE_SIZE,
+        offset,
+      });
+      const batch = result?.data?.items ?? [];
+      rows.push(...batch);
+      offset += batch.length;
+      const total = Number(result?.data?.total ?? rows.length);
+      if (batch.length < FINANCIAL_BALANCE_PAGE_SIZE || rows.length >= total) {
+        break;
+      }
+    }
+
+    const items = rows.slice(0, MAX_ROWS);
+    const identity = this.identityClient;
+    const actors = identity
+      ? await resolveFinancialActors(
+          items.map((row) => row.created_by),
+          (id) => this.send(identity, 'identity.user.find_by_id', { id }),
+        )
+      : new Map();
+
+    const buf = await buildXlsx(
+      'Moliyaviy balans',
+      FINANCIAL_BALANCE_EXPORT_COLUMNS,
+      items.map((row) => toFinancialBalanceExportRow(row, actors)),
+    );
+    this.sendFile(res, 'financial-balance.xlsx', buf);
   }
 }

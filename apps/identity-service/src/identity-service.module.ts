@@ -16,6 +16,9 @@ import { User } from './entities/user.entity';
 import { BcryptEncryption } from '../../../libs/common/helpers/bcrypt';
 import type { StringValue } from 'ms';
 
+import { ScheduleModule } from '@nestjs/schedule';
+import { OtpCode } from './entities/otp-code.entity';
+import { OtpService } from './otp/otp.service';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -31,9 +34,12 @@ import type { StringValue } from 'ms';
     RmqModule.register({ name: 'LOGISTICS' }),
     RmqModule.register({ name: 'FINANCE' }),
     RmqModule.register({ name: 'BRANCH' }),
+    // OTP SMS (rkz0yBxr) notification-service orqali.
+    RmqModule.register({ name: 'NOTIFICATION' }),
+    ScheduleModule.forRoot(),
     DatabaseModule,
     ActivityLogModule.forService('identity-service'),
-    TypeOrmModule.forFeature([User]),
+    TypeOrmModule.forFeature([User, OtpCode]),
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
@@ -46,6 +52,6 @@ import type { StringValue } from 'ms';
     }),
   ],
   controllers: [IdentityController],
-  providers: [UserServiceService, AuthService, BcryptEncryption],
+  providers: [UserServiceService, AuthService, BcryptEncryption, OtpService],
 })
 export class IdentityServiceModule {}

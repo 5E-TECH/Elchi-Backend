@@ -4,6 +4,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   Inject,
   Injectable,
   Param,
@@ -13,10 +14,11 @@ import {
   Query,
   Req,
   UseGuards,
+  Optional,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { timeout } from 'rxjs';
-import { Roles as RoleEnum } from '@app/common';
+import { firstValueFrom, timeout } from 'rxjs';
+import { Roles as RoleEnum, STATUS_CATALOG } from '@app/common';
 import {
   ApiBearerAuth,
   ApiBody,
@@ -47,6 +49,12 @@ import {
 // fetch up to ~60s); an 8s ceiling would premature-fail a working call. See
 // integration-service AbortSignal.timeout / file base64 transfer.
 const PROVIDER_RPC_TIMEOUT_MS = 65_000;
+/** Posilkalar jadvalidagi buyurtma xulosalari — tez javob, aks holda jadval xulosasiz. */
+const ORDER_SUMMARY_TIMEOUT_MS = 8_000;
+
+interface ShipmentListResponse {
+  data?: { items?: Array<Record<string, unknown>> } & Record<string, unknown>;
+}
 
 /**
  * Integratsiya id'si — `bigint` (BaseEntity: `@PrimaryGeneratedColumn('bigint')`),
@@ -82,7 +90,52 @@ export class ParseIntegrationIdPipe implements PipeTransform<string, string> {
 export class IntegrationGatewayController {
   constructor(
     @Inject('INTEGRATION') private readonly integrationClient: ClientProxy,
+    // tokhPLMP: posilkalar jadvaliga mijoz/manzil/summa (buyurtma xulosasi).
+    @Optional() @Inject('ORDER') private readonly orderClient?: ClientProxy,
   ) {}
+
+  /**
+   * Posilkalar sahifasidagi buyurtmalarning xulosasi (raqam, mijoz, telefon,
+   * hudud, summa) — BITTA `order.summary_by_ids` so'rovi (N+1 emas).
+   * ⚠️ Fail-soft: order-service javob bermasa jadval baribir ko'rinadi,
+   * qatorlarda `order: null`.
+   */
+  private async attachOrderSummaries(response: ShipmentListResponse) {
+    const items = response?.data?.items;
+    if (!this.orderClient || !Array.isArray(items) || !items.length) {
+      return response;
+    }
+    const orderIdOf = (row: Record<string, unknown>) =>
+      typeof row.order_id === 'string' || typeof row.order_id === 'number'
+        ? String(row.order_id)
+        : '';
+    const ids = Array.from(new Set(items.map(orderIdOf).filter(Boolean)));
+    let summaries = new Map<string, unknown>();
+    try {
+      const res = await firstValueFrom(
+        this.orderClient
+          .send<{
+            data?: Array<{ id?: unknown }>;
+          }>({ cmd: 'order.summary_by_ids' }, { ids })
+          .pipe(timeout(ORDER_SUMMARY_TIMEOUT_MS)),
+      );
+      summaries = new Map(
+        (Array.isArray(res?.data) ? res.data : []).map((row) => [
+          typeof row?.id === 'string' || typeof row?.id === 'number'
+            ? String(row.id)
+            : '',
+          row,
+        ]),
+      );
+    } catch {
+      // jadval xulosasiz ko'rsatiladi
+    }
+    response.data!.items = items.map((row) => ({
+      ...row,
+      order: summaries.get(orderIdOf(row)) ?? null,
+    }));
+    return response;
+  }
 
   /** The authenticated user as an audit actor for write operations. */
   private auditActor(req: { user?: { sub?: string; roles?: string[] } }) {
@@ -249,6 +302,23 @@ export class IntegrationGatewayController {
       .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
+  /**
+   * KANONIK STATUS KATALOGI (JnHK6bgV) — status xaritasi muharriri shu
+   * ro'yxatdan qator yasaydi. Statik (`Order_status` enumidan hosil
+   * qilingan), shu bois RPC'siz va keshlanadi.
+   * ⚠️ `:id` marshrutlaridan OLDIN — aks holda "status-catalog" id bo'lib o'qiladi.
+   */
+  @Get('status-catalog')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @Header('Cache-Control', 'private, max-age=3600')
+  @ApiOperation({
+    summary:
+      'Kanonik posilka va to‘lov statuslari + o‘zbekcha izoh (status xaritasi uchun)',
+  })
+  statusCatalog() {
+    return { statusCode: 200, message: 'Status catalog', data: STATUS_CATALOG };
+  }
+
   @Get('webhook-logs')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({
@@ -262,6 +332,12 @@ export class IntegrationGatewayController {
     type: String,
     description: 'rejected | verified | processed',
   })
+  @ApiQuery({
+    name: 'invalid_signature',
+    required: false,
+    type: Boolean,
+    description: 'true — faqat imzosi xato yozuvlar',
+  })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   webhookLogs(
@@ -269,6 +345,7 @@ export class IntegrationGatewayController {
     @Query('status') status?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('invalid_signature') invalidSignature?: string,
   ) {
     return this.integrationClient
       .send(
@@ -276,6 +353,8 @@ export class IntegrationGatewayController {
         {
           integration_id: integrationId,
           status,
+          invalid_signature:
+            invalidSignature === 'true' || invalidSignature === '1',
           page: page ? Number(page) : undefined,
           limit: limit ? Number(limit) : undefined,
         },
@@ -608,28 +687,39 @@ export class IntegrationGatewayController {
   @ApiParam({ name: 'id', description: 'Integration id' })
   @ApiQuery({ name: 'status', required: false, type: String })
   @ApiQuery({ name: 'failed_only', required: false, type: Boolean })
+  @ApiQuery({
+    name: 'filter',
+    required: false,
+    type: String,
+    description: 'all | not_sent | failed | delivered | mismatch',
+  })
   @ApiQuery({ name: 'page', required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
-  listProviderShipments(
+  async listProviderShipments(
     @Param('id', ParseIntegrationIdPipe) id: string,
     @Query('status') status?: string,
     @Query('failed_only') failedOnly?: string,
     @Query('page') page?: string,
     @Query('limit') limit?: string,
+    @Query('filter') filter?: string,
   ) {
-    return this.integrationClient
-      .send(
-        { cmd: 'integration.shipment.list' },
-        {
-          integration_id: id,
-          status,
-          // Query satr bo'lib keladi — `'false'` ham rost bo'lib qolmasin.
-          failed_only: failedOnly === 'true' || failedOnly === '1',
-          page: page ? Number(page) : undefined,
-          limit: limit ? Number(limit) : undefined,
-        },
-      )
-      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+    const response = await firstValueFrom(
+      this.integrationClient
+        .send<ShipmentListResponse>(
+          { cmd: 'integration.shipment.list' },
+          {
+            integration_id: id,
+            status,
+            // Query satr bo'lib keladi — `'false'` ham rost bo'lib qolmasin.
+            failed_only: failedOnly === 'true' || failedOnly === '1',
+            filter,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
+        )
+        .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS)),
+    );
+    return this.attachOrderSummaries(response);
   }
 
   @Get(':id/receivable-balance')

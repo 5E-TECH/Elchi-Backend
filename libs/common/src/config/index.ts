@@ -188,6 +188,19 @@ export const identityValidationSchema = Joi.object({
         'SUPERADMIN_PASSWORD is a known weak/default password. Use a strong, unique password (>=12 chars).',
       'string.min': 'SUPERADMIN_PASSWORD must be at least 12 characters.',
     }),
+  // ── OTP (rkz0yBxr). SMS notification-service orqali ketadi.
+  RABBITMQ_NOTIFICATION_QUEUE: Joi.string().default('notification_queue'),
+  // Kod va raqam hash'i uchun kalit; berilmasa ACCESS_TOKEN_KEY ishlatiladi.
+  OTP_HASH_SECRET: Joi.string()
+    .min(32)
+    .custom(rejectWeakSecret, 'weak-secret check')
+    .allow('')
+    .optional(),
+  OTP_TTL_SECONDS: Joi.number().integer().min(60).max(1800).default(300),
+  OTP_MAX_ATTEMPTS: Joi.number().integer().min(1).max(10).default(5),
+  OTP_RESEND_SECONDS: Joi.number().integer().min(10).default(60),
+  OTP_HOURLY_LIMIT: Joi.number().integer().min(1).default(5),
+  OTP_DAILY_LIMIT: Joi.number().integer().min(1).default(10),
 });
 
 export const orderValidationSchema = Joi.object({
@@ -252,6 +265,65 @@ export const notificationValidationSchema = Joi.object({
   // stays disabled when ORDER_BOT_TOKEN is unset.
   ORDER_BOT_TOKEN: Joi.string().optional(),
   ORDER_BOT_WEBAPP_URL: Joi.string().uri().optional(),
+  // Web Push (VAPID). Hammasi ixtiyoriy: kalitsiz servis baribir ko'tariladi,
+  // faqat push o'chiq bo'ladi (startda WARN). Juftlik BIR MARTA yaratiladi —
+  // qayta yaratilsa barcha mavjud obunalar o'ladi.
+  VAPID_PUBLIC_KEY: Joi.string().allow('').optional(),
+  VAPID_PRIVATE_KEY: Joi.string().allow('').optional(),
+  VAPID_SUBJECT: Joi.string()
+    .pattern(/^(mailto:|https:\/\/)/)
+    .allow('')
+    .optional(),
+  // ── SMS (3fRbyadQ, 8auPBa1O, sVByLMnt). Sukutlar XAVFSIZ: SMS_ENABLED=false.
+  SMS_ENABLED: Joi.boolean()
+    .truthy('true', '1')
+    .falsy('false', '0')
+    .default(false),
+  SMS_PROVIDER: Joi.string().valid('eskiz', 'playmobile').default('eskiz'),
+  SMS_DAILY_CAP: Joi.number().integer().min(0).default(500),
+  SMS_MAX_FANOUT: Joi.number().integer().min(1).default(200),
+  SMS_CRON_ENABLED: Joi.boolean()
+    .truthy('true', '1')
+    .falsy('false', '0')
+    .default(true),
+  SMS_CRON_EXPR: Joi.string().optional(),
+  SMS_BATCH_SIZE: Joi.number().integer().min(1).max(500).optional(),
+  // Bir bo'lak narxi (so'm). Berilmasa narx NULL — "tarif sozlanmagan", 0 emas.
+  SMS_TARIFF_TRANSACTIONAL: Joi.number().min(0).allow('').optional(),
+  SMS_TARIFF_PROMO: Joi.number().min(0).allow('').optional(),
+  // Kredensiallarni DB'da shifrlash kaliti (openssl rand -hex 32).
+  SMS_CREDENTIAL_SECRET: Joi.string()
+    .min(32)
+    .custom(rejectWeakSecret, 'weak-secret check')
+    .allow('')
+    .optional(),
+  SMS_CREDENTIAL_SECRET_PREVIOUS: Joi.string()
+    .min(32)
+    .custom(rejectWeakSecret, 'weak-secret check')
+    .allow('')
+    .optional(),
+  // DLR va opt-out havolalarini imzolovchi sir (faqat notification-service'da).
+  SMS_DLR_SECRET: Joi.string()
+    .min(32)
+    .custom(rejectWeakSecret, 'weak-secret check')
+    .allow('')
+    .optional(),
+  SMS_DLR_CALLBACK_URL: Joi.string()
+    .uri({ scheme: ['https'] })
+    .allow('')
+    .optional(),
+  SMS_OPT_OUT_BASE_URL: Joi.string()
+    .uri({ scheme: ['https'] })
+    .allow('')
+    .optional(),
+  // Reklama taqiq oynasi (Toshkent vaqti), qonun soatlari o'zgarishi mumkin.
+  NOTIF_PROMO_QUIET_HOURS: Joi.string()
+    .pattern(/^\d{1,2}:\d{2}-\d{1,2}:\d{2}$/)
+    .default('18:00-09:00'),
+  SMS_CONSENT_TTL_DAYS: Joi.number().integer().min(1).optional(),
+  SMS_BALANCE_ALERT_THRESHOLD: Joi.number().min(0).allow('').optional(),
+  SMS_BALANCE_CRON_EXPR: Joi.string().optional(),
+  SMS_ALERT_RECIPIENT_IDS: Joi.string().allow('').optional(),
 });
 
 export const integrationValidationSchema = Joi.object({

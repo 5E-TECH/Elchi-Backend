@@ -148,6 +148,13 @@ export class User extends BaseEntity {
   @Column({ type: 'jsonb', nullable: true })
   settings: Record<string, unknown> | null;
 
+  /**
+   * Mijoz tili (nkhURiKX): SMS shablon shu tilda tanlanadi. Sukut 'uz'.
+   * Xodimlar tili `settings.appearance.language` da — kontakt so'rovi shundan oladi.
+   */
+  @Column({ type: 'varchar', length: 2, default: 'uz' })
+  language: string;
+
   // Kim bu foydalanuvchini YARATGAN (#3). Manager faqat O'ZI yaratgan
   // foydalanuvchilarni tahrirlay oladi. NULL = eski/tizim yaratgan yoki noma'lum
   // (bunday yozuvni manager tahrirlay olmaydi). bigint -> TS'da string.

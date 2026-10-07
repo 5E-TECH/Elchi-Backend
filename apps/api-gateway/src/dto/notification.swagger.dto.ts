@@ -5,6 +5,8 @@ import {
   IsArray,
   IsBoolean,
   IsEnum,
+  IsIn,
+  IsNotEmpty,
   IsNumber,
   IsObject,
   IsOptional,
@@ -12,6 +14,7 @@ import {
   Matches,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 import {
   Group_type,
@@ -347,6 +350,21 @@ export class InboxQueryDto {
   @IsEnum(NotificationPriority)
   priority?: NotificationPriority;
 
+  @ApiPropertyOptional({
+    example: true,
+    description: '"Faqat muhim" — critical + high (priority dan ustun)',
+  })
+  @IsOptional()
+  @Transform(({ value }) =>
+    value === true || value === 'true' || value === '1'
+      ? true
+      : value === false || value === 'false' || value === '0'
+        ? false
+        : value,
+  )
+  @IsBoolean()
+  important?: boolean;
+
   @ApiPropertyOptional({ example: 1 })
   @IsOptional()
   @Type(() => Number)
@@ -360,4 +378,75 @@ export class InboxQueryDto {
   @IsNumber()
   @Min(1)
   limit?: number;
+}
+
+// ==================== Web Push ====================
+
+export class PushSubscriptionKeysDto {
+  @ApiProperty({
+    example:
+      'BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(512)
+  p256dh!: string;
+
+  @ApiProperty({ example: 'tBHItJI5svbpez7KI4CCXg' })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(256)
+  auth!: string;
+}
+
+export class SubscribePushRequestDto {
+  @ApiProperty({
+    example: 'https://fcm.googleapis.com/fcm/send/dpH5lCsTSSM:APA91bH...',
+    description: 'PushSubscription.endpoint (brauzer beradi)',
+  })
+  @IsString()
+  @Matches(/^https:\/\//i, { message: 'endpoint must be an https URL' })
+  @MaxLength(2048)
+  endpoint!: string;
+
+  @ApiProperty({ type: PushSubscriptionKeysDto })
+  @ValidateNested()
+  @Type(() => PushSubscriptionKeysDto)
+  keys!: PushSubscriptionKeysDto;
+
+  @ApiPropertyOptional({
+    example: 'Mozilla/5.0 (Linux; Android 14) ...',
+    description: 'Serverda 256 belgiga kesiladi',
+  })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1024)
+  user_agent?: string;
+
+  @ApiPropertyOptional({
+    enum: ['android', 'ios', 'desktop'],
+    example: 'android',
+  })
+  @IsOptional()
+  @IsIn(['android', 'ios', 'desktop'])
+  platform?: 'android' | 'ios' | 'desktop';
+
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      "display-mode: standalone (o'rnatilgan PWA) ichidan obuna bo'ldimi",
+  })
+  @IsOptional()
+  @IsBoolean()
+  is_standalone?: boolean;
+}
+
+export class UnsubscribePushRequestDto {
+  @ApiProperty({
+    example: 'https://fcm.googleapis.com/fcm/send/dpH5lCsTSSM:APA91bH...',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(2048)
+  endpoint!: string;
 }

@@ -83,6 +83,14 @@ const toText = (value: unknown): string => {
   return String(value as string | number | boolean | bigint | symbol);
 };
 
+import {
+  normalizeInboundStatusMap,
+  SHIPMENT_DELIVERED_STATUSES,
+  SHIPMENT_FILTER_SQL,
+  SHIPMENT_FILTERS,
+  type ShipmentFilter,
+} from './shipment-filters';
+
 const nullableText = (value: unknown): string | null => {
   const text = toText(value).trim();
   return text || null;
@@ -2490,15 +2498,11 @@ export class IntegrationServiceService {
   }
   private getProviderWebhookLogRetentionMs(): number {
     const raw = Number(process.env.PROVIDER_WEBHOOK_LOG_RETENTION_MS);
-    return Number.isFinite(raw) && raw > 0
-      ? raw
-      : 30 * 24 * 60 * 60 * 1000; // 30 kun (replay/debug oynasi)
+    return Number.isFinite(raw) && raw > 0 ? raw : 30 * 24 * 60 * 60 * 1000; // 30 kun (replay/debug oynasi)
   }
   private getActivityLogRetentionMs(): number {
     const raw = Number(process.env.ACTIVITY_LOG_RETENTION_MS);
-    return Number.isFinite(raw) && raw > 0
-      ? raw
-      : 90 * 24 * 60 * 60 * 1000; // 90 kun (audit tarixi)
+    return Number.isFinite(raw) && raw > 0 ? raw : 90 * 24 * 60 * 60 * 1000; // 90 kun (audit tarixi)
   }
 
   /**
@@ -7094,19 +7098,50 @@ export class IntegrationServiceService {
   async listWebhookLogs(input: {
     integration_id?: string;
     status?: string;
+    /** `true` — faqat imzosi xato (`signature_valid = false`) yozuvlar. */
+    invalid_signature?: boolean | string;
     page?: number;
     limit?: number;
   }) {
     const page = Math.max(1, Number(input?.page ?? 1) || 1);
     const limit = Math.min(100, Math.max(1, Number(input?.limit ?? 20) || 20));
 
-    const where: Record<string, unknown> = {};
+    const scope: Record<string, unknown> = {};
     if (input?.integration_id) {
-      where.integration_id = String(input.integration_id);
+      scope.integration_id = String(input.integration_id);
     }
+    const where: Record<string, unknown> = { ...scope };
     if (input?.status) {
       where.status = String(input.status);
     }
+    if (
+      input?.invalid_signature === true ||
+      input?.invalid_signature === 'true'
+    ) {
+      where.signature_valid = false;
+    }
+
+    // Pill sanoqlari — BITTA agregat so'rov (har pill uchun alohida COUNT emas).
+    const countsQb = this.webhookLogRepo
+      .createQueryBuilder('w')
+      .select('COUNT(*)', 'all')
+      .addSelect("COUNT(*) FILTER (WHERE w.status = 'processed')", 'processed')
+      .addSelect("COUNT(*) FILTER (WHERE w.status = 'verified')", 'verified')
+      .addSelect("COUNT(*) FILTER (WHERE w.status = 'rejected')", 'rejected')
+      .addSelect(
+        'COUNT(*) FILTER (WHERE w.signature_valid = false)',
+        'invalid_signature',
+      );
+    if (scope.integration_id) {
+      countsQb.where('w.integration_id = :iid', { iid: scope.integration_id });
+    }
+    const countsRaw =
+      await countsQb.getRawOne<Record<string, string | number | null>>();
+    const counts = Object.fromEntries(
+      ['all', 'processed', 'verified', 'rejected', 'invalid_signature'].map(
+        (key) => [key, Number(countsRaw?.[key] ?? 0)],
+      ),
+    );
 
     const [rows, total] = await this.webhookLogRepo.findAndCount({
       where,
@@ -7137,6 +7172,7 @@ export class IntegrationServiceService {
           total,
           totalPages: Math.max(1, Math.ceil(total / limit)),
         },
+        counts,
       },
       200,
       'webhook logs',
@@ -8066,29 +8102,82 @@ export class IntegrationServiceService {
     status?: string;
     /** `true` — faqat xato bilan yiqilganlar (qayta jo'natish kerak). */
     failed_only?: boolean;
+    /** Pill filtri (tokhPLMP). `failed_only` = `filter: 'failed'`. */
+    filter?: string;
     page?: number;
     limit?: number;
   }) {
     const page = query.page && query.page > 0 ? query.page : 1;
     const limit =
       query.limit && query.limit > 0 ? Math.min(query.limit, 100) : 20;
+    const filter: ShipmentFilter = query.failed_only
+      ? 'failed'
+      : SHIPMENT_FILTERS.has(query.filter as ShipmentFilter)
+        ? (query.filter as ShipmentFilter)
+        : 'all';
 
-    const qb = this.shipmentRepo
-      .createQueryBuilder('s')
-      .where('s.isDeleted = :d', { d: false });
+    // Nomuvofiqlik ulanishning kiruvchi status xaritasiga tayanadi.
+    const statusMap = query.integration_id
+      ? normalizeInboundStatusMap(
+          (
+            await this.integrationRepo.findOne({
+              where: { id: String(query.integration_id) },
+              select: { id: true, inbound_status_mapping: true },
+            })
+          )?.inbound_status_mapping,
+        )
+      : {};
+    const hasStatusMap = Object.keys(statusMap).length > 0;
 
-    if (query.integration_id) {
-      qb.andWhere('s.integration_id = :iid', {
-        iid: String(query.integration_id),
+    const base = () => {
+      const qb = this.shipmentRepo
+        .createQueryBuilder('s')
+        .where('s.isDeleted = :d', { d: false });
+      if (query.integration_id) {
+        qb.andWhere('s.integration_id = :iid', {
+          iid: String(query.integration_id),
+        });
+      }
+      if (query.status) {
+        qb.andWhere('s.internal_status = :st', { st: String(query.status) });
+      }
+      return qb.setParameters({
+        delivered: [...SHIPMENT_DELIVERED_STATUSES],
+        status_map: JSON.stringify(statusMap),
       });
+    };
+
+    const qb = base();
+    if (filter === 'mismatch' && !hasStatusMap) {
+      // Xarita yo'q — nomuvofiqlikni aniqlab bo'lmaydi (hammasi emas, hech biri).
+      qb.andWhere('1 = 0');
+    } else if (filter !== 'all') {
+      qb.andWhere(SHIPMENT_FILTER_SQL[filter]);
     }
-    if (query.status) {
-      qb.andWhere('s.internal_status = :st', { st: String(query.status) });
-    }
-    if (query.failed_only) {
-      // Xato MATNI bor qatorlar — "yiqilgan" ning yagona ishonchli belgisi.
-      qb.andWhere('s.last_error IS NOT NULL');
-    }
+
+    /**
+     * Pill sanoqlari BITTA agregat so'rovda (N ta COUNT emas). Status
+     * xaritasi bo'sh bo'lsa `mismatch: null` — UI pillni umuman ko'rsatmaydi.
+     */
+    const countsRaw = await base()
+      .select('COUNT(*)', 'all')
+      .addSelect(
+        `COUNT(*) FILTER (WHERE ${SHIPMENT_FILTER_SQL.not_sent})`,
+        'not_sent',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE ${SHIPMENT_FILTER_SQL.failed})`,
+        'failed',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE ${SHIPMENT_FILTER_SQL.delivered})`,
+        'delivered',
+      )
+      .addSelect(
+        `COUNT(*) FILTER (WHERE ${SHIPMENT_FILTER_SQL.mismatch})`,
+        'mismatch',
+      )
+      .getRawOne<Record<string, string | number | null>>();
 
     const [items, total] = await qb
       .orderBy('s.createdAt', 'DESC')
@@ -8096,6 +8185,7 @@ export class IntegrationServiceService {
       .take(limit)
       .getManyAndCount();
 
+    const count = (key: string) => Number(countsRaw?.[key] ?? 0);
     return successRes(
       {
         items,
@@ -8104,6 +8194,13 @@ export class IntegrationServiceService {
           page,
           limit,
           totalPages: Math.ceil(total / limit),
+        },
+        counts: {
+          all: count('all'),
+          not_sent: count('not_sent'),
+          failed: count('failed'),
+          delivered: count('delivered'),
+          mismatch: hasStatusMap ? count('mismatch') : null,
         },
       },
       200,

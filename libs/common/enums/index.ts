@@ -208,6 +208,8 @@ export enum NotificationChannel {
   TELEGRAM = 'telegram',
   EMAIL = 'email',
   SMS = 'sms',
+  // Web Push (brauzer/telefon). DB migratsiya kerak emas — `channels` ustuni JSONB.
+  PUSH = 'push',
 }
 
 /** Severity / surfacing hint for the frontend (badge colour, sound, etc). */

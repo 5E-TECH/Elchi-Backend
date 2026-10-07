@@ -329,6 +329,7 @@ describe('identity.courier.create — executeAndAck nack xulqi', () => {
       realRmqService(),
       h.service,
       {} as never,
+      {} as never,
     );
     const { msg, channel, ctx } = makeContext();
 
@@ -352,6 +353,7 @@ describe('identity.courier.create — executeAndAck nack xulqi', () => {
     const controller = new IdentityController(
       realRmqService(),
       userService as never,
+      {} as never,
       {} as never,
     );
     const { msg, channel, ctx } = makeContext();

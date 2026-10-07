@@ -18,6 +18,16 @@ import { UpdateNotificationDto } from './dto/update-notification.dto';
 import { SendNotificationDto } from './dto/send-notification.dto';
 import { DispatchNotificationDto } from './dto/dispatch-notification.dto';
 import { ListNotificationsDto } from './dto/list-notifications.dto';
+import { PushSubscriptionService } from './push/push-subscription.service';
+import type {
+  SubscribePushInput,
+  UnsubscribePushInput,
+} from './push/push-subscription.service';
+import {
+  PUSH_DELIVER_PATTERN,
+  PushDeliveryService,
+} from './push/push-delivery.service';
+import type { PushDeliverInput } from './push/push-delivery.service';
 
 @Controller()
 export class NotificationServiceController {
@@ -25,6 +35,8 @@ export class NotificationServiceController {
     private readonly rmqService: RmqService,
     private readonly notificationService: NotificationServiceService,
     private readonly inboxService: NotificationInboxService,
+    private readonly pushSubscriptions: PushSubscriptionService,
+    private readonly pushDelivery: PushDeliveryService,
   ) {}
 
   private executeAndAck<T>(
@@ -168,6 +180,16 @@ export class NotificationServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'notification.inbox.counts' })
+  inboxCounts(
+    @Payload() data: { recipient_id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.inboxService.counts(data.recipient_id),
+    );
+  }
+
   @MessagePattern({ cmd: 'notification.inbox.unread_count' })
   unreadCount(
     @Payload() data: { recipient_id: string },
@@ -206,6 +228,41 @@ export class NotificationServiceController {
     return this.executeAndAck(context, () =>
       this.inboxService.remove(data.recipient_id, data.id),
     );
+  }
+
+  // ==================== Web Push ====================
+
+  @MessagePattern({ cmd: 'notification.push.public_key' })
+  pushPublicKey(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.pushSubscriptions.getPublicKey(),
+    );
+  }
+
+  @MessagePattern({ cmd: 'notification.push.subscribe' })
+  pushSubscribe(
+    @Payload() data: SubscribePushInput,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.pushSubscriptions.subscribe(data),
+    );
+  }
+
+  @MessagePattern({ cmd: 'notification.push.unsubscribe' })
+  pushUnsubscribe(
+    @Payload() data: UnsubscribePushInput,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.pushSubscriptions.unsubscribe(data),
+    );
+  }
+
+  /** Outbox iste'molchisi — dispatch navbatga qo'ygan push'larni yetkazadi. */
+  @MessagePattern({ cmd: PUSH_DELIVER_PATTERN })
+  pushDeliver(@Payload() data: PushDeliverInput, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.pushDelivery.deliver(data));
   }
 
   // ==================== Audit-log reads (gateway fan-in) ====================

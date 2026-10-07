@@ -10,6 +10,7 @@ import {
   Res,
   UnauthorizedException,
   UseGuards,
+  HttpCode,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
@@ -77,6 +78,7 @@ import {
   RefreshRequestDto,
 } from './dto/auth.swagger.dto';
 import { UpdateAdminRequestDto } from './dto/identity.swagger.dto';
+import { OtpRequestDto, OtpVerifyDto } from './dto/sms.swagger.dto';
 
 interface JwtUser {
   sub: string;
@@ -248,6 +250,65 @@ export class AuthGatewayController {
     }
 
     return this.sanitizeAuthPayload(response);
+  }
+
+  /**
+   * OTP so'rash (rkz0yBxr). Javob raqam ro'yxatdan o'tgan-o'tmaganidan qat'i
+   * nazar BIR XIL. Limitlar: IP — ClientIpThrottlerGuard + AUTH_THROTTLE;
+   * raqam — identity-service (60 s / soat / kun).
+   */
+  @Throttle(AUTH_THROTTLE)
+  @Public()
+  @Post('otp/request')
+  @HttpCode(200)
+  @ApiOperation({
+    summary:
+      'Request a one-time SMS code (same answer whether the number exists or not)',
+  })
+  @ApiBody({ type: OtpRequestDto })
+  otpRequest(@Body() dto: OtpRequestDto, @Req() req: Request) {
+    return this.sendIdentity<Record<string, unknown>>(
+      { cmd: 'identity.otp.request' },
+      { ...dto, ip: this.clientIp(req) },
+    );
+  }
+
+  @Throttle(AUTH_THROTTLE)
+  @Public()
+  @Post('otp/verify')
+  @HttpCode(200)
+  @ApiOperation({
+    summary:
+      'Verify the SMS code; for purpose=login returns tokens like /auth/login (customers only)',
+  })
+  @ApiBody({ type: OtpVerifyDto })
+  async otpVerify(
+    @Body() dto: OtpVerifyDto,
+    @Req() req: Request,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    const response = await this.sendIdentity<Record<string, unknown>>(
+      { cmd: 'identity.otp.verify' },
+      { ...dto, ip: this.clientIp(req) },
+    );
+    const refreshToken =
+      typeof response.refreshToken === 'string' ? response.refreshToken : null;
+    if (refreshToken) {
+      this.setRefreshCookie(
+        res,
+        refreshToken,
+        this.getRefreshExpiryMs(response),
+      );
+      return this.sanitizeAuthPayload(response);
+    }
+    return response;
+  }
+
+  /** Haqiqiy mijoz IP'si (Cloudflare ortida) — faqat audit uchun. */
+  private clientIp(req: Request): string | null {
+    const raw = req.headers['cf-connecting-ip'];
+    const cf = Array.isArray(raw) ? raw[0] : raw;
+    return (cf || req.ip || null)?.toString().slice(0, 64) ?? null;
   }
 
   @Throttle(AUTH_REFRESH_THROTTLE)

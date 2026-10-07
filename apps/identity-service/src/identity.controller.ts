@@ -9,6 +9,8 @@ import { RmqService, executeAndAck } from '@app/common';
 import type { ActivityLogQuery } from '@app/common';
 import { UserServiceService } from './user-service.service';
 import { AuthService } from './auth/auth.service';
+import { OtpService } from './otp/otp.service';
+import type { OtpRequestInput, OtpVerifyInput } from './otp/otp.service';
 import type {
   CreateCustomerPayload,
   CreateCourierPayload,
@@ -39,6 +41,7 @@ export class IdentityController {
     private readonly rmqService: RmqService,
     private readonly userService: UserServiceService,
     private readonly authService: AuthService,
+    private readonly otpService: OtpService,
   ) {}
 
   private executeAndAck<T>(
@@ -191,6 +194,28 @@ export class IdentityController {
   ) {
     return this.executeAndAck(context, () =>
       this.userService.deleteUser(payload.id, payload.requester),
+    );
+  }
+
+  /** OTP so'rash (rkz0yBxr) — javob raqam mavjudligidan qat'i nazar bir xil. */
+  @MessagePattern({ cmd: 'identity.otp.request' })
+  otpRequest(@Payload() payload: OtpRequestInput, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.otpService.request(payload));
+  }
+
+  @MessagePattern({ cmd: 'identity.otp.verify' })
+  otpVerify(@Payload() payload: OtpVerifyInput, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.otpService.verify(payload));
+  }
+
+  /** SMS/push yetkazish uchun telefon/rol/til — notification-service chaqiradi. */
+  @MessagePattern({ cmd: 'identity.user.contacts_by_ids' })
+  contactsByIds(
+    @Payload() payload: { ids?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.contactsByIds(payload?.ids),
     );
   }
 

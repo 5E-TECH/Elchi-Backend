@@ -902,6 +902,56 @@
         ]
       }
     },
+    "/auth/otp/request": {
+      "post": {
+        "operationId": "AuthGatewayController_otpRequest",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtpRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Request a one-time SMS code (same answer whether the number exists or not)",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
+    "/auth/otp/verify": {
+      "post": {
+        "operationId": "AuthGatewayController_otpVerify",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OtpVerifyDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Verify the SMS code; for purpose=login returns tokens like /auth/login (customers only)",
+        "tags": [
+          "Auth"
+        ]
+      }
+    },
     "/auth/refresh": {
       "post": {
         "operationId": "AuthGatewayController_refresh",
@@ -5368,7 +5418,16 @@
     "/finance/financial-balance/entries": {
       "post": {
         "operationId": "FinanceGatewayController_recordFinancialBalance",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "required": true,
+            "in": "header",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -6346,6 +6405,16 @@
             }
           },
           {
+            "name": "important",
+            "required": false,
+            "in": "query",
+            "description": "\"Faqat muhim\" — critical + high (priority dan ustun)",
+            "schema": {
+              "example": true,
+              "type": "boolean"
+            }
+          },
+          {
             "name": "page",
             "required": false,
             "in": "query",
@@ -6375,6 +6444,26 @@
           }
         ],
         "summary": "Current user's notification inbox",
+        "tags": [
+          "Notification"
+        ]
+      }
+    },
+    "/notifications/inbox/counts": {
+      "get": {
+        "operationId": "NotificationGatewayController_inboxCounts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kategoriya bo‘yicha jami/o‘qilmagan va muhim o‘qilmaganlar soni",
         "tags": [
           "Notification"
         ]
@@ -6503,6 +6592,84 @@
           }
         ],
         "summary": "Mark one of my notifications read (or unread)",
+        "tags": [
+          "Notification"
+        ]
+      }
+    },
+    "/notifications/push/public-key": {
+      "get": {
+        "operationId": "NotificationGatewayController_pushPublicKey",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "VAPID public key for PushManager.subscribe (never the private key)",
+        "tags": [
+          "Notification"
+        ]
+      }
+    },
+    "/notifications/push/subscribe": {
+      "post": {
+        "operationId": "NotificationGatewayController_pushSubscribe",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscribePushRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Save this browser/device push subscription for the current user (idempotent by endpoint)",
+        "tags": [
+          "Notification"
+        ]
+      },
+      "delete": {
+        "operationId": "NotificationGatewayController_pushUnsubscribe",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UnsubscribePushRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Remove one of the current user's push subscriptions (call BEFORE logout revokes the token)",
         "tags": [
           "Notification"
         ]
@@ -6792,6 +6959,453 @@
         ]
       }
     },
+    "/notifications/sms/status": {
+      "get": {
+        "operationId": "SmsGatewayController_status",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "SMS holati: yoqilganmi, akkauntlar, bugungi sarf, kvota, tariflar",
+        "tags": [
+          "SMS"
+        ]
+      }
+    },
+    "/notifications/sms/tariffs": {
+      "get": {
+        "operationId": "SmsGatewayController_tariffs",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bir bo'lak narxi (so'm). Sozlanmagan bo'lsa null",
+        "tags": [
+          "SMS"
+        ]
+      }
+    },
+    "/notifications/sms/report": {
+      "get": {
+        "operationId": "SmsGatewayController_report",
+        "parameters": [
+          {
+            "name": "from",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "2026-10-01T00:00:00+05:00",
+              "type": "string"
+            }
+          },
+          {
+            "name": "to",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "2026-11-01T00:00:00+05:00",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Xarajat hisoboti: Toshkent kuni × sinf (soni, yetkazilgan, so'm)",
+        "tags": [
+          "SMS"
+        ]
+      }
+    },
+    "/notifications/sms/accounts": {
+      "get": {
+        "operationId": "SmsGatewayController_accounts",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Provayder akkauntlari (login maskalangan, parol qaytmaydi)",
+        "tags": [
+          "SMS"
+        ]
+      },
+      "put": {
+        "operationId": "SmsGatewayController_upsertAccount",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertSmsAccountDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Provayder akkaunti — kredensial DB da shifrlanadi",
+        "tags": [
+          "SMS"
+        ]
+      }
+    },
+    "/notifications/sms/templates": {
+      "get": {
+        "operationId": "SmsGatewayController_templates",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Shablonlar (kodlash, bo'laklar, tasdiq holati bilan)",
+        "tags": [
+          "SMS"
+        ]
+      },
+      "post": {
+        "operationId": "SmsGatewayController_upsertTemplate",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpsertSmsTemplateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Shablon yaratish/yangilash (matn o'zgarsa provayder tasdig'i bekor)",
+        "tags": [
+          "SMS"
+        ]
+      }
+    },
+    "/notifications/sms/templates/{id}/approve": {
+      "patch": {
+        "operationId": "SmsGatewayController_approveTemplate",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveSmsTemplateDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Provayder tasdiqlagan shablon id sini yozish",
+        "tags": [
+          "SMS"
+        ]
+      }
+    },
+    "/notifications/sms/templates/{id}": {
+      "delete": {
+        "operationId": "SmsGatewayController_deleteTemplate",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Shablonni o'chirish",
+        "tags": [
+          "SMS"
+        ]
+      }
+    },
+    "/notifications/sms/campaigns/preview": {
+      "post": {
+        "operationId": "SmsGatewayController_previewCampaign",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SmsCampaignDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Tasdiq oynasi: aniq qabul qiluvchilar, roziligi yo'qlar, prognoz narx (hech narsa yuborilmaydi)",
+        "tags": [
+          "SMS"
+        ]
+      }
+    },
+    "/notifications/sms/campaigns": {
+      "post": {
+        "operationId": "SmsGatewayController_sendCampaign",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SmsCampaignDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kampaniyani yuborish (Idempotency-Key majburiy — takror 409)",
+        "tags": [
+          "SMS"
+        ]
+      },
+      "get": {
+        "operationId": "SmsGatewayController_campaigns",
+        "parameters": [
+          {
+            "name": "limit",
+            "required": true,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kampaniyalar tarixi: sent/failed/blocked",
+        "tags": [
+          "SMS"
+        ]
+      }
+    },
+    "/notifications/sms/consents": {
+      "post": {
+        "operationId": "SmsGatewayController_grantConsent",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GrantSmsConsentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Reklama roziligini qayd etish (operator)",
+        "tags": [
+          "SMS"
+        ]
+      }
+    },
+    "/notifications/sms/consents/revoke": {
+      "post": {
+        "operationId": "SmsGatewayController_revokeConsent",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RevokeSmsConsentDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Raqam bo'yicha reklama roziligini bekor qilish",
+        "tags": [
+          "SMS"
+        ]
+      }
+    },
+    "/webhooks/sms/{provider}": {
+      "post": {
+        "operationId": "SmsPublicGatewayController_deliveryReport",
+        "parameters": [
+          {
+            "name": "provider",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "SMS yetkazilganlik hisoboti (DLR) — har xabar HMAC token bilan",
+        "tags": [
+          "SMS"
+        ]
+      }
+    },
+    "/sms/stop/{token}": {
+      "get": {
+        "operationId": "SmsPublicGatewayController_optOut",
+        "parameters": [
+          {
+            "name": "token",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "summary": "Reklama SMS dan chiqish (opt-out) havolasi",
+        "tags": [
+          "SMS"
+        ]
+      }
+    },
     "/integrations": {
       "get": {
         "operationId": "IntegrationGatewayController_findAll",
@@ -7020,6 +7634,26 @@
         ]
       }
     },
+    "/integrations/status-catalog": {
+      "get": {
+        "operationId": "IntegrationGatewayController_statusCatalog",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kanonik posilka va to‘lov statuslari + o‘zbekcha izoh (status xaritasi uchun)",
+        "tags": [
+          "Integrations"
+        ]
+      }
+    },
     "/integrations/webhook-logs": {
       "get": {
         "operationId": "IntegrationGatewayController_webhookLogs",
@@ -7055,6 +7689,15 @@
             "in": "query",
             "schema": {
               "type": "number"
+            }
+          },
+          {
+            "name": "invalid_signature",
+            "required": false,
+            "in": "query",
+            "description": "true — faqat imzosi xato yozuvlar",
+            "schema": {
+              "type": "boolean"
             }
           }
         ],
@@ -7818,6 +8461,15 @@
             "in": "query",
             "schema": {
               "type": "number"
+            }
+          },
+          {
+            "name": "filter",
+            "required": false,
+            "in": "query",
+            "description": "all | not_sent | failed | delivered | mismatch",
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -10619,6 +11271,67 @@
         ]
       }
     },
+    "/export/financial-balance.xlsx": {
+      "get": {
+        "operationId": "ExcelGatewayController_exportFinancialBalance",
+        "parameters": [
+          {
+            "name": "source_type",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "from_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "fromDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "toDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Moliyaviy balans tarixini Excel (.xlsx) ga eksport qilish",
+        "tags": [
+          "Excel Export"
+        ]
+      }
+    },
     "/activity-logs/actions": {
       "get": {
         "operationId": "AuditGatewayController_actions",
@@ -12118,6 +12831,51 @@
         },
         "required": [
           "accessToken"
+        ]
+      },
+      "OtpRequestDto": {
+        "type": "object",
+        "properties": {
+          "phone_number": {
+            "type": "string",
+            "example": "+998901234567"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "login",
+              "phone_verify"
+            ],
+            "example": "login"
+          }
+        },
+        "required": [
+          "phone_number"
+        ]
+      },
+      "OtpVerifyDto": {
+        "type": "object",
+        "properties": {
+          "phone_number": {
+            "type": "string",
+            "example": "+998901234567"
+          },
+          "purpose": {
+            "type": "string",
+            "enum": [
+              "login",
+              "phone_verify"
+            ],
+            "example": "login"
+          },
+          "code": {
+            "type": "string",
+            "example": "123456"
+          }
+        },
+        "required": [
+          "phone_number",
+          "code"
         ]
       },
       "RefreshRequestDto": {
@@ -13841,6 +14599,71 @@
           "amount"
         ]
       },
+      "PushSubscriptionKeysDto": {
+        "type": "object",
+        "properties": {
+          "p256dh": {
+            "type": "string",
+            "example": "BNcRdreALRFXTkOOUHK1EtK2wtaz5Ry4YfYCA_0QTpQtUbVlUls0VJXg7A8u-Ts1XbjhazAkj7I99e8QcYP7DkM"
+          },
+          "auth": {
+            "type": "string",
+            "example": "tBHItJI5svbpez7KI4CCXg"
+          }
+        },
+        "required": [
+          "p256dh",
+          "auth"
+        ]
+      },
+      "SubscribePushRequestDto": {
+        "type": "object",
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "example": "https://fcm.googleapis.com/fcm/send/dpH5lCsTSSM:APA91bH...",
+            "description": "PushSubscription.endpoint (brauzer beradi)"
+          },
+          "keys": {
+            "$ref": "#/components/schemas/PushSubscriptionKeysDto"
+          },
+          "user_agent": {
+            "type": "string",
+            "example": "Mozilla/5.0 (Linux; Android 14) ...",
+            "description": "Serverda 256 belgiga kesiladi"
+          },
+          "platform": {
+            "type": "string",
+            "enum": [
+              "android",
+              "ios",
+              "desktop"
+            ],
+            "example": "android"
+          },
+          "is_standalone": {
+            "type": "boolean",
+            "example": false,
+            "description": "display-mode: standalone (o'rnatilgan PWA) ichidan obuna bo'ldimi"
+          }
+        },
+        "required": [
+          "endpoint",
+          "keys"
+        ]
+      },
+      "UnsubscribePushRequestDto": {
+        "type": "object",
+        "properties": {
+          "endpoint": {
+            "type": "string",
+            "example": "https://fcm.googleapis.com/fcm/send/dpH5lCsTSSM:APA91bH..."
+          }
+        },
+        "required": [
+          "endpoint"
+        ]
+      },
       "DispatchNotificationRequestDto": {
         "type": "object",
         "properties": {
@@ -13935,7 +14758,8 @@
                 "realtime",
                 "telegram",
                 "email",
-                "sms"
+                "sms",
+                "push"
               ]
             }
           },
@@ -14082,6 +14906,238 @@
         },
         "required": [
           "message"
+        ]
+      },
+      "UpsertSmsAccountDto": {
+        "type": "object",
+        "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "eskiz",
+              "playmobile"
+            ],
+            "example": "eskiz"
+          },
+          "sender_profile": {
+            "type": "string",
+            "enum": [
+              "default",
+              "otp"
+            ],
+            "example": "default"
+          },
+          "login": {
+            "type": "string",
+            "example": "ops@elchipochta.uz"
+          },
+          "password": {
+            "type": "string",
+            "example": "••••••••",
+            "description": "Faqat yoziladi, hech qachon qaytmaydi"
+          },
+          "sender": {
+            "type": "string",
+            "example": "ELCHI",
+            "description": "Provayderda tasdiqlangan alfa-nom"
+          },
+          "is_active": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "provider",
+          "sender_profile",
+          "login",
+          "password",
+          "sender"
+        ]
+      },
+      "UpsertSmsTemplateDto": {
+        "type": "object",
+        "properties": {
+          "code": {
+            "type": "string",
+            "example": "order.delivered"
+          },
+          "message_class": {
+            "type": "string",
+            "enum": [
+              "transactional",
+              "promo",
+              "security"
+            ],
+            "example": "transactional"
+          },
+          "lang": {
+            "type": "string",
+            "enum": [
+              "uz",
+              "ru",
+              "en"
+            ],
+            "example": "uz"
+          },
+          "text": {
+            "type": "string",
+            "example": "Buyurtma #{{order_number}} yetkazildi. Summa: {{amount}} so'm."
+          },
+          "required_vars": {
+            "example": [
+              "order_number",
+              "amount"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "is_active": {
+            "type": "boolean",
+            "example": true
+          }
+        },
+        "required": [
+          "code",
+          "message_class",
+          "lang",
+          "text"
+        ]
+      },
+      "ApproveSmsTemplateDto": {
+        "type": "object",
+        "properties": {
+          "provider_template_id": {
+            "type": "string",
+            "example": "12345",
+            "description": "Provayder tasdiqlagan shablon id"
+          }
+        },
+        "required": [
+          "provider_template_id"
+        ]
+      },
+      "SmsCampaignSegmentDto": {
+        "type": "object",
+        "properties": {
+          "market_id": {
+            "type": "string",
+            "example": "3"
+          },
+          "region_id": {
+            "type": "string",
+            "example": "1"
+          },
+          "district_id": {
+            "type": "string",
+            "example": "12"
+          },
+          "last_order_from": {
+            "type": "string",
+            "example": "2026-09-01"
+          },
+          "last_order_to": {
+            "type": "string",
+            "example": "2026-10-01"
+          },
+          "min_orders": {
+            "type": "number",
+            "example": 2
+          },
+          "phones": {
+            "example": [
+              "+998901234567"
+            ],
+            "description": "Segment o'rniga qo'lda ro'yxat",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "SmsCampaignDto": {
+        "type": "object",
+        "properties": {
+          "message_class": {
+            "type": "string",
+            "enum": [
+              "promo",
+              "transactional"
+            ],
+            "example": "promo"
+          },
+          "text": {
+            "type": "string",
+            "example": "Yangi mavsum chegirmalari!"
+          },
+          "template_code": {
+            "type": "string",
+            "example": "promo.autumn"
+          },
+          "lang": {
+            "type": "string",
+            "enum": [
+              "uz",
+              "ru",
+              "en"
+            ],
+            "example": "uz"
+          },
+          "vars": {
+            "type": "object",
+            "example": {
+              "discount": "20%"
+            }
+          },
+          "segment": {
+            "$ref": "#/components/schemas/SmsCampaignSegmentDto"
+          }
+        }
+      },
+      "GrantSmsConsentDto": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string",
+            "example": "+998901234567"
+          },
+          "customer_id": {
+            "type": "string",
+            "example": "1201"
+          },
+          "source": {
+            "type": "string",
+            "enum": [
+              "shartnoma",
+              "veb-forma",
+              "buyurtma",
+              "operator"
+            ]
+          },
+          "evidence": {
+            "type": "object",
+            "example": {
+              "note": "Telefon orqali og'zaki rozilik, qo'ng'iroq yozuvi #55"
+            }
+          }
+        },
+        "required": [
+          "phone",
+          "source"
+        ]
+      },
+      "RevokeSmsConsentDto": {
+        "type": "object",
+        "properties": {
+          "phone": {
+            "type": "string",
+            "example": "+998901234567"
+          }
+        },
+        "required": [
+          "phone"
         ]
       },
       "CreateIntegrationRequestDto": {

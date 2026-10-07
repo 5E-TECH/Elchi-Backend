@@ -218,6 +218,17 @@ export class OrderServiceController {
     );
   }
 
+  /** Buyurtma xulosalari id ro'yxati bo'yicha (integratsiya posilkalari, tokhPLMP). */
+  @MessagePattern({ cmd: 'order.summary_by_ids' })
+  findSummariesByIds(
+    @Payload() data: { ids?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findSummariesByIds(data?.ids),
+    );
+  }
+
   /** Dalil faylining egasi — fayl kirish nazorati uchun (audit S5). */
   @MessagePattern({ cmd: 'order.find_owner_by_proof_file' })
   findOwnerByProofFile(
