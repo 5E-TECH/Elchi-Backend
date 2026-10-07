@@ -2515,6 +2515,44 @@ export class UserServiceService implements OnModuleInit {
     });
   }
 
+  /**
+   * SMS/push yetkazish uchun kontaktlar (bir so'rovda): telefon, rol, til.
+   * O'chirilgan foydalanuvchilar qaytmaydi. Til: mijoz — `language` ustuni,
+   * xodim — `settings.appearance.language` (bo'lmasa ustun).
+   */
+  async contactsByIds(ids: unknown) {
+    const clean = [
+      ...new Set(
+        (Array.isArray(ids) ? ids : [])
+          .map((id) => String(id ?? '').trim())
+          .filter((id) => /^\d+$/.test(id)),
+      ),
+    ].slice(0, 5000);
+    if (!clean.length) return successRes([]);
+    const rows = await this.users.find({
+      where: { id: In(clean), isDeleted: false },
+      select: ['id', 'phone_number', 'role', 'language', 'settings'],
+    });
+    return successRes(
+      rows.map((row) => {
+        const appearance = (
+          row.settings as { appearance?: { language?: unknown } } | null
+        )?.appearance;
+        const staffLanguage =
+          typeof appearance?.language === 'string' ? appearance.language : null;
+        return {
+          id: String(row.id),
+          phone_number: row.phone_number,
+          role: row.role,
+          language:
+            row.role === Roles.CUSTOMER
+              ? row.language
+              : (staffLanguage ?? row.language),
+        };
+      }),
+    );
+  }
+
   async findByIdForAuth(id: string) {
     return this.users.findOne({
       where: { id, isDeleted: false, status: Status.ACTIVE },

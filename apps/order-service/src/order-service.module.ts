@@ -38,6 +38,8 @@ import { OrderBatchInboxMessage } from './entities/order-batch-inbox-message.ent
 import { MarketCancelledHandoverSession } from './entities/market-cancelled-handover-session.entity';
 import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.entity';
 
+import { CustomerSegmentService } from './segment/customer-segment.service';
+import { CustomerSegmentController } from './segment/customer-segment.controller';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -88,8 +90,9 @@ import { OrderExtraCostApproval } from './entities/order-extra-cost-approval.ent
       OrderExtraCostApproval,
     ]),
   ],
-  controllers: [OrderServiceController],
+  controllers: [OrderServiceController, CustomerSegmentController],
   providers: [
+    CustomerSegmentService,
     OrderServiceService,
     OrderAnalyticsService,
     BranchTransferBatchService,

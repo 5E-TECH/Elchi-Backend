@@ -1,3 +1,4 @@
+import { OtpService } from './otp/otp.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import type { RmqContext } from '@nestjs/microservices';
 import { IdentityController } from './identity.controller';
@@ -42,6 +43,7 @@ describe('IdentityController', () => {
             validateUser: jest.fn(),
           },
         },
+        { provide: OtpService, useValue: {} },
         {
           provide: RmqService,
           useValue: {

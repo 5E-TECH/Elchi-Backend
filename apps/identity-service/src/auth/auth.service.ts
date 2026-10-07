@@ -4,7 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { createHash } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import type { StringValue } from 'ms';
 import { User } from '../entities/user.entity';
 import { BcryptEncryption } from '../../../../libs/common/helpers/bcrypt';
@@ -59,18 +59,39 @@ export class AuthService {
     }
   }
 
+  /**
+   * Telefonni jurnal uchun: to'liq raqam YOZILMAYDI (rkz0yBxr #8) — faqat
+   * maska (***7434) va guruhlash/tergov uchun barqaror HMAC hash.
+   */
+  phoneForAudit(phone: string): { phone_masked: string; phone_hash: string } {
+    const digits = String(phone ?? '').replace(/\D/g, '');
+    const national = digits.length >= 9 ? digits.slice(-9) : digits;
+    const key =
+      this.configService.get<string>('OTP_HASH_SECRET') ||
+      this.configService.get<string>('ACCESS_TOKEN_KEY') ||
+      'elchi';
+    return {
+      phone_masked: national.length >= 4 ? `***${national.slice(-4)}` : '***',
+      phone_hash: createHmac('sha256', key)
+        .update(`phone:+998${national}`)
+        .digest('hex')
+        .slice(0, 32),
+    };
+  }
+
   /** Record a failed login attempt for the security audit trail. */
   private async logAuthFailure(
     phone: string,
     reason: string,
     userId?: string,
   ): Promise<void> {
+    const audit = this.phoneForAudit(phone);
     await this.activityLog.log({
       entity_type: 'Auth',
-      entity_id: userId ?? phone,
+      entity_id: userId ?? audit.phone_hash,
       action: ActivityAction.AUTH_FAILURE,
       user_id: userId ?? null,
-      metadata: { phone_number: phone, reason },
+      metadata: { ...audit, reason },
     });
   }
 
@@ -96,6 +117,14 @@ export class AuthService {
       throw new RpcException(errorRes('Invalid credentials', 401));
     }
 
+    return this.sessionForUser(user);
+  }
+
+  /**
+   * Tasdiqlangan foydalanuvchiga sessiya (token juftligi). Parol login'i va
+   * OTP login'i (OtpService) shu bitta yo'ldan o'tadi.
+   */
+  async sessionForUser(user: User, method: 'password' | 'otp' = 'password') {
     const tokens = await this.issueTokens(user);
     await this.saveRefreshToken(user.id, tokens.refreshToken);
     await this.activityLog.log({
@@ -105,6 +134,7 @@ export class AuthService {
       user_id: user.id,
       user_name: user.name,
       user_role: user.role,
+      ...(method === 'otp' ? { metadata: { method } } : {}),
     });
     return {
       statusCode: 200,

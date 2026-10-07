@@ -30,6 +30,10 @@ import { OrderGatewayController } from './order-gateway.controller';
 import { FinanceGatewayController } from './finance-gateway.controller';
 import { AnalyticsGatewayController } from './analytics-gateway.controller';
 import { NotificationGatewayController } from './notification-gateway.controller';
+import {
+  SmsGatewayController,
+  SmsPublicGatewayController,
+} from './sms-gateway.controller';
 import { IntegrationGatewayController } from './integration-gateway.controller';
 import { WebhookGatewayController } from './webhook-gateway.controller';
 import { InvestorGatewayController } from './investor-gateway.controller';
@@ -110,6 +114,8 @@ import type { StringValue } from 'ms';
     SearchGatewayController,
     FinanceGatewayController,
     NotificationGatewayController,
+    SmsGatewayController,
+    SmsPublicGatewayController,
     IntegrationGatewayController,
     WebhookGatewayController,
     InvestorGatewayController,

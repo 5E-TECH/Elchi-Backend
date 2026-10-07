@@ -7,7 +7,8 @@ import {
 } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import { FindOptionsWhere, Repository } from 'typeorm';
+import { EntityManager, FindOptionsWhere, In, Repository } from 'typeorm';
+import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { lastValueFrom, timeout } from 'rxjs';
 import {
   ActivityLogService,
@@ -22,18 +23,33 @@ import { Notification } from './entities/notification.entity';
 import { DispatchNotificationDto } from './dto/dispatch-notification.dto';
 import { ListNotificationsDto } from './dto/list-notifications.dto';
 import { NotificationServiceService } from './notification-service.service';
+import { PushDeliveryService } from './push/push-delivery.service';
+import {
+  SmsChannelResult,
+  SmsDispatchService,
+} from './sms/sms-dispatch.service';
+import { SmsBlockedError } from './sms/sms-gate.service';
 
 /** Upper bound on role/broadcast fan-out, so one dispatch can't insert millions
  * of rows. If a target resolves to more recipients than this we truncate and
  * log it (never silently). */
 const MAX_FANOUT = 5000;
 const IDENTITY_PAGE_SIZE = 100;
+/** Bitta INSERT dagi qatorlar — Postgres 65 535 parametr chegarasidan uzoq. */
+const INSERT_CHUNK = 500;
+/** Qayta o'qishdagi `IN (...)` hajmi. */
+const READ_CHUNK = 1000;
 
 interface ResolvedRecipient {
   id: string;
   role: string | null;
 }
 
+/** "Faqat muhim" filtri va sanog'i (n1sNvGLn). */
+const IMPORTANT_PRIORITIES = [
+  NotificationPriority.CRITICAL,
+  NotificationPriority.HIGH,
+] as const;
 @Injectable()
 export class NotificationInboxService {
   private readonly logger = new Logger(NotificationInboxService.name);
@@ -45,6 +61,8 @@ export class NotificationInboxService {
     @Inject('GATEWAY') private readonly gatewayClient: ClientProxy,
     private readonly telegramService: NotificationServiceService,
     private readonly activityLog: ActivityLogService,
+    private readonly pushDelivery: PushDeliveryService,
+    private readonly smsDispatch: SmsDispatchService,
   ) {}
 
   private toRpcError(error: unknown): never {
@@ -81,8 +99,47 @@ export class NotificationInboxService {
         );
       }
 
+      // SMS: fan-out chegarasi OLDINDAN — oshsa XATO, jimgina kesilmaydi
+      // (MAX_FANOUT=5000 SMS'ga qo'llanmaydi: SMS_MAX_FANOUT).
+      const wantsSms = channels.includes(NotificationChannel.SMS);
+      if (wantsSms) {
+        try {
+          this.smsDispatch.assertFanout(recipients.length);
+        } catch (error) {
+          if (error instanceof SmsBlockedError) {
+            throw new BadRequestException(error.message);
+          }
+          throw error;
+        }
+      }
+      let smsResult: SmsChannelResult | null = null;
+
       // 1) Persist one inbox row per recipient (the in_app channel & system of record).
-      const rows = await this.persistRows(dto, recipients, channels);
+      //    Push is only QUEUED here (outbox) — in the same transaction as the rows,
+      //    so a rolled-back dispatch never sends a push. Delivery is async.
+      const wantsPush = channels.includes(NotificationChannel.PUSH);
+      const rows = await this.repo.manager.transaction(async (manager) => {
+        const persisted = await this.persistRows(
+          manager,
+          dto,
+          recipients,
+          channels,
+        );
+        if (wantsPush && persisted.length) {
+          await this.pushDelivery.enqueue(
+            manager,
+            persisted.map((row) => row.id),
+          );
+        }
+        // SMS: navbatga ham shu tranzaksiyada; holat har qatorning delivery.sms ida.
+        if (wantsSms && persisted.length) {
+          smsResult = await this.smsDispatch.queueForNotifications(
+            persisted,
+            manager,
+          );
+        }
+        return persisted;
+      });
 
       // 2) Realtime push (best-effort) — one event per recipient's socket room.
       if (channels.includes(NotificationChannel.REALTIME)) {
@@ -98,13 +155,11 @@ export class NotificationInboxService {
         telegram = await this.relayTelegram(dto);
       }
 
-      // 4) Email / SMS — not wired yet; recorded as skipped so it's visible.
-      for (const ch of [NotificationChannel.EMAIL, NotificationChannel.SMS]) {
-        if (channels.includes(ch)) {
-          this.logger.warn(
-            `Channel "${ch}" requested but no provider configured — skipped (${rows.length} recipients).`,
-          );
-        }
+      // 4) Email — not wired yet.
+      if (channels.includes(NotificationChannel.EMAIL)) {
+        this.logger.warn(
+          `Channel "email" requested but no provider configured — skipped (${rows.length} recipients).`,
+        );
       }
 
       // Audit: ONE row per dispatch operation (never one per recipient).
@@ -130,6 +185,11 @@ export class NotificationInboxService {
           recipient_ids: rows.map((r) => r.recipient_id),
           channels,
           telegram,
+          // Kanal kesimidagi holat — quruq 201 emas (3fRbyadQ #7).
+          delivery: {
+            in_app: rows.length,
+            ...(smsResult ?? {}),
+          },
         },
         201,
         'Notification dispatched',
@@ -219,11 +279,19 @@ export class NotificationInboxService {
     }
   }
 
+  /**
+   * Bitta dispatch — o'zgarmas sondagi so'rov (qabul qiluvchilar soniga
+   * bog'liq emas): group_key bo'yicha bitta qidiruv, rol bo'yicha UPDATE,
+   * 500 tadan bulk INSERT va bitta qayta o'qish. Avval har qabul qiluvchi
+   * uchun alohida `findOne` + `save` edi (40 ta = 80 so'rov).
+   */
   private async persistRows(
+    manager: EntityManager,
     dto: DispatchNotificationDto,
     recipients: ResolvedRecipient[],
     channels: NotificationChannel[],
   ): Promise<Notification[]> {
+    const repo = manager.getRepository(Notification);
     const base = {
       type: dto.type.trim(),
       category: dto.category ?? NotificationCategory.SYSTEM,
@@ -234,40 +302,83 @@ export class NotificationInboxService {
       link: dto.link ?? null,
       channels,
       group_key: dto.group_key ?? null,
+      // Push so'ralgan bo'lsa yetkazish holati darhol "navbatda" ko'rinadi.
+      ...(channels.includes(NotificationChannel.PUSH)
+        ? { delivery: { push: 'queued' } }
+        : {}),
     };
 
-    const saved: Notification[] = [];
-    for (const recipient of recipients) {
-      // Dedupe by group_key: refresh the existing row instead of stacking dupes.
-      if (dto.group_key) {
-        const existing = await this.repo.findOne({
-          where: {
+    const rowIdByRecipient = new Map<string, string>();
+    let toInsert = recipients;
+
+    // Dedupe by group_key: refresh the existing row instead of stacking dupes.
+    if (dto.group_key) {
+      const existing = await repo.find({
+        where: {
+          recipient_id: In(recipients.map((r) => r.id)),
+          group_key: dto.group_key,
+          isDeleted: false,
+        },
+      });
+      for (const row of existing) {
+        const key = String(row.recipient_id);
+        if (!rowIdByRecipient.has(key)) rowIdByRecipient.set(key, row.id);
+      }
+
+      const idsByRole = new Map<string | null, string[]>();
+      for (const recipient of recipients) {
+        const rowId = rowIdByRecipient.get(recipient.id);
+        if (!rowId) continue;
+        idsByRole.set(recipient.role, [
+          ...(idsByRole.get(recipient.role) ?? []),
+          rowId,
+        ]);
+      }
+      for (const [role, ids] of idsByRole) {
+        // jsonb ustunlari (`data`, `delivery`) TypeORM deep-partial turiga sig'maydi.
+        await repo.update({ id: In(ids) }, {
+          ...base,
+          recipient_role: role,
+          is_read: false,
+          read_at: null,
+        } as QueryDeepPartialEntity<Notification>);
+      }
+      toInsert = recipients.filter((r) => !rowIdByRecipient.has(r.id));
+    }
+
+    for (let start = 0; start < toInsert.length; start += INSERT_CHUNK) {
+      const batch = toInsert.slice(start, start + INSERT_CHUNK);
+      const result = await repo.insert(
+        batch.map((recipient) =>
+          repo.create({
+            ...base,
             recipient_id: recipient.id,
-            group_key: dto.group_key,
-            isDeleted: false,
-          },
-        });
-        if (existing) {
-          Object.assign(existing, base, {
             recipient_role: recipient.role,
             is_read: false,
             read_at: null,
-          });
-          saved.push(await this.repo.save(existing));
-          continue;
-        }
-      }
-
-      const entity = this.repo.create({
-        ...base,
-        recipient_id: recipient.id,
-        recipient_role: recipient.role,
-        is_read: false,
-        read_at: null,
+          }),
+        ) as QueryDeepPartialEntity<Notification>[],
+      );
+      result.identifiers.forEach((identifier, index) => {
+        rowIdByRecipient.set(batch[index].id, String(identifier.id));
       });
-      saved.push(await this.repo.save(entity));
     }
-    return saved;
+
+    const ids = recipients
+      .map((r) => rowIdByRecipient.get(r.id))
+      .filter((id): id is string => Boolean(id));
+    const rows: Notification[] = [];
+    for (let start = 0; start < ids.length; start += READ_CHUNK) {
+      rows.push(
+        ...(await repo.find({
+          where: { id: In(ids.slice(start, start + READ_CHUNK)) },
+        })),
+      );
+    }
+    const order = new Map(ids.map((id, index) => [id, index]));
+    return rows.sort(
+      (a, b) => (order.get(String(a.id)) ?? 0) - (order.get(String(b.id)) ?? 0),
+    );
   }
 
   private async pushRealtime(rows: Notification[]) {
@@ -334,7 +445,8 @@ export class NotificationInboxService {
       if (dto.is_read !== undefined) where.is_read = dto.is_read;
       if (dto.type) where.type = dto.type;
       if (dto.category) where.category = dto.category;
-      if (dto.priority) where.priority = dto.priority;
+      if (dto.important) where.priority = In([...IMPORTANT_PRIORITIES]);
+      else if (dto.priority) where.priority = dto.priority;
 
       const [items, total] = await this.repo.findAndCount({
         where,
@@ -376,6 +488,60 @@ export class NotificationInboxService {
       this.assertId(id, 'id');
       const row = await this.requireOwned(recipientId, id);
       return successRes(this.toPublic(row), 200, 'Notification');
+    } catch (error) {
+      this.toRpcError(error);
+    }
+  }
+
+  /**
+   * INBOX SANOQLARI (n1sNvGLn) — kategoriya chiplari uchun. BITTA
+   * `GROUP BY` so'rov: har kategoriyada jami va o'qilmaganlar, hamda muhim
+   * (critical/high) o'qilmaganlar. Sanoq hech qachon joriy sahifadagi 20
+   * qatordan hisoblanmaydi — chip butun inbox bo'yicha raqam ko'rsatadi.
+   */
+  async counts(recipientId: string) {
+    try {
+      this.assertId(recipientId, 'recipient_id');
+      const rows = await this.repo
+        .createQueryBuilder('n')
+        .select('n.category', 'category')
+        .addSelect('COUNT(*)', 'total')
+        .addSelect('COUNT(*) FILTER (WHERE n.is_read = false)', 'unread')
+        .addSelect(
+          'COUNT(*) FILTER (WHERE n.is_read = false AND n.priority IN (:...important))',
+          'important_unread',
+        )
+        .where('n.recipient_id = :rid', { rid: recipientId })
+        .andWhere('n.isDeleted = false')
+        .setParameter('important', [...IMPORTANT_PRIORITIES])
+        .groupBy('n.category')
+        .getRawMany<{
+          category: string;
+          total: string;
+          unread: string;
+          important_unread: string;
+        }>();
+
+      const categories: Record<string, { total: number; unread: number }> = {};
+      for (const category of Object.values(NotificationCategory)) {
+        categories[category] = { total: 0, unread: 0 };
+      }
+      let unread = 0;
+      let importantUnread = 0;
+      for (const row of rows) {
+        categories[row.category] = {
+          total: Number(row.total ?? 0),
+          unread: Number(row.unread ?? 0),
+        };
+        unread += Number(row.unread ?? 0);
+        importantUnread += Number(row.important_unread ?? 0);
+      }
+
+      return successRes(
+        { categories, unread, important_unread: importantUnread },
+        200,
+        'Inbox counts',
+      );
     } catch (error) {
       this.toRpcError(error);
     }

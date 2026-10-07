@@ -35,6 +35,8 @@ import {
   FindTelegramMarketsQueryDto,
   InboxQueryDto,
   SendNotificationRequestDto,
+  SubscribePushRequestDto,
+  UnsubscribePushRequestDto,
   UpdateTelegramMarketRequestDto,
 } from './dto/notification.swagger.dto';
 
@@ -99,6 +101,19 @@ export class NotificationGatewayController {
     );
   }
 
+  @Get('inbox/counts')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Kategoriya bo‘yicha jami/o‘qilmagan va muhim o‘qilmaganlar soni',
+  })
+  inboxCounts(@Req() req: AuthedRequest) {
+    return this.send(
+      { cmd: 'notification.inbox.counts' },
+      { recipient_id: this.requireUserId(req) },
+    );
+  }
+
   @Get('inbox/unread-count')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -158,6 +173,56 @@ export class NotificationGatewayController {
     return this.send(
       { cmd: 'notification.inbox.delete' },
       { recipient_id: this.requireUserId(req), id },
+    );
+  }
+
+  // ==================== Web Push (current user's device) ====================
+  // Also declared BEFORE the `:id` routes.
+
+  @Get('push/public-key')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'VAPID public key for PushManager.subscribe (never the private key)',
+  })
+  pushPublicKey() {
+    return this.send({ cmd: 'notification.push.public_key' }, {});
+  }
+
+  @Post('push/subscribe')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Save this browser/device push subscription for the current user (idempotent by endpoint)',
+  })
+  @ApiBody({ type: SubscribePushRequestDto })
+  pushSubscribe(
+    @Req() req: AuthedRequest,
+    @Body() dto: SubscribePushRequestDto,
+  ) {
+    return this.send(
+      { cmd: 'notification.push.subscribe' },
+      { ...dto, user_id: this.requireUserId(req) },
+    );
+  }
+
+  @Delete('push/subscribe')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Remove one of the current user's push subscriptions (call BEFORE logout revokes the token)",
+  })
+  @ApiBody({ type: UnsubscribePushRequestDto })
+  pushUnsubscribe(
+    @Req() req: AuthedRequest,
+    @Body() dto: UnsubscribePushRequestDto,
+  ) {
+    return this.send(
+      { cmd: 'notification.push.unsubscribe' },
+      { endpoint: dto.endpoint, user_id: this.requireUserId(req) },
     );
   }
 

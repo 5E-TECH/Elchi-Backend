@@ -60,6 +60,7 @@ import {
   UpdateCashboxBalanceRequestDto,
   UpdateSalaryRequestDto,
 } from './dto/finance.swagger.dto';
+import { resolveFinancialActors } from './financial-balance/financial-balance.util';
 
 interface JwtUser {
   sub: string;
@@ -310,6 +311,39 @@ export class FinanceGatewayController {
       createdByUser: usersMap.get(String(item?.created_by ?? '')) ?? null,
       created_by_user: usersMap.get(String(item?.created_by ?? '')) ?? null,
     }));
+  }
+
+  /**
+   * Moliyaviy daftar (financial balance) qatorlariga KIM kiritganini qo'shadi
+   * (4WeT0Tv5). ⚠️ To'liq identity yozuvi EMAS — faqat `{ id, name, role }`:
+   * javob jadval va Excelga chiqadi, foydalanuvchining boshqa maydonlari
+   * (telefon, token, tarif) bu yerga kerak emas. Avtomatik yozuvlarda
+   * (`created_by` yo'q) — `null`.
+   */
+  private async attachFinancialActors(response: any) {
+    const data = response?.data;
+    const rows: unknown = data?.items ?? data?.rows ?? data?.history;
+    if (!Array.isArray(rows) || !rows.length) {
+      return response;
+    }
+
+    const actors = await resolveFinancialActors(
+      rows.map((row: { created_by?: unknown }) => row?.created_by),
+      (id) =>
+        this.sendIdentity<{ data?: unknown }>(
+          { cmd: 'identity.user.find_by_id' },
+          { id },
+        ),
+    );
+    const enriched = rows.map((row: Record<string, unknown>) => ({
+      ...row,
+      created_by_user:
+        actors.get(String((row?.created_by as string | number) ?? '')) ?? null,
+    }));
+    for (const key of ['items', 'rows', 'history'] as const) {
+      if (Array.isArray(data[key])) data[key] = enriched;
+    }
+    return response;
   }
 
   private async attachCreatedByUsersToHistoryResponse(response: any) {
@@ -2318,11 +2352,54 @@ export class FinanceGatewayController {
   recordFinancialBalance(
     @Body() dto: RecordFinancialBalanceRequestDto,
     @Req() req: { user?: JwtUser },
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
+    const actorId = String(req.user?.sub ?? '');
     return this.send(
       { cmd: 'finance.financial_balance.record' },
-      { ...dto, created_by: req.user?.sub ?? null },
+      {
+        ...dto,
+        created_by: req.user?.sub ?? null,
+        dedup_key: this.resolveLedgerEntryToken(idempotencyKey, actorId, dto),
+      },
     );
+  }
+
+  /**
+   * Qo'lda daftar yozuvining takror tokeni (GtAoqHlk "Yozuv qo'shish").
+   * Ilgari bu endpoint dedup qilinmasdi: ikki marta bosilgan tugma ikkita
+   * chiqim yozardi. Mijoz kaliti yozuvning O'ZI (summa/manba/izoh) bilan
+   * birga xeshlanadi — eski kalit boshqa summa bilan kelib qolsa, yangi yozuv
+   * jimgina "allaqachon bor" bo'lib yutilmaydi. Kalitsiz so'rov — 30 soniyalik
+   * oynadagi aynan bir xil yozuv (qo'lda o'tkazmadagi zaxira naqsh).
+   */
+  private resolveLedgerEntryToken(
+    idempotencyKey: string | undefined,
+    actorId: string,
+    dto: RecordFinancialBalanceRequestDto,
+  ): string {
+    const key = String(idempotencyKey ?? '').trim();
+    const payload = {
+      amount: dto.amount,
+      source_type: dto.source_type,
+      order_id: dto.order_id ?? null,
+      related_user_id: dto.related_user_id ?? null,
+      comment: dto.comment ?? null,
+    };
+    if (!key) {
+      return this.resolveTransferToken(undefined, {
+        actorId,
+        kind: 'financial-balance-entry',
+        payload,
+      });
+    }
+    return createHash('sha256')
+      .update(
+        ['financial-balance-entry', actorId, key, JSON.stringify(payload)].join(
+          '|',
+        ),
+      )
+      .digest('hex');
   }
 
   @Get('financial-balance/history')
@@ -2340,7 +2417,7 @@ export class FinanceGatewayController {
   @ApiQuery({ name: 'page', required: false })
   @ApiQuery({ name: 'limit', required: false })
   @ApiQuery({ name: 'offset', required: false })
-  financialBalanceHistory(
+  async financialBalanceHistory(
     @Query('source_type') source_type?: string,
     @Query('from_date') from_date?: string,
     @Query('to_date') to_date?: string,
@@ -2358,7 +2435,7 @@ export class FinanceGatewayController {
         ? (normalizedPage - 1) * normalizedLimit
         : undefined;
 
-    return this.send(
+    const response = await this.send(
       { cmd: 'finance.financial_balance.history' },
       {
         source_type,
@@ -2368,6 +2445,7 @@ export class FinanceGatewayController {
         offset: normalizedOffset,
       },
     );
+    return this.attachFinancialActors(response);
   }
 
   @Get('financial-balance/analytics')

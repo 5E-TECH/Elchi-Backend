@@ -557,6 +557,7 @@ export class IntegrationServiceController {
       integration_id?: string;
       status?: string;
       failed_only?: boolean;
+      filter?: string;
       page?: number;
       limit?: number;
     },

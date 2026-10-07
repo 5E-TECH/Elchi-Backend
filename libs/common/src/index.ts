@@ -53,3 +53,4 @@ export * from './ai-text';
 export * from './ai';
 export * from './pii/mask-phones';
 export * from './time/tashkent-time';
+export * from './integration/status-catalog';

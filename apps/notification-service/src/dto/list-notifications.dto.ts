@@ -29,6 +29,11 @@ export class ListNotificationsDto {
   @IsEnum(NotificationPriority)
   priority?: NotificationPriority;
 
+  /** "Faqat muhim" (n1sNvGLn): `critical` + `high`. `priority` dan ustun. */
+  @IsOptional()
+  @IsBoolean()
+  important?: boolean;
+
   @IsOptional()
   page?: number;
 

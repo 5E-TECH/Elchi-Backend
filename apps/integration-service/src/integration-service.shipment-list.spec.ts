@@ -11,7 +11,14 @@ import { IntegrationServiceService } from './integration-service.service';
 
 type Cond = { sql: string; params?: Record<string, unknown> };
 
-function setup(rows: unknown[] = [], total = 0) {
+function setup(
+  rows: unknown[] = [],
+  total = 0,
+  opts: {
+    statusMap?: Record<string, unknown> | null;
+    counts?: Record<string, unknown>;
+  } = {},
+) {
   const conds: Cond[] = [];
   const qb: Record<string, jest.Mock> = {
     where: jest.fn((sql: string, params?: Record<string, unknown>) => {
@@ -25,6 +32,10 @@ function setup(rows: unknown[] = [], total = 0) {
     orderBy: jest.fn().mockReturnThis(),
     skip: jest.fn().mockReturnThis(),
     take: jest.fn().mockReturnThis(),
+    setParameters: jest.fn().mockReturnThis(),
+    select: jest.fn().mockReturnThis(),
+    addSelect: jest.fn().mockReturnThis(),
+    getRawOne: jest.fn().mockResolvedValue(opts.counts ?? {}),
     getManyAndCount: jest.fn().mockResolvedValue([rows, total]),
   };
 
@@ -40,12 +51,22 @@ function setup(rows: unknown[] = [], total = 0) {
   const service = Object.create(
     IntegrationServiceService.prototype,
   ) as IntegrationServiceService;
+  const integrationRepo = {
+    findOne: jest
+      .fn()
+      .mockResolvedValue(
+        opts.statusMap === undefined
+          ? null
+          : { id: '7', inbound_status_mapping: opts.statusMap },
+      ),
+  };
   Object.assign(service, {
     shipmentRepo,
+    integrationRepo,
     partnerShipmentRefRepo: partnerRefRepo,
   });
 
-  return { service, qb, conds, partnerRefRepo };
+  return { service, qb, conds, partnerRefRepo, integrationRepo };
 }
 
 const has = (conds: Cond[], needle: string) =>
@@ -116,6 +137,53 @@ describe('listProviderShipments', () => {
     };
     expect(res.data.pagination.total).toBe(41);
     expect(res.data.pagination.totalPages).toBe(3);
+  });
+});
+
+describe('listProviderShipments — pillar va sanoqlar (tokhPLMP)', () => {
+  it('pill filtri o‘z SQL bo‘lagini qo‘yadi', async () => {
+    const { service, conds } = setup();
+    await service.listProviderShipments({
+      integration_id: '7',
+      filter: 'not_sent',
+    });
+    expect(has(conds, 's.external_ref IS NULL')).toBe(true);
+  });
+
+  it('⭐ status xaritasi yo‘q ulanishda "mismatch" filtri HECH NARSA qaytarmaydi (hammasi emas)', async () => {
+    const { service, conds } = setup([], 0, { statusMap: null });
+    const res = (await service.listProviderShipments({
+      integration_id: '7',
+      filter: 'mismatch',
+    })) as { data: { counts: { mismatch: number | null } } };
+    expect(has(conds, '1 = 0')).toBe(true);
+    expect(res.data.counts.mismatch).toBeNull();
+  });
+
+  it('sanoqlar BITTA agregat so‘rovdan (getRawOne bir marta)', async () => {
+    const { service, qb } = setup([], 0, {
+      statusMap: { DELIVERED: { status: 'sold' } },
+      counts: {
+        all: '7',
+        not_sent: '1',
+        failed: '2',
+        delivered: '3',
+        mismatch: '1',
+      },
+    });
+    const res = (await service.listProviderShipments({
+      integration_id: '7',
+    })) as {
+      data: { counts: Record<string, number | null> };
+    };
+    expect(qb.getRawOne).toHaveBeenCalledTimes(1);
+    expect(res.data.counts).toEqual({
+      all: 7,
+      not_sent: 1,
+      failed: 2,
+      delivered: 3,
+      mismatch: 1,
+    });
   });
 });
 
