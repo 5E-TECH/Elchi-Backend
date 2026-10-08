@@ -519,4 +519,82 @@ describe('ApiGatewayController', () => {
       );
     });
   });
+
+  /**
+   * wUHQrZko — POST /couriers dagi branch_id jimgina e'tiborsiz qolardi:
+   * superadmin '13' yuborsa 201, kuryer esa HQ'ga tushardi. Endi mos kelmasa
+   * 400; mos kelsa (menejer UI'si o'z filialini yuboradi) avvalgidek.
+   */
+  describe('createCourier — branch_id jimgina tashlanmaydi', () => {
+    const body = (branchId?: string) =>
+      ({
+        name: 'TEST-KURYER',
+        phone_number: '+998901112233',
+        password: 'secret123',
+        tariff_home: 10000,
+        tariff_center: 8000,
+        ...(branchId ? { branch_id: branchId } : {}),
+      }) as never;
+    const SA = { user: { sub: '1', username: 'sa', roles: ['superadmin'] } };
+    const MANAGER = { user: { sub: '19', username: 'm', roles: ['manager'] } };
+
+    const mockHq = () =>
+      branchClient.send.mockImplementation((pattern: { cmd: string }) =>
+        pattern.cmd === 'branch.find_hq'
+          ? of({ data: { id: '1' } })
+          : of({ data: { id: '1', type: 'HQ', region_id: '' } }),
+      );
+
+    it.each([['13'], ['2']])(
+      '⭐ superadmin branch_id=%p (HQ emas) — 400, kuryer yaratilmaydi',
+      async (branchId) => {
+        mockHq();
+
+        await expect(
+          apiGatewayController.createCourier(body(branchId), SA as never),
+        ).rejects.toMatchObject({ status: 400 });
+        expect(identityClient.send).not.toHaveBeenCalled();
+      },
+    );
+
+    it('superadmin branch_id yubormasa yoki HQ ni yuborsa — HQ da yaratiladi', async () => {
+      for (const branchId of [undefined, '1']) {
+        identityClient.send.mockClear();
+        mockHq();
+
+        await apiGatewayController.createCourier(body(branchId), SA as never);
+
+        expect(identityClient.send).toHaveBeenCalledWith(
+          { cmd: 'identity.courier.create' },
+          expect.objectContaining({
+            dto: expect.objectContaining({ branch_id: '1' }),
+          }),
+        );
+      }
+    });
+
+    it('menejer: o`z filiali — o`tadi; boshqa filial — 400', async () => {
+      branchClient.send.mockImplementation((pattern: { cmd: string }) =>
+        pattern.cmd === 'branch.find_by_id'
+          ? of({ data: { id: '6', type: 'REGIONAL', region_id: '3' } })
+          : of({
+              data: { branch_id: '6', branch: { id: '6', type: 'REGIONAL' } },
+            }),
+      );
+
+      await apiGatewayController.createCourier(body('6'), MANAGER as never);
+      expect(identityClient.send).toHaveBeenCalledWith(
+        { cmd: 'identity.courier.create' },
+        expect.objectContaining({
+          dto: expect.objectContaining({ branch_id: '6', region_id: '3' }),
+        }),
+      );
+
+      identityClient.send.mockClear();
+      await expect(
+        apiGatewayController.createCourier(body('13'), MANAGER as never),
+      ).rejects.toMatchObject({ status: 400 });
+      expect(identityClient.send).not.toHaveBeenCalled();
+    });
+  });
 });

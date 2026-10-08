@@ -137,6 +137,24 @@ export class CreateIntegrationRequestDto {
   @IsBoolean()
   is_active?: boolean;
 
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "Kiruvchi webhook (DOZ6dtJn). false — hodisa jurnalga yoziladi, lekin qo'llanmaydi. Master (is_active) o'chiq bo'lsa ta'sir qilmaydi.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  webhook_enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "Davriy solishtiruvchi (DOZ6dtJn) — ochiq posilka holatini tashuvchidan so'raydi. Master o'chiq bo'lsa ta'sir qilmaydi.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  reconcile_enabled?: boolean;
+
   @ApiPropertyOptional({ type: Object })
   @IsOptional()
   @IsObject()
@@ -427,6 +445,24 @@ export class UpdateIntegrationRequestDto {
   @IsOptional()
   @IsBoolean()
   is_active?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "Kiruvchi webhook (DOZ6dtJn). false — hodisa jurnalga yoziladi, lekin qo'llanmaydi. Master (is_active) o'chiq bo'lsa ta'sir qilmaydi.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  webhook_enabled?: boolean;
+
+  @ApiPropertyOptional({
+    example: true,
+    description:
+      "Davriy solishtiruvchi (DOZ6dtJn) — ochiq posilka holatini tashuvchidan so'raydi. Master o'chiq bo'lsa ta'sir qilmaydi.",
+  })
+  @IsOptional()
+  @IsBoolean()
+  reconcile_enabled?: boolean;
 
   @ApiPropertyOptional({ type: Object })
   @IsOptional()

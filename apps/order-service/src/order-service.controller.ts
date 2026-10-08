@@ -422,6 +422,8 @@ export class OrderServiceController {
       id: string;
       dto: {
         comment?: string;
+        reason?: string;
+        paidAmount?: number;
         extraCost?: number;
         proofFileKeys?: string[];
         proofFileKeysVerified?: boolean;
@@ -857,6 +859,8 @@ export class OrderServiceController {
         where_deliver?: Where_deliver;
         total_price?: number;
         to_be_paid?: number;
+        /** Faqat hamkor posilkasini yangilash (Fnu6PRya). */
+        paid_online_amount?: number;
         paid_amount?: number;
         status?: Order_status;
         return_requested?: boolean;
@@ -1253,6 +1257,23 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.orderAnalyticsService.countOrdersByBranch(data ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'order.analytics.cancel_reasons' })
+  analyticsCancelReasons(
+    @Payload()
+    data: {
+      startDate?: string;
+      endDate?: string;
+      market_id?: string;
+      branch_id?: string;
+      group_by?: 'market' | 'region' | 'courier';
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.getCancelReasonStats(data ?? {}),
     );
   }
 

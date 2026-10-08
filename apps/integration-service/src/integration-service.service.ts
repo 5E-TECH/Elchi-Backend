@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, In, IsNull, LessThanOrEqual, Repository } from 'typeorm';
+import { Between, In, IsNull, LessThanOrEqual, Not, Repository } from 'typeorm';
 import { firstValueFrom, timeout, TimeoutError } from 'rxjs';
 import {
   createCipheriv,
@@ -24,6 +24,8 @@ import {
   computeHmacSignature,
   assertPublicUrl,
   SsrfBlockedError,
+  normalizeUzPhone,
+  maskPiiPayload,
 } from '@app/common';
 import {
   ExternalIntegration,
@@ -222,10 +224,31 @@ type ExternalUpdateConfig = {
   timeout_ms?: number;
 };
 
+/**
+ * SOLISHTIRUVCHI (DOZ6dtJn) — tashuvchidan bitta posilka holatini so'rash.
+ *
+ * `endpoint`/`query_template`/`body_template` da `{{external_ref}}`,
+ * `{{tracking_number}}`, `{{order_id}}` o'rnatiladi. `status_path` — javobdan
+ * TASHUVCHI holatini olish yo'li; u keyin webhook bilan AYNI xarita
+ * (`status_mapping`) orqali ichki holatga aylanadi. Javobdagi summalar
+ * O'QILMAYDI.
+ */
+type StatusQueryConfig = {
+  endpoint?: string;
+  method?: HttpMethod;
+  use_auth?: boolean;
+  query_template?: Record<string, unknown>;
+  body_template?: Record<string, unknown>;
+  headers?: Record<string, string>;
+  status_path?: string;
+  timeout_ms?: number;
+};
+
 type StatusSyncConfig = {
   auth?: AuthConfig;
   external_search?: ExternalSearchConfig;
   external_update?: ExternalUpdateConfig;
+  status_query?: StatusQueryConfig;
 };
 
 type FindAllIntegrationsQuery = {
@@ -1489,6 +1512,19 @@ export class IntegrationServiceService {
     if (!dto?.customer?.name?.trim() || !dto?.customer?.phone?.trim()) {
       this.badRequest('customer.name va customer.phone majburiy');
     }
+    /**
+     * ⚠️ TELEFON KANONIK SHAKLDA (zfPNDCCr). Mijoz telefon bo'yicha
+     * idempotent, taqqoslash esa satr ustida — normallashtirilmasa bitta odam
+     * formatiga qarab bir nechta mijozga bo'linardi, "not-a-phone" esa
+     * kuryerga qo'ng'iroq qilib bo'lmaydigan raqam bo'lib tushardi. Gateway
+     * DTO'si ham shuni qiladi; bu — ichki chaqiruvlar uchun himoya chuqurligi.
+     */
+    const customerPhone = normalizeUzPhone(dto.customer.phone);
+    if (!customerPhone) {
+      this.badRequest(
+        "customer.phone noto'g'ri — +998XXXXXXXXX formatidagi raqam kerak",
+      );
+    }
     if (!dto?.district_id) {
       this.badRequest('district_id majburiy (customer uchun)');
     }
@@ -1538,7 +1574,10 @@ export class IntegrationServiceService {
       },
     });
     if (existing) {
-      return this.idempotentShipmentRes(String(existing.order_id));
+      return this.idempotentShipmentRes(String(existing.order_id), {
+        cod_amount: cod,
+        subtotal: dto.subtotal,
+      });
     }
 
     // 0) Viloyat (fix3b, LC-13) — mijoz/mahsulot yaratilishidan OLDIN, rad
@@ -1555,7 +1594,7 @@ export class IntegrationServiceService {
       {
         dto: {
           name: dto.customer.name.trim(),
-          phone_number: dto.customer.phone.trim(),
+          phone_number: customerPhone,
           district_id: String(dto.district_id),
         },
       },
@@ -1712,7 +1751,10 @@ export class IntegrationServiceService {
         where: { partner_id: partnerId, external_order_id: externalOrderId },
       });
       if (raced) {
-        return this.idempotentShipmentRes(String(raced.order_id));
+        return this.idempotentShipmentRes(String(raced.order_id), {
+          cod_amount: cod,
+          subtotal: dto.subtotal,
+        });
       }
       throw new RpcException(
         errorRes('Shipment bog‘lanishini saqlab bo‘lmadi', 500),
@@ -1763,7 +1805,17 @@ export class IntegrationServiceService {
    * BeePost ko'zgu ustuni (qr_code_token) BO'SH qolardi. Buyurtma o'qib
    * bo'lmasa (rmqRequest null) — eski minimal shaklga xavfsiz qaytamiz.
    */
-  private async idempotentShipmentRes(orderId: string) {
+  /**
+   * ⚠️ TAKRORIY POST YANGI QIYMATNI QO'LLAMAYDI (Fnu6PRya). Shuning uchun
+   * javob Elchi'da HAQIQATAN turgan narxni (`cod_amount`, `total_price`) va
+   * yuborilganidan farq qilgan maydonlarni (`mismatched_fields`) aytadi —
+   * hamkor "yuborildi" deb o'ylab, ikki tizimda narx jimgina ajralib
+   * qolmasin. Farqni qo'llash yo'li: `PATCH /partner/shipments/:id`.
+   */
+  private async idempotentShipmentRes(
+    orderId: string,
+    sent?: { cod_amount?: number; subtotal?: number },
+  ) {
     const order = await this.rmqRequest<Record<string, any>>(
       this.orderClient,
       { cmd: 'order.find_by_id' },
@@ -1777,16 +1829,36 @@ export class IntegrationServiceService {
         'shipment already exists',
       );
     }
+    const totalPrice = Number(this.pluck(order, 'total_price') ?? 0);
+    const codAmount =
+      totalPrice - Number(this.pluck(order, 'paid_online_amount') ?? 0);
+    const mismatchedFields: string[] = [];
+    if (sent) {
+      const differs = (a: number, b: number) => Math.abs(a - b) > 0.005;
+      const sentCod = Number(sent.cod_amount ?? NaN);
+      if (Number.isFinite(sentCod) && differs(sentCod, codAmount)) {
+        mismatchedFields.push('cod_amount');
+      }
+      const sentTotal = Number(sent.subtotal ?? sent.cod_amount ?? NaN);
+      if (Number.isFinite(sentTotal) && differs(sentTotal, totalPrice)) {
+        mismatchedFields.push('subtotal');
+      }
+    }
     return successRes(
       {
         shipment_id: String(orderId),
         order_status: this.pluck(order, 'status'),
         qr_code_token: this.pluck(order, 'qr_code_token') ?? null,
         to_be_paid: Number(this.pluck(order, 'to_be_paid') ?? 0),
+        cod_amount: codAmount,
+        total_price: totalPrice,
         idempotent: true,
+        ...(sent ? { mismatched_fields: mismatchedFields } : {}),
       },
       200,
-      'shipment already exists',
+      mismatchedFields.length
+        ? 'shipment already exists — yuborilgan qiymatlar QO‘LLANMADI, PATCH /partner/shipments/:id ishlating'
+        : 'shipment already exists',
     );
   }
 
@@ -1913,6 +1985,79 @@ export class IntegrationServiceService {
   }
 
   /**
+   * KO'P POSILKA HOLATI — BITTA SO'ROVDA (Andijon E2E, M4ViM9jz).
+   *
+   * Hamkor solishtiruvchisi har posilkani alohida `GET` bilan so'rardi:
+   * 17 posilka ~14 s, 500 tasi bitta siklda 7–14 daqiqa — va parallel
+   * qilinsa Partner API limitiga (daqiqasiga 120) urilib 429 olardi. Endi
+   * 100 tagacha id bitta so'rovda. Har element `GET /partner/shipments/:id`
+   * bilan AYNI shaklda (shu metod orqali) — ikki javob ajralib ketmasin.
+   * Topilmagan (yoki boshqa hamkorniki) — `not_found`, vaqtinchalik xato —
+   * `failed`; bittasi qolganlarini to'xtatmaydi.
+   */
+  async getPartnerShipmentsBulk(dto: {
+    partner_id?: string;
+    shipment_ids?: unknown;
+  }) {
+    const partnerId = String(dto?.partner_id ?? '').trim();
+    if (!partnerId) this.badRequest('partner_id majburiy');
+    const ids = Array.from(
+      new Set(
+        (Array.isArray(dto?.shipment_ids) ? dto.shipment_ids : [])
+          .map((id) => toText(id).trim())
+          .filter(Boolean),
+      ),
+    );
+    if (!ids.length) this.badRequest('shipment_ids majburiy');
+    if (ids.length > 100) {
+      this.badRequest(
+        "bir so'rovda 100 tadan ko'p shipment_id yuborib bo'lmaydi",
+      );
+    }
+
+    const found = new Map<string, unknown>();
+    const notFound: string[] = [];
+    const failed: Array<{ shipment_id: string; error: string }> = [];
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < ids.length) {
+        const id = ids[cursor];
+        cursor += 1;
+        try {
+          const res = (await this.getPartnerShipment({
+            partner_id: partnerId,
+            shipment_id: id,
+          })) as { data?: unknown };
+          found.set(id, res?.data ?? null);
+        } catch (error) {
+          const status = Number(
+            error instanceof RpcException
+              ? (error.getError() as { statusCode?: unknown })?.statusCode
+              : undefined,
+          );
+          if (status === 404) notFound.push(id);
+          else
+            failed.push({
+              shipment_id: id,
+              error: (error as Error)?.message ?? 'xato',
+            });
+        }
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(10, ids.length) }, worker));
+
+    return successRes(
+      {
+        items: ids.filter((id) => found.has(id)).map((id) => found.get(id)),
+        not_found: ids.filter((id) => notFound.includes(id)),
+        failed,
+      },
+      200,
+      'shipments',
+    );
+  }
+
+  /**
    * C2.2 — Partner shipment bekor qilish. Faqat o'z posilkasi (ref scope).
    * Yetkazib bo'lingan (`SOLD`) posilkani bekor qilib bo'lmaydi → 409. Allaqachon
    * bekor qilingan bo'lsa — idempotent 200. Aks holda Elchi `order.cancel`
@@ -2007,6 +2152,194 @@ export class IntegrationServiceService {
       { shipment_id: orderId, status: Order_status.CANCELLED },
       200,
       'shipment cancelled',
+    );
+  }
+
+  /**
+   * Partner posilkasini YANGILASH (Fnu6PRya) — `PATCH /partner/shipments/:id`.
+   *
+   * Ilgari yo'l yo'q edi: idempotent `POST` birinchi narx/manzilni abadiy
+   * muzlatardi, hamkorda o'zgargan narx kuryerga yetmasdi. Qoidalar Elchi'ning
+   * ichki tahrir qoidalari bilan AYNI (`updateFull` qo'riqchilari):
+   *
+   *   • narx/mahsulot — faqat `created`/`new` (HQ qabul qilmaguncha). Qabul
+   *     qilingan posilka summasi pochta va kassa bilan bog'langan — 409;
+   *   • manzil — filialga jo'natilmaguncha (order-service tekshiradi);
+   *   • yakuniy holat — hech narsa o'zgarmaydi, 409.
+   *
+   * Narx yaratishdagi kabi yoziladi: `total_price = subtotal`,
+   * `to_be_paid = cod_amount`, `paid_online_amount = total − cod`.
+   */
+  async updatePartnerShipment(dto: {
+    partner_id?: string;
+    shipment_id?: string;
+    cod_amount?: number;
+    subtotal?: number;
+    address?: string | null;
+    region_id?: string | null;
+    district_id?: string | null;
+    where_deliver?: string;
+    items?: Array<{
+      name?: string;
+      quantity?: number;
+      external_product_id?: string | null;
+    }>;
+    comment?: string | null;
+  }) {
+    const partnerId = String(dto?.partner_id ?? '').trim();
+    const shipmentId = String(dto?.shipment_id ?? '').trim();
+    if (!partnerId) this.badRequest('partner_id majburiy');
+    if (!shipmentId) this.badRequest('shipment_id majburiy');
+
+    const ref = await this.findPartnerShipmentRef(partnerId, shipmentId);
+    const orderId = String(ref.order_id);
+    const order = await this.rmqRequest<Record<string, any>>(
+      this.orderClient,
+      { cmd: 'order.find_by_id' },
+      { id: orderId },
+      8000,
+    );
+    if (!order) {
+      throw new RpcException(errorRes('Elchi buyurtmasi topilmadi', 502));
+    }
+
+    const status = this.pluck(order, 'status') as Order_status | undefined;
+    const editable: Array<Order_status | undefined> = [
+      Order_status.CREATED,
+      Order_status.NEW,
+      Order_status.RECEIVED,
+      Order_status.ON_THE_ROAD,
+      Order_status.WAITING,
+      Order_status.WAITING_CUSTOMER,
+    ];
+    if (!editable.includes(status)) {
+      this.conflict(
+        `Posilka '${String(status)}' holatida — yakuniy holatdagi posilkani yangilab bo'lmaydi`,
+      );
+    }
+
+    const has = (key: keyof typeof dto) =>
+      Object.prototype.hasOwnProperty.call(dto, key) &&
+      typeof dto[key] !== 'undefined';
+    const patch: Record<string, unknown> = {};
+    const updatedFields: string[] = [];
+
+    if (has('cod_amount') || has('subtotal') || has('items')) {
+      if (status !== Order_status.CREATED && status !== Order_status.NEW) {
+        this.conflict(
+          "Posilka Elchi'da qabul qilingan — narx va mahsulotlarni o'zgartirib " +
+            "bo'lmaydi. Posilkani bekor qilib, qaytadan yuboring",
+        );
+      }
+    }
+
+    if (has('cod_amount') || has('subtotal')) {
+      const currentTotal = Number(this.pluck(order, 'total_price') ?? 0);
+      const currentCod =
+        currentTotal - Number(this.pluck(order, 'paid_online_amount') ?? 0);
+      const nextCod = has('cod_amount') ? Number(dto.cod_amount) : currentCod;
+      // Faqat COD berilsa va posilka prepaid qismsiz bo'lsa — yaratishdagi
+      // `subtotal ?? cod` qoidasi: qiymat COD bilan birga o'zgaradi.
+      const nextTotal = has('subtotal')
+        ? Number(dto.subtotal)
+        : currentTotal === currentCod
+          ? nextCod
+          : currentTotal;
+      if (
+        !Number.isFinite(nextCod) ||
+        !Number.isFinite(nextTotal) ||
+        nextCod < 0 ||
+        nextTotal < 0
+      ) {
+        this.badRequest(
+          'cod_amount va subtotal manfiy bo‘lmagan son bo‘lishi kerak',
+        );
+      }
+      if (nextCod > nextTotal) {
+        this.badRequest(
+          `cod_amount (${nextCod}) subtotal (${nextTotal}) dan oshmasligi kerak`,
+        );
+      }
+      patch.total_price = nextTotal;
+      patch.to_be_paid = nextCod;
+      patch.paid_online_amount = nextTotal - nextCod;
+      if (has('cod_amount')) updatedFields.push('cod_amount');
+      if (has('subtotal') || nextTotal !== currentTotal) {
+        updatedFields.push('subtotal');
+      }
+    }
+
+    if (has('items')) {
+      patch.items = await this.resolvePartnerOrderItems(
+        partnerId,
+        toText(this.pluck(order, 'market_id')),
+        dto.items,
+      );
+      updatedFields.push('items');
+    }
+    if (has('address')) {
+      patch.address = nullableText(dto.address);
+      updatedFields.push('address');
+    }
+    if (has('district_id') || has('region_id')) {
+      const districtId = has('district_id')
+        ? String(dto.district_id)
+        : toText(this.pluck(order, 'district_id'));
+      patch.district_id = districtId || null;
+      patch.region_id = await this.resolvePartnerShipmentRegionId(
+        dto.region_id,
+        districtId,
+      );
+      updatedFields.push(has('district_id') ? 'district_id' : 'region_id');
+    }
+    if (has('where_deliver')) {
+      if (dto.where_deliver !== 'address' && dto.where_deliver !== 'center') {
+        this.badRequest("where_deliver faqat 'center' yoki 'address'");
+      }
+      patch.where_deliver =
+        dto.where_deliver === 'address'
+          ? Where_deliver.ADDRESS
+          : Where_deliver.CENTER;
+      updatedFields.push('where_deliver');
+    }
+    if (has('comment')) {
+      patch.comment = nullableText(dto.comment);
+      updatedFields.push('comment');
+    }
+
+    if (!updatedFields.length) {
+      this.badRequest('Yangilanadigan maydon yuborilmadi');
+    }
+
+    const updated = await this.rmqRequestStrict<Record<string, any>>(
+      this.orderClient,
+      { cmd: 'order.update_full' },
+      {
+        id: orderId,
+        dto: patch,
+        requester: {
+          id: `partner:${partnerId}`,
+          roles: [Roles.SUPERADMIN],
+          note: `Partner tomonidan yangilandi: ${updatedFields.join(', ')}`,
+        },
+      },
+      10000,
+    );
+    if (!updated) {
+      throw new RpcException(errorRes('Posilkani yangilab bo‘lmadi', 504));
+    }
+
+    const view = (await this.getPartnerShipment({
+      partner_id: partnerId,
+      shipment_id: orderId,
+    })) as { data?: Record<string, unknown> };
+    return successRes(
+      {
+        ...(view?.data ?? { shipment_id: orderId }),
+        updated_fields: updatedFields,
+      },
+      200,
+      'shipment updated',
     );
   }
 
@@ -5635,6 +5968,283 @@ export class IntegrationServiceService {
     }
   }
 
+  // 0x494e5447524543 = "INTGREC" ASCII — solishtiruvchining O'Z kaliti:
+  // navbat protsessori bilan bir-birini to'smaydi, lekin ikki replikadagi
+  // ikki solishtiruv bir posilkani ikki marta qayta ishlamaydi (DOZ6dtJn).
+  private static readonly RECONCILE_ADVISORY_LOCK_KEY = 0x494e5447524543n;
+  private static readonly RECONCILE_CONCURRENCY = 5;
+
+  /**
+   * Ichki holati YAKUNIY bo'lgan posilka endi so'ralmaydi — solishtiruv
+   * faqat "ochiq" posilkalar uchun (yo'qolgan webhookni tutish).
+   */
+  private static readonly RECONCILE_TERMINAL_STATUSES: string[] = [
+    Order_status.SOLD,
+    Order_status.PAID,
+    Order_status.PARTLY_PAID,
+    Order_status.CANCELLED,
+    Order_status.CANCELLED_SENT,
+    Order_status.RETURNED_TO_MARKET,
+    Order_status.CLOSED,
+  ];
+
+  private statusQueryConfig(
+    integration: ExternalIntegration,
+  ): StatusQueryConfig | null {
+    const cfg = this.toSyncConfig(integration).status_query;
+    return cfg?.endpoint?.trim() && cfg?.status_path?.trim() ? cfg : null;
+  }
+
+  /**
+   * Session advisory lock ostida ishlatish. Qulf band bo'lsa `null` —
+   * boshqa replika (yoki qo'lda bosilgan tugma) allaqachon solishtiryapti.
+   */
+  private async withReconcileLock<T>(
+    work: () => Promise<T>,
+  ): Promise<T | null> {
+    const queryRunner =
+      this.integrationRepo.manager.connection.createQueryRunner();
+    await queryRunner.connect();
+    let acquired = false;
+    try {
+      const rows = await queryRunner.query(
+        'SELECT pg_try_advisory_lock($1::bigint) AS acquired',
+        [IntegrationServiceService.RECONCILE_ADVISORY_LOCK_KEY.toString()],
+      );
+      acquired = Boolean(rows?.[0]?.acquired);
+      if (!acquired) {
+        this.logger.log(
+          'reconcile: qulf band — boshqa nusxa solishtiryapti, bu safar o`tkazib yuborildi',
+        );
+        return null;
+      }
+      return await work();
+    } finally {
+      if (acquired) {
+        try {
+          await queryRunner.query('SELECT pg_advisory_unlock_all()');
+        } catch (err) {
+          this.logger.warn(
+            `reconcile unlock failed: ${(err as Error)?.message ?? err}`,
+          );
+        }
+      }
+      await queryRunner.release();
+    }
+  }
+
+  /**
+   * DAVRIY SOLISHTIRISH (cron) — master VA `reconcile_enabled` yoqiq,
+   * `status_query` sozlangan har ulanish uchun. Bitta ulanish xatosi
+   * qolganlarini to'xtatmaydi.
+   */
+  async reconcileDueIntegrations(limitPerIntegration = 200) {
+    const result = await this.withReconcileLock(async () => {
+      const integrations = await this.integrationRepo.find({
+        where: { is_active: true, reconcile_enabled: true, isDeleted: false },
+      });
+      const results: Array<Record<string, unknown>> = [];
+      for (const integration of integrations) {
+        if (!this.statusQueryConfig(integration)) continue;
+        try {
+          results.push(
+            await this.reconcileIntegration(integration, limitPerIntegration),
+          );
+        } catch (error) {
+          this.logger.warn(
+            `reconcile ${integration.slug} failed: ${(error as Error)?.message ?? error}`,
+          );
+          results.push({
+            integration_id: String(integration.id),
+            error: (error as Error)?.message ?? String(error),
+          });
+        }
+      }
+      return results;
+    });
+    return successRes(
+      result === null
+        ? { skipped: 'already_running', results: [] }
+        : { results: result },
+      200,
+      'reconcile tick',
+    );
+  }
+
+  /**
+   * "HOZIROQ TENGLASHTIRISH" (integration.connection.reconcile_now).
+   *
+   * Master o'chiq — 409 (UI matni: master ustun, o'chiq bo'lsa quyi kalitlar
+   * ta'sir qilmaydi). `reconcile_enabled` faqat cron'ni boshqaradi — qo'lda
+   * bosish uni talab qilmaydi.
+   */
+  async reconcileNow(input: {
+    id?: string;
+    requester?: { id?: string | null; roles?: string[] };
+  }) {
+    const id = String(input?.id ?? '').trim();
+    if (!id) this.badRequest('id majburiy');
+    const integration = await this.integrationRepo.findOne({
+      where: { id, isDeleted: false },
+    });
+    if (!integration) this.notFound('integration not found');
+    if (!integration.is_active) {
+      this.conflict(
+        "Ulanish o'chiq (master kalit) — solishtirish uchun avval ulanishni yoqing",
+      );
+    }
+    if (!this.statusQueryConfig(integration)) {
+      this.badRequest(
+        'status_sync_config.status_query (endpoint, status_path) sozlanmagan — ' +
+          "solishtiruvchi tashuvchidan holatni so'ray olmaydi",
+      );
+    }
+    const result = await this.withReconcileLock(() =>
+      this.reconcileIntegration(integration, 500),
+    );
+    if (result === null) {
+      this.conflict(
+        "Solishtirish allaqachon ishlayapti — birozdan so'ng qayta urining",
+      );
+    }
+    await this.activityLog.log({
+      entity_type: 'ExternalIntegration',
+      entity_id: String(integration.id),
+      action: ActivityAction.EXTERNAL_SYNC,
+      new_value: { reconcile: result },
+      metadata: {
+        trigger: 'manual',
+        requester_id: input?.requester?.id ?? null,
+      },
+    });
+    return successRes(result, 200, 'reconciled');
+  }
+
+  /**
+   * Bitta ulanishning OCHIQ posilkalarini tashuvchidan so'rab, holat farq
+   * qilsa ichki holatni yangilaydi (`applyProviderStatusToShipment` — webhook
+   * bilan AYNI yo'l). Oxirida `last_reconcile_at` yoziladi. Cheklangan
+   * parallellik: tashuvchini bosib qo'ymaslik uchun.
+   */
+  private async reconcileIntegration(
+    integration: ExternalIntegration,
+    limit: number,
+  ) {
+    const cfg = this.statusQueryConfig(integration);
+    const startedAt = Date.now();
+    const counts = {
+      checked: 0,
+      applied: 0,
+      unchanged: 0,
+      unmapped: 0,
+      failed: 0,
+      skipped: 0,
+    };
+    if (!cfg) {
+      return { integration_id: String(integration.id), ...counts };
+    }
+
+    const open = {
+      integration_id: String(integration.id),
+      isDeleted: false,
+    };
+    const shipments = await this.shipmentRepo.find({
+      where: [
+        { ...open, internal_status: IsNull() },
+        {
+          ...open,
+          internal_status: Not(
+            In(IntegrationServiceService.RECONCILE_TERMINAL_STATUSES),
+          ),
+        },
+      ],
+      order: { updatedAt: 'ASC' },
+      take: Math.max(1, Math.min(limit, 1000)),
+    });
+
+    const reconcileOne = async (shipment: ProviderShipment) => {
+      const ctx = {
+        external_ref: String(shipment.external_ref ?? ''),
+        tracking_number: String(shipment.tracking_number ?? ''),
+        order_id: String(shipment.order_id),
+      };
+      if (!ctx.external_ref && !ctx.tracking_number) {
+        counts.skipped += 1;
+        return;
+      }
+      counts.checked += 1;
+      try {
+        const response = (await this.executeExternalRequest({
+          slug: integration.slug,
+          method: cfg.method ?? 'GET',
+          endpoint: String(this.interpolate(cfg.endpoint, ctx)),
+          use_auth: cfg.use_auth,
+          headers: cfg.headers,
+          params: this.interpolate(cfg.query_template ?? {}, ctx) as Record<
+            string,
+            unknown
+          >,
+          body: cfg.body_template
+            ? this.interpolate(cfg.body_template, ctx)
+            : undefined,
+          timeout_ms: cfg.timeout_ms,
+        })) as { data?: { raw?: unknown } };
+        // FAQAT holat o'qiladi — javobdagi summalar daftarga tegmaydi.
+        const providerStatus = this.stringifyPath(
+          this.extractPath(response?.data?.raw, cfg.status_path),
+        );
+        if (!providerStatus) {
+          counts.failed += 1;
+          return;
+        }
+        const applied = await this.applyProviderStatusToShipment(
+          integration,
+          shipment,
+          providerStatus,
+          null,
+        );
+        if (applied.outcome === 'updated') counts.applied += 1;
+        else if (applied.outcome === 'unchanged') counts.unchanged += 1;
+        else counts.unmapped += 1;
+      } catch (error) {
+        counts.failed += 1;
+        this.logger.warn(
+          `reconcile ${integration.slug} order ${shipment.order_id}: ${(error as Error)?.message ?? error}`,
+        );
+      }
+    };
+
+    let cursor = 0;
+    const workers = Array.from(
+      {
+        length: Math.min(
+          IntegrationServiceService.RECONCILE_CONCURRENCY,
+          shipments.length,
+        ),
+      },
+      async () => {
+        while (cursor < shipments.length) {
+          const shipment = shipments[cursor];
+          cursor += 1;
+          await reconcileOne(shipment);
+        }
+      },
+    );
+    await Promise.all(workers);
+
+    const finishedAt = new Date();
+    await this.integrationRepo.update(
+      { id: String(integration.id) },
+      { last_reconcile_at: finishedAt },
+    );
+    return {
+      integration_id: String(integration.id),
+      ...counts,
+      duration_ms: finishedAt.getTime() - startedAt,
+      last_reconcile_at: finishedAt.toISOString(),
+    };
+  }
+
   // 0x494e5447515545 = "INTGQUE" ASCII. Postgres advisory locks are
   // session-scoped → released automatically if the connection dies, so a
   // crashed processor never leaves the queue blocked.
@@ -6047,6 +6657,31 @@ export class IntegrationServiceService {
     // a payload we can't map, or an order we don't have a shipment for, is
     // logged but never fails the webhook — the provider still gets a 200 and
     // the raw event stays in the log for replay.
+    return this.applyVerifiedWebhook(
+      integration,
+      parsed,
+      log?.id ?? null,
+      eventType,
+      deliveryId,
+    );
+  }
+
+  /**
+   * IMZOSI TEKSHIRILGAN HODISANI QO'LLASH — kiruvchi webhook VA qayta ishlash
+   * (Xd88lHGq) shu bitta yo'ldan o'tadi.
+   *
+   * Ikki nusxa bo'lsa darvozalar (master, `webhook_enabled`, to'lov shoxi)
+   * asta bir-biridan farq qila boshlardi va qayta ishlash o'chiq ulanish
+   * hodisasini jimgina qo'llab yuborardi.
+   */
+  private async applyVerifiedWebhook(
+    integration: ExternalIntegration,
+    parsed: Record<string, unknown> | null,
+    logId: string | null,
+    eventType: string | null,
+    deliveryId: string | null,
+  ) {
+    const log = logId ? { id: logId } : null;
     /**
      * ⚠️ KILL-SWITCH ASIMMETRIYASI (audit H2).
      *
@@ -6078,6 +6713,33 @@ export class IntegrationServiceService {
         delivery_id: deliveryId,
         log_id: log?.id ?? null,
         shipment: { outcome: 'skipped_inactive' as const },
+      };
+    }
+
+    /**
+     * ⚠️ KIRUVCHI WEBHOOK O'CHIQ (DOZ6dtJn) — master yoqiq, lekin operator
+     * faqat kiruvchi oqimni to'xtatgan. Hodisa jurnalga `skipped_disabled`
+     * bilan yoziladi (keyin qayta ishlatish mumkin), lekin QO'LLANMAYDI.
+     * Provayderga 200: muammo bizda emas, qaror bizda — non-2xx bo'lsa u
+     * qayta yuborishni boshlab navbatini to'ldirardi. Chiquvchi jo'natish
+     * bu kalitga bog'liq emas.
+     */
+    if (integration.webhook_enabled === false) {
+      this.logger.warn(
+        `webhook SKIPPED for ${integration.slug}: kiruvchi webhook o'chirilgan — ` +
+          "hodisa jurnalga yozildi, lekin qo'llanmadi",
+      );
+      if (log?.id) {
+        await this.markWebhookSkippedDisabled(log.id);
+      }
+      return {
+        ok: true,
+        code: 200,
+        reason: 'webhook_disabled',
+        event_type: eventType,
+        delivery_id: deliveryId,
+        log_id: log?.id ?? null,
+        shipment: { outcome: 'skipped_disabled' as const },
       };
     }
 
@@ -6910,6 +7572,35 @@ export class IntegrationServiceService {
       return { outcome: 'no_shipment' };
     }
 
+    return this.applyProviderStatusToShipment(
+      integration,
+      shipment,
+      providerStatus,
+      trackingNumber,
+    );
+  }
+
+  /**
+   * Tashuvchi aytgan holatni posilka va buyurtmaga qo'llash — webhook VA
+   * solishtiruvchi (DOZ6dtJn) shu bitta yo'ldan o'tadi: xarita, idempotentlik,
+   * buyurtmani yuritish va COD qarzi ikki joyda farq qilmasin.
+   *
+   * ⚠️ PUL SUMMASI TASHUVCHI JAVOBIDAN OLINMAYDI. Qarz summasi
+   * `order.provider.mark` javobidagi `cod_collected` dan (bizning daftar)
+   * olinadi; tashuvchi so'rov javobidagi summa "to'lanishi kerak" bo'lishi
+   * mumkin va aralashtirilsa pul daftari jimgina buzilardi.
+   */
+  private async applyProviderStatusToShipment(
+    integration: ExternalIntegration,
+    shipment: ProviderShipment,
+    providerStatus: string,
+    trackingNumber: string | null,
+  ): Promise<{
+    outcome: 'unmapped' | 'unchanged' | 'updated';
+    internal_status?: string;
+    action?: string;
+    order_id?: string;
+  }> {
     const mapped = this.mapProviderStatus(integration, providerStatus);
     if (!mapped?.status) {
       // Record the raw provider status even when unmapped, so operators can
@@ -7180,6 +7871,228 @@ export class IntegrationServiceService {
   }
 
   /**
+   * Qayta ishlash mumkinmi — sabab bilan (Xd88lHGq). UI tugmani shu sabab
+   * bilan o'chirib qo'yadi (Tooltip), server esa ayni qoidani qo'llaydi.
+   */
+  private webhookReprocessBlockReason(row: {
+    signature_valid?: boolean;
+    status?: string;
+    error?: string | null;
+    parsed_payload?: unknown;
+    integration_id?: string | null;
+  }): string | null {
+    if (!row.signature_valid) {
+      return "Imzo noto'g'ri — imzo XOM tana ustidan tekshiriladi, bunday hodisani qayta ishlatib bo'lmaydi";
+    }
+    if (row.status === 'processed' && !row.error) {
+      return 'Allaqachon ishlangan';
+    }
+    if (row.status === 'reprocessing') {
+      return 'Qayta ishlanmoqda';
+    }
+    if (!row.parsed_payload) {
+      return "Tana JSON emas edi — qayta ishlatib bo'lmaydi";
+    }
+    if (!row.integration_id) {
+      return 'Ulanish aniqlanmagan';
+    }
+    return null;
+  }
+
+  /**
+   * BITTA WEBHOOK YOZUVI — MASKALANGAN PAYLOAD BILAN (Xd88lHGq).
+   *
+   * ⚠️ XOM `raw_body` HECH QACHON QAYTARILMAYDI — Elchi uni ataylab yopgan
+   * (ichida mijoz telefoni va manzili). Faqat `parsed_payload`, maskalangan.
+   * Maskasiz ko'rish — faqat SUPERADMIN, va bu harakatning O'ZI jurnalga
+   * yoziladi. Tana JSON bo'lmagan holat (eng ko'p tekshiriladigani) uchun
+   * bo'sh modal o'rniga sabab qaytariladi.
+   */
+  async getWebhookLogDetail(input: {
+    id?: string;
+    unmasked?: boolean;
+    requester?: { id?: string | null; roles?: string[] };
+  }) {
+    const id = String(input?.id ?? '').trim();
+    if (!/^\d+$/.test(id)) this.badRequest("id noto'g'ri");
+    const roles = (input?.requester?.roles ?? []).map((r) =>
+      String(r).toLowerCase(),
+    );
+    const unmasked = Boolean(input?.unmasked);
+    if (unmasked && !roles.includes(Roles.SUPERADMIN)) {
+      this.forbidden("Maskasiz payload'ni faqat superadmin ko'ra oladi");
+    }
+    const row = await this.webhookLogRepo.findOne({
+      where: { id },
+      select: {
+        id: true,
+        createdAt: true,
+        integration_id: true,
+        provider_slug: true,
+        delivery_id: true,
+        event_type: true,
+        signature_valid: true,
+        status: true,
+        error: true,
+        processed_at: true,
+        trace_id: true,
+        parsed_payload: true,
+      },
+    });
+    if (!row) this.notFound('Webhook yozuvi topilmadi');
+
+    if (unmasked) {
+      await this.activityLog.log({
+        entity_type: 'ProviderWebhook',
+        entity_id: String(row.id),
+        action: 'webhook.payload.unmasked_view',
+        metadata: {
+          requester_id: input?.requester?.id ?? null,
+          provider: row.provider_slug,
+        },
+      });
+    }
+
+    const { parsed_payload: parsed, ...meta } = row;
+    const blockedReason = this.webhookReprocessBlockReason(row);
+    return successRes(
+      {
+        ...meta,
+        masked: !unmasked,
+        payload: parsed ? (unmasked ? parsed : maskPiiPayload(parsed)) : null,
+        payload_note: parsed
+          ? null
+          : "Tana JSON emas edi (yoki saqlanmagan) — xom tana xavfsizlik uchun ko'rsatilmaydi" +
+            (row.error ? `. Sabab: ${row.error}` : ''),
+        can_reprocess: !blockedReason,
+        reprocess_blocked_reason: blockedReason,
+        signature_note:
+          "Imzo XOM tana ustidan tekshiriladi. Parse qilingan JSON'ni qayta " +
+          'imzolash bir xil natija berishiga kafolat yo‘q — shuning uchun ' +
+          'faqat imzosi to‘g‘ri bo‘lgan hodisa qayta ishlanadi va imzo qayta ' +
+          'tekshirilmaydi.',
+      },
+      200,
+      'webhook log',
+    );
+  }
+
+  /**
+   * HODISANI QAYTA ISHLASH (Xd88lHGq) — operator sozlamani tuzatgandan keyin.
+   *
+   * Faqat imzosi to'g'ri va hali muvaffaqiyatli QO'LLANMAGAN yozuv. Qo'llash
+   * kiruvchi webhook bilan AYNI yo'l (`applyVerifiedWebhook`) — master va
+   * `webhook_enabled` darvozalari ham amal qiladi. Yangi jurnal qatori
+   * OCHILMAYDI: natija shu yozuvga yoziladi, ya'ni `delivery_id` bo'yicha
+   * hodisa bitta qoladi.
+   *
+   * ⚠️ IKKI PARALLEL BOSISH. Yozuv avval shartli UPDATE bilan `reprocessing`
+   * ga "egallanadi" — ikkinchisi 0 qator oladi va 409 qaytadi. Buyurtma
+   * yaratish yo'lining o'z dublikat to'sig'i ham bor (`claimInboundDeal`).
+   */
+  async reprocessWebhookLog(input: {
+    id?: string;
+    requester?: { id?: string | null; roles?: string[] };
+  }) {
+    const id = String(input?.id ?? '').trim();
+    if (!/^\d+$/.test(id)) this.badRequest("id noto'g'ri");
+    const row = await this.webhookLogRepo.findOne({ where: { id } });
+    if (!row) this.notFound('Webhook yozuvi topilmadi');
+    const blockedReason = this.webhookReprocessBlockReason(row);
+    if (blockedReason) this.conflict(blockedReason);
+
+    const integration = await this.integrationRepo.findOne({
+      where: { id: String(row.integration_id), isDeleted: false },
+    });
+    if (!integration) this.notFound('Ulanish topilmadi');
+
+    const claimed =
+      Number(
+        (
+          await this.webhookLogRepo.update(
+            {
+              id,
+              signature_valid: true,
+              status: In([
+                'verified',
+                'failed',
+                'received',
+                'rejected',
+                'skipped_disabled',
+              ]),
+            },
+            { status: 'reprocessing' },
+          )
+        )?.affected ?? 0,
+      ) ||
+      Number(
+        (
+          await this.webhookLogRepo.update(
+            {
+              id,
+              signature_valid: true,
+              status: 'processed',
+              error: Not(IsNull()),
+            },
+            { status: 'reprocessing' },
+          )
+        )?.affected ?? 0,
+      );
+    if (!claimed) {
+      this.conflict('Allaqachon ishlangan yoki qayta ishlanmoqda');
+    }
+
+    let result: Record<string, unknown>;
+    try {
+      result = (await this.applyVerifiedWebhook(
+        integration,
+        row.parsed_payload,
+        String(row.id),
+        row.event_type,
+        row.delivery_id,
+      )) as Record<string, unknown>;
+    } catch (error) {
+      await this.webhookLogRepo
+        .update(
+          { id, status: 'reprocessing' },
+          {
+            status: 'failed',
+            processed_at: new Date(),
+            error: `reprocess: ${(error as Error)?.message ?? String(error)}`,
+          },
+        )
+        .catch(() => undefined);
+      throw error;
+    }
+    // Har shox o'z natijasini yozadi; yozmagan bo'lsa egallash qolib
+    // ketmasin.
+    await this.webhookLogRepo
+      .update(
+        { id, status: 'reprocessing' },
+        { status: 'processed', processed_at: new Date() },
+      )
+      .catch(() => undefined);
+
+    await this.activityLog.log({
+      entity_type: 'ProviderWebhook',
+      entity_id: String(row.id),
+      action: 'webhook.reprocess',
+      new_value: { reason: result?.reason ?? null },
+      metadata: {
+        requester_id: input?.requester?.id ?? null,
+        provider: integration.slug,
+        delivery_id: row.delivery_id,
+      },
+    });
+
+    return successRes(
+      { log_id: String(row.id), ...result },
+      200,
+      'reprocessed',
+    );
+  }
+
+  /**
    * ONLAYN TO'LOVLAR RO'YXATI (7-bosqich).
    *
    * ⚠️ NEGA KERAK. 6-bosqichning asosiy darsi: JURNALGA YOZISH ≠ KO'RINISH.
@@ -7245,6 +8158,26 @@ export class IntegrationServiceService {
       200,
       'payment transactions',
     );
+  }
+
+  /**
+   * Kiruvchi webhook o'chiq ulanishda (DOZ6dtJn) — hodisa jurnalda
+   * `skipped_disabled` holatida qoladi: qayta ishlatish (reprocess) uni
+   * "hali qo'llanmagan" deb taniydi.
+   */
+  private async markWebhookSkippedDisabled(logId: string): Promise<void> {
+    try {
+      await this.webhookLogRepo.update(
+        { id: logId },
+        {
+          status: 'skipped_disabled',
+          processed_at: new Date(),
+          error: "apply: webhook_disabled — kiruvchi webhook o'chirilgan",
+        },
+      );
+    } catch {
+      // Non-fatal — the webhook already succeeded.
+    }
   }
 
   private async markWebhookProcessed(

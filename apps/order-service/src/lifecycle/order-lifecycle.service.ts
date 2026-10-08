@@ -23,6 +23,7 @@ import {
   BranchType,
   BranchTransferBatchStatus,
   BranchTransferDirection,
+  CancelReason,
   Cashbox_type,
   ExpenseProofCondition,
   Operation_type,
@@ -149,6 +150,10 @@ const API_UPDATE_FORBIDDEN_FIELDS = [
   'extra_cost',
   'proof_files',
   'external_id',
+  // Mijoz oldindan to'lagan qism — kuryer shuncha kam naqd yig'adi. Faqat
+  // hamkor (Partner API) yangilashi yozadi (`order.update_full`), HTTP PATCH
+  // hech qachon (Fnu6PRya).
+  'paid_online_amount',
 ] as const;
 
 /**
@@ -726,6 +731,7 @@ export class OrderLifecycleService {
     order: Order,
     dto: {
       total_price?: number;
+      paid_online_amount?: number;
       items?: Array<{
         product_id?: string | null;
         product_name?: string | null;
@@ -738,8 +744,13 @@ export class OrderLifecycleService {
     }
 
     const totalPriceChanged =
-      typeof dto.total_price !== 'undefined' &&
-      Number(dto.total_price) !== Number(order.total_price);
+      (typeof dto.total_price !== 'undefined' &&
+        Number(dto.total_price) !== Number(order.total_price)) ||
+      // Oldindan to'langan qism kuryer yig'adigan naqdni belgilaydi — narx
+      // bilan bir xil qoida (Fnu6PRya).
+      (typeof dto.paid_online_amount !== 'undefined' &&
+        Number(dto.paid_online_amount) !==
+          Number(order.paid_online_amount ?? 0));
     const itemsChanged =
       typeof dto.items !== 'undefined' &&
       this.haveOrderItemsChanged(order.items ?? [], dto.items);
@@ -867,6 +878,42 @@ export class OrderLifecycleService {
     }
 
     return parts.join('\n');
+  }
+
+  /**
+   * BEKOR QILISH SABABI — majburiy va yopiq ro'yxatdan (PUvKXWVw).
+   *
+   * Ilgari sabab ixtiyoriy erkin matn edi: sababsiz bekor qilish qabul
+   * qilinardi va qaysi tuman/market/kuryer nima sababdan qaytarayotganini
+   * bilib bo'lmasdi ("yetkazib berolmadim" oqimida esa sabab majburiy edi).
+   *
+   * `reason` berilmasa-yu izoh bo'lsa — `OTHER` (sabab tanlash maydoni hali
+   * yo'q eski klientlar izoh bilan ishlashda davom etadi). Ikkalasi ham bo'sh
+   * bo'lsa yoki `OTHER` erkin matnsiz kelsa — 400.
+   */
+  private resolveCancelReason(
+    reason?: string | null,
+    comment?: string | null,
+  ): CancelReason {
+    const hasComment = Boolean(comment?.trim());
+    const code = reason?.trim();
+    if (!code) {
+      if (!hasComment) {
+        this.badRequest(
+          'Bekor qilish sababi majburiy — reason tanlang yoki izoh yozing',
+        );
+      }
+      return CancelReason.OTHER;
+    }
+    if (!(Object.values(CancelReason) as string[]).includes(code)) {
+      this.badRequest(
+        `Bekor qilish sababi noto'g'ri: ${code}. Ruxsat etilgan: ${Object.values(CancelReason).join(', ')}`,
+      );
+    }
+    if (code === CancelReason.OTHER && !hasComment) {
+      this.badRequest("Sabab 'boshqa' (OTHER) bo'lsa izoh (comment) majburiy");
+    }
+    return code as CancelReason;
   }
 
   /**
@@ -2877,6 +2924,9 @@ export class OrderLifecycleService {
             canceled_post_id: null,
             return_requested: false,
             sold_at: null,
+            // `cancelOrder` bilan bir xil: bekor qilingan buyurtmada marketga
+            // qarz yo'q (pLmAsEsj).
+            to_be_paid: 0,
             ...extraCostReset,
           },
           {
@@ -4857,22 +4907,57 @@ export class OrderLifecycleService {
       (postAssignments?.data ?? []).map((a) => [a.order_id, a.post_id]),
     );
 
+    /**
+     * ⚠️ MAS'ULIYAT ZANJIRI QABULDA MUHRLANADI (Andijon E2E, rTzcjrdo).
+     *
+     * Ilgari qabul faqat holat va `post_id` ni yozardi: `last_handover_at`
+     * yaratilish vaqtida, `last_handover_by` null qolardi — "posilkani HQ'da
+     * kim qabul qildi" savoliga tizim javob bermasdi. Endi qabul qilgan
+     * xodim, vaqt va ushlovchi (HQ yoki o'sha filial) yoziladi, ushlovchi
+     * o'zgargan bo'lsa custody hodisasi ham ochiladi.
+     */
+    const receivedAt = new Date();
+    const receivedBy = this.numericActorId(requester?.id);
+    // Doirasiz (SA/admin) qabul — HQ; HQ id'ni so'rash shart emas.
+    const receiverHolder = scopeBranchId
+      ? await this.resolveHolderFromState(scopeBranchId, null)
+      : {
+          holder_type: OrderHolderType.HQ,
+          holder_branch_id: null,
+          holder_courier_id: null,
+        };
+    const actorId = requester?.id ? String(requester.id) : 'system';
+    const actorRole = requester?.id
+      ? this.custody.toTrackingRole(requester.roles)
+      : 'system';
+
     // 8. Update order statuses + enqueue search sync (single TX)
     const queryRunner = this.dataSource.createQueryRunner();
     await queryRunner.connect();
     await queryRunner.startTransaction();
     try {
       const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
+      const custodyRepo = queryRunner.manager.getRepository(OrderCustodyEvent);
       for (const order of orders) {
         const postId = assignmentMap.get(order.id);
         const previousStatus = order.status;
         const nextStatus = Order_status.RECEIVED;
+        const previousHolder = {
+          type: order.holder_type ?? null,
+          branchId: order.holder_branch_id ?? null,
+          courierId: order.holder_courier_id ?? null,
+        };
         await queryRunner.manager
           .createQueryBuilder()
           .update(Order)
           .set({
             status: nextStatus,
             post_id: postId ?? null,
+            holder_type: receiverHolder.holder_type,
+            holder_branch_id: receiverHolder.holder_branch_id,
+            holder_courier_id: receiverHolder.holder_courier_id,
+            last_handover_at: receivedAt,
+            last_handover_by: receivedBy,
           })
           .where('id = :id', { id: order.id })
           .execute();
@@ -4883,15 +4968,45 @@ export class OrderLifecycleService {
               order_id: order.id,
               from_status: previousStatus,
               to_status: nextStatus,
-              changed_by: 'system',
-              changed_by_role: 'system',
-              note: 'Order assigned to post',
+              changed_by: actorId,
+              changed_by_role: actorRole,
+              note: internal?.scanVerified
+                ? 'Posilka skanerlab qabul qilindi va pochtaga ajratildi'
+                : 'Order assigned to post',
             },
             trackingRepo,
           );
         }
+        const holderChanged =
+          previousHolder.type !== receiverHolder.holder_type ||
+          String(previousHolder.branchId ?? '') !==
+            String(receiverHolder.holder_branch_id ?? '') ||
+          String(previousHolder.courierId ?? '') !==
+            String(receiverHolder.holder_courier_id ?? '');
+        if (holderChanged) {
+          await this.custody.createCustodyEvent(
+            {
+              order_id: String(order.id),
+              from_holder_type: previousHolder.type,
+              to_holder_type: receiverHolder.holder_type,
+              from_branch_id: previousHolder.branchId,
+              to_branch_id: receiverHolder.holder_branch_id,
+              from_courier_id: previousHolder.courierId,
+              to_courier_id: receiverHolder.holder_courier_id,
+              changed_by: actorId,
+              changed_by_role: actorRole,
+              note: 'Qabul qilindi',
+            },
+            custodyRepo,
+          );
+        }
         order.status = nextStatus;
         order.post_id = postId ?? null;
+        order.holder_type = receiverHolder.holder_type;
+        order.holder_branch_id = receiverHolder.holder_branch_id;
+        order.holder_courier_id = receiverHolder.holder_courier_id;
+        order.last_handover_at = receivedAt;
+        order.last_handover_by = receivedBy;
         await this.syncOrderToSearch(order, queryRunner.manager);
       }
       await queryRunner.commitTransaction();
@@ -5050,9 +5165,15 @@ export class OrderLifecycleService {
       }
     }
 
+    /**
+     * `ok` — monitoring shunga qaraydi (n9o0KYd5). HTTP kodi har doim 200
+     * (resurs yaratilmaydi), shuning uchun "hech narsa qabul qilinmadi"
+     * holatini HTTP koddan emas, aynan shu bayroqdan bilish kerak.
+     * `partial` — bir qismi qabul qilindi, qolgani `unmatched` da.
+     */
     if (!orders.length) {
       return successRes(
-        { received: 0, unmatched },
+        { ok: false, partial: false, received: 0, unmatched },
         200,
         'No scannable parcels matched',
       );
@@ -5075,6 +5196,8 @@ export class OrderLifecycleService {
 
     return successRes(
       {
+        ok: true,
+        partial: unmatched.length > 0,
         received: orders.length,
         unmatched,
         /**
@@ -5936,6 +6059,23 @@ export class OrderLifecycleService {
     },
     requestId?: string,
   ) {
+    /**
+     * ⚠️ SOTUVDA `paidAmount` QABUL QILINMAYDI (Andijon E2E, ZsPLevZZ).
+     *
+     * Ilgari u faqat `paid_amount` ustuni va holatni (PAID/PARTLY_PAID)
+     * yozardi, market kassasiga esa baribir TO'LIQ daromad tushardi va
+     * `order_settlement` PENDING qolardi — buyurtma "marketga to'landi"
+     * derdi, kassa "hali qarzdormiz". Keyin HQ haqiqatan to'lasa kitobda ikki
+     * marta to'langan bo'lib chiqardi. UI bu maydonni hech qachon yubormagan;
+     * marketga to'lov faqat `/finance/cashbox/payment/market` va
+     * `/orders/settlement/hq-to-market` orqali o'tadi. Market qarzidan
+     * avtomatik yopiladigan qism (`autoPay`) o'zgarmadi — u kassada aks etadi.
+     */
+    if (Number(dto?.paidAmount ?? 0) !== 0) {
+      this.badRequest(
+        "paidAmount sotuvda qabul qilinmaydi — marketga to'lov /finance/cashbox/payment/market orqali amalga oshiriladi",
+      );
+    }
     const order = await this.findById(id);
     if (order.status !== Order_status.WAITING) {
       this.badRequest('Order not found or not in waiting status');
@@ -6184,18 +6324,12 @@ export class OrderLifecycleService {
 
     const toBePaid = marketIncome;
     const netToBePaid = Math.max(Number(toBePaid) || 0, 0);
-    const requestedPaidAmount = Number(
-      dto?.paidAmount ?? order.paid_amount ?? 0,
+    // `paidAmount` endi tekshirilmaydi: u boshida rad etiladi (yuqoriga
+    // qarang). Qisman sotuv bilan bir xil — faqat buyurtmadagi qiymat.
+    const currentPaid = Math.min(
+      Math.max(Number(order.paid_amount ?? 0), 0),
+      netToBePaid,
     );
-    if (!Number.isFinite(requestedPaidAmount) || requestedPaidAmount < 0) {
-      this.badRequest('paidAmount must be a non-negative number');
-    }
-    if (requestedPaidAmount > netToBePaid) {
-      this.badRequest(
-        `paidAmount (${requestedPaidAmount}) qoldiq summa (${netToBePaid}) dan oshmasligi kerak`,
-      );
-    }
-    const currentPaid = Math.min(Math.max(requestedPaidAmount, 0), netToBePaid);
     const remainingBeforeDebt = netToBePaid - currentPaid;
     const debtBeforeSale =
       marketBalanceBefore < 0 ? Math.abs(marketBalanceBefore) : 0;
@@ -6489,6 +6623,8 @@ export class OrderLifecycleService {
     id: string,
     dto: {
       comment?: string;
+      reason?: string;
+      paidAmount?: number;
       extraCost?: number;
       proofFileKeys?: string[];
       proofFileKeysVerified?: boolean;
@@ -6499,6 +6635,26 @@ export class OrderLifecycleService {
     const isManagerRequester =
       this.hasRole(requester, Roles.MANAGER) &&
       !this.hasRole(requester, Roles.COURIER);
+    /**
+     * ⚠️ BEKOR QILISHDA "TO'LANGAN SUMMA" YO'Q (Andijon E2E, T0UGh8bL).
+     *
+     * CancelModal kuryerdan `paidAmount` so'rardi, bu yerda esa u umuman
+     * o'qilmasdi — kiritilgan raqam jimgina yo'qolardi. Bekor qilishda
+     * mijozdan pul olinmaydi, demak maydonning ma'nosi yo'q. 0 (UI hozir shuni
+     * yuboradi) zararsiz, boshqa qiymat — ochiq xato.
+     */
+    if (Number(dto?.paidAmount ?? 0) !== 0) {
+      this.badRequest(
+        "paidAmount bekor qilishda qabul qilinmaydi — bekor qilingan buyurtmada to'lov bo'lmaydi",
+      );
+    }
+    // Market tasdig'idan keyingi qayta ijroda sabab so'rov paytida allaqachon
+    // tekshirilgan; bu qoida kiritilishidan oldin ochilgan tasdiqlar esa
+    // sababsiz bo'lishi mumkin — ular `OTHER` bilan yakunlanadi.
+    const cancelReason =
+      dto?.extraCostApproved && !dto?.reason && !dto?.comment?.trim()
+        ? CancelReason.OTHER
+        : this.resolveCancelReason(dto?.reason, dto?.comment);
     const order = await this.findById(id);
     if (order.status !== Order_status.WAITING) {
       this.badRequest('Order not found or not in waiting status');
@@ -6756,6 +6912,17 @@ export class OrderLifecycleService {
            * bu yerda 0 bo'lsa ham xavfsiz: 0 yozadi (default bilan bir xil).
            */
           extra_cost: extraCost,
+          /**
+           * ⚠️ BEKOR QILINGAN BUYURTMADA MARKETGA QARZ YO'Q (pLmAsEsj).
+           *
+           * Ilgari `to_be_paid` yaratilishdagi qiymatda (= total_price)
+           * qolardi va bekor qilingan buyurtma "marketga 350 000 to'lanishi
+           * kerak" deb turardi, rollback yo'lidan o'tgani esa 0 ko'rsatardi.
+           * Qo'shimcha xarajat marketning qarzi emas — u kassadan va
+           * daftarning kredit qatoridan yechiladi (yuqorida).
+           */
+          to_be_paid: 0,
+          return_reason: cancelReason,
           ...(proofFiles.length ? { proof_files: proofFiles } : {}),
         },
         { id: requester.id, roles: requester.roles, note: 'Order canceled' },
@@ -6944,6 +7111,9 @@ export class OrderLifecycleService {
       const trackingRepo = queryRunner.manager.getRepository(OrderTracking);
 
       order.status = Order_status.CANCELLED;
+      // Yaratilishdagi `to_be_paid` (= narx) bekor qilingan buyurtmada soxta
+      // debitorlik bo'lib qolmasin — `cancelOrder` bilan bir xil (pLmAsEsj).
+      order.to_be_paid = 0;
       /**
        * ⚠️ PUL VA POCHTA TEGILMAYDI va bu ataylab: `CREATED`/`NEW` holatda
        * na kassa harakati, na `post_id` mavjud. Moliya emit yo'li ham
@@ -7570,6 +7740,25 @@ export class OrderLifecycleService {
         'Qisman sotishda kamida bitta mahsulot soni kamaytirilishi kerak',
       );
     }
+    /**
+     * ⚠️ KAMIDA BITTA MAHSULOT SOTILISHI SHART (Andijon E2E, UlhtEpsI).
+     *
+     * Ilgari faqat "kamida bittasi kamaytirilsin" tekshirilardi — hamma
+     * qatorni 0 qilib yuborish mumkin edi: ota-buyurtma `sold` bo'lib
+     * `product_quantity=0` qolardi, kassaga esa real pul yozilardi. Bu chegara
+     * faqat frontendda (`canDecreaseItem`) edi. Hech narsa sotilmagan bo'lsa —
+     * bu bekor qilish, qisman sotuv emas. Son so'rovdan emas, MOSLANGAN
+     * qatorlardan olinadi: so'rovdagi takroriy qator yig'indini shishirmaydi.
+     */
+    const soldQty = itemMatches.reduce(
+      (sum, match) => sum + Number(match.quantity ?? 0),
+      0,
+    );
+    if (soldQty < 1) {
+      this.badRequest(
+        'Qisman sotishda kamida bitta mahsulot sotilishi kerak, aks holda bekor qilishdan foydalaning',
+      );
+    }
     const cancelledTotalPrice = Math.max(oldTotalPrice - price, 0);
     const cancelledBranchId = String(
       order.holder_branch_id ??
@@ -8136,6 +8325,11 @@ export class OrderLifecycleService {
       paid_amount?: number;
       /** Kuryer yozgan qo'shimcha xarajat — buyurtmada saqlanadi. */
       extra_cost?: number;
+      /**
+       * Mijoz oldindan to'lagan qism. Faqat ichki chaqiruvlar (hamkor
+       * posilkasini yangilash) — HTTP PATCH'da taqiqlangan.
+       */
+      paid_online_amount?: number;
       status?: Order_status;
       return_requested?: boolean;
       comment?: string | null;
@@ -8232,6 +8426,10 @@ export class OrderLifecycleService {
           ? dto.extra_cost
           : order.extra_cost,
       to_be_paid: dto.to_be_paid ?? order.to_be_paid,
+      paid_online_amount:
+        typeof dto.paid_online_amount !== 'undefined'
+          ? dto.paid_online_amount
+          : order.paid_online_amount,
       paid_amount: dto.paid_amount ?? order.paid_amount,
       status: dto.status ?? order.status,
       return_requested:

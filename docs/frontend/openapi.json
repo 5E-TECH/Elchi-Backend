@@ -1830,7 +1830,7 @@
           }
         },
         "responses": {
-          "201": {
+          "200": {
             "description": ""
           }
         },
@@ -2241,6 +2241,73 @@
           }
         ],
         "summary": "Markets with NEW orders",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
+    "/orders/cancel-reasons/stats": {
+      "get": {
+        "description": "by_reason — sabab bo'yicha son; group_by berilsa rows — sabab × market/hudud/kuryer. Sana oynasi bekor qilingan vaqtga qo'llanadi.",
+        "operationId": "OrderGatewayController_cancelReasonStats",
+        "parameters": [
+          {
+            "name": "startDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "endDate",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "branch_id",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "group_by",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "market",
+                "region",
+                "courier"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bekor qilish sabablari kesimida statistika",
         "tags": [
           "Orders"
         ]
@@ -2864,12 +2931,12 @@
           "content": {
             "multipart/form-data": {
               "schema": {
-                "$ref": "#/components/schemas/SellOrderRequestDto"
+                "$ref": "#/components/schemas/CancelOrderRequestDto"
               }
             },
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/SellOrderRequestDto"
+                "$ref": "#/components/schemas/CancelOrderRequestDto"
               }
             }
           }
@@ -7717,6 +7784,73 @@
         ]
       }
     },
+    "/integrations/webhook-logs/{logId}": {
+      "get": {
+        "operationId": "IntegrationGatewayController_webhookLogDetail",
+        "parameters": [
+          {
+            "name": "logId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "unmasked",
+            "required": false,
+            "in": "query",
+            "description": "true — maskasiz (faqat superadmin; jurnalga yoziladi)",
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bitta webhook yozuvi: maskalangan payload, qayta ishlash mumkinligi va sababi",
+        "tags": [
+          "Integrations"
+        ]
+      }
+    },
+    "/integrations/webhook-logs/{logId}/reprocess": {
+      "post": {
+        "operationId": "IntegrationGatewayController_reprocessWebhookLog",
+        "parameters": [
+          {
+            "name": "logId",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Webhook hodisasini qayta ishlash (imzo noto'g'ri yoki allaqachon ishlangan -> 409)",
+        "tags": [
+          "Integrations"
+        ]
+      }
+    },
     "/integrations/sync/history": {
       "get": {
         "operationId": "IntegrationGatewayController_syncHistory",
@@ -8051,6 +8185,35 @@
           }
         ],
         "summary": "Integration connection test alias endpoint",
+        "tags": [
+          "Integrations"
+        ]
+      }
+    },
+    "/integrations/{id}/reconcile-now": {
+      "post": {
+        "operationId": "IntegrationGatewayController_reconcileNow",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Hoziroq tenglashtirish: { checked, applied, unchanged, unmapped, failed, last_reconcile_at }",
         "tags": [
           "Integrations"
         ]
@@ -11890,6 +12053,41 @@
         ]
       }
     },
+    "/partner/shipments/status": {
+      "post": {
+        "operationId": "PartnerGatewayController_getShipmentsStatus",
+        "parameters": [
+          {
+            "name": "X-Api-Key",
+            "in": "header",
+            "description": "Hamkor API kaliti (JWT emas)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PartnerShipmentsStatusRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "items[] — GET /partner/shipments/:id shaklida; not_found[] — topilmagan id lar"
+          }
+        },
+        "summary": "Ko'p posilka holati (100 tagacha) — { items, not_found, failed }",
+        "tags": [
+          "Partner"
+        ]
+      }
+    },
     "/partner/shipments/{id}": {
       "get": {
         "operationId": "PartnerGatewayController_getShipment",
@@ -11921,6 +12119,53 @@
           }
         },
         "summary": "Shipment holati (status/tracking/cod)",
+        "tags": [
+          "Partner"
+        ]
+      },
+      "patch": {
+        "operationId": "PartnerGatewayController_updateShipment",
+        "parameters": [
+          {
+            "name": "X-Api-Key",
+            "in": "header",
+            "description": "Hamkor API kaliti (JWT emas)",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdatePartnerShipmentRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "{ shipment_id, status, cod_amount, total_price, ..., updated_fields }"
+          },
+          "404": {
+            "description": "Shipment topilmadi"
+          },
+          "409": {
+            "description": "Posilka holati bu o‘zgarishga ruxsat bermaydi"
+          }
+        },
+        "summary": "Shipment yangilash (narx/manzil/mahsulot/izoh). Qabul qilingan posilka narxi -> 409, yakuniy holat -> 409.",
         "tags": [
           "Partner"
         ]
@@ -13600,13 +13845,51 @@
             "example": 5000,
             "minimum": 0
           },
-          "paidAmount": {
-            "type": "number",
-            "example": 20000,
-            "minimum": 0
-          },
           "proofFileKeys": {
             "description": "Xarajat isboti uchun yuklangan fayl kalitlari (rasm/video). Market isbot talab qilsa va extraCost > 0 bo'lsa majburiy.",
+            "example": [
+              "proof-1700000000000-uuid-video.mp4"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "CancelOrderRequestDto": {
+        "type": "object",
+        "properties": {
+          "reason": {
+            "type": "string",
+            "enum": [
+              "CUSTOMER_NO_ANSWER",
+              "CUSTOMER_REFUSED",
+              "WRONG_ADDRESS",
+              "DEFECTIVE_PRODUCT",
+              "PRICE_DISPUTE",
+              "OTHER"
+            ],
+            "example": "CUSTOMER_REFUSED",
+            "description": "Bekor qilish sababi (yopiq ro'yxat). OTHER bo'lsa comment majburiy. Berilmasa comment majburiy va sabab OTHER deb yoziladi (eski klientlar)."
+          },
+          "comment": {
+            "type": "string",
+            "example": "Mijoz telefonni ko‘tarmadi"
+          },
+          "extraCost": {
+            "type": "number",
+            "example": 5000,
+            "minimum": 0
+          },
+          "paidAmount": {
+            "type": "number",
+            "example": 0,
+            "deprecated": true,
+            "description": "ESKIRGAN — bekor qilishda to'lov bo'lmaydi. Faqat 0 qabul qilinadi (eski UI uchun); boshqa qiymat 400 (T0UGh8bL)."
+          },
+          "proofFileKeys": {
+            "description": "Xarajat isboti uchun yuklangan fayl kalitlari (rasm/video). Market isbot talab qilsa majburiy.",
             "example": [
               "proof-1700000000000-uuid-video.mp4"
             ],
@@ -15246,6 +15529,16 @@
             "type": "boolean",
             "example": true
           },
+          "webhook_enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "Kiruvchi webhook (DOZ6dtJn). false — hodisa jurnalga yoziladi, lekin qo'llanmaydi. Master (is_active) o'chiq bo'lsa ta'sir qilmaydi."
+          },
+          "reconcile_enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "Davriy solishtiruvchi (DOZ6dtJn) — ochiq posilka holatini tashuvchidan so'raydi. Master o'chiq bo'lsa ta'sir qilmaydi."
+          },
           "field_mapping": {
             "type": "object"
           },
@@ -15469,6 +15762,16 @@
           "is_active": {
             "type": "boolean",
             "example": true
+          },
+          "webhook_enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "Kiruvchi webhook (DOZ6dtJn). false — hodisa jurnalga yoziladi, lekin qo'llanmaydi. Master (is_active) o'chiq bo'lsa ta'sir qilmaydi."
+          },
+          "reconcile_enabled": {
+            "type": "boolean",
+            "example": true,
+            "description": "Davriy solishtiruvchi (DOZ6dtJn) — ochiq posilka holatini tashuvchidan so'raydi. Master o'chiq bo'lsa ta'sir qilmaydi."
           },
           "field_mapping": {
             "type": "object"
@@ -16379,7 +16682,8 @@
           },
           "phone": {
             "type": "string",
-            "example": "+998901234567"
+            "example": "+998901234567",
+            "description": "O'zbekiston raqami. Qabul qilinadi: +998XXXXXXXXX, 998XXXXXXXXX, 0XXXXXXXXX, XXXXXXXXX (probel/qavs/defis bilan ham) — Elchi +998XXXXXXXXX ga keltiradi."
           }
         },
         "required": [
@@ -16489,6 +16793,65 @@
           "district_id",
           "cod_amount"
         ]
+      },
+      "PartnerShipmentsStatusRequestDto": {
+        "type": "object",
+        "properties": {
+          "shipment_ids": {
+            "example": [
+              "1251133",
+              "0bc26034-fe57-4175-81ef-0d9990e84834"
+            ],
+            "description": "shipment_id yoki external_order_id — 100 tagacha. Javob elementlari GET /partner/shipments/:id bilan bir xil.",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "shipment_ids"
+        ]
+      },
+      "UpdatePartnerShipmentRequestDto": {
+        "type": "object",
+        "properties": {
+          "cod_amount": {
+            "type": "number",
+            "example": 180000,
+            "description": "Kuryer yig'adigan summa (0 = to'liq prepaid)"
+          },
+          "subtotal": {
+            "type": "number",
+            "description": "Buyurtma qiymati (total_price)"
+          },
+          "address": {
+            "type": "string"
+          },
+          "region_id": {
+            "type": "string"
+          },
+          "district_id": {
+            "type": "string"
+          },
+          "where_deliver": {
+            "type": "string",
+            "enum": [
+              "center",
+              "address"
+            ]
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ShipmentItemDto"
+            }
+          },
+          "comment": {
+            "type": "string",
+            "example": "Eshik kodi 1234"
+          }
+        }
       },
       "CreatePartnerRequestDto": {
         "type": "object",

@@ -10,12 +10,13 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Max,
   Min,
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
-import { Order_status, Where_deliver } from '@app/common';
+import { CancelReason, Order_status, Where_deliver } from '@app/common';
 
 enum OrderSourceDto {
   INTERNAL = 'internal',
@@ -600,16 +601,68 @@ export class SellOrderRequestDto {
   @IsNumber()
   extraCost?: number;
 
-  @ApiPropertyOptional({ example: 20000, minimum: 0 })
-  @IsOptional()
-  @Transform(({ value }) => parseFormattedNumber(value))
-  @IsNumber()
-  paidAmount?: number;
+  /**
+   * `paidAmount` YO'Q (ZsPLevZZ): sotuvda u buyurtmani "to'landi" qilib
+   * qo'yardi, lekin hech qanday kassa oyog'i yozilmasdi — ikki daftar
+   * ajralardi. Marketga to'lov: `/finance/cashbox/payment/market`.
+   */
 
   @ApiPropertyOptional({
     type: [String],
     description:
       "Xarajat isboti uchun yuklangan fayl kalitlari (rasm/video). Market isbot talab qilsa va extraCost > 0 bo'lsa majburiy.",
+    example: ['proof-1700000000000-uuid-video.mp4'],
+  })
+  @IsOptional()
+  @Transform(({ value }) => parseStringArray(value))
+  @IsArray()
+  @IsString({ each: true })
+  proofFileKeys?: string[];
+}
+
+export class CancelOrderRequestDto {
+  @ApiPropertyOptional({
+    enum: CancelReason,
+    example: CancelReason.CUSTOMER_REFUSED,
+    description:
+      "Bekor qilish sababi (yopiq ro'yxat). OTHER bo'lsa comment majburiy. " +
+      'Berilmasa comment majburiy va sabab OTHER deb yoziladi (eski klientlar).',
+  })
+  @IsOptional()
+  @IsEnum(CancelReason)
+  reason?: CancelReason;
+
+  @ApiPropertyOptional({ example: 'Mijoz telefonni ko‘tarmadi' })
+  @IsOptional()
+  @IsString()
+  comment?: string;
+
+  @ApiPropertyOptional({ example: 5000, minimum: 0 })
+  @IsOptional()
+  @Transform(({ value }) => parseFormattedNumber(value))
+  @IsNumber()
+  extraCost?: number;
+
+  @ApiPropertyOptional({
+    example: 0,
+    deprecated: true,
+    description:
+      "ESKIRGAN — bekor qilishda to'lov bo'lmaydi. Faqat 0 qabul qilinadi (eski UI uchun); boshqa qiymat 400 (T0UGh8bL).",
+  })
+  @IsOptional()
+  @Transform(({ value }) => parseFormattedNumber(value))
+  @IsNumber()
+  @Min(0)
+  @Max(0, {
+    message:
+      "paidAmount bekor qilishda qabul qilinmaydi — faqat 0 bo'lishi mumkin",
+  })
+  paidAmount?: number;
+
+  @ApiPropertyOptional({
+    type: [String],
+    description:
+      'Xarajat isboti uchun yuklangan fayl kalitlari (rasm/video). Market isbot talab qilsa majburiy.',
     example: ['proof-1700000000000-uuid-video.mp4'],
   })
   @IsOptional()

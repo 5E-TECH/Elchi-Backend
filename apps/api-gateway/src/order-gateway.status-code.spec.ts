@@ -125,6 +125,49 @@ describe('OrderGatewayController — HTTP kodi javob tanasiga mos', () => {
     expect((res.body as { statusCode: number }).statusCode).toBe(404);
   });
 
+  /**
+   * n9o0KYd5 — receive-by-scan resurs yaratmaydi: HTTP 200 (201 emas), tana
+   * bilan bir xil. "Hech narsa qabul qilinmadi" holati HTTP koddan emas,
+   * `data.ok=false` dan bilinadi.
+   */
+  it('receive-by-scan: hech narsa mos kelmasa ham HTTP 200 == tana, ok=false', async () => {
+    const body = {
+      statusCode: 200,
+      message: 'No scannable parcels matched',
+      data: {
+        ok: false,
+        partial: false,
+        received: 0,
+        unmatched: [{ token: 'ZZZZ', reason: 'tizimda topilmadi' }],
+      },
+    };
+    orderSend.mockReturnValue(of(body));
+
+    const res = await request(http())
+      .post('/orders/external/receive-by-scan')
+      .send({ tokens: ['ZZZZ'] });
+
+    expect(res.status).toBe(200);
+    expect((res.body as { statusCode: number }).statusCode).toBe(res.status);
+    expect((res.body as typeof body).data.ok).toBe(false);
+  });
+
+  it('receive-by-scan: muvaffaqiyatli qabul ham HTTP 200 (201 emas)', async () => {
+    orderSend.mockReturnValue(
+      of({
+        statusCode: 200,
+        message: 'Scanned parcels received',
+        data: { ok: true, partial: false, received: 6, unmatched: [] },
+      }),
+    );
+
+    const res = await request(http())
+      .post('/orders/external/receive-by-scan')
+      .send({ tokens: ['A', 'B'] });
+
+    expect(res.status).toBe(200);
+  });
+
   it('kontrakt: interceptor butun kontrollerga (barcha order endpointlariga) ulangan', () => {
     const interceptors =
       (Reflect.getMetadata('__interceptors__', OrderGatewayController) as

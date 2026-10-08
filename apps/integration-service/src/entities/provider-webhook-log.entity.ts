@@ -6,7 +6,11 @@ export type WebhookLogStatus =
   | 'verified'
   | 'rejected'
   | 'processed'
-  | 'failed';
+  | 'failed'
+  /** Ulanishda kiruvchi webhook o'chiq — jurnalga yozildi, qo'llanmadi. */
+  | 'skipped_disabled'
+  /** Qayta ishlash davom etmoqda — ikki parallel qayta ishlashni to'sadi. */
+  | 'reprocessing';
 
 /**
  * Audit + replay-protection log for inbound provider webhooks.

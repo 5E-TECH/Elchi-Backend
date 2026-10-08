@@ -1,6 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
+import { normalizeUzPhone } from '@app/common';
 import {
+  ArrayMaxSize,
+  ArrayNotEmpty,
   IsArray,
   IsIn,
   IsInt,
@@ -22,9 +25,28 @@ export class ShipmentCustomerDto {
   @IsNotEmpty()
   name!: string;
 
-  @ApiProperty({ example: '+998901234567' })
+  /**
+   * ⚠️ TELEFON NORMALLASHTIRILADI (zfPNDCCr).
+   *
+   * Ilgari faqat `@IsString()` edi: "not-a-phone" ham o'tardi, mijoz esa
+   * telefon bo'yicha XOM satrda idempotent bo'lgani uchun bitta odam
+   * formatiga qarab ("998900000001", "900000001", "+998 90 000 00 01") Elchida
+   * uch xil mijozga bo'linardi. Endi qabul qilinadigan har shakl kanonik
+   * `+998XXXXXXXXX` ga keltiriladi, yaroqsizi 400.
+   */
+  @ApiProperty({
+    example: '+998901234567',
+    description:
+      "O'zbekiston raqami. Qabul qilinadi: +998XXXXXXXXX, 998XXXXXXXXX, " +
+      '0XXXXXXXXX, XXXXXXXXX (probel/qavs/defis bilan ham) — Elchi ' +
+      '+998XXXXXXXXX ga keltiradi.',
+  })
+  @Transform(({ value }) => normalizeUzPhone(value) ?? value)
   @IsString()
   @IsNotEmpty()
+  @Matches(/^\+998\d{9}$/, {
+    message: "customer.phone noto'g'ri — +998XXXXXXXXX formatidagi raqam kerak",
+  })
   phone!: string;
 }
 
@@ -197,4 +219,84 @@ export class CreatePartnerShipmentRequestDto {
   @IsString()
   @MaxLength(1000)
   comment?: string;
+}
+
+/**
+ * `PATCH /partner/shipments/:id` — yuborilgan posilkani YANGILASH (Fnu6PRya).
+ *
+ * Ilgari yangilash yo'li umuman yo'q edi: takroriy `POST` idempotent bo'lib
+ * birinchi narx/manzilni abadiy muzlatardi va hamkorda o'zgargan narx kuryerga
+ * hech qachon yetmasdi. Barcha maydon ixtiyoriy — faqat yuborilgani o'zgaradi.
+ *
+ * Qoidalar Elchi'ning ichki tahrir qoidalari bilan AYNI:
+ *   • narx (`cod_amount`/`subtotal`) va `items` — faqat posilka Elchi'da
+ *     QABUL QILINMAGUNCHA (`created`/`new`), aks holda 409;
+ *   • manzil — filialga jo'natilmaguncha;
+ *   • yakuniy holatdagi (sotilgan/bekor/qaytarilgan) posilka — 409.
+ */
+export class UpdatePartnerShipmentRequestDto {
+  @ApiPropertyOptional({
+    example: 180000,
+    description: "Kuryer yig'adigan summa (0 = to'liq prepaid)",
+  })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  cod_amount?: number;
+
+  @ApiPropertyOptional({ description: 'Buyurtma qiymati (total_price)' })
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  subtotal?: number;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  address?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  region_id?: string;
+
+  @ApiPropertyOptional()
+  @IsOptional()
+  @IsString()
+  @IsNotEmpty()
+  district_id?: string;
+
+  @ApiPropertyOptional({ enum: ['center', 'address'] })
+  @IsOptional()
+  @IsIn(['center', 'address'])
+  where_deliver?: string;
+
+  @ApiPropertyOptional({ type: [ShipmentItemDto] })
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ShipmentItemDto)
+  items?: ShipmentItemDto[];
+
+  @ApiPropertyOptional({ example: 'Eshik kodi 1234' })
+  @IsOptional()
+  @IsString()
+  @MaxLength(1000)
+  comment?: string;
+}
+
+/** `POST /partner/shipments/status` — ko'p posilka holati bitta so'rovda (M4ViM9jz). */
+export class PartnerShipmentsStatusRequestDto {
+  @ApiProperty({
+    type: [String],
+    example: ['1251133', '0bc26034-fe57-4175-81ef-0d9990e84834'],
+    description:
+      'shipment_id yoki external_order_id — 100 tagacha. Javob elementlari GET /partner/shipments/:id bilan bir xil.',
+  })
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayMaxSize(100)
+  @IsString({ each: true })
+  @IsNotEmpty({ each: true })
+  shipment_ids!: string[];
 }

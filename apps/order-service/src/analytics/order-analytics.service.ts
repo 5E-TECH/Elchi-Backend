@@ -1187,6 +1187,131 @@ export class OrderAnalyticsService {
     };
   }
 
+  /**
+   * BEKOR QILISH SABABLARI KESIMIDA STATISTIKA (PUvKXWVw).
+   *
+   * Sabab endi yopiq ro'yxatdan `return_reason` ga yoziladi — shu hisobot
+   * "qaysi market/tuman/kuryer qanday sabab bilan qaytaryapti" savoliga javob
+   * beradi. Sana oynasi buyurtma yaratilgan vaqtga emas, `cancelled` ga
+   * O'TGAN vaqtga (order_tracking) qo'llanadi. Qoida kiritilishidan oldingi
+   * bekor qilishlar `UNKNOWN` bo'lib chiqadi.
+   *
+   * SQL GROUP BY — qatorlar xotiraga yuklanmaydi, shuning uchun oyna
+   * `MAX_ANALYTICS_SPAN_MS` bilan qisqartirilmaydi.
+   */
+  async getCancelReasonStats(input: {
+    startDate?: string;
+    endDate?: string;
+    market_id?: string;
+    branch_id?: string;
+    group_by?: 'market' | 'region' | 'courier';
+  }) {
+    const groupColumns: Record<string, string> = {
+      market: 'o.market_id',
+      region: 'o.region_id',
+      courier: 'o.courier_id',
+    };
+    const groupBy = input?.group_by ? groupColumns[input.group_by] : null;
+    if (input?.group_by && !groupBy) {
+      throw new RpcException({
+        statusCode: 400,
+        message:
+          "group_by faqat 'market', 'region' yoki 'courier' bo'lishi mumkin",
+      });
+    }
+    const parseDate = (value?: string) => {
+      if (!value) return null;
+      const date = new Date(value);
+      if (Number.isNaN(date.getTime())) {
+        throw new RpcException({
+          statusCode: 400,
+          message: `Sana noto'g'ri formatda: ${value}`,
+        });
+      }
+      return date;
+    };
+    const from = parseDate(input?.startDate);
+    const to = parseDate(input?.endDate);
+
+    const reasonExpression = "COALESCE(o.return_reason, 'UNKNOWN')";
+    const qb = this.orderRepo
+      .createQueryBuilder('o')
+      .where('o.isDeleted = :isDeleted', { isDeleted: false })
+      .andWhere('o.status IN (:...statuses)', {
+        statuses: [
+          Order_status.CANCELLED,
+          Order_status.CANCELLED_SENT,
+          Order_status.RETURNED_TO_MARKET,
+        ],
+      })
+      .select(reasonExpression, 'reason')
+      .addSelect('COUNT(*)', 'count')
+      .groupBy(reasonExpression);
+
+    if (from || to) {
+      const sub = qb
+        .subQuery()
+        .select('1')
+        .from(OrderTracking, 't')
+        .where('t.order_id = o.id')
+        .andWhere('t.to_status = :cancelledStatus');
+      if (from) sub.andWhere('t.created_at >= :from');
+      if (to) sub.andWhere('t.created_at <= :to');
+      qb.andWhere(`EXISTS ${sub.getQuery()}`, {
+        cancelledStatus: Order_status.CANCELLED,
+        ...(from ? { from } : {}),
+        ...(to ? { to } : {}),
+      });
+    }
+    if (input?.market_id) {
+      qb.andWhere('o.market_id = :marketId', {
+        marketId: String(input.market_id),
+      });
+    }
+    if (input?.branch_id) {
+      qb.andWhere(
+        'COALESCE(o.home_branch_id, o.branch_id, o.holder_branch_id) = :branchId',
+        { branchId: String(input.branch_id) },
+      );
+    }
+    if (groupBy) {
+      qb.addSelect(groupBy, 'key').addGroupBy(groupBy);
+    }
+
+    const rows = await qb.getRawMany<{
+      reason: string;
+      count: string;
+      key?: string | null;
+    }>();
+    const byReason = new Map<string, number>();
+    for (const row of rows) {
+      byReason.set(
+        row.reason,
+        (byReason.get(row.reason) ?? 0) + (Number(row.count) || 0),
+      );
+    }
+    const total = Array.from(byReason.values()).reduce((a, b) => a + b, 0);
+    return {
+      total,
+      by_reason: Array.from(byReason.entries())
+        .map(([reason, count]) => ({ reason, count }))
+        .sort((a, b) => b.count - a.count),
+      ...(groupBy
+        ? {
+            group_by: input.group_by,
+            rows: rows.map((row) => ({
+              reason: row.reason,
+              key:
+                row.key !== null && row.key !== undefined
+                  ? String(row.key)
+                  : null,
+              count: Number(row.count) || 0,
+            })),
+          }
+        : {}),
+    };
+  }
+
   async getOverviewStats(
     startDate?: string,
     endDate?: string,

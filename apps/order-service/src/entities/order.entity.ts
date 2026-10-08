@@ -308,6 +308,10 @@ export class Order extends BaseEntity {
   @Column({ type: 'varchar', nullable: true })
   address!: string | null;
 
+  // Skaner qidiruvi shu ustun bo'yicha (D148eHMA) — migratsiya 1716000000058.
+  @Index('IDX_ORDER_QR_CODE_TOKEN', {
+    where: '"qr_code_token" IS NOT NULL',
+  })
   @Column({ type: 'varchar', nullable: true })
   qr_code_token!: string | null;
 

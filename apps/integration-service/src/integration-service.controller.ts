@@ -262,6 +262,42 @@ export class IntegrationServiceController {
     );
   }
 
+  @MessagePattern({ cmd: 'integration.partner.update_shipment' })
+  updatePartnerShipment(
+    @Payload()
+    data: {
+      partner_id?: string;
+      shipment_id?: string;
+      cod_amount?: number;
+      subtotal?: number;
+      address?: string | null;
+      region_id?: string | null;
+      district_id?: string | null;
+      where_deliver?: string;
+      items?: Array<{
+        name?: string;
+        quantity?: number;
+        external_product_id?: string | null;
+      }>;
+      comment?: string | null;
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.updatePartnerShipment(data ?? {}),
+    );
+  }
+
+  @MessagePattern({ cmd: 'integration.partner.get_shipments_bulk' })
+  getPartnerShipmentsBulk(
+    @Payload() data: { partner_id?: string; shipment_ids?: string[] },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.getPartnerShipmentsBulk(data ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'integration.partner.cancel_shipment' })
   cancelPartnerShipment(
     @Payload() data: { partner_id?: string; shipment_id?: string },
@@ -404,6 +440,46 @@ export class IntegrationServiceController {
   listWebhookLogs(@Payload() data: any, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.integrationService.listWebhookLogs(data?.query ?? data ?? {}),
+    );
+  }
+
+  /** Xd88lHGq — bitta yozuv, maskalangan payload (xom tana hech qachon). */
+  @MessagePattern({ cmd: 'integration.webhook.log_detail' })
+  getWebhookLogDetail(
+    @Payload()
+    data: {
+      id?: string;
+      unmasked?: boolean;
+      requester?: { id?: string | null; roles?: string[] };
+    },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.getWebhookLogDetail(data ?? {}),
+    );
+  }
+
+  /** Xd88lHGq — imzosi to'g'ri, hali qo'llanmagan hodisani qayta ishlash. */
+  @MessagePattern({ cmd: 'integration.webhook.reprocess' })
+  reprocessWebhookLog(
+    @Payload()
+    data: { id?: string; requester?: { id?: string | null; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.reprocessWebhookLog(data ?? {}),
+    );
+  }
+
+  /** DOZ6dtJn — "Hoziroq tenglashtirish". */
+  @MessagePattern({ cmd: 'integration.connection.reconcile_now' })
+  reconcileNow(
+    @Payload()
+    data: { id?: string; requester?: { id?: string | null; roles?: string[] } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.integrationService.reconcileNow(data ?? {}),
     );
   }
 

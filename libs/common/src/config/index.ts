@@ -391,6 +391,26 @@ export const integrationValidationSchema = Joi.object({
     .description(
       'Max items processed per tick. Higher = lower latency under burst, more DB load per tick.',
     ),
+  // Ochiq posilkalar solishtiruvchisi (DOZ6dtJn). HA-safe: alohida
+  // pg_try_advisory_lock (reconcileDueIntegrations) ostida ishlaydi.
+  INTEGRATION_RECONCILE_CRON_ENABLED: Joi.boolean()
+    .truthy('true', '1', 'yes')
+    .falsy('false', '0', 'no')
+    .default(true)
+    .description(
+      "Master switch for the periodic reconciler. false — only manual 'Hoziroq tenglashtirish' works.",
+    ),
+  INTEGRATION_RECONCILE_CRON_EXPR: Joi.string()
+    .default('0 */15 * * * *')
+    .description(
+      'Cron expression for the reconcile tick. Default: every 15 minutes.',
+    ),
+  INTEGRATION_RECONCILE_BATCH_SIZE: Joi.number()
+    .integer()
+    .min(1)
+    .max(1000)
+    .default(200)
+    .description('Max open shipments queried per integration per tick.'),
 });
 
 export const analyticsValidationSchema = Joi.object({

@@ -367,6 +367,25 @@ export class ApiGatewayController {
       }
     }
 
+    /**
+     * ⚠️ `branch_id` JIMGINA E'TIBORSIZ QOLDIRILMAYDI (Andijon E2E, wUHQrZko).
+     *
+     * Filial so'rovdan emas, so'rovchidan aniqlanadi (SA/admin — HQ, menejer —
+     * o'z filiali). Ilgari boshqa filial yuborilsa 201 qaytar, kuryer esa
+     * jimgina HQ'ga tushardi — keyin uni ko'chirish 409 berardi. Endi mos
+     * kelmasa ochiq 400; mos kelsa (menejer UI'si o'z filialini yuboradi)
+     * avvalgidek.
+     */
+    const requestedBranchId = String(dto.branch_id ?? '').trim();
+    if (requestedBranchId && requestedBranchId !== branchId) {
+      throw new BadRequestException(
+        isSystemPrivileged
+          ? "Admin/Superadmin uchun courier faqat HQ branch'da yaratiladi — " +
+              `branch_id=${requestedBranchId} qabul qilinmaydi`
+          : `Kuryer faqat o'z filialingizda yaratiladi — branch_id=${requestedBranchId} qabul qilinmaydi`,
+      );
+    }
+
     const branchResponse = await firstValueFrom(
       this.branchClient
         .send(
