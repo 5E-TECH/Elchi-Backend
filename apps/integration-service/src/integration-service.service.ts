@@ -7950,6 +7950,12 @@ export class IntegrationServiceService {
           requester_id: input?.requester?.id ?? null,
           provider: row.provider_slug,
         },
+        // Ijrochi ustunlarda bo'lmasa Activity log ekranida "kim ko'rdi"
+        // bo'sh chiqadi — PII ko'rish auditining asosiy savoli (Xd88lHGq).
+        ...this.auditActor({
+          id: input?.requester?.id ?? undefined,
+          roles: input?.requester?.roles,
+        }),
       });
     }
 
@@ -8083,6 +8089,10 @@ export class IntegrationServiceService {
         provider: integration.slug,
         delivery_id: row.delivery_id,
       },
+      ...this.auditActor({
+        id: input?.requester?.id ?? undefined,
+        roles: input?.requester?.roles,
+      }),
     });
 
     return successRes(

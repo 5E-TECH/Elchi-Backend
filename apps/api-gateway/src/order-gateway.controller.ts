@@ -90,6 +90,7 @@ import {
   Roles as RoleEnum,
   Where_deliver,
   matchesDeclaredType,
+  recordReceiveByScanOutcome,
   requestContext,
   type AiHealthState,
   type AiOrderExtractRequest,
@@ -2232,12 +2233,19 @@ export class OrderGatewayController {
           },
         )
         .pipe(timeout(15000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
-      }
-      throw error;
-    });
+    )
+      .then((response: { data?: { ok?: boolean; partial?: boolean } }) => {
+        // HTTP 200 "hech narsa qabul qilinmadi"ni ajratmaydi — alert uchun
+        // `receive_by_scan_total{outcome}` (n9o0KYd5).
+        recordReceiveByScanOutcome(response?.data);
+        return response;
+      })
+      .catch((error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Order service response timeout');
+        }
+        throw error;
+      });
   }
 
   @Post('external/receive')

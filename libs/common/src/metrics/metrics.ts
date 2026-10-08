@@ -1,5 +1,39 @@
 import { INestApplication } from '@nestjs/common';
-import { Registry, Histogram, Gauge, collectDefaultMetrics } from 'prom-client';
+import {
+  Registry,
+  Counter,
+  Histogram,
+  Gauge,
+  collectDefaultMetrics,
+} from 'prom-client';
+
+export type ReceiveByScanOutcome = 'ok' | 'partial' | 'none';
+
+/**
+ * receive-by-scan natijalari (n9o0KYd5). HTTP kodi har doim 200 (resurs
+ * yaratilmaydi), shuning uchun "hech narsa qabul qilinmadi" holatini HTTP
+ * metrikasi ko'rmaydi — alert shu hisoblagichga quriladi, masalan:
+ * `increase(receive_by_scan_total{outcome="none"}[15m]) > 20`.
+ * Global registry'ga emas, `registerMetrics` dagi ilova registry'siga ulanadi.
+ */
+export const receiveByScanTotal = new Counter({
+  name: 'receive_by_scan_total',
+  help: "receive-by-scan javoblari natija bo'yicha (none = hech narsa qabul qilinmadi)",
+  labelNames: ['outcome'],
+  registers: [],
+});
+
+export function recordReceiveByScanOutcome(
+  data: { ok?: boolean; partial?: boolean } | null | undefined,
+): ReceiveByScanOutcome {
+  const outcome: ReceiveByScanOutcome = !data?.ok
+    ? 'none'
+    : data.partial
+      ? 'partial'
+      : 'ok';
+  receiveByScanTotal.inc({ outcome });
+  return outcome;
+}
 
 interface MetricsRequest {
   method: string;
@@ -43,6 +77,7 @@ export function registerMetrics(
     help: 'Number of in-flight HTTP requests',
     registers: [register],
   });
+  register.registerMetric(receiveByScanTotal);
 
   app
     .getHttpAdapter()

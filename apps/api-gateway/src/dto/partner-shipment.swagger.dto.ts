@@ -45,7 +45,7 @@ export class ShipmentCustomerDto {
   @IsString()
   @IsNotEmpty()
   @Matches(/^\+998\d{9}$/, {
-    message: "customer.phone noto'g'ri — +998XXXXXXXXX formatidagi raqam kerak",
+    message: "phone noto'g'ri — +998XXXXXXXXX formatidagi raqam kerak",
   })
   phone!: string;
 }

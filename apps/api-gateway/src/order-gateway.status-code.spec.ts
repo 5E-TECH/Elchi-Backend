@@ -2,7 +2,11 @@ import { ExecutionContext, INestApplication } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import { of, throwError } from 'rxjs';
 import request from 'supertest';
-import { AllExceptionsFilter, RpcExceptionFilter } from '@app/common';
+import {
+  AllExceptionsFilter,
+  RpcExceptionFilter,
+  receiveByScanTotal,
+} from '@app/common';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { RolesGuard } from './auth/roles.guard';
 import { UserThrottlerGuard } from './auth/user-throttler.guard';
@@ -166,6 +170,41 @@ describe('OrderGatewayController — HTTP kodi javob tanasiga mos', () => {
       .send({ tokens: ['A', 'B'] });
 
     expect(res.status).toBe(200);
+  });
+
+  it('⭐ monitoring: receive-by-scan natijasi receive_by_scan_total{outcome} ga yoziladi (n9o0KYd5)', async () => {
+    const count = async (outcome: string) =>
+      (await receiveByScanTotal.get()).values.find(
+        (v) => v.labels.outcome === outcome,
+      )?.value ?? 0;
+    const before = {
+      none: await count('none'),
+      partial: await count('partial'),
+      ok: await count('ok'),
+    };
+
+    orderSend.mockReturnValueOnce(
+      of({ statusCode: 200, data: { ok: false, partial: false, received: 0 } }),
+    );
+    await request(http())
+      .post('/orders/external/receive-by-scan')
+      .send({ tokens: ['ZZZZ'] });
+    orderSend.mockReturnValueOnce(
+      of({ statusCode: 200, data: { ok: true, partial: true, received: 1 } }),
+    );
+    await request(http())
+      .post('/orders/external/receive-by-scan')
+      .send({ tokens: ['A', 'ZZZZ'] });
+    orderSend.mockReturnValueOnce(
+      of({ statusCode: 200, data: { ok: true, partial: false, received: 2 } }),
+    );
+    await request(http())
+      .post('/orders/external/receive-by-scan')
+      .send({ tokens: ['A', 'B'] });
+
+    expect(await count('none')).toBe(before.none + 1);
+    expect(await count('partial')).toBe(before.partial + 1);
+    expect(await count('ok')).toBe(before.ok + 1);
   });
 
   it('kontrakt: interceptor butun kontrollerga (barcha order endpointlariga) ulangan', () => {

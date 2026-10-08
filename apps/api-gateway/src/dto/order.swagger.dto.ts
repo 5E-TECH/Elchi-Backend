@@ -602,10 +602,28 @@ export class SellOrderRequestDto {
   extraCost?: number;
 
   /**
-   * `paidAmount` YO'Q (ZsPLevZZ): sotuvda u buyurtmani "to'landi" qilib
-   * qo'yardi, lekin hech qanday kassa oyog'i yozilmasdi — ikki daftar
+   * `paidAmount` sotuvda ISHLATILMAYDI (ZsPLevZZ): u buyurtmani "to'landi"
+   * qilib qo'yardi, lekin hech qanday kassa oyog'i yozilmasdi — ikki daftar
    * ajralardi. Marketga to'lov: `/finance/cashbox/payment/market`.
+   * Maydon butunlay olib tashlansa `forbidNonWhitelisted` `paidAmount: 0`
+   * yuboradigan eski klientlarni ham 400 bilan yiqitardi — shuning uchun
+   * faqat 0 qabul qilinadi (CancelOrderRequestDto bilan bir xil).
    */
+  @ApiPropertyOptional({
+    example: 0,
+    deprecated: true,
+    description:
+      "ESKIRGAN — sotuvda to'lov qabul qilinmaydi. Faqat 0 qabul qilinadi (eski klientlar uchun); boshqa qiymat 400 (ZsPLevZZ).",
+  })
+  @IsOptional()
+  @Transform(({ value }) => parseFormattedNumber(value))
+  @IsNumber()
+  @Min(0)
+  @Max(0, {
+    message:
+      "paidAmount sotuvda qabul qilinmaydi — marketga to'lov /finance/cashbox/payment/market orqali",
+  })
+  paidAmount?: number;
 
   @ApiPropertyOptional({
     type: [String],
