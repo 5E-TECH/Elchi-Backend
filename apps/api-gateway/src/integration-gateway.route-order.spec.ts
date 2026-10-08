@@ -154,4 +154,47 @@ describe('IntegrationGatewayController — id shakli', () => {
     expect(res.status).toBe(200);
     expect(send).toHaveBeenCalled();
   });
+
+  type RpcCall = [{ cmd: string }, Record<string, unknown>];
+  const lastCall = () => send.mock.calls.at(-1) as RpcCall | undefined;
+  const cmdOf = () => lastCall()?.[0].cmd;
+
+  /**
+   * Xd88lHGq / DOZ6dtJn — yangi marshrutlar `:id` ga tushmaydi. Auth bu
+   * yerda sinalmaydi (guard'lar o'chirilgan), shuning uchun maskasiz
+   * ko'rishdagi rol tekshiruvi `req.user` siz — admin sifatida (403).
+   */
+  it('TC9: GET webhook-logs/:logId -> log_detail (maskalangan)', async () => {
+    const res = await request(http()).get('/integrations/webhook-logs/77');
+
+    expect(res.status).toBe(200);
+    expect(cmdOf()).toBe('integration.webhook.log_detail');
+    expect(lastCall()?.[1]).toMatchObject({ id: '77', unmasked: false });
+  });
+
+  it('TC10: unmasked=true superadminsiz — 403, servisga bormaydi', async () => {
+    const res = await request(http()).get(
+      '/integrations/webhook-logs/77?unmasked=true',
+    );
+
+    expect(res.status).toBe(403);
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it('TC11: POST webhook-logs/:logId/reprocess -> reprocess, HTTP 200', async () => {
+    const res = await request(http()).post(
+      '/integrations/webhook-logs/77/reprocess',
+    );
+
+    expect(res.status).toBe(200);
+    expect(cmdOf()).toBe('integration.webhook.reprocess');
+  });
+
+  it('TC12: POST :id/reconcile-now -> reconcile_now, HTTP 200', async () => {
+    const res = await request(http()).post('/integrations/5/reconcile-now');
+
+    expect(res.status).toBe(200);
+    expect(cmdOf()).toBe('integration.connection.reconcile_now');
+    expect(lastCall()?.[1]).toMatchObject({ id: '5' });
+  });
 });

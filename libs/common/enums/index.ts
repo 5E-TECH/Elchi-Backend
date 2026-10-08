@@ -143,6 +143,22 @@ export enum Order_status {
   CLOSED = 'closed',
 }
 
+/**
+ * Bekor qilish sababi — YOPIQ ro'yxat (Andijon E2E, PUvKXWVw).
+ *
+ * Ilgari sabab erkin, ixtiyoriy matn edi va bekor qilishlarni tahlil qilib
+ * bo'lmasdi. Kod `orders.return_reason` ga yoziladi; `OTHER` da erkin matn
+ * (`comment`) majburiy.
+ */
+export enum CancelReason {
+  CUSTOMER_NO_ANSWER = 'CUSTOMER_NO_ANSWER',
+  CUSTOMER_REFUSED = 'CUSTOMER_REFUSED',
+  WRONG_ADDRESS = 'WRONG_ADDRESS',
+  DEFECTIVE_PRODUCT = 'DEFECTIVE_PRODUCT',
+  PRICE_DISPUTE = 'PRICE_DISPUTE',
+  OTHER = 'OTHER',
+}
+
 export enum Cashbox_type {
   MAIN = 'main',
   FOR_COURIER = 'couriers',

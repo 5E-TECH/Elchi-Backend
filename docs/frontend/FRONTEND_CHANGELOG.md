@@ -23,6 +23,55 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-07 — Andijon E2E va integratsiya kartalari (6-oktabr muddatli)
+
+> Backend avval deploy qilinadi; hozirgi UI buzilmaydi (pastdagi har yozuvda
+> "eski UI" xulqi aytilgan). `openapi.json` qayta generatsiya qilindi.
+
+- ✏️ [order] **`POST /orders/cancel/:id` — bekor qilish sababi** (PUvKXWVw). Yangi `reason`
+  (yopiq ro'yxat): `CUSTOMER_NO_ANSWER` | `CUSTOMER_REFUSED` | `WRONG_ADDRESS` |
+  `DEFECTIVE_PRODUCT` | `PRICE_DISPUTE` | `OTHER`. `OTHER` bo'lsa `comment` majburiy. Sabab ham,
+  izoh ham bo'lmasa — **400**. `reason` yuborilmasa-yu izoh bo'lsa — `OTHER` deb yoziladi (eski
+  UI shunday ishlayveradi). Kod `return_reason` ga yoziladi. → **Frontendda:** 🔧 CancelModal'ga
+  sabab `<select>` qo'shing, sabab tanlanmaguncha tugma disabled; `OTHER` da izoh majburiy.
+- ✏️ [order] **`paidAmount`** (ZsPLevZZ, T0UGh8bL): `POST /orders/sell/:id` — maydon **olib
+  tashlandi** (whitelist 400; u buyurtmani "to'landi" qilardi, kassaga hech narsa yozilmasdi).
+  `POST /orders/cancel/:id` — faqat `0` qabul qilinadi (eski UI shuni yuboradi), boshqa qiymat 400.
+  → **Frontendda:** 🔧 CancelModal'dan "To'langan summa" maydonini olib tashlang; SellModal'ga
+  qo'shmang — marketga to'lov `/finance/cashbox/payment/market` orqali.
+- ✏️ [order] **`POST /orders/partly-sell/:id`** (UlhtEpsI): hamma qator 0 bo'lsa **400** ("kamida
+  bitta mahsulot sotilishi kerak") — ilgari faqat frontendda (`canDecreaseItem`) edi. 🟢
+- ✏️ [order] **`POST /orders/external/receive-by-scan`** (n9o0KYd5): HTTP **200** (201 emas), tana
+  bilan bir xil. `data.ok` (`false` — hech narsa qabul qilinmadi) va `data.partial` qo'shildi. 🟢
+- 🟢 [order] Bekor qilingan buyurtmada `to_be_paid` endi **0** (pLmAsEsj; eski qatorlar migratsiya
+  bilan tozalanadi). Skanerlab qabulda `last_handover_at/by` va ushlovchi yoziladi (rTzcjrdo).
+- 🆕 [order] **`GET /orders/cancel-reasons/stats`** (SA/admin; market — o'zinikini, menejer — o'z
+  filialini): `?startDate&endDate&market_id&branch_id&group_by=market|region|courier` →
+  `{ total, by_reason[], rows[]? }`. Sana — bekor qilingan vaqt bo'yicha.
+- ✏️ [identity] **`POST /couriers`** (wUHQrZko): `branch_id` so'rovchining filialiga (SA/admin —
+  HQ) mos kelmasa **400** — ilgari jimgina e'tiborsiz qolardi. Menejer UI'si o'z filialini
+  yuboradi — o'zgarish shart emas. 🟢
+- ✏️ [finance] **`GET /finance/cashbox/financial-balanse`** (03avx8hG): `data.branches.cashExceedingPayable[]`
+  — kassasi "berilishi kerak"dan ko'p filiallar (`branch_id, cashbox_balance, payable, excess`).
+  Holat formulasi o'zgarmadi. → **Frontendda:** nazorat ro'yxati sifatida ko'rsatish mumkin.
+- 🆕 [integration] **Ish rejimi** (DOZ6dtJn): ulanishda `webhook_enabled`, `reconcile_enabled`
+  (`PATCH /integrations/:id` orqali, ikkalasi ham sukut `true`) va `last_reconcile_at`.
+  `POST /integrations/:id/reconcile-now` — "Hoziroq tenglashtirish" (`{ checked, applied,
+  unchanged, unmapped, failed, skipped, last_reconcile_at }`; master o'chiq yoki boshqa
+  solishtiruv ishlayotgan bo'lsa 409). Webhook o'chiq bo'lsa jurnalda yangi holat
+  `skipped_disabled`. Tashuvchidan holat so'rash uchun `status_sync_config.status_query =
+  { endpoint, method, status_path, ... }` sozlanadi. → **Frontendda:** 🔧 ConnectionControl
+  qator-ro'yxati (karta tavsifiga qarang).
+- 🆕 [integration] **Webhook payload ko'rgichi** (Xd88lHGq): `GET /integrations/webhook-logs/:logId`
+  — maskalangan `payload` (telefon `***7434`, ism bosh harflar, manzil shahar darajasi),
+  `payload_note` (tana JSON bo'lmasa), `can_reprocess` + `reprocess_blocked_reason`,
+  `signature_note`. `?unmasked=true` — faqat superadmin (admin 403), ko'rish jurnalga yoziladi.
+  `POST /integrations/webhook-logs/:logId/reprocess` — 409 sababi bilan. Xom `raw_body` hech qachon
+  qaytmaydi. → **Frontendda:** 🔧 ConnectionLog'ga Eye (Modal) va RotateCw tugmalari.
+- 🆕 [partner] `PATCH /partner/shipments/:id`, `POST /partner/shipments/status` (100 tagacha),
+  idempotent `POST /partner/shipments` javobida `cod_amount`, `total_price`, `mismatched_fields`;
+  `customer.phone` `+998XXXXXXXXX` ga normallashtiriladi. Tafsilot: `docs/public/MARKETPLACE_API.md` §5.
+
 ### 2026-10-01 — ishga tushirish kuni: fix3 tuzatishlari
 
 > Backend audit tuzatishlari (fix3 + fix3b) va ularga mos Elchi-Frontend o'zgarishlari.

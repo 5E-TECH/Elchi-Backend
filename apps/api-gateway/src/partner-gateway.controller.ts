@@ -7,6 +7,7 @@ import {
   Inject,
   NotFoundException,
   Param,
+  Patch,
   Post,
   Query,
   Req,
@@ -19,6 +20,7 @@ import { firstValueFrom, timeout } from 'rxjs';
 import { successRes } from '../../../libs/common/helpers/response';
 import {
   ApiBody,
+  ApiConflictResponse,
   ApiCreatedResponse,
   ApiHeader,
   ApiNotFoundResponse,
@@ -37,7 +39,11 @@ import {
 import { PartnerThrottlerGuard } from './auth/partner-throttler.guard';
 import { Public } from './auth/public.decorator';
 import { CreatePartnerMarketRequestDto } from './dto/partner-market.swagger.dto';
-import { CreatePartnerShipmentRequestDto } from './dto/partner-shipment.swagger.dto';
+import {
+  CreatePartnerShipmentRequestDto,
+  PartnerShipmentsStatusRequestDto,
+  UpdatePartnerShipmentRequestDto,
+} from './dto/partner-shipment.swagger.dto';
 
 /**
  * Elchi Partner API HTTP kirish nuqtasi (`/partner/*`).
@@ -406,6 +412,35 @@ export class PartnerGatewayController {
   }
 
   /**
+   * KO'P POSILKA HOLATI BITTA SO'ROVDA (M4ViM9jz) — hamkor solishtiruvchisi
+   * uchun. Har element `GET /partner/shipments/:id` bilan bir xil;
+   * topilmaganlari `not_found` da. Hech narsa yaratmaydi — 200.
+   */
+  @Post('shipments/status')
+  @HttpCode(200)
+  @ApiOperation({
+    summary: "Ko'p posilka holati (100 tagacha) — { items, not_found, failed }",
+  })
+  @ApiBody({ type: PartnerShipmentsStatusRequestDto })
+  @ApiOkResponse({
+    description:
+      'items[] — GET /partner/shipments/:id shaklida; not_found[] — topilmagan id lar',
+  })
+  getShipmentsStatus(
+    @Req() request: { partner: PartnerPrincipal },
+    @Body() dto: PartnerShipmentsStatusRequestDto,
+  ) {
+    return firstValueFrom(
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.get_shipments_bulk' },
+          { shipment_ids: dto.shipment_ids, partner_id: request.partner.id },
+        )
+        .pipe(timeout(PARTNER_SHIPMENT_TIMEOUT_MS)),
+    );
+  }
+
+  /**
    * Posilka holatini ko'rish (status / tracking / cod). `:id` = shipment_id
    * (C2.1 javobidagi qiymat). Faqat hamkorning o'z posilkasi ko'rinadi.
    */
@@ -429,6 +464,45 @@ export class PartnerGatewayController {
           { shipment_id: id, partner_id: request.partner.id },
         )
         .pipe(timeout(8000)),
+    );
+  }
+
+  /**
+   * Posilkani YANGILASH (Fnu6PRya) — narx, manzil, mahsulotlar, izoh.
+   *
+   * Ilgari bunday yo'l yo'q edi: takroriy `POST` idempotent bo'lib birinchi
+   * yuborilgan narxni abadiy muzlatardi va kuryer eski summani undirardi.
+   * Narx/mahsulot faqat Elchi qabul qilmaguncha, manzil filialga
+   * jo'natilmaguncha o'zgaradi; aks holda 409. Faqat hamkorning o'z posilkasi.
+   * Javob `GET /partner/shipments/:id` bilan bir xil shaklda.
+   */
+  @Patch('shipments/:id')
+  @ApiOperation({
+    summary:
+      'Shipment yangilash (narx/manzil/mahsulot/izoh). Qabul qilingan ' +
+      'posilka narxi -> 409, yakuniy holat -> 409.',
+  })
+  @ApiBody({ type: UpdatePartnerShipmentRequestDto })
+  @ApiOkResponse({
+    description:
+      '{ shipment_id, status, cod_amount, total_price, ..., updated_fields }',
+  })
+  @ApiNotFoundResponse({ description: 'Shipment topilmadi' })
+  @ApiConflictResponse({
+    description: 'Posilka holati bu o‘zgarishga ruxsat bermaydi',
+  })
+  updateShipment(
+    @Req() request: { partner: PartnerPrincipal },
+    @Param('id') id: string,
+    @Body() dto: UpdatePartnerShipmentRequestDto,
+  ) {
+    return firstValueFrom(
+      this.integrationClient
+        .send(
+          { cmd: 'integration.partner.update_shipment' },
+          { ...dto, shipment_id: id, partner_id: request.partner.id },
+        )
+        .pipe(timeout(PARTNER_SHIPMENT_TIMEOUT_MS)),
     );
   }
 

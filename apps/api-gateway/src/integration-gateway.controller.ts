@@ -3,8 +3,10 @@ import {
   Body,
   Controller,
   Delete,
+  ForbiddenException,
   Get,
   Header,
+  HttpCode,
   Inject,
   Injectable,
   Param,
@@ -362,6 +364,76 @@ export class IntegrationGatewayController {
       .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }
 
+  /**
+   * BITTA WEBHOOK YOZUVI — MASKALANGAN PAYLOAD (Xd88lHGq).
+   *
+   * Xom tana HECH QACHON qaytmaydi. `unmasked=true` faqat SUPERADMIN uchun
+   * (admin — 403) va bu ko'rishning o'zi jurnalga yoziladi.
+   * ⚠️ `@Get(':id')` dan OLDIN — aks holda 'webhook-logs' id deb o'qilardi.
+   */
+  @Get('webhook-logs/:logId')
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      'Bitta webhook yozuvi: maskalangan payload, qayta ishlash mumkinligi va sababi',
+  })
+  @ApiQuery({
+    name: 'unmasked',
+    required: false,
+    type: Boolean,
+    description: 'true — maskasiz (faqat superadmin; jurnalga yoziladi)',
+  })
+  webhookLogDetail(
+    @Param('logId', ParseIntegrationIdPipe) logId: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+    @Query('unmasked') unmasked?: string,
+  ) {
+    const wantsUnmasked = unmasked === 'true' || unmasked === '1';
+    if (
+      wantsUnmasked &&
+      !(req.user?.roles ?? [])
+        .map((role) => String(role).toLowerCase())
+        .includes(RoleEnum.SUPERADMIN)
+    ) {
+      throw new ForbiddenException(
+        "Maskasiz payload'ni faqat superadmin ko'ra oladi",
+      );
+    }
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.webhook.log_detail' },
+        {
+          id: logId,
+          unmasked: wantsUnmasked,
+          requester: this.auditActor(req),
+        },
+      )
+      .pipe(timeout(8000));
+  }
+
+  /**
+   * HODISANI QAYTA ISHLASH (Xd88lHGq) — imzosi to'g'ri va hali qo'llanmagan
+   * yozuv uchun. Natija shu yozuvga yoziladi (yangi qator ochilmaydi).
+   */
+  @Post('webhook-logs/:logId/reprocess')
+  @HttpCode(200)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      "Webhook hodisasini qayta ishlash (imzo noto'g'ri yoki allaqachon ishlangan -> 409)",
+  })
+  reprocessWebhookLog(
+    @Param('logId', ParseIntegrationIdPipe) logId: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.webhook.reprocess' },
+        { id: logId, requester: this.auditActor(req) },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+  }
+
   @Get('sync/history')
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({
@@ -518,6 +590,30 @@ export class IntegrationGatewayController {
           id,
           ...dto,
         },
+      )
+      .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
+  }
+
+  /**
+   * "HOZIROQ TENGLASHTIRISH" (DOZ6dtJn) — ochiq posilkalar holatini
+   * tashuvchidan hozir so'rash. Master o'chiq — 409; boshqa solishtiruv
+   * ishlayotgan bo'lsa — 409.
+   */
+  @Post(':id/reconcile-now')
+  @HttpCode(200)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiOperation({
+    summary:
+      'Hoziroq tenglashtirish: { checked, applied, unchanged, unmapped, failed, last_reconcile_at }',
+  })
+  reconcileNow(
+    @Param('id', ParseIntegrationIdPipe) id: string,
+    @Req() req: { user?: { sub?: string; roles?: string[] } },
+  ) {
+    return this.integrationClient
+      .send(
+        { cmd: 'integration.connection.reconcile_now' },
+        { id, requester: this.auditActor(req) },
       )
       .pipe(timeout(PROVIDER_RPC_TIMEOUT_MS));
   }

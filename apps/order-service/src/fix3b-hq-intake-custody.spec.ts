@@ -122,7 +122,11 @@ function makeSvc(
         .fn()
         .mockResolvedValue(opts.hqId === undefined ? HQ_ID : opts.hqId),
     },
-    custody: { createTrackingEvent: jest.fn().mockResolvedValue(undefined) },
+    custody: {
+      createTrackingEvent: jest.fn().mockResolvedValue(undefined),
+      createCustodyEvent: jest.fn().mockResolvedValue(undefined),
+      toTrackingRole: jest.fn((roles?: string[]) => roles?.[0] ?? 'system'),
+    },
     syncOrderToSearch: jest.fn().mockResolvedValue(undefined),
     activityLog: { log: jest.fn().mockResolvedValue(undefined) },
   });
@@ -134,7 +138,7 @@ function makeSvc(
     );
   const sentCmds = () =>
     rmqSend.mock.calls.map((call) => (call[1] as { cmd: string }).cmd);
-  return { s, receive, sentCmds, queryRunner };
+  return { s, receive, sentCmds, queryRunner, qb };
 }
 
 describe('fix3b — HQ qabuli filialda turgan buyurtmani rad etadi', () => {
@@ -212,5 +216,52 @@ describe('fix3b — HQ qabuli filialda turgan buyurtmani rad etadi', () => {
     expect(
       (h.s.lookup as { getHqBranchId: jest.Mock }).getHqBranchId,
     ).not.toHaveBeenCalled();
+  });
+
+  /**
+   * rTzcjrdo — qabul mas'uliyat zanjirini MUHRLAYDI: kim, qachon, kimga.
+   * Ilgari `last_handover_at` yaratilish vaqtida, `last_handover_by` null
+   * qolardi.
+   */
+  it('⭐ qabul last_handover_at/by va HQ ushlovchisini yozadi', async () => {
+    const h = makeSvc([HQ_HELD], { scope: null });
+    const before = Date.now();
+
+    await h.receive(SUPERADMIN);
+
+    const set = (h.qb.set.mock.calls as unknown as Array<[Row]>)[0][0];
+    expect(set).toMatchObject({
+      status: Order_status.RECEIVED,
+      holder_type: OrderHolderType.HQ,
+      holder_branch_id: null,
+      last_handover_by: SUPERADMIN.id,
+    });
+    expect((set.last_handover_at as Date).getTime()).toBeGreaterThanOrEqual(
+      before,
+    );
+    const tracking = (h.s.custody as { createTrackingEvent: jest.Mock })
+      .createTrackingEvent.mock.calls[0][0] as Row;
+    expect(tracking.changed_by).toBe(SUPERADMIN.id);
+  });
+
+  it('filial menejeri qabulida ushlovchi o`sha filial, custody hodisasi ochiladi', async () => {
+    const h = makeSvc([order({ id: '67', branch_id: '22' })], { scope: '22' });
+
+    await h.receive(MANAGER);
+
+    const set = (h.qb.set.mock.calls as unknown as Array<[Row]>)[0][0];
+    expect(set).toMatchObject({
+      holder_type: OrderHolderType.BRANCH,
+      holder_branch_id: '22',
+      last_handover_by: MANAGER.id,
+    });
+    const custody = h.s.custody as { createCustodyEvent: jest.Mock };
+    expect(custody.createCustodyEvent).toHaveBeenCalledTimes(1);
+    expect(custody.createCustodyEvent.mock.calls[0][0]).toMatchObject({
+      from_holder_type: OrderHolderType.HQ,
+      to_holder_type: OrderHolderType.BRANCH,
+      to_branch_id: '22',
+      changed_by: MANAGER.id,
+    });
   });
 });

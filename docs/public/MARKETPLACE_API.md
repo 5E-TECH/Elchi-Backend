@@ -25,6 +25,10 @@ Keyin ish oqimi shunday:
 
 3. Statusni kutish                   webhook (biz sizga POST qilamiz)
    yoki so'rash                      GET  /partner/shipments/:id
+   ko'pini birdan so'rash            POST /partner/shipments/status
+
+4. Kerak bo'lsa yangilash            PATCH /partner/shipments/:id
+   yoki bekor qilish                 POST /partner/shipments/:id/cancel
 ```
 
 **Muhim tushuncha:** buyurtma sizda yaratiladi, Elchi faqat **yetkazadi**.
@@ -75,6 +79,8 @@ Har hamkor uchun alohida: **daqiqada 120 so'rov** (standart). Oshsa **429**
 qaytadi. Limitdan oshmaslik uchun:
 
 - statusni **so'rab turmang** — webhook ishlatib turing (§6);
+- solishtirish kerak bo'lsa posilkalarni **bittalab emas**, 100 tadan
+  `POST /partner/shipments/status` bilan so'rang (§5.6);
 - geo ma'lumotlarini (viloyat/tuman) **keshlang** — u kamdan-kam o'zgaradi.
 
 ---
@@ -269,7 +275,7 @@ Content-Type: application/json
 |---|---|---|
 | `external_order_id` | ✅ | **Idempotency kaliti.** Sizning buyurtma id'ingiz |
 | `elchi_market_id` | ✅ | §5.1 dan |
-| `customer.name`, `customer.phone` | ✅ | Mijoz — telefon bo'yicha topiladi/yaratiladi |
+| `customer.name`, `customer.phone` | ✅ | Mijoz — telefon bo'yicha topiladi/yaratiladi. Telefon O'zbekiston raqami bo'lishi shart (pastga qara) |
 | `region_id`, `district_id` | ✅ | §4 dan |
 | `address` | uyga yetkazishda | `where_deliver: "address"` bo'lsa shart |
 | `where_deliver` | — | `center` \| `address` (standart: `address`) |
@@ -287,6 +293,16 @@ to'langan buyurtmada esa ikkalasini ham to'g'ri yuborish muhim:
 Naqd (COD):        cod_amount = 450000,  subtotal = 450000
 Oldindan to'langan: cod_amount = 0,      subtotal = 450000
 ```
+
+#### Telefon formati
+
+Telefon **`+998XXXXXXXXX`** ko'rinishiga keltiriladi. Qabul qilinadi:
+`+998901234567`, `998901234567`, `0901234567`, `901234567`, probel, qavs va
+defis bilan ham (`+998 (90) 123-45-67`). Boshqa narsa (`not-a-phone`, chet el
+raqami) — **400**.
+
+Nega: mijoz telefon bo'yicha topiladi. Ilgari raqam xom holda saqlanardi va
+bitta odam formatiga qarab bir nechta mijozga bo'linib ketardi.
 
 #### `external_product_id` — nega muhim
 
@@ -307,11 +323,26 @@ YARATILMAYDI**:
 {
   "statusCode": 200,
   "message": "shipment already exists",
-  "data": { "shipment_id": "124", "idempotent": true }
+  "data": {
+    "shipment_id": "124",
+    "order_status": "new",
+    "qr_code_token": "c0ae6c9e2b92c13cc05f5b2b",
+    "to_be_paid": 450000,
+    "cod_amount": 450000,
+    "total_price": 450000,
+    "idempotent": true,
+    "mismatched_fields": []
+  }
 }
 ```
 
 `statusCode` `201` emas `200` va `idempotent: true` — shundan bilib olasiz.
+
+> ⚠️ **Takror yuborish QIYMATLARNI YANGILAMAYDI.** Narx yoki manzilni
+> o'zgartirib qayta `POST` qilsangiz, Elchi'dagi posilka o'zgarmaydi. Javobda
+> Elchi'da **haqiqatan turgan** `cod_amount`/`total_price` va siz yuborgandan
+> farq qilgan maydonlar (`mismatched_fields`) qaytadi — bo'sh bo'lmasa,
+> o'zgarishni `PATCH /partner/shipments/:id` bilan yuboring (§5.5).
 
 > **Timeout bo'lsa qayta yuboring.** Posilka yaratish bir necha bosqichdan
 > iboratlashi mumkin. Javob kelmasa ayni `external_order_id` bilan qayta
@@ -367,6 +398,56 @@ X-Api-Key: elp_...
 
 - Yetkazilgan posilka **bekor qilinmaydi** → **409**.
 - Allaqachon bekor qilingan bo'lsa **200** va `idempotent: true`.
+
+### 5.5 Yangilash
+
+```http
+PATCH /partner/shipments/124
+X-Api-Key: elp_...
+Content-Type: application/json
+
+{ "cod_amount": 420000, "subtotal": 420000 }
+```
+
+Faqat yuborilgan maydonlar o'zgaradi: `cod_amount`, `subtotal`, `items`,
+`address`, `district_id`, `region_id`, `where_deliver`, `comment`. Javob —
+§5.3 dagi shakl va `updated_fields`.
+
+| Nima | Qachongacha mumkin | Keyin |
+|---|---|---|
+| Narx (`cod_amount`, `subtotal`), `items` | Elchi posilkani **qabul qilmaguncha** (`created`, `new`) | **409** — posilkani bekor qilib, qayta yuboring |
+| Manzil, tuman, `where_deliver` | Posilka filialga **jo'natilmaguncha** | **400** |
+| Hammasi | Yakuniy holatgacha | Sotilgan / bekor / qaytarilgan → **409** |
+
+Qoidalar Elchi'ning ichki tahrir qoidalari bilan bir xil: qabul qilingan
+posilkaning summasi pochta va kassa bilan bog'langan bo'ladi.
+
+### 5.6 Ko'p posilka holati — bitta so'rovda
+
+```http
+POST /partner/shipments/status
+X-Api-Key: elp_...
+Content-Type: application/json
+
+{ "shipment_ids": ["124", "ORD-2026-55124", "125"] }
+```
+
+```json
+{
+  "statusCode": 200,
+  "message": "shipments",
+  "data": {
+    "items": [ { "shipment_id": "124", "status": "sold", "...": "..." } ],
+    "not_found": ["ORD-2026-55124"],
+    "failed": []
+  }
+}
+```
+
+- 100 tagacha id; `shipment_id` yoki `external_order_id`.
+- `items[]` elementlari **§5.3 bilan aynan bir xil** shaklda.
+- Topilmagan (yoki boshqa hamkorga tegishli) id — `not_found`; vaqtinchalik
+  xato — `failed` (shu id larni keyinroq qayta so'rang).
 
 ---
 

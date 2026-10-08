@@ -124,6 +124,24 @@ export class ExternalIntegration extends BaseEntity {
   @Column({ type: 'boolean', default: true })
   is_active!: boolean;
 
+  /**
+   * ISH REJIMI kalitlari (DOZ6dtJn) — master (`is_active`) ostida.
+   *
+   * `webhook_enabled=false` — kiruvchi hodisa jurnalga `skipped_disabled`
+   * bilan yoziladi, lekin QO'LLANMAYDI; chiquvchi jo'natish ishlayveradi.
+   * `reconcile_enabled=false` — davriy solishtiruvchi bu ulanishni o'tkazib
+   * yuboradi. Master o'chiq bo'lsa ikkalasi ham ta'sir qilmaydi.
+   */
+  @Column({ type: 'boolean', default: true })
+  webhook_enabled!: boolean;
+
+  @Column({ type: 'boolean', default: true })
+  reconcile_enabled!: boolean;
+
+  /** Oxirgi solishtiruv (davriy yoki "Hoziroq tenglashtirish") vaqti. */
+  @Column({ type: 'timestamptz', nullable: true })
+  last_reconcile_at!: Date | null;
+
   @Column({ type: 'jsonb', nullable: true })
   field_mapping!: Record<string, string> | null;
 

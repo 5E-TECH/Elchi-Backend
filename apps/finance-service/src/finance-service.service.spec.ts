@@ -484,6 +484,80 @@ describe('FinanceServiceService.financialBalance', () => {
     expect(response.data.currentSituation).toBe(25000);
   });
 
+  /**
+   * 03avx8hG — filial 13 kassasida 280 000, daftarda qarzi 0: bu naqd holat
+   * raqamlarining hech birida ko'rinmasdi. Endi nazorat ro'yxatiga tushadi;
+   * holat formulasi esa o'zgarmaydi (ikki marta sanash bo'lmasin).
+   */
+  it('⭐ kassasi "berilishi kerak" dan ko`p filiallar nazorat ro`yxatida', async () => {
+    const manager = makeManager();
+    const { service, cashboxRepo } = makeService(manager);
+    cashboxRepo.findOne.mockResolvedValue({
+      id: 'main-1',
+      user_id: '0',
+      cashbox_type: 'main',
+      balance: 0,
+    });
+    cashboxRepo.createQueryBuilder = jest.fn().mockReturnValue({
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({ total: '0' }),
+    });
+    cashboxRepo.find = jest.fn().mockResolvedValue([
+      { user_id: '13', balance: 280000 },
+      { user_id: '10', balance: 150000 },
+      { user_id: '11', balance: 50000 },
+      { user_id: '12', balance: 0 },
+    ]);
+    rmqSendMock.mockResolvedValue({
+      data: {
+        chain_receivable: 250000,
+        branches: [
+          { branch_id: '10', amount: 200000 },
+          { branch_id: '11', amount: 30000 },
+        ],
+      },
+    });
+
+    const response: any = await service.financialBalance();
+
+    expect(response.data.branches.cashExceedingPayable).toEqual([
+      { branch_id: '13', cashbox_balance: 280000, payable: 0, excess: 280000 },
+      {
+        branch_id: '11',
+        cashbox_balance: 50000,
+        payable: 30000,
+        excess: 20000,
+      },
+    ]);
+    // Formula o'zgarmagan: 0 + 250 000 − 0.
+    expect(response.data.currentSituation).toBe(250000);
+  });
+
+  it('nazorat yiqilsa ham holat hisoboti qaytadi (bo`sh ro`yxat)', async () => {
+    const manager = makeManager();
+    const { service, cashboxRepo } = makeService(manager);
+    cashboxRepo.findOne.mockResolvedValue({
+      id: 'main-1',
+      user_id: '0',
+      cashbox_type: 'main',
+      balance: 0,
+    });
+    cashboxRepo.createQueryBuilder = jest.fn().mockReturnValue({
+      select: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getRawOne: jest.fn().mockResolvedValue({ total: '0' }),
+    });
+    cashboxRepo.find = jest.fn().mockRejectedValue(new Error('db down'));
+    rmqSendMock.mockResolvedValue({ data: { chain_receivable: 0 } });
+
+    const response: any = await service.financialBalance();
+
+    expect(response.data.branches.cashExceedingPayable).toEqual([]);
+  });
+
   it('eski javobga (chain_receivable yo`q) ham chidaydi', async () => {
     const manager = makeManager();
     const { service, cashboxRepo } = makeService(manager);

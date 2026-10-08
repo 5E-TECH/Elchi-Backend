@@ -291,6 +291,54 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * pushes the aggregation down to `SUM(balance)` so only the scalar crosses the
    * wire. `balance` is a numeric column, so pg returns the SUM as a string.
    */
+  /**
+   * Filial kassasi qoldig'i > daftardagi "berilishi kerak" bo'lgan filiallar
+   * (03avx8hG). Filial kassalari soni filiallar soniga teng — ro'yxat
+   * chegaralangan. Bu yordamchi nazorat: xato bo'lsa kompaniya holati
+   * hisoboti to'xtamaydi, bo'sh ro'yxat qaytadi (kargo qarzi bilan bir xil).
+   */
+  private async findBranchCashExceedingPayable(
+    payables: Array<{ branch_id: string; amount: number }>,
+  ): Promise<
+    Array<{
+      branch_id: string;
+      cashbox_balance: number;
+      payable: number;
+      excess: number;
+    }>
+  > {
+    try {
+      const payableByBranch = new Map(
+        payables.map((row) => [String(row.branch_id), Number(row.amount) || 0]),
+      );
+      const cashboxes = await this.cashboxRepo.find({
+        where: { cashbox_type: Cashbox_type.BRANCH, isDeleted: false },
+        select: { user_id: true, balance: true },
+      });
+      return cashboxes
+        .map((cashbox) => {
+          const branchId = String(cashbox.user_id);
+          const cashboxBalance = Number(cashbox.balance) || 0;
+          const payable = payableByBranch.get(branchId) ?? 0;
+          return {
+            branch_id: branchId,
+            cashbox_balance: cashboxBalance,
+            payable,
+            excess: cashboxBalance - payable,
+          };
+        })
+        .filter((row) => row.cashbox_balance > 0 && row.excess > 0)
+        .sort((a, b) => b.excess - a.excess);
+    } catch (error) {
+      this.logger.warn(
+        `Filial kassasi nazorati hisoblanmadi: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return [];
+    }
+  }
+
   private async sumCashboxBalanceByType(
     cashboxType: Cashbox_type,
   ): Promise<number> {
@@ -3204,6 +3252,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       const marketPayable = marketCashboxTotal;
       const difference = chainReceivable + providerReceivable - marketPayable;
       const currentSituation = Number(mainCashbox.balance) + difference;
+      const branchCashExceedingPayable =
+        await this.findBranchCashExceedingPayable(settlement.branches ?? []);
 
       return this.successRes(
         {
@@ -3223,6 +3273,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             // u allaqachon `chainReceivable` ichida.
             branchCashboxTotal,
             items: settlement.branches ?? [],
+            /**
+             * NAZORAT (Andijon E2E, 03avx8hG): kassasidagi naqd "berilishi
+             * kerak" dan KO'P filiallar. Daftar to'g'ri bo'lsa filial HQ'ga
+             * qarzidan ortiq naqd ushlab turmaydi — ortiqcha qism daftarda
+             * yo'q pul (jonli: filial 13 kassasida 280 000, qarzi 0, bu summa
+             * holat raqamlarining hech birida ko'rinmasdi).
+             */
+            cashExceedingPayable: branchCashExceedingPayable,
           },
           markets: {
             marketPayable,

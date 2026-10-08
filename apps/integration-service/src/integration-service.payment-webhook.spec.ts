@@ -643,5 +643,52 @@ describe('Onlayn to`lov webhooki', () => {
       expect(res.reason).toBe('integration_inactive');
       expect(paymentTxnRepo.save).not.toHaveBeenCalled();
     });
+
+    /**
+     * DOZ6dtJn — master yoqiq, lekin faqat KIRUVCHI webhook o'chirilgan:
+     * hodisa jurnalga `skipped_disabled` bilan yoziladi (keyin qayta
+     * ishlatish mumkin), lekin QO'LLANMAYDI; provayderga 200.
+     */
+    it('⭐ webhook_enabled=false — jurnalga skipped_disabled, QO`LLANMAYDI', async () => {
+      const { service, paymentTxnRepo, webhookLogRepo } = makeService({
+        integration: {
+          ...paymentIntegration(PAY_CONFIG),
+          webhook_enabled: false,
+        },
+        orderReply: RECORDED,
+      });
+
+      const res: any = await service.receiveWebhook(signedInput(PAY_BODY));
+
+      expect(res).toMatchObject({
+        ok: true,
+        code: 200,
+        reason: 'webhook_disabled',
+      });
+      expect(paymentTxnRepo.save).not.toHaveBeenCalled();
+      expect(webhookLogRepo.save).toHaveBeenCalledWith(
+        expect.objectContaining({ signature_valid: true, status: 'verified' }),
+      );
+      expect(webhookLogRepo.update).toHaveBeenCalledWith(
+        expect.anything(),
+        expect.objectContaining({ status: 'skipped_disabled' }),
+      );
+    });
+
+    it('master o`chiq bo`lsa webhook_enabled=true ham ta`sir qilmaydi', async () => {
+      const { service, paymentTxnRepo } = makeService({
+        integration: {
+          ...paymentIntegration(PAY_CONFIG),
+          is_active: false,
+          webhook_enabled: true,
+        },
+        orderReply: RECORDED,
+      });
+
+      const res: any = await service.receiveWebhook(signedInput(PAY_BODY));
+
+      expect(res.reason).toBe('integration_inactive');
+      expect(paymentTxnRepo.save).not.toHaveBeenCalled();
+    });
   });
 });

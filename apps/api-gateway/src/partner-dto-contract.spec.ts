@@ -123,3 +123,43 @@ describe('⭐ CreatePartnerShipmentRequestDto — PCS tanasi to`liq o`tadi', () 
     expect((await errorsFor(body)).join(' ')).toMatch(/begona_maydon/);
   });
 });
+
+/**
+ * zfPNDCCr — telefon DTO'da kanonik shaklga keltiriladi, yaroqsizi 400.
+ * Ilgari faqat `@IsString()` edi: "not-a-phone" ham o'tardi va bitta odam
+ * formatiga qarab bir nechta mijozga bo'linardi.
+ */
+describe('CreatePartnerShipmentRequestDto — customer.phone', () => {
+  const withPhone = (phone: unknown) => ({
+    ...pcsBody(),
+    customer: { name: 'Aliyev Vali', phone },
+  });
+
+  it.each([
+    ['998900000001'],
+    ['900000001'],
+    ['+998 90 000 00 01'],
+    ['0900000001'],
+  ])('%p — o`tadi va +998900000001 ga keltiriladi', async (phone) => {
+    const dto = plainToInstance(
+      CreatePartnerShipmentRequestDto,
+      withPhone(phone),
+    );
+    const errors = await validate(dto, {
+      whitelist: true,
+      forbidNonWhitelisted: true,
+    });
+
+    expect(errors).toEqual([]);
+    expect(dto.customer.phone).toBe('+998900000001');
+  });
+
+  it.each([['not-a-phone'], ['12345'], ['+1 202 555 0100'], ['']])(
+    '%p — 400',
+    async (phone) => {
+      const errors = await errorsFor(withPhone(phone));
+
+      expect(errors.join('\n')).toContain('customer');
+    },
+  );
+});

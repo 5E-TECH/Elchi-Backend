@@ -74,6 +74,7 @@ import {
   RollbackOrderRequestDto,
   ScanAssignOrderRequestDto,
   SellOrderRequestDto,
+  CancelOrderRequestDto,
   SettlementBranchToHqDto,
   SettlementCourierToBranchDto,
   SettlementHqToMarketDto,
@@ -2201,6 +2202,10 @@ export class OrderGatewayController {
    * market posilka qabul qilmaydi.
    */
   @Post('external/receive-by-scan')
+  // Yangi resurs yaratilmaydi — 201 emas, 200. Tana ichidagi `statusCode` ham
+  // 200, ya'ni HTTP va tana bir xil signal beradi; natija `data.ok` da
+  // (n9o0KYd5).
+  @HttpCode(200)
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
     RoleEnum.SUPERADMIN,
@@ -3240,6 +3245,66 @@ export class OrderGatewayController {
     return [];
   }
 
+  /**
+   * BEKOR QILISH SABABLARI STATISTIKASI (PUvKXWVw).
+   *
+   * Market faqat o'z buyurtmalarini, filial xodimi faqat o'z filialini
+   * ko'radi — doira so'rov parametridan EMAS, tokendan olinadi.
+   */
+  @Get('cancel-reasons/stats')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.MANAGER, RoleEnum.MARKET)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: 'Bekor qilish sabablari kesimida statistika',
+    description:
+      "by_reason — sabab bo'yicha son; group_by berilsa rows — sabab × market/hudud/kuryer. Sana oynasi bekor qilingan vaqtga qo'llanadi.",
+  })
+  @ApiQuery({ name: 'startDate', required: false, type: String })
+  @ApiQuery({ name: 'endDate', required: false, type: String })
+  @ApiQuery({ name: 'market_id', required: false, type: String })
+  @ApiQuery({ name: 'branch_id', required: false, type: String })
+  @ApiQuery({
+    name: 'group_by',
+    required: false,
+    enum: ['market', 'region', 'courier'],
+  })
+  async cancelReasonStats(
+    @Req() req: { user: JwtUser },
+    @Query('startDate') startDate?: string,
+    @Query('endDate') endDate?: string,
+    @Query('market_id') marketIdQuery?: string,
+    @Query('branch_id') branchIdQuery?: string,
+    @Query('group_by') groupBy?: string,
+  ) {
+    const roles = this.normalizeRoles(req?.user?.roles ?? []);
+    let marketId = marketIdQuery?.trim() || undefined;
+    let branchId = branchIdQuery?.trim() || undefined;
+    if (roles.includes(RoleEnum.MARKET)) {
+      marketId = String(req.user.sub);
+    } else if (
+      roles.includes(RoleEnum.MANAGER) &&
+      !roles.includes(RoleEnum.SUPERADMIN) &&
+      !roles.includes(RoleEnum.ADMIN)
+    ) {
+      const assignment = await this.resolveBranchAssignment(req.user);
+      if (!this.isBranchStaffAssignment(assignment) || !assignment?.branch_id) {
+        throw new BadRequestException('Branch user branchga biriktirilmagan');
+      }
+      branchId = String(assignment.branch_id);
+    }
+    return this.sendOrderWithTimeout(
+      { cmd: 'order.analytics.cancel_reasons' },
+      {
+        startDate,
+        endDate,
+        market_id: marketId,
+        branch_id: branchId,
+        group_by: groupBy?.trim() || undefined,
+      },
+    );
+  }
+
   @Get('markets/cancelled')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -3809,7 +3874,7 @@ export class OrderGatewayController {
   @ApiOperation({ summary: 'Cancel order (courier)' })
   @ApiParam({ name: 'id', description: 'Order ID (id)' })
   @ApiConsumes('multipart/form-data', 'application/json')
-  @ApiBody({ type: SellOrderRequestDto })
+  @ApiBody({ type: CancelOrderRequestDto })
   @UseInterceptors(
     FileInterceptor('proof', {
       storage: memoryStorage(),
@@ -3818,7 +3883,7 @@ export class OrderGatewayController {
   )
   async cancelOrder(
     @Param('id') id: string,
-    @Body() dto: SellOrderRequestDto,
+    @Body() dto: CancelOrderRequestDto,
     @UploadedFile() proof: UploadedProofFile | undefined,
     @Req() req: { user: JwtUser },
   ) {
