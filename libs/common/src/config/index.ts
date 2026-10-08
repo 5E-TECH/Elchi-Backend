@@ -411,6 +411,18 @@ export const integrationValidationSchema = Joi.object({
     .max(1000)
     .default(200)
     .description('Max open shipments queried per integration per tick.'),
+  // awaiting_config hamkor webhooklari uchun kunlik yig'ma ogohlantirish
+  // (vy9gakYq). Server UTC da: 04:00 UTC = 09:00 Toshkent.
+  INTEGRATION_WEBHOOK_DIGEST_CRON_ENABLED: Joi.boolean()
+    .truthy('true', '1', 'yes')
+    .falsy('false', '0', 'no')
+    .default(true)
+    .description(
+      'Daily admin digest of partner webhooks stuck in awaiting_config.',
+    ),
+  INTEGRATION_WEBHOOK_DIGEST_CRON_EXPR: Joi.string()
+    .default('0 0 4 * * *')
+    .description('Cron expression for the digest. Default: 09:00 Tashkent.'),
 });
 
 export const analyticsValidationSchema = Joi.object({

@@ -326,7 +326,7 @@ class PartnerWebhookSecretMissingError extends PartnerWebhookNotConfiguredError 
  * Shuning uchun 4xx darhol `permanently_failed` bo'ladi — aniq sabab bilan,
  * admin monitoriga ko'rinadigan holda (qo'lda "retry" yo'li ochiq qoladi).
  */
-class PartnerWebhookPermanentError extends Error {
+export class PartnerWebhookPermanentError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'PartnerWebhookPermanentError';
@@ -2940,6 +2940,11 @@ export class IntegrationServiceService {
           `partner webhook ${row.id}: DOIMIY xato — qayta urinilmaydi ` +
             `(partner=${row.partner_id}): ${message}`,
         );
+        await this.notifyAdminsAboutPartnerWebhookFailure(
+          row,
+          message,
+          attempts,
+        );
         return false;
       }
 
@@ -2966,6 +2971,11 @@ export class IntegrationServiceService {
             processing_started_at: null,
             duration_ms: durationMs,
           },
+        );
+        await this.notifyAdminsAboutPartnerWebhookFailure(
+          row,
+          message,
+          attempts,
         );
       }
       return false;
@@ -3238,7 +3248,7 @@ export class IntegrationServiceService {
    */
   async testPartnerWebhook(
     id: string,
-    dto?: { url?: string | null },
+    dto?: { url?: string | null; target?: string | null },
     requester?: { id?: string; roles?: string[] } | null,
   ) {
     const partner = await this.partnerRepo.findOne({
@@ -3248,12 +3258,49 @@ export class IntegrationServiceService {
       this.notFound('Partner topilmadi');
     }
 
+    /**
+     * QAYSI MANZIL VA QAYSI SEKRET (jeU3eztP). Ilgari sinov FAQAT asosiy
+     * `webhook_url` ga qarardi: sandbox yoqilib, manzili to'ldirilgan bo'lsa
+     * ham "manzil yo'q" derdi; `url` berilganda esa doim asosiy sekret bilan
+     * imzolardi — sandbox qabul qiluvchi 401 qaytarib, sinov "yiqildi"
+     * bo'lib ko'rinardi. Endi:
+     *   - `target: 'sandbox' | 'main'` — aniq tanlov;
+     *   - berilmasa: sandbox yoqiq va manzili bor → sandbox, aks holda asosiy;
+     *   - `url` saqlangan sandbox manziliga teng bo'lsa — sandbox sekreti;
+     *   - sandbox HECH QACHON asosiy sekretga qaytmaydi (prodakshn kaliti
+     *     sinov muhitiga chiqmaydi — dispatchSandboxCopy bilan bir xil).
+     * Javobda `target` va `secret_used` aniq ko'rsatiladi.
+     */
     const override = String(dto?.url ?? '').trim();
-    const target = override || String(partner.webhook_url ?? '').trim();
+    const mainUrl = String(partner.webhook_url ?? '').trim();
+    const sandboxUrl = String(partner.sandbox_webhook_url ?? '').trim();
+    const requestedTarget = String(dto?.target ?? '')
+      .trim()
+      .toLowerCase();
+    if (requestedTarget && !['main', 'sandbox'].includes(requestedTarget)) {
+      this.badRequest("`target` faqat 'main' yoki 'sandbox' bo'lishi mumkin");
+    }
+    const useSandbox =
+      requestedTarget === 'sandbox' ||
+      (!requestedTarget &&
+        (override
+          ? Boolean(sandboxUrl) && override === sandboxUrl
+          : Boolean(partner.sandbox_enabled) && Boolean(sandboxUrl)));
+    const savedUrl = useSandbox ? sandboxUrl : mainUrl;
+    const target = override || savedUrl;
     if (!target) {
+      if (useSandbox) {
+        this.badRequest(
+          "Sinov uchun manzil yo'q — sandbox tanlangan, lekin " +
+            "`sandbox_webhook_url` bo'sh. `url` bering yoki sandbox manzilini sozlang",
+        );
+      }
       this.badRequest(
-        "Sinov uchun manzil yo'q — `url` bering yoki hamkorga " +
-          '`webhook_url` sozlang',
+        "Sinov uchun manzil yo'q — hamkorda `webhook_url` ham, " +
+          (partner.sandbox_enabled
+            ? "`sandbox_webhook_url` ham bo'sh (sandbox yoqilgan, lekin manzili yo'q)"
+            : "`sandbox_webhook_url` ham bo'sh (sandbox o'chiq)") +
+          '. `url` bering yoki manzillardan birini sozlang',
       );
     }
     // Haqiqiy yuborish bilan AYNI guard — sinov prodakshndan yumshoqroq
@@ -3265,12 +3312,18 @@ export class IntegrationServiceService {
      * bilan imzolanmaydi. Aks holda sinov "HTTP 401" ko'rsatib, operator
      * sababni qabul qiluvchi tomondan izlardi — holbuki nuqson Elchida.
      */
-    const secret = this.resolvePartnerWebhookSecret(partner.webhook_secret);
+    const secretUsed: 'main' | 'sandbox' = useSandbox ? 'sandbox' : 'main';
+    const secret = useSandbox
+      ? this.decryptCredential(partner.sandbox_webhook_secret)
+      : this.resolvePartnerWebhookSecret(partner.webhook_secret);
     if (!secret) {
       this.badRequest(
-        "Hamkorda `webhook_secret` yo'q — imzo qo'yib bo'lmaydi. Bo'sh " +
-          'kalit bilan imzolangan so‘rovni qabul qiluvchi 401 qaytaradi; ' +
-          'avval sekretni sozlang.',
+        useSandbox
+          ? "Hamkorda `sandbox_webhook_secret` yo'q — sandbox o'z sekreti bilan " +
+              'imzolanadi (prodakshn sekreti sinov muhitiga yuborilmaydi); avval uni sozlang.'
+          : "Hamkorda `webhook_secret` yo'q — imzo qo'yib bo'lmaydi. Bo'sh " +
+              'kalit bilan imzolangan so‘rovni qabul qiluvchi 401 qaytaradi; ' +
+              'avval sekretni sozlang.',
       );
     }
 
@@ -3323,6 +3376,8 @@ export class IntegrationServiceService {
       new_value: {
         webhook_test: true,
         url: target,
+        target: useSandbox ? 'sandbox' : 'main',
+        secret_used: secretUsed,
         ok,
         http_status: httpStatus,
         duration_ms: durationMs,
@@ -3337,6 +3392,10 @@ export class IntegrationServiceService {
       {
         ok,
         url: target,
+        target: useSandbox ? 'sandbox' : 'main',
+        // Qaysi kalit bilan imzolangani — qabul qiluvchi 401 qaytarsa
+        // sabab darhol ko'rinsin (jeU3eztP).
+        secret_used: secretUsed,
         used_saved_url: !override,
         http_status: httpStatus,
         duration_ms: durationMs,
@@ -4219,15 +4278,161 @@ export class IntegrationServiceService {
     return retryDelays[index];
   }
 
+  private adminNotificationGroupId(): string {
+    return (
+      process.env.NOTIFICATION_ADMIN_GROUP_ID ||
+      process.env.TELEGRAM_ADMIN_GROUP_ID ||
+      ''
+    );
+  }
+
+  /** Admin Telegram guruhiga best-effort xabar — xato ishni to'xtatmaydi. */
+  private async sendAdminNotification(message: string): Promise<boolean> {
+    const adminGroupId = this.adminNotificationGroupId();
+    if (!adminGroupId) {
+      return false;
+    }
+    try {
+      await this.rmqRequest(
+        this.notificationClient,
+        { cmd: 'notification.send' },
+        {
+          group_id: adminGroupId,
+          message,
+          token: process.env.TELEGRAM_BOT_TOKEN || undefined,
+        },
+        5000,
+      );
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  private async partnerDisplayName(partnerId: string): Promise<string> {
+    const partner = await this.partnerRepo
+      .findOne({ where: { id: String(partnerId) } })
+      .catch(() => null);
+    return partner?.name ? String(partner.name) : 'noma’lum';
+  }
+
+  /**
+   * vy9gakYq: hamkor webhook outbox'i `permanently_failed` bo'lganda HECH KIM
+   * bilmasdi (SyncQueue yo'lidagi ogohlantirish bu yerda yo'q edi) — pul bilan
+   * bog'liq status hodisasi jimgina yo'qolardi. Endi admin guruhiga hamkor,
+   * buyurtma, yangi holat va oxirgi xato bilan xabar ketadi. Guruh sozlanmagan
+   * bo'lsa jim o'tadi — yetkazish oqimi hech qachon yiqilmaydi.
+   */
+  private async notifyAdminsAboutPartnerWebhookFailure(
+    row: PartnerWebhookOutbox,
+    errorMessage: string,
+    attempts: number,
+  ): Promise<void> {
+    if (!this.adminNotificationGroupId()) {
+      return;
+    }
+    try {
+      const partnerName = await this.partnerDisplayName(row.partner_id);
+      await this.sendAdminNotification(
+        `Hamkor webhooki YETKAZILMADI (permanently_failed)\n` +
+          `hamkor: ${partnerName} (#${row.partner_id})\n` +
+          `order_id: ${row.order_id}\n` +
+          `external_order_id: ${row.external_order_id}\n` +
+          `new_status: ${row.new_status ?? '-'}\n` +
+          `attempts: ${attempts}\n` +
+          `last_error: ${errorMessage}`,
+      );
+    } catch {
+      // Best-effort: ogohlantirish yetkazish oqimini to'xtatmasligi shart.
+    }
+  }
+
+  private static readonly WEBHOOK_DIGEST_ADVISORY_LOCK_KEY =
+    0x5057484447535421n;
+
+  /**
+   * vy9gakYq: `awaiting_config` (hamkorda webhook_url yo'q) qatorlari uchun
+   * KUNLIK yig'ma ogohlantirish. Ilgari faqat `logger.warn` edi — hodisalar
+   * haftalab kutib yotardi (prod: id 7, 8 — 8 kun) va buni hech kim sezmasdi.
+   * Ikki replika bir vaqtda ishga tushsa advisory qulf bittasini o'tkazadi.
+   */
+  async digestAwaitingConfigPartnerWebhooks(): Promise<{
+    total: number;
+    partners: Array<{ partner_id: string; name: string; count: number }>;
+    notified: boolean;
+    skipped?: 'locked';
+  }> {
+    const queryRunner =
+      this.integrationRepo.manager.connection.createQueryRunner();
+    await queryRunner.connect();
+    let acquired = false;
+    try {
+      const lock = await queryRunner.query(
+        'SELECT pg_try_advisory_lock($1::bigint) AS acquired',
+        [IntegrationServiceService.WEBHOOK_DIGEST_ADVISORY_LOCK_KEY.toString()],
+      );
+      acquired = Boolean(lock?.[0]?.acquired);
+      if (!acquired) {
+        return { total: 0, partners: [], notified: false, skipped: 'locked' };
+      }
+
+      const rows = await this.partnerWebhookOutboxRepo
+        .createQueryBuilder('w')
+        .select('w.partner_id', 'partner_id')
+        .addSelect('COUNT(*)', 'count')
+        .where('w.status = :status', { status: 'awaiting_config' })
+        .andWhere('w.isDeleted = :isDeleted', { isDeleted: false })
+        .groupBy('w.partner_id')
+        .getRawMany<{ partner_id: string; count: string }>();
+
+      const partners: Array<{
+        partner_id: string;
+        name: string;
+        count: number;
+      }> = [];
+      for (const row of rows) {
+        partners.push({
+          partner_id: String(row.partner_id),
+          name: await this.partnerDisplayName(String(row.partner_id)),
+          count: Number(row.count ?? 0),
+        });
+      }
+      const total = partners.reduce((sum, p) => sum + p.count, 0);
+      if (!total) {
+        return { total: 0, partners: [], notified: false };
+      }
+
+      const lines = partners.map(
+        (p) =>
+          `• ${p.name} (#${p.partner_id}): ${p.count} ta hodisa webhook_url yo'qligi sababli kutmoqda`,
+      );
+      const notified = await this.sendAdminNotification(
+        `Hamkor webhooklari kutmoqda (awaiting_config) — jami ${total} ta\n` +
+          `${lines.join('\n')}\n` +
+          `Hamkor sozlamasida webhook_url qo'yilsa navbat o'zi yuboriladi.`,
+      );
+      if (!notified) {
+        this.logger.warn(
+          `awaiting_config: ${total} ta hamkor webhooki kutmoqda — admin guruhiga yuborilmadi (NOTIFICATION_ADMIN_GROUP_ID yo'q yoki xato)`,
+        );
+      }
+      return { total, partners, notified };
+    } finally {
+      if (acquired) {
+        await queryRunner
+          .query('SELECT pg_advisory_unlock_all()')
+          .catch(() => undefined);
+      }
+      await queryRunner.release();
+    }
+  }
+
   private async notifyAdminsAboutPermanentFailure(
     queue: SyncQueue,
     integration: ExternalIntegration | null,
     errorMessage: string,
   ): Promise<void> {
-    const adminGroupId =
-      process.env.NOTIFICATION_ADMIN_GROUP_ID ||
-      process.env.TELEGRAM_ADMIN_GROUP_ID ||
-      '';
+    const adminGroupId = this.adminNotificationGroupId();
 
     if (!adminGroupId) {
       return;

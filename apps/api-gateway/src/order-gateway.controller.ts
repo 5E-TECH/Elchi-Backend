@@ -2653,6 +2653,14 @@ export class OrderGatewayController {
     enum: [10, 25, 50, 100],
     schema: { default: 10 } as any,
   })
+  @ApiQuery({
+    name: 'cancelled_inventory',
+    required: false,
+    type: Boolean,
+    description:
+      "Bekor qilingan posilka INVENTARI rejimi (qo'ldagi, qaytarish pochtasiga biriktirilmagan; holder HQ/BRANCH). " +
+      'Berilmasa: SA/admin uchun oddiy status filtri, filial xodimi/HQ registratori uchun inventar (onzwA7CQ).',
+  })
   async findAll(
     @Query('market_id') market_id?: string,
     @Query('customer_id') customer_id?: string,
@@ -2674,6 +2682,7 @@ export class OrderGatewayController {
     @Query('where_deliver') where_deliver?: string,
     @Query('sort_by') sort_by?: string,
     @Query('sort_dir') sort_dir?: string,
+    @Query('cancelled_inventory') cancelled_inventory?: string,
   ) {
     const roles = req?.user?.roles ?? [];
     const normalizedRoles = this.normalizeRoles(roles);
@@ -2731,6 +2740,13 @@ export class OrderGatewayController {
           'Operator hech qaysi marketga biriktirilmagan',
         );
       }
+      // WWbdu8ya TC3: boshqa marketni so'rash market roli bilan bir xil
+      // ochiq 400 — jimgina o'z marketiga almashtirilmaydi.
+      if (market_id && String(market_id) !== String(operatorMarketId)) {
+        throw new BadRequestException(
+          'market_operator role cannot query other market_id',
+        );
+      }
       resolvedMarketId = operatorMarketId;
     }
     // Mijoz — faqat o'z buyurtmalari.
@@ -2778,13 +2794,31 @@ export class OrderGatewayController {
         `Noto'g'ri where_deliver qiymati: ${where_deliver}`,
       );
     }
-    const isCancelledTab =
+    const onlyCancelledStatuses =
       Boolean(statuses?.length) &&
       statuses!.every(
         (value) =>
           value === Order_status.CANCELLED ||
           value === Order_status.CANCELLED_SENT,
       );
+    /**
+     * onzwA7CQ: "bekor qilingan posilka INVENTARI" (qo'ldagi, qaytarish
+     * pochtasiga biriktirilmagan, holder HQ/BRANCH) — alohida rejim. Ilgari u
+     * oddiy `status=cancelled` filtriga JIMGINA ulanardi: superadmin
+     * "Bekor qilingan" ni tanlasa 24 tadan 4 tasi chiqardi, `cancelled (sent)`
+     * esa `cancelled` ga qayta yozilardi. Endi:
+     *   - `cancelled_inventory=true|false` — aniq tanlov;
+     *   - berilmasa: SA/admin uchun ODDIY filtr (hamma bekor qilinganlar),
+     *     filial xodimi / HQ registratori uchun avvalgi inventar (ularning
+     *     "Bekor" tabi shunga tayanadi; kuryer tabi alohida yo'l).
+     */
+    const explicitInventory =
+      cancelled_inventory === undefined || cancelled_inventory === ''
+        ? undefined
+        : String(cancelled_inventory).toLowerCase() === 'true';
+    const isCancelledTab =
+      onlyCancelledStatuses &&
+      (isCourier || (explicitInventory ?? !isSystemPrivilegedRequester));
     // fix3 C4: HQ registratori bekor qilinganlar tabida SA/admin bilan AYNI
     // ro'yxatni ko'radi (HQ qo'lidagi, filial filtrsiz) — aks holda doim bo'sh.
     const isHqRegistratorCancelledTab =

@@ -173,16 +173,18 @@ describe('OrderGatewayController pagination', () => {
     expect(branchClient.send).not.toHaveBeenCalled();
   });
 
-  it('HQ cancelled tab excludes cancellations still in transit', async () => {
-    const { controller, orderClient, branchClient } = makeController();
-    orderClient.send.mockReturnValue(
-      of({ data: [], total: 0, page: 1, limit: 10 }),
-    );
-
-    await controller.findAll(
+  const adminReq = {
+    user: { sub: '1', username: 'admin', roles: ['admin'] },
+  };
+  const findAllAsAdmin = (
+    controller: any,
+    status: string,
+    cancelledInventory?: string,
+  ) =>
+    controller.findAll(
       undefined,
       undefined,
-      'cancelled,cancelled (sent)',
+      status,
       undefined,
       undefined,
       undefined,
@@ -195,14 +197,21 @@ describe('OrderGatewayController pagination', () => {
       undefined,
       '1',
       '10',
-      {
-        user: {
-          sub: '1',
-          username: 'admin',
-          roles: ['admin'],
-        },
-      },
+      adminReq,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      cancelledInventory,
     );
+
+  it('HQ cancelled INVENTORY (cancelled_inventory=true) excludes cancellations still in transit', async () => {
+    const { controller, orderClient, branchClient } = makeController();
+    orderClient.send.mockReturnValue(
+      of({ data: [], total: 0, page: 1, limit: 10 }),
+    );
+
+    await findAllAsAdmin(controller, 'cancelled,cancelled (sent)', 'true');
 
     const payload = orderClient.send.mock.calls[0][1];
     expect(payload.query).toEqual(
@@ -215,6 +224,27 @@ describe('OrderGatewayController pagination', () => {
     expect(payload.query.branch_id).toBeUndefined();
     expect(branchClient.send).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ['cancelled', ['cancelled']],
+    ['cancelled (sent)', ['cancelled (sent)']],
+    ['cancelled,sold', ['cancelled', 'sold']],
+  ])(
+    '⭐ onzwA7CQ: admin oddiy ?status=%s — yashirin holder/post sharti YO`Q, status o`zgarmaydi',
+    async (status, expected) => {
+      const { controller, orderClient } = makeController();
+      orderClient.send.mockReturnValue(
+        of({ data: [], total: 0, page: 1, limit: 10 }),
+      );
+
+      await findAllAsAdmin(controller, status);
+
+      const { query } = orderClient.send.mock.calls[0][1];
+      expect(query.status).toEqual(expected);
+      expect(query.holder_type).toBeUndefined();
+      expect(query.canceled_post_unassigned).toBeUndefined();
+    },
+  );
 
   it('courier cancelled tab returns only unsent cancelled orders for the courier', async () => {
     const { controller, orderClient, logisticsClient, branchClient } =

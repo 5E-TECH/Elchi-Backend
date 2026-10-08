@@ -43,6 +43,9 @@ interface RevenueFilter {
 
 type RevenuePeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
+/** Moliyaviy hisobot `cashflowHistory` sahifasining yuqori chegarasi. */
+const MAX_REPORT_PAGE_LIMIT = 100;
+
 @Injectable()
 export class AnalyticsServiceService {
   private static readonly COURIER_REPORT_TTL_MS = 30_000;
@@ -87,6 +90,43 @@ export class AnalyticsServiceService {
       return (response as { data?: T }).data ?? response;
     }
     return response;
+  }
+
+  /**
+   * `order.analytics.revenue` XOM `{ data: buckets[], summary }` qaytaradi
+   * (successRes o'rami yo'q). Umumiy `unwrap` `'data'` kalitini ko'rib ichini
+   * ochib yuborardi: summary yo'qolardi, bandlar massivi spread bilan
+   * `{"0":…,"1":…}` obyektga aylanardi va KPI'da o'rtacha buyurtma qiymati
+   * doim 0 chiqardi (faAfgvW1, tVAWnl9O). Uchala shakl qabul qilinadi: xom
+   * `{data, summary}`, successRes o'rami va eski massiv.
+   */
+  private unwrapRevenue(response: unknown): {
+    data: Array<Record<string, unknown>>;
+    summary: Record<string, unknown> | null;
+  } {
+    if (Array.isArray(response)) {
+      return {
+        data: response as Array<Record<string, unknown>>,
+        summary: null,
+      };
+    }
+    if (!response || typeof response !== 'object') {
+      return { data: [], summary: null };
+    }
+    const obj = response as { data?: unknown; summary?: unknown };
+    if (Array.isArray(obj.data)) {
+      return {
+        data: obj.data as Array<Record<string, unknown>>,
+        summary:
+          obj.summary && typeof obj.summary === 'object'
+            ? (obj.summary as Record<string, unknown>)
+            : null,
+      };
+    }
+    if (obj.data && typeof obj.data === 'object') {
+      return this.unwrapRevenue(obj.data);
+    }
+    return { data: [], summary: null };
   }
 
   private normalizeDateRange(filter: { startDate?: string; endDate?: string }) {
@@ -164,7 +204,12 @@ export class AnalyticsServiceService {
     const limit = Number(filter.limit ?? 20);
     return {
       page: Number.isFinite(page) && page > 0 ? page : 1,
-      limit: Number.isFinite(limit) && limit > 0 ? limit : 20,
+      // Yuqori chegara (QGxC7v1E): limit=1000000 bitta so'rovda butun kassa
+      // tarixini tortardi. Jami summalar endi limitga bog'liq emas.
+      limit:
+        Number.isFinite(limit) && limit > 0
+          ? Math.min(limit, MAX_REPORT_PAGE_LIMIT)
+          : 20,
     };
   }
 
@@ -741,22 +786,19 @@ export class AnalyticsServiceService {
       ).catch(() => null),
     ]);
 
-    const revenueData = this.unwrap<any>(revenue as any);
+    const revenueData = this.unwrapRevenue(revenue);
     const branchReceivable = this.extractBranchReceivable(branchesResponse);
     const financeData = this.applyBranchReceivableToFinancialBalance(
       this.unwrap(financialBalance as any),
       branchReceivable,
     );
-    const labels = Array.isArray(revenueData?.data)
-      ? revenueData.data.map((row: any) => row.label ?? row.period)
-      : [];
-    const values = Array.isArray(revenueData?.data)
-      ? revenueData.data.map((row: any) => this.parseNumber(row.revenue))
-      : [];
+    const labels = revenueData.data.map((row) => row.label ?? row.period);
+    const values = revenueData.data.map((row) => this.parseNumber(row.revenue));
 
     return successRes(
       {
-        ...(revenueData ?? {}),
+        data: revenueData.data,
+        summary: revenueData.summary,
         chart: { labels, values },
         finance: financeData,
       },
@@ -838,7 +880,7 @@ export class AnalyticsServiceService {
     }
 
     const overviewData = this.unwrap<any>(overview as any);
-    const revenueData = this.unwrap<any>(revenue as any);
+    const revenueData = this.unwrapRevenue(revenue);
     const courierStatsData = Array.isArray(
       this.unwrap<any>(courierStats as any),
     )
@@ -851,7 +893,12 @@ export class AnalyticsServiceService {
     const totalOrders = this.parseNumber(overviewData?.acceptedCount);
     const soldAndPaid = this.parseNumber(overviewData?.soldAndPaid);
     const cancelled = this.parseNumber(overviewData?.cancelled);
-    const totalRevenue = this.parseNumber(revenueData?.summary?.totalRevenue);
+    // Dashboard "Umumiy tushum" bilan AYNI manba (overview) — o'rtacha qiymat
+    // dashboarddagi totalRevenue/soldAndPaid bilan bir xil chiqsin
+    // (tVAWnl9O TC2); overview'da bo'lmasa revenue summary zaxira.
+    const totalRevenue = this.parseNumber(
+      overviewData?.totalRevenue ?? revenueData.summary?.totalRevenue,
+    );
     const avgOrderValue =
       soldAndPaid > 0 ? Number((totalRevenue / soldAndPaid).toFixed(2)) : 0;
     const fulfillmentHours =
@@ -1000,6 +1047,7 @@ export class AnalyticsServiceService {
           toDate: normalized.endDate,
           page: pagination.page,
           limit: pagination.limit,
+          withTotals: true,
         },
       ).catch(() => null),
       rmqSend(
@@ -1031,23 +1079,52 @@ export class AnalyticsServiceService {
       ? allInfoData.allCashboxHistories
       : [];
 
-    const totalIncome = histories
-      .filter((h: any) => h?.operation_type === 'income')
-      .reduce((sum: number, h: any) => sum + this.parseNumber(h?.amount), 0);
-    const totalOutcome = histories
-      .filter((h: any) => h?.operation_type === 'expense')
-      .reduce((sum: number, h: any) => sum + this.parseNumber(h?.amount), 0);
+    /**
+     * QGxC7v1E: jami va oylik summalar finance-service'da BUTUN oraliq
+     * bo'yicha (SQL) hisoblanadi. Ilgari shu yerda sahifa (20 qator) ustidan
+     * yig'ilardi — net ishorasi limitga qarab o'zgarardi. Eski finance javobi
+     * (periodTotals yo'q) uchun sahifa bo'yicha hisob zaxira sifatida qoladi.
+     */
+    const periodTotals = allInfoData?.periodTotals as
+      | { income?: number; outcome?: number }
+      | undefined;
+    const periodMonthly = Array.isArray(allInfoData?.periodMonthly)
+      ? (allInfoData.periodMonthly as Array<{ month: string; amount: number }>)
+      : null;
+
+    const totalIncome = periodTotals
+      ? this.parseNumber(periodTotals.income)
+      : histories
+          .filter((h: any) => h?.operation_type === 'income')
+          .reduce(
+            (sum: number, h: any) => sum + this.parseNumber(h?.amount),
+            0,
+          );
+    const totalOutcome = periodTotals
+      ? this.parseNumber(periodTotals.outcome)
+      : histories
+          .filter((h: any) => h?.operation_type === 'expense')
+          .reduce(
+            (sum: number, h: any) => sum + this.parseNumber(h?.amount),
+            0,
+          );
 
     const monthlyMap = new Map<string, number>();
-    for (const row of histories) {
-      const createdAt = this.parseDateValue(row?.createdAt);
-      if (!createdAt) continue;
-      const key = this.tashkentMonthKey(createdAt);
-      const delta =
-        row?.operation_type === 'income'
-          ? this.parseNumber(row?.amount)
-          : -this.parseNumber(row?.amount);
-      monthlyMap.set(key, (monthlyMap.get(key) ?? 0) + delta);
+    if (periodMonthly) {
+      for (const row of periodMonthly) {
+        monthlyMap.set(row.month, this.parseNumber(row.amount));
+      }
+    } else {
+      for (const row of histories) {
+        const createdAt = this.parseDateValue(row?.createdAt);
+        if (!createdAt) continue;
+        const key = this.tashkentMonthKey(createdAt);
+        const delta =
+          row?.operation_type === 'income'
+            ? this.parseNumber(row?.amount)
+            : -this.parseNumber(row?.amount);
+        monthlyMap.set(key, (monthlyMap.get(key) ?? 0) + delta);
+      }
     }
 
     const monthlyDynamics = Array.from(monthlyMap.entries())

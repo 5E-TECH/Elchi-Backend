@@ -19,6 +19,19 @@ interface JwtUser {
   branch_id?: string;
 }
 
+/** GET /analytics/dashboard ga kira oladigan rollar (investor/customer — yo'q). */
+export const DASHBOARD_ROLES = [
+  RoleEnum.SUPERADMIN,
+  RoleEnum.ADMIN,
+  RoleEnum.MANAGER,
+  RoleEnum.BRANCH,
+  RoleEnum.REGISTRATOR,
+  RoleEnum.OPERATOR,
+  RoleEnum.COURIER,
+  RoleEnum.MARKET,
+  RoleEnum.MARKET_OPERATOR,
+] as const;
+
 @ApiTags('Analytics')
 @Controller('analytics')
 export class AnalyticsGatewayController {
@@ -35,7 +48,11 @@ export class AnalyticsGatewayController {
   }
 
   @Get('dashboard')
-  @UseGuards(JwtAuthGuard)
+  // Default-deny (ukulko6O, EgizXSKW): ilgari faqat JwtAuthGuard edi — har
+  // qanday login qilgan rol (investor, customer) dashboardni olardi. Rolga
+  // xos kesim servisda; bu yerda kim umuman kira olishi.
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(...DASHBOARD_ROLES)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Dashboard statistics by requester role' })
   @ApiQuery({ name: 'startDate', required: false, type: String })

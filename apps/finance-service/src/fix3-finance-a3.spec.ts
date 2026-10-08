@@ -891,6 +891,107 @@ describe('M16 — "Berilishi kerak" faqat musbat market kassalari', () => {
   });
 });
 
+describe('QGxC7v1E — hisobot jami summalari sahifa emas, butun oraliq bo`yicha', () => {
+  const setup = () => {
+    const { service, cashboxRepo, historyRepo } = makeService();
+    cashboxRepo.findOne.mockResolvedValue({ balance: 0 });
+    cashboxRepo.createQueryBuilder.mockImplementation(() => {
+      const qb: any = {
+        select: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        andWhere: jest.fn().mockReturnThis(),
+        getRawOne: jest.fn().mockResolvedValue({ total: '0' }),
+      };
+      return qb;
+    });
+    const unpagedCalls: Array<{ skip: unknown; take: unknown; sql: string[] }> =
+      [];
+    const makeUnpaged = () => {
+      const state = {
+        skip: 'unset' as unknown,
+        take: 'unset' as unknown,
+        sql: [] as string[],
+      };
+      unpagedCalls.push(state);
+      const u: any = {
+        skip: jest.fn((v: unknown) => ((state.skip = v), u)),
+        take: jest.fn((v: unknown) => ((state.take = v), u)),
+        orderBy: jest.fn(() => u),
+        select: jest.fn((s: string) => (state.sql.push(s), u)),
+        addSelect: jest.fn((s: string) => (state.sql.push(s), u)),
+        groupBy: jest.fn(() => u),
+        getRawOne: jest
+          .fn()
+          .mockResolvedValue({ income: '688661000', outcome: '412577000' }),
+        getRawMany: jest.fn().mockResolvedValue([
+          { month: '2026-08', income: '600000', outcome: '100000' },
+          { month: '2026-09', income: '88061000', outcome: '412477000' },
+        ]),
+      };
+      return u;
+    };
+    const page = {
+      leftJoinAndSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      skip: jest.fn().mockReturnThis(),
+      take: jest.fn().mockReturnThis(),
+      clone: jest.fn(() => makeUnpaged()),
+      // Sahifada atigi 2 qator — eski hisob 30 barobar kam chiqarardi.
+      getManyAndCount: jest.fn().mockResolvedValue([
+        [
+          { operation_type: 'income', amount: 1000 },
+          { operation_type: 'expense', amount: 5000 },
+        ],
+        253,
+      ]),
+    };
+    historyRepo.createQueryBuilder.mockReturnValue(page);
+    return { service, page, unpagedCalls };
+  };
+
+  it('⭐ withTotals: jami summa SQL SUM bilan, sahifasiz (skip/take olib tashlangan)', async () => {
+    const { service, unpagedCalls } = setup();
+    const res: any = await service.allCashboxesTotal({
+      page: 1,
+      limit: 20,
+      withTotals: true,
+    });
+
+    expect(res.data.periodTotals).toEqual({
+      income: 688661000,
+      outcome: 412577000,
+      net: 276084000,
+    });
+    expect(unpagedCalls.length).toBe(2);
+    for (const call of unpagedCalls) {
+      expect(call.skip).toBeUndefined();
+      expect(call.take).toBeUndefined();
+    }
+    // Oy Toshkent vaqti bo'yicha (UTC oyi emas).
+    expect(unpagedCalls[1].sql.join(' ')).toContain(
+      `AT TIME ZONE 'Asia/Tashkent'`,
+    );
+    expect(res.data.periodMonthly).toEqual([
+      { month: '2026-08', income: 600000, outcome: 100000, amount: 500000 },
+      {
+        month: '2026-09',
+        income: 88061000,
+        outcome: 412477000,
+        amount: -324416000,
+      },
+    ]);
+  });
+
+  it('withTotals so`ralmasa qo`shimcha so`rov yo`q (Balans all-info o`zgarmaydi)', async () => {
+    const { service, page } = setup();
+    const res: any = await service.allCashboxesTotal({ page: 1, limit: 20 });
+    expect(page.clone).not.toHaveBeenCalled();
+    expect(res.data.periodTotals).toBeUndefined();
+  });
+});
+
 describe('CODE-08 — kassa egasi: filial id si foydalanuvchi deb olinmaydi', () => {
   it('BRANCH/MAIN kassasi uchun identity so`ralmaydi, user = null; market kassasi — so`raladi', async () => {
     const { service } = makeService();

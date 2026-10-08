@@ -315,6 +315,89 @@ describe('ApiGatewayController', () => {
    * MANAGER'ga. REGISTRATOR va BRANCH ro'yxatni balanssiz oladi, finance'ga
    * murojaat qilinmaydi.
    */
+  describe('getUsers — kuryer ko`lami faqat menejerga (o5jS4rUS)', () => {
+    const tenCouriers = Array.from({ length: 10 }, (_, i) => ({
+      id: String(100 + i),
+      name: `Viloyat kuryer ${i}`,
+      role: 'courier',
+    }));
+    const identityPage = (items: Array<Record<string, unknown>>) =>
+      of({
+        statusCode: 200,
+        data: { items, meta: { page: 1, limit: 200, total: items.length } },
+      });
+
+    it('⭐ superadmin: branch so`rovi YO`Q, user_ids yo`q, 10 ta kuryerdan hech biri yashirilmaydi', async () => {
+      identityClient.send.mockReturnValue(identityPage(tenCouriers));
+
+      const res: any = await apiGatewayController.getUsers(
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        '1',
+        '200',
+        { user: { sub: '1', username: 'sa', roles: ['superadmin'] } } as any,
+      );
+
+      const branchCmds = branchClient.send.mock.calls.map(
+        ([p]: [{ cmd: string }]) => p.cmd,
+      );
+      expect(branchCmds).not.toContain('branch.find_hq');
+      expect(branchCmds).not.toContain('branch.user.find_by_branch');
+      const [, payload] = identityClient.send.mock.calls[0];
+      expect(payload.query.user_ids).toBeUndefined();
+      expect(res.data.items).toHaveLength(10);
+      expect(res.data.meta.total).toBe(10);
+    });
+
+    it('⭐ superadmin ?role=courier — /couriers bilan teng (filtrlanmaydi)', async () => {
+      identityClient.send.mockReturnValue(identityPage(tenCouriers));
+      const res: any = await apiGatewayController.getUsers(
+        undefined,
+        'courier',
+        undefined,
+        undefined,
+        undefined,
+        '1',
+        '200',
+        { user: { sub: '1', username: 'sa', roles: ['superadmin'] } } as any,
+      );
+      expect(
+        identityClient.send.mock.calls[0][1].query.user_ids,
+      ).toBeUndefined();
+      expect(res.data.meta.total).toBe(10);
+    });
+
+    it('⭐ regressiya: filialga biriktirilgan menejer uchun kuryer ko`lami SAQLANADI', async () => {
+      branchClient.send.mockImplementation(({ cmd }: { cmd: string }) => {
+        if (cmd === 'branch.user.find_by_user') {
+          return of({ data: { branch_id: '3', role: 'MANAGER' } });
+        }
+        if (cmd === 'branch.user.find_by_branch') {
+          return of({ data: [{ user_id: '101', role: 'COURIER' }] });
+        }
+        return of({ data: null });
+      });
+      identityClient.send.mockReturnValue(identityPage([tenCouriers[1]]));
+
+      await apiGatewayController.getUsers(
+        undefined,
+        'courier',
+        undefined,
+        undefined,
+        undefined,
+        '1',
+        '200',
+        { user: { sub: '25', username: 'mgr', roles: ['manager'] } } as any,
+      );
+
+      const [, payload] = identityClient.send.mock.calls[0];
+      expect(payload.query.user_ids).toEqual(['101']);
+    });
+  });
+
   describe('getCouriers — kuryer balanslari kimga ko‘rinadi', () => {
     const courierCashbox = {
       id: 'cb-263',

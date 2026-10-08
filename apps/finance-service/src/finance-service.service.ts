@@ -21,6 +21,7 @@ import {
   Not,
   QueryFailedError,
   Repository,
+  SelectQueryBuilder,
 } from 'typeorm';
 import { Cashbox } from './entities/cashbox.entity';
 import { CashboxHistory } from './entities/cashbox-history.entity';
@@ -337,6 +338,49 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       );
       return [];
     }
+  }
+
+  /**
+   * Moliyaviy hisobot jami summalari (QGxC7v1E). Ilgari analytics ularni
+   * paginatsiyalangan SAHIFA (default 20 qator) ustidan yig'ardi — kirim
+   * 30 barobar kam, sof foyda ishorasi teskari chiqardi. Endi AYNI filtrli
+   * so'rov sahifasiz, SQL SUM bilan; oylar Toshkent vaqti bo'yicha.
+   */
+  private async sumHistoryTotals(qb: SelectQueryBuilder<CashboxHistory>) {
+    const income = `COALESCE(SUM(CASE WHEN h.operation_type = 'income' THEN h.amount ELSE 0 END), 0)`;
+    const outcome = `COALESCE(SUM(CASE WHEN h.operation_type = 'expense' THEN h.amount ELSE 0 END), 0)`;
+    const unpaged = () => qb.clone().skip(undefined).take(undefined).orderBy();
+
+    const totalsRow = await unpaged()
+      .select(income, 'income')
+      .addSelect(outcome, 'outcome')
+      .getRawOne<{ income: string; outcome: string }>();
+    const monthlyRows = await unpaged()
+      .select(
+        `to_char(h."createdAt" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM')`,
+        'month',
+      )
+      .addSelect(income, 'income')
+      .addSelect(outcome, 'outcome')
+      .groupBy('month')
+      .orderBy('month', 'ASC')
+      .getRawMany<{ month: string; income: string; outcome: string }>();
+
+    const totalIncome = Number(totalsRow?.income ?? 0);
+    const totalOutcome = Number(totalsRow?.outcome ?? 0);
+    return {
+      periodTotals: {
+        income: totalIncome,
+        outcome: totalOutcome,
+        net: totalIncome - totalOutcome,
+      },
+      periodMonthly: monthlyRows.map((row) => ({
+        month: row.month,
+        income: Number(row.income ?? 0),
+        outcome: Number(row.outcome ?? 0),
+        amount: Number(row.income ?? 0) - Number(row.outcome ?? 0),
+      })),
+    };
   }
 
   private async sumCashboxBalanceByType(
@@ -3063,6 +3107,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     to_date?: string;
     page?: number;
     limit?: number;
+    /** Hisobot uchun: jami va oylik summalar BUTUN oraliq bo'yicha (QGxC7v1E). */
+    withTotals?: boolean;
   }) {
     try {
       const mainCashbox = await this.ensureMainCashbox();
@@ -3143,6 +3189,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           this.sumCashboxBalanceByType(Cashbox_type.FOR_MARKET),
           this.sumPositiveCashboxBalanceByType(Cashbox_type.FOR_MARKET),
         ]);
+      const periodTotals = filters?.withTotals
+        ? await this.sumHistoryTotals(qb)
+        : undefined;
 
       return this.successRes(
         {
@@ -3152,6 +3201,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           marketCashboxTotal,
           // Faqat musbat kassalar — HQ marketlarga to'lashi kerak (audit M16).
           marketPayableTotal,
+          ...(periodTotals ?? {}),
           allCashboxHistories,
           pagination: {
             total,

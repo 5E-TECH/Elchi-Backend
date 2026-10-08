@@ -23,6 +23,33 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-08 — 7-oktabr muddatli kartalar (analitika, RBAC, filtrlar, integratsiya)
+
+- [2026-10-08] ✏️ [analytics] — `GET /analytics/revenue`: `data` endi MASSIV
+  (bandlar), `summary {totalRevenue, totalOrders, avgRevenue}` qaytadi; raqamli
+  kalitlar (`"0"`, `"1"`…) yo'q (faAfgvW1). `chart` o'zgarmagan →
+  `FinancialAnalysis.tsx` dagi `Object.values(revenuePayload)` hack'i endi
+  kerak emas, `data`/`chart` o'qilsin. `GET /analytics/kpi` `averageOrderValue`
+  endi 0 emas (tVAWnl9O) — "Yo'qotilgan daromad" ham to'g'ri chiqadi.
+- [2026-10-08] ✏️ [analytics] — `GET /analytics/reports/finance`:
+  `totalIncome/totalOutcome/net` va `monthlyDynamics` BUTUN oraliq bo'yicha
+  (limitga bog'liq emas); `limit` yuqori chegarasi 100 (QGxC7v1E).
+- [2026-10-08] ⚠️ [analytics] — `GET /analytics/dashboard` endi `RolesGuard` bilan:
+  investor va customer → 403 (ukulko6O, EgizXSKW).
+- [2026-10-08] ✏️ [order] — `GET /orders`: SA/admin uchun `status=cancelled`
+  oddiy filtr (hamma bekor qilinganlar, `cancelled (sent)` qayta yozilmaydi).
+  Inventar rejimi (qo'ldagi, qaytarish pochtasiga biriktirilmagan) —
+  `cancelled_inventory=true`. Filial xodimi/HQ registratori uchun parametrsiz
+  avvalgidek inventar → 🔧 menejer «Bekor» tabi `cancelled_inventory=true`
+  yuborsin (onzwA7CQ). `market_operator` boshqa `market_id` so'rasa → 400 (WWbdu8ya).
+- [2026-10-08] 🟢 [identity] — `GET /users`: superadmin/admin uchun kuryerlar
+  filial bo'yicha yashirilmaydi (o5jS4rUS).
+- [2026-10-08] 🟢 [branch] — `GET /branches/:id` (va filial/transfer-batch
+  `:id` yo'llari): raqam bo'lmagan id → 400 (avval 500) (RghzFldr).
+- [2026-10-08] ✏️ [partner] — `POST /admin/partners/:id/webhook-test`:
+  `target: 'main' | 'sandbox'`; javobda `target` va `secret_used`. Berilmasa
+  sandbox yoqiq va manzili bo'lsa sandbox (jeU3eztP).
+
 ### 2026-10-08 — Prod testidan keyingi tuzatishlar (6-oktabr kartalari)
 
 - [2026-10-08] ✏️ [order] — `POST /orders/sell/{id}`: `paidAmount: 0` yana qabul

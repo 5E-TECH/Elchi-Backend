@@ -797,10 +797,13 @@ export class ApiGatewayController {
 
     let scopedUserIds: string[] | undefined;
 
+    // o5jS4rUS: kuryer/filial ko'lami FAQAT menejerga. Superadmin/admin hech
+    // qaysi filialga biriktirilmagan — ilgari ular ham HQ'ga fallback qilib,
+    // HQ'ga biriktirilmagan BARCHA viloyat kuryerlarini ro'yxatdan yashirardi
+    // (/users?role=courier 2 ta, /couriers 10 ta). Tizim egasi uchun ko'lam
+    // cheklanmagan.
     const requesterCanHaveCourierScope =
-      requesterRoles.includes(RoleEnum.MANAGER) ||
-      requesterRoles.includes(RoleEnum.ADMIN) ||
-      requesterRoles.includes(RoleEnum.SUPERADMIN);
+      requesterRoles.includes(RoleEnum.MANAGER) && !isSystemPrivileged;
 
     let branchCourierIds: string[] | undefined;
     let branchBoundUserIds: string[] | undefined;

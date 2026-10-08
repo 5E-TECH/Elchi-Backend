@@ -27,6 +27,7 @@ import { PartnerMarketRef } from './entities/partner-market-ref.entity';
 import { PartnerWebhookOutbox } from './entities/partner-webhook-outbox.entity';
 import { SyncQueueScheduler } from './sync-queue.scheduler';
 import { ReconcileScheduler } from './reconcile.scheduler';
+import { PartnerWebhookDigestScheduler } from './partner-webhook-digest.scheduler';
 
 @Module({
   imports: [
@@ -72,6 +73,7 @@ import { ReconcileScheduler } from './reconcile.scheduler';
     IntegrationServiceService,
     SyncQueueScheduler,
     ReconcileScheduler,
+    PartnerWebhookDigestScheduler,
   ],
 })
 export class IntegrationServiceModule {}
