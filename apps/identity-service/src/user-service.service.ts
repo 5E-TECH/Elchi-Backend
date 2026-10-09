@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { Brackets, In, Repository } from 'typeorm';
+import { Brackets, ILike, In, QueryFailedError, Repository } from 'typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { lastValueFrom, timeout } from 'rxjs';
 import { randomBytes } from 'crypto';
@@ -15,12 +15,20 @@ import { CreateCourierDto } from './dto/create-courier.dto';
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { CreateManagerDto } from './dto/create-manager.dto';
 import { UserFilterQuery } from './contracts/user.payloads';
+import { MARKET_TG_TOKEN_ROTATE_ALL_CONFIRM } from './contracts/market.payloads';
+import {
+  CreateMarketOperatorDto,
+  UpdateMarketOperatorCommissionDto,
+} from './dto/market-operator.dto';
+import type { MarketOperatorFilterQuery } from './contracts/market-operator.payloads';
 import {
   ActivityAction,
   ActivityLogService,
   Cashbox_type,
+  Commission_type,
   Roles,
   Status,
+  normalizeUzPhone,
   rmqSend,
 } from '@app/common';
 import type { ActivityLogQuery } from '@app/common';
@@ -56,6 +64,21 @@ const COURIER_DELETE_CHECK_UNAVAILABLE =
 const COURIER_DELETE_CHECK_TIMEOUT_MS = 12_000;
 
 /**
+ * (dzyVftBx, TC4) Logistni o'chirish: avval uning viloyatlari bo'shatiladi
+ * (`logistics.region.clear_logist` → `regions.logist_id = NULL`), keyin user
+ * soft-delete qilinadi. Sxemalararo FK yo'q va user soft-delete bo'ladi —
+ * `ON DELETE SET NULL` ni shu qadam bajaradi. Bo'shatib bo'lmasa logist
+ * O'CHIRILMAYDI (503, fail-closed): aks holda viloyat o'chirilgan userga
+ * ishora qilib qolardi.
+ *
+ * Qadam idempotent, shuning uchun bitta qayta urinish bor: 2 × 5 s + kechikish
+ * < gateway DELETE /users/:id 15 s.
+ */
+export const LOGIST_DELETE_RELEASE_FAILED =
+  "Logistni viloyatlardan ajratib bo'lmadi — logist o'chirilmadi. Birozdan so'ng qayta urinib ko'ring.";
+const LOGIST_RELEASE_TIMEOUT_MS = 5000;
+
+/**
  * identity.courier.set_region'da DB xatosi. Xom xato qayta navbatga qo'yilib,
  * handler branch-service o'tkazishni bekor qilganidan KEYIN yangi hududni
  * yozib qo'yishi mumkin edi — shuning uchun u RpcException bo'lib ketadi.
@@ -71,6 +94,43 @@ const COURIER_REGION_SAVE_FAILED =
  */
 const COURIER_REGION_DEADLINE_PASSED =
   "Kuryer hududini yangilash muddati o'tdi — hudud o'zgarmadi";
+
+/**
+ * Market operatorlari (i76gGjyq): boshqa marketning operatori ham, umuman
+ * yo'q id ham BIR XIL 404 oladi — 403 id mavjudligini oshkor qilardi.
+ */
+const MARKET_OPERATOR_NOT_FOUND = 'Operator topilmadi yoki sizga tegishli emas';
+
+/**
+ * Operator komissiyasi chegaralari (i76gGjyq, BeePost bilan bir xil):
+ * PERCENT — total_price foizi (0..100), FIXED — sotilgan buyurtma uchun
+ * so'm (0..1 000 000). Undan kattasi deyarli albatta klaviatura xatosi —
+ * finance har sotuvda shu qiymatdan daromad yozadi.
+ */
+const MARKET_OPERATOR_PERCENT_MAX = 100;
+const MARKET_OPERATOR_FIXED_MAX = 1_000_000;
+
+/**
+ * (GvL6ZFAd) market_tg_token — bearer sir: uni order-bot yoki bildirishnoma
+ * botiga yuborgan HAR KIM o'sha marketni o'z chatiga bog'laydi. Ko'rish va
+ * almashtirish FAQAT SUPERADMIN (gateway RolesGuard + shu servisdagi qayta
+ * tekshiruv). Jurnalga faqat amal yoziladi — token QIYMATI hech qachon.
+ */
+const MARKET_TG_TOKEN_FORBIDDEN =
+  "Market Telegram tokenini faqat superadmin ko'ra va almashtira oladi";
+const MARKET_TG_TOKEN_MARKET_NOT_FOUND = 'Market topilmadi';
+const MARKET_TG_TOKEN_ROTATE_ALL_CONFIRM_REQUIRED = `Barcha market tokenlarini almashtirish uchun so'rov tanasida confirm: '${MARKET_TG_TOKEN_ROTATE_ALL_CONFIRM}' yuboring`;
+const MARKET_TG_TOKEN_ROTATE_FAILED =
+  "Market Telegram tokenini almashtirib bo'lmadi — hech bir token o'zgarmadi. Qayta urinib ko'ring.";
+
+export const MARKET_TG_TOKEN_AUDIT_ACTION = {
+  VIEWED: 'market.tg_token_viewed',
+  ROTATED: 'market.tg_token_rotated',
+  ROTATED_ALL: 'market.tg_token_rotated_all',
+} as const;
+
+/** rotate-all jurnal qatorining entity_id si (bitta qator — barcha marketlar). */
+export const MARKET_TG_TOKEN_ROTATE_ALL_ENTITY_ID = 'all_markets';
 
 /**
  * Boshqa servisning rad javobini YAKUNIY mijoz xatosiga aylantiradi.
@@ -159,6 +219,127 @@ function sameEntityId(left: unknown, right: unknown): boolean {
   return a === b;
 }
 
+/**
+ * oNAE3LW9 — `identity.user.reassign_district` kirishi (order/identity/branch dagi
+ * `*.reassign_district` bilan bir xil shakl).
+ */
+export interface GeoReassignInput {
+  from_district_id?: string;
+  to_district_id?: string;
+  /** Ko'chgan qatorlarning `region_id` si shunga o'rnatiladi; bo'sh — tegilmaydi. */
+  to_region_id?: string | null;
+  /**
+   * ID rejimi: faqat shu qatorlar (va faqat hali `from_district_id` da
+   * turganlari) ko'chadi — birlashtirish KOMPENSATSIYASI (B → A) uchun.
+   */
+  ids?: Array<string | number> | null;
+  /** Kompensatsiya: `region_id` ni qator bo'yicha AYNAN tiklash. */
+  restore_regions?: Array<{
+    region_id: string | number | null;
+    ids: Array<string | number>;
+  }> | null;
+  /**
+   * Muddat (epoch ms): logistics shu paytgacha javob kutadi. Undan keyin
+   * ko'chirish BAJARILMAYDI (boshida va COMMIT'dan oldin tekshiriladi) —
+   * logistics timeout bilan voz kechib kompensatsiya qilgandan keyin "kech"
+   * ko'chish bo'lmasin.
+   */
+  deadline_at?: number | null;
+}
+
+/** oNAE3LW9 — bigint ID (musbat butun son, ko'pi bilan 19 xona). */
+const GEO_ID_PATTERN = /^\d{1,19}$/;
+
+const geoBadRequest = (message: string) =>
+  new RpcException(errorRes(message, 400));
+
+/** oNAE3LW9 — `deadline_at` o'tgan bo'lsa ko'chirish bajarilmaydi (409). */
+function assertGeoDeadline(deadlineAt: number | null): void {
+  if (deadlineAt !== null && Date.now() > deadlineAt) {
+    throw new RpcException(
+      errorRes(
+        "Ko'chirish muddati o'tdi (logistics javobni kutmay qo'ydi) — bajarilmadi",
+        409,
+      ),
+    );
+  }
+}
+
+/** oNAE3LW9 — `reassignDistrict` kirishini tekshiradi va normallashtiradi. */
+function parseGeoReassignInput(input: GeoReassignInput) {
+  const from = String(input?.from_district_id ?? '').trim();
+  const to = String(input?.to_district_id ?? '').trim();
+  if (!GEO_ID_PATTERN.test(from) || !GEO_ID_PATTERN.test(to) || from === to) {
+    throw geoBadRequest(
+      "from_district_id va to_district_id majburiy va har xil bo'lishi kerak",
+    );
+  }
+  const toRegionId = String(input?.to_region_id ?? '').trim() || null;
+  const isId = (value: unknown) =>
+    (typeof value === 'string' || typeof value === 'number') &&
+    GEO_ID_PATTERN.test(String(value).trim());
+  let ids: string[] | null = null;
+  if (input?.ids !== undefined && input?.ids !== null) {
+    if (!Array.isArray(input.ids) || !input.ids.every(isId)) {
+      throw geoBadRequest("ids — musbat butun sonlar ro'yxati bo'lishi kerak");
+    }
+    ids = [...new Set(input.ids.map((value) => String(value).trim()))];
+  }
+  const restoreRegions: Array<{ region_id: string | null; ids: string[] }> = [];
+  if (input?.restore_regions !== undefined && input?.restore_regions !== null) {
+    if (!Array.isArray(input.restore_regions)) {
+      throw geoBadRequest("restore_regions ro'yxat bo'lishi kerak");
+    }
+    for (const group of input.restore_regions) {
+      const regionId = String(group?.region_id ?? '').trim() || null;
+      if (
+        (regionId !== null && !isId(regionId)) ||
+        !Array.isArray(group?.ids) ||
+        !group.ids.every(isId)
+      ) {
+        throw geoBadRequest("restore_regions elementi noto'g'ri");
+      }
+      restoreRegions.push({
+        region_id: regionId,
+        ids: group.ids.map((value) => String(value).trim()),
+      });
+    }
+  }
+  const deadline = Number(input?.deadline_at);
+  const deadlineAt =
+    Number.isFinite(deadline) && deadline > 0 ? deadline : null;
+  return { from, to, toRegionId, ids, restoreRegions, deadlineAt };
+}
+
+/**
+ * oNAE3LW9 — ko'chirish javobi: ko'chgan ID'lar, ularning ESKI `region_id`
+ * guruhlari (kompensatsiya aynan tiklashi uchun) va ID rejimida topilmagan
+ * (A da yo'q) ID'lar.
+ */
+function geoReassignResult(
+  req: { from: string; to: string; ids: string[] | null },
+  rows: Array<{ id: string; region_id: string | null }>,
+) {
+  const ids = rows.map((row) => String(row.id));
+  const groups = new Map<string, { region_id: string | null; ids: string[] }>();
+  for (const row of rows) {
+    const regionId = row.region_id == null ? null : String(row.region_id);
+    const key = regionId ?? '';
+    const group = groups.get(key) ?? { region_id: regionId, ids: [] };
+    group.ids.push(String(row.id));
+    groups.set(key, group);
+  }
+  const movedSet = new Set(ids);
+  return {
+    from_district_id: req.from,
+    to_district_id: req.to,
+    moved: ids.length,
+    ids,
+    previous_regions: [...groups.values()],
+    missing_ids: (req.ids ?? []).filter((id) => !movedSet.has(id)),
+  };
+}
+
 @Injectable()
 export class UserServiceService implements OnModuleInit {
   private readonly logger = new Logger(UserServiceService.name);
@@ -185,8 +366,14 @@ export class UserServiceService implements OnModuleInit {
    *
    * market_tg_token ilgari order/analytics/finance/catalog/branch javoblaridagi
    * market obyektlari orqali menejer, registrator, kuryer va boshqa
-   * marketlarga ham yetib borardi. Endi u faqat sanitizeWithTgToken orqali
-   * qaytadi — superadmin/admin market profilini ochganda (GET /users/:id).
+   * marketlarga ham yetib borardi.
+   *
+   * (GvL6ZFAd) ISTISNO YO'Q: token hech bir umumiy javobda (GET /users,
+   * GET /users/:id — SUPERADMIN uchun ham, GET /markets, profil, market
+   * qidiruvi) qaytmaydi. Uni ko'rish va almashtirish faqat SUPERADMIN-only
+   * maxsus RPC'lar orqali: identity.market.get_tg_token,
+   * identity.market.rotate_tg_token, identity.market.rotate_all_tg_tokens.
+   * Avvalgi `include_tg_token` / sanitizeWithTgToken yo'li olib tashlandi.
    */
   private sanitize(
     user: User,
@@ -195,21 +382,6 @@ export class UserServiceService implements OnModuleInit {
     delete (safeUser as { password?: unknown }).password;
     delete (safeUser as { refresh_token?: unknown }).refresh_token;
     delete (safeUser as { market_tg_token?: unknown }).market_tg_token;
-    return safeUser;
-  }
-
-  /**
-   * sanitize() bilan bir xil, lekin market_tg_token SAQLANADI. Faqat
-   * identity.user.find_by_id `include_tg_token === true` bilan va faqat market
-   * qatori uchun ishlatiladi. Gateway bu flagni faqat SUPERADMIN/ADMIN
-   * so'rovida yuboradi — admin tokenni marketga shu sahifadan beradi.
-   */
-  private sanitizeWithTgToken(
-    user: User,
-  ): Omit<User, 'password' | 'refresh_token'> {
-    const safeUser = { ...user };
-    delete (safeUser as { password?: unknown }).password;
-    delete (safeUser as { refresh_token?: unknown }).refresh_token;
     return safeUser;
   }
 
@@ -518,6 +690,22 @@ export class UserServiceService implements OnModuleInit {
   }
 
   private assertRequesterCanCreateManager(requester?: RequesterContext) {
+    if (!requester) {
+      return;
+    }
+
+    if (
+      this.hasRole(requester, Roles.SUPERADMIN) ||
+      this.hasRole(requester, Roles.ADMIN)
+    ) {
+      return;
+    }
+
+    this.forbidden('Bu amal uchun ruxsat yoq');
+  }
+
+  /** (dzyVftBx) Logist: SUPERADMIN | ADMIN (gateway POST /logists bilan bir xil). */
+  private assertRequesterCanCreateLogist(requester?: RequesterContext) {
     if (!requester) {
       return;
     }
@@ -1039,6 +1227,85 @@ export class UserServiceService implements OnModuleInit {
     return successRes(this.sanitize(saved), 201, "Ro'yxatchi yaratildi");
   }
 
+  /**
+   * (dzyVftBx) Logist yaratish — admin/registrator naqshi (ism, telefon,
+   * parol, maosh, to'lov kuni). Logist filial xodimi emas: `branch_id`
+   * e'tiborga olinmaydi (gateway DTO'sida u umuman yo'q), kassa ham
+   * ochilmaydi (roleToCashboxType → null). Viloyatlar keyin
+   * PATCH /region/:id/logist yoki POST /region/logist/bulk bilan beriladi.
+   */
+  async createLogist(dto: CreateAdminDto, requester?: RequesterContext) {
+    this.assertRequesterCanCreateLogist(requester);
+
+    await this.ensurePhoneUnique(dto.phone_number);
+
+    const hashedPassword = await this.bcryptEncryption.encrypt(dto.password);
+
+    const logist = this.users.create({
+      name: dto.name,
+      phone_number: dto.phone_number,
+      username: null,
+      password: hashedPassword,
+      salary: dto.salary ?? 0,
+      payment_day: dto.payment_day ?? this.getBusinessPaymentDay(),
+      role: Roles.LOGIST,
+      status: Status.ACTIVE,
+      created_by: this.createdByOf(requester),
+      isDeleted: false,
+    });
+
+    const saved = await this.users.save(logist);
+    void this.syncUserToSearch(saved);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.CREATED,
+      new_value: {
+        name: saved.name,
+        phone_number: saved.phone_number,
+        role: saved.role,
+      },
+      ...this.auditActor(requester),
+    });
+    return successRes(this.sanitize(saved), 201, 'Logist yaratildi');
+  }
+
+  /**
+   * (dzyVftBx) logistics-service viloyatga logist biriktirishdan oldin
+   * chaqiradi: faqat o'chirilmagan LOGIST qatorlari (status bilan — faolligini
+   * logistics tekshiradi). findCouriersByIds bilan bir xil shakl.
+   */
+  async findLogistsByIds(ids: unknown) {
+    const clean = [
+      ...new Set(
+        (Array.isArray(ids) ? ids : [])
+          .map((id) => primitiveText(id).trim())
+          // bigint chegarasidan tashqari id Postgres xatosi (500) bo'lardi.
+          .filter(
+            (id) =>
+              /^\d{1,19}$/.test(id) &&
+              BigInt(id) <= BigInt('9223372036854775807'),
+          ),
+      ),
+    ].slice(0, 500);
+    if (!clean.length) {
+      return { success: true, data: [] };
+    }
+
+    const logists = await this.users.find({
+      where: {
+        id: In(clean),
+        role: Roles.LOGIST,
+        isDeleted: false,
+      },
+    });
+
+    return {
+      success: true,
+      data: logists.map((row) => this.sanitize(row)),
+    };
+  }
+
   async updateAdmin(id: string, dto: UpdateUserDto) {
     return this.updateUser(id, dto);
   }
@@ -1419,6 +1686,34 @@ export class UserServiceService implements OnModuleInit {
     }
   }
 
+  /**
+   * (dzyVftBx, TC4) `logistics.region.clear_logist` — logistning barcha
+   * viloyatlarida `logist_id = NULL` (LOGIST_DELETE_RELEASE_FAILED ga
+   * qarang). Xato, timeout yoki rad javobi → 503 (fail-closed).
+   */
+  private async releaseLogistRegionsOrFail(
+    logistId: string,
+    requester?: RequesterContext,
+  ): Promise<void> {
+    try {
+      await rmqSend(
+        this.logisticsClient,
+        { cmd: 'logistics.region.clear_logist' },
+        { logist_id: logistId, requester },
+        {
+          attachRequestId: false,
+          retries: 1,
+          timeoutMs: LOGIST_RELEASE_TIMEOUT_MS,
+        },
+      );
+    } catch (error) {
+      this.logger.warn(
+        `deleteUser: logistics.region.clear_logist failed for logist ${logistId} (${describeSagaError(error)}) — logist NOT deleted`,
+      );
+      throw new RpcException(errorRes(LOGIST_DELETE_RELEASE_FAILED, 503));
+    }
+  }
+
   async deleteAdmin(id: string) {
     return this.deleteUser(id);
   }
@@ -1440,6 +1735,13 @@ export class UserServiceService implements OnModuleInit {
     // o'zgarishdan oldin (branch_users qatori va kassa o'z holicha qoladi).
     if (admin.role === Roles.COURIER) {
       await this.assertCourierCanBeDeleted(String(admin.id), requester);
+    }
+
+    // (dzyVftBx, TC4) Logistning viloyatlari soft-delete'dan OLDIN bo'shatiladi
+    // (regions.logist_id = NULL; viloyatlarning o'zi o'chmaydi). Bo'shatib
+    // bo'lmasa — 503, logist o'chirilmaydi.
+    if (admin.role === Roles.LOGIST) {
+      await this.releaseLogistRegionsOrFail(String(admin.id), requester);
     }
 
     if (admin.role === Roles.MARKET) {
@@ -1544,20 +1846,21 @@ export class UserServiceService implements OnModuleInit {
     }
   }
 
-  async findUserById(id: string, options: { includeTgToken?: boolean } = {}) {
+  async findUserById(id: string, options: { includeDeleted?: boolean } = {}) {
+    // (i76gGjyq) `includeDeleted` — faqat ichki RPC (finance operator
+    // komissiyasi): o'chirilgan operatorning ilgari olingan buyurtmasi keyin
+    // sotilsa, 404 outbox'ni cheksiz qayta urardi. Gateway buni HECH QACHON
+    // yubormaydi (GET /users/:id faqat `{ id }`).
     const user = await this.users.findOne({
-      where: { id, isDeleted: false },
+      where: options.includeDeleted ? { id } : { id, isDeleted: false },
     });
     if (!user) {
       this.notFound('User topilmadi');
     }
 
-    // market_tg_token faqat aniq `true` flag bilan VA faqat market qatorida
-    // qaytadi — xodim qatorida qolib ketgan eski qiymat ham chiqmaydi.
-    const safeUser =
-      options?.includeTgToken === true && user.role === Roles.MARKET
-        ? this.sanitizeWithTgToken(user)
-        : this.sanitize(user);
+    // (GvL6ZFAd) market_tg_token HECH QACHON qaytmaydi — hech bir rol yoki
+    // flag uchun. Ko'rish: GET /markets/:id/tg-token (faqat SUPERADMIN).
+    const safeUser = this.sanitize(user);
     const profileRegion = await this.getRegionById(safeUser.region_id);
     return successRes({
       ...safeUser,
@@ -2273,6 +2576,122 @@ export class UserServiceService implements OnModuleInit {
     return successRes({ id }, 200, 'Market o‘chirildi');
   }
 
+  /**
+   * oNAE3LW9 — hududni o'chirishdan OLDIN: shu tuman/viloyatga bog'langan
+   * foydalanuvchilar (mijozlar, kuryerlar, marketlar) soni. O'chirilganlari
+   * ham sanaladi — ular buyurtma tarixida ko'rinadi.
+   */
+  async countGeoUsage(input: { district_id?: string; region_id?: string }) {
+    const districtId = String(input?.district_id ?? '').trim();
+    const regionId = String(input?.region_id ?? '').trim();
+    if (!districtId && !regionId) {
+      throw new RpcException(
+        errorRes('district_id yoki region_id majburiy', 400),
+      );
+    }
+    const rows = await this.users
+      .createQueryBuilder('u')
+      .select('u.role', 'role')
+      .addSelect('COUNT(*)', 'count')
+      .where(
+        districtId ? 'u.district_id = :districtId' : 'u.region_id = :regionId',
+        districtId ? { districtId } : { regionId },
+      )
+      .groupBy('u.role')
+      .getRawMany<{ role: string; count: string }>();
+    const by_role = Object.fromEntries(
+      rows.map((r) => [String(r.role), Number(r.count ?? 0)]),
+    );
+    const users = rows.reduce((sum, r) => sum + Number(r.count ?? 0), 0);
+    return successRes(
+      {
+        district_id: districtId || null,
+        region_id: regionId || null,
+        users,
+        by_role,
+      },
+      200,
+      'Geo usage',
+    );
+  }
+
+  /**
+   * oNAE3LW9 — tumanlarni birlashtirish (logistics `mergeDistricts`):
+   * foydalanuvchilar (mijoz/kuryer/market) A → B tumaniga (va B ning viloyatiga).
+   *
+   * ID rejimi (`ids`): faqat shu qatorlar va faqat hali A da turganlari —
+   * logistics KOMPENSATSIYASI (B → A); `restore_regions` bilan `region_id`
+   * ham qator bo'yicha AYNAN eski qiymatiga qaytadi.
+   *
+   * BITTA tranzaksiyada: qatorlar `FOR UPDATE` bilan qulflanib ID va ESKI
+   * `region_id` olinadi, so'ng aynan shu ID'lar yangilanadi. Javobdagi `ids`
+   * + `previous_regions` bo'yicha logistics keyingi bosqich yiqilsa AYNAN
+   * shu qatorlarni A ga qaytaradi (servislararo umumiy tranzaksiya yo'q).
+   * `deadline_at` dan keyin ko'chirish bajarilmaydi (kech ko'chish yo'q).
+   */
+  async reassignDistrict(input: GeoReassignInput) {
+    const req = parseGeoReassignInput(input);
+    assertGeoDeadline(req.deadlineAt);
+    let rows: Array<{ id: string; region_id: string | null }>;
+    try {
+      rows = await this.users.manager.transaction(async (manager) => {
+        if (req.ids && !req.ids.length) return [];
+        const select = manager
+          .getRepository(User)
+          .createQueryBuilder('t')
+          .select('t.id', 'id')
+          .addSelect('t.region_id', 'region_id')
+          .where('t.district_id = :from', { from: req.from });
+        if (req.ids) {
+          select.andWhere('t.id = ANY(:ids)', { ids: req.ids });
+        }
+        const locked = await select
+          .setLock('pessimistic_write')
+          .getRawMany<{ id: string; region_id: string | null }>();
+        const ids = locked.map((row) => String(row.id));
+        if (!ids.length) return locked;
+        await manager
+          .createQueryBuilder()
+          .update(User)
+          .set(
+            req.toRegionId
+              ? { district_id: req.to, region_id: req.toRegionId }
+              : { district_id: req.to },
+          )
+          .where('id = ANY(:ids)', { ids })
+          .execute();
+        const movedSet = new Set(ids);
+        for (const group of req.restoreRegions) {
+          const groupIds = group.ids.filter((id) => movedSet.has(id));
+          if (!groupIds.length) continue;
+          await manager
+            .createQueryBuilder()
+            .update(User)
+            .set({ region_id: group.region_id })
+            .where('id = ANY(:ids)', { ids: groupIds })
+            .execute();
+        }
+        // Muddat COMMIT'dan OLDIN yana: logistics voz kechgan bo'lsa — rollback.
+        assertGeoDeadline(req.deadlineAt);
+        return locked;
+      });
+    } catch (error) {
+      if (error instanceof RpcException) throw error;
+      // Kutilmagan (DB) xato RpcException'ga o'raladi: aks holda RMQ xabarni
+      // QAYTA navbatga qo'yadi va logistics kompensatsiya qilgandan keyin
+      // ko'chirish takror bajarilib qolishi mumkin edi.
+      throw new RpcException(
+        errorRes(
+          `Tuman bo'yicha ko'chirib bo'lmadi: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          503,
+        ),
+      );
+    }
+    return successRes(geoReassignResult(req, rows), 200, 'Users reassigned');
+  }
+
   async findMarketById(id: string) {
     const market = await this.users.findOne({
       where: { id, role: Roles.MARKET, isDeleted: false },
@@ -2319,39 +2738,185 @@ export class UserServiceService implements OnModuleInit {
   }
 
   /**
-   * market_tg_token'ni QAYTARADIGAN yagona RPC (identity.market.rotate_tg_token).
-   * Faqat ichki. fix3b: notification-service uni endi CHAQIRMAYDI — guruh
-   * ulangandan keyin token almashtirilmaydi (u marketning order-bot kaliti).
-   * RPC o'zgarmagan holda qoldirildi (hozir chaqiruvchisi yo'q). Gateway'da bu RPC'ga olib boradigan
-   * HTTP route bo'lmasligi SHART — aks holda token yana ochiq qoladi.
+   * (GvL6ZFAd) Token RPC'lari faqat SUPERADMIN uchun. Gateway RolesGuard'i
+   * asosiy darvoza; bu — ikkinchi qatlam: kelajakda boshqa rolga ochiq route
+   * shu RPC'ga ulansa ham token chiqmaydi. requester'siz chaqiruv ham 403.
+   * Rol tekshiruvi 404 dan OLDIN — boshqa rol market id mavjudligini ham
+   * bilmaydi.
    */
-  async rotateMarketTelegramToken(id: string) {
-    const market = await this.users.findOne({
-      where: { id, role: Roles.MARKET, isDeleted: false },
-    });
-
-    if (!market) {
-      this.notFound('Market topilmadi');
+  private assertMarketTgTokenSuperadmin(requester?: RequesterContext): void {
+    const roles = (requester?.roles ?? []).map((role) =>
+      String(role ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+    const requesterId = String(requester?.id ?? '').trim();
+    if (!requesterId || !roles.includes(Roles.SUPERADMIN)) {
+      this.forbidden(MARKET_TG_TOKEN_FORBIDDEN);
     }
+  }
 
-    market.market_tg_token = this.generateGroupToken();
-    const saved = await this.users.save(market);
+  /** Faqat role = market, is_deleted = false; aks holda (yoki id raqam emas) — 404. */
+  private async findActiveMarketForTgToken(id: unknown): Promise<User> {
+    const marketId = primitiveText(id).trim();
+    if (!/^\d+$/.test(marketId)) {
+      this.notFound(MARKET_TG_TOKEN_MARKET_NOT_FOUND);
+    }
+    const market = await this.users.findOne({
+      where: { id: marketId, role: Roles.MARKET, isDeleted: false },
+    });
+    if (!market) {
+      this.notFound(MARKET_TG_TOKEN_MARKET_NOT_FOUND);
+    }
+    return market;
+  }
+
+  /**
+   * identity.market.get_tg_token (GvL6ZFAd) — GET /markets/:id/tg-token.
+   * market_tg_token'ni QAYTARADIGAN ikki RPC'dan biri (ikkinchisi — bitta
+   * marketni rotatsiya). Har ko'rish jurnalga yoziladi (kim, qaysi market),
+   * token qiymati — yo'q.
+   */
+  async getMarketTelegramToken(id: string, requester?: RequesterContext) {
+    this.assertMarketTgTokenSuperadmin(requester);
+    const market = await this.findActiveMarketForTgToken(id);
 
     await this.activityLog.log({
       entity_type: 'User',
-      entity_id: saved.id,
-      action: ActivityAction.UPDATED,
-      // Credential rotation: record only that it happened, NEVER the token value.
-      metadata: { rotated: true, market_id: saved.id },
+      entity_id: market.id,
+      action: MARKET_TG_TOKEN_AUDIT_ACTION.VIEWED,
+      ...this.auditActor(requester),
+      // Faqat fakt — token QIYMATI hech qachon jurnalga tushmaydi.
+      metadata: {
+        market_id: market.id,
+        has_token: Boolean(market.market_tg_token),
+      },
     });
 
     return successRes(
       {
-        id: saved.id,
-        market_tg_token: saved.market_tg_token,
+        id: market.id,
+        market_tg_token: market.market_tg_token ?? null,
       },
       200,
-      'Market telegram token yangilandi',
+      'Market Telegram tokeni',
+    );
+  }
+
+  /**
+   * identity.market.rotate_tg_token — POST /markets/:id/tg-token/rotate
+   * (GvL6ZFAd: endi HTTP route BOR, lekin faqat SUPERADMIN; ilgari bu RPC
+   * "faqat ichki, HTTP route ochilmasin" edi — route token ochiq turgan
+   * umumiy javoblar bilan birga xavfli edi, endi token faqat shu maxsus
+   * marshrutlarda). fix3b: notification-service uni CHAQIRMAYDI — guruh
+   * ulangandan keyin token almashtirilmaydi.
+   *
+   * Nuqtali UPDATE (save() emas): faqat market_tg_token ustuni yoziladi.
+   * Eski token darhol yaroqsiz: identity.market.find_by_tg_token uni endi
+   * topmaydi (bot orqali YANGI bog'lanish/guruh ulash faqat yangi token bilan).
+   */
+  async rotateMarketTelegramToken(id: string, requester?: RequesterContext) {
+    this.assertMarketTgTokenSuperadmin(requester);
+    const market = await this.findActiveMarketForTgToken(id);
+
+    const nextToken = this.generateGroupToken();
+    let affected: number | undefined;
+    try {
+      const result = await this.users.update(
+        { id: market.id, role: Roles.MARKET, isDeleted: false },
+        { market_tg_token: nextToken },
+      );
+      affected = result?.affected;
+    } catch (error) {
+      this.logger.error(
+        `rotateMarketTelegramToken(${market.id}) failed: ${(error as Error)?.message}`,
+      );
+      throw new RpcException(errorRes(MARKET_TG_TOKEN_ROTATE_FAILED, 503));
+    }
+    if (affected === 0) {
+      // O'qish va yozish orasida o'chirildi.
+      this.notFound(MARKET_TG_TOKEN_MARKET_NOT_FOUND);
+    }
+
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: market.id,
+      action: MARKET_TG_TOKEN_AUDIT_ACTION.ROTATED,
+      ...this.auditActor(requester),
+      // Credential rotation: faqat fakt, token QIYMATI (eski ham, yangi ham) — yo'q.
+      metadata: { market_id: market.id, rotated: true },
+    });
+
+    return successRes(
+      {
+        id: market.id,
+        market_tg_token: nextToken,
+      },
+      200,
+      'Market Telegram tokeni yangilandi',
+    );
+  }
+
+  /**
+   * identity.market.rotate_all_tg_tokens (GvL6ZFAd) — POST
+   * /markets/tg-token/rotate-all. Kartadagi "chiqarilgandan keyin barcha
+   * mavjud tokenlarni majburiy rotatsiya" mexanizmi: tokenlar CRM ochgan har
+   * admin/menejer brauzerida ko'ringan. Ishga tushirish — egasining qarori
+   * (deploy'dan keyin, qo'lda).
+   *
+   * - Faqat SUPERADMIN va aniq tasdiq `confirm === 'ROTATE_ALL'` (aks holda 400).
+   * - Barcha role = market, is_deleted = false qatorlar (status'dan qat'i
+   *   nazar: INACTIVE market tokeni ham find_by_tg_token'da ishlaydi) BITTA
+   *   tranzaksiyada; xato bo'lsa hech biri o'zgarmaydi (503, navbatga qayta
+   *   qo'yilmaydi).
+   * - Javobda faqat SON — tokenlar emas. Bitta jurnal qatori.
+   */
+  async rotateAllMarketTelegramTokens(
+    confirm: unknown,
+    requester?: RequesterContext,
+  ) {
+    this.assertMarketTgTokenSuperadmin(requester);
+    if (confirm !== MARKET_TG_TOKEN_ROTATE_ALL_CONFIRM) {
+      this.badRequest(MARKET_TG_TOKEN_ROTATE_ALL_CONFIRM_REQUIRED);
+    }
+
+    let rotatedCount: number;
+    try {
+      rotatedCount = await this.users.manager.transaction(async (manager) => {
+        const repo = manager.getRepository(User);
+        const markets = await repo.find({
+          where: { role: Roles.MARKET, isDeleted: false },
+          select: { id: true },
+          order: { id: 'ASC' },
+        });
+        for (const market of markets) {
+          await repo.update(
+            { id: market.id },
+            { market_tg_token: this.generateGroupToken() },
+          );
+        }
+        return markets.length;
+      });
+    } catch (error) {
+      this.logger.error(
+        `rotateAllMarketTelegramTokens failed (rolled back): ${(error as Error)?.message}`,
+      );
+      throw new RpcException(errorRes(MARKET_TG_TOKEN_ROTATE_FAILED, 503));
+    }
+
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: MARKET_TG_TOKEN_ROTATE_ALL_ENTITY_ID,
+      action: MARKET_TG_TOKEN_AUDIT_ACTION.ROTATED_ALL,
+      ...this.auditActor(requester),
+      // Faqat son — market id'lari ham, tokenlar ham yozilmaydi.
+      metadata: { rotated_count: rotatedCount },
+    });
+
+    return successRes(
+      { rotated_count: rotatedCount },
+      200,
+      `${rotatedCount} ta market Telegram tokeni yangilandi`,
     );
   }
 
@@ -2611,5 +3176,370 @@ export class UserServiceService implements OnModuleInit {
     limit?: number,
   ) {
     return this.activityLog.findByEntity(entity_type, entity_id, limit ?? 50);
+  }
+
+  // ==================== Market operators (i76gGjyq) ====================
+
+  /**
+   * Market operatorlari ko'lami (i76gGjyq). `market_id` gateway'dan keladi
+   * (market so'rovida — JWT `sub`), lekin bu yerda QAYTA tekshiriladi
+   * (defense-in-depth): FAQAT market va faqat O'Z id'si bilan (karta:
+   * "requester.sub = market_id majburiy" — BeePost `getMyOperators` ko'lam
+   * modeli), boshqa rollar (superadmin/admin ham) — 403; admin uchun mavjud
+   * `/users` yo'llari bor. requester yo'q — ishonchli ichki chaqiruv.
+   * Qaytadi: kanonik market id ('01' → '1').
+   */
+  private resolveMarketOperatorScope(
+    marketId: unknown,
+    requester?: RequesterContext,
+  ): string {
+    const raw = primitiveText(marketId).trim();
+    if (!/^\d{1,19}$/.test(raw)) {
+      this.badRequest("market_id noto'g'ri");
+    }
+    const canonical = BigInt(raw).toString();
+    if (!requester) {
+      return canonical;
+    }
+    if (this.hasRole(requester, Roles.MARKET)) {
+      if (!sameEntityId(requester.id, canonical)) {
+        this.forbidden("Market faqat o'z operatorlarini boshqara oladi");
+      }
+      return canonical;
+    }
+    this.forbidden('Bu amal uchun ruxsat yoq');
+  }
+
+  /**
+   * Marketga qaytadigan operator ko'rinishi (i76gGjyq): parol, refresh token,
+   * maosh va UI sozlamalari YO'Q — faqat sahifa va komissiya formasi uchun
+   * kerakli maydonlar.
+   */
+  private toMarketOperatorView(user: User) {
+    return {
+      id: user.id,
+      name: user.name,
+      phone_number: user.phone_number,
+      role: user.role,
+      status: user.status,
+      market_id: user.market_id ?? null,
+      commission_type: user.commission_type ?? null,
+      commission_value: user.commission_value ?? null,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    };
+  }
+
+  /** Shu marketning o'chirilmagan operatori; aks holda (begona/yo'q) — 404. */
+  private async findOwnMarketOperator(
+    id: unknown,
+    marketId: string,
+  ): Promise<User> {
+    const operatorId = primitiveText(id).trim();
+    if (!/^\d{1,19}$/.test(operatorId)) {
+      this.notFound(MARKET_OPERATOR_NOT_FOUND);
+    }
+    const operator = await this.users.findOne({
+      where: {
+        id: BigInt(operatorId).toString(),
+        role: Roles.MARKET_OPERATOR,
+        market_id: marketId,
+        isDeleted: false,
+      },
+    });
+    if (!operator) {
+      this.notFound(MARKET_OPERATOR_NOT_FOUND);
+    }
+    return operator;
+  }
+
+  /**
+   * identity.market_operator.create (i76gGjyq) — market o'z operatorini
+   * yaratadi. Rol DOIM market_operator, market_id — ko'lamdagi market (mijoz
+   * tanasidan EMAS). Kassa YARATILMAYDI: operator pul ushlamaydi — uning
+   * daromadi finance `operator_earnings` da hisoblanadi va uni market to'laydi
+   * (Cashbox_type'da operator turi yo'q; BeePost'da ham operator kassasiz).
+   */
+  async createMarketOperator(
+    marketId: string,
+    dto: CreateMarketOperatorDto,
+    requester?: RequesterContext,
+  ) {
+    const scopedMarketId = this.resolveMarketOperatorScope(marketId, requester);
+
+    const name = primitiveText(dto?.name).trim().replace(/\s+/g, ' ');
+    if (name.length < 2 || name.length > 100) {
+      this.badRequest("Operator ismi 2-100 belgi bo'lishi kerak");
+    }
+    const password = typeof dto?.password === 'string' ? dto.password : '';
+    if (password.length < 4) {
+      this.badRequest("Parol kamida 4 belgi bo'lishi kerak");
+    }
+    // Telefon serverda kanonik ko'rinishga keltiriladi (+998XXXXXXXXX):
+    // '998901234567' va '+998901234567' — bitta odam, takroriylik tekshiruvi
+    // aylanib o'tilmasin (BeePost'dagi saboq).
+    const rawPhone = primitiveText(dto?.phone_number).trim();
+    const phone = normalizeUzPhone(rawPhone);
+    if (!phone) {
+      this.badRequest("Telefon raqam noto'g'ri");
+    }
+
+    // Market bazadan qayta o'qiladi: o'chirilgan yoki bloklangan market
+    // operator qo'sha olmaydi (aks holda yangi ACTIVE operator orqali blok
+    // o'z-o'zidan "erirdi").
+    const market = await this.users.findOne({
+      where: { id: scopedMarketId, role: Roles.MARKET, isDeleted: false },
+    });
+    if (!market) {
+      this.notFound('Market topilmadi');
+    }
+    if (market.status !== Status.ACTIVE) {
+      this.forbidden("Market bloklangan — operator qo'shib bo'lmaydi");
+    }
+
+    await this.ensurePhoneUnique(phone);
+    if (rawPhone !== phone) {
+      await this.ensurePhoneUnique(rawPhone);
+    }
+
+    const hashedPassword = await this.bcryptEncryption.encrypt(password);
+    const operator = this.users.create({
+      name,
+      phone_number: phone,
+      username: null,
+      password: hashedPassword,
+      salary: 0,
+      payment_day: undefined,
+      market_id: scopedMarketId,
+      role: Roles.MARKET_OPERATOR,
+      status: Status.ACTIVE,
+      created_by: this.createdByOf(requester),
+      tariff_home: null,
+      tariff_center: null,
+      add_order: false,
+      can_add_extra_cost: false,
+      default_tariff: null,
+      commission_type: null,
+      commission_value: null,
+      isDeleted: false,
+    });
+
+    let saved: User;
+    try {
+      saved = await this.users.save(operator);
+    } catch (error) {
+      // Bir vaqtdagi ikki so'rov ensurePhoneUnique'dan birga o'tishi mumkin —
+      // DB unique (phone_number) ikkinchisini 23505 bilan rad etadi: 500 emas,
+      // aniq 409.
+      if (
+        error instanceof QueryFailedError &&
+        (error as QueryFailedError & { code?: string }).code === '23505'
+      ) {
+        this.conflict('Bu telefon raqam allaqachon mavjud');
+      }
+      throw error;
+    }
+
+    void this.syncUserToSearch(saved);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.CREATED,
+      new_value: {
+        name: saved.name,
+        phone_number: saved.phone_number,
+        role: saved.role,
+      },
+      ...this.auditActor(requester),
+      metadata: { market_id: scopedMarketId },
+    });
+    return successRes(
+      this.toMarketOperatorView(saved),
+      201,
+      'Operator yaratildi',
+    );
+  }
+
+  /**
+   * identity.market_operator.find_by_market (i76gGjyq) — FAQAT shu marketning
+   * operatorlari (role = market_operator, o'chirilmagan). Javob shakli
+   * GET /users bilan bir xil (`items` + `meta`), sahifalash 100 gacha.
+   */
+  async findMarketOperators(
+    marketId: string,
+    query: MarketOperatorFilterQuery = {},
+    requester?: RequesterContext,
+  ) {
+    const scopedMarketId = this.resolveMarketOperatorScope(marketId, requester);
+    const { search, status, page, limit, skip } = this.normalizeQuery({
+      search: typeof query?.search === 'string' ? query.search : undefined,
+      status: typeof query?.status === 'string' ? query.status : undefined,
+      page: query?.page,
+      limit: query?.limit,
+    });
+
+    const base = {
+      role: Roles.MARKET_OPERATOR,
+      market_id: scopedMarketId,
+      isDeleted: false,
+      ...(status ? { status } : {}),
+    };
+    const where = search
+      ? [
+          { ...base, name: ILike(`%${search}%`) },
+          { ...base, phone_number: ILike(`%${search}%`) },
+        ]
+      : base;
+
+    const [rows, total] = await this.users.findAndCount({
+      where,
+      order: { createdAt: 'DESC', id: 'DESC' },
+      skip,
+      take: limit,
+    });
+
+    return successRes({
+      items: rows.map((row) => this.toMarketOperatorView(row)),
+      meta: {
+        page,
+        limit,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / limit)),
+      },
+    });
+  }
+
+  /**
+   * identity.market_operator.delete (i76gGjyq) — soft-delete (deleteUser
+   * shakli: telefon/username bo'shatiladi, status inactive). refresh_token
+   * tozalanadi: qurilma keyingi refresh'da chiqariladi (access token ko'pi
+   * bilan ACCESS_TOKEN_TIME yashaydi). Buyurtmalar va daromad tarixi tegilmaydi.
+   */
+  async deleteMarketOperator(
+    id: string,
+    marketId: string,
+    requester?: RequesterContext,
+  ) {
+    const scopedMarketId = this.resolveMarketOperatorScope(marketId, requester);
+    const operator = await this.findOwnMarketOperator(id, scopedMarketId);
+
+    const ts = Date.now();
+    operator.isDeleted = true;
+    operator.status = Status.INACTIVE;
+    operator.phone_number = `${operator.phone_number}-d${ts % 100000}`.slice(
+      0,
+      20,
+    );
+    operator.username = operator.username?.length
+      ? `${operator.username}#del#${ts % 100000}`.slice(0, 60)
+      : null;
+    operator.refresh_token = null;
+
+    const saved = await this.users.save(operator);
+    void this.removeUserFromSearch(saved);
+    await this.activityLog.log({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.DELETED,
+      old_value: { name: saved.name, role: saved.role },
+      ...this.auditActor(requester),
+      metadata: { market_id: scopedMarketId },
+    });
+    return successRes({ id: saved.id }, 200, "Operator o'chirildi");
+  }
+
+  /**
+   * identity.market_operator.update_commission (i76gGjyq) — market o'z
+   * operatorining komissiyasini belgilaydi. Yangi qiymat faqat KEYINGI
+   * sotuvlarga ta'sir qiladi: finance har sotuvda qoidani o'qib, earning
+   * qatoriga snapshot qiladi. `null` — tozalash (komissiya yo'q). Tekshiruv
+   * BIRLASHGAN holat bo'yicha: faqat turni almashtirish (masalan fixed 50 000
+   * → percent) ham chegaradan o'tsa 400.
+   */
+  async updateMarketOperatorCommission(
+    id: string,
+    marketId: string,
+    dto: UpdateMarketOperatorCommissionDto,
+    requester?: RequesterContext,
+  ) {
+    const scopedMarketId = this.resolveMarketOperatorScope(marketId, requester);
+
+    const hasType = typeof dto?.commission_type !== 'undefined';
+    const hasValue = typeof dto?.commission_value !== 'undefined';
+    if (!hasType && !hasValue) {
+      this.badRequest('commission_type yoki commission_value majburiy');
+    }
+    const nextTypeInput = hasType ? (dto.commission_type ?? null) : null;
+    if (
+      nextTypeInput !== null &&
+      !Object.values(Commission_type).includes(nextTypeInput)
+    ) {
+      this.badRequest("commission_type noto'g'ri (percent | fixed)");
+    }
+    const nextValueInput = hasValue ? (dto.commission_value ?? null) : null;
+    if (nextValueInput !== null) {
+      if (
+        typeof nextValueInput !== 'number' ||
+        !Number.isFinite(nextValueInput) ||
+        nextValueInput < 0
+      ) {
+        this.badRequest("commission_value manfiy bo'lmagan son bo'lishi kerak");
+      }
+      // numeric(14,2): 3+ kasr jimgina yaxlitlanib qolmasin.
+      if (
+        Math.abs(Math.round(nextValueInput * 100) - nextValueInput * 100) > 1e-6
+      ) {
+        this.badRequest("commission_value ko'pi bilan 2 kasr xonali bo'lsin");
+      }
+    }
+
+    const operator = await this.findOwnMarketOperator(id, scopedMarketId);
+    const before = {
+      commission_type: operator.commission_type ?? null,
+      commission_value: operator.commission_value ?? null,
+    };
+    const nextType = hasType ? nextTypeInput : before.commission_type;
+    const nextValue = hasValue ? nextValueInput : before.commission_value;
+
+    if (
+      nextType === Commission_type.PERCENT &&
+      nextValue !== null &&
+      Number(nextValue) > MARKET_OPERATOR_PERCENT_MAX
+    ) {
+      this.badRequest("Komissiya foizi 0 dan 100 gacha bo'lishi kerak");
+    }
+    if (
+      nextType === Commission_type.FIXED &&
+      nextValue !== null &&
+      Number(nextValue) > MARKET_OPERATOR_FIXED_MAX
+    ) {
+      this.badRequest(
+        "Belgilangan komissiya 0 dan 1 000 000 so'mgacha bo'lishi kerak",
+      );
+    }
+
+    operator.commission_type = nextType;
+    operator.commission_value = nextValue;
+    const saved = await this.users.save(operator);
+    await this.activityLog.logChange({
+      entity_type: 'User',
+      entity_id: saved.id,
+      action: ActivityAction.UPDATED,
+      old_value: before,
+      new_value: {
+        commission_type: saved.commission_type ?? null,
+        commission_value: saved.commission_value ?? null,
+      },
+      ...this.auditActor(requester),
+      metadata: {
+        market_id: scopedMarketId,
+        reason: 'market_operator_commission',
+      },
+    });
+    return successRes(
+      this.toMarketOperatorView(saved),
+      200,
+      'Operator komissiyasi yangilandi',
+    );
   }
 }

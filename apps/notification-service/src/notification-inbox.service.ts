@@ -10,12 +10,20 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { EntityManager, FindOptionsWhere, In, Repository } from 'typeorm';
 import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { lastValueFrom, timeout } from 'rxjs';
+import { randomUUID } from 'node:crypto';
 import {
   ActivityLogService,
+  FREE_NOTIFICATION_TYPE_PREFIX,
+  NOTIFICATION_TYPES,
   NotificationCategory,
   NotificationChannel,
   NotificationDeliveryStatus,
   NotificationPriority,
+  escapeTelegramHtml,
+  isKnownNotificationType,
+  maskPhonesForLog,
+  notificationTypeErrorMessage,
+  resolveNotificationDefaults,
   rmqSend,
 } from '@app/common';
 import { successRes } from '../../../libs/common/helpers/response';
@@ -31,18 +39,53 @@ import {
 import { SmsBlockedError } from './sms/sms-gate.service';
 
 /** Upper bound on role/broadcast fan-out, so one dispatch can't insert millions
- * of rows. If a target resolves to more recipients than this we truncate and
- * log it (never silently). */
+ * of rows. (QFoRULeu) Oshsa dispatch 400 bilan rad etiladi — jimgina kesilmaydi. */
 const MAX_FANOUT = 5000;
 const IDENTITY_PAGE_SIZE = 100;
 /** Bitta INSERT dagi qatorlar — Postgres 65 535 parametr chegarasidan uzoq. */
 const INSERT_CHUNK = 500;
 /** Qayta o'qishdagi `IN (...)` hajmi. */
 const READ_CHUNK = 1000;
+/** Aniq qabul qiluvchilarga realtime emit — bir vaqtda shuncha (ketma-ket emas). */
+const REALTIME_CONCURRENCY = 50;
+/** `delivery.*_error` maksimal uzunligi — provayder javobi to'liq yozilmaydi (PII). */
+const DELIVERY_REASON_MAX = 200;
 
 interface ResolvedRecipient {
   id: string;
   role: string | null;
+  /** `explicit` — recipient_id(s); `identity` — roles/broadcast orqali topilgan. */
+  via: 'explicit' | 'identity';
+}
+
+/** Bitta qatorning `delivery` JSONB'iga qo'shiladigan kanal natijasi. */
+type DeliveryPatch = Record<string, string | number>;
+
+interface RealtimeResult {
+  /** notification id → `{ realtime, realtime_error? }`. */
+  outcomes: Map<string, DeliveryPatch>;
+  emitted: number;
+}
+
+interface TelegramOutcome extends DeliveryPatch {
+  telegram: NotificationDeliveryStatus;
+}
+
+/**
+ * Xato sababini `delivery` ga yozishga yaroqli qiladi: telefonlar maskalanadi,
+ * 200 belgiga kesiladi — provayder/xom javob to'liq saqlanmaydi (uFmUS86e).
+ */
+function shortReason(error: unknown): string {
+  const text =
+    error instanceof Error
+      ? error.message
+      : typeof error === 'string'
+        ? error
+        : 'unknown';
+  return maskPhonesForLog(text.replace(/\s+/g, ' ').trim()).slice(
+    0,
+    DELIVERY_REASON_MAX,
+  );
 }
 
 /** "Faqat muhim" filtri va sanog'i (n1sNvGLn). */
@@ -81,16 +124,41 @@ export class NotificationInboxService {
 
   // ==================== DISPATCH (the generic entry point) ====================
 
+  /** Dispatch partiyasi ID si (f2Ud5tju #6): `request_id` yoki yangi UUID. */
+  private dispatchBatchId(dto: DispatchNotificationDto): string {
+    const raw = (dto as { request_id?: unknown }).request_id;
+    const requestId = typeof raw === 'string' ? raw.trim() : '';
+    // activity_logs.entity_id — VARCHAR(100).
+    return requestId && requestId.length <= 100 ? requestId : randomUUID();
+  }
+
   async dispatch(dto: DispatchNotificationDto) {
     try {
       if (!dto.type?.trim()) throw new BadRequestException('type is required');
       if (!dto.title?.trim())
         throw new BadRequestException('title is required');
+      // (Eh8y21Ha) Reyestr — FAIL-CLOSED. RMQ'da ValidationPipe yo'q, shuning
+      // uchun ichki chaqiruvchilar (order-service outbox, ai-service) uchun
+      // tekshiruv shu yerda; gateway DTO ham xuddi shuni tekshiradi.
+      if (!isKnownNotificationType(dto.type)) {
+        throw new BadRequestException(notificationTypeErrorMessage(dto.type));
+      }
+      // Berilmagan category/priority/group_key/channels — KATALOGDAN (DTO
+      // ustun). `dto` ning o'zi to'ldiriladi: audit metadata ham aynan
+      // yozilgan kategoriyani ko'radi (qattiq SYSTEM sukuti emas).
+      const defaults = resolveNotificationDefaults({
+        type: dto.type,
+        category: dto.category,
+        priority: dto.priority,
+        group_key: dto.group_key,
+        channels: dto.channels,
+        data: dto.data,
+      });
+      dto.category = defaults.category;
+      dto.priority = defaults.priority;
+      dto.group_key = defaults.group_key ?? undefined;
 
-      const channels =
-        dto.channels && dto.channels.length
-          ? dto.channels
-          : [NotificationChannel.IN_APP, NotificationChannel.REALTIME];
+      const channels = [...new Set(defaults.channels)];
 
       const recipients = await this.resolveRecipients(dto);
       if (!recipients.length) {
@@ -141,46 +209,69 @@ export class NotificationInboxService {
         return persisted;
       });
 
-      // 2) Realtime push (best-effort) — one event per recipient's socket room.
-      if (channels.includes(NotificationChannel.REALTIME)) {
-        await this.pushRealtime(rows);
-      }
+      // 2) Realtime (best-effort). Aniq qabul qiluvchilar — har biriga
+      //    `user_id` emit; rol/broadcast — BITTA emit (QFoRULeu). Natija
+      //    `delivery.realtime` ga: `emitted` (ack yo'q — `sent` EMAS) | `failed`.
+      const realtime = channels.includes(NotificationChannel.REALTIME)
+        ? await this.pushRealtime(rows, dto, recipients)
+        : null;
 
-      // 3) Telegram relay (optional, best-effort).
+      // 3) Telegram relay (optional, best-effort) — natija `delivery.telegram`.
       let telegram: unknown = null;
-      if (
-        channels.includes(NotificationChannel.TELEGRAM) &&
-        (dto.telegram?.market_id || dto.telegram?.group_id)
-      ) {
-        telegram = await this.relayTelegram(dto);
+      let telegramOutcome: TelegramOutcome | null = null;
+      if (channels.includes(NotificationChannel.TELEGRAM)) {
+        const relayed = await this.relayTelegram(dto);
+        telegram = relayed.result;
+        telegramOutcome = relayed.outcome;
       }
 
-      // 4) Email — not wired yet.
-      if (channels.includes(NotificationChannel.EMAIL)) {
-        this.logger.warn(
-          `Channel "email" requested but no provider configured — skipped (${rows.length} recipients).`,
-        );
-      }
+      // 4) Kanal natijalari dispatch oxirida BITTA bulk UPDATE bilan (sikl
+      //    ichida save YO'Q). Email — provayder yo'q: `no_provider` qatorga
+      //    INSERT paytida yozilgan (persistRows).
+      await this.recordDelivery(rows, realtime, telegramOutcome);
 
       // Audit: ONE row per dispatch operation (never one per recipient).
       const actor = (dto as { requester?: { id?: string; roles?: string[] } })
         .requester;
+      /**
+       * entity_id — HAQIQIY dispatch partiyasi ID si (f2Ud5tju #6), qattiq
+       * `'dispatch'` satri emas (jurnalda hammasi "Notification #dispatch"
+       * bo'lib, bir-biridan ajratib bo'lmasdi). Manba: chaqiruvchining
+       * `request_id` si (`rmqSend` har chaqiruvga beradi, timeout qayta
+       * urinishida o'zgarmaydi — bir partiya bitta ID), bo'lmasa yangi UUID.
+       * Shu ID javobda `dispatch_id` bo'lib qaytadi, yaratilgan qatorlar esa
+       * `notification_ids` (birinchi 20 ta) orqali bog'lanadi.
+       */
+      const dispatchId = this.dispatchBatchId(dto);
       await this.activityLog.log({
         entity_type: 'Notification',
-        entity_id: 'dispatch',
+        entity_id: dispatchId,
         action: 'notification.dispatched',
         user_id: actor?.id ? String(actor.id) : null,
         user_role: actor?.roles?.length ? actor.roles.join(',') : null,
         metadata: {
+          dispatch_id: dispatchId,
           type: dto.type.trim(),
           category: dto.category ?? NotificationCategory.SYSTEM,
           dispatched_count: rows.length,
           channels,
+          notification_ids: rows.slice(0, 20).map((row) => String(row.id)),
         },
       });
 
+      // (uFmUS86e) Kanal kesimidagi hisob: qaysi tashqi kanal haqiqatan
+      // ketgani ko'rinadi — "Notification dispatched" faqat hammasi ketganda.
+      const summary = this.summarizeChannels(
+        channels,
+        rows.length,
+        realtime,
+        telegramOutcome,
+        smsResult as SmsChannelResult | null,
+      );
+
       return successRes(
         {
+          dispatch_id: dispatchId,
           dispatched: rows.length,
           recipient_ids: rows.map((r) => r.recipient_id),
           channels,
@@ -189,10 +280,16 @@ export class NotificationInboxService {
           delivery: {
             in_app: rows.length,
             ...(smsResult ?? {}),
+            ...(realtime ? { realtime: realtime.emitted } : {}),
+            ...(telegramOutcome
+              ? { telegram_status: telegramOutcome.telegram }
+              : {}),
           },
+          by_channel: summary.by_channel,
+          no_provider: summary.no_provider,
         },
         201,
-        'Notification dispatched',
+        summary.message,
       );
     } catch (error) {
       this.toRpcError(error);
@@ -205,28 +302,35 @@ export class NotificationInboxService {
     const map = new Map<string, ResolvedRecipient>();
 
     if (dto.recipient_id) {
-      map.set(dto.recipient_id, { id: dto.recipient_id, role: null });
+      map.set(dto.recipient_id, {
+        id: dto.recipient_id,
+        role: null,
+        via: 'explicit',
+      });
     }
 
     for (const id of dto.recipient_ids ?? []) {
       const clean = String(id ?? '').trim();
-      if (clean) map.set(clean, { id: clean, role: null });
+      if (clean) map.set(clean, { id: clean, role: null, via: 'explicit' });
     }
 
     if (dto.broadcast) {
       await this.collectFromIdentity(undefined, map);
     } else if (dto.roles?.length) {
       for (const role of dto.roles) {
-        if (map.size >= MAX_FANOUT) break;
+        if (map.size > MAX_FANOUT) break;
         await this.collectFromIdentity(String(role).trim().toLowerCase(), map);
       }
     }
 
+    // (QFoRULeu) Chegaradan oshsa XATO — jimgina kesilgan kampaniya
+    // "muvaffaqiyat" deb yozilmasin. Yig'ish MAX_FANOUT+1 da to'xtaydi,
+    // shuning uchun oshib ketish aniq ko'rinadi.
     if (map.size > MAX_FANOUT) {
-      this.logger.warn(
-        `Recipient fan-out ${map.size} exceeds cap ${MAX_FANOUT} — truncating.`,
+      throw new BadRequestException(
+        `fan-out cap exceeded: qabul qiluvchilar ${MAX_FANOUT} tadan ko'p (MAX_FANOUT). ` +
+          'Nishonni toraytiring (roles/recipient_ids) — hech narsa yuborilmadi.',
       );
-      return Array.from(map.values()).slice(0, MAX_FANOUT);
     }
     return Array.from(map.values());
   }
@@ -244,7 +348,7 @@ export class NotificationInboxService {
     let page = 1;
 
     while (true) {
-      if (map.size >= MAX_FANOUT) return;
+      if (map.size > MAX_FANOUT) return;
       const res = await rmqSend<any>(
         this.identityClient,
         { cmd: 'identity.user.find_all' },
@@ -267,8 +371,8 @@ export class NotificationInboxService {
       for (const u of items) {
         const id = String(u?.id ?? '').trim();
         if (id) {
-          map.set(id, { id, role: u?.role ?? role ?? null });
-          if (map.size >= MAX_FANOUT) return;
+          map.set(id, { id, role: u?.role ?? role ?? null, via: 'identity' });
+          if (map.size > MAX_FANOUT) return;
         }
       }
 
@@ -302,10 +406,9 @@ export class NotificationInboxService {
       link: dto.link ?? null,
       channels,
       group_key: dto.group_key ?? null,
-      // Push so'ralgan bo'lsa yetkazish holati darhol "navbatda" ko'rinadi.
-      ...(channels.includes(NotificationChannel.PUSH)
-        ? { delivery: { push: 'queued' } }
-        : {}),
+      // (uFmUS86e) Har so'ralgan kanal uchun boshlang'ich holat — qator
+      // yozilgan zahoti "kimga nima ketmagani" DB'da ko'rinadi.
+      delivery: this.initialDelivery(channels),
     };
 
     const rowIdByRecipient = new Map<string, string>();
@@ -381,52 +484,319 @@ export class NotificationInboxService {
     );
   }
 
-  private async pushRealtime(rows: Notification[]) {
-    for (const row of rows) {
-      try {
-        await lastValueFrom(
-          this.gatewayClient
-            .emit(
-              { cmd: 'realtime.notify' },
-              {
-                event: 'notification:new',
-                user_id: row.recipient_id,
-                payload: this.toPublic(row),
-              },
-            )
-            // Best-effort realtime push, fanned out per recipient (up to
-            // MAX_FANOUT). Bound each emit so a slow/unresponsive broker can't
-            // stall the whole dispatch loop — on timeout we just warn and move on.
-            .pipe(timeout(2_000)),
-          { defaultValue: null },
-        );
-      } catch (err) {
-        this.logger.warn(
-          `realtime push failed for recipient=${row.recipient_id}: ${
-            err instanceof Error ? err.message : 'unknown'
-          }`,
-        );
+  /** Boshlang'ich `delivery`: in_app darhol `sent` (qatorning o'zi), qolganlar `pending`. */
+  private initialDelivery(channels: NotificationChannel[]) {
+    const delivery: Record<string, string> = {
+      [NotificationChannel.IN_APP]: NotificationDeliveryStatus.SENT,
+    };
+    for (const channel of channels) {
+      if (channel === NotificationChannel.IN_APP) continue;
+      delivery[channel] =
+        channel === NotificationChannel.PUSH
+          ? // Push faqat navbatga qo'yiladi (outbox) — darhol "navbatda".
+            NotificationDeliveryStatus.QUEUED
+          : channel === NotificationChannel.EMAIL
+            ? // Email provayderi ulanmagan — jim "skipped" emas, DB'da ko'rinadi.
+              NotificationDeliveryStatus.NO_PROVIDER
+            : NotificationDeliveryStatus.PENDING;
+    }
+    return delivery;
+  }
+
+  /**
+   * Realtime (QFoRULeu): aniq qabul qiluvchilar (`recipient_id(s)`) — har
+   * biriga `user_id` emit (to'liq qator payload'i); rol bo'yicha — har rolga
+   * BITTA emit, broadcast — BITTA emit. Guruh emit'ida qator id'si yo'q,
+   * frontend "inboxni yangilash" signalini oladi (`{ type, category, priority }`)
+   * va qatorni `GET /notifications/inbox` dan o'qiydi.
+   *
+   * ⚠️ Har emit `timeout(2_000)` bilan chegaralangan va aniq qabul
+   * qiluvchilar 50 tadan PARALLEL yuboriladi. Ketma-ket `await` + timeout
+   * naqshi Web Push / SMS ga NUSXALANMASIN — ular tashqi HTTP (yuzlab ms) va
+   * outbox orqali ketadi.
+   */
+  private async pushRealtime(
+    rows: Notification[],
+    dto: DispatchNotificationDto,
+    recipients: ResolvedRecipient[],
+  ): Promise<RealtimeResult> {
+    const outcomes = new Map<string, DeliveryPatch>();
+    const viaIdentity = new Set(
+      recipients
+        .filter((recipient) => recipient.via === 'identity')
+        .map((recipient) => recipient.id),
+    );
+    const direct = rows.filter(
+      (row) => !viaIdentity.has(String(row.recipient_id)),
+    );
+    const grouped = rows.filter((row) =>
+      viaIdentity.has(String(row.recipient_id)),
+    );
+    const signal = {
+      type: dto.type.trim(),
+      category: dto.category ?? null,
+      priority: dto.priority ?? null,
+    };
+
+    const directResults = await this.emitEach(direct);
+    direct.forEach((row, index) =>
+      outcomes.set(String(row.id), directResults[index]),
+    );
+
+    if (grouped.length) {
+      const targets = new Map<string, Notification[]>();
+      for (const row of grouped) {
+        const key = dto.broadcast
+          ? '*'
+          : String(row.recipient_role ?? '').toLowerCase();
+        targets.set(key, [...(targets.get(key) ?? []), row]);
       }
+      for (const [key, targetRows] of targets) {
+        if (!key) {
+          // Rolsiz (identity rol bermagan) — xona yo'q, faqat user_id.
+          const results = await this.emitEach(targetRows);
+          targetRows.forEach((row, index) =>
+            outcomes.set(String(row.id), results[index]),
+          );
+          continue;
+        }
+        const result = await this.emitRealtime(
+          key === '*'
+            ? { event: 'notification:new', broadcast: true, payload: signal }
+            : { event: 'notification:new', role: key, payload: signal },
+        );
+        for (const row of targetRows) outcomes.set(String(row.id), result);
+      }
+    }
+
+    let emitted = 0;
+    for (const outcome of outcomes.values()) {
+      if (outcome.realtime === NotificationDeliveryStatus.EMITTED) emitted += 1;
+    }
+    return { outcomes, emitted };
+  }
+
+  /** Har qatorga `user_id` emit — 50 tadan parallel (ketma-ket emas). */
+  private async emitEach(rows: Notification[]): Promise<DeliveryPatch[]> {
+    const results: DeliveryPatch[] = [];
+    for (let start = 0; start < rows.length; start += REALTIME_CONCURRENCY) {
+      results.push(
+        ...(await Promise.all(
+          rows.slice(start, start + REALTIME_CONCURRENCY).map((row) =>
+            this.emitRealtime({
+              event: 'notification:new',
+              user_id: row.recipient_id,
+              payload: this.toPublic(row),
+            }),
+          ),
+        )),
+      );
+    }
+    return results;
+  }
+
+  private async emitRealtime(message: object): Promise<DeliveryPatch> {
+    try {
+      await lastValueFrom(
+        this.gatewayClient
+          .emit({ cmd: 'realtime.notify' }, message)
+          // Sekin/javobsiz broker butun dispatch'ni to'xtatib qo'ymasin.
+          .pipe(timeout(2_000)),
+        { defaultValue: null },
+      );
+      return { realtime: NotificationDeliveryStatus.EMITTED };
+    } catch (err) {
+      const reason = shortReason(err);
+      this.logger.warn(`realtime push failed: ${reason}`);
+      return {
+        realtime: NotificationDeliveryStatus.FAILED,
+        realtime_error: reason,
+      };
     }
   }
 
-  private async relayTelegram(dto: DispatchNotificationDto) {
+  /**
+   * Telegram relay (uFmUS86e / n0kLbx3d). Natija `delivery.telegram` ga:
+   * `sent` (Telegram API `ok`) | `failed` + `telegram_error` (≤200 belgi) |
+   * `not_eligible` (nishon yo'q / marketda guruh ulanmagan).
+   *
+   * ⚠️ Bot tokeni payload'dan OLINMAYDI — faqat DB (telegram_markets) yoki
+   * env (TELEGRAM_BOT_TOKEN). Matn `parse_mode: HTML`: chaqiruvchi tayyor
+   * `telegram.text` bermasa sarlavha/tana HTML-escape qilinadi (`<`/`&`
+   * bo'lsa Telegram butun xabarni rad etardi).
+   */
+  private async relayTelegram(
+    dto: DispatchNotificationDto,
+  ): Promise<{ result: unknown; outcome: TelegramOutcome }> {
+    const target = dto.telegram;
+    if (!target?.market_id && !target?.group_id) {
+      return {
+        result: null,
+        outcome: {
+          telegram: NotificationDeliveryStatus.NOT_ELIGIBLE,
+          telegram_error: 'telegram_target_missing',
+        },
+      };
+    }
+    const message =
+      typeof target.text === 'string' && target.text.trim()
+        ? target.text
+        : dto.body
+          ? `${escapeTelegramHtml(dto.title)}\n\n${escapeTelegramHtml(dto.body)}`
+          : escapeTelegramHtml(dto.title);
     try {
-      const message = dto.body ? `${dto.title}\n\n${dto.body}` : dto.title;
-      return await this.telegramService.sendNotification({
-        market_id: dto.telegram?.market_id,
-        group_id: dto.telegram?.group_id,
-        group_type: dto.telegram?.group_type,
-        token: dto.telegram?.token,
+      const res = (await this.telegramService.sendNotification({
+        market_id: target.market_id,
+        group_id: target.group_id,
+        group_type: target.group_type,
         message: message.slice(0, 4096),
         parse_mode: 'HTML',
-      } as any);
+      })) as {
+        data?: {
+          success?: number;
+          failed?: number;
+          results?: Array<{ ok?: boolean; error?: string }>;
+        };
+      } | null;
+      const data = res?.data ?? {};
+      const success = Number(data.success ?? 0);
+      const failed = Number(data.failed ?? 0);
+      const firstError =
+        data.results?.find((item) => !item.ok)?.error ?? 'telegram_failed';
+      const outcome: TelegramOutcome =
+        success > 0 && failed === 0
+          ? {
+              telegram: NotificationDeliveryStatus.SENT,
+              telegram_sent: success,
+            }
+          : {
+              telegram: NotificationDeliveryStatus.FAILED,
+              telegram_sent: success,
+              telegram_error: shortReason(
+                success > 0
+                  ? `partial ${failed}/${success + failed}: ${firstError}`
+                  : firstError,
+              ),
+            };
+      return { result: res, outcome };
     } catch (err) {
-      this.logger.warn(
-        `telegram relay failed: ${err instanceof Error ? err.message : 'unknown'}`,
-      );
-      return { ok: false, status: NotificationDeliveryStatus.FAILED };
+      const rpc =
+        err instanceof RpcException
+          ? (err.getError() as { statusCode?: number; message?: string })
+          : null;
+      const reason = shortReason(rpc?.message ?? err);
+      this.logger.warn(`telegram relay failed: ${reason}`);
+      const outcome: TelegramOutcome =
+        rpc?.statusCode === 404
+          ? {
+              telegram: NotificationDeliveryStatus.NOT_ELIGIBLE,
+              telegram_error: 'no_telegram_group',
+            }
+          : {
+              telegram: NotificationDeliveryStatus.FAILED,
+              telegram_error: reason,
+            };
+      return { result: { ok: false, status: outcome.telegram }, outcome };
     }
+  }
+
+  /**
+   * Realtime + Telegram natijalarini qatorlarga yozadi —
+   * `UPDATE ... WHERE id IN (...)`: bir xil natijali qatorlar BITTA so'rovda
+   * (odatda hammasi bir xil → jami 1 ta UPDATE). Sikl ichida save YO'Q.
+   * Best-effort: xato bo'lsa faqat log — qatorlar va kanallar allaqachon ketgan.
+   */
+  private async recordDelivery(
+    rows: Notification[],
+    realtime: RealtimeResult | null,
+    telegram: TelegramOutcome | null,
+  ): Promise<void> {
+    if (!rows.length || (!realtime && !telegram)) return;
+    const groups = new Map<string, { patch: DeliveryPatch; ids: string[] }>();
+    for (const row of rows) {
+      const patch: DeliveryPatch = {
+        ...(realtime?.outcomes.get(String(row.id)) ?? {}),
+        ...(telegram ?? {}),
+      };
+      const key = JSON.stringify(patch);
+      const group = groups.get(key) ?? { patch, ids: [] };
+      group.ids.push(String(row.id));
+      groups.set(key, group);
+    }
+    try {
+      for (const { patch, ids } of groups.values()) {
+        await this.repo
+          .createQueryBuilder()
+          .update(Notification)
+          .set({
+            delivery: () =>
+              `COALESCE("delivery", '{}'::jsonb) || :patch::jsonb`,
+          })
+          .setParameter('patch', JSON.stringify(patch))
+          .whereInIds(ids)
+          .execute();
+      }
+    } catch (err) {
+      this.logger.error(
+        `delivery holatini yozib bo'lmadi (${rows.length} qator): ${shortReason(err)}`,
+      );
+    }
+  }
+
+  /**
+   * Javob uchun kanal kesimi (uFmUS86e): `by_channel` — haqiqatan ketgan son,
+   * `no_provider` — provayderi yo'q kanallar. Xabar matni: hammasi ketdi →
+   * `Notification dispatched`; bir qismi → `Partially dispatched`; hech bir
+   * tashqi kanal ketmadi → "dispatched"/"sent" demaydi.
+   */
+  private summarizeChannels(
+    channels: NotificationChannel[],
+    rows: number,
+    realtime: RealtimeResult | null,
+    telegram: TelegramOutcome | null,
+    sms: SmsChannelResult | null,
+  ) {
+    const byChannel: Record<string, number> = { in_app: rows };
+    const noProvider: string[] = [];
+    for (const channel of channels) {
+      if (channel === NotificationChannel.REALTIME) {
+        byChannel.realtime = realtime?.emitted ?? 0;
+      } else if (channel === NotificationChannel.TELEGRAM) {
+        byChannel.telegram = Number(telegram?.telegram_sent ?? 0);
+      } else if (channel === NotificationChannel.SMS) {
+        byChannel.sms = Number(sms?.sms ?? 0);
+        if (sms?.sms_status === 'no_provider') noProvider.push(channel);
+      } else if (channel === NotificationChannel.PUSH) {
+        byChannel.push = rows;
+      } else if (channel === NotificationChannel.EMAIL) {
+        byChannel.email = 0;
+        noProvider.push(channel);
+      }
+    }
+    const external = channels.filter(
+      (channel) => channel !== NotificationChannel.IN_APP,
+    );
+    const delivered = external.filter((channel) => byChannel[channel] > 0);
+    const message =
+      delivered.length === external.length
+        ? 'Notification dispatched'
+        : delivered.length
+          ? 'Partially dispatched'
+          : 'Saved to inbox only — no external channel delivered';
+    return { by_channel: byChannel, no_provider: noProvider, message };
+  }
+
+  /** `GET /notifications/types` (Eh8y21Ha) — kod katalogi, DB emas. */
+  listTypes() {
+    return successRes(
+      {
+        items: NOTIFICATION_TYPES,
+        free_prefix: FREE_NOTIFICATION_TYPE_PREFIX,
+        categories: Object.values(NotificationCategory),
+      },
+      200,
+      'Notification types',
+    );
   }
 
   // ==================== INBOX READS (per recipient) ====================
@@ -643,6 +1013,9 @@ export class NotificationInboxService {
       is_read: row.is_read,
       read_at: row.read_at,
       created_at: row.createdAt,
+      // (uFmUS86e) Kanal natijalari inbox javobida ham — qo'shimcha maydon,
+      // eski frontend uni e'tiborsiz qoldiradi.
+      delivery: row.delivery ?? null,
     };
   }
 }

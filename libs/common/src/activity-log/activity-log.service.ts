@@ -1,9 +1,20 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { requestContext } from '../context/request-context';
+import {
+  AuditContext,
+  pickAuditContext,
+  requestContext,
+} from '../context/request-context';
+import { maskPhonesForLog } from '../pii/mask-phones';
 import { ActivityLog } from './activity-log.entity';
 import { computeDiff } from './diff';
+import {
+  ACTIVITY_LOG_DEVICE_STRIP_BATCH_DEFAULT,
+  quoteActivityLogTable,
+  resolveDeviceRetentionMs,
+  stripDeviceMetadataBatched,
+} from './retention';
 import {
   ACTIVITY_LOG_SERVICE_NAME,
   ActivityAction,
@@ -20,6 +31,45 @@ function normaliseJsonb(value: unknown): Record<string, unknown> | null {
   }
   // Wrap primitives/arrays so JSONB column always sees an object shape.
   return { value };
+}
+
+/** `activity_logs.trace_id` — VARCHAR(64). */
+const TRACE_ID_MAX = 64;
+/** Tavsif — qisqa gap; himoya chegarasi (ustun `text`). */
+export const ACTIVITY_DESCRIPTION_MAX = 500;
+
+/**
+ * Kontekstdagi IP/qurilmani metadata bilan birlashtiradi (f2Ud5tju, BeePost
+ * `activity-log.service.ts:76-83` naqshi): avtomatik qiymatlar AVVAL, ustidan
+ * chaqiruvchining metadata'si — ya'ni chaqiruvchi bergan `ip` USTUN turadi.
+ * Chaqiruvchidagi `undefined` qiymat avtomatikni o'chirmaydi (spread `undefined`
+ * ni yozib, JSON'da kalit yo'qolib qolardi); aniq `null` esa o'chiradi.
+ *
+ * Kontekst bo'sh (cron/bot) va metadata berilmagan bo'lsa — `null` (avvalgidek).
+ */
+function mergeAuditMetadata(
+  auto: AuditContext,
+  given: Record<string, unknown> | null,
+): Record<string, unknown> | null {
+  if (!given && Object.keys(auto).length === 0) return null;
+  const merged: Record<string, unknown> = { ...auto };
+  for (const [key, value] of Object.entries(given ?? {})) {
+    if (value !== undefined) merged[key] = value;
+  }
+  return merged;
+}
+
+/**
+ * Tavsifni yozishdan oldin tozalaydi (2WRzdWpZ): bo'shliqlar yig'iladi, bo'sh
+ * satr → NULL, uzunlik cheklanadi. ⚠️ HIMOYA QATLAMI: gapga tasodifan telefon
+ * tushib qolsa (`maskPhonesForLog`) `+99890*****67` ko'rinishiga keltiriladi —
+ * jurnal PII omboriga aylanmasin. Asosiy qoida baribir quruvchilarda
+ * (`ActivityDescribeUz` PII maydonini qabul qilmaydi).
+ */
+function normaliseDescription(value: unknown): string | null {
+  if (typeof value !== 'string') return null;
+  const clean = maskPhonesForLog(value.replace(/\s+/g, ' ').trim());
+  return clean ? clean.slice(0, ACTIVITY_DESCRIPTION_MAX) : null;
 }
 
 @Injectable()
@@ -42,6 +92,7 @@ export class ActivityLogService {
   async log(input: ActivityLogInput): Promise<void> {
     try {
       const ctx = requestContext.get();
+      const traceId = input.trace_id ?? ctx?.traceId ?? null;
       const entity = this.repo.create({
         entity_type: input.entity_type,
         entity_id: String(input.entity_id),
@@ -52,8 +103,15 @@ export class ActivityLogService {
         user_name: input.user_name ?? null,
         user_role: input.user_role ?? null,
         service: this.serviceName,
-        trace_id: input.trace_id ?? ctx?.traceId ?? null,
-        metadata: normaliseJsonb(input.metadata),
+        // Mijoz `x-request-id` sarlavhasi ustundan (VARCHAR 64) uzun bo'lsa
+        // INSERT yiqilib, log JIMGINA yo'qolardi (f2Ud5tju: trace endi RMQ
+        // sarlavhasi orqali HAR chaqiruvda keladi).
+        trace_id: traceId ? String(traceId).slice(0, TRACE_ID_MAX) : null,
+        metadata: mergeAuditMetadata(
+          pickAuditContext(ctx),
+          normaliseJsonb(input.metadata),
+        ),
+        description: normaliseDescription(input.description),
       });
       await this.repo.save(entity);
     } catch (err) {
@@ -92,6 +150,7 @@ export class ActivityLogService {
       user_role: input.user_role,
       trace_id: input.trace_id,
       metadata: input.metadata,
+      description: input.description,
     });
   }
 
@@ -162,8 +221,11 @@ export class ActivityLogService {
     }
     if (q.search && q.search.trim()) {
       const term = `%${q.search.trim()}%`;
+      // `a.description` (2WRzdWpZ) — "bekor" deb yozilsa "Buyurtma #… bekor
+      // qilindi" qatorlari topiladi. Ustunda GIN `gin_trgm_ops` indeksi bor
+      // (migratsiya 1716000000062).
       qb.andWhere(
-        '(a.entity_type ILIKE :s OR a.entity_id ILIKE :s OR a.action ILIKE :s OR a.user_name ILIKE :s)',
+        '(a.entity_type ILIKE :s OR a.entity_id ILIKE :s OR a.action ILIKE :s OR a.user_name ILIKE :s OR a.description ILIKE :s)',
         { s: term },
       );
     }
@@ -185,7 +247,15 @@ export class ActivityLogService {
     };
   }
 
-  /** Best-effort retention: delete rows older than `olderThanMs`. */
+  /**
+   * Best-effort retention: delete rows older than `olderThanMs`.
+   *
+   * (f2Ud5tju) Shundan KEYIN IP/qurilma maydonlari uchun QISQAROQ muddat:
+   * `ACTIVITY_LOG_DEVICE_RETENTION_DAYS` (sukut 30 kun, `olderThanMs` dan
+   * katta bo'lsa — `olderThanMs`) dan eski qatorlarda `metadata` dan `ip`,
+   * `user_agent`, `device_id`, `device_name` olib tashlanadi, qator qoladi.
+   * Tozalash xatosi DELETE natijasini yo'qotmaydi (faqat ogohlantirish).
+   */
   async prune(olderThanMs: number): Promise<number> {
     const cutoff = new Date(Date.now() - olderThanMs);
     const result = await this.repo
@@ -193,6 +263,39 @@ export class ActivityLogService {
       .delete()
       .where('created_at < :cutoff', { cutoff })
       .execute();
+    try {
+      const stripped = await this.stripDeviceMetadata(
+        resolveDeviceRetentionMs(olderThanMs),
+      );
+      if (stripped) {
+        this.logger.log(
+          `activity_logs retention: ${stripped} qatorda ip/qurilma maydonlari olib tashlandi`,
+        );
+      }
+    } catch (err) {
+      this.logger.warn(
+        `activity_logs ip/qurilma retention xato: ${(err as Error).message}`,
+      );
+    }
     return result.affected ?? 0;
+  }
+
+  /**
+   * `olderThanMs` dan eski qatorlarda `metadata` dan IP/qurilma kalitlarini
+   * PARTIYALAB olib tashlaydi (f2Ud5tju); tozalangan qatorlar sonini
+   * qaytaradi. Faqat shu servisning o'z sxemasidagi jadval — barcha sxemalar
+   * `scripts/prune-activity-logs.ts` da.
+   */
+  async stripDeviceMetadata(
+    olderThanMs: number,
+    batchSize: number = ACTIVITY_LOG_DEVICE_STRIP_BATCH_DEFAULT,
+  ): Promise<number> {
+    const { schema, tableName } = this.repo.metadata;
+    return stripDeviceMetadataBatched(
+      (sql, params) => this.repo.query(sql, params),
+      quoteActivityLogTable(schema, tableName),
+      new Date(Date.now() - olderThanMs),
+      batchSize,
+    );
   }
 }

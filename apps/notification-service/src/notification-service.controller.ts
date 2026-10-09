@@ -165,6 +165,12 @@ export class NotificationServiceController {
     return this.executeAndAck(context, () => this.inboxService.dispatch(data));
   }
 
+  /** Bildirishnoma turlari reyestri (Eh8y21Ha) — `GET /notifications/types`. */
+  @MessagePattern({ cmd: 'notification.types.list' })
+  listTypes(@Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.inboxService.listTypes());
+  }
+
   @MessagePattern({ cmd: 'notification.inbox.list' })
   listInbox(@Payload() data: ListNotificationsDto, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.inboxService.list(data));

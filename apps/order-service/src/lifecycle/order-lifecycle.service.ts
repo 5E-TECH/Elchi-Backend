@@ -1,4 +1,4 @@
-import { Inject, Injectable, Logger } from '@nestjs/common';
+import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { DataSource, In, IsNull, QueryFailedError, Repository } from 'typeorm';
@@ -19,6 +19,7 @@ import {
 } from '../entities/order-extra-cost-approval.entity';
 import {
   ActivityAction,
+  ActivityDescribeUz,
   ActivityLogService,
   BranchType,
   BranchTransferBatchStatus,
@@ -54,6 +55,7 @@ import {
 } from '../domain/order-money';
 import { OrderLookupService } from '../lookup/order-lookup.service';
 import { OrderCustodyService } from '../custody/order-custody.service';
+import { OrderNotificationService } from '../notification/order-notification.service';
 import {
   matchPartlySellItems,
   type PartlySellRequestItem,
@@ -241,6 +243,10 @@ export class OrderLifecycleService {
     private readonly activityLog: ActivityLogService,
     private readonly lookup: OrderLookupService,
     private readonly custody: OrderCustodyService,
+    // (ePpLHPX2) Kuryerga biriktirish → `order.assigned_to_courier` (outbox).
+    // Ixtiyoriy: eski spec'lar lifecycle'ni usiz quradi — u holda bildirishnoma yo'q.
+    @Optional()
+    private readonly orderNotifications?: OrderNotificationService,
   ) {}
 
   // ===== leaf helpers duplicated from OrderServiceService =====
@@ -3603,6 +3609,11 @@ export class OrderLifecycleService {
       new_value: { status: Order_status.RETURNED_TO_MARKET },
       ...this.custody.auditActor(requester),
       metadata: { market_id: order.market_id },
+      description: ActivityDescribeUz.orderStatusChanged(
+        order.id,
+        oldStatus,
+        Order_status.RETURNED_TO_MARKET,
+      ),
     });
 
     const updated = await this.findById(id);
@@ -4100,6 +4111,33 @@ export class OrderLifecycleService {
     return toTiyin(amount) / 100;
   }
 
+  /**
+   * IDG1z5y9 — ikkilamchi himoya (gateway DTO dan tashqari). `create` ga
+   * HTTP'dan tashqari yo'llar ham keladi (AI tasdig'i, hamkor posilkasi,
+   * telegram bot, ichki RPC) — ular ValidationPipe'dan o'tmaydi. Manfiy summa
+   * yoki 1 dan kichik / kasr miqdor bilan buyurtma bazaga YOZILMAYDI.
+   */
+  private assertCreateAmounts(dto: {
+    total_price?: number;
+    items?: Array<{ quantity?: number }>;
+  }): void {
+    if (dto.total_price !== undefined && dto.total_price !== null) {
+      const total = Number(dto.total_price);
+      if (!Number.isFinite(total) || total < 0) {
+        this.badRequest("total_price 0 dan kichik bo'lmasligi kerak");
+      }
+    }
+    for (const item of dto.items ?? []) {
+      if (item?.quantity === undefined || item?.quantity === null) continue;
+      const quantity = Number(item.quantity);
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        this.badRequest(
+          'Mahsulot miqdori (quantity) kamida 1 va butun son bo‘lishi kerak',
+        );
+      }
+    }
+  }
+
   async create(
     rawDto: {
       market_id: string;
@@ -4150,6 +4188,7 @@ export class OrderLifecycleService {
     // yaratuvchining hayot sikli/saqlash maydonlari olib tashlanadi —
     // buyurtma DOIM NEW, kuryersiz va pochtasiz.
     const dto = this.sanitizeCreateDtoForRequester(rawDto, requester);
+    this.assertCreateAmounts(dto);
     // fix3b: hamkor prepaid summasi endi SAQLANADI (tozalashdan keyin —
     // market/filial xodimidan kelgani allaqachon olib tashlangan).
     const paidOnlineAmount = this.resolveCreatePaidOnlineAmount(
@@ -4306,6 +4345,14 @@ export class OrderLifecycleService {
         custodyRepo,
       );
 
+      // (ePpLHPX2) Kuryer bilan yaratilgan buyurtma (faqat SA/ADMIN yoki
+      // ichki chaqiruv `courier_id` bera oladi) — kuryerga bildirishnoma,
+      // shu tranzaksiyada outbox orqali. Kuryersiz bo'lsa hech narsa yo'q.
+      await this.orderNotifications?.onCourierAssigned(
+        { order: saved, previous_courier_id: null },
+        queryRunner.manager,
+      );
+
       await this.syncOrderToSearch(saved, queryRunner.manager);
       await queryRunner.commitTransaction();
     } catch (error) {
@@ -4330,6 +4377,8 @@ export class OrderLifecycleService {
         },
         ...this.custody.auditActor(requester),
         metadata: { operator_id: operatorId },
+        // 2WRzdWpZ: faqat raqam + summa — mijoz ismi/telefoni/manzili YO'Q.
+        description: ActivityDescribeUz.orderCreated(savedId, dto.total_price),
       });
     }
 
@@ -5038,6 +5087,11 @@ export class OrderLifecycleService {
         action: ActivityAction.STATUS_CHANGE,
         old_value: { status: Order_status.NEW },
         new_value: { status: Order_status.RECEIVED, post_id: order.post_id },
+        description: ActivityDescribeUz.orderStatusChanged(
+          order.id,
+          Order_status.NEW,
+          Order_status.RECEIVED,
+        ),
       });
     }
 
@@ -6625,6 +6679,7 @@ export class OrderLifecycleService {
         branch_id: settlementBranchId,
         total_price: totalPrice,
       },
+      description: ActivityDescribeUz.orderSold(order.id, totalPrice),
     });
 
     return successRes({}, 200, 'Order sold');
@@ -6985,6 +7040,8 @@ export class OrderLifecycleService {
       new_value: { status: Order_status.CANCELLED, extra_cost: extraCost },
       ...this.custody.auditActor(requester),
       metadata: { market_id: order.market_id, courier_id: actorCourierId },
+      // 2WRzdWpZ: izoh (comment) ATAYLAB yo'q — unda mijoz ma'lumoti bo'lishi mumkin.
+      description: ActivityDescribeUz.orderCancelled(order.id),
     });
 
     return successRes({ id }, 200, 'Order canceled');
@@ -7040,6 +7097,11 @@ export class OrderLifecycleService {
       new_value: { status: Order_status.WAITING_CUSTOMER },
       ...this.custody.auditActor(requester),
       metadata: { reason },
+      description: ActivityDescribeUz.orderStatusChanged(
+        order.id,
+        Order_status.ON_THE_ROAD,
+        Order_status.WAITING_CUSTOMER,
+      ),
     });
 
     return successRes(
@@ -7161,6 +7223,7 @@ export class OrderLifecycleService {
       old_value: { status: oldStatus },
       new_value: { status: Order_status.CANCELLED },
       metadata: { reason: input.reason ?? null, actor: input.actor ?? null },
+      description: ActivityDescribeUz.orderCancelled(order.id),
     });
 
     /**
@@ -8190,6 +8253,7 @@ export class OrderLifecycleService {
       entity_type: 'Order',
       entity_id: String(order.id),
       action: 'order.partly_sell',
+      description: ActivityDescribeUz.orderPartlySold(order.id, price),
       old_value: { status: Order_status.WAITING, total_price: oldTotalPrice },
       new_value: { status: nextStatus, total_price: price },
       ...this.custody.auditActor(requester),
@@ -8388,6 +8452,8 @@ export class OrderLifecycleService {
     const previousHolderType = order.holder_type;
     const previousHolderBranchId = order.holder_branch_id;
     const previousHolderCourierId = order.holder_courier_id;
+    // (ePpLHPX2) Kuryer o'zgardimi — `order.assigned_to_courier` uchun.
+    const previousCourierId = order.courier_id;
 
     Object.assign(order, {
       market_id: dto.market_id ?? order.market_id,
@@ -8644,6 +8710,14 @@ export class OrderLifecycleService {
         );
       }
 
+      // (ePpLHPX2) Kuryerga biriktirildi (logistics scan-assign /
+      // assign-to-courier `order.update` → shu yer) — bildirishnoma shu
+      // tranzaksiyada outbox orqali; kuryer o'zgarmagan bo'lsa hech narsa.
+      await this.orderNotifications?.onCourierAssigned(
+        { order, previous_courier_id: previousCourierId },
+        manager,
+      );
+
       // Atomic search index update: enqueue the outbox event in the same
       // transaction so the search publisher only sees committed state.
       await this.syncOrderToSearch(order, manager);
@@ -8722,6 +8796,14 @@ export class OrderLifecycleService {
         new_value: changeSet,
         ...this.custody.auditActor(requester),
         metadata: requester?.note ? { note: requester.note } : null,
+        description:
+          oldStatus !== newStatus
+            ? ActivityDescribeUz.orderStatusChanged(
+                order.id,
+                oldStatus,
+                newStatus,
+              )
+            : ActivityDescribeUz.orderUpdated(order.id),
       });
     }
     return updated;

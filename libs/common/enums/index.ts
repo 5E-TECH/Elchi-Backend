@@ -10,6 +10,11 @@ export enum Roles {
   MANAGER = 'manager',
   BRANCH = 'branch',
   INVESTOR = 'investor',
+  // (dzyVftBx) Viloyatlar ustidan nazorat qiluvchi xodim: viloyatlarga
+  // biriktiriladi (regions.logist_id) va hudud statistikasini ko'radi.
+  // DB'dagi `identity_schema.admins_role_enum` ga 1716000000060 migratsiyasi
+  // qo'shadi.
+  LOGIST = 'logist',
 }
 
 export enum Status {
@@ -250,10 +255,26 @@ export enum NotificationCategory {
   MARKETING = 'marketing',
 }
 
-/** Per-channel delivery outcome recorded on the notification row. */
+/**
+ * Per-channel delivery outcome recorded on the notification row
+ * (`notifications.delivery` JSONB — yangi qiymat uchun migratsiya KERAK EMAS).
+ *
+ * (uFmUS86e) `delivery.realtime` uchun `SENT` ishlatilmaydi: gateway ack
+ * qaytarmaydi, navbatda iste'molchi bo'lmasa xabar jimgina yo'qoladi. Shuning
+ * uchun muvaffaqiyatli emit = `EMITTED` (brokerga topshirildi), `SENT` —
+ * faqat haqiqiy tasdiq (Telegram API `ok`) bo'lganda.
+ */
 export enum NotificationDeliveryStatus {
   PENDING = 'pending',
   SENT = 'sent',
   FAILED = 'failed',
   SKIPPED = 'skipped',
+  /** Navbatga qo'yildi (push/SMS outbox) — yetkazish keyin, asinxron. */
+  QUEUED = 'queued',
+  /** Realtime: brokerga emit qilindi (ack yo'q — `sent` EMAS). */
+  EMITTED = 'emitted',
+  /** Kanal so'raldi, lekin provayder ulanmagan (email, SMS akkaunti yo'q). */
+  NO_PROVIDER = 'no_provider',
+  /** Kanal so'raldi, lekin nishon yo'q (masalan marketda Telegram guruhi yo'q). */
+  NOT_ELIGIBLE = 'not_eligible',
 }

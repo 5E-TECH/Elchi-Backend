@@ -31,7 +31,7 @@ import {
   RMQ_SERVICE_TIMEOUT,
   tashkentDayRange,
 } from '@app/common';
-import { successRes } from '../../../libs/common/helpers/response';
+import { errorRes, successRes } from '../../../libs/common/helpers/response';
 import { resolveCourierShare as resolveCourierShareShare } from './domain/order-money';
 import { OrderLookupService } from './lookup/order-lookup.service';
 import { OrderCustodyService } from './custody/order-custody.service';
@@ -115,6 +115,130 @@ export const parseOrderListSort = (
 
 /** `findSummariesByIds` — bitta jadval sahifasidan ortiq emas. */
 const ORDER_SUMMARY_MAX_IDS = 100;
+/** Tashqi posilkalar ro'yxati sahifa chegarasi (PEc4BjVX). */
+const EXTERNAL_LIST_MAX_LIMIT = 200;
+
+/**
+ * oNAE3LW9 — `order.geo.reassign_district` kirishi (order/identity/branch dagi
+ * `*.reassign_district` bilan bir xil shakl).
+ */
+export interface GeoReassignInput {
+  from_district_id?: string;
+  to_district_id?: string;
+  /** Ko'chgan qatorlarning `region_id` si shunga o'rnatiladi; bo'sh — tegilmaydi. */
+  to_region_id?: string | null;
+  /**
+   * ID rejimi: faqat shu qatorlar (va faqat hali `from_district_id` da
+   * turganlari) ko'chadi — birlashtirish KOMPENSATSIYASI (B → A) uchun.
+   */
+  ids?: Array<string | number> | null;
+  /** Kompensatsiya: `region_id` ni qator bo'yicha AYNAN tiklash. */
+  restore_regions?: Array<{
+    region_id: string | number | null;
+    ids: Array<string | number>;
+  }> | null;
+  /**
+   * Muddat (epoch ms): logistics shu paytgacha javob kutadi. Undan keyin
+   * ko'chirish BAJARILMAYDI (boshida va COMMIT'dan oldin tekshiriladi) —
+   * logistics timeout bilan voz kechib kompensatsiya qilgandan keyin "kech"
+   * ko'chish bo'lmasin.
+   */
+  deadline_at?: number | null;
+}
+
+/** oNAE3LW9 — bigint ID (musbat butun son, ko'pi bilan 19 xona). */
+const GEO_ID_PATTERN = /^\d{1,19}$/;
+
+const geoBadRequest = (message: string) =>
+  new RpcException(errorRes(message, 400));
+
+/** oNAE3LW9 — `deadline_at` o'tgan bo'lsa ko'chirish bajarilmaydi (409). */
+function assertGeoDeadline(deadlineAt: number | null): void {
+  if (deadlineAt !== null && Date.now() > deadlineAt) {
+    throw new RpcException(
+      errorRes(
+        "Ko'chirish muddati o'tdi (logistics javobni kutmay qo'ydi) — bajarilmadi",
+        409,
+      ),
+    );
+  }
+}
+
+/** oNAE3LW9 — `reassignDistrict` kirishini tekshiradi va normallashtiradi. */
+function parseGeoReassignInput(input: GeoReassignInput) {
+  const from = String(input?.from_district_id ?? '').trim();
+  const to = String(input?.to_district_id ?? '').trim();
+  if (!GEO_ID_PATTERN.test(from) || !GEO_ID_PATTERN.test(to) || from === to) {
+    throw geoBadRequest(
+      "from_district_id va to_district_id majburiy va har xil bo'lishi kerak",
+    );
+  }
+  const toRegionId = String(input?.to_region_id ?? '').trim() || null;
+  const isId = (value: unknown) =>
+    (typeof value === 'string' || typeof value === 'number') &&
+    GEO_ID_PATTERN.test(String(value).trim());
+  let ids: string[] | null = null;
+  if (input?.ids !== undefined && input?.ids !== null) {
+    if (!Array.isArray(input.ids) || !input.ids.every(isId)) {
+      throw geoBadRequest("ids — musbat butun sonlar ro'yxati bo'lishi kerak");
+    }
+    ids = [...new Set(input.ids.map((value) => String(value).trim()))];
+  }
+  const restoreRegions: Array<{ region_id: string | null; ids: string[] }> = [];
+  if (input?.restore_regions !== undefined && input?.restore_regions !== null) {
+    if (!Array.isArray(input.restore_regions)) {
+      throw geoBadRequest("restore_regions ro'yxat bo'lishi kerak");
+    }
+    for (const group of input.restore_regions) {
+      const regionId = String(group?.region_id ?? '').trim() || null;
+      if (
+        (regionId !== null && !isId(regionId)) ||
+        !Array.isArray(group?.ids) ||
+        !group.ids.every(isId)
+      ) {
+        throw geoBadRequest("restore_regions elementi noto'g'ri");
+      }
+      restoreRegions.push({
+        region_id: regionId,
+        ids: group.ids.map((value) => String(value).trim()),
+      });
+    }
+  }
+  const deadline = Number(input?.deadline_at);
+  const deadlineAt =
+    Number.isFinite(deadline) && deadline > 0 ? deadline : null;
+  return { from, to, toRegionId, ids, restoreRegions, deadlineAt };
+}
+
+/**
+ * oNAE3LW9 — ko'chirish javobi: ko'chgan ID'lar, ularning ESKI `region_id`
+ * guruhlari (kompensatsiya aynan tiklashi uchun) va ID rejimida topilmagan
+ * (A da yo'q) ID'lar.
+ */
+function geoReassignResult(
+  req: { from: string; to: string; ids: string[] | null },
+  rows: Array<{ id: string; region_id: string | null }>,
+) {
+  const ids = rows.map((row) => String(row.id));
+  const groups = new Map<string, { region_id: string | null; ids: string[] }>();
+  for (const row of rows) {
+    const regionId = row.region_id == null ? null : String(row.region_id);
+    const key = regionId ?? '';
+    const group = groups.get(key) ?? { region_id: regionId, ids: [] };
+    group.ids.push(String(row.id));
+    groups.set(key, group);
+  }
+  const movedSet = new Set(ids);
+  return {
+    from_district_id: req.from,
+    to_district_id: req.to,
+    moved: ids.length,
+    ids,
+    previous_regions: [...groups.values()],
+    missing_ids: (req.ids ?? []).filter((id) => !movedSet.has(id)),
+  };
+}
+
 @Injectable()
 export class OrderServiceService {
   private readonly logger = new Logger(OrderServiceService.name);
@@ -435,9 +559,15 @@ export class OrderServiceService {
     page?: number,
     limit?: number,
     fetchAll?: boolean,
+    maxLimit?: number,
   ) {
     const DEFAULT_LIMIT = 10;
-    const MAX_LIMIT = 100;
+    // Sukut 100; ichki chaqiruvchi (masalan tashqi posilkalar skan ekrani —
+    // PEc4BjVX) 500 gacha ko'tara oladi.
+    const MAX_LIMIT =
+      Number.isFinite(Number(maxLimit)) && Number(maxLimit) > 100
+        ? Math.min(Number(maxLimit), 500)
+        : 100;
     const MAX_FETCH_ALL = 5000;
     const parsedPage = Number(page ?? 1);
     const parsedLimit = Number(limit ?? DEFAULT_LIMIT);
@@ -555,6 +685,8 @@ export class OrderServiceService {
     sort_dir?: string;
     page?: number;
     limit?: number;
+    /** Ichki: sahifa yuqori chegarasi (sukut 100) — PEc4BjVX. */
+    max_limit?: number;
   }) {
     const {
       market_id,
@@ -590,6 +722,7 @@ export class OrderServiceService {
       sort_dir,
       page,
       limit,
+      max_limit,
     } = query;
     // So'rov qurilishidan OLDIN — noto'g'ri qiymat bazaga yetib bormaydi.
     const sort = parseOrderListSort(sort_by, sort_dir);
@@ -603,7 +736,12 @@ export class OrderServiceService {
       include_courier_history === true ||
       String(include_courier_history).toLowerCase() === 'true';
 
-    const pagination = this.normalizePagination(page, limit, useFetchAll);
+    const pagination = this.normalizePagination(
+      page,
+      limit,
+      useFetchAll,
+      max_limit,
+    );
     const statusFilter = this.normalizeStatusFilter(status);
     const sourceFilter = this.normalizeSourceFilter(source);
     const excludeSourceFilters = (exclude_sources ?? [])
@@ -991,6 +1129,8 @@ export class OrderServiceService {
     return this.findAllEnriched({
       ...query,
       source: Order_source.EXTERNAL,
+      // PEc4BjVX: skan ekrani butun qopni oladi (gateway limit=200 ga ruxsat beradi).
+      max_limit: EXTERNAL_LIST_MAX_LIMIT,
     });
   }
 
@@ -1068,6 +1208,126 @@ export class OrderServiceService {
       200,
       'Proof file owner',
     );
+  }
+
+  /**
+   * oNAE3LW9 — hududni o'chirishdan OLDIN: shu tuman/viloyatga ishora qilgan
+   * buyurtmalar soni. Buyurtmalar boshqa sxemada (FK yo'q) — ilgari tuman
+   * o'chsa `order.district_id` mavjud bo'lmagan ID ga ishora qilib qolardi va
+   * hudud kesimidagi hisobotlar buzilardi. O'chirilgan (is_deleted) buyurtmalar
+   * ham sanaladi: ular ham hisobotlarda va tarixda ko'rinadi.
+   */
+  async countGeoUsage(input: { district_id?: string; region_id?: string }) {
+    const districtId = String(input?.district_id ?? '').trim();
+    const regionId = String(input?.region_id ?? '').trim();
+    if (!districtId && !regionId) {
+      this.badRequest('district_id yoki region_id majburiy');
+    }
+    const qb = this.orderRepo.createQueryBuilder('o');
+    if (districtId) {
+      qb.where('o.district_id = :districtId', { districtId });
+    } else {
+      qb.where('o.region_id = :regionId', { regionId });
+    }
+    const orders = await qb.getCount();
+    // oNAE3LW9: filiallararo jo'natmalar ham viloyatga bog'langan
+    // (`branch_transfer_batches.target_region_id`, shu sxemada, FK yo'q) —
+    // viloyat o'chsa ular ham mavjud bo'lmagan ID ga ishora qilib qolardi.
+    // Tumanga bog'lanmagan (district ustuni yo'q) — tuman so'rovida 0.
+    const transferBatches =
+      !districtId && regionId
+        ? await this.transferBatchRepo
+            .createQueryBuilder('b')
+            .where('b.target_region_id = :regionId', { regionId })
+            .getCount()
+        : 0;
+    return successRes(
+      {
+        district_id: districtId || null,
+        region_id: regionId || null,
+        orders,
+        transfer_batches: transferBatches,
+      },
+      200,
+      'Geo usage',
+    );
+  }
+
+  /**
+   * oNAE3LW9 — tumanlarni birlashtirish (logistics `mergeDistricts`):
+   * buyurtmalar A → B tumaniga (va B ning viloyatiga).
+   *
+   * ID rejimi (`ids`): faqat shu qatorlar va faqat hali A da turganlari —
+   * logistics KOMPENSATSIYASI (B → A); `restore_regions` bilan `region_id`
+   * ham qator bo'yicha AYNAN eski qiymatiga qaytadi.
+   *
+   * BITTA tranzaksiyada: qatorlar `FOR UPDATE` bilan qulflanib ID va ESKI
+   * `region_id` olinadi, so'ng aynan shu ID'lar yangilanadi. Javobdagi `ids`
+   * + `previous_regions` bo'yicha logistics keyingi bosqich yiqilsa AYNAN
+   * shu qatorlarni A ga qaytaradi (servislararo umumiy tranzaksiya yo'q).
+   * `deadline_at` dan keyin ko'chirish bajarilmaydi (kech ko'chish yo'q).
+   */
+  async reassignDistrict(input: GeoReassignInput) {
+    const req = parseGeoReassignInput(input);
+    assertGeoDeadline(req.deadlineAt);
+    let rows: Array<{ id: string; region_id: string | null }>;
+    try {
+      rows = await this.orderRepo.manager.transaction(async (manager) => {
+        if (req.ids && !req.ids.length) return [];
+        const select = manager
+          .getRepository(Order)
+          .createQueryBuilder('t')
+          .select('t.id', 'id')
+          .addSelect('t.region_id', 'region_id')
+          .where('t.district_id = :from', { from: req.from });
+        if (req.ids) {
+          select.andWhere('t.id = ANY(:ids)', { ids: req.ids });
+        }
+        const locked = await select
+          .setLock('pessimistic_write')
+          .getRawMany<{ id: string; region_id: string | null }>();
+        const ids = locked.map((row) => String(row.id));
+        if (!ids.length) return locked;
+        await manager
+          .createQueryBuilder()
+          .update(Order)
+          .set(
+            req.toRegionId
+              ? { district_id: req.to, region_id: req.toRegionId }
+              : { district_id: req.to },
+          )
+          .where('id = ANY(:ids)', { ids })
+          .execute();
+        const movedSet = new Set(ids);
+        for (const group of req.restoreRegions) {
+          const groupIds = group.ids.filter((id) => movedSet.has(id));
+          if (!groupIds.length) continue;
+          await manager
+            .createQueryBuilder()
+            .update(Order)
+            .set({ region_id: group.region_id })
+            .where('id = ANY(:ids)', { ids: groupIds })
+            .execute();
+        }
+        // Muddat COMMIT'dan OLDIN yana: logistics voz kechgan bo'lsa — rollback.
+        assertGeoDeadline(req.deadlineAt);
+        return locked;
+      });
+    } catch (error) {
+      if (error instanceof RpcException) throw error;
+      // Kutilmagan (DB) xato RpcException'ga o'raladi: aks holda RMQ xabarni
+      // QAYTA navbatga qo'yadi va logistics kompensatsiya qilgandan keyin
+      // ko'chirish takror bajarilib qolishi mumkin edi.
+      throw new RpcException(
+        errorRes(
+          `Tuman bo'yicha ko'chirib bo'lmadi: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+          503,
+        ),
+      );
+    }
+    return successRes(geoReassignResult(req, rows), 200, 'Orders reassigned');
   }
 
   /**
@@ -1643,6 +1903,7 @@ export class OrderServiceService {
     fetch_all?: boolean | string;
     page?: number;
     limit?: number;
+    max_limit?: number;
   }) {
     const { search, ...orderQuery } = query;
     const trimmedSearch = search?.trim() ?? '';

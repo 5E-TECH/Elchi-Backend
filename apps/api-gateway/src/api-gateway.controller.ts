@@ -5,6 +5,8 @@ import {
   Delete,
   ForbiddenException,
   Get,
+  Header,
+  HttpCode,
   Inject,
   NotFoundException,
   Param,
@@ -18,10 +20,12 @@ import { ClientProxy } from '@nestjs/microservices';
 import { Cashbox_type, Roles as RoleEnum } from '@app/common';
 import { firstValueFrom, timeout } from 'rxjs';
 import {
+  ApiBadRequestResponse,
   ApiBearerAuth,
   ApiBody,
   ApiConflictResponse,
   ApiCreatedResponse,
+  ApiForbiddenResponse,
   ApiNotFoundResponse,
   ApiOkResponse,
   ApiOperation,
@@ -37,9 +41,13 @@ import { RolesGuard } from './auth/roles.guard';
 import {
   CreateAdminRequestDto,
   CreateCourierRequestDto,
+  CreateLogistRequestDto,
   CreateManagerRequestDto,
   CreateMarketRequestDto,
   CreateRegistratorRequestDto,
+  MarketTgTokenResponseDto,
+  RotateAllMarketTgTokensRequestDto,
+  RotateAllMarketTgTokensResponseDto,
   UpdateAdminRequestDto,
   UpdateMarketAddOrderRequestDto,
   UpdateMarketCancelledHandoverQrRequestDto,
@@ -312,6 +320,66 @@ export class ApiGatewayController {
         {
           query: {
             role: RoleEnum.ADMIN,
+            search,
+            status,
+            page: page ? Number(page) : undefined,
+            limit: limit ? Number(limit) : undefined,
+          },
+        },
+      )
+      .pipe(timeout(8000));
+  }
+
+  // (dzyVftBx) Logist — viloyatlar ustidan nazorat qiluvchi xodim. Yaratish
+  // admin naqshida (identity.logist.create); o'chirish umumiy
+  // DELETE /users/:id orqali (identity uning viloyatlarini bo'shatadi).
+  @Post('logists')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Create logist' })
+  @ApiBody({ type: CreateLogistRequestDto })
+  @ApiCreatedResponse({ description: 'Logist created' })
+  @ApiConflictResponse({ description: 'Conflict' })
+  createLogist(
+    @Body() dto: CreateLogistRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.identityClient
+      .send(
+        { cmd: 'identity.logist.create' },
+        { dto, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
+  }
+
+  @Get('logists')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List logists with filtering and pagination' })
+  @ApiQuery({ name: 'search', required: false, type: String })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    type: String,
+    example: 'active',
+  })
+  @ApiQuery({ name: 'page', required: false, type: Number, example: 1 })
+  @ApiQuery({ name: 'limit', required: false, type: Number, example: 10 })
+  @ApiOkResponse({ description: 'Logist list' })
+  getLogists(
+    @Query('search') search?: string,
+    @Query('status') status?: string,
+    @Query('page') page?: string,
+    @Query('limit') limit?: string,
+  ) {
+    return this.identityClient
+      .send(
+        { cmd: 'identity.user.find_all' },
+        {
+          query: {
+            role: RoleEnum.LOGIST,
             search,
             status,
             page: page ? Number(page) : undefined,
@@ -1007,15 +1075,12 @@ export class ApiGatewayController {
       }
     }
 
-    // market_tg_token (marketning Telegram kaliti) faqat SUPERADMIN/ADMIN'ga:
-    // admin uni marketga shu sahifadan beradi. Menejer so'rovida flag umuman
-    // yuborilmaydi (identity javobida token bo'lmaydi).
+    // (GvL6ZFAd) market_tg_token bu javobda HECH bir rol uchun (SUPERADMIN
+    // ham) yo'q — avvalgi SUPERADMIN/ADMIN istisnosi (`include_tg_token`)
+    // bekor qilindi. Token: GET /markets/:id/tg-token (faqat SUPERADMIN).
     return firstValueFrom(
       this.identityClient
-        .send(
-          { cmd: 'identity.user.find_by_id' },
-          requesterIsPrivileged ? { id, include_tg_token: true } : { id },
-        )
+        .send({ cmd: 'identity.user.find_by_id' }, { id })
         .pipe(timeout(8000)),
     );
   }
@@ -1274,6 +1339,102 @@ export class ApiGatewayController {
     return view === 'branch_staff'
       ? { ...base, phone_number: market?.phone_number ?? null }
       : base;
+  }
+
+  // ==================== Market Telegram tokeni (GvL6ZFAd) ====================
+  // market_tg_token — bearer sir (order-bot / guruh ulash kaliti). U endi
+  // HECH bir umumiy javobda yo'q (/users, /users/:id, /markets). Ko'rish va
+  // almashtirish FAQAT shu SUPERADMIN-only marshrutlar orqali; ADMIN, MANAGER
+  // va boshqalar — 403 (RolesGuard; identity ham requester.roles'ni qayta
+  // tekshiradi). Har amal activity log'ga yoziladi, token qiymati — yo'q.
+  // Javoblar `Cache-Control: no-store` — sir brauzer/proksi keshida qolmasin.
+  //
+  // ⚠️ TARTIB: statik `markets/tg-token/rotate-all` `markets/:id/...`
+  // marshrutlaridan OLDIN e'lon qilinadi.
+
+  @Post('markets/tg-token/rotate-all')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Rotate the Telegram token of EVERY active market in one transaction (SUPERADMIN only)',
+    description:
+      "Barcha faol (o'chirilmagan) marketlarning market_tg_token'i bitta tranzaksiyada yangilanadi. Tanada aniq tasdiq `{ \"confirm\": \"ROTATE_ALL\" }` shart (aks holda 400). Javobda faqat son (`rotated_count`), tokenlar YO'Q. ⚠️ Shundan keyin har bir market yangi tokenni admin'dan olishi kerak: order-bot'ga qayta ulanish va yangi guruh ulash faqat yangi token bilan; mavjud ulangan guruhlar ishlashda davom etadi.",
+  })
+  @ApiBody({ type: RotateAllMarketTgTokensRequestDto })
+  @ApiOkResponse({ type: RotateAllMarketTgTokensResponseDto })
+  @ApiBadRequestResponse({ description: "confirm yo'q yoki 'ROTATE_ALL' emas" })
+  @ApiForbiddenResponse({ description: 'SUPERADMIN emas' })
+  rotateAllMarketTgTokens(
+    @Body() dto: RotateAllMarketTgTokensRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    // 30 s: identity barcha marketlarni bitta tranzaksiyada yangilaydi.
+    return this.identityClient
+      .send(
+        { cmd: 'identity.market.rotate_all_tg_tokens' },
+        { confirm: dto.confirm, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(30000));
+  }
+
+  @Get('markets/:id/tg-token')
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Get a market's Telegram token (SUPERADMIN only)",
+    description:
+      "Market sahifasidagi Telegram token kartasi uchun. Faqat SUPERADMIN; har ko'rish activity log'ga yoziladi (token qiymati yozilmaydi). Market: role=market, o'chirilmagan; aks holda 404.",
+  })
+  @ApiParam({ name: 'id', description: 'Market user ID' })
+  @ApiOkResponse({ type: MarketTgTokenResponseDto })
+  @ApiForbiddenResponse({ description: 'SUPERADMIN emas' })
+  @ApiNotFoundResponse({ description: 'Market topilmadi' })
+  getMarketTgToken(@Param('id') id: string, @Req() req: { user: JwtUser }) {
+    this.assertMarketIdParam(id);
+    return this.identityClient
+      .send(
+        { cmd: 'identity.market.get_tg_token' },
+        { id, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
+  }
+
+  @Post('markets/:id/tg-token/rotate')
+  @HttpCode(200)
+  @Header('Cache-Control', 'no-store')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary: "Rotate a market's Telegram token (SUPERADMIN only)",
+    description:
+      "Yangi token server tomonida yaratiladi (tanasi yo'q) va javobda qaytadi; eski token darhol yaroqsiz. Activity log'ga yoziladi (token qiymati yozilmaydi). Market: role=market, o'chirilmagan; aks holda 404.",
+  })
+  @ApiParam({ name: 'id', description: 'Market user ID' })
+  @ApiOkResponse({ type: MarketTgTokenResponseDto })
+  @ApiForbiddenResponse({ description: 'SUPERADMIN emas' })
+  @ApiNotFoundResponse({ description: 'Market topilmadi' })
+  rotateMarketTgToken(@Param('id') id: string, @Req() req: { user: JwtUser }) {
+    this.assertMarketIdParam(id);
+    return this.identityClient
+      .send(
+        { cmd: 'identity.market.rotate_tg_token' },
+        { id, requester: this.toRequester(req) },
+      )
+      .pipe(timeout(8000));
+  }
+
+  /** Market id — bigint PK; raqam bo'lmagan segment DB'ga bormaydi (404). */
+  private assertMarketIdParam(id: string): void {
+    if (!/^\d+$/.test(String(id ?? ''))) {
+      throw new NotFoundException('Market topilmadi');
+    }
   }
 
   @Patch('markets/:id/add-order')

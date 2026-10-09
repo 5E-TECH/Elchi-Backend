@@ -36,7 +36,19 @@ export interface ActivityLogInput {
   user_name?: string | null;
   user_role?: string | null;
   trace_id?: string | null;
+  /**
+   * Metadata. Gateway HTTP so'rovidan kelgan amalda `ip`, `user_agent`,
+   * `device_id`, `device_name` AVTOMATIK qo'shiladi (f2Ud5tju); shu
+   * kalitlardan birini chaqiruvchi o'zi bersa — uniki USTUN.
+   */
   metadata?: Record<string, unknown> | null;
+  /**
+   * Inson o'qiy oladigan qisqa o'zbekcha gap (2WRzdWpZ), masalan
+   * "Buyurtma #100439 bekor qilindi". `ActivityDescribeUz` quruvchilaridan
+   * oling — servisda qo'lda yozmang. ⚠️ Mijoz ismi/telefoni/manzili
+   * QO'SHILMAYDI. Berilmasa ustun NULL (frontend amal yorlig'ini ko'rsatadi).
+   */
+  description?: string | null;
 }
 
 export interface ActivityChangeInput extends Omit<
@@ -61,7 +73,10 @@ export interface ActivityLogQuery {
   /** ISO date / parseable timestamp lower & upper bounds on created_at. */
   from?: string | Date;
   to?: string | Date;
-  /** Free-text ILIKE across entity_type / entity_id / action / user_name. */
+  /**
+   * Free-text ILIKE across entity_type / entity_id / action / user_name /
+   * description (2WRzdWpZ — "bekor" deb qidirilsa bekor qilish qatorlari).
+   */
   search?: string;
   page?: number;
   limit?: number;

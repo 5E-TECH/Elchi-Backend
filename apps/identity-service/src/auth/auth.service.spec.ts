@@ -37,6 +37,16 @@ jest.mock('@app/common', () => ({
     AUTH_FAILURE: 'auth_failure',
   },
   ActivityLogService: class ActivityLogService {},
+  // 2WRzdWpZ / f2Ud5tju — sof funksiyalar, haqiqiylari ishlatiladi.
+  ActivityDescribeUz: jest.requireActual(
+    '../../../../libs/common/src/activity-log/describe-uz',
+  ).ActivityDescribeUz,
+  computeHmacSignature: jest.requireActual(
+    '../../../../libs/common/src/webhook/hmac',
+  ).computeHmacSignature,
+  normalizeUzPhone: jest.requireActual(
+    '../../../../libs/common/src/ai-text/phone',
+  ).normalizeUzPhone,
   numericTransformer: { to: (v: unknown) => v, from: (v: unknown) => v },
   rmqSend: jest.fn(),
   BaseEntity: class BaseEntity {},

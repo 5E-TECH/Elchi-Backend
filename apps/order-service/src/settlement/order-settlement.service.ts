@@ -1,7 +1,7 @@
 import { Inject, Injectable, Logger, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { createHash } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import {
   Brackets,
   DataSource,
@@ -18,6 +18,7 @@ import {
   Cashbox_type,
   IdempotencyKey,
   Order_status,
+  OutboxService,
   SettlementStatus,
   rmqSend,
 } from '@app/common';
@@ -92,6 +93,16 @@ const COURIER_TRANSFER_SAMPLE_LIMIT = 5;
 const ADVANCE_APPLIED_PATTERN = 'order.settlement.advance.applied';
 const PG_UNIQUE_VIOLATION = '23505';
 
+/**
+ * znD3KaZL — FIFO qoldig'i (`leftover` > 0) haqidagi hodisa: order-service
+ * advance tranzaksiyasining O'ZIDA outbox orqali FINANCE'ga yuboriladi,
+ * finance uni `finance_settlement_unapplied` ga idempotent yozadi
+ * (`(level, actor_id, dedup_epoch)` UNIQUE). `finance.*` — doimiy (pul)
+ * pattern: yetkazilmaguncha cheksiz qayta uriniladi.
+ */
+export const SETTLEMENT_UNAPPLIED_RECORDED_PATTERN =
+  'finance.settlement.unapplied_recorded';
+
 /** Advance tokeni boshqa (commit bo'lgan) tranzaksiyada qo'llanib bo'lgan. */
 class AdvanceAlreadyAppliedError extends Error {
   constructor(readonly key: string) {
@@ -133,6 +144,13 @@ export class OrderSettlementService {
      * mexanizmi avvalgidek ishlaydi (C10 izohiga qarang).
      */
     @Optional() private readonly lookup?: OrderLookupService,
+    /**
+     * znD3KaZL — `finance.settlement.unapplied_recorded` hodisasi uchun
+     * (FIFO tranzaksiyasi ichida). Ixtiyoriy: eski spec'lar servisni 4
+     * argument bilan quradi — u holda hodisa yozilmaydi (prod'da modul
+     * `OutboxModule.forService` orqali har doim beradi).
+     */
+    @Optional() private readonly outbox?: OutboxService,
   ) {}
 
   // ===== leaf helpers duplicated from OrderServiceService =====
@@ -481,6 +499,7 @@ export class OrderSettlementService {
     }
 
     const branchReceivable = branches.reduce((sum, row) => sum + row.amount, 0);
+    const unappliedCarry = this.summarizeUnappliedCarries(carries, hqBranchId);
 
     return successRes(
       {
@@ -493,10 +512,80 @@ export class OrderSettlementService {
         market_payable: markets.reduce((sum, row) => sum + row.amount, 0),
         branches,
         markets,
+        // znD3KaZL — faqat KO'RSATKICH (yuqoridagi yig'indilarga qo'shimcha
+        // ta'siri yo'q, ular qoldiqni allaqachon ayirgan). Qoldiq bo'lmasa
+        // kalit qo'shilmaydi — javob shakli avvalgidek; finance yo'q kalitni
+        // nol deb o'qiydi.
+        ...(unappliedCarry.count ? { unapplied_carry: unappliedCarry } : {}),
       },
       200,
       'Financial balance settlement summary',
     );
+  }
+
+  /**
+   * znD3KaZL — "Taqsimlanmagan qoldiq" ko'rsatkichi (`/financial-balance`).
+   *
+   * Kassada ko'chgan, lekin hali hech bir BUTUN buyurtmani yopmagan naqd —
+   * bo'g'in bo'yicha jami va tomonlar ro'yxati. Ilgari bu farq hech qayerda
+   * ko'rinmasdi: kuryer 550 000 topshirsa va daftar 300 000 ni yopsa,
+   * 250 000 faqat yig'indilardan jimgina ayirilardi.
+   *
+   * ⚠️ BU FORMULA QISMI EMAS. `chain_receivable` / `market_payable` qoldiqni
+   * yuqorida allaqachon ayirgan — bu raqamni holatga qo'shish ayni pulni
+   * ikki marta sanash bo'lardi. Filial kuryerining qoldig'i ham shu yerda
+   * (u zanjirga ta'sir qilmaydi, lekin kuryerning daftar qarzidan ayiriladi).
+   * C10: HQ'ning o'z nomidagi `branch_to_hq` qoldig'i — yig'indilardagi kabi
+   * — hisobga olinmaydi (haqiqiy naqd emas).
+   */
+  private summarizeUnappliedCarries(
+    carries: OrderSettlementCarry[],
+    hqBranchId: string | null,
+  ) {
+    const round2 = (value: number) => Math.round(value * 100) / 100;
+    const byLevel: Record<SettlementLevel, number> = {
+      courier_to_branch: 0,
+      branch_to_hq: 0,
+      hq_to_market: 0,
+    };
+    const items: Array<{
+      level: SettlementLevel;
+      party_id: string;
+      branch_id: string | null;
+      amount: number;
+    }> = [];
+    for (const carry of carries) {
+      const level = carry.level as SettlementLevel;
+      const amount = Number(carry.amount) || 0;
+      const partyId = String(carry.party_id);
+      if (
+        !Object.prototype.hasOwnProperty.call(byLevel, level) ||
+        !(amount > 0)
+      ) {
+        continue;
+      }
+      if (level === 'branch_to_hq' && hqBranchId && partyId === hqBranchId) {
+        continue;
+      }
+      byLevel[level] += amount;
+      items.push({
+        level,
+        party_id: partyId,
+        branch_id: carry.branch_id ? String(carry.branch_id) : null,
+        amount,
+      });
+    }
+    items.sort((a, b) => b.amount - a.amount);
+    return {
+      total: round2(
+        byLevel.courier_to_branch + byLevel.branch_to_hq + byLevel.hq_to_market,
+      ),
+      courier_to_branch: round2(byLevel.courier_to_branch),
+      branch_to_hq: round2(byLevel.branch_to_hq),
+      hq_to_market: round2(byLevel.hq_to_market),
+      count: items.length,
+      items,
+    };
   }
 
   /**
@@ -941,6 +1030,15 @@ export class OrderSettlementService {
      * Aks holda tranzaksiya qaytariladi va `rejected` da sabab qaytadi.
      */
     requireZeroNet?: boolean;
+    /**
+     * znD3KaZL — FAQAT `advanceSettlement` (haqiqiy kassa to'lovi) beradi.
+     * Javobdagi `leftover` > 0 bo'lsa AYNAN shu tranzaksiyada FINANCE'ga
+     * `finance.settlement.unapplied_recorded` outbox hodisasi yoziladi
+     * (`enqueueUnappliedRecorded` izohi). `level` alohida beriladi: C10 HQ
+     * tomonida `carryLevel` yo'q, lekin javobda qoldiq baribir bor.
+     * Kaskad va sof-nol yopish bermaydi — ular kassa to'lovi emas.
+     */
+    unapplied?: { level: SettlementLevel; dedupEpoch: string };
   }): Promise<{
     settled_order_ids: string[];
     allocated: number;
@@ -949,15 +1047,15 @@ export class OrderSettlementService {
     touched: { branch_ids: string[]; market_ids: string[] };
     /** Faqat `requireZeroNet`: nega hech narsa yopilmadi. */
     rejected?: ZeroNetRejection;
+    /**
+     * znD3KaZL — `leftover` `order_settlement_carry` ga YOZILDIMI (ichki,
+     * javobga chiqmaydi). `false` — qoldiq mexanizmi o'chiq (jadval yo'q
+     * yoki C10 HQ tomoni): `leftover` hech qayerda saqlanmagan.
+     */
+    carryPersisted: boolean;
   }> {
     const lumpSum = Math.max(Number(params.lumpSum) || 0, 0);
-    // C8: sof-nol yopishda qoldiq jadvali QAT'IY aniqlanadi — yutilgan
-    // xatodan qolgan `false` kesh qoldiqni "yo'q" deb ko'rsatmasin.
-    const carryEnabled = params.carryLevel
-      ? params.requireZeroNet
-        ? await this.isCarryTableStrict()
-        : await this.isCarryEnabled()
-      : false;
+    const carryEnabled = await this.resolveCarryEnabled(params);
     // lump-sum 0 bilan faqat qoldiqni qo'llash uchun chaqiriladi (kaskad).
     // Sof-nol yopish qoldiq jadvali bo'lmasa ham tranzaksiyaga kiradi.
     if (
@@ -969,6 +1067,7 @@ export class OrderSettlementService {
         allocated: 0,
         leftover: lumpSum,
         touched: { branch_ids: [], market_ids: [] },
+        carryPersisted: false,
       };
     }
     if (params.requireZeroNet && lumpSum !== 0) {
@@ -984,6 +1083,7 @@ export class OrderSettlementService {
     let allocated = 0;
     let carryBefore = 0;
     let newCarry = lumpSum;
+    let carryPersisted = false;
     let zeroNetRejection: ZeroNetRejection | null = null;
     try {
       const tx = queryRunner.manager;
@@ -1210,7 +1310,13 @@ export class OrderSettlementService {
           { id: carryRow.id },
           { amount: newCarry, branch_id: carryBranchId },
         );
+        carryPersisted = true;
       }
+
+      // Javobdagi `leftover` (pastdagi `return` bilan AYNAN bir xil ifoda).
+      const leftoverOut = carryEnabled
+        ? newCarry
+        : Math.max(lumpSum - allocated, 0);
 
       if (params.claimKey && !zeroNetRejection) {
         // Belgiga natija yoziladi — qayta ishga tushgan handler AYNAN shuni
@@ -1221,12 +1327,23 @@ export class OrderSettlementService {
             response: {
               settled_order_ids: settledOrderIds,
               allocated,
-              leftover: carryEnabled
-                ? newCarry
-                : Math.max(lumpSum - allocated, 0),
+              leftover: leftoverOut,
             },
           },
         );
+      }
+
+      if (params.unapplied && !zeroNetRejection && leftoverOut > 0) {
+        await this.enqueueUnappliedRecorded(tx, {
+          level: params.unapplied.level,
+          actorId: params.matchValue,
+          leftover: leftoverOut,
+          dedupEpoch: params.unapplied.dedupEpoch,
+          lumpSum,
+          allocated,
+          carryPersisted,
+          settledCount: settledOrderIds.length,
+        });
       }
 
       if (zeroNetRejection) {
@@ -1257,6 +1374,7 @@ export class OrderSettlementService {
         leftover: 0,
         touched: { branch_ids: [], market_ids: [] },
         rejected: zeroNetRejection,
+        carryPersisted: false,
       };
     }
 
@@ -1270,7 +1388,115 @@ export class OrderSettlementService {
         branch_ids: [...touchedBranches],
         market_ids: [...touchedMarkets],
       },
+      carryPersisted,
     };
+  }
+
+  /**
+   * znD3KaZL — FIFO qoldig'i haqidagi hodisani FINANCE'ga outbox orqali,
+   * advance tranzaksiyasining O'ZIDA navbatga qo'yish.
+   *
+   * ⚠️ NEGA SHU YERDA. Advance ikki yo'l bilan keladi: finance'ning tezkor
+   * yo'li (commit'dan keyin `send`, javobni o'qiydi) va finance outbox relay
+   * (javobni TASHLAB yuboradi). Tezkor yo'l timeout bo'lsa yoki finance
+   * yiqilsa, qoldiq faqat relay orqali qo'llanadi — finance uni hech qachon
+   * ko'rmasdi va `finance_settlement_unapplied` yozuvi paydo bo'lmasdi.
+   * Qoldiqni aniq biladigan yagona joy — shu tranzaksiya: hodisa FIFO
+   * natijasi bilan ATOMIK (rollback bo'lsa hodisa ham yo'q; M8 takrorida
+   * FIFO ishlamaydi — hodisa ham qayta yozilmaydi). Finance yozuvni
+   * `(level, actor_id, dedup_epoch)` bo'yicha idempotent qo'shadi, ya'ni
+   * tezkor yo'l bilan ikkalasi ham yozsa — bitta qator.
+   *
+   * Bu faqat KO'RSATKICH/AUDIT: kassa harakatlari va qoldiq mexanizmi
+   * (`order_settlement_carry`, keyingi to'lovga qo'shish) o'zgarmaydi.
+   * `outbox` yo'q (eski spec) — hech narsa qilinmaydi. Enqueue xatosi
+   * tranzaksiyani qaytaradi (advance xato bilan tugaydi, M8 kaliti `failed`,
+   * finance outbox'i advance'ni keyinroq qayta yuboradi) — hodisa daftar
+   * bilan birga yoki umuman yozilmaydi.
+   */
+  private async enqueueUnappliedRecorded(
+    tx: EntityManager,
+    input: {
+      level: SettlementLevel;
+      actorId: string;
+      leftover: number;
+      dedupEpoch: string;
+      lumpSum: number;
+      allocated: number;
+      carryPersisted: boolean;
+      settledCount: number;
+    },
+  ): Promise<void> {
+    if (!this.outbox) {
+      return;
+    }
+    const round2 = (value: number) => Math.round(value * 100) / 100;
+    const amount = round2(input.leftover);
+    if (!(amount > 0)) {
+      return;
+    }
+    await this.outbox.enqueue(
+      'FINANCE',
+      SETTLEMENT_UNAPPLIED_RECORDED_PATTERN,
+      {
+        level: input.level,
+        actor_id: String(input.actorId),
+        amount,
+        dedup_epoch: input.dedupEpoch,
+        // Faqat tashxis (finance logida) — jadvalga yozilmaydi.
+        lump_sum: round2(input.lumpSum),
+        allocated: round2(input.allocated),
+        carry_persisted: input.carryPersisted,
+        settled_count: input.settledCount,
+      },
+      { manager: tx },
+    );
+  }
+
+  /**
+   * Bu FIFO chaqiruvida qoldiq mexanizmi yoqiladimi.
+   *
+   *   • C8 sof-nol yopish — QAT'IY (yutilgan xatodan qolgan `false` kesh
+   *     qoldiqni "yo'q" deb ko'rsatmasin);
+   *   • znD3KaZL — haqiqiy to'lov (M8 tokenli advance, `claimKey`) ham
+   *     QAT'IY. ⚠️ NEGA. `isCarryEnabled` tekshiruv xatosini yutib `false`
+   *     ni 60 soniya keshlaydi. O'sha oynada kelgan har to'lov qoldiqsiz
+   *     ishlardi: kassa pulni ko'chirgan, FIFO esa sig'magan qoldiqni hech
+   *     qayerga yozmasdan tashlab yuborardi (kartadagi "jim yo'qolish" ning
+   *     aynan o'zi) — keyin hech qanday urinish uni tiklay olmasdi. Endi
+   *     tekshiruv xatosi RpcException 500: tranzaksiya ochilmaydi, M8 kaliti
+   *     `failed`, outbox AYNAN shu to'lovni keyinroq qayta yuboradi.
+   *     Jadval haqiqatan yo'q (migratsiya ishlamagan) — avvalgidek `false`;
+   *   • qolganlari (kaskad, tokensiz eski chaqiruvchi) — avvalgidek
+   *     fail-open: lump-sum 0 bo'lgani uchun u yerda yo'qoladigan naqd yo'q.
+   */
+  private async resolveCarryEnabled(params: {
+    carryLevel?: SettlementLevel;
+    matchValue: string;
+    claimKey?: string;
+    requireZeroNet?: boolean;
+  }): Promise<boolean> {
+    if (!params.carryLevel) {
+      return false;
+    }
+    if (params.requireZeroNet) {
+      return this.isCarryTableStrict();
+    }
+    if (!params.claimKey) {
+      return this.isCarryEnabled();
+    }
+    try {
+      return await this.isCarryTableStrict();
+    } catch (error) {
+      this.logger.warn(
+        `order.settlement.advance: qoldiq jadvalini tekshirib bo'lmadi (znD3KaZL) level=${params.carryLevel} match=${params.matchValue}: ${(error as Error)?.message ?? error}`,
+      );
+      throw new RpcException({
+        statusCode: 500,
+        message:
+          "Taqsimlanmagan qoldiq jadvalini tekshirib bo'lmadi — hisob-kitob keyinroq qayta uriniladi",
+      });
+    }
   }
 
   /**
@@ -1465,6 +1691,13 @@ export class OrderSettlementService {
         postLeg: noPost,
         stamp: cfg.stamp,
         claimKey: appliedKey,
+        // znD3KaZL: `dedup_epoch` = finance to'lov tokeni (`request_id`) —
+        // finance tezkor yo'li ham AYNAN shu kalit bilan yozadi. Token yo'q
+        // (eski chaqiruvchi; tezkor yo'l ham yo'q) — bir martalik kalit.
+        unapplied: {
+          level: data.level,
+          dedupEpoch: token || `no-token:${randomUUID()}`,
+        },
       });
     } catch (error) {
       // M8: parallel ishga tushgan ikkinchi nusxa — birinchisi commit bo'ldi.
@@ -1518,10 +1751,65 @@ export class OrderSettlementService {
       );
     }
 
-    // `touched` — faqat kaskad uchun ichki ma'lumot, javobga chiqmaydi.
+    this.logAdvanceLeftover(data.level, matchValue, amount, result, {
+      hqBranchParty: isHqBranchParty,
+    });
+
+    // `touched` / `carryPersisted` — ichki ma'lumot, javobga chiqmaydi
+    // (javob shakli M8 belgisida saqlanadigan bilan bir xil qoladi).
     const publicResult: Partial<typeof result> = { ...result };
     delete publicResult.touched;
+    delete publicResult.carryPersisted;
     return successRes(publicResult, 200, 'Settlement advanced');
+  }
+
+  /**
+   * znD3KaZL — FIFO qoldig'i (`leftover`) endi JIM qolmaydi.
+   *
+   * ⚠️ NEGA KERAK. Kassa pulni to'liq ko'chiradi, FIFO esa faqat BUTUN
+   * buyurtmalarni yopadi: sig'magan qism daftarda hech bir buyurtmaga
+   * yozilmaydi. Qoldiq `order_settlement_carry` da saqlanib keyingi to'lovga
+   * qo'shiladi, lekin bu ilgari hech qayerda ko'rinmasdi — finance javobni
+   * o'qimaydi (outbox relay javobni tashlab yuboradi), ya'ni "kuryer qarzi
+   * nega kamaymadi?" degan savolga log javob bermasdi. Advance natijasini
+   * aniq biladigan YAGONA joy shu (tezkor yo'l ham, relay ham shu yerdan
+   * o'tadi), shuning uchun log shu yerda:
+   *   • saqlandi — WARN (kutilgan holat, lekin ko'rinishi kerak);
+   *   • C10 HQ tomoni — WARN (ataylab saqlanmaydi);
+   *   • jadval yo'q (migratsiya ishlamagan) — ERROR: daftar kassadan orqada
+   *     qoladi, aynan kartadagi xato.
+   * `leftover` — tomonning JAMI qoldig'i (eski qoldiq + shu to'lovning
+   * sig'magan qismi). M8 takrorida chaqirilmaydi (u yerda hech narsa
+   * qo'llanmaydi).
+   */
+  private logAdvanceLeftover(
+    level: SettlementLevel,
+    matchValue: string,
+    amount: number,
+    result: { allocated: number; leftover: number; carryPersisted: boolean },
+    opts: { hqBranchParty: boolean },
+  ): void {
+    const leftover = Number(result.leftover) || 0;
+    if (!(leftover > 0)) {
+      return;
+    }
+    const base =
+      `order.settlement.advance FIFO qoldig'i (znD3KaZL): level=${level} ` +
+      `match=${matchValue} amount=${amount} allocated=${result.allocated} ` +
+      `leftover=${leftover}`;
+    if (result.carryPersisted) {
+      this.logger.warn(
+        `${base} — order_settlement_carry ga saqlandi, keyingi to'lovga qo'shiladi`,
+      );
+    } else if (opts.hqBranchParty) {
+      this.logger.warn(
+        `${base} — saqlanmadi: tomon HQ'ning o'zi (C10, ataylab)`,
+      );
+    } else {
+      this.logger.error(
+        `${base} — SAQLANMADI: order_settlement_carry jadvali yo'q (migratsiya 1716000000048?) — daftar kassadan orqada qoladi`,
+      );
+    }
   }
 
   /**

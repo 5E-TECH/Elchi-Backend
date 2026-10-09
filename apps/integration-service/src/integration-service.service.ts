@@ -9454,8 +9454,9 @@ export class IntegrationServiceService {
   /**
    * Record a remittance from a provider and settle pending receivables against
    * it. If `order_ids` is given only those are settled; otherwise pending
-   * receivables are settled oldest-first up to `amount`. Reconciliation only —
-   * does not post to a cashbox.
+   * receivables are settled oldest-first up to `amount`. (N3yNa6rO) Summa
+   * MAIN kassaga avtomatik kirim qilinadi (idempotent `dedup_epoch`), natija
+   * javobda `cashbox_posted`.
    */
   async createRemittance(input: {
     integration_id: string;
@@ -9576,6 +9577,10 @@ export class IntegrationServiceService {
      * Tranzaksiyadan KEYIN, best-effort: kassa yozuvi `dedup_epoch` bilan
      * idempotent, takroriy urinish pulni ikki marta yozmaydi.
      */
+    // N3yNa6rO: natija javobda — operator kassa yozuvi bo'lgan-bo'lmaganini
+    // ko'rsin (ilgari xato faqat logga tushardi, ekran esa "kassaga
+    // yozilmaydi, qo'lda kiriting" derdi — pul ikki marta kirim bo'lardi).
+    let cashboxPosted = false;
     try {
       await rmqSend(
         this.financeClient,
@@ -9591,6 +9596,7 @@ export class IntegrationServiceService {
           dedup_epoch: `provider-remittance:${String(result.remittance_id)}`,
         },
       );
+      cashboxPosted = true;
     } catch (err) {
       this.logger.error(
         `provider remittance cashbox posting FAILED for remittance ` +
@@ -9632,9 +9638,19 @@ export class IntegrationServiceService {
         order_ids: settledOrderIds.slice(0, 10),
         created_by: input.created_by ?? null,
         amount,
+        cashbox_posted: cashboxPosted,
       },
     });
 
-    return result.response;
+    const response = result.response as { data?: Record<string, unknown> };
+    return {
+      ...response,
+      data: {
+        ...(response?.data ?? {}),
+        // true — summa MAIN kassaga kirim bo'lib yozildi (qo'lda takrorlanmasin);
+        // false — yozilmadi, qo'lda tekshirish kerak.
+        cashbox_posted: cashboxPosted,
+      },
+    };
   }
 }

@@ -9,6 +9,7 @@ import { OrderSettlementService } from './settlement/order-settlement.service';
 import { OrderLookupService } from './lookup/order-lookup.service';
 import { OrderLifecycleService } from './lifecycle/order-lifecycle.service';
 import { OrderCustodyService } from './custody/order-custody.service';
+import { OrderNotificationService } from './notification/order-notification.service';
 import { ProductResolverService } from './ai/product-resolver.service';
 import { AiPreviewService } from './ai/ai-preview.service';
 import {
@@ -60,6 +61,10 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
     // `ai.product.disambiguate` (noaniq mahsulotni LLM bilan aniqlashtirish) —
     // ai-service navbati. Faqat RPC mijozi; outbox maqsadi EMAS.
     RmqModule.register({ name: 'AI' }),
+    // (OA16fdSq) Buyurtma hodisalari → `notification.dispatch`. FAQAT outbox
+    // maqsadi sifatida (OrderNotificationService) — to'g'ridan-to'g'ri
+    // rmqSend TAQIQ (tranzaksiya rollback bo'lsa ham xabar ketib qolardi).
+    RmqModule.register({ name: 'NOTIFICATION' }),
     DatabaseModule,
     IdempotencyModule.forService(),
     OutboxModule.forService({
@@ -71,7 +76,13 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
         'LOGISTICS',
         'INTEGRATION',
         'BRANCH',
+        'NOTIFICATION',
       ],
+      // (OA16fdSq) Bildirishnoma javobi KUTILMAYDI: dispatch Telegram'ni ham
+      // kutadi (10 s gacha), notification-service yiqilsa esa har hodisa
+      // timeout'gacha osilardi — ketma-ket publisher'da ortidagi PUL
+      // hodisalari kechikardi. Pul/holat hodisalari bu ro'yxatda YO'Q.
+      options: { fireAndForgetPatterns: ['notification.dispatch'] },
     }),
     ActivityLogModule.forService('order-service'),
     TypeOrmModule.forFeature([
@@ -100,6 +111,7 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
     OrderLookupService,
     OrderLifecycleService,
     OrderCustodyService,
+    OrderNotificationService,
     ProductResolverService,
     AiPreviewService,
     { provide: PRODUCT_DISAMBIGUATOR, useClass: RmqProductDisambiguator },

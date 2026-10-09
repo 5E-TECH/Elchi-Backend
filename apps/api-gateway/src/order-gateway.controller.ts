@@ -5,16 +5,19 @@ import {
   Delete,
   ForbiddenException,
   GatewayTimeoutException,
+  GoneException,
   Get,
   HttpCode,
   Inject,
   Logger,
+  NotFoundException,
   Optional,
   Param,
   Patch,
   Post,
   Query,
   Req,
+  ServiceUnavailableException,
   UploadedFile,
   UploadedFiles,
   UseGuards,
@@ -75,9 +78,6 @@ import {
   ScanAssignOrderRequestDto,
   SellOrderRequestDto,
   CancelOrderRequestDto,
-  SettlementBranchToHqDto,
-  SettlementCourierToBranchDto,
-  SettlementHqToMarketDto,
   UpdateOrderByIdRequestDto,
 } from './dto/order.swagger.dto';
 import {
@@ -276,6 +276,26 @@ class ReceiveExternalOrdersDto {
   @IsArray()
   orders!: any[];
 }
+
+/**
+ * Lump-sum settlement oyoqlari (kuryer→filial, filial→HQ, HQ→market) Faza 2b
+ * da olib tashlangan — pul faqat kassa to'lov endpointlari orqali ko'chadi va
+ * settlement'ni o'zi ilgari suradi (MlVMpsfr).
+ */
+export const SETTLEMENT_LUMP_SUM_GONE_MESSAGE =
+  "Bu hisob-kitob yo'li o'chirilgan (Faza 2b). Pulni kassa to'lovlari orqali ko'chiring: " +
+  'POST /finance/cashbox/payment/courier (kuryer→filial), ' +
+  'POST /finance/cashbox/payment/branch-to-main (filial→HQ), ' +
+  'POST /finance/cashbox/payment/market (HQ→market) — settlement avtomatik ilgari suriladi';
+
+/** Umumiy ro'yxatlar uchun ruxsat etilgan `limit` qiymatlari. */
+const DEFAULT_ALLOWED_LIMITS = [10, 25, 50, 100] as const;
+/**
+ * `GET /orders/external` — kiruvchi posilkalar skan ekrani (PEc4BjVX):
+ * frontend butun qopni `limit=200` bilan oladi; ilgari bu 400 qaytarib,
+ * skan ekrani 100% o'lik edi.
+ */
+export const EXTERNAL_ALLOWED_LIMITS = [10, 25, 50, 100, 200] as const;
 
 @ApiTags('Orders')
 @Controller('orders')
@@ -1030,8 +1050,11 @@ export class OrderGatewayController {
     return '';
   }
 
-  private parsePaginationQuery(page?: string, limit?: string) {
-    const allowedLimits = [10, 25, 50, 100];
+  private parsePaginationQuery(
+    page?: string,
+    limit?: string,
+    allowedLimits: readonly number[] = DEFAULT_ALLOWED_LIMITS,
+  ) {
     const parsedLimit = Number(limit ?? 10);
     if (!Number.isFinite(parsedLimit) || !allowedLimits.includes(parsedLimit)) {
       throw new BadRequestException(
@@ -1303,6 +1326,89 @@ export class OrderGatewayController {
 
   private isDeletedRow(row: Record<string, unknown>): boolean {
     return row?.isDeleted === true || row?.is_deleted === true;
+  }
+
+  /**
+   * UER0MpMX — `POST /orders` (va ai-confirm) da market va mahsulot egaligi
+   * SERVER tomonda. Ilgari: mavjud bo'lmagan `market_id` bilan yetim buyurtma
+   * yaratilardi; A marketning `product_id` si B marketning buyurtmasiga
+   * yozilardi (IDOR — yorliq/chekda begona mahsulot); nofaol market va
+   * `add_order=false` market ham buyurtma yaratardi (faqat frontend to'sardi).
+   *  - market yo'q / market emas → 404 (identity o'zi tashlaydi);
+   *  - market nofaol → 400;
+   *  - market / market_operator roli va `add_order=false` → 400 (admin,
+   *    registrator va filial xodimi market nomidan yaratishda davom etadi);
+   *  - har `product_id` shu marketniki bo'lishi shart → 404.
+   */
+  private async assertOrderMarket(
+    marketId: string | undefined,
+    roles: string[],
+  ): Promise<void> {
+    const id = String(marketId ?? '').trim();
+    if (!id) {
+      return;
+    }
+    const response = await this.sendIdentityWithTimeout(
+      { cmd: 'identity.market.find_by_id' },
+      { id },
+    );
+    const market =
+      (
+        response as {
+          data?: { id?: string; status?: string; add_order?: boolean };
+        } | null
+      )?.data ?? null;
+    if (!market) {
+      throw new NotFoundException('Market topilmadi');
+    }
+    if (String(market.status ?? '').toLowerCase() !== 'active') {
+      throw new BadRequestException(
+        "Market faol emas — unga buyurtma yaratib bo'lmaydi",
+      );
+    }
+    const isMarketSide =
+      roles.includes(RoleEnum.MARKET) ||
+      roles.includes(RoleEnum.MARKET_OPERATOR);
+    if (isMarketSide && market.add_order === false) {
+      throw new BadRequestException(
+        "Bu marketga o'zi buyurtma yaratish ruxsat etilmagan (add_order o'chiq)",
+      );
+    }
+  }
+
+  /** UER0MpMX: har `product_id` aynan shu marketniki bo'lishi shart (IDOR). */
+  private async assertOrderProductsOwned(
+    marketId: string | undefined,
+    items: Array<{ product_id?: string | null }>,
+  ): Promise<void> {
+    const id = String(marketId ?? '').trim();
+    const productIds = this.distinctIds(items.map((item) => item?.product_id));
+    if (!id || !productIds.length || !this.catalogClient) {
+      return;
+    }
+    let lookup: unknown;
+    try {
+      lookup = await this.findAiConfirmProducts(productIds);
+    } catch {
+      // Fail-closed: tekshiruvsiz begona mahsulot yozilmasin.
+      throw new ServiceUnavailableException(
+        "Mahsulotlarni tekshirib bo'lmadi — keyinroq qayta urinib ko'ring",
+      );
+    }
+    const rows = this.extractRows(lookup);
+    const ownerById = new Map(
+      rows
+        .filter((row) => !this.isDeletedRow(row))
+        .map((row) => [
+          this.asStr(row?.id).trim(),
+          this.asStr(row?.user_id ?? row?.market_id).trim(),
+        ]),
+    );
+    for (const productId of productIds) {
+      if (ownerById.get(productId) !== id) {
+        throw new NotFoundException(`Mahsulot topilmadi: ${productId}`);
+      }
+    }
   }
 
   private async findAiConfirmProducts(ids: string[]): Promise<unknown> {
@@ -1624,6 +1730,13 @@ export class OrderGatewayController {
       !resolvedMarketId
     ) {
       throw new BadRequestException('market_id is required');
+    }
+    // UER0MpMX: mijoz yaratilishidan OLDIN — rad etilsa yetim mijoz qolmaydi.
+    // ai-confirm (opts.marketId) marketni partiya boshida, mahsulot egaligini
+    // esa o'z lookup'ida allaqachon tekshirgan — takrorlanmaydi.
+    if (!opts?.marketId) {
+      await this.assertOrderMarket(resolvedMarketId, roles);
+      await this.assertOrderProductsOwned(resolvedMarketId, dto.items ?? []);
     }
 
     if (!customerId) {
@@ -2012,6 +2125,8 @@ export class OrderGatewayController {
     }
     const { marketId } = market;
     const roles = this.normalizeRoles(req.user.roles);
+    // UER0MpMX: partiya uchun BIR MARTA — market mavjud, faol, add_order.
+    await this.assertOrderMarket(marketId, roles);
     const branchAssignment =
       roles.includes(RoleEnum.BRANCH) ||
       roles.includes(RoleEnum.MANAGER) ||
@@ -2381,7 +2496,7 @@ export class OrderGatewayController {
   @ApiQuery({
     name: 'limit',
     required: false,
-    enum: [10, 25, 50, 100],
+    enum: [10, 25, 50, 100, 200],
     schema: { default: 10 } as any,
   })
   @ApiQuery({ name: 'fetch_all', required: false, type: Boolean })
@@ -2413,7 +2528,13 @@ export class OrderGatewayController {
     const resolvedStartDay = start_day ?? date;
     const resolvedEndDay = end_day ?? date;
 
-    const pagination = this.parsePaginationQuery(page, limit);
+    // PEc4BjVX: skan ekrani butun qopni bitta so'rovda oladi (limit=200);
+    // umumiy ro'yxatlar 100 bilan chegaralangan qoladi.
+    const pagination = this.parsePaginationQuery(
+      page,
+      limit,
+      EXTERNAL_ALLOWED_LIMITS,
+    );
 
     const statuses = this.parseStatusQuery(status);
 
@@ -2514,6 +2635,9 @@ export class OrderGatewayController {
     ) {
       throw new BadRequestException('market_id is required');
     }
+    // UER0MpMX: mijoz yaratilishidan OLDIN — rad etilsa yetim mijoz qolmaydi.
+    await this.assertOrderMarket(resolvedMarketId, roles);
+    await this.assertOrderProductsOwned(resolvedMarketId, dto.items ?? []);
 
     if (!customerId) {
       if (!customer) {
@@ -3659,6 +3783,40 @@ export class OrderGatewayController {
     );
   }
 
+  /**
+   * ⚠️ `@Get(':id')` dan OLDIN (PINtZcLj): Nest/Express marshrutni e'lon
+   * tartibida moslaydi — ilgari `GET /orders/extra-cost-approvals`
+   * buyurtma-ID handleriga tushib 400 ("ID qiymatlari raqam ko'rinishida
+   * bo'lishi kerak") qaytarardi: market kuryerning qo'shimcha xarajat
+   * so'rovini hech qachon ko'rmas, buyurtma 202 holatida muzlab qolardi.
+   */
+  @Get('extra-cost-approvals')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.MARKET, RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'List extra cost approval requests' })
+  @ApiQuery({
+    name: 'status',
+    required: false,
+    example: 'pending',
+    enum: ['pending', 'approved', 'rejected'],
+  })
+  listExtraCostApprovals(
+    @Query('status') status: string | undefined,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.sendOrderWithTimeout(
+      { cmd: 'order.extra_cost_approval.list' },
+      {
+        status,
+        requester: {
+          id: req.user.sub,
+          roles: this.normalizeRoles(req.user.roles),
+        },
+      },
+    );
+  }
+
   @Get(':id')
   @UseGuards(JwtAuthGuard)
   @ApiBearerAuth()
@@ -3733,33 +3891,6 @@ export class OrderGatewayController {
       { cmd: 'logistics.order.assign_to_courier' },
       {
         dto,
-        requester: {
-          id: req.user.sub,
-          roles: this.normalizeRoles(req.user.roles),
-        },
-      },
-    );
-  }
-
-  @Get('extra-cost-approvals')
-  @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles(RoleEnum.MARKET, RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'List extra cost approval requests' })
-  @ApiQuery({
-    name: 'status',
-    required: false,
-    example: 'pending',
-    enum: ['pending', 'approved', 'rejected'],
-  })
-  listExtraCostApprovals(
-    @Query('status') status: string | undefined,
-    @Req() req: { user: JwtUser },
-  ) {
-    return this.sendOrderWithTimeout(
-      { cmd: 'order.extra_cost_approval.list' },
-      {
-        status,
         requester: {
           id: req.user.sub,
           roles: this.normalizeRoles(req.user.roles),
@@ -3954,26 +4085,6 @@ export class OrderGatewayController {
     });
   }
 
-  /**
-   * HISOB-KITOB IDEMPOTENTLIGI (5hBeDuyn). Ilgari har so'rovda yangi
-   * `randomUUID()` edi — javob 8 s dan kechiksa operator qayta bosar va
-   * `runIdempotent` buni ushlamay, bitta pul ikki marta FIFO taqsimlanardi.
-   * Frontend forma ochilganda bitta kalit yaratib, muvaffaqiyatgacha shu
-   * kalitni `Idempotency-Key` sarlavhasida yuboradi. Boshqa foydalanuvchi
-   * kaliti bilan to'qnashmasligi uchun foydalanuvchi ID si bilan bog'lanadi;
-   * kalit bo'lmasa yoki noto'g'ri bo'lsa — avvalgidek tasodifiy.
-   */
-  private settlementRequestId(req: {
-    user: JwtUser;
-    headers?: Record<string, string | string[] | undefined>;
-  }) {
-    const raw = req.headers?.['idempotency-key'];
-    const key = (Array.isArray(raw) ? raw[0] : raw)?.trim() ?? '';
-    return /^[A-Za-z0-9_-]{8,64}$/.test(key)
-      ? `${req.user.sub}:${key}`
-      : randomUUID();
-  }
-
   @Post('settlement/courier-to-branch')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -3988,35 +4099,10 @@ export class OrderGatewayController {
     summary:
       'DEPRECATED (410 Gone): lump-sum settlement olib tashlandi — endi har-buyurtma FIFO ledger ishlaydi. Bu yo’l 410 qaytaradi (uEPILERk).',
   })
-  settlementCourierToBranch(
-    @Body() dto: SettlementCourierToBranchDto,
-    @Req()
-    req: {
-      user: JwtUser;
-      headers?: Record<string, string | string[] | undefined>;
-    },
-  ) {
-    return firstValueFrom(
-      this.orderClient
-        .send(
-          { cmd: 'order.settlement.courier_to_branch' },
-          {
-            dto,
-            requester: {
-              id: req.user.sub,
-              roles: this.normalizeRoles(req.user.roles),
-              branch_id: req.user.branch_id ?? null,
-            },
-            request_id: this.settlementRequestId(req),
-          },
-        )
-        .pipe(timeout(8000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
-      }
-      throw error;
-    });
+  settlementCourierToBranch(): never {
+    // MlVMpsfr: ochiq turgan o'lik marshrut yangi chaqiruvchini tuzoqqa
+    // tortardi (order-service 400 qaytarardi). Endi aniq 410 Gone.
+    throw new GoneException(SETTLEMENT_LUMP_SUM_GONE_MESSAGE);
   }
 
   @Post('settlement/branch-to-hq')
@@ -4028,35 +4114,10 @@ export class OrderGatewayController {
     summary:
       'DEPRECATED (410 Gone): lump-sum remittance olib tashlandi — FIFO ledger ishlaydi. 410 qaytaradi (uEPILERk).',
   })
-  settlementBranchToHq(
-    @Body() dto: SettlementBranchToHqDto,
-    @Req()
-    req: {
-      user: JwtUser;
-      headers?: Record<string, string | string[] | undefined>;
-    },
-  ) {
-    return firstValueFrom(
-      this.orderClient
-        .send(
-          { cmd: 'order.settlement.branch_to_hq' },
-          {
-            dto,
-            requester: {
-              id: req.user.sub,
-              roles: this.normalizeRoles(req.user.roles),
-              branch_id: req.user.branch_id ?? null,
-            },
-            request_id: this.settlementRequestId(req),
-          },
-        )
-        .pipe(timeout(8000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
-      }
-      throw error;
-    });
+  settlementBranchToHq(): never {
+    // MlVMpsfr: ochiq turgan o'lik marshrut yangi chaqiruvchini tuzoqqa
+    // tortardi (order-service 400 qaytarardi). Endi aniq 410 Gone.
+    throw new GoneException(SETTLEMENT_LUMP_SUM_GONE_MESSAGE);
   }
 
   @Post('settlement/hq-to-market')
@@ -4068,35 +4129,10 @@ export class OrderGatewayController {
     summary:
       'DEPRECATED (410 Gone): HQ lump-sum payment olib tashlandi — FIFO ledger ishlaydi. 410 qaytaradi (uEPILERk).',
   })
-  settlementHqToMarket(
-    @Body() dto: SettlementHqToMarketDto,
-    @Req()
-    req: {
-      user: JwtUser;
-      headers?: Record<string, string | string[] | undefined>;
-    },
-  ) {
-    return firstValueFrom(
-      this.orderClient
-        .send(
-          { cmd: 'order.settlement.hq_to_market' },
-          {
-            dto,
-            requester: {
-              id: req.user.sub,
-              roles: this.normalizeRoles(req.user.roles),
-              branch_id: req.user.branch_id ?? null,
-            },
-            request_id: this.settlementRequestId(req),
-          },
-        )
-        .pipe(timeout(8000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
-      }
-      throw error;
-    });
+  settlementHqToMarket(): never {
+    // MlVMpsfr: ochiq turgan o'lik marshrut yangi chaqiruvchini tuzoqqa
+    // tortardi (order-service 400 qaytarardi). Endi aniq 410 Gone.
+    throw new GoneException(SETTLEMENT_LUMP_SUM_GONE_MESSAGE);
   }
 
   @Get(':id/settlement')

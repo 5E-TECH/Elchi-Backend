@@ -77,6 +77,17 @@ describe('NotificationInboxService', () => {
       update: jest.fn(),
       save: jest.fn((e) => Promise.resolve({ id: '1', ...e })),
       create: jest.fn((v) => v),
+      // recordDelivery: `UPDATE ... SET delivery = delivery || patch WHERE id IN (...)`.
+      createQueryBuilder: jest.fn(() => {
+        const qb: any = {
+          update: jest.fn(() => qb),
+          set: jest.fn(() => qb),
+          setParameter: jest.fn(() => qb),
+          whereInIds: jest.fn(() => qb),
+          execute: jest.fn().mockResolvedValue({ affected: 1 }),
+        };
+        return qb;
+      }),
       manager: {
         transaction: jest.fn((work: (m: any) => Promise<unknown>) =>
           work(manager),
@@ -159,7 +170,7 @@ describe('NotificationInboxService', () => {
 
     const res = await service.dispatch({
       recipient_id: '42',
-      type: 'order.status',
+      type: 'order.accepted',
       title: 'Yangilandi',
       group_key: 'order-123',
     } as any);
@@ -190,7 +201,7 @@ describe('NotificationInboxService', () => {
 
     const res = await service.dispatch({
       roles: ['courier'],
-      type: 'system.broadcast',
+      type: 'system.announcement',
       title: 'E’lon',
     } as any);
 
@@ -211,7 +222,7 @@ describe('NotificationInboxService', () => {
 
     const res = await service.dispatch({
       recipient_ids,
-      type: 'system.broadcast',
+      type: 'system.announcement',
       title: 'E’lon',
       group_key: 'promo-1',
     } as any);
@@ -228,7 +239,7 @@ describe('NotificationInboxService', () => {
   it('push channel: rows start as delivery.push=queued and are enqueued in the SAME transaction', async () => {
     const res = await service.dispatch({
       recipient_ids: ['42', '43'],
-      type: 'order.new',
+      type: 'order.created',
       title: 'Yangi buyurtma',
       channels: ['in_app', 'push'],
     } as any);
@@ -237,7 +248,7 @@ describe('NotificationInboxService', () => {
     expect(repo.manager.transaction).toHaveBeenCalledTimes(1);
     const inserted = txRepo.insert.mock.calls[0][0];
     inserted.forEach((row: any) =>
-      expect(row.delivery).toEqual({ push: 'queued' }),
+      expect(row.delivery).toEqual({ in_app: 'sent', push: 'queued' }),
     );
     const [manager, ids] = pushDelivery.enqueue.mock.calls[0];
     expect(manager.getRepository).toBeDefined();
@@ -254,7 +265,7 @@ describe('NotificationInboxService', () => {
     await expect(
       service.dispatch({
         recipient_id: '42',
-        type: 'order.new',
+        type: 'order.created',
         title: 'Yangi buyurtma',
         channels: ['in_app', 'realtime', 'push'],
       } as any),
@@ -265,7 +276,7 @@ describe('NotificationInboxService', () => {
   it('SMS channel: queued in the same transaction and reported per channel (not a bare 201)', async () => {
     const res = await service.dispatch({
       recipient_ids: ['42', '43'],
-      type: 'order.new',
+      type: 'order.created',
       title: 'Yangi buyurtma',
       channels: ['in_app', 'sms'],
     } as any);
@@ -295,7 +306,7 @@ describe('NotificationInboxService', () => {
       service.dispatch({
         broadcast: false,
         recipient_ids: Array.from({ length: 300 }, (_, i) => String(i + 1)),
-        type: 'promo',
+        type: 'marketing.promo',
         title: 'x',
         channels: ['sms'],
       } as any),

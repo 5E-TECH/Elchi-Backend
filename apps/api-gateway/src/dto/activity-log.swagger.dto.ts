@@ -91,7 +91,8 @@ export class ActivityLogQueryDto {
   to?: string;
 
   @ApiPropertyOptional({
-    description: 'Free-text across type/id/action/actor name',
+    description:
+      'Free-text across type/id/action/actor name/description (e.g. "bekor")',
   })
   @IsOptional()
   @IsString()

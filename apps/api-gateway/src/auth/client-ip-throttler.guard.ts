@@ -24,19 +24,33 @@ import { ThrottlerGuard } from '@nestjs/throttler';
 @Injectable()
 export class ClientIpThrottlerGuard extends ThrottlerGuard {
   protected getTracker(req: Record<string, any>): Promise<string> {
-    const typed = req as {
-      headers?: Record<string, string | string[] | undefined>;
-      ip?: string;
-      ips?: string[];
-    };
-
-    const raw = typed.headers?.['cf-connecting-ip'];
-    const cfIp = Array.isArray(raw) ? raw[0] : raw;
-    const trusted = String(cfIp ?? '').trim();
-    if (trusted) {
-      return Promise.resolve(trusted);
-    }
-
-    return Promise.resolve(String(typed.ip ?? typed.ips?.[0] ?? 'unknown'));
+    return Promise.resolve(resolveTrustedClientIp(req) ?? 'unknown');
   }
+}
+
+/**
+ * Ishonchli mijoz IP'si — `ClientIpThrottlerGuard.getTracker` ning AYNAN
+ * o'zi, alohida funksiyaga chiqarilgan (f2Ud5tju): audit konteksti
+ * (`context/request-context.middleware.ts`) ham shu manbadan oladi, aks holda
+ * rate-limit bir IP'ni, jurnal boshqasini (Cloudflare tunnel IP'sini yoki
+ * mijoz soxtalashtirgan `X-Forwarded-For` ni) ko'rardi.
+ *
+ * Tartib: `CF-Connecting-IP` (bo'sh emas) → `req.ip` → `req.ips[0]` → `null`.
+ */
+export function resolveTrustedClientIp(req: unknown): string | null {
+  const typed = (req ?? {}) as {
+    headers?: Record<string, string | string[] | undefined>;
+    ip?: string;
+    ips?: string[];
+  };
+
+  const raw = typed.headers?.['cf-connecting-ip'];
+  const cfIp = Array.isArray(raw) ? raw[0] : raw;
+  const trusted = String(cfIp ?? '').trim();
+  if (trusted) {
+    return trusted;
+  }
+
+  const fallback = typed.ip ?? typed.ips?.[0];
+  return fallback === undefined || fallback === null ? null : String(fallback);
 }

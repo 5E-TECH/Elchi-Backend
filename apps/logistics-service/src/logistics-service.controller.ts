@@ -14,6 +14,12 @@ import { UpdateDistrictNameDto } from './dto/update-district-name.dto';
 import { UpdateDistrictSatoCodeDto } from './dto/update-district-sato-code.dto';
 import { CreateRegionDto } from './dto/create-region.dto';
 import { UpdateRegionDto } from './dto/update-region.dto';
+import type {
+  AssignRegionLogistPayload,
+  BulkAssignRegionLogistPayload,
+  ClearRegionLogistPayload,
+  RegionLogistRequester,
+} from './dto/region-logist.dto';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 import { ReceivePostDto } from './dto/receive-post.dto';
 import { PostIdDto } from './dto/post-id.dto';
@@ -555,6 +561,57 @@ export class LogisticsServiceController {
     );
   }
 
+  /** (dzyVftBx) RMQ so'rovchisini servis kutgan shaklga keltiradi. */
+  private regionLogistRequester(requester?: RegionLogistRequester) {
+    return requester
+      ? { id: String(requester.id ?? ''), roles: requester.roles ?? [] }
+      : undefined;
+  }
+
+  // (dzyVftBx) PATCH /region/:id/logist — `logist_id: null` — olib tashlash.
+  @MessagePattern({ cmd: 'logistics.region.assign_logist' })
+  assignRegionLogist(
+    @Payload() payload: AssignRegionLogistPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.assignRegionLogist(
+        payload?.id,
+        payload?.logist_id,
+        this.regionLogistRequester(payload?.requester),
+      ),
+    );
+  }
+
+  // (dzyVftBx) POST /region/logist/bulk.
+  @MessagePattern({ cmd: 'logistics.region.bulk_assign_logist' })
+  bulkAssignRegionLogist(
+    @Payload() payload: BulkAssignRegionLogistPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.bulkAssignRegionLogist(
+        payload?.logist_id,
+        payload?.region_ids,
+        this.regionLogistRequester(payload?.requester),
+      ),
+    );
+  }
+
+  // (dzyVftBx, TC4) ICHKI — identity deleteUser logistni o'chirishdan oldin.
+  @MessagePattern({ cmd: 'logistics.region.clear_logist' })
+  clearRegionLogist(
+    @Payload() payload: ClearRegionLogistPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.clearLogistFromRegions(
+        payload?.logist_id,
+        this.regionLogistRequester(payload?.requester),
+      ),
+    );
+  }
+
   // --- District ---
   @MessagePattern({ cmd: 'logistics.district.create' })
   createDistrict(
@@ -648,6 +705,19 @@ export class LogisticsServiceController {
   applyDistrictSatoCodes(@Ctx() context: RmqContext) {
     return this.executeAndAck(context, () =>
       this.logisticsService.applyDistrictSatoCodes(),
+    );
+  }
+
+  @MessagePattern({ cmd: 'logistics.district.merge' })
+  mergeDistrict(
+    @Payload() payload: { id: string; target_district_id: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.logisticsService.mergeDistricts(
+        payload.id,
+        payload.target_district_id,
+      ),
     );
   }
 

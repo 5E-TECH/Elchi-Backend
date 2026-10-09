@@ -1,3 +1,4 @@
+import { RpcException } from '@nestjs/microservices';
 import { of } from 'rxjs';
 import { Roles, Status } from '@app/common';
 import { UserServiceService } from './user-service.service';
@@ -9,9 +10,12 @@ import { UserServiceService } from './user-service.service';
  * Ilgari sanitize() faqat password va refresh_token'ni olib tashlardi, shuning
  * uchun market qatori tokeni bilan order/analytics/finance/catalog/branch
  * javoblariga ulanib, menejer, registrator, kuryer va boshqa marketlarga
- * yetib borardi. Endi token faqat identity.user.find_by_id'da, aniq
- * `includeTgToken: true` bilan va faqat market qatorida qaytadi (gateway uni
- * faqat SUPERADMIN/ADMIN GET /users/:id so'rovida yuboradi).
+ * yetib borardi.
+ *
+ * (GvL6ZFAd) Avvalgi istisno (SUPERADMIN/ADMIN uchun find_by_id
+ * `includeTgToken: true`) BEKOR qilindi: token hech bir umumiy javobda yo'q.
+ * Ko'rish/rotatsiya — faqat SUPERADMIN RPC'lari
+ * (user-service.market-tg-token.spec.ts).
  */
 const TOKEN = 'group_token-0123456789abcdef0123456789abcdef';
 const SECRET_KEYS = ['password', 'refresh_token', 'market_tg_token'] as const;
@@ -107,6 +111,7 @@ function makeService() {
     save: jest.fn((value: Record<string, unknown>) =>
       Promise.resolve({ id: '3', ...value }),
     ),
+    update: jest.fn(() => Promise.resolve({ affected: 1 })),
     createQueryBuilder: jest.fn(() => qb),
   };
 
@@ -212,33 +217,30 @@ describe('UserServiceService — market_tg_token va boshqa sirlar javobda yo‘q
     expectNoSecretValues(res);
   });
 
-  it('findUserById(includeTgToken: true) market uchun: token bor, password/refresh_token yo‘q', async () => {
+  // (GvL6ZFAd) Eski `includeTgToken` opsiyasi olib tashlandi — u (yoki
+  // istalgan boshqa ikkinchi argument) uzatilsa ham token chiqmaydi.
+  it.each([[{ includeTgToken: true }], [{ include_tg_token: true }], ['true']])(
+    'findUserById market uchun eski flag %p bilan ham: sirlar yo‘q (GvL6ZFAd)',
+    async (legacyFlag) => {
+      const { service } = makeService();
+      const findUserById = service.findUserById.bind(service) as (
+        ...args: unknown[]
+      ) => ReturnType<UserServiceService['findUserById']>;
+
+      const res = await findUserById('3', legacyFlag);
+
+      expectNoSecrets(res.data);
+      expectNoSecretValues(res);
+    },
+  );
+
+  it('findUserById kuryer qatorida qolib ketgan eski token qiymati ham chiqmaydi', async () => {
     const { service } = makeService();
 
-    const res = await service.findUserById('3', { includeTgToken: true });
-
-    expect(res.data.market_tg_token).toBe(TOKEN);
-    expect(res.data).not.toHaveProperty('password');
-    expect(res.data).not.toHaveProperty('refresh_token');
-  });
-
-  it('findUserById(includeTgToken: true) kuryer uchun: eski token qiymati ham chiqmaydi (flag faqat market qatoriga)', async () => {
-    const { service } = makeService();
-
-    const res = await service.findUserById('9', { includeTgToken: true });
+    const res = await service.findUserById('9');
 
     expectNoSecrets(res.data);
     expectNoSecretValues(res);
-  });
-
-  it("findUserById: flag qat'iy — 'true' satri tokenni ochmaydi", async () => {
-    const { service } = makeService();
-
-    const res = await service.findUserById('3', {
-      includeTgToken: 'true' as never,
-    });
-
-    expectNoSecrets(res.data);
   });
 
   it('findAdminById (sukut: flagsiz) tokenni qaytarmaydi', async () => {
@@ -270,14 +272,34 @@ describe('UserServiceService — market_tg_token va boshqa sirlar javobda yo‘q
     expectNoSecretValues(res);
   });
 
-  it("rotateMarketTelegramToken: ichki kontrakt o'zgarmagan — yangi token qaytadi", async () => {
+  it('rotateMarketTelegramToken (SUPERADMIN): yangi token faqat shu maxsus javobda qaytadi', async () => {
     const { service } = makeService();
 
-    const res = await service.rotateMarketTelegramToken('3');
+    const res = await service.rotateMarketTelegramToken('3', {
+      id: '1',
+      roles: ['superadmin'],
+    });
 
-    expect(res.data.id).toBe('3');
-    expect(res.data.market_tg_token).toMatch(/^group_token-[a-f0-9]{32}$/);
+    expect(res.data).toEqual({
+      id: '3',
+      market_tg_token: expect.stringMatching(/^group_token-[a-f0-9]{32}$/),
+    });
     expect(res.data.market_tg_token).not.toBe(TOKEN);
+  });
+
+  it("rotateMarketTelegramToken requester'siz (eski ichki chaqiruv) → 403 (GvL6ZFAd)", async () => {
+    const { service, repo } = makeService();
+
+    const error: unknown = await service
+      .rotateMarketTelegramToken('3')
+      .then(() => null)
+      .catch((err: unknown) => err);
+
+    expect(error).toBeInstanceOf(RpcException);
+    expect((error as RpcException).getError()).toEqual(
+      expect.objectContaining({ statusCode: 403 }),
+    );
+    expect(repo.update).not.toHaveBeenCalled();
   });
 
   it("createMarket (HYBRID menejer, POST /markets): token yaratiladi, lekin javobda ham, search indeksida ham yo'q", async () => {

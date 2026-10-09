@@ -1,5 +1,6 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  Equals,
   IsArray,
   IsEnum,
   IsNumber,
@@ -41,6 +42,13 @@ export class CreateAdminRequestDto {
   @Max(30)
   payment_day?: number;
 }
+
+/**
+ * (dzyVftBx) POST /logists — admin bilan bir xil maydonlar (ism, telefon,
+ * parol, maosh, to'lov kuni). `branch_id` YO'Q: logist filial xodimi emas,
+ * viloyatlar alohida (PATCH /region/:id/logist, POST /region/logist/bulk).
+ */
+export class CreateLogistRequestDto extends CreateAdminRequestDto {}
 
 export class CreateRegistratorRequestDto extends CreateAdminRequestDto {
   @ApiPropertyOptional({
@@ -405,6 +413,71 @@ export class UpdateUserStatusRequestDto {
   @ApiProperty({ example: 'active', enum: ['active', 'inactive'] })
   @IsEnum(['active', 'inactive'])
   status!: string;
+}
+
+/**
+ * (GvL6ZFAd) POST /markets/tg-token/rotate-all tasdig'i. Qiymat identity
+ * `MARKET_TG_TOKEN_ROTATE_ALL_CONFIRM` (contracts/market.payloads.ts) bilan
+ * BIR XIL — kontrakt spec'i solishtiradi.
+ */
+export const MARKET_TG_TOKEN_ROTATE_ALL_CONFIRM = 'ROTATE_ALL';
+
+export class RotateAllMarketTgTokensRequestDto {
+  @ApiProperty({
+    example: MARKET_TG_TOKEN_ROTATE_ALL_CONFIRM,
+    enum: [MARKET_TG_TOKEN_ROTATE_ALL_CONFIRM],
+    description:
+      "Aniq tasdiq: AYNAN 'ROTATE_ALL'. Boshqa qiymat yoki maydon yo'q — 400.",
+  })
+  @Equals(MARKET_TG_TOKEN_ROTATE_ALL_CONFIRM, {
+    message: `confirm aynan '${MARKET_TG_TOKEN_ROTATE_ALL_CONFIRM}' bo'lishi kerak`,
+  })
+  confirm!: string;
+}
+
+export class MarketTgTokenDataDto {
+  @ApiProperty({ example: '3' })
+  id!: string;
+
+  @ApiProperty({
+    example: 'group_token-0123456789abcdef0123456789abcdef',
+    nullable: true,
+    type: String,
+    description:
+      "Marketning maxfiy Telegram tokeni (group_token-<32 hex>). Faqat SUPERADMIN ko'radi; marketga xavfsiz kanal orqali bering.",
+  })
+  market_tg_token!: string | null;
+}
+
+export class MarketTgTokenResponseDto {
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiProperty({ example: 'Market Telegram tokeni' })
+  message!: string;
+
+  @ApiProperty({ type: MarketTgTokenDataDto })
+  data!: MarketTgTokenDataDto;
+}
+
+export class RotateAllMarketTgTokensDataDto {
+  @ApiProperty({
+    example: 11,
+    description:
+      "Tokeni almashtirilgan faol marketlar soni (tokenlarning o'zi YO'Q).",
+  })
+  rotated_count!: number;
+}
+
+export class RotateAllMarketTgTokensResponseDto {
+  @ApiProperty({ example: 200 })
+  statusCode!: number;
+
+  @ApiProperty({ example: '11 ta market Telegram tokeni yangilandi' })
+  message!: string;
+
+  @ApiProperty({ type: RotateAllMarketTgTokensDataDto })
+  data!: RotateAllMarketTgTokensDataDto;
 }
 
 export class EntityItemDto {

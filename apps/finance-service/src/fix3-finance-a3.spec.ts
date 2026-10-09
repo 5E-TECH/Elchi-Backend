@@ -12,6 +12,8 @@ const rmqSendMock = jest.fn();
 
 jest.mock('@app/common', () => ({
   ...jest.requireActual('@app/common/time/tashkent-time'),
+  // 2WRzdWpZ — jurnal gaplari quruvchisi (sof funksiyalar).
+  ...jest.requireActual('@app/common/activity-log/describe-uz'),
   Cashbox_type: {
     MAIN: 'main',
     FOR_COURIER: 'couriers',

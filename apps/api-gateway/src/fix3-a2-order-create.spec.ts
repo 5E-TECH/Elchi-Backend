@@ -55,6 +55,10 @@ describe('fix3 A2 — order create hardening', () => {
         if (pattern.cmd === 'identity.user.find_by_id') {
           return of({ data: { market_id: opts?.operatorMarketId ?? null } });
         }
+        // UER0MpMX: market mavjud va faol.
+        if (pattern.cmd === 'identity.market.find_by_id') {
+          return of({ data: { status: 'active', add_order: true } });
+        }
         return of({});
       }),
     };
@@ -153,7 +157,11 @@ describe('fix3 A2 — order create hardening', () => {
     expect(dto.source).toBe('branch');
     expect(dto.customer_id).toBe('55');
     expect(dto.market_id).toBe('999');
-    expect(identityClient.send).not.toHaveBeenCalled();
+    // UER0MpMX: market tekshiruvi bor, lekin mijoz yaratilmaydi.
+    expect(identityClient.send).not.toHaveBeenCalledWith(
+      { cmd: 'identity.customer.create' },
+      expect.anything(),
+    );
   });
 
   it('REGISTRATOR (filial xodimi): status/kuryer olib tashlanadi, filial majburan', async () => {

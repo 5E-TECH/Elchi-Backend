@@ -190,6 +190,93 @@
         ]
       }
     },
+    "/logists": {
+      "post": {
+        "operationId": "ApiGatewayController_createLogist",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateLogistRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Logist created"
+          },
+          "409": {
+            "description": "Conflict"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Create logist",
+        "tags": [
+          "Identity"
+        ]
+      },
+      "get": {
+        "operationId": "ApiGatewayController_getLogists",
+        "parameters": [
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "active",
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 10,
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Logist list"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List logists with filtering and pagination",
+        "tags": [
+          "Identity"
+        ]
+      }
+    },
     "/couriers": {
       "post": {
         "operationId": "ApiGatewayController_createCourier",
@@ -733,6 +820,138 @@
           }
         ],
         "summary": "List markets with filtering and pagination",
+        "tags": [
+          "Identity"
+        ]
+      }
+    },
+    "/markets/tg-token/rotate-all": {
+      "post": {
+        "description": "Barcha faol (o'chirilmagan) marketlarning market_tg_token'i bitta tranzaksiyada yangilanadi. Tanada aniq tasdiq `{ \"confirm\": \"ROTATE_ALL\" }` shart (aks holda 400). Javobda faqat son (`rotated_count`), tokenlar YO'Q. ⚠️ Shundan keyin har bir market yangi tokenni admin'dan olishi kerak: order-bot'ga qayta ulanish va yangi guruh ulash faqat yangi token bilan; mavjud ulangan guruhlar ishlashda davom etadi.",
+        "operationId": "ApiGatewayController_rotateAllMarketTgTokens",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RotateAllMarketTgTokensRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RotateAllMarketTgTokensResponseDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "confirm yo'q yoki 'ROTATE_ALL' emas"
+          },
+          "403": {
+            "description": "SUPERADMIN emas"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Rotate the Telegram token of EVERY active market in one transaction (SUPERADMIN only)",
+        "tags": [
+          "Identity"
+        ]
+      }
+    },
+    "/markets/{id}/tg-token": {
+      "get": {
+        "description": "Market sahifasidagi Telegram token kartasi uchun. Faqat SUPERADMIN; har ko'rish activity log'ga yoziladi (token qiymati yozilmaydi). Market: role=market, o'chirilmagan; aks holda 404.",
+        "operationId": "ApiGatewayController_getMarketTgToken",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Market user ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketTgTokenResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "SUPERADMIN emas"
+          },
+          "404": {
+            "description": "Market topilmadi"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Get a market's Telegram token (SUPERADMIN only)",
+        "tags": [
+          "Identity"
+        ]
+      }
+    },
+    "/markets/{id}/tg-token/rotate": {
+      "post": {
+        "description": "Yangi token server tomonida yaratiladi (tanasi yo'q) va javobda qaytadi; eski token darhol yaroqsiz. Activity log'ga yoziladi (token qiymati yozilmaydi). Market: role=market, o'chirilmagan; aks holda 404.",
+        "operationId": "ApiGatewayController_rotateMarketTgToken",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Market user ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MarketTgTokenResponseDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "SUPERADMIN emas"
+          },
+          "404": {
+            "description": "Market topilmadi"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Rotate a market's Telegram token (SUPERADMIN only)",
         "tags": [
           "Identity"
         ]
@@ -1960,7 +2179,8 @@
                 10,
                 25,
                 50,
-                100
+                100,
+                200
               ],
               "type": "number"
             }
@@ -2528,6 +2748,40 @@
         ]
       }
     },
+    "/orders/extra-cost-approvals": {
+      "get": {
+        "operationId": "OrderGatewayController_listExtraCostApprovals",
+        "parameters": [
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "enum": [
+                "pending",
+                "approved",
+                "rejected"
+              ],
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "List extra cost approval requests",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
     "/orders/{id}": {
       "get": {
         "operationId": "OrderGatewayController_findById",
@@ -2709,40 +2963,6 @@
           }
         ],
         "summary": "Manager bulk-assign orders to one courier",
-        "tags": [
-          "Orders"
-        ]
-      }
-    },
-    "/orders/extra-cost-approvals": {
-      "get": {
-        "operationId": "OrderGatewayController_listExtraCostApprovals",
-        "parameters": [
-          {
-            "name": "status",
-            "required": false,
-            "in": "query",
-            "schema": {
-              "enum": [
-                "pending",
-                "approved",
-                "rejected"
-              ],
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": ""
-          }
-        },
-        "security": [
-          {
-            "bearer": []
-          }
-        ],
-        "summary": "List extra cost approval requests",
         "tags": [
           "Orders"
         ]
@@ -2971,16 +3191,6 @@
         "deprecated": true,
         "operationId": "OrderGatewayController_settlementCourierToBranch",
         "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SettlementCourierToBranchDto"
-              }
-            }
-          }
-        },
         "responses": {
           "201": {
             "description": ""
@@ -3002,16 +3212,6 @@
         "deprecated": true,
         "operationId": "OrderGatewayController_settlementBranchToHq",
         "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SettlementBranchToHqDto"
-              }
-            }
-          }
-        },
         "responses": {
           "201": {
             "description": ""
@@ -3033,16 +3233,6 @@
         "deprecated": true,
         "operationId": "OrderGatewayController_settlementHqToMarket",
         "parameters": [],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SettlementHqToMarketDto"
-              }
-            }
-          }
-        },
         "responses": {
           "201": {
             "description": ""
@@ -4245,6 +4435,36 @@
         ]
       }
     },
+    "/region/logist/bulk": {
+      "post": {
+        "operationId": "LogisticsGatewayController_bulkAssignRegionLogist",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkAssignRegionLogistRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Logist regions replaced"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bulk-assign a logist to regions (others of this logist are unassigned)",
+        "tags": [
+          "Logistics"
+        ]
+      }
+    },
     "/region/{id}": {
       "get": {
         "operationId": "LogisticsGatewayController_getRegionById",
@@ -4336,6 +4556,46 @@
           }
         ],
         "summary": "Delete region",
+        "tags": [
+          "Logistics"
+        ]
+      }
+    },
+    "/region/{id}/logist": {
+      "patch": {
+        "operationId": "LogisticsGatewayController_assignRegionLogist",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Region ID (id)",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssignRegionLogistRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Region logist updated"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Assign (or remove with null) a region logist",
         "tags": [
           "Logistics"
         ]
@@ -4518,7 +4778,7 @@
             "bearer": []
           }
         ],
-        "summary": "Delete district",
+        "summary": "Delete district — buyurtma/foydalanuvchi/filial bog'langan bo'lsa 400 (oNAE3LW9)",
         "tags": [
           "Logistics"
         ]
@@ -4639,6 +4899,47 @@
           }
         ],
         "summary": "Apply matched district sato_codes",
+        "tags": [
+          "Logistics"
+        ]
+      }
+    },
+    "/district/{id}/merge": {
+      "post": {
+        "description": "Ko'chirishdan OLDIN B dagi sonlar olinadi; keyin A da 0 qolgani va B = eski B + ko'chirilgan ekani tasdiqlanadi. Biror bosqich yiqilsa yoki sonlar mos kelmasa — ko'chirilganlar AYNAN o'sha ID'lar bo'yicha A ga qaytariladi, A o'chirilmaydi: 409 (tekshiruv mos kelmadi / servis rad etdi) yoki 503 (servis javob bermadi). Kompensatsiyaning o'zi yiqilsa — xato matnida qaysi ID'lar qaysi tumanda qolgani yoziladi (to'liq ro'yxat — activity log, District #id, action `district.merge_compensation_failed`). 200 javobi: `moved` {orders, users, branches}, `target_before`, `target_after`.",
+        "operationId": "LogisticsGatewayController_mergeDistrict",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "O'chiriladigan tuman ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeDistrictRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Tumanni boshqasiga birlashtirish: buyurtma, foydalanuvchi va filiallar ko'chadi, tuman o'chadi (oNAE3LW9)",
         "tags": [
           "Logistics"
         ]
@@ -6751,6 +7052,26 @@
         ]
       }
     },
+    "/notifications/types": {
+      "get": {
+        "operationId": "NotificationGatewayController_listTypes",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Notification types catalog (key, category, priority, default_channels, label_uz, user_can_mute)",
+        "tags": [
+          "Notification"
+        ]
+      }
+    },
     "/notifications/dispatch": {
       "post": {
         "operationId": "NotificationGatewayController_dispatch",
@@ -7029,7 +7350,7 @@
             "bearer": []
           }
         ],
-        "summary": "Send notification to telegram group(s)",
+        "summary": "Send notification to telegram group(s). REGISTRATOR — faqat Elchi'da ulangan market guruhlariga (begona group_id → 403). `token` qabul qilinmaydi (400).",
         "tags": [
           "Notification"
         ]
@@ -11644,7 +11965,7 @@
             "name": "search",
             "required": false,
             "in": "query",
-            "description": "Free-text across type/id/action/actor name",
+            "description": "Free-text across type/id/action/actor name/description (e.g. \"bekor\")",
             "schema": {
               "type": "string"
             }
@@ -11833,7 +12154,7 @@
             "name": "search",
             "required": false,
             "in": "query",
-            "description": "Free-text across type/id/action/actor name",
+            "description": "Free-text across type/id/action/actor name/description (e.g. \"bekor\")",
             "schema": {
               "type": "string"
             }
@@ -12618,6 +12939,187 @@
         ]
       }
     },
+    "/market-operators": {
+      "get": {
+        "operationId": "MarketOperatorGatewayController_list",
+        "parameters": [
+          {
+            "name": "search",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "active",
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 100,
+              "type": "number"
+            }
+          },
+          {
+            "name": "market_id",
+            "required": false,
+            "in": "query",
+            "description": "Ixtiyoriy; faqat o`z id`ingiz. Boshqa market_id → 400",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "{ items: MarketOperator[], meta: { page, limit, total, totalPages } }"
+          },
+          "403": {
+            "description": "Market emas"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market operatorlari ro'yxati (faqat market — o'ziniki)",
+        "tags": [
+          "Market operators"
+        ]
+      },
+      "post": {
+        "operationId": "MarketOperatorGatewayController_create",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateMarketOperatorRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Operator yaratildi"
+          },
+          "403": {
+            "description": "Market emas yoki market bloklangan"
+          },
+          "409": {
+            "description": "Telefon raqam band"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Market o`z operatorini yaratadi (rol: market_operator)",
+        "tags": [
+          "Market operators"
+        ]
+      }
+    },
+    "/market-operators/{id}/commission": {
+      "patch": {
+        "operationId": "MarketOperatorGatewayController_updateCommission",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Operator ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateMarketOperatorCommissionRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Komissiya yangilandi"
+          },
+          "400": {
+            "description": "Chegaradan tashqari qiymat"
+          },
+          "404": {
+            "description": "Operator topilmadi yoki begona"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Operator komissiyasi (percent | fixed | null) — faqat o`z operatori",
+        "tags": [
+          "Market operators"
+        ]
+      }
+    },
+    "/market-operators/{id}": {
+      "delete": {
+        "operationId": "MarketOperatorGatewayController_remove",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "description": "Operator ID",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Operator o'chirildi"
+          },
+          "404": {
+            "description": "Operator topilmadi yoki begona"
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Operatorni o`chirish (soft) — faqat o`z operatori",
+        "tags": [
+          "Market operators"
+        ]
+      }
+    },
     "/health/readiness": {
       "get": {
         "operationId": "HealthController_readiness",
@@ -12709,6 +13211,37 @@
             "type": "string",
             "example": "1",
             "description": "Branch ID (manager HYBRID flowda avtomatik aniqlanadi)"
+          }
+        },
+        "required": [
+          "name",
+          "phone_number",
+          "password",
+          "salary"
+        ]
+      },
+      "CreateLogistRequestDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Admin User"
+          },
+          "phone_number": {
+            "type": "string",
+            "example": "+998901234567"
+          },
+          "password": {
+            "type": "string",
+            "example": "strongPassword123"
+          },
+          "salary": {
+            "type": "number",
+            "example": 3000000
+          },
+          "payment_day": {
+            "type": "number",
+            "example": 10
           }
         },
         "required": [
@@ -12976,6 +13509,96 @@
           "default_tariff"
         ]
       },
+      "RotateAllMarketTgTokensRequestDto": {
+        "type": "object",
+        "properties": {
+          "confirm": {
+            "type": "string",
+            "example": "ROTATE_ALL",
+            "enum": [
+              "ROTATE_ALL"
+            ],
+            "description": "Aniq tasdiq: AYNAN 'ROTATE_ALL'. Boshqa qiymat yoki maydon yo'q — 400."
+          }
+        },
+        "required": [
+          "confirm"
+        ]
+      },
+      "RotateAllMarketTgTokensDataDto": {
+        "type": "object",
+        "properties": {
+          "rotated_count": {
+            "type": "number",
+            "example": 11,
+            "description": "Tokeni almashtirilgan faol marketlar soni (tokenlarning o'zi YO'Q)."
+          }
+        },
+        "required": [
+          "rotated_count"
+        ]
+      },
+      "RotateAllMarketTgTokensResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "11 ta market Telegram tokeni yangilandi"
+          },
+          "data": {
+            "$ref": "#/components/schemas/RotateAllMarketTgTokensDataDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
+      "MarketTgTokenDataDto": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "example": "3"
+          },
+          "market_tg_token": {
+            "type": "string",
+            "example": "group_token-0123456789abcdef0123456789abcdef",
+            "nullable": true,
+            "description": "Marketning maxfiy Telegram tokeni (group_token-<32 hex>). Faqat SUPERADMIN ko'radi; marketga xavfsiz kanal orqali bering."
+          }
+        },
+        "required": [
+          "id",
+          "market_tg_token"
+        ]
+      },
+      "MarketTgTokenResponseDto": {
+        "type": "object",
+        "properties": {
+          "statusCode": {
+            "type": "number",
+            "example": 200
+          },
+          "message": {
+            "type": "string",
+            "example": "Market Telegram tokeni"
+          },
+          "data": {
+            "$ref": "#/components/schemas/MarketTgTokenDataDto"
+          }
+        },
+        "required": [
+          "statusCode",
+          "message",
+          "data"
+        ]
+      },
       "UpdateMarketAddOrderRequestDto": {
         "type": "object",
         "properties": {
@@ -13239,7 +13862,8 @@
           },
           "quantity": {
             "type": "number",
-            "example": 1
+            "example": 1,
+            "minimum": 1
           }
         }
       },
@@ -13269,7 +13893,8 @@
           },
           "total_price": {
             "type": "number",
-            "example": 0
+            "example": 0,
+            "minimum": 0
           },
           "status": {
             "type": "string",
@@ -13357,7 +13982,10 @@
               "$ref": "#/components/schemas/OrderItemDto"
             }
           }
-        }
+        },
+        "required": [
+          "total_price"
+        ]
       },
       "CreateOrderByTelegramBotRequestDto": {
         "type": "object",
@@ -13642,7 +14270,8 @@
           },
           "total_price": {
             "type": "number",
-            "example": 0
+            "example": 0,
+            "minimum": 0
           },
           "status": {
             "type": "string",
@@ -13734,7 +14363,10 @@
             "type": "object",
             "example": "EXT-ORDER-1001"
           }
-        }
+        },
+        "required": [
+          "total_price"
+        ]
       },
       "CancelledManualOverrideDto": {
         "type": "object",
@@ -13914,57 +14546,6 @@
             }
           }
         }
-      },
-      "SettlementCourierToBranchDto": {
-        "type": "object",
-        "properties": {
-          "amount": {
-            "type": "number",
-            "description": "Amount to settle in som (>= 0, 2 dp)"
-          },
-          "courier_id": {
-            "type": "string",
-            "description": "Courier user id"
-          }
-        },
-        "required": [
-          "amount",
-          "courier_id"
-        ]
-      },
-      "SettlementBranchToHqDto": {
-        "type": "object",
-        "properties": {
-          "amount": {
-            "type": "number",
-            "description": "Amount to settle in som (>= 0, 2 dp)"
-          },
-          "branch_id": {
-            "type": "string",
-            "description": "Branch id"
-          }
-        },
-        "required": [
-          "amount",
-          "branch_id"
-        ]
-      },
-      "SettlementHqToMarketDto": {
-        "type": "object",
-        "properties": {
-          "amount": {
-            "type": "number",
-            "description": "Amount to settle in som (>= 0, 2 dp)"
-          },
-          "market_id": {
-            "type": "string",
-            "description": "Market id"
-          }
-        },
-        "required": [
-          "amount",
-          "market_id"
-        ]
       },
       "CouldNotDeliverOrderRequestDto": {
         "type": "object",
@@ -14278,6 +14859,32 @@
           "sato_code"
         ]
       },
+      "BulkAssignRegionLogistRequestDto": {
+        "type": "object",
+        "properties": {
+          "logist_id": {
+            "type": "string",
+            "example": "42",
+            "nullable": true,
+            "description": "LOGIST id'si: `region_ids` dagi viloyatlar unga o'tadi, uning boshqa viloyatlaridan u olib tashlanadi (`region_ids: []` — hammasidan). `null` — faqat `region_ids` dagi viloyatlardan logist olinadi."
+          },
+          "region_ids": {
+            "example": [
+              "1",
+              "5",
+              "9"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "logist_id",
+          "region_ids"
+        ]
+      },
       "UpdateRegionRequestDto": {
         "type": "object",
         "properties": {
@@ -14290,6 +14897,20 @@
             "example": "REG-05-NEW"
           }
         }
+      },
+      "AssignRegionLogistRequestDto": {
+        "type": "object",
+        "properties": {
+          "logist_id": {
+            "type": "string",
+            "example": "42",
+            "nullable": true,
+            "description": "LOGIST rolidagi faol foydalanuvchi id'si. `null` — viloyatdan logistni olib tashlash. Maydon MAJBURIY (yo'q bo'lsa 400)."
+          }
+        },
+        "required": [
+          "logist_id"
+        ]
       },
       "CreateDistrictRequestDto": {
         "type": "object",
@@ -14346,6 +14967,19 @@
         },
         "required": [
           "sato_code"
+        ]
+      },
+      "MergeDistrictRequestDto": {
+        "type": "object",
+        "properties": {
+          "target_district_id": {
+            "type": "string",
+            "example": "28",
+            "description": "Qabul qiluvchi (qoladigan) tuman ID"
+          }
+        },
+        "required": [
+          "target_district_id"
         ]
       },
       "CreateCashboxRequestDto": {
@@ -14962,6 +15596,28 @@
           "endpoint"
         ]
       },
+      "DispatchTelegramTargetDto": {
+        "type": "object",
+        "properties": {
+          "market_id": {
+            "type": "string",
+            "example": "2",
+            "description": "Market id (ulangan guruh)"
+          },
+          "group_id": {
+            "type": "string",
+            "example": "-1001234567890"
+          },
+          "group_type": {
+            "type": "string",
+            "enum": [
+              "cancel",
+              "create"
+            ],
+            "example": "create"
+          }
+        }
+      },
       "DispatchNotificationRequestDto": {
         "type": "object",
         "properties": {
@@ -15000,7 +15656,7 @@
           "type": {
             "type": "string",
             "example": "order.sold",
-            "description": "Event key `{domain}.{event}`"
+            "description": "Event key `{domain}.{event}` — GET /notifications/types katalogidan, yoki vaqtinchalik `x.` prefiksli tur (masalan `x.test`). Boshqasi 400."
           },
           "category": {
             "type": "string",
@@ -15067,8 +15723,12 @@
             "description": "Dedupe/collapse key"
           },
           "telegram": {
-            "type": "object",
-            "description": "Optional telegram relay target"
+            "description": "Optional telegram relay target (token qabul qilinmaydi)",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/DispatchTelegramTargetDto"
+              }
+            ]
           }
         },
         "required": [
@@ -15149,7 +15809,7 @@
           "text": {
             "type": "string",
             "example": "group_token-0123456789abcdef0123456789abcdef",
-            "description": "The market's secret market_tg_token (`group_token-<32 hex>`), readable only by SUPERADMIN/ADMIN via GET /users/:id. Optional suffix `-create` (default) or `-cancel` selects the group type, e.g. `group_token-<32 hex>-cancel`. The old `group_token-<marketId>` form is rejected. A bind does NOT rotate the token (it stays the order-bot credential), and an existing (market, group type) binding is never overwritten: re-bind only via PATCH/DELETE /notifications/:id."
+            "description": "The market's secret market_tg_token (`group_token-<32 hex>`), readable only by SUPERADMIN via GET /markets/:id/tg-token (GvL6ZFAd). Optional suffix `-create` (default) or `-cancel` selects the group type, e.g. `group_token-<32 hex>-cancel`. The old `group_token-<marketId>` form is rejected. A bind does NOT rotate the token (it stays the order-bot credential), and an existing (market, group type) binding is never overwritten: re-bind only via PATCH/DELETE /notifications/:id."
           },
           "group_id": {
             "type": "string",
@@ -15179,10 +15839,6 @@
               "create"
             ],
             "example": "create"
-          },
-          "token": {
-            "type": "string",
-            "example": "123456:ABCDEF..."
           },
           "message": {
             "type": "string",
@@ -16978,6 +17634,54 @@
           "extra_usd",
           "reason"
         ]
+      },
+      "CreateMarketOperatorRequestDto": {
+        "type": "object",
+        "properties": {
+          "name": {
+            "type": "string",
+            "example": "Ali Valiyev",
+            "minLength": 2,
+            "maxLength": 100
+          },
+          "phone_number": {
+            "type": "string",
+            "example": "+998901234567"
+          },
+          "password": {
+            "type": "string",
+            "example": "secret123",
+            "minLength": 4
+          }
+        },
+        "required": [
+          "name",
+          "phone_number",
+          "password"
+        ]
+      },
+      "UpdateMarketOperatorCommissionRequestDto": {
+        "type": "object",
+        "properties": {
+          "commission_type": {
+            "type": "string",
+            "enum": [
+              "percent",
+              "fixed"
+            ],
+            "nullable": true,
+            "example": "percent",
+            "description": "percent — buyurtma total_price foizi; fixed — sotilgan buyurtma uchun so'm; null — komissiya yo'q"
+          },
+          "commission_value": {
+            "type": "object",
+            "example": 5,
+            "nullable": true,
+            "minimum": 0,
+            "maximum": 1000000,
+            "description": "Foiz (0..100) yoki so'm (0..1 000 000), ko'pi bilan 2 kasr"
+          }
+        }
       }
     }
   }

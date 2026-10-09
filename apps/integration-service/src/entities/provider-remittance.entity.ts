@@ -6,10 +6,11 @@ import { BaseEntity } from '@app/common';
  * receivables. Creating one settles a set of PENDING receivables (explicit
  * order ids, or FIFO up to `amount`) and records the audit trail of who/when.
  *
- * This is a reconciliation ledger only — it does NOT post to a cashbox. Which
- * cashbox a provider remittance lands in (and how a provider fee is split) is a
- * finance-policy decision left to the business; an operator records the matching
- * cashbox income separately.
+ * (N3yNa6rO) Remittance yaratilganda summa MAIN kassaga AVTOMATIK kirim
+ * qilinadi (`finance.cashbox.fill`, `dedup_epoch =
+ * provider-remittance:<id>` — idempotent). Natija javobda `cashbox_posted`;
+ * `false` bo'lsa kassa yozuvi yiqilgan — qo'lda tekshirilsin (qo'lda kirim
+ * qilish pulni IKKI marta yozadi, avval `cashbox_posted` ni ko'ring).
  */
 @Entity({ name: 'provider_remittances' })
 @Index('IDX_REMITTANCE_INTEGRATION', ['integration_id'])

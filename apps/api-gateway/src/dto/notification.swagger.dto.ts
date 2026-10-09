@@ -18,6 +18,7 @@ import {
 } from 'class-validator';
 import {
   Group_type,
+  IsNotificationType,
   NotificationCategory,
   NotificationChannel,
   NotificationPriority,
@@ -159,10 +160,9 @@ export class SendNotificationRequestDto {
   @IsEnum(Group_type)
   group_type?: Group_type;
 
-  @ApiPropertyOptional({ example: '123456:ABCDEF...' })
-  @IsOptional()
-  @IsString()
-  token?: string;
+  // (n0kLbx3d) `token` ATAYLAB YO'Q: yuborilsa 400 (forbidNonWhitelisted).
+  // Bot tokeni faqat DB (telegram_markets) yoki env'dan olinadi — server
+  // ixtiyoriy bot tokeni bilan tashqi so'rov yuboruvchi vositaga aylanmasin.
 
   @ApiProperty({ example: 'Buyurtma yaratildi: #123' })
   @IsString()
@@ -187,7 +187,7 @@ export class ConnectTelegramByTokenRequestDto {
   @ApiProperty({
     example: 'group_token-0123456789abcdef0123456789abcdef',
     description:
-      "The market's secret market_tg_token (`group_token-<32 hex>`), readable only by SUPERADMIN/ADMIN via GET /users/:id. " +
+      "The market's secret market_tg_token (`group_token-<32 hex>`), readable only by SUPERADMIN via GET /markets/:id/tg-token (GvL6ZFAd). " +
       'Optional suffix `-create` (default) or `-cancel` selects the group type, e.g. `group_token-<32 hex>-cancel`. ' +
       'The old `group_token-<marketId>` form is rejected. A bind does NOT rotate the token (it stays the order-bot credential), ' +
       'and an existing (market, group type) binding is never overwritten: re-bind only via PATCH/DELETE /notifications/:id.',
@@ -201,6 +201,31 @@ export class ConnectTelegramByTokenRequestDto {
 }
 
 // ==================== In-app notification inbox ====================
+
+/**
+ * Dispatch'ning Telegram relay nishoni (n0kLbx3d): faqat shu maydonlar —
+ * `token` (yoki boshqa noma'lum maydon) yuborilsa 400.
+ */
+export class DispatchTelegramTargetDto {
+  @ApiPropertyOptional({
+    example: '2',
+    description: 'Market id (ulangan guruh)',
+  })
+  @IsOptional()
+  @IsString()
+  @Matches(/^\d+$/)
+  market_id?: string;
+
+  @ApiPropertyOptional({ example: '-1001234567890' })
+  @IsOptional()
+  @IsString()
+  group_id?: string;
+
+  @ApiPropertyOptional({ enum: Group_type, example: Group_type.CREATE })
+  @IsOptional()
+  @IsEnum(Group_type)
+  group_type?: Group_type;
+}
 
 export class DispatchNotificationRequestDto {
   @ApiPropertyOptional({
@@ -248,10 +273,13 @@ export class DispatchNotificationRequestDto {
 
   @ApiProperty({
     example: 'order.sold',
-    description: 'Event key `{domain}.{event}`',
+    description:
+      'Event key `{domain}.{event}` — GET /notifications/types katalogidan, ' +
+      'yoki vaqtinchalik `x.` prefiksli tur (masalan `x.test`). Boshqasi 400.',
   })
   @IsString()
   @MaxLength(120)
+  @IsNotificationType()
   type!: string;
 
   @ApiPropertyOptional({
@@ -311,15 +339,15 @@ export class DispatchNotificationRequestDto {
   @MaxLength(255)
   group_key?: string;
 
-  @ApiPropertyOptional({ description: 'Optional telegram relay target' })
+  @ApiPropertyOptional({
+    type: DispatchTelegramTargetDto,
+    description: 'Optional telegram relay target (token qabul qilinmaydi)',
+  })
   @IsOptional()
   @IsObject()
-  telegram?: {
-    market_id?: string;
-    group_id?: string;
-    group_type?: Group_type;
-    token?: string;
-  };
+  @ValidateNested()
+  @Type(() => DispatchTelegramTargetDto)
+  telegram?: DispatchTelegramTargetDto;
 }
 
 export class InboxQueryDto {

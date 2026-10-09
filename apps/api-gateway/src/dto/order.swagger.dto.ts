@@ -1,7 +1,9 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import {
+  ArrayMinSize,
   ArrayNotEmpty,
   IsArray,
+  IsInt,
   IsEnum,
   IsISO8601,
   MaxLength,
@@ -91,9 +93,14 @@ export class OrderItemDto {
   @IsString()
   product_name?: string | null;
 
-  @ApiPropertyOptional({ example: 1 })
+  /**
+   * IDG1z5y9: ilgari chegara yo'q edi — `quantity: -5` bilan buyurtma
+   * yozilib, mahsulot statistikasi va hisob-kitobni buzardi.
+   */
+  @ApiPropertyOptional({ example: 1, minimum: 1 })
   @IsOptional()
-  @IsNumber()
+  @IsInt({ message: 'quantity butun son bo‘lishi kerak' })
+  @Min(1, { message: 'quantity kamida 1 bo‘lishi kerak' })
   quantity?: number;
 }
 
@@ -162,10 +169,17 @@ export class CreateOrderRequestDto {
   @IsEnum(Where_deliver)
   where_deliver?: Where_deliver;
 
-  @ApiPropertyOptional({ example: 0 })
-  @IsOptional()
+  /**
+   * IDG1z5y9: ilgari ixtiyoriy va chegarasiz edi — `-1000` bilan buyurtma
+   * 201 bilan yozilib, market hisob-kitobi (to_be_paid = total_price −
+   * tarif), daromad analitikasi va kuryer inkassatsiyasiga kirardi. 0 —
+   * bepul buyurtma, ruxsat etiladi.
+   */
+  @ApiProperty({ example: 0, minimum: 0 })
+  @IsNotEmpty({ message: 'total_price majburiy' })
   @IsNumber()
-  total_price?: number;
+  @Min(0, { message: "total_price 0 dan kichik bo'lmasligi kerak" })
+  total_price!: number;
 
   /**
    * ⚠️ fix3 C6 (RBAC-05, LC-07): `status`, `post_id`, `current_batch_id`,
@@ -279,9 +293,11 @@ export class CreateOrderRequestDto {
   @IsEnum(OrderSourceDto)
   source?: OrderSourceDto;
 
+  // IDG1z5y9: bo'sh `items: []` — mahsulotsiz buyurtma; rad etiladi.
   @ApiPropertyOptional({ type: [OrderItemDto] })
   @IsOptional()
   @IsArray()
+  @ArrayMinSize(1, { message: "items bo'sh bo'lmasligi kerak" })
   @ValidateNested({ each: true })
   @Type(() => OrderItemDto)
   items?: OrderItemDto[];
@@ -867,6 +883,8 @@ export class CreateOrderByTelegramBotRequestDto {
   @ApiProperty({ example: 120000 })
   @Transform(({ value }) => parseFormattedNumber(value))
   @IsNumber()
+  // (IDG1z5y9) telegram bot yo'li ham manfiy summani qabul qilmaydi.
+  @Min(0)
   total_price!: number;
 
   @ApiPropertyOptional({ enum: Where_deliver, default: Where_deliver.CENTER })

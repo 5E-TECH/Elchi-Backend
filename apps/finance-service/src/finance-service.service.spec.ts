@@ -10,6 +10,8 @@ jest.mock('@app/common', () => ({
   // Haqiqiy Toshkent kun helperlari (SqVMuhKo) — servis ularni barrel'dan
   // oladi, sana filtri chegaralari haqiqiy kod bilan hisoblanishi kerak.
   ...jest.requireActual('@app/common/time/tashkent-time'),
+  // 2WRzdWpZ — jurnal gaplari quruvchisi (sof funksiyalar).
+  ...jest.requireActual('@app/common/activity-log/describe-uz'),
   Cashbox_type: {
     MAIN: 'main',
     FOR_COURIER: 'for_courier',

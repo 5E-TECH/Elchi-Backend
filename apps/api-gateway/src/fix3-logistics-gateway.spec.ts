@@ -84,7 +84,16 @@ describe('FIX3 RBAC-14 — region stats rollari', () => {
   it('stats/:id: market ham, kuryer ham yo‘q', () => {
     const roles = rolesOf('getRegionStatsById');
 
-    expect(roles).toEqual(['admin', 'superadmin', 'manager', 'registrator']);
+    // (dzyVftBx) logist — ichki xodim, viloyat statistikasini ko'radi.
+    expect(roles).toEqual([
+      'admin',
+      'superadmin',
+      'manager',
+      'registrator',
+      'logist',
+    ]);
+    expect(roles).not.toContain('market');
+    expect(roles).not.toContain('courier');
   });
 });
 

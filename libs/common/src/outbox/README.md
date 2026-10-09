@@ -131,3 +131,33 @@ bilmaydi.
 
 `order.settlement.advance` uchun ilgari yiqilgan idempotency kaliti endi
 o'z-o'zidan qayta egallanadi (`reclaimFailed`) — alohida tozalash kerak emas.
+
+## Bildirishnoma (`notification.dispatch`) ulash — yo'riqnoma (OA16fdSq)
+
+Pilot: order-service (`apps/order-service/src/notification/order-notification.service.ts`).
+Keyingi servislar (finance, branch, logistics) AYNAN shu naqsh bilan:
+
+1. Modulda: `RmqModule.register({ name: 'NOTIFICATION' })` va
+   `OutboxModule.forService({ targets: [..., 'NOTIFICATION'], options: { fireAndForgetPatterns: ['notification.dispatch'] } })`.
+   `fireAndForgetPatterns` — publisher bildirishnoma javobini KUTMAYDI
+   (dispatch Telegram'ni ham kutadi; notification-service yiqilsa ortidagi
+   pul hodisalari kechikmasin). Pul/holat patternlarini bu ro'yxatga qo'shmang.
+2. Hodisa nuqtasida, biznes tranzaksiyasi ICHIDA:
+   `await this.outbox.enqueue('NOTIFICATION', 'notification.dispatch', payload, { manager })`.
+   To'g'ridan-to'g'ri `rmqSend` / `client.send` TAQIQ (rollback bo'lsa ham
+   xabar ketardi; sinxron chaqiruv tugmani bildirishnomani kutishga majburlaydi).
+3. `payload.type` — `NOTIFICATION_TYPES` katalogidan (`libs/common/src/notification/notification-types.ts`);
+   yangi tur = katalogga yozuv (migratsiya kerak emas), kategoriya faqat mavjud 7 ta
+   (`integration`/`ai` → `system`). Katalogda yo'q tur notification-service'da 400.
+4. `category`/`priority`/`group_key`/`channels` ni katalogdan oling
+   (`findNotificationType`, `renderNotificationGroupKey`) — notification-service
+   ham bermasangiz shu yerdan to'ldiradi.
+5. PII: in_app `body` — faqat raqam + holat. Telefon/manzil faqat
+   `telegram.text` da (market guruhi), har foydalanuvchi qismi
+   `escapeTelegramHtml` dan o'tsin (`parse_mode: HTML`).
+6. Fail-open: payload qurishdagi xato biznes amalini yiqitmasin (try/catch + WARN).
+
+Kutilayotgan turlar: `finance.payment_received` (to'lov / balans to'ldirish,
+market), `finance.settlement_closed`, `branch.transfer_sent|received`
+(`batch_id`), `logistics.assigned` (kuryer, `order_id`),
+`logistics.return_approved`.
