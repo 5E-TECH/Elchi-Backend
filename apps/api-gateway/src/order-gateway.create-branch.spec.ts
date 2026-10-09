@@ -29,7 +29,11 @@ describe('OrderGatewayController create with branch auto binding', () => {
     );
     // fix3 RBAC-01: filial xodimidan tayyor customer_id qabul qilinmaydi —
     // mijoz `customer` obyektidan (identity.customer.create) aniqlanadi.
-    identityClient.send.mockReturnValue(of({ data: { id: '55' } }));
+    identityClient.send.mockImplementation((pattern: { cmd: string }) =>
+      pattern.cmd === 'identity.market.find_by_id'
+        ? of({ data: { status: 'active', add_order: true } })
+        : of({ data: { id: '55' } }),
+    );
     orderClient.send.mockReturnValue(
       of({ statusCode: 201, data: { id: '100' } }),
     );
@@ -54,7 +58,12 @@ describe('OrderGatewayController create with branch auto binding', () => {
   });
 
   it('HQ admin create qilsa eski flow qoladi (branch auto qo‘shilmaydi)', async () => {
-    const { controller, orderClient, branchClient } = makeController();
+    const { controller, orderClient, branchClient, identityClient } =
+      makeController();
+    // UER0MpMX: market mavjud va faol.
+    identityClient.send.mockReturnValue(
+      of({ data: { status: 'active', add_order: true } }),
+    );
 
     branchClient.send.mockReturnValue(of({ data: null }));
     orderClient.send.mockReturnValue(

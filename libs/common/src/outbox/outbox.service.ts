@@ -72,8 +72,25 @@ export class OutboxService {
    * invisible to getDuePending, so a monitor must surface them or a stuck
    * money/state event sits silently forever.
    */
-  async countFailed(): Promise<number> {
-    return this.repo.count({ where: { status: 'failed' } });
+  async countFailed(excludePatterns: readonly string[] = []): Promise<number> {
+    if (!excludePatterns.length) {
+      return this.repo.count({ where: { status: 'failed' } });
+    }
+    // (OA16fdSq) Fire-and-forget (bildirishnoma) hodisalari pul/holat
+    // ogohlantirishiga kirmaydi — aniq nom yoki `prefix*`.
+    const qb = this.repo
+      .createQueryBuilder('e')
+      .where('e.status = :status', { status: 'failed' });
+    excludePatterns.forEach((pattern, index) => {
+      const key = `exclude_${index}`;
+      if (pattern.endsWith('*')) {
+        const prefix = pattern.slice(0, -1).replace(/[\\%_]/g, '\\$&');
+        qb.andWhere(`e.pattern NOT LIKE :${key}`, { [key]: `${prefix}%` });
+      } else {
+        qb.andWhere(`e.pattern <> :${key}`, { [key]: pattern });
+      }
+    });
+    return qb.getCount();
   }
 
   /**

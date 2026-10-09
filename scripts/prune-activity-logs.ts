@@ -8,13 +8,21 @@
  * table (discovered from information_schema, so new services are covered
  * automatically), in bounded batches so it never holds a long lock.
  *
+ * (f2Ud5tju) Then, in the same schemas, a SHORTER window for personal data:
+ * rows older than ACTIVITY_LOG_DEVICE_RETENTION_DAYS keep the row but lose the
+ * `ip`, `user_agent`, `device_id`, `device_name` metadata keys (batched UPDATE,
+ * other metadata keys untouched) — see libs/common/src/activity-log/retention.ts.
+ *
  * Config (env):
  *   POSTGRES_URI                 required — the DB connection string.
  *   ACTIVITY_LOG_RETENTION_DAYS  retention window in days (default 365).
- *   ACTIVITY_LOG_PRUNE_BATCH     rows per DELETE batch (default 10000).
+ *   ACTIVITY_LOG_PRUNE_BATCH     rows per DELETE / UPDATE batch (default 10000).
+ *   ACTIVITY_LOG_DEVICE_RETENTION_DAYS  ip/device metadata window in days
+ *                                (default 30; capped at the retention window).
  *
  * Flags:
- *   --dry-run   report how many rows WOULD be deleted per schema, delete nothing.
+ *   --dry-run   report how many rows WOULD be deleted / lose ip-device metadata
+ *               per schema, change nothing.
  *
  * Scheduling (DB is server-local, so run ON the server): daily via crontab or
  * the `activity-log-prune` docker-compose sidecar, e.g.
@@ -23,6 +31,14 @@
  * Exit codes: 0 ok, 2 misconfigured (no POSTGRES_URI / bad retention).
  */
 import { DataSource } from 'typeorm';
+import {
+  ACTIVITY_LOG_DEVICE_RETENTION_DEFAULT_DAYS,
+  ACTIVITY_LOG_DEVICE_RETENTION_ENV,
+  buildDeviceMetadataCountSql,
+  quoteActivityLogTable,
+  resolveDeviceRetentionDays,
+  stripDeviceMetadataBatched,
+} from '../libs/common/src/activity-log/retention';
 
 function intFromEnv(name: string, fallback: number): number {
   const raw = process.env[name];
@@ -45,6 +61,16 @@ async function main(): Promise<void> {
   const retentionDays = intFromEnv('ACTIVITY_LOG_RETENTION_DAYS', 365);
   const batchSize = intFromEnv('ACTIVITY_LOG_PRUNE_BATCH', 10_000);
   const cutoffSql = `now() - interval '${retentionDays} days'`;
+  // (f2Ud5tju) Noto'g'ri qiymat — exit 2 (jim sukutga tushib, IP'ni kutilgandan
+  // erta o'chirmasin); umumiy muddatdan katta bo'lsa umumiy ustun.
+  const deviceDays = resolveDeviceRetentionDays(
+    retentionDays,
+    intFromEnv(
+      ACTIVITY_LOG_DEVICE_RETENTION_ENV,
+      ACTIVITY_LOG_DEVICE_RETENTION_DEFAULT_DAYS,
+    ),
+  );
+  const deviceCutoff = new Date(Date.now() - deviceDays * 86_400_000);
 
   const ds = new DataSource({
     type: 'postgres',
@@ -67,12 +93,13 @@ async function main(): Promise<void> {
     console.log(
       `${dryRun ? '[dry-run] ' : ''}Pruning activity_logs older than ` +
         `${retentionDays} days across ${schemas.length} schema(s), ` +
-        `batch=${batchSize}.\n`,
+        `batch=${batchSize}; ip/device metadata older than ${deviceDays} days.\n`,
     );
 
     let grandTotal = 0;
+    let deviceTotal = 0;
     for (const { table_schema } of schemas) {
-      const table = `"${table_schema}"."activity_logs"`;
+      const table = quoteActivityLogTable(table_schema);
 
       if (dryRun) {
         const [{ count }]: Array<{ count: string }> = await ds.query(
@@ -80,7 +107,15 @@ async function main(): Promise<void> {
         );
         const n = Number(count);
         grandTotal += n;
-        console.log(`  ${table_schema}: ${n} row(s) would be deleted`);
+        const [device]: Array<{ count: number }> = await ds.query(
+          buildDeviceMetadataCountSql(table),
+          [deviceCutoff],
+        );
+        deviceTotal += Number(device?.count ?? 0);
+        console.log(
+          `  ${table_schema}: ${n} row(s) would be deleted, ` +
+            `<= ${Number(device?.count ?? 0)} row(s) would lose ip/device metadata`,
+        );
         continue;
       }
 
@@ -105,12 +140,26 @@ async function main(): Promise<void> {
         if (deleted < batchSize) break;
       }
       grandTotal += schemaTotal;
-      console.log(`  ${table_schema}: deleted ${schemaTotal} row(s)`);
+
+      // (f2Ud5tju) DELETE dan keyin — o'chiriladigan qatorlar bekorga UPDATE
+      // qilinmaydi. Partiyalab: har partiya alohida qisqa so'rov.
+      const stripped = await stripDeviceMetadataBatched(
+        (sql, params) => ds.query(sql, params),
+        table,
+        deviceCutoff,
+        batchSize,
+      );
+      deviceTotal += stripped;
+      console.log(
+        `  ${table_schema}: deleted ${schemaTotal} row(s), ` +
+          `stripped ip/device metadata from ${stripped} row(s)`,
+      );
     }
 
     console.log(
       `\n${dryRun ? '[dry-run] ' : ''}Total: ${grandTotal} row(s)` +
-        `${dryRun ? ' would be' : ''} pruned.`,
+        `${dryRun ? ' would be' : ''} pruned, ${deviceTotal} row(s)` +
+        `${dryRun ? ' would lose' : ' lost'} ip/device metadata.`,
     );
   } finally {
     await ds.destroy();

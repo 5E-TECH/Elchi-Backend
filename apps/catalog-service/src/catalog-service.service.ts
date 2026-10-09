@@ -14,8 +14,29 @@ import {
 interface MarketInfo {
   id: string;
   name: string;
-  role: string;
+  phone_number: string | null;
   status: string;
+}
+
+/**
+ * 5hfCZgu5: identity qaytargan market obyekti mahsulot javobiga BUTUNLIGICHA
+ * yopishtirilardi — telegram tokeni, ichki username, maosh, tariflar,
+ * komissiya. Faqat oq ro'yxatdagi maydonlar qoladi (frontend faqat
+ * `market.name` ni o'qiydi).
+ */
+function toMarketInfo(raw: unknown): MarketInfo | null {
+  if (!raw || typeof raw !== 'object') {
+    return null;
+  }
+  const row = raw as Record<string, unknown>;
+  const str = (value: unknown): string =>
+    typeof value === 'string' || typeof value === 'number' ? String(value) : '';
+  return {
+    id: str(row.id),
+    name: str(row.name),
+    phone_number: str(row.phone_number) || null,
+    status: str(row.status),
+  };
 }
 
 @Injectable()
@@ -146,7 +167,7 @@ export class CatalogServiceService {
 
       return {
         ...product,
-        market: result?.data ?? null,
+        market: toMarketInfo(result?.data),
       };
     } catch {
       return { ...product, market: null };
@@ -170,8 +191,13 @@ export class CatalogServiceService {
           .pipe(timeout(5000)),
       );
 
-      if (result?.data) {
-        byId = new Map(result.data.map((m: MarketInfo) => [m.id, m]));
+      if (Array.isArray(result?.data)) {
+        byId = new Map(
+          (result.data as unknown[])
+            .map((m) => toMarketInfo(m))
+            .filter((m): m is MarketInfo => m !== null)
+            .map((m) => [m.id, m]),
+        );
       }
     } catch {
       // Market ma'lumotlari olinmasa, null qo'yiladi

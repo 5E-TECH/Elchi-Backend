@@ -47,13 +47,10 @@ export interface DeleteUserPayload {
 
 export interface FindUserByIdPayload {
   id: string;
-  /**
-   * Faqat identity.user.find_by_id uchun: `true` bo'lsa market qatori
-   * market_tg_token bilan qaytadi. Uni faqat api-gateway GET /users/:id va
-   * faqat SUPERADMIN/ADMIN so'rovida yuboradi. Qat'iy `=== true` —
-   * 'true' yoki 1 hisobga olinmaydi.
-   */
-  include_tg_token?: boolean;
+  /** (i76gGjyq) Faqat ichki: o'chirilgan foydalanuvchini ham qaytarish. */
+  include_deleted?: boolean;
+  // (GvL6ZFAd) `include_tg_token` olib tashlandi: kelsa ham e'tiborsiz —
+  // market_tg_token faqat identity.market.get_tg_token (SUPERADMIN) orqali.
 }
 
 export interface UserFilterQuery {

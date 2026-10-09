@@ -76,32 +76,36 @@ describe('SmsDispatchService', () => {
     notifications = { query: jest.fn() };
   });
 
-  it('SMS_ENABLED=false → no sms_outbox row, delivery.sms = skipped in DB, reason returned', async () => {
+  it('SMS_ENABLED=false → no sms_outbox row, delivery.sms = no_provider in DB, reason returned (uFmUS86e)', async () => {
     const res = await make({}).queueForNotifications(
       [row('1', '42')],
       manager as never,
     );
     expect(res).toEqual({
       sms: 0,
-      sms_status: 'skipped',
+      sms_status: 'no_provider',
       sms_reason: 'sms_disabled',
     });
     expect(outbox.enqueue).not.toHaveBeenCalled();
     expect(patches[0]).toEqual({
       ids: ['1'],
-      patch: { sms: 'skipped', sms_reason: 'sms_disabled' },
+      patch: { sms: 'no_provider', sms_reason: 'sms_disabled' },
     });
   });
 
-  it('no provider account → skipped (not a fake "sent")', async () => {
+  it('no provider account → no_provider in DB (not a fake "sent", not a silent "skipped") (uFmUS86e TC1)', async () => {
     registry.hasAccount.mockResolvedValue(false);
     const res = await make().queueForNotifications(
       [row('1', '42')],
       manager as never,
     );
-    expect(res.sms_status).toBe('skipped');
+    expect(res.sms_status).toBe('no_provider');
     expect(res.sms_reason).toBe('provider_not_configured');
     expect(outbox.enqueue).not.toHaveBeenCalled();
+    expect(patches[0]).toEqual({
+      ids: ['1'],
+      patch: { sms: 'no_provider', sms_reason: 'provider_not_configured' },
+    });
   });
 
   it('queues recipients with a phone (client id notif-<id>) and marks those without one skipped', async () => {

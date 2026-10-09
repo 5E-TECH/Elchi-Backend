@@ -49,6 +49,15 @@ export class ActivityLog {
   @Column({ type: 'jsonb', nullable: true })
   metadata!: Record<string, unknown> | null;
 
+  /**
+   * Inson o'qiy oladigan tavsif (2WRzdWpZ): "Buyurtma #100439 bekor qilindi".
+   * Migratsiya 1716000000062 BARCHA audit sxemalariga qo'shadi va
+   * `gin_trgm_ops` indeksini quradi (qidiruv `description ILIKE`).
+   * Eski qatorlarda NULL — frontend amal yorlig'ini ko'rsatadi.
+   */
+  @Column({ type: 'text', nullable: true })
+  description!: string | null;
+
   @CreateDateColumn({ type: 'timestamptz' })
   created_at!: Date;
 }

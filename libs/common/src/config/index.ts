@@ -209,6 +209,8 @@ export const orderValidationSchema = Joi.object({
   DB_SCHEMA: Joi.string().default('order_schema'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_ORDER_QUEUE: Joi.string().required(),
+  // (OA16fdSq/ePpLHPX2) Hodisa → bildirishnoma outbox maqsadi (NOTIFICATION).
+  RABBITMQ_NOTIFICATION_QUEUE: Joi.string().default('notification_queue'),
   RABBITMQ_SEARCH_QUEUE: Joi.string().required(),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
   RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
@@ -235,6 +237,8 @@ export const logisticsValidationSchema = Joi.object({
   DB_SCHEMA: Joi.string().default('logistics_schema'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_LOGISTICS_QUEUE: Joi.string().required(),
+  // (OA16fdSq/ePpLHPX2) Hodisa → bildirishnoma outbox maqsadi (NOTIFICATION).
+  RABBITMQ_NOTIFICATION_QUEUE: Joi.string().default('notification_queue'),
   RABBITMQ_ORDER_QUEUE: Joi.string().required(),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
   RABBITMQ_SEARCH_QUEUE: Joi.string().required(),
@@ -246,6 +250,8 @@ export const financeValidationSchema = Joi.object({
   DB_SCHEMA: Joi.string().default('finance_schema'),
   RABBITMQ_URI: Joi.string().required(),
   RABBITMQ_FINANCE_QUEUE: Joi.string().required(),
+  // (OA16fdSq/ePpLHPX2) Hodisa → bildirishnoma outbox maqsadi (NOTIFICATION).
+  RABBITMQ_NOTIFICATION_QUEUE: Joi.string().default('notification_queue'),
   RABBITMQ_IDENTITY_QUEUE: Joi.string().required(),
 });
 
@@ -300,6 +306,17 @@ export const notificationValidationSchema = Joi.object({
   SMS_CREDENTIAL_SECRET_PREVIOUS: Joi.string()
     .min(32)
     .custom(rejectWeakSecret, 'weak-secret check')
+    .allow('')
+    .optional(),
+  // (n0kLbx3d) telegram_markets.token ni DB'da shifrlash kaliti — 32 bayt
+  // (openssl rand -hex 32). Formatni cipher start'da ham tekshiradi; bo'sh
+  // bo'lsa kalit boshqa maxfiy env'dan hosil qilinadi (WARN).
+  TELEGRAM_TOKEN_ENC_KEY: Joi.string()
+    .pattern(/^(?:[0-9a-fA-F]{64}|[A-Za-z0-9+/_-]{43}=?)$/)
+    .allow('')
+    .optional(),
+  TELEGRAM_TOKEN_ENC_KEY_PREVIOUS: Joi.string()
+    .pattern(/^(?:[0-9a-fA-F]{64}|[A-Za-z0-9+/_-]{43}=?)$/)
     .allow('')
     .optional(),
   // DLR va opt-out havolalarini imzolovchi sir (faqat notification-service'da).

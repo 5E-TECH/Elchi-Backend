@@ -226,6 +226,22 @@ export class NotificationGatewayController {
     );
   }
 
+  /**
+   * Bildirishnoma turlari reyestri (Eh8y21Ha) — frontend katalogni qo'lda
+   * takrorlamasin, shu yerdan olsin. Autentifikatsiya bilan (`@Public` emas).
+   * ⚠️ `:id` marshrutidan OLDIN e'lon qilingan.
+   */
+  @Get('types')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Notification types catalog (key, category, priority, default_channels, label_uz, user_can_mute)',
+  })
+  listTypes() {
+    return this.send({ cmd: 'notification.types.list' }, {});
+  }
+
   @Post('dispatch')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
@@ -327,9 +343,19 @@ export class NotificationGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN, RoleEnum.REGISTRATOR)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Send notification to telegram group(s)' })
+  @ApiOperation({
+    summary:
+      "Send notification to telegram group(s). REGISTRATOR — faqat Elchi'da ulangan market guruhlariga (begona group_id → 403). `token` qabul qilinmaydi (400).",
+  })
   @ApiBody({ type: SendNotificationRequestDto })
-  sendNotification(@Body() dto: SendNotificationRequestDto) {
-    return this.send({ cmd: 'notification.send' }, dto);
+  sendNotification(
+    @Body() dto: SendNotificationRequestDto,
+    @Req() req: AuthedRequest,
+  ) {
+    // (n0kLbx3d) requester — notification-service rol doirasini tekshiradi.
+    return this.send(
+      { cmd: 'notification.send' },
+      { ...dto, requester: this.auditActor(req) },
+    );
   }
 }

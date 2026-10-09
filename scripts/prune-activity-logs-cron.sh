@@ -9,6 +9,7 @@
 # Env:
 #   ACTIVITY_LOG_PRUNE_INTERVAL_SECONDS  seconds between runs (default 86400 = 1d)
 #   ACTIVITY_LOG_RETENTION_DAYS          retention window (default 365, see script)
+#   ACTIVITY_LOG_DEVICE_RETENTION_DAYS   ip/device metadata window (default 30, f2Ud5tju)
 #   POSTGRES_URI                         connection (from .env.production)
 #
 set -eu

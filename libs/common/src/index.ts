@@ -26,6 +26,7 @@ export * from './activity-log/activity-log.service';
 export * from './activity-log/activity-log.module';
 export * from './activity-log/types';
 export * from './activity-log/diff';
+export * from './activity-log/describe-uz';
 
 export * from './webhook/hmac';
 export * from './webhook/webhook-signature.guard';
@@ -44,6 +45,7 @@ export * from './logger/app-logger.module';
 
 export * from './context/request-context';
 export * from './context/rmq-trace.interceptor';
+export * from './context/rmq-context.serializer';
 
 export * from './sentry/sentry.helper';
 export * from './health/liveness';
@@ -55,3 +57,6 @@ export * from './pii/mask-phones';
 export * from './pii/mask-payload';
 export * from './time/tashkent-time';
 export * from './integration/status-catalog';
+export * from './notification/notification-types';
+export * from './notification/notification-type.validator';
+export * from './notification/telegram-html';

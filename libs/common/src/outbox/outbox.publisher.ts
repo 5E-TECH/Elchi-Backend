@@ -39,6 +39,7 @@ export class OutboxPublisher implements OnModuleInit, OnModuleDestroy {
   private readonly maxAttempts: number;
   private readonly persistentPatterns: readonly string[];
   private readonly stuckAlertAttempts: number;
+  private readonly fireAndForgetPatterns: readonly string[];
 
   constructor(
     private readonly moduleRef: ModuleRef,
@@ -55,6 +56,7 @@ export class OutboxPublisher implements OnModuleInit, OnModuleDestroy {
       options?.persistentPatterns ?? DEFAULT_PERSISTENT_OUTBOX_PATTERNS;
     this.stuckAlertAttempts =
       options?.stuckAlertAttempts ?? DEFAULT_OUTBOX_MAX_ATTEMPTS;
+    this.fireAndForgetPatterns = options?.fireAndForgetPatterns ?? [];
   }
 
   /**
@@ -109,7 +111,17 @@ export class OutboxPublisher implements OnModuleInit, OnModuleDestroy {
    */
   private async checkFailedEvents(): Promise<void> {
     try {
-      const failed = await this.outbox.countFailed();
+      // Bildirishnoma kabi fire-and-forget hodisalar bu yerda sanalmaydi:
+      // ular pul/holat emas, "money/state delivery is stuck" chalg'itardi.
+      const failed = await this.outbox.countFailed(this.fireAndForgetPatterns);
+      if (this.fireAndForgetPatterns.length) {
+        const all = await this.outbox.countFailed();
+        if (all > failed) {
+          this.logger.warn(
+            `Outbox has ${all - failed} FAILED best-effort event(s) (${this.fireAndForgetPatterns.join(', ')}) — bildirishnoma yetkazilmadi, pul/holatga ta'sir yo'q`,
+          );
+        }
+      }
       if (failed > 0) {
         const message = `Outbox has ${failed} FAILED (poison) event(s) — money/state delivery is stuck; inspect outbox_events WHERE status='failed'`;
         this.logger.error(message);
@@ -169,11 +181,25 @@ export class OutboxPublisher implements OnModuleInit, OnModuleDestroy {
       }
 
       try {
-        await firstValueFrom(
-          client
-            .send({ cmd: event.pattern }, event.payload)
-            .pipe(timeout(this.publishTimeoutMs)),
-        );
+        if (
+          this.fireAndForgetPatterns.length &&
+          isPersistentOutboxPattern(event.pattern, this.fireAndForgetPatterns)
+        ) {
+          // (OA16fdSq) Javob kutilmaydi — broker qabul qilgani yetarli.
+          // (`isPersistentOutboxPattern` — umumiy moslashtiruvchi: aniq yoki `prefix*`.)
+          await firstValueFrom(
+            client
+              .emit({ cmd: event.pattern }, event.payload)
+              .pipe(timeout(this.publishTimeoutMs)),
+            { defaultValue: null },
+          );
+        } else {
+          await firstValueFrom(
+            client
+              .send({ cmd: event.pattern }, event.payload)
+              .pipe(timeout(this.publishTimeoutMs)),
+          );
+        }
         await this.outbox.markPublished(event.id);
       } catch (error) {
         const errorMsg = (error as Error)?.message ?? String(error);

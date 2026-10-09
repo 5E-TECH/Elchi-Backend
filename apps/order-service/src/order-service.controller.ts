@@ -13,7 +13,10 @@ import {
   ActivityLogQuery,
 } from '@app/common';
 import { Order_status, Where_deliver } from '@app/common';
-import { OrderServiceService } from './order-service.service';
+import {
+  OrderServiceService,
+  type GeoReassignInput,
+} from './order-service.service';
 import { OrderAnalyticsService } from './analytics/order-analytics.service';
 import { BranchTransferBatchService } from './transfer-batch/branch-transfer-batch.service';
 import { OrderSettlementService } from './settlement/order-settlement.service';
@@ -237,6 +240,28 @@ export class OrderServiceController {
   ) {
     return this.executeAndAck(context, () =>
       this.orderService.findOwnerByProofFile(data?.key ?? ''),
+    );
+  }
+
+  // oNAE3LW9: hudud o'chirish himoyasi va tumanlarni birlashtirish.
+  @MessagePattern({ cmd: 'order.geo.usage' })
+  geoUsage(
+    @Payload() data: { district_id?: string; region_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.countGeoUsage(data ?? {}),
+    );
+  }
+
+  // Ko'chgan ID'larni qaytaradi; `ids` + `restore_regions` — kompensatsiya.
+  @MessagePattern({ cmd: 'order.geo.reassign_district' })
+  geoReassignDistrict(
+    @Payload() data: GeoReassignInput,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.reassignDistrict(data ?? {}),
     );
   }
 

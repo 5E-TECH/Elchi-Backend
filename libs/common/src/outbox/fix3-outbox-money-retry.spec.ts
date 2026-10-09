@@ -372,6 +372,71 @@ describe('OutboxPublisher — STUCK ogohlantirishi', () => {
   });
 });
 
+describe('OutboxPublisher — fire-and-forget FAILED hodisalari (OA16fdSq)', () => {
+  it('bildirishnoma FAILED — Sentry "money/state stuck" EMAS, faqat WARN', async () => {
+    const { service, repo } = makeOutbox([]);
+    const failedQb = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getCount: jest.fn().mockResolvedValue(0),
+    };
+    repo.createQueryBuilder.mockReturnValueOnce(failedQb as never);
+    // countFailed(hammasi) → 3, countStuckPending → 0
+    repo.count.mockResolvedValueOnce(3).mockResolvedValueOnce(0);
+    const publisher = makePublisher(
+      service,
+      {},
+      {
+        fireAndForgetPatterns: ['notification.dispatch', 'notify.*'],
+      },
+    );
+    const warnSpy = jest.spyOn(Logger.prototype, 'warn');
+    jest.mocked(captureException).mockClear();
+
+    await publisher.checkFailedEvents();
+
+    expect(failedQb.andWhere).toHaveBeenCalledWith('e.pattern <> :exclude_0', {
+      exclude_0: 'notification.dispatch',
+    });
+    expect(failedQb.andWhere).toHaveBeenCalledWith(
+      'e.pattern NOT LIKE :exclude_1',
+      { exclude_1: 'notify.%' },
+    );
+    expect(jest.mocked(captureException)).not.toHaveBeenCalled();
+    expect(
+      warnSpy.mock.calls.some((call) =>
+        String(call[0]).includes('3 FAILED best-effort'),
+      ),
+    ).toBe(true);
+  });
+
+  it('pul hodisasi FAILED bo`lsa — Sentry avvalgidek', async () => {
+    const { service, repo } = makeOutbox([]);
+    const failedQb = {
+      where: jest.fn().mockReturnThis(),
+      andWhere: jest.fn().mockReturnThis(),
+      getCount: jest.fn().mockResolvedValue(2),
+    };
+    repo.createQueryBuilder.mockReturnValueOnce(failedQb as never);
+    repo.count.mockResolvedValueOnce(2).mockResolvedValueOnce(0);
+    const publisher = makePublisher(
+      service,
+      {},
+      {
+        fireAndForgetPatterns: ['notification.dispatch'],
+      },
+    );
+    jest.mocked(captureException).mockClear();
+
+    await publisher.checkFailedEvents();
+
+    expect(jest.mocked(captureException)).toHaveBeenCalledWith(
+      expect.any(Error),
+      { outbox_failed_count: 2 },
+    );
+  });
+});
+
 describe('OutboxService.requeueFailed — operator replay', () => {
   it('faqat failed qatorlar, attempts 0, darhol navbatga; id va pattern filtri', async () => {
     const { service, updateQb } = makeOutbox([]);

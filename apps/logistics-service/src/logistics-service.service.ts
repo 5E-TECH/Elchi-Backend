@@ -1,7 +1,13 @@
-import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
+import {
+  Inject,
+  Injectable,
+  Logger,
+  OnModuleInit,
+  Optional,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
-import { In, IsNull, Not, Repository } from 'typeorm';
+import { FindOptionsWhere, In, IsNull, Not, Repository } from 'typeorm';
 import { lastValueFrom, timeout } from 'rxjs';
 import { Post } from './entities/post.entity';
 import { Region } from './entities/region.entity';
@@ -20,6 +26,7 @@ import { PostIdDto } from './dto/post-id.dto';
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 import { matchDistricts } from './utils/sato-matcher';
 import { assessHqCourierScan } from './utils/scan-assign-eligibility';
+import { LogisticsNotificationService } from './notification/logistics-notification.service';
 import {
   ActivityAction,
   ActivityLogService,
@@ -28,6 +35,7 @@ import {
   Order_status,
   Post_status,
   Roles,
+  Status,
   Where_deliver,
 } from '@app/common';
 
@@ -113,6 +121,84 @@ const OPEN_RETURN_POSTS_ORDER_TIMEOUT_MS = 3500;
 const OPEN_RETURN_POSTS_UNAVAILABLE_MESSAGE =
   "Bekor qilingan pochtalarni tekshirib bo'lmadi — birozdan so'ng qayta urinib ko'ring";
 
+/**
+ * (dzyVftBx) Viloyatga logist biriktirishda identity tekshiruvi. Identity
+ * javob bermasa — fail-closed: tekshirilmagan id viloyatga yozilmaydi.
+ */
+const LOGIST_CHECK_TIMEOUT_MS = 5000;
+export const LOGIST_CHECK_UNAVAILABLE_MESSAGE =
+  "Logistni tekshirib bo'lmadi — viloyat o'zgarmadi. Birozdan so'ng qayta urinib ko'ring";
+export const LOGIST_NOT_FOUND_MESSAGE = 'Logist topilmadi';
+export const LOGIST_INACTIVE_MESSAGE =
+  "Logist faol emas (bloklangan) — viloyatga biriktirib bo'lmaydi";
+
+const PG_BIGINT_MAX = BigInt('9223372036854775807');
+
+/**
+ * (dzyVftBx) bigint id'ning kanonik ko'rinishi ('05' → '5') yoki `null`
+ * (raqam emas, 0 yoki Postgres bigint'dan katta — aks holda 22P02/22003 →
+ * 500 bo'lardi).
+ */
+function canonicalBigintId(value: unknown): string | null {
+  let raw = '';
+  if (typeof value === 'string') {
+    raw = value.trim();
+  } else if (typeof value === 'number' && Number.isSafeInteger(value)) {
+    raw = String(value);
+  }
+  if (!/^\d{1,19}$/.test(raw)) {
+    return null;
+  }
+  const parsed = BigInt(raw);
+  if (parsed <= BigInt(0) || parsed > PG_BIGINT_MAX) {
+    return null;
+  }
+  return parsed.toString();
+}
+
+/**
+ * oNAE3LW9 — tuman/viloyat boshqa servislarda qayerda ishlatilyapti (FK yo'q —
+ * har biri o'z sxemasida, RPC bilan sanaladi).
+ */
+type GeoUsage = {
+  orders: number;
+  users: number;
+  branches: number;
+  /** `order_schema.branch_transfer_batches.target_region_id` — faqat viloyat. */
+  transfer_batches: number;
+};
+type GeoMoveKind = 'orders' | 'users' | 'branches';
+type GeoMoveStep = {
+  kind: GeoMoveKind;
+  /** "5 ta buyurtma" */
+  label: string;
+  /** "buyurtmalar ko'chirilmadi" */
+  plural: string;
+  client: ClientProxy;
+  cmd: string;
+};
+/** Bitta servis ko'chirgan qatorlar — kompensatsiya AYNAN shularni qaytaradi. */
+type GeoMoved = {
+  ids: string[];
+  previous_regions: Array<{ region_id: string | null; ids: string[] }>;
+};
+/** Kompensatsiyadan keyin ham A ga qaytmagan qatorlar (qo'lda tuzatish). */
+type GeoStranded = {
+  kind: GeoMoveKind;
+  /** Qatorlar hozir turgan tuman (B); `null` — aniqlanmadi. */
+  district_id: string | null;
+  /** `null` — ID'lar noma'lum (javob kelmagan bosqich). */
+  ids: string[] | null;
+  reason: string;
+};
+/** Ko'chirish/kompensatsiya RPC'si uchun vaqt chegarasi. */
+const GEO_MOVE_TIMEOUT_MS = 15000;
+/** Xato matnida har tur uchun ko'rsatiladigan ID'lar soni (to'liq ro'yxat — activity log). */
+const GEO_STRANDED_PREVIEW = 50;
+
+/** oNAE3LW9 — birlashtirish tekshiruvi mos kelmadi (logistics tranzaksiyasi rollback). */
+class GeoMergeCheckError extends Error {}
+
 @Injectable()
 export class LogisticsServiceService implements OnModuleInit {
   private readonly logger = new Logger(LogisticsServiceService.name);
@@ -127,6 +213,11 @@ export class LogisticsServiceService implements OnModuleInit {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('SEARCH') private readonly searchClient: ClientProxy,
     private readonly activityLog: ActivityLogService,
+    // (ePpLHPX2) Pochta filialga qabul qilindi → bildirishnoma (FAQAT outbox,
+    // pochta holati yozuvi bilan bitta tranzaksiyada). Ixtiyoriy: eski
+    // spec'lar servisni 8 argument bilan quradi — u holda bildirishnoma yo'q.
+    @Optional()
+    private readonly logisticsNotifications?: LogisticsNotificationService,
   ) {}
 
   /**
@@ -2426,6 +2517,19 @@ export class LogisticsServiceService implements OnModuleInit {
       (belongsToScopedBranch ? String(scopedBranchId) : '') ||
       undefined;
 
+    // (ePpLHPX2) Filiallararo pochta manzil filialga keldi — bildirishnoma
+    // nishoni (filial xodimlari). Qidiruv tranzaksiyadan OLDIN va order
+    // yangilashlari bilan PARALLEL boshlanadi; qisqa timeout + kesh, hech
+    // qachon reject bo'lmaydi (fail-open → bo'sh ro'yxat). Kuryerning o'z
+    // pochtasini qabul qilishi — filialga kelish EMAS.
+    const arrivalStaffIds: Promise<string[]> | null =
+      this.logisticsNotifications && isBranchTransferPost && targetBranchId
+        ? this.logisticsNotifications.resolveBranchStaffIds(
+            targetBranchId,
+            requester,
+          )
+        : null;
+
     // receivePost spans multiple updateOrder RMQ calls + a local postRepo.save
     // across two services — no atomic TX possible. Track which transitions
     // succeeded so partial failures are visible in logs rather than silent.
@@ -2518,7 +2622,20 @@ export class LogisticsServiceService implements OnModuleInit {
     post.status = hasRemainingReceivableOrders
       ? Post_status.SENT
       : Post_status.RECEIVED;
-    const savedPost = await this.postRepo.save(post);
+    const failedSelectedSet = new Set(failedSelectedOrderIds);
+    const savedPost = await this.savePostWithArrivalNotification(
+      post,
+      arrivalStaffIds
+        ? {
+            staffIds: arrivalStaffIds,
+            branch_id: targetBranchId ?? null,
+            received_count: selectedOrders.filter(
+              (order) => !failedSelectedSet.has(String(order.id)),
+            ).length,
+            order_count: allOrders.length,
+          }
+        : null,
+    );
     void this.syncPostToSearch(savedPost);
 
     await this.activityLog.log({
@@ -2556,6 +2673,67 @@ export class LogisticsServiceService implements OnModuleInit {
       failures,
       not_received_order_ids: notReceivedOrderIds,
     };
+  }
+
+  /**
+   * (ePpLHPX2) Pochta holatini saqlaydi; filialga kelish bo'lsa
+   * `logistics.batch_arrived` bildirishnomasini AYNAN shu tranzaksiyada
+   * outbox'ga yozadi (rollback bo'lsa xabar ham yo'q).
+   *
+   * Bildirishnoma bo'lmasa (notifier ulanmagan, nishon yo'q, hech narsa
+   * qabul qilinmagan) — avvalgidek oddiy `postRepo.save`.
+   *
+   * FAIL-OPEN. Tranzaksiya bildirishnoma tufayli yiqilsa (masalan
+   * `outbox_events` yozilmadi) — u to'liq rollback qilinadi va pochta holati
+   * bildirishnomasiz QAYTA saqlanadi: order yangilashlari allaqachon
+   * bajarilgan, pochta holati esa bildirishnoma uchun qurbon qilinmaydi.
+   * Xato pochta yozuvining o'zida bo'lsa — qayta urinish ham o'sha xatoni
+   * qaytaradi (xulq avvalgidek).
+   */
+  private async savePostWithArrivalNotification(
+    post: Post,
+    arrival: {
+      staffIds: Promise<string[]>;
+      branch_id: string | null;
+      received_count: number;
+      order_count: number;
+    } | null,
+  ): Promise<Post> {
+    const notifier = this.logisticsNotifications;
+    const recipientIds = arrival ? await arrival.staffIds : [];
+    if (
+      !notifier ||
+      !arrival ||
+      arrival.received_count <= 0 ||
+      !recipientIds.length
+    ) {
+      return this.postRepo.save(post);
+    }
+
+    try {
+      return await this.postRepo.manager.transaction(async (manager) => {
+        const saved = await manager.getRepository(Post).save(post);
+        await notifier.onBatchArrived(
+          {
+            post_id: saved.id,
+            branch_id: arrival.branch_id,
+            received_count: arrival.received_count,
+            order_count: arrival.order_count,
+            status: saved.status,
+            recipient_ids: recipientIds,
+          },
+          manager,
+        );
+        return saved;
+      });
+    } catch (err) {
+      this.logger.warn(
+        `receivePost: post=${post.id} bildirishnoma bilan saqlanmadi (rollback) — bildirishnomasiz qayta saqlanadi: ${
+          (err as Error)?.message ?? err
+        }`,
+      );
+      return this.postRepo.save(post);
+    }
   }
 
   /**
@@ -4744,10 +4922,101 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
+  /**
+   * oNAE3LW9 — hudud boshqa servislarda ishlatilyaptimi. Buyurtma (va viloyat
+   * bo'yicha filiallararo jo'natma), foydalanuvchi (mijoz/kuryer/market) va
+   * filial boshqa sxemalarda — FK yo'q, shuning uchun har biridan RPC bilan
+   * sanaladi. Bittasi javob bermasa — FAIL-CLOSED (503): tekshiruvsiz
+   * o'chirish buyurtmalarni yetim qoldirishi mumkin.
+   */
+  private async collectGeoUsage(
+    where: { district_id?: string; region_id?: string },
+    purpose = "o'chirish",
+  ): Promise<GeoUsage> {
+    const ask = async (
+      client: ClientProxy,
+      cmd: string,
+      fields: Array<keyof GeoUsage>,
+    ): Promise<Partial<GeoUsage>> => {
+      try {
+        const res = await lastValueFrom(
+          client.send({ cmd }, where).pipe(timeout(8000)),
+        );
+        const data = (res as { data?: Record<string, unknown> })?.data ?? {};
+        const out: Partial<GeoUsage> = {};
+        for (const field of fields) {
+          const raw = data[field];
+          const value = Number(raw);
+          // Eski versiya maydonni qaytarmasa ham FAIL-CLOSED (0 deb olinmaydi).
+          if (raw === undefined || raw === null || !Number.isFinite(value)) {
+            throw new Error(`${cmd}: noto'g'ri javob (${field})`);
+          }
+          out[field] = value;
+        }
+        return out;
+      } catch (error) {
+        this.logger.error(
+          `geo usage check failed (${cmd}): ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+        throw new RpcException(
+          errorRes(
+            `Hudud ishlatilishini tekshirib bo'lmadi — ${purpose} to'xtatildi, keyinroq qayta urinib ko'ring`,
+            503,
+          ),
+        );
+      }
+    };
+    const byRegion = !where.district_id && Boolean(where.region_id);
+    const [order, identity, branch] = await Promise.all([
+      ask(
+        this.orderClient,
+        'order.geo.usage',
+        byRegion ? ['orders', 'transfer_batches'] : ['orders'],
+      ),
+      ask(this.identityClient, 'identity.user.geo_usage', ['users']),
+      ask(this.branchClient, 'branch.geo_usage', ['branches']),
+    ]);
+    return {
+      orders: order.orders ?? 0,
+      users: identity.users ?? 0,
+      branches: branch.branches ?? 0,
+      transfer_batches: order.transfer_batches ?? 0,
+    };
+  }
+
+  private geoUsageTotal(usage: GeoUsage): number {
+    return usage.orders + usage.users + usage.branches + usage.transfer_batches;
+  }
+
+  private describeGeoUsage(usage: GeoUsage): string {
+    const parts: string[] = [];
+    if (usage.orders) parts.push(`${usage.orders} ta buyurtma`);
+    if (usage.users)
+      parts.push(`${usage.users} ta foydalanuvchi (mijoz/kuryer/market)`);
+    if (usage.branches) parts.push(`${usage.branches} ta filial`);
+    if (usage.transfer_batches)
+      parts.push(`${usage.transfer_batches} ta filiallararo jo'natma`);
+    return parts.join(', ');
+  }
+
+  /**
+   * oNAE3LW9 — Soft delete EMAS: karta TC2 "buyurtmasi yo'q tuman DELETE →
+   * 200 va DB dan yo'qoladi" — bog'lanishi bo'lmagan tuman qattiq o'chadi,
+   * bog'langani esa umuman o'chirilmaydi (400).
+   */
   async deleteDistrict(id: string) {
     const district = await this.districtRepo.findOne({ where: { id } });
     if (!district) {
       this.notFound('District not found');
+    }
+    // oNAE3LW9: ilgari hech narsa tekshirilmasdan `remove` qilinardi.
+    const usage = await this.collectGeoUsage({ district_id: String(id) });
+    if (this.geoUsageTotal(usage) > 0) {
+      this.badRequest(
+        `Bu tumanda ${this.describeGeoUsage(usage)} bor. Avval tumanni boshqasiga birlashtiring (POST /district/${id}/merge) yoki ularni ko'chiring.`,
+      );
     }
 
     const deletedSnapshot = {
@@ -4755,9 +5024,12 @@ export class LogisticsServiceService implements OnModuleInit {
       sato_code: district.sato_code,
       region_id: district.region_id,
     };
+    // oNAE3LW9: TypeORM `remove` dan keyin entity `id` si undefined bo'ladi —
+    // qidiruv indeksidan o'chirish uchun nusxa OLDIN olinadi.
+    const searchRef = { ...district };
 
     await this.districtRepo.remove(district);
-    void this.removeDistrictFromSearch(district);
+    void this.removeDistrictFromSearch(searchRef);
 
     await this.activityLog.log({
       entity_type: 'District',
@@ -4895,6 +5167,9 @@ export class LogisticsServiceService implements OnModuleInit {
         id: region.id,
         name: region.name,
         sato_code: region.sato_code,
+        // (dzyVftBx) biriktirilgan logist (yo'q bo'lsa null) — xarita/
+        // statistika sahifasida ko'rsatish uchun.
+        logist_id: region.logist_id ?? null,
         districts_count: Array.isArray(region.districts)
           ? region.districts.length
           : 0,
@@ -5301,16 +5576,497 @@ export class LogisticsServiceService implements OnModuleInit {
     return successRes(saved, 200, 'Region updated');
   }
 
+  /** oNAE3LW9 — birlashtirish bosqichlari (ketma-ket; kompensatsiya — teskari). */
+  private geoMoveSteps(): GeoMoveStep[] {
+    return [
+      {
+        kind: 'orders',
+        label: 'buyurtma',
+        plural: 'buyurtmalar',
+        client: this.orderClient,
+        cmd: 'order.geo.reassign_district',
+      },
+      {
+        kind: 'users',
+        label: 'foydalanuvchi',
+        plural: 'foydalanuvchilar',
+        client: this.identityClient,
+        cmd: 'identity.user.reassign_district',
+      },
+      {
+        kind: 'branches',
+        label: 'filial',
+        plural: 'filiallar',
+        client: this.branchClient,
+        cmd: 'branch.reassign_district',
+      },
+    ];
+  }
+
+  /**
+   * oNAE3LW9 — masofadagi servis qaytargan xato statusi. `undefined` —
+   * timeout/ulanish xatosi yoki statussiz xato: natija NOANIQ.
+   */
+  private geoRemoteStatus(error: unknown): number | undefined {
+    if (error instanceof Error) return undefined;
+    const status = (error as { statusCode?: unknown } | null)?.statusCode;
+    return typeof status === 'number' ? status : undefined;
+  }
+
+  private geoErrorText(error: unknown): string {
+    if (error instanceof Error) {
+      return error.name === 'TimeoutError'
+        ? 'javob kelmadi (timeout)'
+        : error.message;
+    }
+    const message = (error as { message?: unknown } | null)?.message;
+    if (Array.isArray(message)) return message.map(String).join('. ');
+    if (typeof message === 'string' && message) return message;
+    try {
+      return JSON.stringify(error);
+    } catch {
+      return String(error);
+    }
+  }
+
+  /** oNAE3LW9 — `*.reassign_district` javobi: ko'chgan ID'lar + eski viloyatlar. */
+  private parseGeoMoved(res: unknown, cmd: string): GeoMoved {
+    const data = (
+      res as { data?: { ids?: unknown; previous_regions?: unknown } } | null
+    )?.data;
+    if (!data || !Array.isArray(data.ids)) {
+      throw new Error(`${cmd}: javobda ko'chgan ID'lar (ids) yo'q`);
+    }
+    const toIds = (list: unknown): string[] =>
+      Array.isArray(list) ? list.map((value) => String(value)) : [];
+    const groups: unknown[] = Array.isArray(data.previous_regions)
+      ? (data.previous_regions as unknown[])
+      : [];
+    return {
+      ids: toIds(data.ids),
+      previous_regions: groups.map((group) => {
+        const g = group as { region_id?: unknown; ids?: unknown } | null;
+        return {
+          region_id:
+            g?.region_id === undefined || g?.region_id === null
+              ? null
+              : String(g.region_id as string | number),
+          ids: toIds(g?.ids),
+        };
+      }),
+    };
+  }
+
+  private geoPreviewIds(ids: string[]): string {
+    const head = ids.slice(0, GEO_STRANDED_PREVIEW).join(', ');
+    return ids.length > GEO_STRANDED_PREVIEW
+      ? `${head} … (+${ids.length - GEO_STRANDED_PREVIEW} ta)`
+      : head;
+  }
+
+  /**
+   * oNAE3LW9 — kompensatsiya: allaqachon ko'chirilganlar AYNAN o'sha ID'lar
+   * bo'yicha B → A qaytariladi (teskari tartibda), `region_id` lari ham eski
+   * qiymatiga. ID rejimi idempotent: faqat hali B da turgan shu ID'lar
+   * ko'chadi. Qaytmaganlari ro'yxat bo'lib qaytadi (qo'lda tuzatish uchun).
+   */
+  private async compensateDistrictMerge(
+    fromId: string,
+    toId: string,
+    done: Array<{ step: GeoMoveStep; moved: GeoMoved }>,
+  ): Promise<GeoStranded[]> {
+    const stranded: GeoStranded[] = [];
+    for (const { step, moved } of [...done].reverse()) {
+      if (!moved.ids.length) continue;
+      try {
+        const res = await lastValueFrom(
+          step.client
+            .send(
+              { cmd: step.cmd },
+              {
+                from_district_id: toId,
+                to_district_id: fromId,
+                ids: moved.ids,
+                restore_regions: moved.previous_regions,
+              },
+            )
+            .pipe(timeout(GEO_MOVE_TIMEOUT_MS)),
+        );
+        const back = new Set(this.parseGeoMoved(res, step.cmd).ids);
+        const lost = moved.ids.filter((rowId) => !back.has(rowId));
+        if (lost.length) {
+          stranded.push({
+            kind: step.kind,
+            district_id: null,
+            ids: lost,
+            reason: `B tumanda (#${toId}) topilmadi — kompensatsiya paytida boshqa joyga o'zgargan`,
+          });
+        }
+      } catch (error) {
+        stranded.push({
+          kind: step.kind,
+          district_id: toId,
+          ids: moved.ids,
+          reason: `A ga qaytarib bo'lmadi: ${this.geoErrorText(error)}`,
+        });
+      }
+    }
+    return stranded;
+  }
+
+  /**
+   * oNAE3LW9 — javobi kelmagan (timeout/ulanish) bosqich: servis ko'chirib
+   * ulgurganmi? A dagi son OLDINGIDAN kam bo'lsa — qatorlar B ga ketgan, lekin
+   * ID'lari noma'lum (qo'lda tuzatish). Servis `deadline_at` dan keyin
+   * ko'chirmaydi, shuning uchun bu juda kam holat.
+   */
+  private async checkUncertainGeoStep(
+    fromId: string,
+    toId: string,
+    step: GeoMoveStep,
+    beforeA: GeoUsage,
+  ): Promise<GeoStranded | null> {
+    try {
+      const nowA = await this.collectGeoUsage(
+        { district_id: fromId },
+        'birlashtirish',
+      );
+      if (nowA[step.kind] >= beforeA[step.kind]) return null;
+      return {
+        kind: step.kind,
+        district_id: toId,
+        ids: null,
+        reason: `${step.cmd} javobi kelmadi, lekin A dagi ${step.plural} ${beforeA[step.kind]} → ${nowA[step.kind]} ga kamaydi — B tumanga (#${toId}) ko'chgan bo'lishi mumkin`,
+      };
+    } catch (error) {
+      return {
+        kind: step.kind,
+        district_id: null,
+        ids: null,
+        reason: `${step.cmd} natijasi noaniq va A ni qayta sanab bo'lmadi: ${this.geoErrorText(error)}`,
+      };
+    }
+  }
+
+  /**
+   * oNAE3LW9 — birlashtirishni BEKOR qilish: kompensatsiya, A o'chirilmaydi,
+   * aniq xato (409/503). Kompensatsiya to'liq bo'lmasa — ERROR log, activity
+   * log (`district.merge_compensation_failed`, to'liq ID ro'yxati) va xato
+   * matnida qaysi ID'lar qayerda qolgani.
+   */
+  private async abortDistrictMerge(ctx: {
+    fromId: string;
+    toId: string;
+    done: Array<{ step: GeoMoveStep; moved: GeoMoved }>;
+    beforeA: GeoUsage;
+    status: 409 | 503;
+    reason: string;
+    uncertain?: GeoMoveStep;
+  }): Promise<never> {
+    const { fromId, toId, done, status, reason } = ctx;
+    const stranded = await this.compensateDistrictMerge(fromId, toId, done);
+    if (ctx.uncertain) {
+      const check = await this.checkUncertainGeoStep(
+        fromId,
+        toId,
+        ctx.uncertain,
+        ctx.beforeA,
+      );
+      if (check) stranded.push(check);
+    }
+    const rolledBack: Partial<Record<GeoMoveKind, number>> = {};
+    for (const { step, moved } of done) {
+      const lost =
+        stranded.find((s) => s.kind === step.kind && s.ids !== null)?.ids
+          ?.length ?? 0;
+      rolledBack[step.kind] = moved.ids.length - lost;
+    }
+    const details = {
+      from_district_id: fromId,
+      to_district_id: toId,
+      rolled_back: rolledBack,
+    };
+
+    if (!stranded.length) {
+      this.logger.warn(
+        `mergeDistricts ${fromId} → ${toId} bekor qilindi (${reason}); kompensatsiya OK: ${JSON.stringify(rolledBack)}`,
+      );
+      throw new RpcException(
+        errorRes(
+          `Birlashtirish bekor qilindi: ${reason}. Ko'chirilganlar A tumanga (#${fromId}) qaytarildi, tuman o'chirilmadi — qayta urinib ko'ring.`,
+          status,
+          details,
+        ),
+      );
+    }
+
+    const steps = new Map(this.geoMoveSteps().map((s) => [s.kind, s]));
+    const where = stranded
+      .map((s) => {
+        const place = s.district_id
+          ? `B tumanda (#${s.district_id}) qoldi`
+          : 'joyi aniqlanmadi';
+        const ids =
+          s.ids === null ? "ID'lar noma'lum" : this.geoPreviewIds(s.ids);
+        return `${steps.get(s.kind)?.plural ?? s.kind}: ${place} — ${ids} (${s.reason})`;
+      })
+      .join('; ');
+    this.logger.error(
+      `mergeDistricts ${fromId} → ${toId}: KOMPENSATSIYA TO'LIQ EMAS — qo'lda tuzatish kerak. Sabab: ${reason}. Qolganlar: ${JSON.stringify(stranded)}`,
+    );
+    await this.activityLog.log({
+      entity_type: 'District',
+      entity_id: fromId,
+      action: 'district.merge_compensation_failed',
+      new_value: { target_district_id: toId },
+      metadata: { reason, rolled_back: rolledBack, stranded },
+    });
+    throw new RpcException(
+      errorRes(
+        `Birlashtirish bekor qilindi: ${reason}. DIQQAT — kompensatsiya to'liq bo'lmadi, QO'LDA TUZATING: ${where}. A tuman (#${fromId}) o'chirilmadi; to'liq ro'yxat — activity log (District #${fromId}, district.merge_compensation_failed).`,
+        status,
+        { ...details, stranded },
+      ),
+    );
+  }
+
+  /** oNAE3LW9 — A bo'sh va B = eski B + ko'chirilgan (BeePost :434-446, :495-497). */
+  private districtMergeMismatches(
+    beforeB: GeoUsage,
+    afterA: GeoUsage,
+    afterB: GeoUsage,
+    moved: Record<GeoMoveKind, number>,
+  ): string[] {
+    const problems: string[] = [];
+    for (const step of this.geoMoveSteps()) {
+      const kind = step.kind;
+      if (afterA[kind] > 0) {
+        problems.push(`A tumanda hali ${afterA[kind]} ta ${step.label} qoldi`);
+      }
+      const expected = beforeB[kind] + moved[kind];
+      if (afterB[kind] !== expected) {
+        problems.push(
+          `B tumandagi ${step.plural} soni ${afterB[kind]}, kutilgan ${beforeB[kind]} + ${moved[kind]} = ${expected}`,
+        );
+      }
+    }
+    return problems;
+  }
+
+  /**
+   * oNAE3LW9 TC5 — tumanlarni BIRLASHTIRISH: A (`id`) dagi buyurtma,
+   * foydalanuvchi va filiallar B (`target_district_id`) ga (va B ning
+   * viloyatiga) ko'chadi, so'ng A o'chadi.
+   *
+   * Ma'lumot uch xil servis sxemasida — servislararo DB tranzaksiyasi yo'q,
+   * shuning uchun KOMPENSATSIYA:
+   *  1. OLDIN A va B dagi sonlar olinadi (BeePost district.service.ts naqshi).
+   *  2. Har servis O'Z tranzaksiyasida A → B ko'chiradi va ko'chgan ID'larni
+   *     (eski `region_id` bilan) qaytaradi.
+   *  3. A logistics tranzaksiyasida o'chiriladi va COMMIT'dan OLDIN qayta
+   *     sanaladi: A da 0 qolgan va B = eski B + ko'chirilgan (BeePost
+   *     :434-446, :495-497). Mos kelmasa — rollback (A qoladi).
+   *  4. Istalgan bosqich yiqilsa — allaqachon ko'chirilganlar AYNAN o'sha
+   *     ID'lar bo'yicha A ga qaytariladi, A o'chirilmaydi, 409/503
+   *     (`abortDistrictMerge`).
+   */
+  async mergeDistricts(id: string, targetDistrictId: string) {
+    const fromId = String(id ?? '').trim();
+    const toId = String(targetDistrictId ?? '').trim();
+    if (!fromId || !toId) {
+      this.badRequest('id va target_district_id majburiy');
+    }
+    if (fromId === toId) {
+      this.badRequest("Tumanni o'ziga birlashtirib bo'lmaydi");
+    }
+    const [from, to] = await Promise.all([
+      this.districtRepo.findOne({ where: { id: fromId } }),
+      this.districtRepo.findOne({ where: { id: toId } }),
+    ]);
+    if (!from) this.notFound('District not found');
+    if (!to) this.notFound('Target district not found');
+
+    // 1. OLDIN: A va B sanog'i (B ning eski soni — 3-bosqichda tasdiqlanadi).
+    const [beforeA, beforeB] = await Promise.all([
+      this.collectGeoUsage({ district_id: fromId }, 'birlashtirish'),
+      this.collectGeoUsage({ district_id: toId }, 'birlashtirish'),
+    ]);
+    const done: Array<{ step: GeoMoveStep; moved: GeoMoved }> = [];
+    const abort = (
+      status: 409 | 503,
+      reason: string,
+      uncertain?: GeoMoveStep,
+    ): Promise<never> =>
+      this.abortDistrictMerge({
+        fromId,
+        toId,
+        done,
+        beforeA,
+        status,
+        reason,
+        uncertain,
+      });
+
+    // 2. Ko'chirish — ketma-ket, har servis o'z tranzaksiyasida.
+    for (const step of this.geoMoveSteps()) {
+      let res: unknown;
+      try {
+        res = await lastValueFrom(
+          step.client
+            .send(
+              { cmd: step.cmd },
+              {
+                from_district_id: fromId,
+                to_district_id: toId,
+                ...(to.region_id ? { to_region_id: String(to.region_id) } : {}),
+                // Servis shu paytdan keyin ko'chirmaydi — timeout bilan voz
+                // kechib kompensatsiya qilgandan keyin "kech" ko'chish yo'q.
+                deadline_at: Date.now() + GEO_MOVE_TIMEOUT_MS - 2000,
+              },
+            )
+            .pipe(timeout(GEO_MOVE_TIMEOUT_MS)),
+        );
+      } catch (error) {
+        // Masofadagi xato (statusCode bor) — uning tranzaksiyasi rollback;
+        // timeout/ulanish — natija noaniq (qayta sanab tekshiriladi).
+        const remote = this.geoRemoteStatus(error);
+        return abort(
+          remote !== undefined && remote < 500 ? 409 : 503,
+          `${step.plural} ko'chirilmadi (${this.geoErrorText(error)})`,
+          remote === undefined ? step : undefined,
+        );
+      }
+      let moved: GeoMoved;
+      try {
+        moved = this.parseGeoMoved(res, step.cmd);
+      } catch (error) {
+        return abort(
+          503,
+          `${step.plural} ko'chirish javobi noto'g'ri (${this.geoErrorText(error)})`,
+          step,
+        );
+      }
+      done.push({ step, moved });
+    }
+    const movedCounts: Record<GeoMoveKind, number> = {
+      orders: 0,
+      users: 0,
+      branches: 0,
+    };
+    for (const { step, moved } of done) {
+      movedCounts[step.kind] = moved.ids.length;
+    }
+
+    // 3. A ni o'chirish + tasdiqlash (COMMIT'dan OLDIN) — mos kelmasa rollback.
+    const snapshot = {
+      name: from.name,
+      sato_code: from.sato_code,
+      region_id: from.region_id,
+    };
+    const searchRef = { ...from };
+    let after: { from: GeoUsage; to: GeoUsage };
+    try {
+      after = await this.districtRepo.manager.transaction(async (manager) => {
+        await manager.remove(from);
+        const [afterA, afterB] = await Promise.all([
+          this.collectGeoUsage({ district_id: fromId }, 'birlashtirish'),
+          this.collectGeoUsage({ district_id: toId }, 'birlashtirish'),
+        ]);
+        const problems = this.districtMergeMismatches(
+          beforeB,
+          afterA,
+          afterB,
+          movedCounts,
+        );
+        if (problems.length) {
+          throw new GeoMergeCheckError(problems.join('; '));
+        }
+        return { from: afterA, to: afterB };
+      });
+    } catch (error) {
+      if (error instanceof GeoMergeCheckError) {
+        return abort(409, `tekshiruv mos kelmadi — ${error.message}`);
+      }
+      return abort(
+        503,
+        `tumanni o'chirib/qayta sanab bo'lmadi (${this.geoErrorText(error)})`,
+      );
+    }
+
+    void this.removeDistrictFromSearch(searchRef);
+    await this.activityLog.log({
+      entity_type: 'District',
+      entity_id: fromId,
+      action: ActivityAction.DELETED,
+      old_value: snapshot,
+      new_value: { merged_into: toId },
+      metadata: {
+        moved: movedCounts,
+        source_before: beforeA,
+        target_before: beforeB,
+        target_after: after.to,
+      },
+    });
+    return successRes(
+      {
+        from_district_id: fromId,
+        to_district_id: toId,
+        moved: movedCounts,
+        target_before: beforeB,
+        target_after: after.to,
+      },
+      200,
+      'District merged',
+    );
+  }
+
+  /**
+   * oNAE3LW9 — Soft delete EMAS (karta TC2/TC3 — bog'lanishsiz hudud qattiq
+   * o'chadi, bog'langani umuman o'chirilmaydi).
+   */
   async deleteRegion(id: string) {
     const region = await this.regionRepo.findOne({ where: { id } });
     if (!region) {
       this.notFound('Region not found');
     }
+    /**
+     * oNAE3LW9: `District.region_id` `onDelete: CASCADE` — viloyat o'chsa
+     * uning BARCHA tumanlari jimgina o'chardi. Endi tumani bor viloyat
+     * o'chirilmaydi; viloyatga to'g'ridan-to'g'ri bog'langan BARCHA yozuvlar
+     * ham tekshiriladi: buyurtma va filiallararo jo'natma
+     * (`order_schema.branch_transfer_batches.target_region_id`),
+     * foydalanuvchi, filial va pochta.
+     */
+    const districtCount = await this.districtRepo.count({
+      where: { region_id: String(id) },
+    });
+    if (districtCount > 0) {
+      this.badRequest(
+        `Bu viloyatda ${districtCount} ta tuman bor — avval tumanlarni o'chiring yoki boshqa viloyatga birlashtiring.`,
+      );
+    }
+    const usage = await this.collectGeoUsage({ region_id: String(id) });
+    const posts = await this.postRepo.count({
+      where: { region_id: String(id) },
+    });
+    if (this.geoUsageTotal(usage) + posts > 0) {
+      const details = [
+        this.describeGeoUsage(usage),
+        posts ? `${posts} ta pochta` : '',
+      ]
+        .filter(Boolean)
+        .join(', ');
+      this.badRequest(
+        `Bu viloyatga ${details} bog'langan — o'chirib bo'lmaydi.`,
+      );
+    }
 
     const deletedSnapshot = { name: region.name, sato_code: region.sato_code };
+    // `remove` dan keyin `id` undefined bo'ladi — qidiruv uchun nusxa oldin.
+    const searchRef = { ...region };
 
     await this.regionRepo.remove(region);
-    void this.removeRegionFromSearch(region);
+    void this.removeRegionFromSearch(searchRef);
 
     await this.activityLog.log({
       entity_type: 'Region',
@@ -5320,5 +6076,343 @@ export class LogisticsServiceService implements OnModuleInit {
     });
 
     return successRes({ id }, 200, 'Region deleted');
+  }
+
+  // ==================== Logist biriktirish (dzyVftBx) ====================
+
+  /**
+   * (dzyVftBx) `logist_id` faqat identity'dagi HAQIQIY, o'chirilmagan va FAOL
+   * LOGIST bo'lishi mumkin (`identity.logist.find_by_ids` faqat
+   * `role = logist, is_deleted = false` qatorlarini qaytaradi; rol bu yerda
+   * ham qayta tekshiriladi).
+   *
+   * - topilmadi / boshqa rol → 404;
+   * - bloklangan (status ≠ active) → 400;
+   * - identity javob bermadi yoki javob shakli buzuq → 503 (fail-closed).
+   */
+  private async resolveActiveLogist(
+    logistId: string,
+  ): Promise<{ id: string; name: string | null }> {
+    let rows: unknown;
+    try {
+      const res = await lastValueFrom(
+        this.identityClient
+          .send<{
+            data?: unknown;
+          }>({ cmd: 'identity.logist.find_by_ids' }, { ids: [logistId] })
+          .pipe(timeout(LOGIST_CHECK_TIMEOUT_MS)),
+      );
+      rows = res?.data;
+    } catch (error) {
+      this.logger.warn(
+        `identity.logist.find_by_ids(${logistId}) failed: ${(error as Error)?.message ?? error}`,
+      );
+      throw new RpcException(errorRes(LOGIST_CHECK_UNAVAILABLE_MESSAGE, 503));
+    }
+    if (!Array.isArray(rows)) {
+      throw new RpcException(errorRes(LOGIST_CHECK_UNAVAILABLE_MESSAGE, 503));
+    }
+
+    const list: unknown[] = rows;
+    const row = list.find(
+      (
+        item,
+      ): item is {
+        id: string | number;
+        role?: unknown;
+        status?: unknown;
+        name?: unknown;
+      } => {
+        if (!item || typeof item !== 'object') {
+          return false;
+        }
+        return canonicalBigintId((item as { id?: unknown }).id) === logistId;
+      },
+    );
+    const role = typeof row?.role === 'string' ? row.role.toLowerCase() : '';
+    if (!row || role !== Roles.LOGIST) {
+      this.notFound(LOGIST_NOT_FOUND_MESSAGE);
+    }
+    const status =
+      typeof row.status === 'string' ? row.status.trim().toLowerCase() : '';
+    if (status !== Status.ACTIVE) {
+      this.badRequest(LOGIST_INACTIVE_MESSAGE);
+    }
+    return {
+      id: logistId,
+      name: typeof row.name === 'string' ? row.name : null,
+    };
+  }
+
+  /** `logist_id` maydoni: `null` — olib tashlash; yo'q yoki buzuq → 400. */
+  private parseLogistIdField(value: unknown): string | null {
+    if (value === null) {
+      return null;
+    }
+    if (value === undefined) {
+      this.badRequest('logist_id majburiy (olib tashlash uchun null yuboring)');
+    }
+    const logistId = canonicalBigintId(value);
+    if (!logistId) {
+      this.badRequest("logist_id noto'g'ri");
+    }
+    return logistId;
+  }
+
+  /**
+   * (dzyVftBx) PATCH /region/:id/logist — bitta viloyatga logist biriktirish
+   * yoki `logist_id: null` bilan olib tashlash. Viloyatda bitta logist
+   * (`regions.logist_id`); boshqa logistning viloyatiga biriktirilsa, u
+   * yangi logistga o'tadi. Faqat superadmin/admin (gateway ham shuni talab
+   * qiladi — ikkinchi qatlam).
+   */
+  async assignRegionLogist(
+    id: string,
+    logistIdInput: unknown,
+    requester?: RequesterContext,
+  ) {
+    if (!this.isSystemPrivileged(requester)) {
+      this.forbidden(
+        'Viloyatga logistni faqat admin yoki superadmin biriktira oladi',
+      );
+    }
+
+    const regionId = canonicalBigintId(id);
+    if (!regionId) {
+      this.badRequest("Region id noto'g'ri");
+    }
+    const logistId = this.parseLogistIdField(logistIdInput);
+
+    const region = await this.regionRepo.findOne({ where: { id: regionId } });
+    if (!region) {
+      this.notFound('Region not found');
+    }
+
+    const logist = logistId ? await this.resolveActiveLogist(logistId) : null;
+
+    const previousLogistId = canonicalBigintId(region.logist_id);
+    region.logist_id = logistId;
+    const saved = await this.regionRepo.save(region);
+
+    await this.activityLog.logChange({
+      entity_type: 'Region',
+      entity_id: String(saved.id),
+      action: logistId ? ActivityAction.ASSIGN : ActivityAction.UNASSIGN,
+      old_value: { logist_id: previousLogistId },
+      new_value: { logist_id: logistId },
+      metadata: logist?.name ? { logist_name: logist.name } : null,
+      ...this.auditActor(requester),
+    });
+
+    return successRes(
+      saved,
+      200,
+      logistId ? 'Logist biriktirildi' : 'Logist olib tashlandi',
+    );
+  }
+
+  /**
+   * (dzyVftBx) POST /region/logist/bulk — BeePost `bulkAssignLogist`
+   * semantikasi:
+   *
+   * - `logist_id` berilsa: `region_ids` dagi viloyatlar shu logistga o'tadi
+   *   (boshqa logistdagi viloyat ham), logistning `region_ids` da YO'Q
+   *   viloyatlaridan u olib tashlanadi (`logist_id = NULL`). `region_ids: []`
+   *   — logist hamma viloyatdan olinadi. Boshqa logistlarning qolgan
+   *   viloyatlari o'zgarmaydi.
+   * - `logist_id: null`: faqat `region_ids` dagi viloyatlardan logist olinadi.
+   *
+   * Ikkala UPDATE bitta tranzaksiyada — yarim holat qolmaydi. Viloyatlar va
+   * logist yozuvdan OLDIN tekshiriladi: biror id topilmasa hech narsa
+   * o'zgarmaydi.
+   */
+  async bulkAssignRegionLogist(
+    logistIdInput: unknown,
+    regionIdsInput: unknown,
+    requester?: RequesterContext,
+  ) {
+    if (!this.isSystemPrivileged(requester)) {
+      this.forbidden(
+        'Viloyatga logistni faqat admin yoki superadmin biriktira oladi',
+      );
+    }
+
+    const logistId = this.parseLogistIdField(logistIdInput);
+
+    if (!Array.isArray(regionIdsInput)) {
+      this.badRequest("region_ids massiv bo'lishi kerak");
+    }
+    const rawRegionIds: unknown[] = regionIdsInput;
+    const regionIds: string[] = [];
+    const invalidRegionIds: string[] = [];
+    for (const raw of rawRegionIds) {
+      const regionId = canonicalBigintId(raw);
+      if (!regionId) {
+        invalidRegionIds.push(
+          typeof raw === 'string' || typeof raw === 'number'
+            ? String(raw)
+            : typeof raw,
+        );
+      } else if (!regionIds.includes(regionId)) {
+        regionIds.push(regionId);
+      }
+    }
+    if (invalidRegionIds.length) {
+      this.badRequest(`region_ids noto'g'ri: ${invalidRegionIds.join(', ')}`);
+    }
+    if (logistId === null && !regionIds.length) {
+      this.badRequest(
+        "Logist olib tashlanadigan viloyatlar (region_ids) ko'rsatilmagan",
+      );
+    }
+
+    if (regionIds.length) {
+      const existing = await this.regionRepo.find({
+        where: { id: In(regionIds) },
+      });
+      const existingIds = new Set(existing.map((region) => String(region.id)));
+      const missing = regionIds.filter((id) => !existingIds.has(id));
+      if (missing.length) {
+        this.notFound(`Viloyat topilmadi: ${missing.join(', ')}`);
+      }
+    }
+
+    const logist = logistId ? await this.resolveActiveLogist(logistId) : null;
+
+    const changes = await this.regionRepo.manager.transaction(
+      async (manager) => {
+        const repo = manager.getRepository(Region);
+        // Tegiladigan viloyatlar: tanlanganlar + logistning hozirgilari
+        // (audit uchun "oldin" holati). Kamida bittasi bor — yuqorida
+        // `logist_id: null` + bo'sh `region_ids` rad etilgan.
+        const touchedWhere: FindOptionsWhere<Region>[] = [];
+        if (regionIds.length) {
+          touchedWhere.push({ id: In(regionIds) });
+        }
+        if (logistId) {
+          touchedWhere.push({ logist_id: logistId });
+        }
+        const touched = await repo.find({ where: touchedWhere });
+        const before = new Map(
+          touched.map((region) => [
+            String(region.id),
+            canonicalBigintId(region.logist_id),
+          ]),
+        );
+
+        if (logistId) {
+          // Logistning tanlanmagan viloyatlari — bitta UPDATE, shuning uchun
+          // parallel biriktirish bilan poyga oynasi yo'q.
+          await repo.update(
+            regionIds.length
+              ? { logist_id: logistId, id: Not(In(regionIds)) }
+              : { logist_id: logistId },
+            { logist_id: null },
+          );
+        }
+        if (regionIds.length) {
+          await repo.update({ id: In(regionIds) }, { logist_id: logistId });
+        }
+
+        const selected = new Set(regionIds);
+        return Array.from(before.entries())
+          .map(([regionId, previous]) => ({
+            region_id: regionId,
+            previous_logist_id: previous,
+            logist_id: selected.has(regionId) ? logistId : null,
+          }))
+          .filter((change) => change.previous_logist_id !== change.logist_id);
+      },
+    );
+
+    for (const change of changes) {
+      await this.activityLog.logChange({
+        entity_type: 'Region',
+        entity_id: change.region_id,
+        action: change.logist_id
+          ? ActivityAction.ASSIGN
+          : ActivityAction.UNASSIGN,
+        old_value: { logist_id: change.previous_logist_id },
+        new_value: { logist_id: change.logist_id },
+        metadata: {
+          source: 'bulk',
+          ...(logist?.name ? { logist_name: logist.name } : {}),
+        },
+        ...this.auditActor(requester),
+      });
+    }
+
+    const removedRegionIds = changes
+      .filter((change) => change.logist_id === null)
+      .map((change) => change.region_id);
+    const reassignedFrom = changes
+      .filter(
+        (change) =>
+          change.logist_id !== null && change.previous_logist_id !== null,
+      )
+      .map((change) => ({
+        region_id: change.region_id,
+        logist_id: change.previous_logist_id,
+      }));
+
+    return successRes(
+      {
+        logist_id: logistId,
+        region_ids: regionIds,
+        removed_region_ids: removedRegionIds,
+        reassigned_from: reassignedFrom,
+      },
+      200,
+      logistId
+        ? `Logist ${regionIds.length} ta viloyatga biriktirildi`
+        : `${regionIds.length} ta viloyatdan logist olib tashlandi`,
+    );
+  }
+
+  /**
+   * (dzyVftBx, TC4) ICHKI: logist o'chirilganda uning BARCHA viloyatlarida
+   * `logist_id = NULL` — DB'dagi `ON DELETE SET NULL` ning ilova qatlamidagi
+   * o'rnini bosuvchi (user soft-delete bo'ladi va sxemalararo FK yo'q).
+   * Viloyatning o'zi o'chmaydi. Identity `deleteUser` chaqiradi (gateway
+   * route'i yo'q); idempotent — qayta chaqirish xavfsiz.
+   */
+  async clearLogistFromRegions(
+    logistIdInput: unknown,
+    requester?: RequesterContext,
+  ) {
+    const logistId = canonicalBigintId(logistIdInput);
+    if (!logistId) {
+      this.badRequest("logist_id noto'g'ri");
+    }
+
+    const regions = await this.regionRepo.find({
+      where: { logist_id: logistId },
+    });
+    if (regions.length) {
+      await this.regionRepo.update(
+        { logist_id: logistId },
+        { logist_id: null },
+      );
+      for (const region of regions) {
+        await this.activityLog.logChange({
+          entity_type: 'Region',
+          entity_id: String(region.id),
+          action: ActivityAction.UNASSIGN,
+          old_value: { logist_id: logistId },
+          new_value: { logist_id: null },
+          metadata: { reason: 'logist_deleted' },
+          ...this.auditActor(requester),
+        });
+      }
+    }
+
+    return successRes(
+      {
+        logist_id: logistId,
+        region_ids: regions.map((region) => String(region.id)),
+      },
+      200,
+      'Logist viloyatlardan ajratildi',
+    );
   }
 }

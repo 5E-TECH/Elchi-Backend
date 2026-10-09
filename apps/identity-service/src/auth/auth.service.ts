@@ -4,7 +4,7 @@ import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { createHash, createHmac } from 'node:crypto';
+import { createHash } from 'node:crypto';
 import type { StringValue } from 'ms';
 import { User } from '../entities/user.entity';
 import { BcryptEncryption } from '../../../../libs/common/helpers/bcrypt';
@@ -12,8 +12,11 @@ import { LoginDto } from './dto/login.dto';
 import { RefreshDto } from './dto/refresh.dto';
 import {
   ActivityAction,
+  ActivityDescribeUz,
   ActivityLogService,
   Status,
+  computeHmacSignature,
+  normalizeUzPhone,
   rmqSend,
 } from '@app/common';
 import { errorRes, successRes } from '../../../../libs/common/helpers/response';
@@ -60,26 +63,53 @@ export class AuthService {
   }
 
   /**
-   * Telefonni jurnal uchun: to'liq raqam YOZILMAYDI (rkz0yBxr #8) — faqat
-   * maska (***7434) va guruhlash/tergov uchun barqaror HMAC hash.
+   * Telefonni jurnal uchun: to'liq raqam YOZILMAYDI (rkz0yBxr #8, f2Ud5tju #5)
+   * — faqat maska (***7434) va guruhlash/tergov uchun barqaror HMAC hash.
+   *
+   * NORMALLASHTIRISH: hash'dan OLDIN raqam `+998XXXXXXXXX` ga keltiriladi
+   * (`normalizeUzPhone` — AI/OTP oqimlari bilan AYNI qoida), shuning uchun
+   * "900000000", "90 000 00 00", "998900000000", "+998 90 000 00 00" BITTA
+   * hash beradi. Hash kirishi avvalgidek `phone:+998XXXXXXXXX` — mavjud
+   * qatorlardagi hash'lar o'zgarmaydi. UZ raqamiga keltirib bo'lmaydigan
+   * kirish (`raw:` prefiksli raqamlar) haqiqiy raqam hash'i bilan to'qnashmaydi.
+   *
+   * KALIT: `OTP_HASH_SECRET`, bo'lmasa `ACCESS_TOKEN_KEY` (identity'da majburiy).
+   * Qattiq kodlangan zaxira kalit YO'Q: kalit topilmasa hash `null` — taxmin
+   * qilinadigan kalit bilan hash raqamni lug'at hujumiga ochib qo'yardi.
+   * HMAC — umumiy `computeHmacSignature` (libs/common/src/webhook/hmac.ts).
    */
-  phoneForAudit(phone: string): { phone_masked: string; phone_hash: string } {
-    const digits = String(phone ?? '').replace(/\D/g, '');
-    const national = digits.length >= 9 ? digits.slice(-9) : digits;
+  phoneForAudit(phone: string): {
+    phone_masked: string;
+    phone_hash: string | null;
+  } {
+    const normalized = normalizeUzPhone(phone);
+    const digits = normalized
+      ? normalized.slice(4)
+      : String(phone ?? '').replace(/\D/g, '');
     const key =
       this.configService.get<string>('OTP_HASH_SECRET') ||
       this.configService.get<string>('ACCESS_TOKEN_KEY') ||
-      'elchi';
+      '';
     return {
-      phone_masked: national.length >= 4 ? `***${national.slice(-4)}` : '***',
-      phone_hash: createHmac('sha256', key)
-        .update(`phone:+998${national}`)
-        .digest('hex')
-        .slice(0, 32),
+      phone_masked: digits.length >= 4 ? `***${digits.slice(-4)}` : '***',
+      phone_hash: key
+        ? computeHmacSignature(
+            normalized ? `phone:${normalized}` : `phone:raw:${digits}`,
+            key,
+          ).slice(0, 32)
+        : null,
     };
   }
 
-  /** Record a failed login attempt for the security audit trail. */
+  /**
+   * Record a failed login attempt for the security audit trail.
+   *
+   * f2Ud5tju #5: `entity_id` da raqam HECH QACHON yo'q — ma'lum
+   * foydalanuvchida uning ID si, noma'lumda HMAC hash (bir raqamdan
+   * urinishlarni guruhlash uchun), kalit bo'lmasa `'unknown'`. Shu sabab
+   * `search=<raqam>` jurnaldan hech narsa topmaydi. IP/qurilma metadata'ga
+   * `ActivityLogService.log()` tomonidan avtomatik qo'shiladi.
+   */
   private async logAuthFailure(
     phone: string,
     reason: string,
@@ -88,10 +118,11 @@ export class AuthService {
     const audit = this.phoneForAudit(phone);
     await this.activityLog.log({
       entity_type: 'Auth',
-      entity_id: userId ?? audit.phone_hash,
+      entity_id: userId ?? audit.phone_hash ?? 'unknown',
       action: ActivityAction.AUTH_FAILURE,
       user_id: userId ?? null,
       metadata: { ...audit, reason },
+      description: ActivityDescribeUz.authFailure(reason),
     });
   }
 
@@ -135,6 +166,12 @@ export class AuthService {
       user_name: user.name,
       user_role: user.role,
       ...(method === 'otp' ? { metadata: { method } } : {}),
+      // "<Ism> tizimga kirdi" (2WRzdWpZ); mijozda ism o'rniga rol (PII).
+      description: ActivityDescribeUz.login({
+        name: user.name,
+        role: user.role,
+        method,
+      }),
     });
     return {
       statusCode: 200,
@@ -226,6 +263,7 @@ export class AuthService {
           reason: 'refresh_token_superseded',
           session_invalidated: false,
         },
+        description: ActivityDescribeUz.authFailure('refresh_token_superseded'),
       });
       throw new RpcException(errorRes('Invalid refresh token', 401));
     }

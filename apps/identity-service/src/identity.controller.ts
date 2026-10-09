@@ -7,7 +7,10 @@ import {
 } from '@nestjs/microservices';
 import { RmqService, executeAndAck } from '@app/common';
 import type { ActivityLogQuery } from '@app/common';
-import { UserServiceService } from './user-service.service';
+import {
+  UserServiceService,
+  type GeoReassignInput,
+} from './user-service.service';
 import { AuthService } from './auth/auth.service';
 import { OtpService } from './otp/otp.service';
 import type { OtpRequestInput, OtpVerifyInput } from './otp/otp.service';
@@ -31,9 +34,17 @@ import type {
   FindMarketByIdPayload,
   FindMarketByTgTokenPayload,
   FindMarketsByIdsPayload,
+  GetMarketTgTokenPayload,
+  RotateAllMarketTgTokensPayload,
   RotateMarketTgTokenPayload,
   UpdateMarketPayload,
 } from './contracts/market.payloads';
+import type {
+  CreateMarketOperatorPayload,
+  DeleteMarketOperatorPayload,
+  FindMarketOperatorsPayload,
+  UpdateMarketOperatorCommissionPayload,
+} from './contracts/market-operator.payloads';
 
 @Controller()
 export class IdentityController {
@@ -113,6 +124,28 @@ export class IdentityController {
   ) {
     return this.executeAndAck(context, () =>
       this.userService.createRegistrator(payload.dto, payload.requester),
+    );
+  }
+
+  // (dzyVftBx) POST /logists.
+  @MessagePattern({ cmd: 'identity.logist.create' })
+  createLogist(
+    @Payload() payload: CreateUserPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.createLogist(payload.dto, payload.requester),
+    );
+  }
+
+  // (dzyVftBx) Ichki: logistics viloyatga logist biriktirishdan oldin.
+  @MessagePattern({ cmd: 'identity.logist.find_by_ids' })
+  getLogistsByIds(
+    @Payload() payload: { ids?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.findLogistsByIds(payload?.ids),
     );
   }
 
@@ -219,16 +252,40 @@ export class IdentityController {
     );
   }
 
+  // oNAE3LW9: hudud o'chirish himoyasi va tumanlarni birlashtirish.
+  @MessagePattern({ cmd: 'identity.user.geo_usage' })
+  geoUsage(
+    @Payload() payload: { district_id?: string; region_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.countGeoUsage(payload ?? {}),
+    );
+  }
+
+  // Ko'chgan ID'larni qaytaradi; `ids` + `restore_regions` — kompensatsiya.
+  @MessagePattern({ cmd: 'identity.user.reassign_district' })
+  geoReassignDistrict(
+    @Payload() payload: GeoReassignInput,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.reassignDistrict(payload ?? {}),
+    );
+  }
+
   @MessagePattern({ cmd: 'identity.user.find_by_id' })
   getAdminById(
     @Payload() payload: FindUserByIdPayload,
     @Ctx() context: RmqContext,
   ) {
-    // market_tg_token faqat qat'iy `true` flag bilan (gateway uni faqat
-    // SUPERADMIN/ADMIN GET /users/:id da yuboradi); 'true' yoki 1 — yo'q.
+    // (GvL6ZFAd) market_tg_token bu yerda HECH QACHON qaytmaydi: eski
+    // `include_tg_token` flagi kelsa ham e'tiborsiz — faqat id uzatiladi.
+    // Token: identity.market.get_tg_token (faqat SUPERADMIN).
+    // (i76gGjyq) `include_deleted` faqat qat'iy `true` bilan (ichki finance).
     return this.executeAndAck(context, () =>
       this.userService.findUserById(payload.id, {
-        includeTgToken: payload?.include_tg_token === true,
+        includeDeleted: payload?.include_deleted === true,
       }),
     );
   }
@@ -360,13 +417,103 @@ export class IdentityController {
     );
   }
 
+  // (GvL6ZFAd) market_tg_token'ni ko'rish/almashtirish — faqat SUPERADMIN
+  // (gateway RolesGuard + servisdagi requester.roles tekshiruvi).
+
+  @MessagePattern({ cmd: 'identity.market.get_tg_token' })
+  getMarketTgToken(
+    @Payload() payload: GetMarketTgTokenPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.getMarketTelegramToken(payload?.id, payload?.requester),
+    );
+  }
+
   @MessagePattern({ cmd: 'identity.market.rotate_tg_token' })
   rotateMarketTgToken(
     @Payload() payload: RotateMarketTgTokenPayload,
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.userService.rotateMarketTelegramToken(payload.id),
+      this.userService.rotateMarketTelegramToken(
+        payload?.id,
+        payload?.requester,
+      ),
+    );
+  }
+
+  @MessagePattern({ cmd: 'identity.market.rotate_all_tg_tokens' })
+  rotateAllMarketTgTokens(
+    @Payload() payload: RotateAllMarketTgTokensPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.rotateAllMarketTelegramTokens(
+        payload?.confirm,
+        payload?.requester,
+      ),
+    );
+  }
+
+  // ==================== Market operators (i76gGjyq) ====================
+  // market_id gateway'da qo'yiladi (market — JWT sub); servis uni requester
+  // bilan qayta solishtiradi.
+
+  @MessagePattern({ cmd: 'identity.market_operator.create' })
+  createMarketOperator(
+    @Payload() payload: CreateMarketOperatorPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.createMarketOperator(
+        payload?.market_id,
+        payload?.dto,
+        payload?.requester,
+      ),
+    );
+  }
+
+  @MessagePattern({ cmd: 'identity.market_operator.find_by_market' })
+  findMarketOperators(
+    @Payload() payload: FindMarketOperatorsPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.findMarketOperators(
+        payload?.market_id,
+        payload?.query,
+        payload?.requester,
+      ),
+    );
+  }
+
+  @MessagePattern({ cmd: 'identity.market_operator.delete' })
+  deleteMarketOperator(
+    @Payload() payload: DeleteMarketOperatorPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.deleteMarketOperator(
+        payload?.id,
+        payload?.market_id,
+        payload?.requester,
+      ),
+    );
+  }
+
+  @MessagePattern({ cmd: 'identity.market_operator.update_commission' })
+  updateMarketOperatorCommission(
+    @Payload() payload: UpdateMarketOperatorCommissionPayload,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.updateMarketOperatorCommission(
+        payload?.id,
+        payload?.market_id,
+        payload?.dto,
+        payload?.requester,
+      ),
     );
   }
 

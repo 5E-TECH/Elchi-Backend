@@ -5,6 +5,7 @@ import {
   GatewayTimeoutException,
   Get,
   GoneException,
+  HttpCode,
   Inject,
   Param,
   Patch,
@@ -31,8 +32,11 @@ import { Public } from './auth/public.decorator';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
 import {
+  AssignRegionLogistRequestDto,
+  BulkAssignRegionLogistRequestDto,
   CreateRegionRequestDto,
   CreateDistrictRequestDto,
+  MergeDistrictRequestDto,
   ReassignPostRequestDto,
   PostIdRequestDto,
   ReceivePostRequestDto,
@@ -833,7 +837,8 @@ export class LogisticsGatewayController {
   // RBAC-14 — MARKET YO'Q: tashqi marketga kompaniya daromadi (hudud
   // bo'yicha) ko'rinmasin; market panelida hududlar sahifasi yo'q. COURIER
   // qoladi: kuryerning /regions sahifasi shu agregatlarni o'qiydi (bu javobda
-  // kuryer ism/telefoni yo'q).
+  // kuryer ism/telefoni yo'q). (dzyVftBx) LOGIST — viloyatlar ustidan nazorat
+  // qiluvchi xodim, hudud statistikasini ko'radi (BeePost bilan bir xil).
   @Get('region/stats/all')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -842,6 +847,7 @@ export class LogisticsGatewayController {
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
     RoleEnum.COURIER,
+    RoleEnum.LOGIST,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get all region stats' })
@@ -869,7 +875,9 @@ export class LogisticsGatewayController {
   // RBAC-14 — MARKET va COURIER YO'Q: bu javobda HAR BIR kuryerning ismi,
   // telefoni va daromadi bor. Frontend kuryer uchun bu endpointni chaqirmaydi
   // (dashboard hudud kartasi va /regions sahifasining batafsil so'rovi kuryer
-  // uchun o'chiq), market paneli esa umuman chaqirmaydi.
+  // uchun o'chiq), market paneli esa umuman chaqirmaydi. (dzyVftBx) LOGIST —
+  // ichki xodim, viloyat bo'yicha kuryerlar ishini nazorat qiladi (BeePost:
+  // stats/:id ADMIN, SUPERADMIN, LOGIST).
   @Get('region/stats/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -877,6 +885,7 @@ export class LogisticsGatewayController {
     RoleEnum.SUPERADMIN,
     RoleEnum.MANAGER,
     RoleEnum.REGISTRATOR,
+    RoleEnum.LOGIST,
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get region detailed stats by id' })
@@ -916,6 +925,35 @@ export class LogisticsGatewayController {
       .pipe(timeout(8000));
   }
 
+  // (dzyVftBx) Statik yo'l — `region/:id` dan OLDIN. BeePost
+  // `bulkAssignLogist`: `region_ids` dagi viloyatlar logistga o'tadi, uning
+  // boshqa viloyatlaridan u olib tashlanadi. Logist identity'da faol LOGIST
+  // ekanini logistics tekshiradi (404/400/503).
+  @Post('region/logist/bulk')
+  @HttpCode(200)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Bulk-assign a logist to regions (others of this logist are unassigned)',
+  })
+  @ApiBody({ type: BulkAssignRegionLogistRequestDto })
+  @ApiOkResponse({ description: 'Logist regions replaced' })
+  bulkAssignRegionLogist(
+    @Body() dto: BulkAssignRegionLogistRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.region.bulk_assign_logist' },
+      {
+        logist_id: dto.logist_id,
+        region_ids: dto.region_ids,
+        requester: { id: req.user.sub, roles: req.user.roles ?? [] },
+      },
+    );
+  }
+
   @Get('region/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(
@@ -949,6 +987,31 @@ export class LogisticsGatewayController {
       .pipe(timeout(8000));
   }
 
+  // (dzyVftBx) Bitta viloyatga logist biriktirish; `logist_id: null` —
+  // olib tashlash (BeePost `assignLogist`).
+  @Patch('region/:id/logist')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'Assign (or remove with null) a region logist' })
+  @ApiParam({ name: 'id', description: 'Region ID (id)' })
+  @ApiBody({ type: AssignRegionLogistRequestDto })
+  @ApiOkResponse({ description: 'Region logist updated' })
+  assignRegionLogist(
+    @Param('id') id: string,
+    @Body() dto: AssignRegionLogistRequestDto,
+    @Req() req: { user: JwtUser },
+  ) {
+    return this.sendLogisticsWithTimeout(
+      { cmd: 'logistics.region.assign_logist' },
+      {
+        id,
+        logist_id: dto.logist_id,
+        requester: { id: req.user.sub, roles: req.user.roles ?? [] },
+      },
+    );
+  }
+
   @Delete('region/:id')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
@@ -958,7 +1021,7 @@ export class LogisticsGatewayController {
   deleteRegion(@Param('id') id: string) {
     return this.logisticsClient
       .send({ cmd: 'logistics.region.delete' }, { id })
-      .pipe(timeout(8000));
+      .pipe(timeout(15000));
   }
 
   // ---------- District ----------
@@ -1121,11 +1184,42 @@ export class LogisticsGatewayController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'Delete district' })
+  @ApiOperation({
+    summary:
+      "Delete district — buyurtma/foydalanuvchi/filial bog'langan bo'lsa 400 (oNAE3LW9)",
+  })
   @ApiParam({ name: 'id', description: 'District ID (id)' })
   deleteDistrict(@Param('id') id: string) {
     return this.logisticsClient
       .send({ cmd: 'logistics.district.delete' }, { id })
-      .pipe(timeout(8000));
+      .pipe(timeout(15000));
+  }
+
+  @Post('district/:id/merge')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.ADMIN, RoleEnum.SUPERADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      "Tumanni boshqasiga birlashtirish: buyurtma, foydalanuvchi va filiallar ko'chadi, tuman o'chadi (oNAE3LW9)",
+    description:
+      "Ko'chirishdan OLDIN B dagi sonlar olinadi; keyin A da 0 qolgani va B = eski B + ko'chirilgan ekani tasdiqlanadi. " +
+      "Biror bosqich yiqilsa yoki sonlar mos kelmasa — ko'chirilganlar AYNAN o'sha ID'lar bo'yicha A ga qaytariladi, A o'chirilmaydi: " +
+      '409 (tekshiruv mos kelmadi / servis rad etdi) yoki 503 (servis javob bermadi). ' +
+      "Kompensatsiyaning o'zi yiqilsa — xato matnida qaysi ID'lar qaysi tumanda qolgani yoziladi (to'liq ro'yxat — activity log, " +
+      'District #id, action `district.merge_compensation_failed`). ' +
+      '200 javobi: `moved` {orders, users, branches}, `target_before`, `target_after`.',
+  })
+  @ApiParam({ name: 'id', description: "O'chiriladigan tuman ID" })
+  @ApiBody({ type: MergeDistrictRequestDto })
+  mergeDistrict(@Param('id') id: string, @Body() dto: MergeDistrictRequestDto) {
+    // Uch servis bo'ylab ko'chirish + qayta sanash, yiqilsa kompensatsiya
+    // (har bosqich 15 s gacha) — eng yomon holat ~110 s.
+    return this.logisticsClient
+      .send(
+        { cmd: 'logistics.district.merge' },
+        { id, target_district_id: dto.target_district_id },
+      )
+      .pipe(timeout(120000));
   }
 }

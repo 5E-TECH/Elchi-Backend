@@ -149,6 +149,12 @@ const makeController = () => {
     if (pattern.cmd === 'identity.user.find_by_id') {
       return of({ data: { id: payload.id, market_id: MARKET_ID } });
     }
+    // UER0MpMX: partiya boshida market tekshiruvi.
+    if (pattern.cmd === 'identity.market.find_by_id') {
+      return of({
+        data: { id: payload.id, status: 'active', add_order: true },
+      });
+    }
     return of({ data: null });
   });
   let nextOrderId = 1000;
@@ -450,15 +456,17 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
     const activePhones = new Set<string>();
     let sameLaneOverlap = false;
 
-    fx.identity.send.mockImplementation((_pattern, payload) =>
-      defer(() => {
-        const phone = payload.dto?.phone_number ?? '';
-        if (activePhones.has(phone)) sameLaneOverlap = true;
-        activePhones.add(phone);
-        active += 1;
-        maxActive = Math.max(maxActive, active);
-        return timer(5).pipe(map(() => ({ data: { id: `c${phone}` } })));
-      }),
+    fx.identity.send.mockImplementation((pattern, payload) =>
+      pattern.cmd === 'identity.market.find_by_id'
+        ? of({ data: { id: payload.id, status: 'active', add_order: true } })
+        : defer(() => {
+            const phone = payload.dto?.phone_number ?? '';
+            if (activePhones.has(phone)) sameLaneOverlap = true;
+            activePhones.add(phone);
+            active += 1;
+            maxActive = Math.max(maxActive, active);
+            return timer(5).pipe(map(() => ({ data: { id: `c${phone}` } })));
+          }),
     );
     let nextId = 1;
     fx.order.send.mockImplementation((_pattern, payload) =>

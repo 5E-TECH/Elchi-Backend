@@ -1,10 +1,11 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Optional } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { OrderHolderType } from '../entities/order.entity';
 import { OrderTracking } from '../entities/order-tracking.entity';
 import { OrderCustodyEvent } from '../entities/order-custody-event.entity';
 import { Order_status, Roles } from '@app/common';
+import { OrderNotificationService } from '../notification/order-notification.service';
 
 /**
  * Order tracking + custody event writers, plus the pure tracking-label
@@ -21,6 +22,10 @@ export class OrderCustodyService {
     private readonly orderTrackingRepo: Repository<OrderTracking>,
     @InjectRepository(OrderCustodyEvent)
     private readonly orderCustodyEventRepo: Repository<OrderCustodyEvent>,
+    // (OA16fdSq) Holat o'zgarishi → bildirishnoma (outbox). Ixtiyoriy: eski
+    // spec'lar custody'ni ikki repo bilan quradi — u holda bildirishnoma yo'q.
+    @Optional()
+    private readonly orderNotifications?: OrderNotificationService,
   ) {}
 
   inferTrackingAction(
@@ -220,6 +225,17 @@ export class OrderCustodyService {
       note: data.note ?? null,
     });
     await repo.save(entity);
+
+    // (OA16fdSq) Bildirishnoma — kuzatuv qatori bilan BITTA tranzaksiyada
+    // (`repo.manager` — chaqiruvchining queryRunner menejeri), faqat outbox.
+    await this.orderNotifications?.onStatusChange(
+      {
+        order_id: data.order_id,
+        from_status: data.from_status,
+        to_status: data.to_status,
+      },
+      repository?.manager,
+    );
   }
 
   async createCustodyEvent(

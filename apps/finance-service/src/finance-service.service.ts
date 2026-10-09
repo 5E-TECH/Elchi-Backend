@@ -6,6 +6,7 @@ import {
   NotFoundException,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -32,6 +33,7 @@ import { OperatorPayment } from './entities/operator-payment.entity';
 import { FinancialBalanceHistory } from './entities/financial-balance-history.entity';
 import {
   ActivityAction,
+  ActivityDescribeUz,
   ActivityLogQuery,
   ActivityLogService,
   Cashbox_type,
@@ -57,6 +59,8 @@ import { FindShiftsDto } from './dto/shift/find-shifts.dto';
 import { CreateSalaryDto } from './dto/salary/create-salary.dto';
 import { UpdateSalaryDto } from './dto/salary/update-salary.dto';
 import { FindSalaryByUserDto } from './dto/salary/find-salary-by-user.dto';
+import { FinanceNotificationService } from './notification/finance-notification.service';
+import { SettlementUnappliedService } from './settlement/settlement-unapplied.service';
 
 /**
  * `order.find_all` qatoridan market to'lovi sinxroni o'qiydigan maydonlar
@@ -112,6 +116,16 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     @Inject('INTEGRATION') private readonly integrationClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     private readonly outbox: OutboxService,
+    // (ePpLHPX2) To'lov / balans to'ldirish → bildirishnoma (FAQAT outbox,
+    // pul tranzaksiyasi ichida). Ixtiyoriy: eski spec'lar servisni
+    // 13 argument bilan quradi — u holda bildirishnoma yo'q.
+    @Optional()
+    private readonly financeNotifications?: FinanceNotificationService,
+    // znD3KaZL — advance javobidagi FIFO qoldig'ini `finance_settlement_
+    // unapplied` ga yozish (tezkor yo'l). Ixtiyoriy: eski spec'lar
+    // servisni 13/14 argument bilan quradi — u holda faqat WARN log.
+    @Optional()
+    private readonly settlementUnapplied?: SettlementUnappliedService,
   ) {}
 
   async onModuleInit() {
@@ -1340,6 +1354,26 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         });
 
         const savedHistory = await queryRunner.manager.save(history);
+
+        // (ePpLHPX2) Market/kuryer kassasiga qo'lda kirim (MANUAL_INCOME) —
+        // `finance.balance_topup` (BeePost notifyBalanceTopup analogi). Faqat
+        // outbox, AYNAN shu tranzaksiyada: rollback bo'lsa xabar ham yo'q.
+        // Boshqa oyoqlar (sotuv, bekor qilish, MAIN/BRANCH to'ldirish) —
+        // servis ichida filtrlanadi. Takroriy (idempotent) yetkazishda bu
+        // nuqtaga yetilmaydi — bildirishnoma ham takrorlanmaydi.
+        await this.financeNotifications?.balanceTopup(
+          {
+            cashbox_type: savedCashbox.cashbox_type,
+            operation_type: dto.operation_type,
+            source_type: dto.source_type,
+            recipient_id: savedCashbox.user_id,
+            history_id: savedHistory?.id,
+            amount: Number(dto.amount),
+            balance_after: savedCashbox.balance,
+          },
+          queryRunner.manager,
+        );
+
         await queryRunner.commitTransaction();
         auditedCashbox = savedCashbox;
 
@@ -2212,6 +2246,12 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           amount: Number(data.amount),
           cashbox_type: targetCashboxType,
         },
+        // 2WRzdWpZ: izoh (comment) gapga KIRMAYDI — erkin matn.
+        description: ActivityDescribeUz.cashboxExpense(
+          data.amount,
+          targetCashboxType,
+          data.type ?? PaymentMethod.CASH,
+        ),
       });
       return this.successRes(update?.data ?? {}, 200, 'Manual expense created');
     } catch (error) {
@@ -2258,6 +2298,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           amount: Number(data.amount),
           cashbox_type: targetCashboxType,
         },
+        description: ActivityDescribeUz.cashboxIncome(
+          data.amount,
+          targetCashboxType,
+          data.type ?? PaymentMethod.CASH,
+        ),
       });
       return this.successRes(update?.data ?? {}, 200, 'Cashbox filled');
     } catch (error) {
@@ -2355,14 +2400,124 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       return;
     }
     try {
-      await firstValueFrom(
+      const reply = await firstValueFrom(
         this.orderClient
           .send({ cmd: 'order.settlement.advance' }, payload)
           .pipe(timeout(2000)),
       );
+      this.warnOnAdvanceLeftover(payload, reply);
+      await this.recordAdvanceLeftover(payload, reply);
     } catch {
       // Swallowed — the transactional outbox relay guarantees eventual delivery.
     }
+  }
+
+  /**
+   * znD3KaZL — tezkor yo'l: javobdagi qoldiq > 0 bo'lsa
+   * `finance_settlement_unapplied` ga idempotent yozuv (`dedup_epoch` = to'lov
+   * tokeni, ya'ni advance `request_id`).
+   *
+   * Sekin yo'l — order-service FIFO tranzaksiyasi ichida outbox orqali
+   * yuboradigan `finance.settlement.unapplied_recorded` hodisasi
+   * (`SettlementUnappliedService`): tezkor yo'l timeout bo'lsa yoki finance
+   * shu yerda yiqilsa ham yozuv baribir paydo bo'ladi. Ikkalasi bitta kalit
+   * bilan (`ON CONFLICT DO NOTHING`) — dublikat yo'q. Xato YUTILADI (pul
+   * allaqachon commit bo'lgan, yozuvni sekin yo'l kafolatlaydi).
+   */
+  private async recordAdvanceLeftover(
+    payload: Record<string, unknown>,
+    reply: unknown,
+  ): Promise<void> {
+    if (!this.settlementUnapplied) {
+      return;
+    }
+    const data = (reply as { data?: Record<string, unknown> } | null)?.data;
+    const leftover = Number(data?.leftover ?? 0) || 0;
+    if (!(leftover > 0)) {
+      return;
+    }
+    try {
+      await this.settlementUnapplied.record({
+        level: payload.level,
+        actor_id: payload.match_value,
+        amount: leftover,
+        dedup_epoch: payload.request_id,
+      });
+    } catch (error) {
+      this.logger.warn(
+        `finance_settlement_unapplied ga tezkor yo'lda yozib bo'lmadi (znD3KaZL) level=${String(payload.level)} match=${String(payload.match_value)} — order-service outbox hodisasi yozadi: ${(error as Error)?.message ?? error}`,
+      );
+    }
+  }
+
+  /**
+   * znD3KaZL — advance javobidagi FIFO qoldig'i (`leftover`) endi o'qiladi.
+   *
+   * Ilgari javob butunlay tashlab yuborilardi: kassa 550 000 ni ko'chirsa,
+   * daftar esa 300 000 ni yopsa, 250 000 lik farq finance logida hech
+   * qachon ko'rinmasdi. Qoldiqning o'zi order-service'da, FIFO bilan bitta
+   * tranzaksiyada `order_settlement_carry` ga yoziladi va keyingi to'lovga
+   * qo'shiladi. Finance'dagi audit yozuvi (`finance_settlement_unapplied`)
+   * — `recordAdvanceLeftover` (tezkor yo'l) va order-service outbox hodisasi
+   * (sekin yo'l). Bu — kassa to'lovi bilan yonma-yon turadigan ko'rinish;
+   * to'liq tafsilot (saqlandi / saqlanmadi) order-service logida. Hech
+   * qachon xato otmaydi.
+   */
+  private warnOnAdvanceLeftover(
+    payload: Record<string, unknown>,
+    reply: unknown,
+  ): void {
+    const data = (reply as { data?: Record<string, unknown> } | null)?.data;
+    const leftover = Number(data?.leftover ?? 0) || 0;
+    if (!(leftover > 0)) {
+      return;
+    }
+    const allocated = Number(data?.allocated ?? 0) || 0;
+    this.logger.warn(
+      `Settlement advance FIFO qoldig'i (znD3KaZL): level=${String(payload.level)} match=${String(payload.match_value)} amount=${Number(payload.amount ?? 0)} allocated=${allocated} leftover=${leftover} — butun buyurtmaga sig'magan naqd taqsimlanmagan qoldiqda (order_settlement_carry)`,
+    );
+  }
+
+  /**
+   * znD3KaZL — order-service yig'indisidagi `unapplied_carry` ni javob
+   * shakliga keltiradi. Kalit yo'q (qoldiq yo'q yoki order-service eski
+   * versiyada) — nollar.
+   */
+  private normalizeUnappliedCarry(raw: unknown) {
+    const src = (raw ?? {}) as {
+      total?: unknown;
+      courier_to_branch?: unknown;
+      branch_to_hq?: unknown;
+      hq_to_market?: unknown;
+      count?: unknown;
+      items?: unknown;
+    };
+    const num = (value: unknown) => Number(value ?? 0) || 0;
+    type RawItem = {
+      level?: string | null;
+      party_id?: string | number | null;
+      branch_id?: string | number | null;
+      amount?: unknown;
+    } | null;
+    const items = Array.isArray(src.items)
+      ? (src.items as RawItem[]).map((item) => ({
+          level: String(item?.level ?? ''),
+          party_id: String(item?.party_id ?? ''),
+          branch_id:
+            item?.branch_id === null || item?.branch_id === undefined
+              ? null
+              : String(item.branch_id),
+          amount: num(item?.amount),
+        }))
+      : [];
+    return {
+      total: num(src.total),
+      courierToBranch: num(src.courier_to_branch),
+      branchToHq: num(src.branch_to_hq),
+      hqToMarket: num(src.hq_to_market),
+      count: num(src.count) || items.length,
+      items,
+    };
   }
 
   async paymentsFromCourier(data: {
@@ -2540,7 +2695,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         payment_method: data.payment_method,
         source_user_id: data.courier_id,
       });
-      await queryRunner.manager.save(courierHistory);
+      const savedCourierHistory =
+        await queryRunner.manager.save(courierHistory);
 
       this.updateBalancesByMethod(
         receiverCashbox,
@@ -2566,6 +2722,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       });
       await queryRunner.manager.save(receiverHistory);
 
+      // (ePpLHPX2) Marketga o'tkazmada market kassasi tarix qatori — market
+      // bildirishnomasidagi to'lov raqami.
+      let clickMarketHistory: CashboxHistory | null = null;
       if (clickMarketCashbox) {
         const marketCashbox = clickMarketCashbox;
 
@@ -2600,7 +2759,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           data.payment_method,
         );
         await queryRunner.manager.save(marketCashbox);
-        await queryRunner.manager.save(
+        clickMarketHistory = await queryRunner.manager.save(
           queryRunner.manager.create(CashboxHistory, {
             operation_type: Operation_type.EXPENSE,
             cashbox_id: marketCashbox.id,
@@ -2647,6 +2806,33 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             dedupKey ? `${dedupKey}:m` : '',
           )
         : null;
+
+      // (ePpLHPX2) `finance.payment_received` — puli ketgan tomon (kuryer:
+      // topshirgani qabul qilindi) va o'tkazmada puli kelgan tomon (market).
+      // Faqat outbox, AYNAN shu tranzaksiyada (oxirgi qadam — oldingi har
+      // qanday xato bildirishnomani ham yozdirmaydi).
+      await this.financeNotifications?.paymentReceived(
+        {
+          kind: 'courier_payment',
+          recipient_id: data.courier_id,
+          payment_id: savedCourierHistory?.id,
+          amount: Number(data.amount),
+          payment_method: data.payment_method,
+        },
+        queryRunner.manager,
+      );
+      if (clickMarketCashbox) {
+        await this.financeNotifications?.paymentReceived(
+          {
+            kind: 'market_payment',
+            recipient_id: data.market_id,
+            payment_id: clickMarketHistory?.id,
+            amount: Number(data.amount),
+            payment_method: data.payment_method,
+          },
+          queryRunner.manager,
+        );
+      }
 
       await queryRunner.commitTransaction();
       // Immediate best-effort publish to close the outbox-poll lag (Faza 2c).
@@ -2724,6 +2910,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
               data.receiver_user_id ??
               FinanceServiceService.MAIN_CASHBOX_USER_ID,
           },
+          description: ActivityDescribeUz.courierPayment(
+            data.courier_id,
+            data.amount,
+            data.payment_method,
+          ),
         });
       }
     }
@@ -2889,6 +3080,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             amount: Number(data.amount),
             created_by: data.created_by ?? null,
           },
+          description: ActivityDescribeUz.branchToMainPayment(
+            data.branch_id,
+            data.amount,
+            data.payment_method,
+          ),
         });
       }
     }
@@ -3016,7 +3212,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         data.payment_method ?? PaymentMethod.CASH,
       );
       await queryRunner.manager.save(marketCashbox);
-      await queryRunner.manager.save(
+      const marketHistory = await queryRunner.manager.save(
         queryRunner.manager.create(CashboxHistory, {
           operation_type: Operation_type.EXPENSE,
           cashbox_id: marketCashbox.id,
@@ -3043,6 +3239,20 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         Number(data.amount),
         data.created_by,
         dedupKey,
+      );
+
+      // (ePpLHPX2) `finance.payment_received` — puli kelgan tomon (market).
+      // Faqat outbox, AYNAN shu tranzaksiyada: rollback bo'lsa xabar ham
+      // yo'q; notification-service o'chiq bo'lsa ham to'lov o'tadi.
+      await this.financeNotifications?.paymentReceived(
+        {
+          kind: 'market_payment',
+          recipient_id: data.market_id,
+          payment_id: marketHistory?.id,
+          amount: Number(data.amount),
+          payment_method: data.payment_method,
+        },
+        queryRunner.manager,
       );
 
       await queryRunner.commitTransaction();
@@ -3085,6 +3295,11 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             amount: Number(data.amount),
             created_by: data.created_by ?? null,
           },
+          description: ActivityDescribeUz.marketPayment(
+            data.market_id,
+            data.amount,
+            data.payment_method,
+          ),
         });
       }
     }
@@ -3241,6 +3456,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           market_payable?: number;
           branches?: Array<{ branch_id: string; amount: number }>;
           markets?: Array<{ market_id: string; amount: number }>;
+          // znD3KaZL — taqsimlanmagan qoldiq (faqat ko'rsatkich).
+          unapplied_carry?: unknown;
         };
       }>(
         this.orderClient,
@@ -3342,6 +3559,17 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             // 0 deb qotib qolgan edi).
             couriersTotalBalanse: courierCashboxTotal,
           },
+          /**
+           * znD3KaZL — "Taqsimlanmagan qoldiq": kassada yuqoriga ko'chgan,
+           * lekin FIFO hali hech bir BUTUN buyurtmani yopmagan naqd
+           * (`order_settlement_carry`, bo'g'in bo'yicha). Keyingi to'lovga
+           * qo'shiladi. ⚠️ Holat formulasiga KIRMAYDI — `chainReceivable` uni
+           * allaqachon ayirgan, marketga qarz esa kassadan olinadi (to'lov u
+           * yerda aks etgan); qo'shish ayni pulni ikki marta sanash bo'lardi.
+           */
+          unappliedCarry: this.normalizeUnappliedCarry(
+            settlement.unapplied_carry,
+          ),
           difference,
           formula:
             'main_cashbox + chain_receivable + provider_receivable - market_cashbox_payable',
@@ -3568,6 +3796,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         new_value: { amount, operator_id: String(input.operator_id) },
         user_id: input.paid_by_id ? String(input.paid_by_id) : null,
         metadata: { note: input.note ?? null },
+        description: ActivityDescribeUz.operatorPayment(
+          input.operator_id,
+          amount,
+        ),
       });
       return this.successRes(saved, 201, 'operator payment recorded');
     } catch (error) {
@@ -3700,7 +3932,10 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       }>(
         this.identityClient,
         { cmd: 'identity.user.find_by_id' },
-        { id: operatorId },
+        // (i76gGjyq) Operator buyurtmani olgandan keyin o'chirilgan bo'lishi
+        // mumkin — komissiya baribir yoziladi (aks holda 404 outbox'ni
+        // cheksiz qayta urardi).
+        { id: operatorId, include_deleted: true },
       );
       const user = res?.data;
       if (!user) {

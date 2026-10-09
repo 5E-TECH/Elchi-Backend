@@ -1,4 +1,5 @@
 import {
+  IsNotificationType,
   NotificationCategory,
   NotificationChannel,
   NotificationPriority,
@@ -68,10 +69,16 @@ export class DispatchNotificationDto {
   @IsBoolean()
   broadcast?: boolean;
 
-  /** Fine-grained event key, convention `{domain}.{event}` e.g. `order.sold`. */
+  /**
+   * Fine-grained event key, convention `{domain}.{event}` e.g. `order.sold`.
+   * (Eh8y21Ha) Reyestrda (`NOTIFICATION_TYPES`) bo'lishi SHART yoki `x.`
+   * prefiksli vaqtinchalik tur. ⚠️ RMQ'da ValidationPipe yo'q — servis
+   * `dispatch()` ham aynan shuni tekshiradi.
+   */
   @IsString()
   @IsNotBlank()
   @MaxLength(120)
+  @IsNotificationType()
   type!: string;
 
   @IsOptional()
@@ -113,13 +120,21 @@ export class DispatchNotificationDto {
   @MaxLength(255)
   group_key?: string;
 
-  /** Optional telegram relay target (reuses telegram_markets config). */
+  /**
+   * Optional telegram relay target (reuses telegram_markets config).
+   *
+   * (n0kLbx3d) `token` YO'Q — bot tokeni faqat DB yoki env'dan; payload'da
+   * kelsa e'tiborsiz qoldiriladi. `text` — ichki chaqiruvchi (order-service)
+   * tayyorlagan, allaqachon HTML-escape qilingan Telegram matni (market
+   * guruhi uchun; in_app `body` dan farqli, PII bo'lishi mumkin). Gateway
+   * DTO'sida `text` yo'q — HTTP orqali yuborib bo'lmaydi.
+   */
   @IsOptional()
   @IsObject()
   telegram?: {
     market_id?: string;
     group_id?: string;
     group_type?: Group_type;
-    token?: string;
+    text?: string;
   };
 }

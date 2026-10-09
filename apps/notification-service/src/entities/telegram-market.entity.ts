@@ -16,7 +16,18 @@ export class TelegramMarket extends BaseEntity {
   @Column({ type: 'enum', enum: Group_type })
   group_type!: Group_type;
 
-  @Column({ type: 'varchar', nullable: true })
+  /**
+   * Bot tokeni — MAXFIY (n0kLbx3d): `select: false`, API javoblarida hech
+   * qachon qaytarilmaydi (faqat `has_token`). Kerakli o'qishlar uni ataylab
+   * tanlaydi (`TG_MARKET_SELECT`).
+   *
+   * #3: DB'da SHIFRLANGAN (`enc:v1:…`, AES-256-GCM, tasodifiy IV) — shifrlash
+   * servis qatlamida (`telegram-token.cipher.ts`), prefikssiz qiymat — eski
+   * ochiq matn (start'dagi backfill shifrlaydi). Token bo'yicha WHERE qidiruv
+   * QILINMAYDI. Ustun `character varying` (uzunliksiz) — shifr sig'adi,
+   * migratsiya kerak emas.
+   */
+  @Column({ type: 'varchar', nullable: true, select: false })
   token!: string | null;
 
   @Column({ type: 'boolean', default: true })

@@ -10,13 +10,12 @@ import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
 import helmet from 'helmet';
 import basicAuth from 'express-basic-auth';
 import { Logger } from 'nestjs-pino';
-import { randomUUID } from 'node:crypto';
 import type { NextFunction, Request, Response } from 'express';
 import { ApiGatewayModule } from './api-gateway.module';
+import { requestContextMiddleware } from './context/request-context.middleware';
 import {
   RpcExceptionFilter,
   AllExceptionsFilter,
-  requestContext,
   initSentry,
   flushSentry,
   registerMetrics,
@@ -56,21 +55,12 @@ async function bootstrap() {
   // haqiqiy mijoz IP'sini oladi — tunnel konteyneri IP'sini emas.
   app.set('trust proxy', true);
 
-  // Trace correlation: read x-request-id from the client (typical proxy
-  // pattern) or mint a fresh one. The id propagates through pino logs,
-  // outgoing RMQ calls (libs/common rmqSend), and on into every downstream
-  // service via the trace_id payload field.
-  app.use((req: Request, res: Response, next: NextFunction) => {
-    const headerId = req.headers['x-request-id'];
-    const traceId =
-      typeof headerId === 'string' && headerId.trim()
-        ? headerId.trim()
-        : Array.isArray(headerId) && headerId[0]?.trim()
-          ? headerId[0].trim()
-          : randomUUID();
-    res.setHeader('x-request-id', traceId);
-    requestContext.run({ traceId }, () => next());
-  });
+  // Trace correlation + audit konteksti (f2Ud5tju): x-request-id (yoki yangi
+  // UUID) va haqiqiy mijoz IP'si / User-Agent / qurilma. Hammasi pino
+  // loglari, chiquvchi RMQ xabarlari (AMQP sarlavhalari) va pastdagi har
+  // servisga — u yerda `ActivityLogService.log()` metadata'siga — yetib boradi.
+  // IP manbai `ClientIpThrottlerGuard` bilan AYNI (`resolveTrustedClientIp`).
+  app.use(requestContextMiddleware);
 
   const corsOrigins = (process.env.CORS_ORIGINS ?? '')
     .split(',')
@@ -140,7 +130,15 @@ async function bootstrap() {
     methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
     // Idempotency-Key — hisob-kitob formalari qayta bosilganda pul ikki marta
     // taqsimlanmasligi uchun (5hBeDuyn).
-    allowedHeaders: ['Content-Type', 'Authorization', 'Idempotency-Key'],
+    // X-Device-Id / X-Device-Name — jurnalga qurilma (f2Ud5tju); yuborilmasa
+    // qurilma nomi User-Agent'dan olinadi.
+    allowedHeaders: [
+      'Content-Type',
+      'Authorization',
+      'Idempotency-Key',
+      'X-Device-Id',
+      'X-Device-Name',
+    ],
   });
 
   app.useGlobalPipes(

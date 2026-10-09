@@ -23,6 +23,186 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-09 — Kartadagidek qilib tugatildi (2-bosqich)
+
+- [2026-10-09] ⚠️ [identity] — `market_tg_token` endi HECH bir umumiy javobda
+  yo'q: `GET /users`, `GET /users/:id` (SUPERADMIN/ADMIN uchun ham — avvalgi
+  istisno bekor), `GET /markets`, profil (GvL6ZFAd). Tokenni ko'rish va
+  almashtirish faqat SUPERADMIN:
+  - `GET /markets/:id/tg-token` → `{ id, market_tg_token }`; boshqa rol → 403,
+    market yo'q → 404. Har ko'rish audit jurnaliga yoziladi.
+  - `POST /markets/:id/tg-token/rotate` → yangi token, eskisi darhol yaroqsiz.
+  - `POST /markets/tg-token/rotate-all` `{ "confirm": "ROTATE_ALL" }` →
+    `{ rotated_count }` (operatsion amal, UI shart emas).
+  - Javoblar `Cache-Control: no-store`.
+  → **Frontendda:** 🔧 `User.market_tg_token` ni tipdan olib tashlang;
+  `UserDetailWidget` token kartasi yangi endpointdan olsin va faqat
+  SUPERADMIN'ga ko'rinsin; "Tokenni yangilash" tugmasi + tasdiqlash.
+- [2026-10-09] ⚠️ [identity] — `/market-operators` endi FAQAT market uchun
+  (i76gGjyq: ko'lam `requester.sub = market_id`). SUPERADMIN/ADMIN →
+  **403** (ilgari `?market_id=` bilan ko'ra olardi).
+- [2026-10-09] 🟢 [notification] — Telegram bot tokeni DB'da shifrlangan
+  (n0kLbx3d). Kontrakt o'zgarmagan (`has_token`). Server kaliti sozlanmagan
+  bo'lsa `POST/PATCH /notifications` `token` bilan 400 qaytaradi;
+  `/notifications/send` natijasida "Telegram bot tokenini ochib bo'lmadi" —
+  tokenni `PATCH /notifications/:id` orqali qayta kiritish kerak.
+- [2026-10-09] 🆕 [notification] — Inbox'da yangi avtomatik bildirishnomalar
+  (OA16fdSq, ePpLHPX2). Turlar `GET /notifications/types` katalogida:
+  - `order.*` holat bildirishnomalari endi viloyat LOGIST'iga ham keladi
+    (bitta buyurtma = inboxda bitta qator);
+  - `order.assigned_to_courier` — kuryer va marketga, `link /orders/{id}`;
+  - `finance.payment_received` — `link /cash-box`, `data.kind` =
+    `market_payment` | `courier_payment`;
+  - `finance.balance_topup` — market/kuryer kassasiga qo'lda kirimda;
+  - `logistics.batch_arrived` — filiallararo pochta qabul qilinganda filial
+    MANAGER/REGISTRATOR'lariga, `link /mails/{post_id}`.
+  → **Frontendda:** 🔧 shu turlar va havolalar inboxda to'g'ri ochilishini
+  tekshiring.
+- [2026-10-09] ✏️ [audit] — `GET /activity-logs`: `metadata.ip`, `user_agent`,
+  `device_id`, `device_name` faqat oxirgi 30 kun yozuvlarida (env
+  `ACTIVITY_LOG_DEVICE_RETENTION_DAYS`) — eskiroq qatorlarda bu kalitlar yo'q,
+  chip ko'rsatilmasin (f2Ud5tju). Endpoint faqat SUPERADMIN/ADMIN.
+- [2026-10-09] ✏️ [logistics] — `DELETE /region/:id`: filiallararo jo'natma
+  (`branch_transfer_batches`) bog'langan viloyat ham → 400 (oNAE3LW9).
+  `POST /district/:id/merge` → 200 `{ from_district_id, to_district_id,
+  moved: { orders, users, branches }, target_before, target_after }`. Xato
+  (409 — tekshiruv mos kelmadi / servis rad etdi; 503 — javob yo'q) bo'lsa
+  ko'chirilganlar A ga qaytariladi, A o'chmaydi. 120 s gacha davom etishi
+  mumkin.
+  → **Frontendda:** 🔧 `message` ni to'liq ko'rsating ("QO'LDA TUZATING"
+  bo'lsa ogohlantirish sifatida), loader va qayta bosishdan himoya.
+- [2026-10-09] ✏️ [order] — `POST /orders/telegram/bot/create`: `total_price`
+  manfiy bo'lsa 400 (IDG1z5y9).
+
+### 2026-10-09 — 8-oktabr muddatli kartalar (buyurtma, geo, logist, settlement)
+
+- [2026-10-09] ⚠️ [order] — `POST /orders`, `/orders/external`: `total_price`
+  endi **majburiy** va `≥ 0`; `items` kamida 1 ta; `items[].quantity` butun
+  son `≥ 1`. Manfiy/kasr qiymat → **400** (IDG1z5y9). Order-service ichki
+  yo'llarda ham (AI tasdig'i, bot, hamkor) xuddi shu tekshiruv.
+  → **Frontendda:** buyurtma formasida `total_price` doim yuborilsin,
+  miqdor maydoniga `min=1 step=1`.
+- [2026-10-09] ⚠️ [order] — `POST /orders` / `/orders/external` /
+  `/orders/ai-confirm`: market tekshiriladi (UER0MpMX): yo'q → **404**,
+  nofaol → **400**, MARKET/MARKET_OPERATOR uchun `add_order=false` → **400**.
+  `items[].product_id` boshqa marketniki yoki o'chirilgan → **404**; katalog
+  javob bermasa → **503**.
+  → **Frontendda:** shu xabarlarni toast'da ko'rsating.
+- [2026-10-09] 🟢 [order] — `GET /orders/extra-cost-approvals` endi `:id`
+  marshrutidan oldin turadi — ilgari 400 qaytarardi, endi ishlaydi (PINtZcLj).
+- [2026-10-09] ✏️ [order] — `GET /orders/external?limit=` ruxsat etilgan
+  qiymatlar: `10, 25, 50, 100, 200` (PEc4BjVX). Boshqa ro'yxatlar o'zgarmagan
+  (≤ 100).
+  → **Frontendda:** skan ekrani 200 tagacha so'rashi mumkin.
+- [2026-10-09] ✏️ [catalog] — mahsulot javobidagi `market` endi faqat
+  `{ id, name, phone_number, status }` (5hfCZgu5). Parol hash, komissiya va
+  boshqa ichki maydonlar chiqmaydi.
+- [2026-10-09] ⚠️ [order] — `POST /orders/settlement/*` (3 ta lump-sum yo'l)
+  → **410 Gone** (MlVMpsfr). To'lovlar faqat kassa to'lov endpointlari
+  orqali.
+  → **Frontendda:** bu yo'llarga murojaatlarni olib tashlang (`/settlement`
+  sahifasi allaqachon yo'q — 5a8HRZkl).
+- [2026-10-09] ✏️ [integration] — `POST /integrations/:id/remittances` javobida
+  yangi `data.cashbox_posted: boolean` (N3yNa6rO): kassaga yozildimi.
+- [2026-10-09] ⚠️ [logistics] — `DELETE /district/:id` va `DELETE /region/:id`
+  (oNAE3LW9): tumanda buyurtma/foydalanuvchi/filial bo'lsa → **400**
+  (xabarda nechtasi bog'langani); viloyatda tuman, buyurtma yoki pochta bo'lsa
+  → **400**; tekshiruv servisi javob bermasa → **503**.
+  🆕 `POST /district/:id/merge` `{ target_district_id }` — barcha bog'liqlarni
+  B tumanga ko'chirib, A ni o'chiradi; o'ziga → 400, B yo'q → 404, qoldiq
+  qolsa → 409 (qayta urinish mumkin).
+  → **Frontendda:** o'chirishda 400 bo'lsa "Birlashtirish" taklif qiling.
+- [2026-10-09] 🆕 [identity/logistics] — Logist roli (dzyVftBx):
+  - `POST /logists` (superadmin/admin) — `POST /admins` bilan bir xil tana
+    (`branch_id` yo'q); `GET /logists?search=&status=&page=&limit=`;
+    o'chirish — `DELETE /users/:id` (viloyatlari bo'shatiladi).
+  - `PATCH /region/:id/logist` `{ logist_id: string|null }` — `null` olib
+    tashlaydi, maydon yo'q → 400.
+  - `POST /region/logist/bulk` `{ logist_id, region_ids[] }` — ro'yxatdagi
+    viloyatlar logistga o'tadi, ro'yxatda yo'qlari undan olinadi.
+  - Logist: yo'q/boshqa rol → 404, bloklangan → 400.
+  - `GET /region` javobida har viloyatda `logist_id`.
+  - `GET /region/stats/all`, `/region/stats/:id` — LOGIST ham ko'radi.
+  → **Frontendda:** 🔧 `pages/region/pages/logist-assignment` sahifasi,
+  `logist` rolini rol yorliqlari va routing'ga qo'shish.
+- [2026-10-09] ✏️ [audit] — `GET /activity-logs` (2WRzdWpZ, f2Ud5tju):
+  - har qatorda yangi `description` — o'zbekcha gap ("Buyurtma #7001 bekor
+    qilindi"), PII'siz. Eski qatorlarda `null`.
+  - `metadata` da `ip`, `user_agent`, `device_id`, `device_name`.
+  - `?search=` endi `description` bo'yicha ham qidiradi.
+  → **Frontendda:** 🔧 `description` ni ko'rsating, `null` bo'lsa `action`
+  yorlig'i; har so'rovda `X-Device-Id` (localStorage UUID) va ixtiyoriy
+  `X-Device-Name` (`encodeURIComponent`) yuboring (CORS ruxsat etilgan);
+  `metadata.device_name` / `metadata.ip` chiplari.
+- [2026-10-09] ✏️ [finance] — `GET /finance/cashbox/financial-balanse`:
+  yangi `unappliedCarry` (ko'rsatkich, formulaga kirmaydi) (znD3KaZL).
+
+### 2026-10-09 — Market operatorlari (i76gGjyq)
+
+- [2026-10-09] 🆕 [identity] — **`/market-operators`** (market o'z xodimlari):
+  - `GET /market-operators?search=&status=&page=&limit=` — FAQAT
+    `@Roles(market)` (superadmin/admin → 403). Ko'lam DOIM JWT `sub`:
+    market boshqa `market_id` yuborsa → **400**. Javob `/users` bilan bir xil:
+    `data.items[]` (`id, name, phone_number, role:'market_operator', status,
+    market_id, commission_type, commission_value, createdAt, updatedAt`) +
+    `data.meta`. `limit` ≤ 100.
+  - `POST /market-operators` `{ name, phone_number, password }` → 201. Rol doim
+    `market_operator`, `market_id` = market. Tanada `market_id`/`role` → 400.
+    Telefon band → 409, market bloklangan → 403.
+  - `DELETE /market-operators/:id` → 200 `{ id }` (soft-delete; operator keyingi refresh'da
+    chiqariladi). Begona/yo'q operator → **404**.
+  - `PATCH /market-operators/:id/commission` `{ commission_type:
+    'percent'|'fixed'|null, commission_value: number|null }` — percent 0..100,
+    fixed 0..1 000 000, ko'pi bilan 2 kasr; `null` — tozalash. Faqat keyingi
+    sotuvlarga ta'sir qiladi.
+  → **Frontendda:** 🔧 `pages/market-operators/index.tsx` — ro'yxatni
+  `useGetUser({role:'operator'})` (→ `/users`, market uchun 403) o'rniga
+  `GET /market-operators` ga o'tkazing, `user.role === 'operator'` filtrini
+  `'market_operator'` qiling (yoki olib tashlang — server allaqachon
+  ko'lamlaydi); `handleCreateSubmit` qo'g'irchog'i o'rniga
+  `POST /market-operators` mutatsiyasi (`buildCreateMarketOperatorPayload`
+  natijasi aynan shu tana); o'chirish va komissiya UI'sini BeePost
+  `client/src/pages/market-operators` dan port qiling;
+  `locales/*/marketOperators.json` dagi `createUnavailable*` matnlarini va
+  `endpoints.ts:38-40` dagi "no /operators route" izohini olib tashlang.
+
+### 2026-10-09 — Bildirishnoma yadrosi (delivery, fan-out, turlar, hodisalar, Telegram relay)
+
+- [2026-10-09] 🆕 [notification] — `GET /notifications/types` (JWT, istalgan rol):
+  turlar reyestri `{ items: [{ key, category, priority, default_channels,
+  group_key_pattern, label_uz, default_audience, user_can_mute }], free_prefix: 'x.',
+  categories }` (Eh8y21Ha) → 🔧 inbox yorliqlari/ikonalari va sozlamalar shu
+  katalogdan olinsin, qo'lda takrorlanmasin.
+- [2026-10-09] ⚠️ [notification] — `POST /notifications/dispatch`: `type` endi
+  reyestrda bo'lishi SHART (yoki `x.` prefiksli), aks holda 400. Admin formasi
+  yuboradigan `${category}.manual` katalogda bor — o'zgarish shart emas.
+  `telegram` faqat `{ market_id?, group_id?, group_type? }` — `telegram.token` → 400.
+  `channels` berilmasa tur katalogidagi `default_channels` ishlatiladi.
+- [2026-10-09] ✏️ [notification] — dispatch javobi: `by_channel`
+  (`{ in_app, realtime?, telegram?, sms?, push?, email? }` — haqiqatan ketgan son),
+  `no_provider` (masalan `['sms','email']`), `delivery.realtime`/`telegram_status`.
+  Xabar: hammasi ketdi → `Notification dispatched`; bir qismi → `Partially
+  dispatched`; hech bir tashqi kanal ketmadi → `Saved to inbox only — no external
+  channel delivered` (uFmUS86e) → 🔧 natija oynasi `by_channel`/`no_provider` ni
+  ko'rsatsin. Rol/broadcast 5000 dan oshsa 400 `fan-out cap exceeded` (avval
+  jimgina kesilardi).
+- [2026-10-09] ✏️ [notification] — inbox elementlarida `delivery` maydoni
+  (`{ in_app: 'sent', realtime: 'emitted'|'failed', telegram: 'sent'|'failed'|'not_eligible',
+  sms: 'queued'|'no_provider'|…, email: 'no_provider', push: 'queued'|… }`).
+  ⚠️ `realtime: 'emitted'` = brokerga topshirildi, yetkazilgani tasdiqlanmagan.
+- [2026-10-09] ✏️ [notification] — socket `notification:new`: rol/broadcast
+  dispatch'da endi BITTA signal `{ type, category, priority }` (qator id'siz) →
+  🔧 socket tinglansa: payload'da `id` bo'lmasa inbox va badge'ni qayta so'rang.
+- [2026-10-09] ⚠️ [notification] — `POST /notifications/send`: `token` maydoni
+  olib tashlandi (yuborilsa 400); REGISTRATOR faqat Elchi'da ulangan market
+  guruhlariga (begona `group_id` → 403). `GET/POST/PATCH /notifications`
+  javoblarida `token` va `isDeleted` YO'Q, o'rniga `has_token: boolean` (n0kLbx3d).
+- [2026-10-09] 🟢 [order] — buyurtma holati o'zgarganda market (va buyurtma
+  operatori) inboxiga avtomatik bildirishnoma: `order.created`, `order.accepted`,
+  `order.on_way`, `order.sold`, `order.cancelled` (+ market "cancel" Telegram
+  guruhi), `order.returned`, `order.not_accepted`; `link: /orders/{id}`, bitta
+  buyurtma = bitta qator (`group_key order:{id}:status`) (OA16fdSq, ePpLHPX2).
+
 ### 2026-10-08 — 7-oktabr muddatli kartalar (analitika, RBAC, filtrlar, integratsiya)
 
 - [2026-10-08] ✏️ [analytics] — `GET /analytics/revenue`: `data` endi MASSIV

@@ -12,6 +12,7 @@ import { BranchTransferBatchHistory } from '../entities/branch-transfer-batch-hi
 import { OrderBatchInboxMessage } from '../entities/order-batch-inbox-message.entity';
 import {
   ActivityAction,
+  ActivityDescribeUz,
   ActivityLogService,
   BranchTransferBatchAction,
   BranchTransferBatchStatus,
@@ -452,6 +453,12 @@ export class BranchTransferBatchService {
           order_count: candidateOrders.length,
           order_ids: candidateOrders.slice(0, 20).map((o) => String(o.id)),
         },
+        description: ActivityDescribeUz.branchTransferCreated({
+          batchId: touchedBatchIdList[0],
+          fromBranchId: sourceBranchId,
+          toBranchId: destinationBranchId,
+          orderCount: candidateOrders.length,
+        }),
       });
 
       const batches = await this.listBatchesWithItems(touchedBatchIdList);

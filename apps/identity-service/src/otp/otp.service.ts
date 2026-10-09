@@ -309,7 +309,8 @@ export class OtpService {
     await this.activityLog
       .log({
         entity_type: 'Auth',
-        entity_id: masked.phone_hash,
+        // Kalit yo'q bo'lsa hash `null` — raqam emas, 'unknown' (f2Ud5tju).
+        entity_id: masked.phone_hash ?? 'unknown',
         action:
           event === 'otp_failed'
             ? ActivityAction.AUTH_FAILURE

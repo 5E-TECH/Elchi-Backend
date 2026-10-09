@@ -1,6 +1,7 @@
 import { DynamicModule, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ClientsModule, Transport } from '@nestjs/microservices';
+import { RequestContextRmqSerializer } from '../context/rmq-context.serializer';
 import { RmqService } from './rmq.service';
 
 interface RmqModuleOptions {
@@ -29,6 +30,12 @@ export class RmqModule {
                   urls: [configService.get<string>('RABBITMQ_URI')!],
                   queue: configService.get<string>(`RABBITMQ_${name}_QUEUE`)!,
                   noAssert: true,
+                  /**
+                   * f2Ud5tju — trace va IP/qurilma kontekstini HAR chiquvchi
+                   * xabarga AMQP sarlavhasi sifatida qo'shadi (payload'ga
+                   * tegmaydi). Qabul tomoni: `RmqTraceInterceptor`.
+                   */
+                  serializer: new RequestContextRmqSerializer(),
                   /**
                    * ⚠️ TCP_NODELAY — HAR BIR CHAQIRUVDAN ~43 ms OLIB TASHLAYDI.
                    *

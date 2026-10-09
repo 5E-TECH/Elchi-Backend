@@ -10,7 +10,17 @@ import { SmsDuplicateError, SmsOutboxService } from './sms-outbox.service';
 import { SmsProviderRegistry } from './sms-provider.registry';
 import { normalizeSmsPhone } from './sms-phone.util';
 
-export type SmsChannelStatus = 'queued' | 'partial' | 'skipped' | 'blocked';
+/**
+ * `no_provider` (uFmUS86e) — SMS o'chirilgan (SMS_ENABLED=false) yoki provayder
+ * akkaunti yo'q: so'ralgan kanal umuman ketmaydi, DB'da ham, javobda ham
+ * shunday ko'rinadi (sabab `sms_reason` da).
+ */
+export type SmsChannelStatus =
+  | 'queued'
+  | 'partial'
+  | 'skipped'
+  | 'blocked'
+  | 'no_provider';
 
 export interface SmsChannelResult {
   sms: number;
@@ -85,19 +95,19 @@ export class SmsDispatchService {
     const ids = rows.map((row) => row.id);
     if (!this.config.enabled) {
       await this.patch(manager, ids, {
-        sms: 'skipped',
+        sms: 'no_provider',
         sms_reason: 'sms_disabled',
       });
-      return { sms: 0, sms_status: 'skipped', sms_reason: 'sms_disabled' };
+      return { sms: 0, sms_status: 'no_provider', sms_reason: 'sms_disabled' };
     }
     if (!(await this.registry.hasAccount('default'))) {
       await this.patch(manager, ids, {
-        sms: 'skipped',
+        sms: 'no_provider',
         sms_reason: 'provider_not_configured',
       });
       return {
         sms: 0,
-        sms_status: 'skipped',
+        sms_status: 'no_provider',
         sms_reason: 'provider_not_configured',
       };
     }

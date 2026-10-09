@@ -1,86 +1,88 @@
+import 'reflect-metadata';
+import { ExecutionContext, INestApplication } from '@nestjs/common';
+import { Test } from '@nestjs/testing';
 import { of } from 'rxjs';
-import { OrderGatewayController } from './order-gateway.controller';
+import request from 'supertest';
+import { JwtAuthGuard } from './auth/jwt-auth.guard';
+import { RolesGuard } from './auth/roles.guard';
+import { UserThrottlerGuard } from './auth/user-throttler.guard';
+import {
+  OrderGatewayController,
+  SETTLEMENT_LUMP_SUM_GONE_MESSAGE,
+} from './order-gateway.controller';
 
 /**
- * 5hBeDuyn. Hisob-kitob oyog'i qayta bosilsa (javob kechikkan) bir xil
- * `Idempotency-Key` bilan keladi — order-service `runIdempotent` uni
- * (pattern + request_id) bo'yicha ushlab, pulni ikkinchi marta taqsimlamaydi.
+ * MlVMpsfr — lump-sum settlement oyoqlari (Faza 2b) o'chirilgan. Ilgari
+ * marshrutlar ochiq turib, order-service 400 qaytarardi (5hBeDuyn dagi
+ * idempotentlik kaliti endi ma'nosiz). Endi gateway aniq 410 Gone beradi,
+ * xabarda haqiqiy pul yo'li ko'rsatiladi va order-service chaqirilmaydi.
+ * Body validatsiyasi ham yo'q — `branch_id` kabi eski maydon 400 emas, 410.
  */
-describe('OrderGatewayController settlement idempotency', () => {
-  const setup = () => {
-    const orderClient = {
-      send: jest.fn(() => of({ statusCode: 200, data: { allocated: 0 } })),
-    };
-    const controller = new OrderGatewayController(
-      orderClient as any,
-      { send: jest.fn(() => of({})) } as any,
-      { send: jest.fn(() => of({})) } as any,
-      { send: jest.fn(() => of({})) } as any,
-    );
-    const requestIds = () =>
-      orderClient.send.mock.calls.map(
-        (call: any[]) => (call[1] as { request_id: string }).request_id,
+describe('POST /orders/settlement/* — 410 Gone (MlVMpsfr)', () => {
+  let app: INestApplication;
+  const orderSend = jest.fn(() => of({ statusCode: 200 }));
+  const noop = { send: jest.fn(() => of({})) };
+
+  beforeAll(async () => {
+    const moduleRef = await Test.createTestingModule({
+      controllers: [OrderGatewayController],
+      providers: [
+        { provide: 'ORDER', useValue: { send: orderSend } },
+        { provide: 'IDENTITY', useValue: noop },
+        { provide: 'LOGISTICS', useValue: noop },
+        { provide: 'BRANCH', useValue: noop },
+      ],
+    })
+      .overrideGuard(JwtAuthGuard)
+      .useValue({
+        canActivate: (ctx: ExecutionContext) => {
+          ctx.switchToHttp().getRequest<{ user?: unknown }>().user = {
+            sub: '1',
+            roles: ['superadmin'],
+          };
+          return true;
+        },
+      })
+      .overrideGuard(RolesGuard)
+      .useValue({ canActivate: () => true })
+      .overrideGuard(UserThrottlerGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
+    app = moduleRef.createNestApplication();
+    await app.init();
+  });
+
+  afterAll(async () => {
+    if (app) await app.close();
+  });
+
+  const http = () => app.getHttpServer() as Parameters<typeof request>[0];
+
+  it.each([
+    ['courier-to-branch', { courier_id: '56', branch_id: '12', amount: 500 }],
+    ['branch-to-hq', { branch_id: '12', amount: 1000 }],
+    ['hq-to-market', { market_id: '3', amount: 500 }],
+  ])(
+    '⭐ TC2: POST /orders/settlement/%s → 410, order-service chaqirilmaydi',
+    async (leg, body) => {
+      orderSend.mockClear();
+      const res = await request(http())
+        .post(`/orders/settlement/${leg}`)
+        .send(body);
+
+      expect(res.status).toBe(410);
+      expect((res.body as { message: string }).message).toBe(
+        SETTLEMENT_LUMP_SUM_GONE_MESSAGE,
       );
-    return { controller, orderClient, requestIds };
-  };
-  const req = (sub: string, key?: string) =>
-    ({
-      user: { sub, roles: ['superadmin'] },
-      headers: key ? { 'idempotency-key': key } : {},
-    }) as any;
+      expect(orderSend).not.toHaveBeenCalled();
+    },
+  );
 
-  it('reuses the Idempotency-Key for every retry of the same form submit (all three legs)', async () => {
-    const { controller, requestIds } = setup();
-    const key = 'a1b2c3d4-e5f6-4a7b-8c9d-0123456789ab';
-
-    await controller.settlementBranchToHq(
-      { branch_id: '12', amount: 1000 } as any,
-      req('1', key),
+  it('xabar haqiqiy pul yo`lini (kassa to`lovlari) ko`rsatadi', () => {
+    expect(SETTLEMENT_LUMP_SUM_GONE_MESSAGE).toMatch(
+      /finance\/cashbox\/payment\/courier/,
     );
-    await controller.settlementBranchToHq(
-      { branch_id: '12', amount: 1000 } as any,
-      req('1', key),
-    );
-    await controller.settlementHqToMarket(
-      { market_id: '3', amount: 500 } as any,
-      req('1', key),
-    );
-    await controller.settlementCourierToBranch(
-      { courier_id: '56', amount: 500 } as any,
-      req('1', key),
-    );
-
-    expect(requestIds()).toEqual([
-      `1:${key}`,
-      `1:${key}`,
-      `1:${key}`,
-      `1:${key}`,
-    ]);
-  });
-
-  it('binds the key to the user so another user can never replay it', async () => {
-    const { controller, requestIds } = setup();
-    const key = 'same-key-12345';
-
-    await controller.settlementBranchToHq({} as any, req('1', key));
-    await controller.settlementBranchToHq({} as any, req('2', key));
-
-    const [first, second] = requestIds();
-    expect(first).not.toBe(second);
-  });
-
-  it('falls back to a fresh random id without a (valid) key', async () => {
-    const { controller, requestIds } = setup();
-
-    await controller.settlementBranchToHq({} as any, req('1'));
-    await controller.settlementBranchToHq({} as any, req('1'));
-    await controller.settlementBranchToHq(
-      {} as any,
-      req('1', 'bad key with spaces'),
-    );
-
-    const ids = requestIds();
-    expect(new Set(ids).size).toBe(3);
-    ids.forEach((id) => expect(id).toMatch(/^[0-9a-f-]{36}$/));
+    expect(SETTLEMENT_LUMP_SUM_GONE_MESSAGE).toMatch(/branch-to-main/);
+    expect(SETTLEMENT_LUMP_SUM_GONE_MESSAGE).toMatch(/payment\/market/);
   });
 });

@@ -519,22 +519,23 @@ describe('ApiGatewayController', () => {
   });
 
   /**
-   * Item 4 — market_tg_token (marketning Telegram kaliti) identity'dan faqat
-   * SUPERADMIN/ADMIN'ning GET /users/:id so'rovida so'raladi. Menejer so'rovida
-   * `include_tg_token` kaliti umuman yuborilmaydi.
+   * (GvL6ZFAd) GET /users/:id market_tg_token'ni HECH bir rol uchun
+   * so'ramaydi — avvalgi SUPERADMIN/ADMIN istisnosi (`include_tg_token: true`)
+   * bekor qilindi. Token: GET /markets/:id/tg-token (faqat SUPERADMIN).
    */
-  describe("getUserById — market_tg_token faqat SUPERADMIN/ADMIN so'rovida so'raladi", () => {
+  describe("getUserById — identity'ga AYNAN { id }, include_tg_token hech qachon yo'q (GvL6ZFAd)", () => {
     it.each([['superadmin'], ['admin'], ['SUPERADMIN']])(
-      "%s: identity'ga { id, include_tg_token: true }; filial so'rovi yo'q",
+      "%s: identity'ga AYNAN { id }; filial so'rovi yo'q",
       async (role) => {
         await apiGatewayController.getUserById('3', {
           user: { sub: '1', username: 'sa', roles: [role] },
         });
 
-        expect(identityClient.send).toHaveBeenCalledWith(
-          { cmd: 'identity.user.find_by_id' },
-          { id: '3', include_tg_token: true },
-        );
+        expect(identityClient.send).toHaveBeenCalledTimes(1);
+        const [pattern, payload] = identityClient.send.mock.calls[0];
+        expect(pattern).toEqual({ cmd: 'identity.user.find_by_id' });
+        expect(payload).toStrictEqual({ id: '3' });
+        expect(payload).not.toHaveProperty('include_tg_token');
         expect(branchClient.send).not.toHaveBeenCalled();
       },
     );

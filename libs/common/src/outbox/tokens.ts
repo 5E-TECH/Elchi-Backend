@@ -82,4 +82,18 @@ export interface OutboxOptions {
    * Sukut 10 — eski poison chegarasi bilan bir xil vaqtda ogohlantiradi.
    */
   stuckAlertAttempts?: number;
+  /**
+   * (OA16fdSq) RPC javobi KUTILMAYDIGAN patternlar (aniq yoki `prefix*`):
+   * `client.emit` — broker qabul qilgani = `published`. Sukut `[]` — hamma
+   * hodisa avvalgidek `send` (javob kutiladi), ya'ni mavjud xulq o'zgarmaydi.
+   *
+   * NEGA. Publisher hodisalarni KETMA-KET yuboradi. Bildirishnoma
+   * (`notification.dispatch`) javobi Telegram HTTP'ni ham kutadi (10 s gacha),
+   * notification-service ishlamasa esa har hodisa `publishTimeoutMs` gacha
+   * osilib turadi — ortidagi PUL hodisalari kechikardi. Fire-and-forget
+   * bilan bildirishnoma pul oqimiga hech qachon to'siq bo'lmaydi.
+   * ⚠️ Pul / holat hodisalarini bu ro'yxatga QO'SHMANG — ularga yetkazish
+   * tasdig'i (va qayta urinish) kerak.
+   */
+  fireAndForgetPatterns?: readonly string[];
 }

@@ -38,10 +38,13 @@ describe('NotificationServiceService', () => {
       save: jest.fn(),
       create: jest.fn((v) => v),
     };
+    // (n0kLbx3d #3) bot tokeni DB'ga shifrlab yoziladi — kalit kerak.
+    const env: Record<string, string> = {
+      TELEGRAM_BOT_TOKEN: 'ENV_TOKEN',
+      TELEGRAM_TOKEN_ENC_KEY: 'ab'.repeat(32),
+    };
     config = {
-      get: jest.fn((k: string) =>
-        k === 'TELEGRAM_BOT_TOKEN' ? 'ENV_TOKEN' : undefined,
-      ),
+      get: jest.fn((k: string) => env[k]),
     };
     activityLog = {
       log: jest.fn().mockResolvedValue(undefined),

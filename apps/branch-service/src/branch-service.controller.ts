@@ -6,7 +6,10 @@ import {
   RmqContext,
 } from '@nestjs/microservices';
 import { RmqService, executeAndAck } from '@app/common';
-import { BranchServiceService } from './branch-service.service';
+import {
+  BranchServiceService,
+  type GeoReassignInput,
+} from './branch-service.service';
 
 @Controller()
 export class BranchServiceController {
@@ -66,6 +69,34 @@ export class BranchServiceController {
   @MessagePattern({ cmd: 'branch.find_hq' })
   findHq(@Payload() _data: Record<string, any>, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.branchService.findHqBranch());
+  }
+
+  // oNAE3LW9: hudud o'chirish himoyasi va tumanlarni birlashtirish.
+  @MessagePattern({ cmd: 'branch.geo_usage' })
+  geoUsage(@Payload() data: Record<string, any>, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.branchService.countGeoUsage({
+        district_id: data?.district_id,
+        region_id: data?.region_id,
+      }),
+    );
+  }
+
+  // Ko'chgan ID'larni qaytaradi; `ids` + `restore_regions` — kompensatsiya.
+  @MessagePattern({ cmd: 'branch.reassign_district' })
+  geoReassignDistrict(
+    @Payload() data: GeoReassignInput,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.branchService.reassignDistrict({
+        from_district_id: data?.from_district_id,
+        to_district_id: data?.to_district_id,
+        to_region_id: data?.to_region_id,
+        ids: data?.ids,
+        restore_regions: data?.restore_regions,
+      }),
+    );
   }
 
   @MessagePattern({ cmd: 'branch.find_by_id' })
