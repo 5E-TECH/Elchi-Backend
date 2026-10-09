@@ -87,6 +87,7 @@ export class IntegrationServiceController {
     data: {
       id?: string;
       url?: string | null;
+      target?: string | null;
       requester?: { id?: string; roles?: string[] };
     },
     @Ctx() context: RmqContext,
@@ -94,7 +95,7 @@ export class IntegrationServiceController {
     return this.executeAndAck(context, () =>
       this.integrationService.testPartnerWebhook(
         String(data?.id ?? ''),
-        { url: data?.url ?? null },
+        { url: data?.url ?? null, target: data?.target ?? null },
         data?.requester ?? null,
       ),
     );

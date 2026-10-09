@@ -1,7 +1,8 @@
-import { registerMetrics } from './metrics';
+import { recordReceiveByScanOutcome, registerMetrics } from './metrics';
 
 describe('registerMetrics', () => {
   it('exposes /metrics with the service label and a timing middleware', async () => {
+    recordReceiveByScanOutcome({ ok: false, partial: false });
     const routes: Record<string, (req: unknown, res: unknown) => void> = {};
     const middlewares: Array<
       (req: unknown, res: unknown, next: () => void) => void
@@ -51,5 +52,20 @@ describe('registerMetrics', () => {
     });
     expect(body).toContain('service="api-gateway"');
     expect(body).toContain('http_request_duration_seconds');
+    // n9o0KYd5 — alert shu qatorga quriladi.
+    expect(body).toMatch(
+      /receive_by_scan_total\{outcome="none",service="api-gateway"\} [1-9]/,
+    );
+  });
+});
+
+describe('recordReceiveByScanOutcome (n9o0KYd5)', () => {
+  it.each([
+    [{ ok: false, partial: false }, 'none'],
+    [null, 'none'],
+    [{ ok: true, partial: true }, 'partial'],
+    [{ ok: true, partial: false }, 'ok'],
+  ])('%p → %s', (data, outcome) => {
+    expect(recordReceiveByScanOutcome(data)).toBe(outcome);
   });
 });

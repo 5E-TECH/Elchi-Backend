@@ -90,6 +90,48 @@ describe('BranchGatewayController — marshrut tartibi', () => {
     expect(cmdOf()).toBe('branch.find_by_id');
     expect(lastCall()?.[1]).toEqual(expect.objectContaining({ id: '5' }));
   });
+
+  it.each(['abc', 'new-order', '1.5', '-1', '12345678901234567890'])(
+    '⭐ GET /branches/%s → 400 (500 emas), quyi servisga ketmaydi (RghzFldr)',
+    async (id) => {
+      const res = await request(http()).get(`/branches/${id}`);
+
+      expect(res.status).toBe(400);
+      expect(send).not.toHaveBeenCalled();
+    },
+  );
+
+  it('GET /branches/999999 → find_by_id ga boradi (404 ni servis qaytaradi)', async () => {
+    await request(http()).get('/branches/999999');
+    expect(cmdOf()).toBe('branch.find_by_id');
+  });
+});
+
+describe('BranchGatewayController — statik yo`llar `:id` dan OLDIN (RghzFldr TC3)', () => {
+  it('⭐ har bir statik `branches/<so`z>` GET `branches/:id` dan oldin e`lon qilingan', () => {
+    const proto = BranchGatewayController.prototype as unknown as Record<
+      string,
+      unknown
+    >;
+    const getPaths = Object.getOwnPropertyNames(proto)
+      .filter((name) => name !== 'constructor')
+      .map((name) => ({
+        name,
+        path: Reflect.getMetadata('path', proto[name]) as string | undefined,
+        method: Reflect.getMetadata('method', proto[name]) as
+          | number
+          | undefined,
+      }))
+      // RequestMethod.GET === 0
+      .filter((r) => r.method === 0 && typeof r.path === 'string');
+
+    const idIndex = getPaths.findIndex((r) => r.path === 'branches/:id');
+    expect(idIndex).toBeGreaterThanOrEqual(0);
+    const staticAfterId = getPaths
+      .slice(idIndex + 1)
+      .filter((r) => /^branches\/[^/:]+$/.test(r.path!));
+    expect(staticAfterId).toEqual([]);
+  });
 });
 
 describe('BranchGatewayController — dispatch-destinations rollari', () => {

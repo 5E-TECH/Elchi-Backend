@@ -265,6 +265,9 @@ describe('Xd88lHGq — webhook yozuvi ko`rgichi', () => {
       expect.objectContaining({
         entity_id: '77',
         action: 'webhook.payload.unmasked_view',
+        // Xd88lHGq: kim ko'rgani ijrochi ustunlarida — prodda null edi.
+        user_id: '1',
+        user_role: 'superadmin',
       }),
     );
   });
@@ -328,7 +331,11 @@ describe('Xd88lHGq — webhook yozuvi ko`rgichi', () => {
       'evt_1',
     );
     expect(svc.activityLog.log).toHaveBeenCalledWith(
-      expect.objectContaining({ action: 'webhook.reprocess' }),
+      expect.objectContaining({
+        action: 'webhook.reprocess',
+        user_id: '1',
+        user_role: 'superadmin',
+      }),
     );
   });
 

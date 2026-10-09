@@ -5172,6 +5172,18 @@ export class OrderLifecycleService {
      * `partial` — bir qismi qabul qilindi, qolgani `unmatched` da.
      */
     if (!orders.length) {
+      // Monitoring signali (n9o0KYd5): gateway `receive_by_scan_total{outcome="none"}`
+      // hisoblagichini oshiradi, bu yerda esa SABABLAR yoziladi — alert
+      // kelganda "nega hech narsa qabul qilinmadi" logdan topiladi.
+      const reasons = unmatched.reduce<Record<string, number>>((acc, u) => {
+        acc[u.reason] = (acc[u.reason] ?? 0) + 1;
+        return acc;
+      }, {});
+      this.logger.warn(
+        `receive-by-scan: hech narsa qabul qilinmadi (received=0) — ` +
+          `tokens=${tokens.length}, requester=${input.requester?.id ?? '-'}, ` +
+          `reasons=${JSON.stringify(reasons)}`,
+      );
       return successRes(
         { ok: false, partial: false, received: 0, unmatched },
         200,

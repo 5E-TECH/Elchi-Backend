@@ -1,3 +1,4 @@
+import { computeHmacSignature } from '@app/common';
 import { IntegrationServiceService } from './integration-service.service';
 
 /**
@@ -168,5 +169,122 @@ describe('Sinov webhooki', () => {
     await expect(svc.testPartnerWebhook('7')).rejects.toThrow();
 
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('Sinov webhooki — sandbox (jeU3eztP)', () => {
+  const SANDBOX = 'https://abc.ngrok.app/api/v1/elchi/webhook';
+  const withSandbox = (over: Record<string, unknown> = {}) => {
+    const made = makeSvc({
+      ...PARTNER,
+      webhook_url: null,
+      sandbox_enabled: true,
+      sandbox_webhook_url: SANDBOX,
+      sandbox_webhook_secret: 'enc:sandbox',
+      ...over,
+    });
+    made.svc.decryptCredential = jest.fn((v: string | null) =>
+      v === 'enc:sandbox' ? 'sandbox-secret' : v ? 'main-secret' : null,
+    );
+    return made;
+  };
+  const okFetch = () => {
+    const fetchMock = jest.fn().mockResolvedValue({
+      status: 200,
+      text: () => Promise.resolve('ok'),
+    });
+    global.fetch = fetchMock as any;
+    return fetchMock;
+  };
+  const hmac = (body: string, key: string) =>
+    computeHmacSignature(body, key, 'sha256', 'hex');
+
+  afterEach(() => {
+    delete (global as any).fetch;
+  });
+
+  it('⭐ TC1: sandbox yoqiq + manzil bor, webhook_url yo`q — sandbox manziliga, SANDBOX sekreti bilan', async () => {
+    const { svc } = withSandbox();
+    const fetchMock = okFetch();
+
+    const res: any = await svc.testPartnerWebhook('7');
+
+    expect(fetchMock.mock.calls[0][0]).toBe(SANDBOX);
+    const sent = fetchMock.mock.calls[0][1];
+    expect(sent.headers['X-Elchi-Signature']).toBe(
+      hmac(sent.body, 'sandbox-secret'),
+    );
+    // ⭐ TC2: javobda qaysi manzil va qaysi sekret
+    expect(res.data).toMatchObject({
+      target: 'sandbox',
+      secret_used: 'sandbox',
+      url: SANDBOX,
+    });
+  });
+
+  it('target=main — asosiy manzil va asosiy sekret (sandbox yoqiq bo`lsa ham)', async () => {
+    const { svc } = withSandbox({
+      webhook_url: 'https://beepost.uz/api/v1/elchi/webhook',
+      webhook_secret: 'enc:main',
+    });
+    const fetchMock = okFetch();
+
+    const res: any = await svc.testPartnerWebhook('7', { target: 'main' });
+
+    expect(fetchMock.mock.calls[0][0]).toBe(
+      'https://beepost.uz/api/v1/elchi/webhook',
+    );
+    expect(res.data).toMatchObject({ target: 'main', secret_used: 'main' });
+  });
+
+  it('`url` = saqlangan sandbox manzili — sandbox sekreti bilan imzolanadi (401 emas)', async () => {
+    const { svc } = withSandbox({ sandbox_enabled: false });
+    const fetchMock = okFetch();
+
+    const res: any = await svc.testPartnerWebhook('7', { url: SANDBOX });
+
+    const sent = fetchMock.mock.calls[0][1];
+    expect(sent.headers['X-Elchi-Signature']).toBe(
+      hmac(sent.body, 'sandbox-secret'),
+    );
+    expect(res.data.secret_used).toBe('sandbox');
+  });
+
+  it('sandbox sekreti yo`q — asosiy sekretga QAYTMAYDI, so`rov ketmaydi', async () => {
+    const { svc } = withSandbox({
+      sandbox_webhook_secret: null,
+      webhook_secret: 'enc:main',
+    });
+    const fetchMock = okFetch();
+
+    await expect(svc.testPartnerWebhook('7')).rejects.toThrow(
+      /sandbox_webhook_secret/,
+    );
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('⭐ TC3: webhook_url ham, sandbox ham bo`sh — xato ikkalasini eslatadi', async () => {
+    const { svc } = withSandbox({ sandbox_webhook_url: null });
+    okFetch();
+    await expect(svc.testPartnerWebhook('7')).rejects.toThrow(
+      /webhook_url.*sandbox_webhook_url.*sandbox yoqilgan, lekin manzili yo'q/s,
+    );
+  });
+
+  it('target=sandbox, lekin sandbox manzili bo`sh — aniq xato', async () => {
+    const { svc } = withSandbox({
+      sandbox_webhook_url: null,
+      sandbox_enabled: false,
+    });
+    await expect(
+      svc.testPartnerWebhook('7', { target: 'sandbox' }),
+    ).rejects.toThrow(/sandbox_webhook_url` bo'sh/);
+  });
+
+  it('noto`g`ri target — 400', async () => {
+    const { svc } = withSandbox();
+    await expect(
+      svc.testPartnerWebhook('7', { target: 'prod' }),
+    ).rejects.toThrow(/target/);
   });
 });

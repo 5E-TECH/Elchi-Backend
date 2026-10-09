@@ -227,6 +227,7 @@ export class FinanceServiceController {
       to_date?: string;
       page?: number;
       limit?: number;
+      withTotals?: boolean;
     },
     @Ctx() context: RmqContext,
   ) {

@@ -1603,6 +1603,15 @@
             }
           },
           {
+            "name": "cancelled_inventory",
+            "required": false,
+            "in": "query",
+            "description": "Bekor qilingan posilka INVENTARI rejimi (qo'ldagi, qaytarish pochtasiga biriktirilmagan; holder HQ/BRANCH). Berilmasa: SA/admin uchun oddiy status filtri, filial xodimi/HQ registratori uchun inventar (onzwA7CQ).",
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
             "name": "status",
             "required": false,
             "in": "query",
@@ -12397,7 +12406,7 @@
         ],
         "responses": {
           "200": {
-            "description": "{ ok, url, http_status, duration_ms, response_body, error, signature_sent, secret_configured, event_id }"
+            "description": "{ ok, url, target, secret_used, http_status, duration_ms, response_body, error, signature_sent, secret_configured, event_id }"
           }
         },
         "security": [
@@ -12405,7 +12414,7 @@
             "bearer": []
           }
         ],
-        "summary": "Sinov webhookini yuborish — haqiqiy buyurtmaga tegmaydi. `url` berilsa saqlangan manzildan ustun turadi (saqlashdan OLDIN sinash).",
+        "summary": "Sinov webhookini yuborish — haqiqiy buyurtmaga tegmaydi. `url` berilsa saqlangan manzildan ustun turadi (saqlashdan OLDIN sinash). `target: 'main'|'sandbox'` — qaysi manzil/sekret; berilmasa sandbox yoqiq va manzili bo'lsa sandbox, aks holda asosiy (jeU3eztP).",
         "tags": [
           "Partners (admin)"
         ]
@@ -13844,6 +13853,12 @@
             "type": "number",
             "example": 5000,
             "minimum": 0
+          },
+          "paidAmount": {
+            "type": "number",
+            "example": 0,
+            "deprecated": true,
+            "description": "ESKIRGAN — sotuvda to'lov qabul qilinmaydi. Faqat 0 qabul qilinadi (eski klientlar uchun); boshqa qiymat 400 (ZsPLevZZ)."
           },
           "proofFileKeys": {
             "description": "Xarajat isboti uchun yuklangan fayl kalitlari (rasm/video). Market isbot talab qilsa va extraCost > 0 bo'lsa majburiy.",

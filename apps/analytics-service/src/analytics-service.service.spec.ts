@@ -354,6 +354,104 @@ describe('AnalyticsServiceService', () => {
     expect(res.data.courierEfficiency).toBe(5);
   });
 
+  describe('revenue javobi shakli (faAfgvW1, tVAWnl9O)', () => {
+    // order-service HAQIQATDA shunday qaytaradi: successRes o'ramisiz.
+    const rawRevenue = {
+      data: [
+        {
+          period: '2026-09-01',
+          label: '2026-09-01',
+          ordersCount: 1,
+          revenue: 100,
+        },
+        {
+          period: '2026-09-02',
+          label: '2026-09-02',
+          ordersCount: 2,
+          revenue: 250,
+        },
+      ],
+      summary: { totalRevenue: 350, totalOrders: 3, avgRevenue: 175 },
+    };
+
+    it('⭐ /analytics/revenue: data massiv, raqamli kalit yo`q, summary bor, chart = summary', async () => {
+      rmqSendMock.mockImplementation((_c: any, pattern: any) =>
+        Promise.resolve(
+          pattern.cmd === 'order.analytics.revenue' ? rawRevenue : { data: {} },
+        ),
+      );
+
+      const res: any = await service.getRevenueStats(
+        { id: 'a', roles: ['admin'] },
+        { period: 'daily' } as any,
+      );
+
+      expect(Array.isArray(res.data.data)).toBe(true);
+      expect(Object.keys(res.data).some((k) => /^\d+$/.test(k))).toBe(false);
+      expect(res.data.summary).toEqual(rawRevenue.summary);
+      expect(res.data.chart.labels).toHaveLength(res.data.data.length);
+      const chartSum = res.data.chart.values.reduce(
+        (s: number, v: number) => s + v,
+        0,
+      );
+      expect(chartSum).toBe(res.data.summary.totalRevenue);
+    });
+
+    const kpiWith = (overview: any, revenue: any) =>
+      rmqSendMock.mockImplementation((_c: any, pattern: any) => {
+        if (pattern.cmd === 'order.analytics.overview')
+          return Promise.resolve(overview);
+        if (pattern.cmd === 'order.analytics.revenue')
+          return Promise.resolve(revenue);
+        if (pattern.cmd === 'order.find_all') {
+          return Promise.resolve({ data: [], total: 0, page: 1, limit: 200 });
+        }
+        return Promise.resolve({ data: [] });
+      });
+
+    it('⭐ KPI: xom {data,summary} — averageOrderValue 0 EMAS (summary zaxira)', async () => {
+      kpiWith(
+        { data: { acceptedCount: 10, soldAndPaid: 5, cancelled: 1 } },
+        rawRevenue,
+      );
+      const res: any = await service.getKpiStats(
+        { id: 'a', roles: ['admin'] },
+        {} as any,
+      );
+      expect(res.data.averageOrderValue).toBe(70); // 350 / 5
+    });
+
+    it('⭐ KPI: overview.totalRevenue / soldAndPaid — dashboard bilan bir xil (166 840 000 / 41)', async () => {
+      kpiWith(
+        {
+          data: {
+            acceptedCount: 59,
+            soldAndPaid: 41,
+            cancelled: 18,
+            totalRevenue: 166840000,
+          },
+        },
+        rawRevenue.data, // eski klient: massiv
+      );
+      const res: any = await service.getKpiStats(
+        { id: 'a', roles: ['admin'] },
+        {} as any,
+      );
+      expect(
+        Math.abs(res.data.averageOrderValue - 166840000 / 41),
+      ).toBeLessThanOrEqual(1);
+    });
+
+    it('KPI: ma`lumot yo`q — 0, yiqilmaydi', async () => {
+      kpiWith({ data: { acceptedCount: 0, soldAndPaid: 0 } }, null);
+      const res: any = await service.getKpiStats(
+        { id: 'a', roles: ['admin'] },
+        {} as any,
+      );
+      expect(res.data.averageOrderValue).toBe(0);
+    });
+  });
+
   it('getKpiStats groups long all-time ranges yearly', async () => {
     rmqSendMock.mockResolvedValue({ data: [] });
 

@@ -57,6 +57,8 @@ function makeSvc(rows: OrderRow[]) {
 
   Object.assign(svc, {
     orderRepo,
+    // Object.create class maydonlarini (logger) o'rnatmaydi.
+    logger: { warn: jest.fn(), log: jest.fn(), error: jest.fn() },
     resolveReceiveBranchScope: jest.fn().mockResolvedValue(null),
     badRequest: (m: string) => {
       throw Object.assign(new Error(m), { statusCode: 400 });
@@ -191,6 +193,27 @@ describe("receiveExternalByScan — token qo'riqchisi", () => {
     expect(byToken['ichki']).toMatch(/tashqi posilka emas/);
     expect(byToken['allaqachon']).toMatch(/received/);
     expect(byToken['yoq']).toMatch(/topilmadi/);
+  });
+
+  it('⭐ monitoring: received=0 bo`lsa sabablari bilan warn log yoziladi (n9o0KYd5)', async () => {
+    const { svc } = makeSvc([
+      row({ id: '9', source: Order_source.INTERNAL, qr_code_token: 'ichki' }),
+    ]);
+
+    const res = (await (svc as any).receiveExternalByScan({
+      tokens: ['ichki', 'yoq', 'yoq2'],
+      requester: { id: '25', roles: ['manager'] },
+    })) as { data: { ok: boolean; received: number } };
+
+    expect(res.data).toMatchObject({ ok: false, received: 0 });
+    const warn = (svc as any).logger.warn as jest.Mock;
+    expect(warn).toHaveBeenCalledTimes(1);
+    const msg = String(warn.mock.calls[0][0]);
+    expect(msg).toMatch(/received=0/);
+    expect(msg).toMatch(/tokens=3/);
+    expect(msg).toMatch(/requester=25/);
+    expect(msg).toMatch(/"tizimda topilmadi":2/);
+    expect(msg).toMatch(/"tashqi posilka emas":1/);
   });
 
   it("⭐ faqat NEW + EXTERNAL qatorlar so'raladi", async () => {

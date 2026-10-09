@@ -190,17 +190,19 @@ export class PartnerAdminGatewayController {
   @ApiOperation({
     summary:
       'Sinov webhookini yuborish — haqiqiy buyurtmaga tegmaydi. ' +
-      '`url` berilsa saqlangan manzildan ustun turadi (saqlashdan OLDIN sinash).',
+      '`url` berilsa saqlangan manzildan ustun turadi (saqlashdan OLDIN sinash). ' +
+      "`target: 'main'|'sandbox'` — qaysi manzil/sekret; berilmasa sandbox yoqiq va " +
+      "manzili bo'lsa sandbox, aks holda asosiy (jeU3eztP).",
   })
   @ApiOkResponse({
     description:
-      '{ ok, url, http_status, duration_ms, response_body, error, ' +
-      'signature_sent, secret_configured, event_id }',
+      '{ ok, url, target, secret_used, http_status, duration_ms, response_body, ' +
+      'error, signature_sent, secret_configured, event_id }',
   })
   @ApiParam({ name: 'id' })
   testWebhook(
     @Param('id') id: string,
-    @Body() body: { url?: string | null },
+    @Body() body: { url?: string | null; target?: 'main' | 'sandbox' | null },
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     // Sinov TASHQI so'rov qiladi (15s timeout) — gateway kutishi undan
@@ -211,7 +213,12 @@ export class PartnerAdminGatewayController {
       this.integrationClient
         .send(
           { cmd: 'integration.partner.webhook.test' },
-          { id, url: body?.url ?? null, requester: this.auditActor(req) },
+          {
+            id,
+            url: body?.url ?? null,
+            target: body?.target ?? null,
+            requester: this.auditActor(req),
+          },
         )
         .pipe(timeout(25000)),
     );

@@ -148,14 +148,50 @@ describe('fix3 A2 — GET /orders role scoping (C11, CODE-04)', () => {
       order: { 'order.find_all_enriched': listOk },
       identity: { 'identity.user.find_by_id': { data: { market_id: '201' } } },
     });
+    await callFindAll(controller, {}, user('400', ['market_operator']));
+    expect(lastPayload(order, 'order.find_all_enriched').query.market_id).toBe(
+      '201',
+    );
+  });
+
+  it('MARKET_OPERATOR o`z market_id si bilan -> OK', async () => {
+    const { controller, order } = setup({
+      order: { 'order.find_all_enriched': listOk },
+      identity: { 'identity.user.find_by_id': { data: { market_id: '201' } } },
+    });
     await callFindAll(
       controller,
-      { market_id: '999' },
+      { market_id: '201' },
       user('400', ['market_operator']),
     );
     expect(lastPayload(order, 'order.find_all_enriched').query.market_id).toBe(
       '201',
     );
+  });
+
+  it('⭐ MARKET_OPERATOR ?market_id=<boshqa market> -> 400, order-service chaqirilmaydi (WWbdu8ya TC3)', async () => {
+    const { controller, order } = setup({
+      order: { 'order.find_all_enriched': listOk },
+      identity: { 'identity.user.find_by_id': { data: { market_id: '201' } } },
+    });
+    await expect(
+      callFindAll(
+        controller,
+        { market_id: '999' },
+        user('400', ['market_operator']),
+      ),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(sentTo(order, 'order.find_all_enriched')).toHaveLength(0);
+  });
+
+  it('MARKET ?market_id=<boshqa market> -> 400 (regressiya, WWbdu8ya TC4)', async () => {
+    const { controller, order } = setup({
+      order: { 'order.find_all_enriched': listOk },
+    });
+    await expect(
+      callFindAll(controller, { market_id: '999' }, user('201', ['market'])),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(sentTo(order, 'order.find_all_enriched')).toHaveLength(0);
   });
 
   it('MARKET_OPERATOR marketsiz -> 403', async () => {

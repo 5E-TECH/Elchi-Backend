@@ -214,6 +214,19 @@ export class UserServiceService implements OnModuleInit {
   }
 
   /** Normalise the RMQ requester into activity-log actor fields. */
+  /**
+   * `users.created_by` — bigint ustun. Ichki servislar so'rovchini raqam
+   * bo'lmagan id bilan yuborishi mumkin (integration partner market
+   * provisioning: `partner:2`) — uni yozish Postgres xatosi bilan butun
+   * yaratishni yiqitardi (POST /partner/markets → 502). Faqat raqamli id
+   * yoziladi, qolganida egalik yo'q (null).
+   */
+  private createdByOf(requester?: RequesterContext): string | null {
+    const raw = (requester as { id?: string | number | null } | undefined)?.id;
+    const id = raw === undefined || raw === null ? '' : String(raw).trim();
+    return /^\d+$/.test(id) ? id : null;
+  }
+
   private auditActor(requester?: RequesterContext): {
     user_id: string | null;
     user_role: string | null;
@@ -958,7 +971,7 @@ export class UserServiceService implements OnModuleInit {
       // fix #3: yaratuvchini yozamiz — manager keyinchalik FAQAT o'zi yaratgan
       // (created_by) userlarni tahrirlay oladi. requester bo'lmasa (ishonchli
       // ichki chaqiruv) null qoladi.
-      created_by: requester?.id ? String(requester.id) : null,
+      created_by: this.createdByOf(requester),
       isDeleted: false,
     });
 
@@ -995,7 +1008,7 @@ export class UserServiceService implements OnModuleInit {
       role: Roles.REGISTRATOR,
       status: Status.ACTIVE,
       // fix #3: created_by — manager egaligi uchun.
-      created_by: requester?.id ? String(requester.id) : null,
+      created_by: this.createdByOf(requester),
       isDeleted: false,
     });
 
@@ -1800,7 +1813,7 @@ export class UserServiceService implements OnModuleInit {
       role: Roles.MARKET,
       status: Status.ACTIVE,
       // fix #3: created_by — manager egaligi uchun.
-      created_by: requester?.id ? String(requester.id) : null,
+      created_by: this.createdByOf(requester),
       tariff_home: dto.tariff_home,
       tariff_center: dto.tariff_center,
       add_order: dto.add_order ?? false,
@@ -1852,7 +1865,7 @@ export class UserServiceService implements OnModuleInit {
       role: Roles.COURIER,
       status: Status.ACTIVE,
       // fix #3: created_by — manager egaligi uchun.
-      created_by: requester?.id ? String(requester.id) : null,
+      created_by: this.createdByOf(requester),
       tariff_home: dto.tariff_home ?? 0,
       tariff_center: dto.tariff_center ?? 0,
       add_order: false,
@@ -1971,7 +1984,7 @@ export class UserServiceService implements OnModuleInit {
       role: Roles.MANAGER,
       status: Status.ACTIVE,
       // fix #3: created_by — manager egaligi uchun.
-      created_by: requester?.id ? String(requester.id) : null,
+      created_by: this.createdByOf(requester),
       tariff_home: dto.tariff_home ?? null,
       tariff_center: dto.tariff_center ?? null,
       add_order: false,

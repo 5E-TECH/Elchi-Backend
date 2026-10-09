@@ -1,9 +1,9 @@
 /**
  * Sotish / bekor qilish DTO kontrakti (Andijon E2E).
  *
- *   ZsPLevZZ — SellOrderRequestDto da `paidAmount` YO'Q: whitelist uni 400
- *              bilan rad etadi (ilgari buyurtmani "to'landi" qilib, kassaga
- *              hech narsa yozmasdi).
+ *   ZsPLevZZ — SellOrderRequestDto: `paidAmount` faqat 0 (eski klientlar
+ *              regressiyasiz o'tadi), boshqa qiymat 400 (ilgari buyurtmani
+ *              "to'landi" qilib, kassaga hech narsa yozmasdi).
  *   T0UGh8bL — CancelOrderRequestDto: `paidAmount` faqat 0 (eski UI shuni
  *              yuboradi), boshqa qiymat 400.
  *   PUvKXWVw — `reason` yopiq ro'yxatdan.
@@ -28,10 +28,10 @@ const errorsFor = async (
   });
 
 describe('SellOrderRequestDto', () => {
-  it('⭐ paidAmount — 400 (whitelist)', async () => {
+  it.each([105000, 1, -1])('⭐ paidAmount=%p — 400', async (paidAmount) => {
     const errors = await errorsFor(SellOrderRequestDto, {
       comment: 'Sotildi',
-      paidAmount: 105000,
+      paidAmount,
     });
     expect(errors.map((e) => e.property)).toContain('paidAmount');
   });
@@ -39,6 +39,22 @@ describe('SellOrderRequestDto', () => {
   it('UI yuboradigan tana (comment/extraCost) — o`tadi', async () => {
     expect(
       await errorsFor(SellOrderRequestDto, { comment: 'x', extraCost: 0 }),
+    ).toHaveLength(0);
+  });
+
+  it('⭐ regressiya: eski klient {paidAmount: 0} — o`tadi (ZsPLevZZ TC 2)', async () => {
+    expect(
+      await errorsFor(SellOrderRequestDto, {
+        comment: 'x',
+        extraCost: 0,
+        paidAmount: 0,
+      }),
+    ).toHaveLength(0);
+  });
+
+  it('multipart: paidAmount "0" satr — o`tadi', async () => {
+    expect(
+      await errorsFor(SellOrderRequestDto, { comment: 'x', paidAmount: '0' }),
     ).toHaveLength(0);
   });
 });

@@ -26,6 +26,8 @@ function buildSvc(rows: {
   anyOrder?: Row | null;
 }) {
   const svc: any = Object.create(OrderLifecycleService.prototype);
+  // Object.create class maydonlarini (logger) o'rnatmaydi.
+  svc.logger = { warn: jest.fn(), log: jest.fn(), error: jest.fn() };
   const findCalls: any[] = [];
   let call = 0;
 

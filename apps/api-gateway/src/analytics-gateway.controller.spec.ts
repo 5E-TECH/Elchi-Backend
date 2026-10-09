@@ -5,10 +5,50 @@ jest.mock('@app/common', () => ({
   Roles: {
     SUPERADMIN: 'superadmin',
     ADMIN: 'admin',
+    COURIER: 'courier',
+    REGISTRATOR: 'registrator',
+    MARKET: 'market',
+    CUSTOMER: 'customer',
+    OPERATOR: 'operator',
+    MARKET_OPERATOR: 'market_operator',
+    MANAGER: 'manager',
+    BRANCH: 'branch',
+    INVESTOR: 'investor',
   },
 }));
 
 import { AnalyticsGatewayController } from './analytics-gateway.controller';
+import { RolesGuard } from './auth/roles.guard';
+import { ROLES_KEY } from './auth/roles.decorator';
+
+describe('GET /analytics/dashboard — RolesGuard (ukulko6O, EgizXSKW)', () => {
+  const handler = Object.getOwnPropertyDescriptor(
+    AnalyticsGatewayController.prototype,
+    'getDashboard',
+  )?.value as object;
+
+  it('⭐ RolesGuard ulangan (faqat JwtAuthGuard emas)', () => {
+    const guards = Reflect.getMetadata('__guards__', handler) as unknown[];
+    expect(guards).toContain(RolesGuard);
+  });
+
+  it('⭐ investor va customer ro`yxatda yo`q (→ 403), ish rollari bor', () => {
+    const roles = Reflect.getMetadata(ROLES_KEY, handler) as string[];
+    expect(roles).not.toContain('investor');
+    expect(roles).not.toContain('customer');
+    expect(roles).toEqual(
+      expect.arrayContaining([
+        'superadmin',
+        'admin',
+        'manager',
+        'registrator',
+        'courier',
+        'market',
+        'market_operator',
+      ]),
+    );
+  });
+});
 
 describe('AnalyticsGatewayController', () => {
   function setup() {

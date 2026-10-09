@@ -26,6 +26,7 @@ import {
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
+import { ParseBigintIdPipe } from './pipes/parse-bigint-id.pipe';
 import {
   AssignBranchUserRequestDto,
   CancelTransferBatchRequestDto,
@@ -268,7 +269,7 @@ export class BranchGatewayController {
   @ApiOperation({ summary: 'Find branch by id' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   findBranchById(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return this.branchClient
@@ -283,7 +284,7 @@ export class BranchGatewayController {
   @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
   @ApiOperation({ summary: 'Get all descendants of a branch (flat list)' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
-  findBranchDescendants(@Param('id') id: string) {
+  findBranchDescendants(@Param('id', ParseBigintIdPipe) id: string) {
     return this.branchClient
       .send({ cmd: 'branch.descendants' }, { id })
       .pipe(timeout(8000));
@@ -302,7 +303,7 @@ export class BranchGatewayController {
   })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   findBranchMarketsAnalytics(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return this.branchClient
@@ -355,7 +356,7 @@ export class BranchGatewayController {
   })
   @ApiBody({ type: CreateReturnBatchesRequestDto })
   createReturnBatches(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Body() dto: CreateReturnBatchesRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
@@ -379,7 +380,7 @@ export class BranchGatewayController {
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   @ApiBody({ type: SendTransferBatchRequestDto })
   sendTransferBatchPatch(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Body() dto: SendTransferBatchRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
@@ -463,7 +464,7 @@ export class BranchGatewayController {
   @ApiOperation({ summary: 'Get transfer batch by id' })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   findTransferBatchById(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return this.branchClient
@@ -487,7 +488,7 @@ export class BranchGatewayController {
   })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   findRemainingTransferBatchById(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return this.branchClient
@@ -511,7 +512,7 @@ export class BranchGatewayController {
   })
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   receiveTransferBatch(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return this.branchClient
@@ -537,7 +538,7 @@ export class BranchGatewayController {
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   @ApiBody({ type: ReceiveTransferBatchOrdersRequestDto })
   receiveTransferBatchOrders(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Body() dto: ReceiveTransferBatchOrdersRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
@@ -561,7 +562,7 @@ export class BranchGatewayController {
   @ApiParam({ name: 'id', description: 'Transfer batch ID (bigint string)' })
   @ApiBody({ type: CancelTransferBatchRequestDto })
   cancelTransferBatch(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Body() dto: CancelTransferBatchRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
@@ -639,7 +640,7 @@ export class BranchGatewayController {
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   @ApiBody({ type: UpdateBranchRequestDto })
   updateBranch(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Body() dto: UpdateBranchRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
@@ -656,7 +657,7 @@ export class BranchGatewayController {
   @ApiOperation({ summary: 'Delete branch (soft delete)' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   deleteBranch(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return this.branchClient
@@ -670,7 +671,7 @@ export class BranchGatewayController {
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   @ApiBody({ type: AssignBranchUserRequestDto })
   assignUserToBranch(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Body() dto: AssignBranchUserRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
@@ -690,8 +691,8 @@ export class BranchGatewayController {
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   @ApiParam({ name: 'userId', description: 'User ID (bigint string)' })
   removeUserFromBranch(
-    @Param('id') id: string,
-    @Param('userId') userId: string,
+    @Param('id', ParseBigintIdPipe) id: string,
+    @Param('userId', ParseBigintIdPipe) userId: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return this.branchClient
@@ -753,7 +754,7 @@ export class BranchGatewayController {
   @ApiOperation({ summary: 'Get users assigned to branch' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   getBranchUsers(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return this.branchClient
@@ -769,7 +770,7 @@ export class BranchGatewayController {
   @ApiOperation({ summary: 'Get branch config list' })
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   getBranchConfig(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
     return this.branchClient
@@ -786,7 +787,7 @@ export class BranchGatewayController {
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   @ApiBody({ type: SetBranchConfigRequestDto })
   setBranchConfig(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Body() dto: SetBranchConfigRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
@@ -804,7 +805,7 @@ export class BranchGatewayController {
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   @ApiParam({ name: 'key', description: 'Config key' })
   getBranchConfigByKey(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Param('key') key: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
@@ -823,7 +824,7 @@ export class BranchGatewayController {
   @ApiParam({ name: 'key', description: 'Config key' })
   @ApiBody({ type: UpdateBranchConfigRequestDto })
   updateBranchConfigByKey(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Param('key') key: string,
     @Body() dto: UpdateBranchConfigRequestDto,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
@@ -845,7 +846,7 @@ export class BranchGatewayController {
   @ApiParam({ name: 'id', description: 'Branch ID (bigint string)' })
   @ApiParam({ name: 'key', description: 'Config key' })
   deleteBranchConfigByKey(
-    @Param('id') id: string,
+    @Param('id', ParseBigintIdPipe) id: string,
     @Param('key') key: string,
     @Req() req: { user?: { sub?: string; roles?: string[] } },
   ) {
