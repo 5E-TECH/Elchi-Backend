@@ -16,7 +16,7 @@ import {
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import { Roles as RoleEnum } from '@app/common';
-import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
+import { firstValueFrom, map, TimeoutError, timeout } from 'rxjs';
 import {
   ApiCreatedResponse,
   ApiBearerAuth,
@@ -31,6 +31,7 @@ import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
 import { Roles } from './auth/roles.decorator';
 import { RolesGuard } from './auth/roles.guard';
+import { projectOrderPayloadForRoles } from './auth/order-role-projection';
 import {
   AssignRegionLogistRequestDto,
   BulkAssignRegionLogistRequestDto,
@@ -534,7 +535,14 @@ export class LogisticsGatewayController {
           },
         )
         .pipe(timeout(8000)),
-    ).then((response) => this.enrichOrdersByPostResponse(response));
+    ).then(async (response) =>
+      // kH2zZsz3: kuryer pochta buyurtmalari — market tarifi/filial ulushisiz
+      // (GET /orders/:id bilan AYNI rol proyeksiyasi).
+      projectOrderPayloadForRoles(
+        req.user.roles,
+        await this.enrichOrdersByPostResponse(response),
+      ),
+    );
   }
 
   @Get('post/orders/rejected/:id')
@@ -568,7 +576,13 @@ export class LogisticsGatewayController {
           },
         )
         .pipe(timeout(8000)),
-    ).then((response) => this.enrichRejectedOrdersByPostResponse(response));
+    ).then(async (response) =>
+      // kH2zZsz3: GET /orders/:id bilan AYNI rol proyeksiyasi.
+      projectOrderPayloadForRoles(
+        req?.user?.roles,
+        await this.enrichRejectedOrdersByPostResponse(response),
+      ),
+    );
   }
 
   @Post('post/check/:id')
@@ -629,7 +643,15 @@ export class LogisticsGatewayController {
           },
         },
       )
-      .pipe(timeout(8000));
+      .pipe(
+        timeout(8000),
+        // kH2zZsz3 (tekshiruv #4): javob `data` si — qabul qilingan buyurtma
+        // qatorlari (logistics `order.find_by_id` dan XOM). Kuryerga
+        // GET /orders/:id bilan AYNI rol proyeksiyasi.
+        map((response: unknown) =>
+          projectOrderPayloadForRoles(req?.user?.roles, response),
+        ),
+      );
   }
 
   @Patch('post/receive/scan/:id')

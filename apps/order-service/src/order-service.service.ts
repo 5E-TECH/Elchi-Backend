@@ -34,6 +34,10 @@ import {
 import { errorRes, successRes } from '../../../libs/common/helpers/response';
 import { resolveCourierShare as resolveCourierShareShare } from './domain/order-money';
 import { OrderLookupService } from './lookup/order-lookup.service';
+import {
+  ORDER_SCAN_LIGHT_SELECT,
+  toOrderScanLightView,
+} from './lookup/order-scan-light.view';
 import { OrderCustodyService } from './custody/order-custody.service';
 
 /** Qidiruvda identity-service'dan olinadigan mijozlar chegarasi. */
@@ -1408,6 +1412,45 @@ export class OrderServiceService {
 
     const enriched = await this.enrichOrders([order]);
     return successRes(enriched[0] ?? order, 200, 'Order by QR code');
+  }
+
+  /**
+   * D148eHMA — skaner uchun YENGIL javob (`order.find_by_qr_light`, gateway
+   * `?view=light`). Maydonlar ro'yxati va sababi: `lookup/order-scan-light.view`.
+   *
+   * ⚠️ OPT-IN: `findByQrCode` / `findByQrCodeEnriched` O'ZGARMADI — mavjud
+   * iste'molchilar (to'liq javobni kutadiganlar) sinmaydi. Qidiruv sharti
+   * ham AYNI (`qr_code_token` + `isDeleted=false`), ya'ni yengil va to'liq
+   * javob bir xil buyurtmani topadi.
+   */
+  async findByQrCodeLight(token: string) {
+    const qrToken = typeof token === 'string' ? token : '';
+    // Bo'sh token DB'ga bormaydi: TypeORM `undefined` shartni tashlab
+    // yuboradi va IXTIYORIY buyurtmani qaytarishi mumkin edi.
+    if (!qrToken.trim()) {
+      this.notFound('Order not found');
+    }
+    let order: Order | null = null;
+    try {
+      order = await this.orderRepo.findOne({
+        where: { qr_code_token: qrToken, isDeleted: false },
+        select: ORDER_SCAN_LIGHT_SELECT,
+        relations: { items: true },
+      });
+    } catch (error) {
+      this.handleDbError(error);
+    }
+    if (!order) {
+      this.notFound('Order not found');
+    }
+    // Nomlar (mijoz, market, tuman/viloyat, mahsulot) — to'liq javobdagi
+    // AYNI manbadan; keyin faqat oq ro'yxatdagi maydonlar qoldiriladi.
+    const enriched = await this.enrichOrders([order]);
+    return successRes(
+      toOrderScanLightView(enriched[0] ?? order),
+      200,
+      'Order by QR code (light)',
+    );
   }
 
   /**

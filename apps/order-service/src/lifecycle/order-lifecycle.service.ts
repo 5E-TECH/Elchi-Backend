@@ -35,8 +35,10 @@ import {
   SettlementStatus,
   Source_type,
   Where_deliver,
+  normalizeUzPhone,
   rmqSend,
   RMQ_SERVICE_TIMEOUT,
+  resolvePartnerMoneyFields,
 } from '@app/common';
 import type { EntityManager } from 'typeorm';
 import { successRes } from '../../../../libs/common/helpers/response';
@@ -4574,18 +4576,18 @@ export class OrderLifecycleService {
      * `null` — buyurtma hali sotilmagan (yoki rollback qilingan). Bu
      * ATAYLAB: 0 yuborish "yig'ildi, lekin hech narsa emas" degan ma'noli
      * da'vo bo'lardi va hamkor uni qarz hisobiga qo'shardi.
+     *
+     * Lx5oONlP: formula bu yerda YOZILMAYDI — `GET /partner/shipments/:id`
+     * ham ishlatadigan `resolvePartnerMoneyFields` (libs/common) chaqiriladi,
+     * ikki raqam ajralmasin. Snapshot bo'lmagan ESKI sotuvda (ustundan oldin
+     * yoki `updateFull` xatosi davrida sotilgan) qiymat endi `null` emas —
+     * sotuv formulasi (`resolveCollectibleAmount`) bilan tiklanadi.
      */
-    const collectedFromCustomer =
-      order.sale_collectible_amount != null
-        ? Number(order.sale_collectible_amount)
-        : null;
-    const elchiFee =
-      order.market_tariff != null ? Number(order.market_tariff) : null;
-    /** Elchi hamkorga qarzi: yig'ilgan naqd minus bizning tarifimiz. */
-    const marketAmount =
-      collectedFromCustomer != null && elchiFee != null
-        ? collectedFromCustomer - elchiFee
-        : null;
+    const {
+      collected_from_customer: collectedFromCustomer,
+      elchi_fee: elchiFee,
+      market_amount: marketAmount,
+    } = resolvePartnerMoneyFields(order);
 
     if (order.external_id) {
       await rmqSend(
@@ -5843,15 +5845,21 @@ export class OrderLifecycleService {
       const phoneRaw = String(
         this.getFieldValue(ext, fieldMapping.phone_field ?? 'phone') ?? '',
       );
-      const normalizedDigits = phoneRaw.replace(/\D/g, '');
-      const phone =
-        normalizedDigits.length === 12 && normalizedDigits.startsWith('998')
-          ? `+${normalizedDigits}`
-          : normalizedDigits.length === 9
-            ? `+998${normalizedDigits}`
-            : phoneRaw;
-      if (!phone?.trim()) {
+      if (!phoneRaw.trim()) {
         skipped.push({ external_id: externalId, reason: 'phone_missing' });
+        continue;
+      }
+      /**
+       * zfPNDCCr: umumiy `normalizeUzPhone` (ilgari bu yerda faqat "998..." va
+       * 9 xona keltirilib, "0901234567" kabi qolgani XOM ketardi — bitta odam
+       * alohida mijozga bo'linardi). Keltirib bo'lmasa qator TASHLANADI:
+       * `identity.customer.create` endi uni 400 bilan rad etadi va xato
+       * butun partiyani yarim yo'lda uzib qo'yardi. Mijoz yaratilishidan
+       * OLDIN — yetim mijoz qolmaydi.
+       */
+      const phone = normalizeUzPhone(phoneRaw);
+      if (!phone) {
+        skipped.push({ external_id: externalId, reason: 'phone_invalid' });
         continue;
       }
 

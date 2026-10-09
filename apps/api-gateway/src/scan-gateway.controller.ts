@@ -8,6 +8,7 @@ import {
   Inject,
   Param,
   Post,
+  Query,
   Req,
   UseGuards,
 } from '@nestjs/common';
@@ -19,6 +20,7 @@ import {
   ApiOkResponse,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
 import { IsNotEmpty, IsString } from 'class-validator';
@@ -28,6 +30,8 @@ import {
   assertQrOrderVisible,
   canLookupOrderByQr,
 } from './auth/order-qr-visibility';
+import { projectOrderPayloadForRoles } from './auth/order-role-projection';
+import { isOrderQrLightView, sendOrderQrLight } from './order-qr-light-view';
 
 type ScanResponseType =
   | 'order'
@@ -103,8 +107,12 @@ export class ScanGatewayController {
     if (error instanceof GatewayTimeoutException) return false;
     const raw: { statusCode?: number; status?: number } =
       error && typeof (error as { getError?: unknown }).getError === 'function'
-        ? (error as { getError: () => { statusCode?: number; status?: number } }).getError()
-        : (error as { statusCode?: number; status?: number }) ?? {};
+        ? (
+            error as {
+              getError: () => { statusCode?: number; status?: number };
+            }
+          ).getError()
+        : ((error as { statusCode?: number; status?: number }) ?? {});
     return raw?.statusCode === 404 || raw?.status === 404;
   }
 
@@ -129,7 +137,18 @@ export class ScanGatewayController {
     },
   })
   @ApiNotFoundResponse({ description: 'Topilmadi' })
-  async scan(@Param('token') token: string, @Req() req: { user: JwtUser }) {
+  @ApiQuery({
+    name: 'view',
+    required: false,
+    enum: ['light'],
+    description:
+      "D148eHMA: `light` — buyurtma tokeni uchun skaner ekraniga yengil javob. Paket/pochta tokenlariga ta'sir qilmaydi.",
+  })
+  async scan(
+    @Param('token') token: string,
+    @Req() req: { user: JwtUser },
+    @Query('view') view?: string,
+  ) {
     const normalizedToken = this.normalizeToken(token);
     const prefix = this.extractPrefix(normalizedToken);
 
@@ -162,14 +181,28 @@ export class ScanGatewayController {
       throw new ForbiddenException("Bu buyurtmani ko'rishga ruxsat yo'q");
     }
     try {
-      const response: unknown = await this.sendWithTimeout(
-        'order',
-        { cmd: 'order.find_by_qr' },
-        { token: normalizedToken },
-      );
+      // D148eHMA — `?view=light` OPT-IN; parametrsiz so'rov AYNAN avvalgidek.
+      // 404 yengil yo'lda ham shu yerga tushadi -> quyida QOP qidiruvi.
+      const response: unknown = isOrderQrLightView(view)
+        ? await sendOrderQrLight(
+            (pattern) =>
+              this.sendWithTimeout('order', pattern, {
+                token: normalizedToken,
+              }),
+            // Fallback — to'liq (enriched) javob: yengilning ustki to'plami.
+            { cmd: 'order.find_by_qr_enriched' },
+          )
+        : await this.sendWithTimeout(
+            'order',
+            { cmd: 'order.find_by_qr' },
+            { token: normalizedToken },
+          );
       const shaped = this.shapeResponse('order', response);
       assertQrOrderVisible(req?.user, shaped.data);
-      return shaped;
+      // kH2zZsz3: skan qilingan buyurtma `GET /orders/:id` bilan AYNI rol
+      // proyeksiyasida — kuryer market tarifi/filial ulushini, market esa
+      // kuryer tarifi/ulushini ko'rmaydi.
+      return projectOrderPayloadForRoles(req?.user?.roles, shaped);
     } catch (error) {
       /**
        * CyCV4XHR — buyurtma topilmadi. Token QOP (`external_batch_token`)

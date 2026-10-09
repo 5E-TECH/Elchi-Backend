@@ -1,6 +1,6 @@
 import { Inject, Injectable, Logger } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
-import { firstValueFrom, timeout } from 'rxjs';
+import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 
 type Row = Record<string, any>;
 
@@ -253,21 +253,64 @@ export class AuditEnrichmentService {
 
   // ---- resolvers -------------------------------------------------------
 
-  /** Resolve staff/market/courier ids (all roles except customer/superadmin). */
+  /**
+   * Actor/entity foydalanuvchilarini topadi — BARCHA rollar (superadmin ham).
+   *
+   * (2WRzdWpZ topilma, audit-actor-name) Ilgari `identity.user.find_all`
+   * (GET /users ro'yxati) ishlatilardi. U SUPERADMIN va mijozni ataylab
+   * chiqarib tashlaydi, shuning uchun superadmin amallari "Kim" ustunida
+   * ism o'rniga "1" bo'lib ko'rinardi (actor zaxira shakli, `user_name` NULL).
+   * Endi ichki `identity.user.find_by_ids` ishlatiladi.
+   */
   private async resolveUsers(ids: Set<string>): Promise<Map<string, Row>> {
     const map = new Map<string, Row>();
-    if (!ids.size) return map;
-    const all = Array.from(ids);
-    // Chunk so a big page doesn't exceed the find_all id-filter window.
+    // Faqat raqamli id: `system`/`partner:2` kabi qiymat identity'dagi bigint
+    // so'rovini yiqitib, butun sahifadagi ismlarni yo'qotardi. Bunday qator
+    // denormal `user_name`/`user_role` ustunlariga tayanadi.
+    const all = Array.from(ids).filter((id) => /^\d{1,19}$/.test(id));
+    if (!all.length) return map;
+    // Chunk so a big page doesn't exceed the identity id-filter window.
     for (let i = 0; i < all.length; i += 100) {
       const chunk = all.slice(i, i + 100);
-      const res = await this.sendSafe(this.identity, 'identity.user.find_all', {
-        query: { user_ids: chunk, limit: 100 },
-      });
-      const items: Row[] = res?.data?.items ?? res?.items ?? res?.data ?? [];
-      for (const u of items) if (u?.id !== undefined) map.set(String(u.id), u);
+      for (const u of await this.findUsersChunk(chunk))
+        if (u?.id !== undefined) map.set(String(u.id), u);
     }
     return map;
+  }
+
+  private async findUsersChunk(chunk: string[]): Promise<Row[]> {
+    const cmd = 'identity.user.find_by_ids';
+    try {
+      const res = await firstValueFrom(
+        this.identity.send({ cmd }, { ids: chunk }).pipe(timeout(this.TIMEOUT)),
+      );
+      return this.userItems(res);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'unknown';
+      // Identity javob bermayapti — ikkinchi so'rov faqat kutishni uzaytiradi.
+      if (err instanceof TimeoutError) {
+        this.logger.warn(`enrich leg ${cmd} failed: ${message}`);
+        return [];
+      }
+      // (2WRzdWpZ) Eski identity (deploy oralig'ida handler hali yo'q) —
+      // avvalgi yo'l: superadminsiz, lekin qolgan ismlar yo'qolmaydi.
+      this.logger.warn(
+        `enrich leg ${cmd} failed: ${message}; identity.user.find_all ga qaytildi`,
+      );
+      const legacy = await this.sendSafe(
+        this.identity,
+        'identity.user.find_all',
+        { query: { user_ids: chunk, limit: 100 } },
+      );
+      return this.userItems(legacy);
+    }
+  }
+
+  /** `{ data: [...] }` (find_by_ids) va `{ data: { items } }` (find_all). */
+  private userItems(res: any): Row[] {
+    const items: unknown =
+      res?.data?.items ?? res?.items ?? res?.data ?? res ?? [];
+    return Array.isArray(items) ? (items as Row[]) : [];
   }
 
   private async resolveBatch(

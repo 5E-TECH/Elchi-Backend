@@ -34,7 +34,11 @@ import { DataSource } from 'typeorm';
 import {
   ACTIVITY_LOG_DEVICE_RETENTION_DEFAULT_DAYS,
   ACTIVITY_LOG_DEVICE_RETENTION_ENV,
+  ACTIVITY_LOG_PRUNE_BATCH_DEFAULT,
+  ActivityLogSqlRunner,
+  buildActivityLogPruneCountSql,
   buildDeviceMetadataCountSql,
+  pruneActivityLogsBatched,
   quoteActivityLogTable,
   resolveDeviceRetentionDays,
   stripDeviceMetadataBatched,
@@ -59,8 +63,10 @@ async function main(): Promise<void> {
     process.exit(2);
   }
   const retentionDays = intFromEnv('ACTIVITY_LOG_RETENTION_DAYS', 365);
-  const batchSize = intFromEnv('ACTIVITY_LOG_PRUNE_BATCH', 10_000);
-  const cutoffSql = `now() - interval '${retentionDays} days'`;
+  const batchSize = intFromEnv(
+    'ACTIVITY_LOG_PRUNE_BATCH',
+    ACTIVITY_LOG_PRUNE_BATCH_DEFAULT,
+  );
   // (f2Ud5tju) Noto'g'ri qiymat — exit 2 (jim sukutga tushib, IP'ni kutilgandan
   // erta o'chirmasin); umumiy muddatdan katta bo'lsa umumiy ustun.
   const deviceDays = resolveDeviceRetentionDays(
@@ -79,6 +85,7 @@ async function main(): Promise<void> {
     logging: false,
   });
   await ds.initialize();
+  const run: ActivityLogSqlRunner = (sql, params) => ds.query(sql, params);
 
   try {
     const schemas: Array<{ table_schema: string }> = await ds.query(
@@ -102,8 +109,10 @@ async function main(): Promise<void> {
       const table = quoteActivityLogTable(table_schema);
 
       if (dryRun) {
+        // (f2Ud5tju, prune-delete-count) DELETE bilan AYNI shart (`$1` — kun).
         const [{ count }]: Array<{ count: string }> = await ds.query(
-          `SELECT COUNT(*)::text AS count FROM ${table} WHERE created_at < ${cutoffSql}`,
+          buildActivityLogPruneCountSql(table),
+          [retentionDays],
         );
         const n = Number(count);
         grandTotal += n;
@@ -121,30 +130,24 @@ async function main(): Promise<void> {
 
       // Batched delete: cap each statement so a big backlog can't hold a long
       // lock / bloat WAL. Loop until a batch deletes fewer than batchSize rows.
-      let schemaTotal = 0;
-      for (;;) {
-        // RETURNING 1 gives one row per deleted row, so the array length is the
-        // exact batch count (driver-agnostic, unlike a positional rowCount).
-        const deletedRows: unknown[] = await ds.query(
-          `DELETE FROM ${table}
-           WHERE id IN (
-             SELECT id FROM ${table}
-             WHERE created_at < ${cutoffSql}
-             ORDER BY id
-             LIMIT ${batchSize}
-           )
-           RETURNING 1`,
-        );
-        const deleted = Array.isArray(deletedRows) ? deletedRows.length : 0;
-        schemaTotal += deleted;
-        if (deleted < batchSize) break;
-      }
+      // (f2Ud5tju topilmasi, prune-delete-count) Avval top-level
+      // `DELETE ... RETURNING 1` natijasining uzunligi son deb olinardi —
+      // TypeORM DELETE uchun `[rows, rowCount]` qaytaradi, son har doim 2 edi:
+      // tsikl birinchi partiyadan keyin to'xtardi (har sxemadan ko'pi bilan
+      // `batchSize` qator, log'da "deleted 2"). Endi sinalgan helper: DELETE
+      // CTE ichida, natija — `SELECT COUNT(*)` qatori (retention.ts).
+      const schemaTotal = await pruneActivityLogsBatched(
+        run,
+        table,
+        retentionDays,
+        batchSize,
+      );
       grandTotal += schemaTotal;
 
       // (f2Ud5tju) DELETE dan keyin — o'chiriladigan qatorlar bekorga UPDATE
       // qilinmaydi. Partiyalab: har partiya alohida qisqa so'rov.
       const stripped = await stripDeviceMetadataBatched(
-        (sql, params) => ds.query(sql, params),
+        run,
         table,
         deviceCutoff,
         batchSize,

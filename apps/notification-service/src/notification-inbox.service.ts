@@ -444,6 +444,18 @@ export class NotificationInboxService {
           recipient_role: role,
           is_read: false,
           read_at: null,
+          /**
+           * (OA16fdSq / QFoRULeu — inbox-group-sort) Guruh qatorining
+           * yangilanishi — YANGI hodisa: inbox saralash kaliti `createdAt`
+           * ham yangilanadi, aks holda qator (masalan "bekor qilindi")
+           * birinchi hodisa vaqti bilan ro'yxat PASTIDA qolib ketardi. Vaqt
+           * — DB soati (`CURRENT_TIMESTAMP` = tranzaksiya boshi), xuddi shu
+           * dispatch'da INSERT qilingan qatorlarning `DEFAULT now()` i bilan
+           * bir xil. `updatedAt` bo'yicha saralash EMAS: u o'qildi belgisi,
+           * `delivery` yozuvi va o'chirishda ham o'zgaradi (qator sababsiz
+           * tepaga sakrardi) va `(recipient_id, updatedAt)` indeksi yo'q.
+           */
+          createdAt: () => 'CURRENT_TIMESTAMP',
         } as QueryDeepPartialEntity<Notification>);
       }
       toInsert = recipients.filter((r) => !rowIdByRecipient.has(r.id));
@@ -820,7 +832,11 @@ export class NotificationInboxService {
 
       const [items, total] = await this.repo.findAndCount({
         where,
-        order: { createdAt: 'DESC' },
+        // (inbox-group-sort) `createdAt` — oxirgi hodisa vaqti (guruh
+        // yangilanganda ham o'zgaradi, persistRows). `id` — teng vaqtlarda
+        // barqaror tartib: sahifalar orasida qator takrorlanmaydi/tushib
+        // qolmaydi (IDX_NOTIF_RECIPIENT_CREATED indeksi ishlatiladi).
+        order: { createdAt: 'DESC', id: 'DESC' },
         skip: (page - 1) * limit,
         take: limit,
       });
@@ -1012,6 +1028,7 @@ export class NotificationInboxService {
       link: row.link,
       is_read: row.is_read,
       read_at: row.read_at,
+      // (inbox-group-sort) group_key qatorida — OXIRGI hodisa vaqti.
       created_at: row.createdAt,
       // (uFmUS86e) Kanal natijalari inbox javobida ham — qo'shimcha maydon,
       // eski frontend uni e'tiborsiz qoldiradi.

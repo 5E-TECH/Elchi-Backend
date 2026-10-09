@@ -23,6 +23,40 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-09 — Prod testidan keyingi backend tuzatishlar (3-bosqich)
+
+- [2026-10-09] ⚠️ [order/identity] — Mijoz telefoni hamma yo'lda (POST /orders,
+  /orders/external, /orders/telegram/bot/create, import, ai-confirm, hamkor)
+  `+998XXXXXXXXX` ga normallashtiriladi; o'zbek raqamiga keltirib bo'lmaydigan
+  qiymat → **400** "Telefon raqam noto'g'ri" (`customer.phone_number`)
+  (zfPNDCCr). Eski normallashtirilmagan mijozlar ham topiladi (dublikat yo'q).
+  → **Frontendda:** 🔧 buyurtma formasidagi telefon maskasi 12 xonali `998…`
+  joylanganda prefiksni olib tashlasin (hozir `+998998887009` yuboradi).
+- [2026-10-09] ✏️ [order] — Buyurtma javoblarida rolga qarab moliyaviy
+  proyeksiya (kH2zZsz3): MARKET/MARKET_OPERATOR — `courier_tariff`,
+  `courier_share`, `branch_share` yo'q; COURIER — `market_tariff`,
+  `branch_share`, market tarif/komissiya maydonlari yo'q (detal, ro'yxat,
+  qr-code, scan, `GET /finance/history/:id`). Admin/menejer/registrator —
+  o'zgarmagan. `to_be_paid`/`paid_amount` kuryerga hozircha qoldirildi.
+  → **Frontendda:** 🔧 kuryer detalida `to_be_paid` qatorini yashiring.
+- [2026-10-09] 🆕 [order] — `GET /orders/qr-code/:token?view=light` va
+  `GET /scan/:token?view=light` — skaner uchun yengil javob (id, raqam,
+  status, summa, manzil, mijoz, tuman/viloyat, mahsulot nomlari) (D148eHMA).
+  Parametrsiz — avvalgidek to'liq javob.
+  → **Frontendda:** 🔧 skan ekranlari `view=light` dan foydalansin.
+- [2026-10-09] ✏️ [analytics] — Dashboard "Jami qabul qilingan" endi ro'yxat
+  bilan bir xil sanaydi (qisman sotuvdan hosil bo'lgan bola-buyurtma ham
+  alohida) (SqVMuhKo).
+- [2026-10-09] 🟢 [notification] — Inbox: guruhlangan qator (`group_key`)
+  yangilanganda ro'yxat tepasiga chiqadi (OA16fdSq).
+- [2026-10-09] ✏️ [logistics] — Tuman/viloyat o'chirish 400 xabarlari endi
+  tushunarli o'zbekcha, xom API yo'lisiz (oNAE3LW9).
+- [2026-10-09] 🟢 [audit] — Faoliyat jurnalida superadmin/admin amallari
+  "Kim" ustunida ism bilan (2WRzdWpZ).
+- [2026-10-09] ✏️ [integration] — Hamkor posilkasida `collected_from_customer`
+  eski sotuvlarda ham to'ladi (snapshot yo'q bo'lsa `total_price −
+  paid_online_amount`); GET va webhook bir manbadan (Lx5oONlP).
+
 ### 2026-10-09 — Kartadagidek qilib tugatildi (2-bosqich)
 
 - [2026-10-09] ⚠️ [identity] — `market_tg_token` endi HECH bir umumiy javobda

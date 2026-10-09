@@ -2890,6 +2890,18 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "view",
+            "required": false,
+            "in": "query",
+            "description": "D148eHMA: `light` — skaner uchun yengil javob (faqat skaner ekrani maydonlari). Berilmasa — to'liq buyurtma (o'zgarmagan).",
+            "schema": {
+              "enum": [
+                "light"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -11096,6 +11108,18 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "view",
+            "required": false,
+            "in": "query",
+            "description": "D148eHMA: `light` — buyurtma tokeni uchun skaner ekraniga yengil javob. Paket/pochta tokenlariga ta'sir qilmaydi.",
+            "schema": {
+              "enum": [
+                "light"
+              ],
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -13820,7 +13844,8 @@
           },
           "phone_number": {
             "type": "string",
-            "example": "+998901112233"
+            "example": "+998901112233",
+            "description": "O'zbekiston raqami. Qabul qilinadi: +998XXXXXXXXX, 998XXXXXXXXX, 0XXXXXXXXX, XXXXXXXXX (probel/qavs/defis bilan ham) — server +998XXXXXXXXX ga keltiradi; boshqasi 400."
           },
           "market_id": {
             "type": "string",
@@ -13996,7 +14021,8 @@
           },
           "phone_number": {
             "type": "string",
-            "example": "+998901112233"
+            "example": "+998901112233",
+            "description": "O'zbekiston raqami (+998XXXXXXXXX, 998..., 0..., 9 xona) — server +998XXXXXXXXX ga keltiradi; boshqasi 400."
           },
           "district_id": {
             "type": "string",

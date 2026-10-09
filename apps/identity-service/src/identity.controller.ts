@@ -529,6 +529,18 @@ export class IdentityController {
     );
   }
 
+  // (2WRzdWpZ audit-actor-name) Ichki: gateway faoliyat jurnali actor/entity
+  // ismlari uchun. find_all'dan farqli — superadmin ham qaytadi.
+  @MessagePattern({ cmd: 'identity.user.find_by_ids' })
+  getUsersByIds(
+    @Payload() payload: { ids?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.findUsersByIds(payload?.ids),
+    );
+  }
+
   @MessagePattern({ cmd: 'identity.courier.find_by_ids' })
   getCouriersByIds(
     @Payload() payload: FindCouriersByIdsPayload,

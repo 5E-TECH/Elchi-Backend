@@ -88,10 +88,11 @@ export function quoteActivityLogTable(
   return schema ? `${q(schema)}.${q(table)}` : q(table);
 }
 
-function normaliseBatchSize(batchSize: number): number {
-  return Number.isInteger(batchSize) && batchSize > 0
-    ? batchSize
-    : ACTIVITY_LOG_DEVICE_STRIP_BATCH_DEFAULT;
+function normaliseBatchSize(
+  batchSize: number,
+  fallback: number = ACTIVITY_LOG_DEVICE_STRIP_BATCH_DEFAULT,
+): number {
+  return Number.isInteger(batchSize) && batchSize > 0 ? batchSize : fallback;
 }
 
 const KEYS_SQL = `ARRAY[${ACTIVITY_LOG_DEVICE_METADATA_KEYS.map((k) => `'${k}'`).join(', ')}]::text[]`;
@@ -171,6 +172,84 @@ export async function stripDeviceMetadataBatched(
     total += stripped;
     if (stripped < limit || !row?.last_id) break;
     lastId = String(row.last_id);
+  }
+  return total;
+}
+
+/**
+ * UMUMIY muddat: `ACTIVITY_LOG_RETENTION_DAYS` dan eski qatorlar butunlay
+ * o'chiriladi (`scripts/prune-activity-logs.ts`, barcha sxemalar).
+ *
+ * (f2Ud5tju topilmasi, prune-delete-count) Avval skript top-level
+ * `DELETE ... RETURNING 1` natijasining `.length` ini son deb olardi. TypeORM
+ * 0.3 `query()` DELETE/UPDATE uchun `[rows, rowCount]` qaytaradi — `.length`
+ * har doim 2: tsikl birinchi partiyadan keyin to'xtardi (har ishga tushishda
+ * har sxemadan ko'pi bilan bitta partiya, log'da "deleted 2"), batch <= 2 da
+ * esa cheksiz aylanardi. Endi DELETE CTE ichida, yuqori darajadagi buyruq —
+ * `SELECT COUNT(*)`: driver shaklidan qat'i nazar bitta qator, aniq son.
+ */
+export const ACTIVITY_LOG_PRUNE_BATCH_DEFAULT = 10_000;
+
+/** `$1` — muddat (kun, musbat butun). DELETE va `--dry-run` uchun AYNI shart. */
+const PRUNE_CUTOFF_SQL = 'now() - make_interval(days => $1)';
+
+/**
+ * Bitta partiya: chegaradan eski qatorlardan PK tartibida `LIMIT` tasi
+ * o'chiriladi (bitta qisqa so'rov — uzoq qulf/WAL shishishi yo'q). Natija —
+ * bitta qator: `{ deleted: number }`.
+ */
+export function buildActivityLogPruneSql(
+  table: string,
+  batchSize: number = ACTIVITY_LOG_PRUNE_BATCH_DEFAULT,
+): string {
+  const limit = normaliseBatchSize(batchSize, ACTIVITY_LOG_PRUNE_BATCH_DEFAULT);
+  return `WITH batch AS (
+  SELECT s.id FROM ${table} AS s
+   WHERE s.created_at < ${PRUNE_CUTOFF_SQL}
+   ORDER BY s.id
+   LIMIT ${limit}
+), deleted AS (
+  DELETE FROM ${table}
+   WHERE id IN (SELECT id FROM batch)
+  RETURNING 1
+)
+SELECT COUNT(*)::int AS deleted FROM deleted`;
+}
+
+/** `--dry-run` uchun: o'chiriladigan qatorlar soni. `$1` — muddat (kun). */
+export function buildActivityLogPruneCountSql(table: string): string {
+  return `SELECT COUNT(*)::text AS count FROM ${table}
+   WHERE created_at < ${PRUNE_CUTOFF_SQL}`;
+}
+
+/**
+ * `retentionDays` dan eski qatorlarni PARTIYALAB o'chiradi; jami o'chirilgan
+ * qatorlar sonini qaytaradi. Partiya `batchSize` dan kam bo'lsa — tugadi.
+ * Noto'g'ri muddat (0 — HAMMA qatorni o'chirardi) so'rovsiz rad etiladi.
+ */
+export async function pruneActivityLogsBatched(
+  run: ActivityLogSqlRunner,
+  table: string,
+  retentionDays: number,
+  batchSize: number = ACTIVITY_LOG_PRUNE_BATCH_DEFAULT,
+): Promise<number> {
+  if (!Number.isInteger(retentionDays) || retentionDays <= 0) {
+    throw new RangeError(
+      `activity_logs prune: retentionDays musbat butun son bo'lishi kerak (${retentionDays}).`,
+    );
+  }
+  const limit = normaliseBatchSize(batchSize, ACTIVITY_LOG_PRUNE_BATCH_DEFAULT);
+  const sql = buildActivityLogPruneSql(table, limit);
+  let total = 0;
+  for (;;) {
+    const rows = (await run(sql, [retentionDays])) as
+      | Array<{ deleted?: number | string }>
+      | undefined;
+    const row = Array.isArray(rows) ? rows[0] : undefined;
+    const deleted = Number(row?.deleted ?? 0);
+    if (!Number.isFinite(deleted) || deleted <= 0) break;
+    total += deleted;
+    if (deleted < limit) break;
   }
   return total;
 }

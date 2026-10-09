@@ -26,6 +26,7 @@ import {
   SsrfBlockedError,
   normalizeUzPhone,
   maskPiiPayload,
+  resolvePartnerMoneyFields,
 } from '@app/common';
 import {
   ExternalIntegration,
@@ -1944,6 +1945,28 @@ export class IntegrationServiceService {
      * Shu bois endi solishtirish (`GET`) yo'lida ham qaytariladi — himoya
      * webhookka bog'liq bo'lmasin.
      */
+    /**
+     * HAQIQIY PUL MAYDONLARI (audit M2) — webhook payloadi bilan AYNI.
+     *
+     * ⚠️ Tortib olish (bu yer) va webhook BIR XIL raqam berishi SHART.
+     * Ikkisi ajralsa, hamkor qaysi biriga ishonishni bilmaydi va
+     * solishtiruv har safar "nomuvofiqlik" chiqaradi. Shu bois formula
+     * bu yerda YOZILMAYDI — order-service webhooki ham ishlatadigan
+     * `resolvePartnerMoneyFields` (libs/common) chaqiriladi.
+     *
+     * Lx5oONlP: snapshot (`sale_collectible_amount`) bo'lmagan ESKI sotuvda
+     * ilgari `null` qaytardi (#122, #123) — endi sotuv formulasi bilan
+     * tiklanadi (`total_price − paid_online_amount`), shuning uchun
+     * `status`, `sold_at`, `paid_online_amount` ham uzatiladi.
+     */
+    const money = resolvePartnerMoneyFields({
+      status: this.pluck(order, 'status'),
+      sold_at: this.pluck(order, 'sold_at'),
+      sale_collectible_amount: this.pluck(order, 'sale_collectible_amount'),
+      total_price: this.pluck(order, 'total_price'),
+      paid_online_amount: this.pluck(order, 'paid_online_amount'),
+      market_tariff: this.pluck(order, 'market_tariff'),
+    });
     return successRes(
       {
         shipment_id: String(ref.order_id),
@@ -1952,24 +1975,10 @@ export class IntegrationServiceService {
         cod_amount: Number(this.pluck(order, 'to_be_paid') ?? 0),
         /** @deprecated Nomi yolg'on — `collected_from_customer` ishlatilsin. */
         cod_collected: Number(this.pluck(order, 'paid_amount') ?? 0),
-        /**
-         * HAQIQIY PUL MAYDONLARI (audit M2) — webhook payloadi bilan AYNI.
-         *
-         * ⚠️ Tortib olish (bu yer) va webhook BIR XIL raqam berishi SHART.
-         * Ikkisi ajralsa, hamkor qaysi biriga ishonishni bilmaydi va
-         * solishtiruv har safar "nomuvofiqlik" chiqaradi.
-         */
-        collected_from_customer: nullableMoney(
-          this.pluck(order, 'sale_collectible_amount'),
-        ),
-        elchi_fee: nullableMoney(this.pluck(order, 'market_tariff')),
-        market_amount: (() => {
-          const collected = nullableMoney(
-            this.pluck(order, 'sale_collectible_amount'),
-          );
-          const fee = nullableMoney(this.pluck(order, 'market_tariff'));
-          return collected != null && fee != null ? collected - fee : null;
-        })(),
+        // Yuqoridagi izohga qarang (M2, Lx5oONlP) — webhook bilan AYNI manba.
+        collected_from_customer: money.collected_from_customer,
+        elchi_fee: money.elchi_fee,
+        market_amount: money.market_amount,
         total_price: Number(this.pluck(order, 'total_price') ?? 0),
         /**
          * Kuryer yozgan qo'shimcha xarajat. Hamkor buni o'z tomonida ham
@@ -5996,7 +6005,37 @@ export class IntegrationServiceService {
     return successRes(updated ?? savedQueue, 201, 'sync enqueued');
   }
 
+  /**
+   * Master kaliti o'chiq (`is_active=false`), lekin o'chirilmagan ulanishlar —
+   * ularning navbati to'xtatib turiladi (DOZ6dtJn). Ro'yxat kichik: har
+   * navbat yurishida bir marta o'qiladi.
+   */
+  private async pausedSyncIntegrationIds(): Promise<string[]> {
+    const rows = await this.integrationRepo.find({
+      where: { is_active: false, isDeleted: false },
+      select: { id: true },
+    });
+    return (rows ?? []).map((row) => String(row.id));
+  }
+
   private async processQueueItem(queue: SyncQueue): Promise<SyncQueue> {
+    const integration = await this.integrationRepo.findOne({
+      where: { id: String(queue.integration_id), isDeleted: false },
+    });
+
+    /**
+     * ⚠️ POYGA QO'RIQCHISI (DOZ6dtJn): master navbat yurishi o'rtasida
+     * o'chirilgan bo'lsa ham qator yiqitilmaydi — urinish sarflanmaydi,
+     * `pending` qoladi va keyinroq qayta ko'riladi (shu yurishda qayta
+     * olinmasligi uchun `next_retry_at` biroz suriladi).
+     */
+    if (integration && integration.is_active === false) {
+      queue.status = 'pending';
+      queue.next_retry_at = new Date(Date.now() + this.getRetryDelayMs(1));
+      await this.syncQueueRepo.save(queue);
+      return queue;
+    }
+
     queue.status = 'processing';
     queue.attempts = Number(queue.attempts ?? 0) + 1;
     queue.retry_count = Math.min(
@@ -6005,10 +6044,6 @@ export class IntegrationServiceService {
     );
     queue.last_error = null;
     await this.syncQueueRepo.save(queue);
-
-    const integration = await this.integrationRepo.findOne({
-      where: { id: String(queue.integration_id), isDeleted: false },
-    });
 
     if (!integration) {
       queue.status = 'failed';
@@ -6479,6 +6514,30 @@ export class IntegrationServiceService {
         return successRes({ message: 'queue processor is already running' });
       }
 
+      /**
+       * ⚠️ MASTER O'CHIQ ULANISH NAVBATI KUTADI (DOZ6dtJn).
+       *
+       * Ilgari o'chiq ulanishning navbat qatorlari ham olinardi: so'rov
+       * `findActiveBySlug` da 404 bilan yiqilar, har safar urinish sarflanar
+       * va ~21 daqiqada (1m/5m/15m) qator `permanently_failed` bo'lib,
+       * adminlarga xabar ketardi. Ya'ni master kalit "to'xtatish" emas,
+       * "navbatni yo'qotish" edi — UI esa "navbat to'planib turadi" deydi.
+       * Endi bunday qatorlar umuman olinmaydi: urinish sarflanmaydi, ulanish
+       * qayta yoqilganda navbat o'z tartibida ketadi. `webhook_enabled` va
+       * `reconcile_enabled` bu chiquvchi yo'lga ta'sir qilmaydi.
+       */
+      const pausedIds = await this.pausedSyncIntegrationIds();
+      if (integration_id && pausedIds.includes(String(integration_id))) {
+        return successRes(
+          { processed: 0, completed: 0, failed: 0, paused: true },
+          200,
+          "ulanish o'chiq (master kalit) — navbat ulanish yoqilishini kutmoqda",
+        );
+      }
+      const notPaused = pausedIds.length
+        ? { integration_id: Not(In(pausedIds)) }
+        : {};
+
       let processed = 0;
       let completed = 0;
       let failed = 0;
@@ -6495,8 +6554,12 @@ export class IntegrationServiceService {
               },
             ]
           : [
-              { status: 'pending', next_retry_at: IsNull() },
-              { status: 'pending', next_retry_at: LessThanOrEqual(now) },
+              { status: 'pending', next_retry_at: IsNull(), ...notPaused },
+              {
+                status: 'pending',
+                next_retry_at: LessThanOrEqual(now),
+                ...notPaused,
+              },
             ];
 
         const queue = await this.syncQueueRepo.findOne({

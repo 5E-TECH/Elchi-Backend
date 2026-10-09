@@ -103,6 +103,8 @@ import {
   ORDER_QR_LOOKUP_ROLES,
   assertQrOrderVisible,
 } from './auth/order-qr-visibility';
+import { projectOrderPayloadForRoles } from './auth/order-role-projection';
+import { isOrderQrLightView, sendOrderQrLight } from './order-qr-light-view';
 
 interface JwtUser {
   sub: string;
@@ -1612,7 +1614,11 @@ export class OrderGatewayController {
     @Body() dto: CreateOrderRequestDto,
     @Req() req: { user: JwtUser },
   ) {
-    return this.createOrderInternal(dto, req);
+    // kH2zZsz3 (tekshiruv #4): yaratilgan buyurtma qatori (order-service
+    // `findById`) — market/market operatori kuryer tarifi/ulushi va filial
+    // ulushi kalitlarini ko'rmaydi (GET /orders/:id bilan AYNI proyeksiya).
+    const response: unknown = await this.createOrderInternal(dto, req);
+    return projectOrderPayloadForRoles(req?.user?.roles, response);
   }
 
   /**
@@ -2591,7 +2597,13 @@ export class OrderGatewayController {
         }
         throw error;
       })
-      .then((response) => this.withPaginationMeta(response, pagination));
+      .then((response) =>
+        // kH2zZsz3: market — kuryer tarifi/ulushi va filial ulushisiz.
+        projectOrderPayloadForRoles(
+          roles,
+          this.withPaginationMeta(response, pagination),
+        ),
+      );
   }
 
   @Post('external')
@@ -2690,12 +2702,18 @@ export class OrderGatewayController {
           },
         )
         .pipe(timeout(8000)),
-    ).catch((error: unknown) => {
-      if (error instanceof TimeoutError) {
-        throw new GatewayTimeoutException('Order service response timeout');
-      }
-      throw error;
-    });
+    )
+      .then((response: unknown) =>
+        // kH2zZsz3 (tekshiruv #4): market — kuryer tarifi/ulushi va filial
+        // ulushi kalitlarisiz (GET /orders/:id bilan AYNI proyeksiya).
+        projectOrderPayloadForRoles(req?.user?.roles, response),
+      )
+      .catch((error: unknown) => {
+        if (error instanceof TimeoutError) {
+          throw new GatewayTimeoutException('Order service response timeout');
+        }
+        throw error;
+      });
   }
 
   @Get()
@@ -2988,13 +3006,14 @@ export class OrderGatewayController {
         pagination.limit,
       );
 
-      return {
+      // kH2zZsz3: kuryer ro'yxati — market tarifi/filial ulushisiz.
+      return projectOrderPayloadForRoles(roles, {
         data,
         total,
         page: pagination.page,
         limit: pagination.limit,
         ...paginationMeta,
-      };
+      });
     }
 
     const payload = {
@@ -3032,7 +3051,11 @@ export class OrderGatewayController {
       { cmd: 'order.find_all' },
       payload,
     ).then((response) => {
-      return this.withPaginationMeta(response, pagination);
+      // kH2zZsz3: ro'yxat qatorlari ham detal bilan AYNI rol proyeksiyasida.
+      return projectOrderPayloadForRoles(
+        roles,
+        this.withPaginationMeta(response, pagination),
+      );
     });
   }
 
@@ -3101,7 +3124,13 @@ export class OrderGatewayController {
           limit: pagination.limit,
         },
       },
-    ).then((response) => this.withPaginationMeta(response, pagination));
+    ).then((response) =>
+      // kH2zZsz3: market — kuryer tarifi/ulushi va filial ulushisiz.
+      projectOrderPayloadForRoles(
+        req?.user?.roles,
+        this.withPaginationMeta(response, pagination),
+      ),
+    );
   }
 
   @Get('courier/orders')
@@ -3185,16 +3214,20 @@ export class OrderGatewayController {
         pagination.limit,
       );
 
-      return successRes(
-        {
-          data: legacyData,
-          total,
-          page: pagination.page,
-          limit: pagination.limit,
-          ...paginationMeta,
-        },
-        200,
-        'All my orders',
+      // kH2zZsz3: kuryerning bekor qilinganlar tabi — market tarifisiz.
+      return projectOrderPayloadForRoles(
+        req?.user?.roles,
+        successRes(
+          {
+            data: legacyData,
+            total,
+            page: pagination.page,
+            limit: pagination.limit,
+            ...paginationMeta,
+          },
+          200,
+          'All my orders',
+        ),
       );
     }
 
@@ -3315,16 +3348,20 @@ export class OrderGatewayController {
       currentLimit,
     );
 
-    return successRes(
-      {
-        data: legacyData,
-        total,
-        page: currentPage,
-        limit: currentLimit,
-        ...paginationMeta,
-      },
-      200,
-      'All my orders',
+    // kH2zZsz3: kuryer ro'yxati — market tarifi/filial ulushisiz.
+    return projectOrderPayloadForRoles(
+      req?.user?.roles,
+      successRes(
+        {
+          data: legacyData,
+          total,
+          page: currentPage,
+          limit: currentLimit,
+          ...paginationMeta,
+        },
+        200,
+        'All my orders',
+      ),
     );
   }
 
@@ -3652,11 +3689,13 @@ export class OrderGatewayController {
       exclude_branch_source: excludeBranchSource,
     };
 
-    return this.sendOrderWithFallback(
+    const response: unknown = await this.sendOrderWithFallback(
       { cmd: 'order.find_new_by_market_enriched' },
       { cmd: 'order.find_new_by_market' },
       payload,
     );
+    // kH2zZsz3: market — kuryer tarifi/ulushi va filial ulushisiz.
+    return projectOrderPayloadForRoles(roles, response);
   }
 
   @Get('markets/:marketId/cancelled')
@@ -3708,7 +3747,7 @@ export class OrderGatewayController {
       excludeBranchSource = false;
     }
 
-    return this.sendOrderWithTimeout(
+    const response: unknown = await this.sendOrderWithTimeout(
       { cmd: 'order.find_cancelled_by_market_enriched' },
       {
         market_id: marketId,
@@ -3717,6 +3756,8 @@ export class OrderGatewayController {
         exclude_branch_source: excludeBranchSource,
       },
     );
+    // kH2zZsz3: market — kuryer tarifi/ulushi va filial ulushisiz.
+    return projectOrderPayloadForRoles(roles, response);
   }
 
   @Post('markets/:marketId/cancelled/qr')
@@ -3829,7 +3870,9 @@ export class OrderGatewayController {
       { id },
     );
     await this.assertCanViewOrder(req?.user, this.unwrapOrderRow(response));
-    return response;
+    // kH2zZsz3: kuryer — market tarifi/filial ulushisiz, market — kuryer
+    // tarifi/ulushi va filial ulushisiz (auth/order-role-projection).
+    return projectOrderPayloadForRoles(req?.user?.roles, response);
   }
 
   @Get('qr-code/:token')
@@ -3838,21 +3881,36 @@ export class OrderGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get order by QR code (Post Control style)' })
   @ApiParam({ name: 'token', description: 'Order QR token' })
+  @ApiQuery({
+    name: 'view',
+    required: false,
+    enum: ['light'],
+    description:
+      "D148eHMA: `light` — skaner uchun yengil javob (faqat skaner ekrani maydonlari). Berilmasa — to'liq buyurtma (o'zgarmagan).",
+  })
   async findByQrCode(
     @Param('token') token: string,
     @Req() req?: { user: JwtUser },
+    @Query('view') view?: string,
   ) {
-    const response: unknown = await this.sendOrderWithFallback(
-      { cmd: 'order.find_by_qr_enriched' },
-      { cmd: 'order.find_by_qr' },
-      { token },
-    );
+    // D148eHMA — `?view=light` OPT-IN: parametrsiz so'rov AYNAN avvalgidek.
+    const response: unknown = isOrderQrLightView(view)
+      ? await sendOrderQrLight(
+          (pattern) => this.sendOrderWithTimeout(pattern, { token }),
+          { cmd: 'order.find_by_qr_enriched' },
+        )
+      : await this.sendOrderWithFallback(
+          { cmd: 'order.find_by_qr_enriched' },
+          { cmd: 'order.find_by_qr' },
+          { token },
+        );
     // fix3 C11 (CODE-04): market faqat o'z posilkasini (auth/order-qr-visibility).
     assertQrOrderVisible(
       req?.user,
       (response as { data?: unknown } | null)?.data,
     );
-    return response;
+    // kH2zZsz3: QR orqali ham AYNI rol proyeksiyasi (detal bilan bir xil).
+    return projectOrderPayloadForRoles(req?.user?.roles, response);
   }
 
   @Post('scan-assign')
