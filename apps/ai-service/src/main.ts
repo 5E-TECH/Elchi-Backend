@@ -63,7 +63,12 @@ async function bootstrap() {
   // PRECONDITION_FAILED hodisasi).
   opts.options!.prefetchCount =
     config.get<number>('AI_RMQ_PREFETCH') ?? AI_RMQ_PREFETCH_DEFAULT;
-  app.connectMicroservice(opts);
+  // (f2Ud5tju) Hybrid app: `app.useGlobalInterceptors` faqat HTTP'ga
+  // qo'llanadi — `inheritAppConfig` siz RMQ handler'larida RmqTraceInterceptor
+  // UMUMAN ishlamasdi (trace_id / IP / qurilma servisga yetib bormasdi).
+  // Enhancer'lar shu chaqiruvda nusxalanadi: bu yerdan KEYIN qo'shilgan
+  // global pipe/filter RMQ'ga ta'sir qilmaydi.
+  app.connectMicroservice(opts, { inheritAppConfig: true });
 
   // ⚠️ MAXFIYLIK (HD5zOyBp #11/#16): muddati o'tgan `ai.order.extract` xabari
   // (xom matn + base64 rasmlar) `ai_queue_dlq`ga tushadi — u TTL'siz va

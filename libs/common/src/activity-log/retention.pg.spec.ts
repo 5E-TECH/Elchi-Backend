@@ -4,7 +4,9 @@ import { ActivityLog } from './activity-log.entity';
 import { ActivityLogService } from './activity-log.service';
 import {
   ACTIVITY_LOG_DEVICE_RETENTION_ENV,
+  buildActivityLogPruneCountSql,
   buildDeviceMetadataCountSql,
+  pruneActivityLogsBatched,
   quoteActivityLogTable,
   stripDeviceMetadataBatched,
 } from './retention';
@@ -170,6 +172,85 @@ describePg('activity_logs ip/qurilma retention — real Postgres', () => {
     await expect(
       stripDeviceMetadataBatched(run, table, cutoff, 10),
     ).resolves.toBe(0);
+  });
+
+  // f2Ud5tju topilmasi (prune-delete-count): haqiqiy TypeORM `ds.query()`
+  // top-level DELETE uchun `[rows, rowCount]` qaytaradi — eski skript `.length`
+  // (= 2) ni son deb olib, birinchi partiyadan keyin to'xtardi.
+  it('ildiz sabab: eski skript DELETE so`rovi — `.length` 2, 10 ta o`chgan bo`lsa ham', async () => {
+    await insert(
+      Array.from({ length: 23 }, (_, i) => ({
+        tag: `expired-${i}`,
+        ageDays: 400 + i,
+        metadata: null,
+      })),
+    );
+    const legacy: unknown[] = await ds.query(
+      `DELETE FROM ${table}
+           WHERE id IN (
+             SELECT id FROM ${table}
+             WHERE created_at < now() - interval '365 days'
+             ORDER BY id
+             LIMIT 10
+           )
+           RETURNING 1`,
+    );
+    expect(legacy).toHaveLength(2); // eski skript log'i: "deleted 2"
+    expect(legacy[1]).toBe(10);
+    expect((await byTag()).size).toBe(13);
+  });
+
+  it('prune skripti: batch`dan ko`p eski qator — HAMMASI o`chadi, son aniq; keyin strip ishlaydi', async () => {
+    await insert([
+      ...Array.from({ length: 23 }, (_, i) => ({
+        tag: `expired-${i}`,
+        ageDays: 400 + i,
+        metadata: { ...DEVICE, n: i },
+      })),
+      { tag: 'old', ageDays: 40, metadata: { ...DEVICE, market_id: '1' } },
+      { tag: 'fresh', ageDays: 5, metadata: { ...DEVICE } },
+    ]);
+    const run = jest.fn((sql: string, params: unknown[]) =>
+      ds.query(sql, params),
+    );
+    const countExpired = async () => {
+      const [{ count }]: Array<{ count: string }> = await ds.query(
+        buildActivityLogPruneCountSql(table),
+        [365],
+      );
+      return Number(count);
+    };
+
+    // --dry-run: o'chiriladiganlar soni, hech narsa o'zgarmaydi
+    await expect(countExpired()).resolves.toBe(23);
+    expect((await byTag()).size).toBe(25);
+
+    await expect(pruneActivityLogsBatched(run, table, 365, 10)).resolves.toBe(
+      23,
+    );
+    expect(run).toHaveBeenCalledTimes(3); // 10 + 10 + 3
+    await expect(countExpired()).resolves.toBe(0);
+
+    // skript tartibi: DELETE dan keyin ip/qurilma strip
+    await expect(
+      stripDeviceMetadataBatched(
+        run,
+        table,
+        new Date(Date.now() - 30 * DAY),
+        10,
+      ),
+    ).resolves.toBe(1);
+    const rows = await byTag();
+    expect([...rows.keys()].sort()).toEqual(['fresh', 'old']);
+    expect(rows.get('old')!.metadata).toEqual({ market_id: '1' });
+    expect(rows.get('fresh')!.metadata).toEqual(DEVICE);
+
+    // qayta ishga tushirish — 0, bitta so'rov
+    run.mockClear();
+    await expect(pruneActivityLogsBatched(run, table, 365, 10)).resolves.toBe(
+      0,
+    );
+    expect(run).toHaveBeenCalledTimes(1);
   });
 
   it('ActivityLogService.prune: umumiy muddat DELETE, env muddati tozalaydi', async () => {

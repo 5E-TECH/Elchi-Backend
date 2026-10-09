@@ -529,3 +529,152 @@ describe('mergeDistricts — birlashtirish (oNAE3LW9 TC5)', () => {
     expect(await statusOf(svc.mergeDistricts('173', '999'))).toBe(404);
   });
 });
+
+/**
+ * oNAE3LW9 (merge-message) — 2026-10-09 prod UI testi: buyurtmasi bor tumanni
+ * o'chirishda frontend backend matnini to'g'ridan-to'g'ri ko'rsatdi va unda
+ * xom API yo'li bor edi: "... birlashtiring (POST /district/187/merge) ...".
+ * Matn faqat o'zbekcha tushuntirish bo'lishi, endpoint esa mashina uchun
+ * alohida `data.hint` maydonida berilishi kerak. Maslahat faqat BAJARSA
+ * BO'LADIGAN amalni taklif qiladi.
+ */
+describe('o`chirish xabarlari — foydalanuvchiga tushunarli (oNAE3LW9 merge-message)', () => {
+  /** Matnda HTTP metod + yo'l ("POST /district/...") bo'lmasligi kerak. */
+  const RAW_API = /\b(GET|POST|PATCH|PUT|DELETE)\s+\/|\/district\/|\/merge\b/;
+
+  it('⭐ tuman: matnda API yo`li yo`q, sonlar saqlangan, endpoint `data.hint` da', async () => {
+    // Prod holati: 1 ta buyurtma + 1 ta mijoz (tuman #187 o'rniga #173).
+    const { svc } = make({
+      rows: {
+        orders: [order('40', '173', '3')],
+        users: [order('41', '173', '3')],
+      },
+    });
+    const err = await errorOf(svc.deleteDistrict('173'));
+    expect(err.statusCode).toBe(400);
+    expect(err.message).not.toMatch(RAW_API);
+    // "ularni" emas — nimani ko'chirish kerakligi aniq aytiladi.
+    expect(err.message).toBe(
+      "Bu tumanda 1 ta buyurtma, 1 ta foydalanuvchi (mijoz/kuryer/market) bor, shuning uchun uni o'chirib bo'lmaydi. " +
+        "Avval tumanlarni birlashtiring (bu tumanni boshqa tumanga qo'shing) yoki buyurtma va foydalanuvchilarni boshqa tumanga ko'chiring.",
+    );
+    expect(err.message).not.toContain('ularni');
+    expect(err.data).toEqual({
+      reason: 'district_in_use',
+      usage: { orders: 1, users: 1, branches: 0, transfer_batches: 0 },
+      hint: { action: 'merge', method: 'POST', path: '/district/173/merge' },
+    });
+    expect(svc.districtRepo.remove).not.toHaveBeenCalled();
+  });
+
+  it('tuman: faqat filial bog`langan bo`lsa ham matn toza, son va ko`chiriladigan tur aytiladi', async () => {
+    const { svc } = make({ rows: { branches: [order('7', '173', '3')] } });
+    const err = await errorOf(svc.deleteDistrict('173'));
+    expect(err.message).not.toMatch(RAW_API);
+    expect(err.message).toContain('Bu tumanda 1 ta filial bor');
+    expect(err.message).toContain('Avval tumanlarni birlashtiring');
+    expect(err.message).toContain(
+      "yoki filiallarni boshqa tumanga ko'chiring.",
+    );
+    expect(err.data.usage.branches).toBe(1);
+  });
+
+  it('tuman: uchala tur — "buyurtma, foydalanuvchi va filiallarni"', async () => {
+    const { svc } = make({
+      rows: {
+        orders: [order('40', '173', '3')],
+        users: [order('41', '173', '3')],
+        branches: [order('7', '173', '3')],
+      },
+    });
+    const err = await errorOf(svc.deleteDistrict('173'));
+    expect(err.message).toContain(
+      "yoki buyurtma, foydalanuvchi va filiallarni boshqa tumanga ko'chiring.",
+    );
+  });
+
+  it('⭐ viloyat: tumani bor — bajarsa bo`ladigan yo`l (o`chirish / boshqa viloyatdagi tumanga birlashtirish)', async () => {
+    const { svc } = make({ regionDistricts: 4 });
+    const err = await errorOf(svc.deleteRegion('3'));
+    expect(err.statusCode).toBe(400);
+    expect(err.message).not.toMatch(RAW_API);
+    // `district.region_id` ni o'zgartiradigan API yo'q (PATCH district faqat
+    // `assigned_region`) — "boshqa viloyatga ko'chiring" bajarib bo'lmaydi.
+    expect(err.message).not.toContain("ko'chiring");
+    expect(err.message).toBe(
+      "Bu viloyatda 4 ta tuman bor, shuning uchun uni o'chirib bo'lmaydi. Avval tumanlarni o'chiring yoki boshqa viloyatdagi tumanga birlashtiring.",
+    );
+    expect(err.data).toEqual({ reason: 'region_has_districts', districts: 4 });
+  });
+
+  it('viloyat: maslahat haqiqatan bajariladi — boshqa viloyatdagi tumanga birlashtirilgan tuman o`chadi', async () => {
+    // #173 (viloyat 3) → #50 (viloyat 9): birlashtirish boshqa viloyatga
+    // ruxsat etiladi, A tuman o'chadi va buyurtmalar B viloyatiga o'tadi.
+    const { svc, districts, rows } = make({
+      rows: { orders: [order('40', '173', '3')] },
+    });
+    const res = await svc.mergeDistricts('173', '50');
+    expect(res.statusCode).toBe(200);
+    expect(districts['173']).toBeUndefined();
+    expect(rows.orders[0]).toMatchObject({ district_id: '50', region_id: '9' });
+  });
+
+  it('viloyat: faqat ko`chirsa bo`ladigan yozuvlar — sonlar saqlangan, aniq maslahat', async () => {
+    const { svc } = make({
+      rows: {
+        orders: [order('11', '999', '3')],
+        users: [order('301', '999', '3')],
+      },
+    });
+    const err = await errorOf(svc.deleteRegion('3'));
+    expect(err.statusCode).toBe(400);
+    expect(err.message).not.toMatch(RAW_API);
+    expect(err.message).toBe(
+      "Bu viloyatga 1 ta buyurtma, 1 ta foydalanuvchi (mijoz/kuryer/market) bog'langan, shuning uchun uni o'chirib bo'lmaydi. Avval buyurtma va foydalanuvchilarni boshqa viloyatga ko'chiring.",
+    );
+    expect(err.data).toEqual({
+      reason: 'region_in_use',
+      usage: {
+        orders: 1,
+        users: 1,
+        branches: 0,
+        transfer_batches: 0,
+        posts: 0,
+      },
+    });
+  });
+
+  it('⭐ viloyat: pochta/jo`natma (tarixiy) bog`langan — "ko`chiring" taklif qilinmaydi', async () => {
+    const { svc } = make({
+      rows: { orders: [order('11', '999', '3')] },
+      posts: 2,
+    });
+    const err = await errorOf(svc.deleteRegion('3'));
+    expect(err.statusCode).toBe(400);
+    expect(err.message).not.toMatch(RAW_API);
+    expect(err.message).not.toContain("ko'chiring");
+    expect(err.message).toBe(
+      "Bu viloyatga 1 ta buyurtma, 2 ta pochta bog'langan, shuning uchun uni o'chirib bo'lmaydi. Pochtalar tarixiy yozuv bo'lgani uchun ularni boshqa viloyatga ko'chirib bo'lmaydi.",
+    );
+    expect(err.data).toEqual({
+      reason: 'region_in_use',
+      usage: {
+        orders: 1,
+        users: 0,
+        branches: 0,
+        transfer_batches: 0,
+        posts: 2,
+      },
+    });
+  });
+
+  it('viloyat: pochta + filiallararo jo`natma — ikkalasi nomlanadi, "ko`chiring" yo`q', async () => {
+    const { svc } = make({ posts: 1, batches: ['3'] });
+    const err = await errorOf(svc.deleteRegion('3'));
+    expect(err.statusCode).toBe(400);
+    expect(err.message).not.toContain("ko'chiring");
+    expect(err.message).toContain(
+      "Pochta va filiallararo jo'natmalar tarixiy yozuv bo'lgani uchun ularni boshqa viloyatga ko'chirib bo'lmaydi.",
+    );
+  });
+});

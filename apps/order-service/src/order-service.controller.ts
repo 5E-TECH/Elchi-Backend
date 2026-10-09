@@ -292,6 +292,18 @@ export class OrderServiceController {
     );
   }
 
+  // D148eHMA — skaner uchun YENGIL javob (gateway `?view=light`). To'liq
+  // `order.find_by_qr_enriched` o'zgarmagan: bu alohida, opt-in yo'l.
+  @MessagePattern({ cmd: 'order.find_by_qr_light' })
+  findByQrLight(
+    @Payload() data: { token: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderService.findByQrCodeLight(data?.token),
+    );
+  }
+
   // CyCV4XHR — QOP (external_batch_token) bo'yicha a'zo posilkalar. Skaner
   // order topa olmaganda (prefiksiz qop yorlig'i) gateway shu yo'lga tushadi.
   @MessagePattern({ cmd: 'order.find_batch_by_external_token' })

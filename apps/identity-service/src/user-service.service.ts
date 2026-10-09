@@ -192,6 +192,52 @@ function primitiveText(value: unknown): string {
     : '';
 }
 
+/**
+ * Mijozning ESKI (normallashtirilmagan) yozuv shakllari (zfPNDCCr).
+ *
+ * Normallashtirishdan oldin mijoz telefoni XOM satr bilan yozilardi (prod
+ * E2E: "900000001", "+998 90 000 00 01"). Ma'lumot migratsiyasisiz yangi
+ * buyurtma o'sha mijozga tushishi uchun kanonik raqamdan keyin shu shakllar
+ * bo'yicha ham izlanadi (unique indeks — `IN (...)`, jadval to'liq
+ * skanerlanmaydi). Ro'yxatdagi HAR shakl `normalizeUzPhone` da AYNI kanonik
+ * raqamga qaytadi — begona odamning raqami hech qachon tushmaydi.
+ *
+ * `rawPhone` — kiritilgan xom satr (o'sha odam avval aynan shu shaklda
+ * yozilgan bo'lsa). Kanonikning o'zi bu yerda yo'q — u 1-qadamda tekshiriladi.
+ */
+function legacyCustomerPhoneForms(phone: string, rawPhone: string): string[] {
+  const n = phone.slice(4); // milliy 9 raqam
+  const spaced = `+998 ${n.slice(0, 2)} ${n.slice(2, 5)} ${n.slice(5, 7)} ${n.slice(7)}`;
+  return [
+    ...new Set([`998${n}`, n, `0${n}`, `8${n}`, spaced, rawPhone]),
+  ].filter(
+    (form) =>
+      form.length > 0 &&
+      form.length <= 20 &&
+      form !== phone &&
+      normalizeUzPhone(form) === phone,
+  );
+}
+
+/**
+ * Batch `*.find_by_ids` uchun id ro'yxatini tozalaydi: takrorsiz, faqat
+ * bigint chegarasidagi musbat butun sonlar (aks holda Postgres xatosi — 500),
+ * ko'pi bilan 500 ta.
+ */
+function cleanBigintIds(ids: unknown): string[] {
+  return [
+    ...new Set(
+      (Array.isArray(ids) ? ids : [])
+        .map((id) => primitiveText(id).trim())
+        .filter(
+          (id) =>
+            /^\d{1,19}$/.test(id) &&
+            BigInt(id) <= BigInt('9223372036854775807'),
+        ),
+    ),
+  ].slice(0, 500);
+}
+
 function describeSagaError(error: unknown): string {
   if (error instanceof Error) {
     return error.message;
@@ -1276,18 +1322,7 @@ export class UserServiceService implements OnModuleInit {
    * logistics tekshiradi). findCouriersByIds bilan bir xil shakl.
    */
   async findLogistsByIds(ids: unknown) {
-    const clean = [
-      ...new Set(
-        (Array.isArray(ids) ? ids : [])
-          .map((id) => primitiveText(id).trim())
-          // bigint chegarasidan tashqari id Postgres xatosi (500) bo'lardi.
-          .filter(
-            (id) =>
-              /^\d{1,19}$/.test(id) &&
-              BigInt(id) <= BigInt('9223372036854775807'),
-          ),
-      ),
-    ].slice(0, 500);
+    const clean = cleanBigintIds(ids);
     if (!clean.length) {
       return { success: true, data: [] };
     }
@@ -2331,9 +2366,40 @@ export class UserServiceService implements OnModuleInit {
   }
 
   async createCustomer(dto: CreateCustomerDto) {
-    const existing = await this.users.findOne({
-      where: [{ phone_number: dto.phone_number, isDeleted: false }],
-    });
+    /**
+     * TELEFON NORMALLASHTIRILADI (zfPNDCCr).
+     *
+     * Bu RPC — Elchi'da mijoz yaratiladigan YAGONA joy (POST /orders,
+     * /orders/external, telegram bot, ai-confirm, hamkor, tashqi sayt
+     * importi). Ilgari mijoz XOM satr bo'yicha qidirilib, XOM satr bilan
+     * yozilardi: bitta odam formatiga qarab ("998901234567", "901234567",
+     * "+998 90 123 45 67") bir nechta mijozga bo'linardi, "not-a-phone" ham
+     * o'tardi. RMQ payloadi `CreateCustomerDto` bo'yicha validatsiya
+     * qilinMAYDI (`{ dto }` ichida), shuning uchun tekshiruv shu yerda.
+     */
+    const rawPhone = primitiveText(dto?.phone_number).trim();
+    const phone = normalizeUzPhone(dto?.phone_number);
+    if (!phone) {
+      this.badRequest(
+        "Telefon raqam noto'g'ri — +998XXXXXXXXX formatidagi raqam kerak",
+      );
+    }
+
+    // 1) Kanonik raqam — avvalgi xulq: boshqa roldagi egasi bo'lsa 409.
+    // 2) Topilmasa — eski (normallashtirilmagan) MIJOZ yozuvi; faqat mijoz
+    //    roli: xodimning eski yozuvi mijoz sifatida qaytib ketmasin.
+    const existing =
+      (await this.users.findOne({
+        where: { phone_number: phone, isDeleted: false },
+      })) ??
+      (await this.users.findOne({
+        where: {
+          phone_number: In(legacyCustomerPhoneForms(phone, rawPhone)),
+          role: Roles.CUSTOMER,
+          isDeleted: false,
+        },
+        order: { id: 'ASC' },
+      }));
 
     if (existing) {
       if (existing.role !== Roles.CUSTOMER) {
@@ -2387,7 +2453,8 @@ export class UserServiceService implements OnModuleInit {
     const generatedPassword = `cust_${randomBytes(12).toString('hex')}`;
     const customer = this.users.create({
       name: dto.name,
-      phone_number: dto.phone_number,
+      // zfPNDCCr: doim kanonik +998XXXXXXXXX.
+      phone_number: phone,
       extra_number: dto.extra_number ?? null,
       address: dto.address ?? null,
       district_id: dto.district_id,
@@ -3033,6 +3100,45 @@ export class UserServiceService implements OnModuleInit {
     };
   }
 
+  /**
+   * (2WRzdWpZ topilma, audit-actor-name) Gateway faoliyat jurnali "Kim"
+   * ustuni uchun ICHKI batch. `identity.user.find_all` (GET /users ro'yxati)
+   * SUPERADMIN va mijozni ataylab chiqarib tashlaydi — shu sabab superadmin
+   * amallari jurnalda ism o'rniga "1" bo'lib ko'rinardi. Bu yerda rol filtri
+   * YO'Q, faqat o'chirilmagan foydalanuvchilar va faqat UI'ga kerakli qisqa
+   * maydonlar (parol/token/manzil qaytmaydi).
+   */
+  async findUsersByIds(ids: unknown) {
+    const clean = cleanBigintIds(ids);
+    if (!clean.length) {
+      return { success: true, data: [] };
+    }
+
+    const users = await this.users.find({
+      where: { id: In(clean), isDeleted: false },
+      select: {
+        id: true,
+        name: true,
+        username: true,
+        phone_number: true,
+        role: true,
+        status: true,
+      },
+    });
+
+    return {
+      success: true,
+      data: users.map((u) => ({
+        id: u.id,
+        name: u.name ?? null,
+        username: u.username ?? null,
+        phone_number: u.phone_number ?? null,
+        role: u.role ?? null,
+        status: u.status ?? null,
+      })),
+    };
+  }
+
   async findCouriersByIds(ids: string[]) {
     if (!ids.length) {
       return { success: true, data: [] };
@@ -3057,6 +3163,10 @@ export class UserServiceService implements OnModuleInit {
       return { success: true, data: [] };
     }
 
+    // zfPNDCCr: qidiruv telefon bo'lsa ("0901234567", "+998 90 123 45 67"),
+    // milliy 9 raqam bo'yicha ham izlanadi — kanonik (+998XXXXXXXXX) va eski
+    // "998..."/"9 xona" yozuvlar topiladi. Ism qidiruviga ta'sir qilmaydi.
+    const searchPhone = normalizeUzPhone(search.trim());
     const qb = this.users
       .createQueryBuilder('u')
       .where('u.isDeleted = :isDeleted', { isDeleted: false })
@@ -3067,6 +3177,11 @@ export class UserServiceService implements OnModuleInit {
             'u.phone_number ILIKE :s',
             { s: `%${search.trim()}%` },
           );
+          if (searchPhone) {
+            q.orWhere('u.phone_number LIKE :national', {
+              national: `%${searchPhone.slice(4)}%`,
+            });
+          }
         }),
       )
       // Barqaror tartib: limitdan oshganda qaysi mijozlar qaytishi tasodifiy

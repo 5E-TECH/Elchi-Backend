@@ -34,7 +34,14 @@ async function bootstrap() {
   const rmqService = app.get<RmqService>(RmqService);
 
   await rmqService.setupDlqTopology('FINANCE');
-  app.connectMicroservice(rmqService.getOptions('FINANCE'));
+  // (f2Ud5tju) Hybrid app: `app.useGlobalInterceptors` faqat HTTP'ga
+  // qo'llanadi — `inheritAppConfig` siz RMQ handler'larida RmqTraceInterceptor
+  // UMUMAN ishlamasdi (trace_id / IP / qurilma servisga yetib bormasdi).
+  // Enhancer'lar shu chaqiruvda nusxalanadi: bu yerdan KEYIN qo'shilgan
+  // global pipe/filter RMQ'ga ta'sir qilmaydi.
+  app.connectMicroservice(rmqService.getOptions('FINANCE'), {
+    inheritAppConfig: true,
+  });
 
   await app.startAllMicroservices();
   registerLiveness(app, 'finance-service');

@@ -4804,17 +4804,21 @@ export class BranchServiceService implements OnModuleInit {
     const countsByBranch = new Map<string, number>();
     if (branchIds.length) {
       try {
+        type BranchCountRow = { branch_id: string; count: number };
         const response = await lastValueFrom(
           this.orderClient
-            .send<{
-              data?: Array<{ branch_id: string; count: number }>;
-            }>(
-              { cmd: 'order.analytics.count_by_branch' },
-              { branch_ids: branchIds, status: Order_status.NEW },
-            )
+            .send<
+              BranchCountRow[] | { data?: BranchCountRow[] }
+            >({ cmd: 'order.analytics.count_by_branch' }, { branch_ids: branchIds, status: Order_status.NEW })
             .pipe(timeout(10000)),
         );
-        for (const row of response?.data ?? []) {
+        // (RghzFldr) order-service XOM massiv qaytaradi (`successRes` siz) —
+        // ilgari faqat `response.data` o'qilardi, natijada sanoq doim 0 va
+        // "Yangi buyurtmali filiallar" jadvali doim bo'sh edi.
+        const rows = Array.isArray(response)
+          ? response
+          : (response?.data ?? []);
+        for (const row of rows) {
           countsByBranch.set(String(row.branch_id), Number(row.count) || 0);
         }
       } catch {

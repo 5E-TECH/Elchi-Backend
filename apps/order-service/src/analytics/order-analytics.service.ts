@@ -326,6 +326,27 @@ export class OrderAnalyticsService {
     return Number(row?.count ?? 0);
   }
 
+  /**
+   * Dashboard «Jami qabul qilingan» — davrda YARATILGAN buyurtma qatorlari.
+   *
+   * ⚠️ BOLA-BUYURTMA ALOHIDA SANALADI (SqVMuhKo, 2026-10-09 prod testi).
+   * Ilgari `COUNT(DISTINCT COALESCE(o.parent_order_id, o.id))` edi: qisman
+   * sotuvdan hosil bo'lgan bola (`partlySellOrder` yaratadigan CANCELLED
+   * qator, o'z QR'i va qaytarish yo'li bilan) ota bilan bitta sanalardi.
+   * Natijada:
+   *  - GET /orders (sana filtri) bilan son farq qilardi — 08.10 da ro'yxat
+   *    10, dashboard 9; 01–09.10 da 39 vs 37 (#29 → #25, #20 → #17);
+   *  - shu javobning o'zidagi `cancelled` bolani ALOHIDA sanaydi (kuzatuvda
+   *    CANCELLED), ya'ni «Jarayonda» = jami − sotilgan − bekor bitta kam
+   *    chiqardi, sotish + bekor ulushi 100% dan oshardi;
+   *  - market jadvali (`getMarketStats`), market/kuryer dashboardi va
+   *    hisobotdagi viloyat taqsimoti allaqachon qator sanaydi — markazdagi
+   *    son jadval yig'indisidan kam edi (prod, 01–09.10: 29 vs 31);
+   *  - ota bir kunda, bola boshqa kunda bo'lsa ota bola kuniga ham
+   *    «qabul qilingan» bo'lib tushardi (kunlar yig'indisi davrga teng emas).
+   * Endi ro'yxat bilan AYNI qoida: o'chirilmagan, davrda yaratilgan har bir
+   * buyurtma qatori.
+   */
   private async countDashboardAcceptedOrders(
     range: { start: Date; end: Date } | null,
     branchId?: string,
@@ -335,7 +356,7 @@ export class OrderAnalyticsService {
         .createQueryBuilder('o')
         .where('o.isDeleted = :isDeleted', { isDeleted: false }),
       branchId,
-    ).select('COUNT(DISTINCT COALESCE(o.parent_order_id, o.id))', 'count');
+    ).select('COUNT(*)', 'count');
 
     if (range) {
       query.andWhere('o.createdAt BETWEEN :start AND :end', range);

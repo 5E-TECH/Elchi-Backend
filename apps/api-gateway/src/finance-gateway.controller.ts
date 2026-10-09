@@ -33,6 +33,7 @@ import { Roles } from './auth/roles.decorator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
 import { Public } from './auth/public.decorator';
 import { RolesGuard } from './auth/roles.guard';
+import { projectOrderPayloadForRoles } from './auth/order-role-projection';
 import {
   Cashbox_type,
   Operation_type,
@@ -2836,7 +2837,12 @@ export class FinanceGatewayController {
       throw new ForbiddenException("Siz bu kassa tarixini ko'ra olmaysiz");
     }
 
-    return response;
+    // kH2zZsz3 (tekshiruv #1): SELL/CANCEL/EXTRA_COST/CORRECTION yozuvi
+    // `data.order` ga `order.find_by_id_enriched` qatorini TO'LIQ qo'shadi —
+    // ilgari kuryer o'z kassasi yozuvi orqali market tarifi/filial ulushini,
+    // market esa kuryer tarifi/ulushini olardi. GET /orders/:id bilan AYNI
+    // rol proyeksiyasi (filial xodimlari — o'zgarishsiz).
+    return projectOrderPayloadForRoles(req?.user?.roles, response);
   }
 
   @Post('shift/open')

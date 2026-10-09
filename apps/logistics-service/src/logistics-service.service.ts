@@ -252,8 +252,12 @@ export class LogisticsServiceService implements OnModuleInit {
     throw new RpcException(errorRes(message, 404));
   }
 
-  private badRequest(message: string): never {
-    throw new RpcException(errorRes(message, 400));
+  /**
+   * `data` — ixtiyoriy, mashina uchun tafsilot (`errorRes` ning 3-maydoni).
+   * Berilmasa — avvalgidek `data: null`.
+   */
+  private badRequest(message: string, data?: unknown): never {
+    throw new RpcException(errorRes(message, 400, data));
   }
 
   private forbidden(message: string): never {
@@ -5002,6 +5006,31 @@ export class LogisticsServiceService implements OnModuleInit {
   }
 
   /**
+   * oNAE3LW9 (merge-message) — o'zbekcha sanash: ["buyurtma", "filial"] +
+   * "larni" → "buyurtma va filiallarni"; qo'shimcha faqat oxirgi otga.
+   */
+  private joinGeoNouns(nouns: string[], suffix: string): string {
+    if (!nouns.length) return '';
+    const last = `${nouns[nouns.length - 1]}${suffix}`;
+    const rest = nouns.slice(0, -1);
+    return rest.length ? `${rest.join(', ')} va ${last}` : last;
+  }
+
+  /**
+   * oNAE3LW9 (merge-message) — boshqa tumanga/viloyatga KO'CHIRSA BO'LADIGAN
+   * bog'lanishlar: buyurtma (tahrirda `district_id`/`region_id`),
+   * foydalanuvchi (UpdateUserDto `region_id`), filial (UpdateBranchDto).
+   * Pochta va filiallararo jo'natma — tarixiy yozuv, ko'chirish amali yo'q.
+   */
+  private movableGeoNouns(usage: GeoUsage): string[] {
+    return [
+      usage.orders ? 'buyurtma' : '',
+      usage.users ? 'foydalanuvchi' : '',
+      usage.branches ? 'filial' : '',
+    ].filter(Boolean);
+  }
+
+  /**
    * oNAE3LW9 — Soft delete EMAS: karta TC2 "buyurtmasi yo'q tuman DELETE →
    * 200 va DB dan yo'qoladi" — bog'lanishi bo'lmagan tuman qattiq o'chadi,
    * bog'langani esa umuman o'chirilmaydi (400).
@@ -5014,8 +5043,27 @@ export class LogisticsServiceService implements OnModuleInit {
     // oNAE3LW9: ilgari hech narsa tekshirilmasdan `remove` qilinardi.
     const usage = await this.collectGeoUsage({ district_id: String(id) });
     if (this.geoUsageTotal(usage) > 0) {
+      /**
+       * oNAE3LW9 (merge-message): matn foydalanuvchiga to'g'ridan-to'g'ri
+       * ko'rsatiladi (frontend `showError`) — ilgari unda xom API yo'li
+       * ("POST /district/187/merge") bor edi. Endi matn faqat o'zbekcha
+       * tushuntirish; birlashtirish endpointi mashina uchun `data.hint` da.
+       * Ikkinchi yo'l aniq nomlanadi ("buyurtma va foydalanuvchilarni") —
+       * "ularni" deyilsa "tumanlarni" deb tushunilardi.
+       */
+      const movable = this.joinGeoNouns(this.movableGeoNouns(usage), 'larni');
       this.badRequest(
-        `Bu tumanda ${this.describeGeoUsage(usage)} bor. Avval tumanni boshqasiga birlashtiring (POST /district/${id}/merge) yoki ularni ko'chiring.`,
+        `Bu tumanda ${this.describeGeoUsage(usage)} bor, shuning uchun uni o'chirib bo'lmaydi. Avval tumanlarni birlashtiring (bu tumanni boshqa tumanga qo'shing)` +
+          (movable ? ` yoki ${movable} boshqa tumanga ko'chiring.` : '.'),
+        {
+          reason: 'district_in_use',
+          usage,
+          hint: {
+            action: 'merge',
+            method: 'POST',
+            path: `/district/${id}/merge`,
+          },
+        },
       );
     }
 
@@ -6041,8 +6089,17 @@ export class LogisticsServiceService implements OnModuleInit {
       where: { region_id: String(id) },
     });
     if (districtCount > 0) {
+      /**
+       * oNAE3LW9 (merge-message): sanoq `district.region_id` bo'yicha. Uni
+       * o'zgartiradigan API YO'Q — PATCH district faqat `assigned_region`
+       * (HQ intake yo'nalishi, LC-08) ni o'zgartiradi, sanoq kamaymaydi.
+       * Bajarsa bo'ladigan yo'llar: bo'sh tumanni o'chirish yoki tumanni
+       * boshqa viloyatdagi tumanga birlashtirish (`mergeDistricts` boshqa
+       * viloyatga ruxsat beradi, A tuman o'chadi). "Ko'chiring" deyilmaydi.
+       */
       this.badRequest(
-        `Bu viloyatda ${districtCount} ta tuman bor — avval tumanlarni o'chiring yoki boshqa viloyatga birlashtiring.`,
+        `Bu viloyatda ${districtCount} ta tuman bor, shuning uchun uni o'chirib bo'lmaydi. Avval tumanlarni o'chiring yoki boshqa viloyatdagi tumanga birlashtiring.`,
+        { reason: 'region_has_districts', districts: districtCount },
       );
     }
     const usage = await this.collectGeoUsage({ region_id: String(id) });
@@ -6056,8 +6113,26 @@ export class LogisticsServiceService implements OnModuleInit {
       ]
         .filter(Boolean)
         .join(', ');
+      /**
+       * oNAE3LW9 (merge-message): maslahat faqat ko'chirsa bo'ladigan
+       * turlarga (buyurtma/foydalanuvchi/filial). Pochta va filiallararo
+       * jo'natmani boshqa viloyatga ko'chirish amali yo'q — ular bo'lsa,
+       * bajarib bo'lmaydigan "ko'chiring" taklif qilinmaydi.
+       */
+      const historical = this.joinGeoNouns(
+        [
+          posts ? 'pochta' : '',
+          usage.transfer_batches ? "filiallararo jo'natma" : '',
+        ].filter(Boolean),
+        'lar',
+      );
+      const movable = this.joinGeoNouns(this.movableGeoNouns(usage), 'larni');
+      const advice = historical
+        ? `${historical.charAt(0).toUpperCase()}${historical.slice(1)} tarixiy yozuv bo'lgani uchun ularni boshqa viloyatga ko'chirib bo'lmaydi.`
+        : `Avval ${movable} boshqa viloyatga ko'chiring.`;
       this.badRequest(
-        `Bu viloyatga ${details} bog'langan — o'chirib bo'lmaydi.`,
+        `Bu viloyatga ${details} bog'langan, shuning uchun uni o'chirib bo'lmaydi. ${advice}`,
+        { reason: 'region_in_use', usage: { ...usage, posts } },
       );
     }
 

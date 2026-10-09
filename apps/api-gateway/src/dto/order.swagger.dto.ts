@@ -12,13 +12,19 @@ import {
   IsNumber,
   IsOptional,
   IsString,
+  Matches,
   Max,
   Min,
   ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import { Transform, Type } from 'class-transformer';
-import { CancelReason, Order_status, Where_deliver } from '@app/common';
+import {
+  CancelReason,
+  normalizeUzPhone,
+  Order_status,
+  Where_deliver,
+} from '@app/common';
 
 enum OrderSourceDto {
   INTERNAL = 'internal',
@@ -43,6 +49,19 @@ const parseFormattedNumber = (value: unknown): unknown => {
   }
   return value;
 };
+
+/**
+ * Mijoz telefoni (zfPNDCCr): qabul qilinadigan har shakl ("998901112233",
+ * "+998 90 111 22 33", "90 111 22 33", "0901112233") kanonik
+ * `+998XXXXXXXXX` ga keltiriladi — umumiy `normalizeUzPhone` (hamkor DTO,
+ * AI va OTP bilan AYNI qoida). Keltirib bo'lmasa qiymat O'ZGARMAYDI va
+ * `@Matches(UZ_PHONE_E164_RE)` uni 400 bilan rad etadi.
+ */
+const UZ_PHONE_E164_RE = /^\+998\d{9}$/;
+const UZ_PHONE_MESSAGE =
+  "Telefon raqam noto'g'ri — +998XXXXXXXXX formatidagi raqam kerak";
+const toCanonicalUzPhone = ({ value }: { value: unknown }): unknown =>
+  normalizeUzPhone(value) ?? value;
 
 const parseStringArray = (value: unknown): unknown => {
   if (Array.isArray(value)) return value;
@@ -110,9 +129,25 @@ export class CreateOrderCustomerDto {
   @IsString()
   name!: string;
 
-  @ApiProperty({ example: '+998901112233' })
+  /**
+   * ⚠️ TELEFON NORMALLASHTIRILADI (zfPNDCCr). Ilgari faqat `@IsString()`
+   * edi — himoya faqat admin formasi maskasida edi: API'ga to'g'ridan-to'g'ri
+   * "998887009150" yoki "+998 88 700 91 50" yuborilsa, identity mijozni xom
+   * satr bo'yicha qidirgani uchun bitta odam bir nechta mijozga bo'linardi,
+   * "not-a-phone" esa 201 bilan o'tardi. POST /orders va /orders/external
+   * (meros) shu DTO'dan o'tadi.
+   */
+  @ApiProperty({
+    example: '+998901112233',
+    description:
+      "O'zbekiston raqami. Qabul qilinadi: +998XXXXXXXXX, 998XXXXXXXXX, " +
+      '0XXXXXXXXX, XXXXXXXXX (probel/qavs/defis bilan ham) — server ' +
+      '+998XXXXXXXXX ga keltiradi; boshqasi 400.',
+  })
+  @Transform(toCanonicalUzPhone)
   @IsNotEmpty()
   @IsString()
+  @Matches(UZ_PHONE_E164_RE, { message: UZ_PHONE_MESSAGE })
   phone_number!: string;
 
   @ApiPropertyOptional({ example: '1' })
@@ -853,9 +888,17 @@ export class CreateOrderByTelegramBotRequestDto {
   @IsString()
   name!: string;
 
-  @ApiProperty({ example: '+998901112233' })
+  // zfPNDCCr: POST /orders bilan AYNI qoida — kanonik +998XXXXXXXXX, aks holda 400.
+  @ApiProperty({
+    example: '+998901112233',
+    description:
+      "O'zbekiston raqami (+998XXXXXXXXX, 998..., 0..., 9 xona) — server " +
+      '+998XXXXXXXXX ga keltiradi; boshqasi 400.',
+  })
+  @Transform(toCanonicalUzPhone)
   @IsNotEmpty()
   @IsString()
+  @Matches(UZ_PHONE_E164_RE, { message: UZ_PHONE_MESSAGE })
   phone_number!: string;
 
   @ApiProperty({ example: '12' })

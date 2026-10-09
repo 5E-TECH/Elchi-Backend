@@ -15,6 +15,8 @@ import { NotificationCategory, NotificationPriority } from '@app/common';
  */
 @Entity({ name: 'notifications' })
 // The hot path: "my unread, newest first" and "my inbox, newest first".
+// (inbox-group-sort) `createdAt` — inbox saralash kaliti: group_key qatori
+// yangilanganda u ham yangilanadi (oxirgi hodisa vaqti), qator tepaga chiqadi.
 @Index('IDX_NOTIF_RECIPIENT_READ', ['recipient_id', 'is_read'])
 @Index('IDX_NOTIF_RECIPIENT_CREATED', ['recipient_id', 'createdAt'])
 @Index('IDX_NOTIF_TYPE', ['type'])
@@ -69,7 +71,9 @@ export class Notification extends BaseEntity {
   delivery!: Record<string, unknown> | null;
 
   /** Optional dedupe/collapse key — repeated dispatches with the same key for the
-   * same recipient are merged instead of duplicated (e.g. one row per order). */
+   * same recipient are merged instead of duplicated (e.g. one row per order).
+   * Birlashtirilganda qator qayta o'qilmagan bo'ladi va `createdAt` yangilanadi
+   * (inbox-group-sort). */
   @Column({ type: 'varchar', nullable: true })
   group_key!: string | null;
 
