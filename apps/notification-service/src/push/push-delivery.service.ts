@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { EntityManager, In, Repository } from 'typeorm';
+import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import { NotificationPriority, OutboxService } from '@app/common';
 import { Notification } from '../entities/notification.entity';
 import { PushSubscription } from '../entities/push-subscription.entity';
@@ -54,6 +54,7 @@ export class PushDeliveryService {
     private readonly webPush: WebPushService,
     private readonly outbox: OutboxService,
     private readonly smsDispatch: SmsDispatchService,
+    private readonly dataSource: DataSource,
   ) {}
 
   /**
@@ -80,6 +81,29 @@ export class PushDeliveryService {
       .filter(Boolean);
     if (!ids.length) return { processed: 0 };
 
+    const runner = this.dataSource.createQueryRunner();
+    await runner.connect();
+    let locked = false;
+    const lockKey = `notification.push.deliver:${[...ids].sort().join(',')}`;
+    try {
+      const [state] = (await runner.query(
+        'SELECT pg_try_advisory_lock(hashtext($1)) AS locked',
+        [lockKey],
+      )) as Array<{ locked: boolean }>;
+      locked = Boolean(state?.locked);
+      if (!locked) throw new Error('Push yuborishni boshqa ishchi bajarmoqda');
+      return await this.deliverLocked(ids);
+    } finally {
+      if (locked) {
+        await runner
+          .query('SELECT pg_advisory_unlock(hashtext($1))', [lockKey])
+          .catch(() => undefined);
+      }
+      await runner.release();
+    }
+  }
+
+  private async deliverLocked(ids: string[]) {
     const rows = await this.notifications.find({ where: { id: In(ids) } });
     const pending = rows.filter((row) => row.delivery?.push !== 'sent');
     if (!pending.length) return { processed: 0 };

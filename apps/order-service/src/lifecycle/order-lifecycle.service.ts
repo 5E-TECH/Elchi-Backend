@@ -8882,9 +8882,79 @@ export class OrderLifecycleService {
       );
     }
 
+    const linkedPostId = order.post_id ? String(order.post_id) : null;
+    if (
+      linkedPostId &&
+      (order.status !== Order_status.RECEIVED ||
+        order.canceled_post_id ||
+        order.current_batch_id ||
+        order.return_requested ||
+        order.sold_at ||
+        Number(order.paid_amount ?? 0) !== 0 ||
+        Number(order.paid_online_amount ?? 0) !== 0 ||
+        order.holder_type === OrderHolderType.COURIER)
+    ) {
+      throw new RpcException({
+        statusCode: 409,
+        message:
+          "Pochtadagi buyurtmani faqat jo'natilmagan va to'lovsiz holatda o'chirish mumkin",
+      });
+    }
+
     await this.dataSource.transaction(async (tx) => {
-      order.isDeleted = true;
-      await tx.getRepository(Order).save(order);
+      if (linkedPostId) {
+        // (yokjwjXG) Order va pochta turli sxemada, lekin bitta Postgres DB'da:
+        // sanog'ini va summasini order soft-delete bilan atomik yangilaymiz.
+        const posts: Array<{ id: string; status: string }> = await tx.query(
+          `SELECT "id", "status" FROM "logistics_schema"."posts"
+           WHERE "id" = $1 AND "is_deleted" = false FOR UPDATE`,
+          [linkedPostId],
+        );
+        if (posts[0]?.status !== 'new') {
+          throw new RpcException({
+            statusCode: 409,
+            message:
+              "Faqat jo'natilmagan pochtadan buyurtmani o'chirish mumkin",
+          });
+        }
+        const deleted: Array<{ id: string }> = await tx.query(
+          `UPDATE "order_schema"."orders"
+           SET "is_deleted" = true, "updatedAt" = NOW()
+           WHERE "id" = $1 AND "post_id" = $2
+             AND "status" = 'received' AND "is_deleted" = false
+             AND "deleted_at" IS NULL AND "canceled_post_id" IS NULL
+             AND "current_batch_id" IS NULL AND "return_requested" = false
+             AND "sold_at" IS NULL AND "paid_amount" = 0
+             AND COALESCE("paid_online_amount", 0) = 0
+             AND "holder_type" <> 'COURIER'
+           RETURNING "id"`,
+          [id, linkedPostId],
+        );
+        if (!deleted.length) {
+          throw new RpcException({
+            statusCode: 409,
+            message: "Buyurtma holati o'zgargan — qayta yuklab tekshiring",
+          });
+        }
+        await tx.query(
+          `UPDATE "logistics_schema"."posts" AS post
+           SET "order_quantity" = totals.quantity,
+               "post_total_price" = totals.total,
+               "updatedAt" = NOW()
+           FROM (
+             SELECT COUNT(*)::int AS quantity,
+                    COALESCE(SUM("total_price"), 0) AS total
+             FROM "order_schema"."orders"
+             WHERE "post_id" = $1 AND "is_deleted" = false
+               AND "deleted_at" IS NULL
+           ) AS totals
+           WHERE post."id" = $1`,
+          [linkedPostId],
+        );
+      } else {
+        order.isDeleted = true;
+        await tx.getRepository(Order).save(order);
+      }
       await this.removeOrderFromSearch(id, tx);
     });
 
@@ -8892,7 +8962,11 @@ export class OrderLifecycleService {
       entity_type: 'Order',
       entity_id: String(id),
       action: ActivityAction.DELETED,
-      old_value: { status: order.status, market_id: order.market_id },
+      old_value: {
+        status: order.status,
+        market_id: order.market_id,
+        post_id: linkedPostId,
+      },
       ...this.custody.auditActor(requester),
     });
 

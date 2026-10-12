@@ -103,12 +103,15 @@ describe('parseOrderListSort', () => {
 });
 
 describe('findAll — ORDER BY', () => {
-  it("parametrsiz so'rov avvalgidek createdAt DESC", async () => {
+  it("parametrsiz so'rov createdAt DESC, id DESC tartibida", async () => {
     const { service, orderBys, addSelects } = setup();
 
     await service.findAll({ page: 1, limit: 10 });
 
-    expect(orderBys).toEqual([['order.createdAt', 'DESC']]);
+    expect(orderBys).toEqual([
+      ['order.createdAt', 'DESC'],
+      ['order.id', 'DESC'],
+    ]);
     expect(addSelects).toEqual([]);
   });
 

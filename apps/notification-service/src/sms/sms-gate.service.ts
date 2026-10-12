@@ -11,6 +11,7 @@ export type SmsBlockReason =
   | 'fanout_exceeded'
   | 'daily_cap_exceeded'
   | 'opt_out_not_configured'
+  | 'no_consent'
   | 'provider_not_configured';
 
 /** Darvoza rad etdi — chaqiruvchiga ANIQ sabab qaytadi (fail-closed). */

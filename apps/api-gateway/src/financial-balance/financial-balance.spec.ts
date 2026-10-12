@@ -249,7 +249,7 @@ describe('POST finance/financial-balance/entries — takroriy bosish (GtAoqHlk)'
     await fx.record(expense, 'k-1');
     await fx.record(expense, 'k-1');
     const [a, b] = fx.dedupKeys();
-    expect(a).toBeTruthy();
+    expect(a).toBe('k-1');
     expect(a).toBe(b);
     expect(fx.financeClient.send.mock.calls[0][1]).toMatchObject({
       ...expense,
@@ -257,19 +257,17 @@ describe('POST finance/financial-balance/entries — takroriy bosish (GtAoqHlk)'
     });
   });
 
-  it('ayni kalit, lekin boshqa summa → BOSHQA yozuv (yutilmaydi)', async () => {
+  it('ayni kalit, lekin boshqa summa → shu kalit uzatiladi (service 409 beradi)', async () => {
     const fx = setup();
     await fx.record(expense, 'k-1');
     await fx.record({ ...expense, amount: -60000 }, 'k-1');
     const [a, b] = fx.dedupKeys();
-    expect(a).not.toBe(b);
+    expect(a).toBe(b);
   });
 
-  it('kalitsiz ikki marta bosish — 30 soniya ichida ayni token', async () => {
+  it('kalitsiz daftar yozuvi 400, finance chaqirilmaydi', () => {
     const fx = setup();
-    await fx.record(expense);
-    await fx.record(expense);
-    const [a, b] = fx.dedupKeys();
-    expect(a).toBe(b);
+    expect(() => fx.record(expense)).toThrow('Idempotency-Key');
+    expect(fx.financeClient.send).not.toHaveBeenCalled();
   });
 });

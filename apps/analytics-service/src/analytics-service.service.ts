@@ -45,6 +45,11 @@ type RevenuePeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 /** Moliyaviy hisobot `cashflowHistory` sahifasining yuqori chegarasi. */
 const MAX_REPORT_PAGE_LIMIT = 100;
+const ANALYTICS_READ_OPTIONS = Object.freeze({
+  timeoutMs: 2500,
+  retries: 0,
+  deadlineMs: 2500,
+});
 
 @Injectable()
 export class AnalyticsServiceService {
@@ -67,6 +72,39 @@ export class AnalyticsServiceService {
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     @Inject('BRANCH') private readonly branchClient: ClientProxy,
   ) {}
+
+  private async readPart(
+    client: ClientProxy,
+    cmd: string,
+    payload: unknown,
+    failedParts: string[],
+    part: string,
+  ): Promise<unknown> {
+    try {
+      const result = await rmqSend(
+        client,
+        { cmd },
+        payload,
+        ANALYTICS_READ_OPTIONS,
+      );
+      if (result !== null && result !== undefined) return result;
+    } catch (error) {
+      this.logger.warn(
+        `Analytics ${part} olinmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+    failedParts.push(part);
+    return null;
+  }
+
+  private requirePart(value: unknown, part: string): void {
+    if (value === null) {
+      throw new RpcException({
+        statusCode: 503,
+        message: `Analitika ${part} ma'lumoti hozir olinmadi`,
+      });
+    }
+  }
 
   /**
    * Defense-in-depth for company-wide financial reports. The gateway already
@@ -248,6 +286,20 @@ export class AnalyticsServiceService {
     }));
   }
 
+  private ranking(response: unknown) {
+    const value = this.unwrap<any>(response as any);
+    if (Array.isArray(value)) return { items: value, meta: null };
+    const items = Array.isArray(value?.items) ? value.items : [];
+    const meta =
+      Number.isFinite(value?.min_orders) && Number.isFinite(value?.filtered_out)
+        ? {
+            min_orders: Number(value.min_orders),
+            filtered_out: Number(value.filtered_out),
+          }
+        : null;
+    return { items, meta };
+  }
+
   /**
    * RBAC-02: market (va market operatori) dashboard'idagi `markets` FAQAT
    * so'rovchi marketning o'z qatori. Ilgari market_stats javobi butunligicha
@@ -282,7 +334,7 @@ export class AnalyticsServiceService {
       this.branchClient,
       { cmd: 'branch.user.find_by_branch' },
       { branch_id: branchId, requester },
-      { timeoutMs: 3000, retries: 1 },
+      ANALYTICS_READ_OPTIONS,
     ).catch(() => null);
     const rows = this.unwrap<any>(response);
     if (!Array.isArray(rows)) {
@@ -392,6 +444,7 @@ export class AnalyticsServiceService {
       this.orderClient,
       { cmd: 'order.find_all' },
       { query },
+      ANALYTICS_READ_OPTIONS,
     );
     if (
       response &&
@@ -494,6 +547,7 @@ export class AnalyticsServiceService {
       this.identityClient,
       { cmd: 'identity.user.find_by_id' },
       { id: requester.id },
+      ANALYTICS_READ_OPTIONS,
     ).catch(() => null);
     const operatorData = this.unwrap<any>(operatorRes);
     const marketId = operatorData?.market_id;
@@ -526,6 +580,7 @@ export class AnalyticsServiceService {
       this.branchClient,
       { cmd: 'branch.dashboard' },
       { id: branchId, requester, filter },
+      ANALYTICS_READ_OPTIONS,
     ).catch(() => null);
 
     return this.unwrap<any>(dashboardRes) ?? null;
@@ -545,6 +600,7 @@ export class AnalyticsServiceService {
       this.branchClient,
       { cmd: 'branch.user.find_by_user' },
       { user_id: requester.id, requester },
+      ANALYTICS_READ_OPTIONS,
     ).catch(() => null);
     const assignmentData = this.unwrap<any>(assignmentRes);
     return assignmentData?.branch_id ? String(assignmentData.branch_id) : null;
@@ -560,12 +616,17 @@ export class AnalyticsServiceService {
     },
   ) {
     const isAllTime = filter.all === true;
+    const failedParts: string[] = [];
     const normalized = isAllTime
       ? this.normalizeDashboardDateRange({
           startDate: '1970-01-01',
           endDate: new Date().toISOString(),
         })
       : this.normalizeDashboardDateRange(filter);
+    const dashboardRange = {
+      ...normalized,
+      ...(isAllTime ? { all: true } : {}),
+    };
     const roles = this.roleSet(requester);
     const isRegistrator = roles.has(Roles.REGISTRATOR);
     const isBranchRole =
@@ -576,15 +637,21 @@ export class AnalyticsServiceService {
       ? await this.resolveRequesterBranchId(requester)
       : null;
     const scopedRange = branchId
-      ? { ...normalized, branch_id: branchId }
-      : normalized;
+      ? {
+          ...dashboardRange,
+          branch_id: branchId,
+        }
+      : dashboardRange;
 
     if (roles.has(Roles.COURIER)) {
-      const myStat = await rmqSend(
+      const myStat = await this.readPart(
         this.orderClient,
-        { cmd: 'order.analytics.courier_stat' },
-        { requester, ...normalized },
-      ).catch(() => null);
+        'order.analytics.courier_stat',
+        { requester, ...dashboardRange },
+        failedParts,
+        'myStat',
+      );
+      this.requirePart(myStat, 'myStat');
       const unwrappedMyStat = this.unwrap<any>(myStat);
       const courierScopedStats = unwrappedMyStat
         ? [
@@ -603,6 +670,8 @@ export class AnalyticsServiceService {
           myStat: unwrappedMyStat,
           couriers: courierScopedStats,
           topCouriers: [],
+          degraded: false,
+          failed_parts: [],
         },
         200,
         'Dashboard infos',
@@ -615,27 +684,36 @@ export class AnalyticsServiceService {
         roles,
       );
       const [myStat, markets, topMarkets, topOperators] = await Promise.all([
-        rmqSend(
+        this.readPart(
           this.orderClient,
-          { cmd: 'order.analytics.market_stat' },
-          { requester: marketRequester, ...normalized },
-        ).catch(() => null),
-        rmqSend(
+          'order.analytics.market_stat',
+          { requester: marketRequester, ...dashboardRange },
+          failedParts,
+          'myStat',
+        ),
+        this.readPart(
           this.orderClient,
-          { cmd: 'order.analytics.market_stats' },
-          normalized,
-        ).catch(() => null),
-        rmqSend(
+          'order.analytics.market_stats',
+          dashboardRange,
+          failedParts,
+          'markets',
+        ),
+        this.readPart(
           this.orderClient,
-          { cmd: 'order.analytics.top_markets' },
-          normalized,
-        ).catch(() => null),
-        rmqSend(
+          'order.analytics.top_markets',
+          { ...dashboardRange, include_meta: true },
+          failedParts,
+          'topMarkets',
+        ),
+        this.readPart(
           this.orderClient,
-          { cmd: 'order.analytics.top_operators_by_market' },
+          'order.analytics.top_operators_by_market',
           { requester: marketRequester },
-        ).catch(() => []),
+          failedParts,
+          'topOperators',
+        ),
       ]);
+      this.requirePart(myStat, 'myStat');
 
       return successRes(
         {
@@ -644,85 +722,56 @@ export class AnalyticsServiceService {
             markets,
             String(marketRequester?.id ?? ''),
           ),
-          topMarkets: this.unwrap(topMarkets),
-          topOperators: this.unwrap(topOperators as any),
+          topMarkets: this.ranking(topMarkets).items,
+          topMarketsMeta: this.ranking(topMarkets).meta,
+          topOperators: this.unwrap(topOperators as any) ?? [],
+          degraded: failedParts.length > 0,
+          failed_parts: failedParts.sort(),
         },
         200,
         'Dashboard infos',
       );
     }
 
-    if (isAllTime) {
-      const [orders, topMarkets, topBranches] = await Promise.all([
-        rmqSend(
-          this.orderClient,
-          { cmd: 'order.analytics.overview' },
-          scopedRange,
-        ).catch(() => null),
-        rmqSend(
-          this.orderClient,
-          { cmd: 'order.analytics.top_markets' },
-          branchId ? { ...scopedRange, branch_id: branchId } : scopedRange,
-        ).catch(() => null),
-        rmqSend(
-          this.orderClient,
-          { cmd: 'order.analytics.top_branches' },
-          branchId ? { ...scopedRange, branch_id: branchId } : scopedRange,
-        ).catch(() => null),
-      ]);
-      const branchDashboard = isBranchRole
-        ? await this.resolveRequesterBranchDashboard(requester, {
-            ...scopedRange,
-            period: filter.period,
-            all: filter.all,
-          })
-        : null;
-
-      return successRes(
-        {
-          orders: this.sanitizeDashboardOverview(
-            this.unwrap(orders),
-            isRegistrator,
-          ),
-          markets: [],
-          couriers: [],
-          topMarkets: this.unwrap(topMarkets),
-          topBranches: this.unwrap(topBranches),
-          branchDashboard,
-        },
-        200,
-        'Dashboard infos (all time)',
-      );
-    }
-
     const [orders, markets, couriers, topMarkets, topBranches] =
       await Promise.all([
-        rmqSend(
+        this.readPart(
           this.orderClient,
-          { cmd: 'order.analytics.overview' },
+          'order.analytics.overview',
           scopedRange,
-        ).catch(() => null),
-        rmqSend(
+          failedParts,
+          'overview',
+        ),
+        this.readPart(
           this.orderClient,
-          { cmd: 'order.analytics.market_stats' },
+          'order.analytics.market_stats',
           scopedRange,
-        ).catch(() => null),
-        rmqSend(
+          failedParts,
+          'markets',
+        ),
+        this.readPart(
           this.orderClient,
-          { cmd: 'order.analytics.courier_stats' },
+          'order.analytics.courier_stats',
           scopedRange,
-        ).catch(() => null),
-        rmqSend(
+          failedParts,
+          'couriers',
+        ),
+        this.readPart(
           this.orderClient,
-          { cmd: 'order.analytics.top_markets' },
-          branchId ? { ...scopedRange, branch_id: branchId } : scopedRange,
-        ).catch(() => null),
-        rmqSend(
+          'order.analytics.top_markets',
+          { ...scopedRange, include_meta: true },
+          failedParts,
+          'topMarkets',
+        ),
+        this.readPart(
           this.orderClient,
-          { cmd: 'order.analytics.top_branches' },
-          branchId ? { ...scopedRange, branch_id: branchId } : scopedRange,
-        ).catch(() => null),
+          'order.analytics.top_branches',
+          { ...scopedRange, include_meta: true },
+          failedParts,
+          'topBranches',
+        ),
       ]);
+    this.requirePart(orders, 'overview');
     const branchDashboard = isBranchRole
       ? await this.resolveRequesterBranchDashboard(requester, {
           ...normalized,
@@ -730,24 +779,39 @@ export class AnalyticsServiceService {
           all: filter.all,
         })
       : null;
+    if (isBranchRole && branchId && branchDashboard === null) {
+      failedParts.push('branchDashboard');
+    }
 
     const ordersOverview = this.unwrap<any>(orders as any);
     const safeOrdersOverview = this.sanitizeDashboardOverview(
       ordersOverview,
       isRegistrator,
     );
+    const appliedRange = ordersOverview?.applied_range;
 
     return successRes(
       {
         orders: safeOrdersOverview,
         markets: this.projectStatsRows(markets, 'market'),
         couriers: this.projectStatsRows(couriers, 'courier'),
-        topMarkets: this.unwrap(topMarkets),
-        topBranches: this.unwrap(topBranches),
+        topMarkets: this.ranking(topMarkets).items,
+        topMarketsMeta: this.ranking(topMarkets).meta,
+        topBranches: this.ranking(topBranches).items,
+        topBranchesMeta: this.ranking(topBranches).meta,
         branchDashboard,
+        degraded: failedParts.length > 0,
+        failed_parts: failedParts.sort(),
+        ...(isAllTime
+          ? {
+              clamped: appliedRange?.clamped ?? null,
+              effective_from: appliedRange?.applied_from ?? null,
+              effective_to: appliedRange?.applied_to ?? null,
+            }
+          : {}),
       },
       200,
-      'Dashboard infos',
+      isAllTime ? 'Dashboard infos (barcha tarix)' : 'Dashboard infos',
     );
   }
 
@@ -758,23 +822,26 @@ export class AnalyticsServiceService {
     this.assertFinancialAccess(requester);
     const normalized = this.normalizeDateRangeAny(filter);
     const period = this.normalizeRevenuePeriod(filter.period);
+    const failedParts: string[] = [];
 
-    // Resilient fan-out: a failed/timed-out downstream degrades that leg to null
-    // (handled by unwrap/?. below) instead of crashing the whole report.
     const [revenue, financialBalance, branchesResponse] = await Promise.all([
-      rmqSend(
+      this.readPart(
         this.orderClient,
-        { cmd: 'order.analytics.revenue' },
+        'order.analytics.revenue',
         { ...normalized, period },
-      ).catch(() => null),
-      rmqSend(
+        failedParts,
+        'revenue',
+      ),
+      this.readPart(
         this.financeClient,
-        { cmd: 'finance.cashbox.financial_balance' },
+        'finance.cashbox.financial_balance',
         {},
-      ).catch(() => null),
-      rmqSend(
+        failedParts,
+        'finance',
+      ),
+      this.readPart(
         this.branchClient,
-        { cmd: 'branch.find_all' },
+        'branch.find_all',
         {
           requester,
           query: {
@@ -783,8 +850,11 @@ export class AnalyticsServiceService {
             limit: 1000,
           },
         },
-      ).catch(() => null),
+        failedParts,
+        'branches',
+      ),
     ]);
+    this.requirePart(revenue, 'revenue');
 
     const revenueData = this.unwrapRevenue(revenue);
     const branchReceivable = this.extractBranchReceivable(branchesResponse);
@@ -801,6 +871,8 @@ export class AnalyticsServiceService {
         summary: revenueData.summary,
         chart: { labels, values },
         finance: financeData,
+        degraded: failedParts.length > 0,
+        failed_parts: failedParts.sort(),
       },
       200,
       `Revenue stats (${period})`,
@@ -822,28 +894,38 @@ export class AnalyticsServiceService {
         : rangeMs > 90 * 24 * 60 * 60 * 1000
           ? 'monthly'
           : 'daily';
+    const failedParts: string[] = [];
     const [overview, revenue, courierStats, topMarkets] = await Promise.all([
-      rmqSend(
+      this.readPart(
         this.orderClient,
-        { cmd: 'order.analytics.overview' },
+        'order.analytics.overview',
         normalized,
-      ).catch(() => null),
-      rmqSend(
+        failedParts,
+        'overview',
+      ),
+      this.readPart(
         this.orderClient,
-        { cmd: 'order.analytics.revenue' },
+        'order.analytics.revenue',
         { ...normalized, period: revenuePeriod },
-      ).catch(() => null),
-      rmqSend(
+        failedParts,
+        'revenue',
+      ),
+      this.readPart(
         this.orderClient,
-        { cmd: 'order.analytics.courier_stats' },
+        'order.analytics.courier_stats',
         normalized,
-      ).catch(() => null),
-      rmqSend(
+        failedParts,
+        'couriers',
+      ),
+      this.readPart(
         this.orderClient,
-        { cmd: 'order.analytics.top_markets' },
-        { limit: 10 },
-      ).catch(() => null),
+        'order.analytics.top_markets',
+        { limit: 10, ...normalized, include_meta: true },
+        failedParts,
+        'topMarkets',
+      ),
     ]);
+    this.requirePart(overview, 'overview');
 
     const soldStatuses = [
       Order_status.SOLD,
@@ -852,15 +934,23 @@ export class AnalyticsServiceService {
       Order_status.PARTLY_PAID,
     ];
 
-    const soldOrdersResult = await Promise.all(
-      soldStatuses.map((status) =>
-        this.collectOrders({
-          status,
-          start_day: normalized.startDate,
-          end_day: normalized.endDate,
-        }),
-      ),
-    );
+    let soldOrdersResult;
+    try {
+      soldOrdersResult = await Promise.all(
+        soldStatuses.map((status) =>
+          this.collectOrders({
+            status,
+            start_day: normalized.startDate,
+            end_day: normalized.endDate,
+          }),
+        ),
+      );
+    } catch {
+      throw new RpcException({
+        statusCode: 503,
+        message: 'Analitika buyurtmalari hozir olinmadi',
+      });
+    }
     const soldOrders = soldOrdersResult.flatMap((res) => res.items);
 
     let deliveryMsTotal = 0;
@@ -886,9 +976,7 @@ export class AnalyticsServiceService {
     )
       ? (this.unwrap<any>(courierStats as any) as any[])
       : [];
-    const topMarketsData = Array.isArray(this.unwrap<any>(topMarkets as any))
-      ? (this.unwrap<any>(topMarkets as any) as any[])
-      : [];
+    const topMarketsData = this.ranking(topMarkets).items;
 
     const totalOrders = this.parseNumber(overviewData?.acceptedCount);
     const soldAndPaid = this.parseNumber(overviewData?.soldAndPaid);
@@ -935,6 +1023,9 @@ export class AnalyticsServiceService {
         cancellationRate,
         courierEfficiency,
         marketRating: topMarketsData,
+        marketRatingMeta: this.ranking(topMarkets).meta,
+        degraded: failedParts.length > 0,
+        failed_parts: failedParts.sort(),
       },
       200,
       'KPI stats',
@@ -956,7 +1047,7 @@ export class AnalyticsServiceService {
       rmqSend(
         this.orderClient,
         { cmd: 'order.analytics.top_markets' },
-        { limit: 10 },
+        { limit: 10, ...normalized, include_meta: true },
       ).catch(() => null),
     ]);
 
@@ -1023,7 +1114,8 @@ export class AnalyticsServiceService {
         overview: this.unwrap(overview as any),
         statusDistribution,
         byRegion,
-        topMarkets: this.unwrap(topMarkets as any),
+        topMarkets: this.ranking(topMarkets).items,
+        topMarketsMeta: this.ranking(topMarkets).meta,
         topProducts,
       },
       200,
@@ -1185,10 +1277,12 @@ export class AnalyticsServiceService {
     const cached = this.courierReportCache.get(cacheKey);
     let items: any[];
     let topCouriersData: any[];
+    let topCouriersMeta: { min_orders: number; filtered_out: number } | null;
 
     if (cached && cached.expiresAt > now) {
       items = cached.data.items;
       topCouriersData = cached.data.ranking;
+      topCouriersMeta = cached.data.rankingMeta ?? null;
     } else {
       const [courierStats, topCouriers] = await Promise.all([
         rmqSend(
@@ -1199,7 +1293,7 @@ export class AnalyticsServiceService {
         rmqSend(
           this.orderClient,
           { cmd: 'order.analytics.top_couriers' },
-          { limit: 20 },
+          { limit: 20, ...normalized, include_meta: true },
         ),
       ]);
 
@@ -1208,9 +1302,8 @@ export class AnalyticsServiceService {
       )
         ? (this.unwrap<any>(courierStats as any) as any[])
         : [];
-      topCouriersData = Array.isArray(this.unwrap<any>(topCouriers as any))
-        ? (this.unwrap<any>(topCouriers as any) as any[])
-        : [];
+      topCouriersData = this.ranking(topCouriers).items;
+      topCouriersMeta = this.ranking(topCouriers).meta;
 
       items = await Promise.all(
         courierStatsData.map(async (row) => {
@@ -1254,7 +1347,7 @@ export class AnalyticsServiceService {
       }
 
       this.courierReportCache.set(cacheKey, {
-        data: { items, ranking: topCouriersData },
+        data: { items, ranking: topCouriersData, rankingMeta: topCouriersMeta },
         expiresAt: now + AnalyticsServiceService.COURIER_REPORT_TTL_MS,
       });
     }
@@ -1268,6 +1361,7 @@ export class AnalyticsServiceService {
             (row) => String(row?.courier?.id ?? '') === requesterId,
           ),
           ranking: topCouriersData,
+          rankingMeta: topCouriersMeta,
         },
         200,
         'Courier report',
@@ -1284,6 +1378,7 @@ export class AnalyticsServiceService {
           ranking: topCouriersData.filter((row) =>
             branchCourierIds.has(String(row?.courier_id ?? '')),
           ),
+          rankingMeta: topCouriersMeta,
         },
         200,
         'Courier report',
@@ -1295,6 +1390,7 @@ export class AnalyticsServiceService {
         range: normalized,
         items,
         ranking: topCouriersData,
+        rankingMeta: topCouriersMeta,
       },
       200,
       'Courier report',

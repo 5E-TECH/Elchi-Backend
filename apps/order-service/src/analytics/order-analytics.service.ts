@@ -39,11 +39,12 @@ export class OrderAnalyticsService {
    *
    * ⚠️ 768 KUN AMALDA CHEGARA EMAS EDI. Kuniga 1 000 buyurtmada bu ~770 ming
    * qatorni JS xotirasiga yuklash degani — servis xotira shifti 1,5 GB, ya'ni
-   * dashboard OOM bilan yiqilardi. 180 kun (yarim yil) real hisobotlar uchun
-   * yetarli, undan uzoq davrni esa `sold_at` bo'yicha SQL agregatsiyasi bilan
-   * alohida qilish kerak.
+   * dashboard OOM bilan yiqilardi. Hozir asosiy kesimlar SQL agregatsiyada;
+   * 366 kun to'liq kalendar yilni qamrab oladi, undan keng davr esa kesiladi.
    */
-  private static readonly MAX_ANALYTICS_SPAN_MS = 180 * 24 * 60 * 60 * 1000;
+  private static readonly MAX_ANALYTICS_SPAN_DAYS = 366;
+  private static readonly MAX_ANALYTICS_SPAN_MS =
+    OrderAnalyticsService.MAX_ANALYTICS_SPAN_DAYS * 24 * 60 * 60 * 1000;
 
   constructor(
     @InjectRepository(Order) private readonly orderRepo: Repository<Order>,
@@ -102,7 +103,18 @@ export class OrderAnalyticsService {
     return `'Y:' || to_char(date_trunc('year', ${local}), 'YYYY')`;
   }
 
-  private analyticsDateRange(startDate?: string, endDate?: string) {
+  private ceilToTashkentDayStart(date: Date): Date {
+    const dayStart = this.periodStart(date, 'daily');
+    return dayStart.getTime() === date.getTime()
+      ? dayStart
+      : new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
+  }
+
+  private analyticsDateRange(
+    startDate?: string,
+    endDate?: string,
+    unbounded = false,
+  ) {
     const UZB_OFFSET_MS = 5 * 60 * 60 * 1000;
 
     const parseUzDate = (value: string, endOfDay: boolean): Date | null => {
@@ -164,10 +176,12 @@ export class OrderAnalyticsService {
     // orders table into memory (Audit: unbounded analytics query). Clamp the
     // start to the most-recent window rather than rejecting, so dashboards keep
     // working; log so the truncation is observable.
+    const requestedStart = start;
+    const requestedEnd = end;
     const span = end.getTime() - start.getTime();
-    if (span > OrderAnalyticsService.MAX_ANALYTICS_SPAN_MS) {
-      const clampedStart = new Date(
-        end.getTime() - OrderAnalyticsService.MAX_ANALYTICS_SPAN_MS,
+    if (!unbounded && span > OrderAnalyticsService.MAX_ANALYTICS_SPAN_MS) {
+      const clampedStart = this.ceilToTashkentDayStart(
+        new Date(end.getTime() - OrderAnalyticsService.MAX_ANALYTICS_SPAN_MS),
       );
       this.logger.warn(
         `Analytics date span ${Math.round(span / 86_400_000)}d exceeds cap ` +
@@ -177,36 +191,47 @@ export class OrderAnalyticsService {
       start = clampedStart;
     }
 
-    return { start, end };
+    return {
+      start,
+      end,
+      applied_range: {
+        requested_from: requestedStart.toISOString(),
+        requested_to: requestedEnd.toISOString(),
+        applied_from: start.toISOString(),
+        applied_to: end.toISOString(),
+        clamped: start.getTime() !== requestedStart.getTime(),
+        max_span_days: unbounded
+          ? null
+          : OrderAnalyticsService.MAX_ANALYTICS_SPAN_DAYS,
+      },
+    };
   }
 
   /**
-   * Analitika oynasini hal qiladi. `all=true` — "butun davr" tugmasi, lekin u
-   * CHEGARANI CHETLAB O'TMAYDI (audit C3): ilgari `all` berilganda oyna
-   * umuman qo'yilmasdi va so'rov butun `orders` jadvalini JS xotirasiga
-   * yuklardi. Endi u eng katta ruxsat etilgan oynaga (`MAX_ANALYTICS_SPAN_MS`)
-   * teng, bugungi kun bilan tugaydigan davrni beradi va qisqartirish jurnalga
-   * yoziladi — ya'ni raqam "butun davr" emasligi ko'rinadi.
+   * (uN1tjjGu) `all=true` butun tarixni qamraydi. Bu yo'ldagi hisoblar
+   * SQL agregatsiya qiladi; oddiy keng sana so'rovlari esa chegaralangan.
    */
   private resolveAnalyticsRange(
     startDate: string | undefined,
     endDate: string | undefined,
     all: boolean,
-  ): { start: Date; end: Date } {
+  ) {
     if (!all) {
       return this.analyticsDateRange(startDate, endDate);
     }
-    const end = new Date();
-    const start = new Date(
-      end.getTime() - OrderAnalyticsService.MAX_ANALYTICS_SPAN_MS,
+    const range = this.analyticsDateRange(
+      '1970-01-01',
+      new Date().toISOString(),
+      true,
     );
-    this.logger.warn(
-      `Analytics 'all' requested; clamped to the last ` +
-        `${Math.round(
-          OrderAnalyticsService.MAX_ANALYTICS_SPAN_MS / 86_400_000,
-        )} days (${start.toISOString()} → ${end.toISOString()})`,
-    );
-    return { start, end };
+    return {
+      ...range,
+      applied_range: {
+        ...range.applied_range,
+        requested_from: null,
+        requested_to: null,
+      },
+    };
   }
 
   private soldStatuses() {
@@ -1381,6 +1406,7 @@ export class OrderAnalyticsService {
       totalRevenue: Number(aggregate?.revenue ?? 0),
       from: range?.start.getTime(),
       to: range?.end.getTime(),
+      applied_range: range.applied_range,
     };
   }
 
@@ -1388,8 +1414,9 @@ export class OrderAnalyticsService {
     startDate?: string,
     endDate?: string,
     branchId?: string,
+    all = false,
   ) {
-    const { start, end } = this.analyticsDateRange(startDate, endDate);
+    const { start, end } = this.analyticsDateRange(startDate, endDate, all);
     const soldStatuses = this.soldStatuses();
     const startMs = String(start.getTime());
     const endMs = String(end.getTime());
@@ -1457,8 +1484,9 @@ export class OrderAnalyticsService {
     startDate?: string,
     endDate?: string,
     branchId?: string,
+    all = false,
   ) {
-    const { start, end } = this.analyticsDateRange(startDate, endDate);
+    const { start, end } = this.analyticsDateRange(startDate, endDate, all);
     const soldStatuses = this.soldStatuses();
     const startMs = String(start.getTime());
     const endMs = String(end.getTime());
@@ -1539,11 +1567,20 @@ export class OrderAnalyticsService {
     branchId?: string,
     startDate?: string,
     endDate?: string,
+    minOrders = 1,
+    includeMeta = false,
+    all = false,
   ) {
     const soldStatuses = this.soldStatuses();
     const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const fromDate = startDate ? new Date(startDate) : lastMonth;
-    const toDate = endDate ? new Date(endDate) : undefined;
+    const range =
+      startDate && endDate
+        ? this.analyticsDateRange(startDate, endDate, all)
+        : null;
+    const fromDate =
+      range?.start ?? (startDate ? new Date(startDate) : lastMonth);
+    const toDate = range?.end ?? (endDate ? new Date(endDate) : undefined);
+    const threshold = this.normalizeRankingMinOrders(minOrders);
 
     const totalsRaw = await this.applyAnalyticsBranchScope(
       this.orderRepo
@@ -1574,7 +1611,7 @@ export class OrderAnalyticsService {
     const marketMap = new Map(markets.map((m) => [String(m.id), m]));
 
     const result = totalsRaw
-      .filter((row) => Number(row.total_orders) >= 30)
+      .filter((row) => Number(row.total_orders) >= threshold)
       .map((row) => {
         const totalOrders = Number(row.total_orders);
         const successfulOrders = Number(row.successful_orders);
@@ -1594,22 +1631,57 @@ export class OrderAnalyticsService {
       .sort((a, b) => b.success_rate - a.success_rate)
       .slice(0, limit);
 
-    return result;
+    return this.rankingResult(
+      result,
+      threshold,
+      totalsRaw.filter((row) => Number(row.total_orders) < threshold).length,
+      includeMeta,
+    );
+  }
+
+  private normalizeRankingMinOrders(value: number): number {
+    return Number.isFinite(value) && value >= 1 ? Math.floor(value) : 1;
+  }
+
+  private rankingResult<T>(
+    items: T[],
+    minOrders: number,
+    filteredOut: number,
+    includeMeta: boolean,
+  ) {
+    return includeMeta
+      ? { items, min_orders: minOrders, filtered_out: filteredOut }
+      : items;
   }
 
   /**
    * ⚠️ AGREGATSIYA BAZADA (Scale 1-bosqich). Ilgari oxirgi 30 kunning BARCHA
    * buyurtmalari yuklanib JS'da sanalardi. Endi `GROUP BY post_id`.
    */
-  async getTopCouriers(limit = 10, branchId?: string) {
+  async getTopCouriers(
+    limit = 10,
+    branchId?: string,
+    startDate?: string,
+    endDate?: string,
+    minOrders = 1,
+    includeMeta = false,
+    all = false,
+  ) {
     const soldStatuses = this.soldStatuses();
     const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
+    const range =
+      startDate && endDate
+        ? this.analyticsDateRange(startDate, endDate, all)
+        : null;
+    const start = range?.start ?? (startDate ? new Date(startDate) : lastMonth);
+    const end = range?.end ?? (endDate ? new Date(endDate) : new Date());
+    const threshold = this.normalizeRankingMinOrders(minOrders);
 
     const rows = await this.applyAnalyticsBranchScope(
       this.orderRepo
         .createQueryBuilder('o')
         .where('o.isDeleted = :isDeleted', { isDeleted: false })
-        .andWhere('o.createdAt >= :lastMonth', { lastMonth })
+        .andWhere('o.createdAt BETWEEN :start AND :end', { start, end })
         .andWhere('o.post_id IS NOT NULL'),
       branchId,
     )
@@ -1624,7 +1696,7 @@ export class OrderAnalyticsService {
       .getRawMany<{ post_id: string; total: string; successful: string }>();
 
     if (!rows.length) {
-      return [];
+      return this.rankingResult([], threshold, 0, includeMeta);
     }
 
     const posts = await this.getPostsByIds(
@@ -1650,24 +1722,28 @@ export class OrderAnalyticsService {
       stats.set(String(courierId), current);
     }
 
-    return Array.from(stats.entries())
-      .map(([courierId, current]) => {
-        const courier = courierMap.get(courierId);
-        const successRate =
-          current.total > 0
-            ? Number(((current.successful * 100) / current.total).toFixed(2))
-            : 0;
-        return {
-          courier_id: courierId,
-          courier_name: courier?.name ?? null,
-          total_orders: current.total,
-          successful_orders: current.successful,
-          success_rate: successRate,
-        };
-      })
-      .filter((row) => row.total_orders >= 30)
+    const ranked = Array.from(stats.entries()).map(([courierId, current]) => {
+      const courier = courierMap.get(courierId);
+      const successRate =
+        current.total > 0
+          ? Number(((current.successful * 100) / current.total).toFixed(2))
+          : 0;
+      return {
+        courier_id: courierId,
+        courier_name: courier?.name ?? null,
+        total_orders: current.total,
+        successful_orders: current.successful,
+        success_rate: successRate,
+      };
+    });
+    const filteredOut = ranked.filter(
+      (row) => row.total_orders < threshold,
+    ).length;
+    const result = ranked
+      .filter((row) => row.total_orders >= threshold)
       .sort((a, b) => b.success_rate - a.success_rate)
       .slice(0, limit);
+    return this.rankingResult(result, threshold, filteredOut, includeMeta);
   }
 
   async getTopBranches(
@@ -1675,11 +1751,20 @@ export class OrderAnalyticsService {
     branchId?: string,
     startDate?: string,
     endDate?: string,
+    minOrders = 1,
+    includeMeta = false,
+    all = false,
   ) {
     const soldStatuses = this.soldStatuses();
     const lastMonth = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000);
-    const fromDate = startDate ? new Date(startDate) : lastMonth;
-    const toDate = endDate ? new Date(endDate) : undefined;
+    const range =
+      startDate && endDate
+        ? this.analyticsDateRange(startDate, endDate, all)
+        : null;
+    const fromDate =
+      range?.start ?? (startDate ? new Date(startDate) : lastMonth);
+    const toDate = range?.end ?? (endDate ? new Date(endDate) : undefined);
+    const threshold = this.normalizeRankingMinOrders(minOrders);
 
     const branchExpression =
       'COALESCE(o.home_branch_id, o.branch_id, o.holder_branch_id)';
@@ -1715,11 +1800,11 @@ export class OrderAnalyticsService {
       branches.map((branch) => [String(branch.id), branch]),
     );
 
-    return rows
-      .filter((row) => {
-        const branch = branchMap.get(String(row.branch_id));
-        return Number(row.total_orders) >= 30 && branch?.type !== BranchType.HQ;
-      })
+    const eligible = rows.filter(
+      (row) => branchMap.get(String(row.branch_id))?.type !== BranchType.HQ,
+    );
+    const result = eligible
+      .filter((row) => Number(row.total_orders) >= threshold)
       .map((row) => {
         const totalOrders = Number(row.total_orders) || 0;
         const successfulOrders = Number(row.successful_orders) || 0;
@@ -1742,6 +1827,12 @@ export class OrderAnalyticsService {
       })
       .sort((a, b) => b.success_rate - a.success_rate)
       .slice(0, limit);
+    return this.rankingResult(
+      result,
+      threshold,
+      eligible.filter((row) => Number(row.total_orders) < threshold).length,
+      includeMeta,
+    );
   }
 
   async getTopOperatorsByMarket(marketId: string, limit = 10) {
@@ -1900,8 +1991,13 @@ export class OrderAnalyticsService {
    * Filtrlar endi to'g'ridan-to'g'ri har bir hisobga qo'yiladi — natija
    * bir xil, lekin xotira ham, so'rov hajmi ham o'zgarmas.
    */
-  async getMarketStat(marketId: string, startDate?: string, endDate?: string) {
-    const { start, end } = this.analyticsDateRange(startDate, endDate);
+  async getMarketStat(
+    marketId: string,
+    startDate?: string,
+    endDate?: string,
+    all = false,
+  ) {
+    const { start, end } = this.analyticsDateRange(startDate, endDate, all);
     const soldStatuses = this.soldStatuses();
     const startMs = String(start.getTime());
     const endMs = String(end.getTime());

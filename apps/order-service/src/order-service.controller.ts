@@ -1338,7 +1338,12 @@ export class OrderServiceController {
   @MessagePattern({ cmd: 'order.analytics.market_stats' })
   analyticsMarketStats(
     @Payload()
-    data: { startDate?: string; endDate?: string; branch_id?: string },
+    data: {
+      startDate?: string;
+      endDate?: string;
+      branch_id?: string;
+      all?: boolean;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -1346,6 +1351,7 @@ export class OrderServiceController {
         data.startDate,
         data.endDate,
         data.branch_id,
+        data.all,
       ),
     );
   }
@@ -1353,7 +1359,12 @@ export class OrderServiceController {
   @MessagePattern({ cmd: 'order.analytics.courier_stats' })
   analyticsCourierStats(
     @Payload()
-    data: { startDate?: string; endDate?: string; branch_id?: string },
+    data: {
+      startDate?: string;
+      endDate?: string;
+      branch_id?: string;
+      all?: boolean;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -1361,6 +1372,7 @@ export class OrderServiceController {
         data.startDate,
         data.endDate,
         data.branch_id,
+        data.all,
       ),
     );
   }
@@ -1373,6 +1385,9 @@ export class OrderServiceController {
       branch_id?: string;
       startDate?: string;
       endDate?: string;
+      min_orders?: number;
+      include_meta?: boolean;
+      all?: boolean;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -1382,17 +1397,37 @@ export class OrderServiceController {
         data.branch_id,
         data.startDate,
         data.endDate,
+        data.min_orders,
+        data.include_meta,
+        data.all,
       ),
     );
   }
 
   @MessagePattern({ cmd: 'order.analytics.top_couriers' })
   analyticsTopCouriers(
-    @Payload() data: { limit?: number; branch_id?: string },
+    @Payload()
+    data: {
+      limit?: number;
+      branch_id?: string;
+      startDate?: string;
+      endDate?: string;
+      min_orders?: number;
+      include_meta?: boolean;
+      all?: boolean;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
-      this.orderAnalyticsService.getTopCouriers(data.limit, data.branch_id),
+      this.orderAnalyticsService.getTopCouriers(
+        data.limit,
+        data.branch_id,
+        data.startDate,
+        data.endDate,
+        data.min_orders,
+        data.include_meta,
+        data.all,
+      ),
     );
   }
 
@@ -1404,6 +1439,9 @@ export class OrderServiceController {
       branch_id?: string;
       startDate?: string;
       endDate?: string;
+      min_orders?: number;
+      include_meta?: boolean;
+      all?: boolean;
     },
     @Ctx() context: RmqContext,
   ) {
@@ -1413,6 +1451,9 @@ export class OrderServiceController {
         data.branch_id,
         data.startDate,
         data.endDate,
+        data.min_orders,
+        data.include_meta,
+        data.all,
       ),
     );
   }
@@ -1454,7 +1495,12 @@ export class OrderServiceController {
   @MessagePattern({ cmd: 'order.analytics.market_stat' })
   analyticsMarketStat(
     @Payload()
-    data: { requester: { id: string }; startDate?: string; endDate?: string },
+    data: {
+      requester: { id: string };
+      startDate?: string;
+      endDate?: string;
+      all?: boolean;
+    },
     @Ctx() context: RmqContext,
   ) {
     return this.executeAndAck(context, () =>
@@ -1462,6 +1508,7 @@ export class OrderServiceController {
         data.requester.id,
         data.startDate,
         data.endDate,
+        data.all,
       ),
     );
   }

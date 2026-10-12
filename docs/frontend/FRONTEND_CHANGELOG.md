@@ -23,6 +23,108 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-12 — 1-kun backend kartalari
+
+- [2026-10-12] ✏️ [order/logistics] — superadminning mavjud
+  `DELETE /orders/:id` amali `received` buyurtmani faqat jo'natilmagan,
+  to'lovsiz pochtadan o'chiradi; buyurtma belgisi va pochta sanog'i/summasi
+  bitta DB tranzaksiyasida yangilanadi. Jo'natilgan pochta, to'lov yoki
+  qaytarish/partiya aloqasi bo'lsa 409 qaytadi (yokjwjXG).
+  `POST /post/cancel` hanuz faqat kuryer/menejerning bekor pochta oqimi.
+  → **Frontendda:** 🔧 savatni qayta yoqish qarori haqiqiy buyurtmani
+  o'chirish bo'lsa `DELETE /orders/:id` ni ishlating; faqat pochtadan
+  ajratish istalsa bu endpoint mos emas, savat yashirin qolsin.
+- [2026-10-12] ✏️ [order] — `disable_pagination` ichki ro'yxatlari 5000 qator
+  bilan chegaralanadi; `GET /orders/markets/:marketId/new` javobida
+  `truncated` bayrog'i bor (9Rdi2gJF). Kuryerning bekor tabi bitta
+  sahifalangan so'rovdan qaytadi, javob shakli saqlangan.
+  → **Frontendda:** 🔧 `truncated: true` bo'lsa ro'yxat to'liq emasligini
+  ko'rsating; kuryer tabida server bergan `total/page` ga tayaning.
+- [2026-10-12] 🔧 [finance] — `GET /finance/financial-balance/top-impacts`
+  backendda avvaldan server sahifalashi bor: `limit` eng ko'pi 100,
+  `pagination.totalPages` haqiqiy jami qatorga asoslanadi (vmLTsAok).
+  → **Frontendda:** 🔧 AnalysisTab'da `limit: PAGE_SIZE` va joriy `page`
+  yuboring, `totalPages` ni javobdan o'qing; mahalliy `slice/sort` ni olib
+  tashlang. `buildBuckets(rows)` fallbackini olib tashlang yoki “taxminiy”
+  deb belgilang. AnalysisTab/HistoryTab sana parametrlarini Toshkent kuni
+  chegaralari bilan yuboring (`YYYY-MM-DD`, backend shu kunni hisoblaydi).
+- [2026-10-12] ⚠️ [finance] — `POST /finance/financial-balance/entries`
+  endi `Idempotency-Key` sarlavhasini talab qiladi; yo'q bo'lsa 400,
+  ayni kalit boshqa yozuvga ishlatilsa 409 qaytadi. `amount: 0` daftar
+  yozmasdan HTTP 200 `skipped` qaytaradi; haqiqiy yangi yozuv HTTP 201
+  bo'lib qoladi (cSNJN7GP).
+  → **Frontendda:** `FinancialEntryModal` har yangi yozuv uchun UUID yaratib,
+  takroriy yuborishda ayni kalitni saqlashi allaqachon bor. 400/409 va
+  `200 skipped` holatlarini yangi backend bilan integratsiyada tekshiring.
+- [2026-10-12] 🔧 [finance] — `GET /finance/financial-balance/history`
+  `source_type` endi enumga kirmasa 400 qaytaradi (b1QxU3qa).
+  → **Frontendda:** `HistoryTab` `sell_profit` yuborishi, xatoda
+  `QueryErrorState` va qayta urinishni ko'rsatishi allaqachon bor.
+  AnalysisTab/HistoryTab'dagi eski `sell` ko'rsatish aliaslarini tozalash mumkin.
+- [2026-10-12] ⚠️ [analytics] — dashboard/KPI asosiy order ma'lumoti
+  olinmasa 503; qisman nosozlikda dashboard/revenue/KPI javobida
+  `degraded: true` va `failed_parts` bor (VkwhHqvW).
+  → **Frontendda:** 🔧 503 yoki `degraded` holatini “ma'lumot olinmadi” deb
+  ko'rsating; yetishmagan bo'limda 0 sonini chizmang, qayta urinish imkonini
+  bering.
+- [2026-10-12] ✏️ [analytics] — top-market/kuryer/filial reytinglari tanlangan
+  davrga bog'landi va sukut `min_orders=1`; qatorlar massivi avvalgidek
+  (`topMarkets`, `topBranches`, `ranking`, `marketRating`), yonida
+  `topMarketsMeta`, `topBranchesMeta`, `rankingMeta`, `marketRatingMeta`
+  (`min_orders`, `filtered_out`) paydo bo'ldi (PQt3n1N0).
+  → **Frontendda:** 🔧 “kamida 30 buyurtma” qotirilgan bo'sh holat matnini
+  olib tashlang; server metadata'siga qarab sababini ko'rsating.
+- [2026-10-12] ✏️ [analytics] — `GET /analytics/dashboard?all=true`
+  market va kuryer qatorlarini ham qaytaradi; `all=true` haqiqiy barcha tarixni
+  qamraydi (`clamped: false`, `effective_from` 1970-01-01 Toshkent kuni,
+  `effective_to` joriy vaqt). Oddiy sana oralig'i 366 kun bilan chegaralangan
+  holda qoladi (uN1tjjGu).
+  → **Frontendda:** 🔧 “Barchasi” uchun barcha tarixni ko'rsating; oddiy
+  oralig'ida `clamped` bo'lsa qo'llangan sanalarni chiqaring.
+- [2026-10-12] ✏️ [finance] — `GET /finance/financial-balance` javobida
+  `markets.allMarketCashboxes` va `couriers.allCourierCashboxes` endi nol
+  bo'lmagan kassalarni qaytaradi; ikkala bo'limda `nonZeroCount` va
+  `truncated` bor (IaMK2tf2). → **Frontendda:** 🔧 ro'yxat sanog'ini
+  `nonZeroCount` dan o'qing, `truncated` bo'lsa top-N ekanini ko'rsating va
+  “Barchasini ko'rish” havolasini qo'shing. Market qatorining `balance`
+  ishorasini saqlang: `-Math.abs(rawBalance)` ni olib tashlang. 390px
+  kenglikda gorizontal overflow yo'qligini tekshiring.
+- [2026-10-12] 🔧 [sms] — promo SMS navbatga qo'yish va yuborish oldidan
+  rozilik qayta tekshiriladi; roziligi yo'q yoki keyin bekor qilingan raqamga
+  xabar ketmaydi (sVByLMnt). → **Frontendda:** 🔧 kampaniya uchun
+  `POST /notifications/sms/campaigns/preview` javobidagi `recipients`, `blocked_no_consent`,
+  `estimated_cost`, `sample_text` va `fanout_exceeded` ni tasdiq oynasida
+  ko'rsatish, `Idempotency-Key` bilan yuborish va kampaniya tarixini ko'rsatish
+  `CampaignPage` da allaqachon bor. Opt-out matni preview'da ko'rinadi.
+  Davlat reyestri va OTP istisnosi huquqiy tekshiruv/tashkiliy ish bo'lib qoladi.
+- [2026-10-12] 🔧 [settlement] — eski `/orders/settlement/*` endpointlari 410
+  qaytaradi; ularning DTO'si ham `amount: 0` ni rad etadi (qGaxcaD4).
+  → **Frontendda:** 🔧 eski settlement formasini ishlatmang; amaldagi
+  `/finance/cashbox/payment/*` formalarida bo'sh summani yubormang, probel
+  bilan ajratilgan raqamni to'g'ri o'qing, xatoda backend `message` ni ko'rsating
+  va pul o'tkazishdan oldin tasdiq so'rang.
+- [2026-10-12] 🔧 [logistics] — `POST /post/cancel` savatdagi "o'chirish"
+  emas, bekor qilingan pochtani yaratish oqimi; superadmin bu oqimda 403
+  oladi (yokjwjXG). → **Frontendda:** `/mails/:id` dagi savat amali
+  `canDelete={false}` bilan allaqachon yashirilgan. Uni qayta yoqishdan oldin
+  "pochtadan ajratish" yoki "bekor qilingan pochtaga yuborish" maqsadi tanlansin.
+- [2026-10-12] 🔧 [api-gateway/finance] — qo'lda kuryer/market/filial to'lovi
+  va kassa kirim/chiqimida `Idempotency-Key` sarlavhasi bo'lmasa dedup
+  qilinmaydi; takroriy kalitda `data.idempotent: true` qaytadi (TMgL1zvq).
+  → **Frontendda:** 🔧 har submit uchun `crypto.randomUUID()` kalit yarating,
+  retry paytida ayni kalitni yuboring; `idempotent: true` ni alohida ko'rsating.
+- [2026-10-12] 🔧 [api-gateway/finance] — `POST /finance/operator-payments`
+  tanasida `note` qabul qilinadi, `comment` 400 qaytaradi (2DCQKd37).
+  → **Frontendda:** 🔧 `finance-operators` to'lov formasida `comment` o'rniga
+  `note` yuboring (bo'sh bo'lsa yubormang), jadvalning Izoh ustunini `note` dan
+  o'qing va 400 javobdagi `message` ni ko'rsating.
+- [2026-10-12] 🔧 [api-gateway/logistics] — `GET /post/orders/:id` va
+  `/post/orders/rejected/:id` javobidagi `market` faqat `id/name/phone_number`,
+  `customer` faqat `id/name/phone_number/address/district_id`, `district` esa
+  `id/name/region` (regionda `id/name`) qaytaradi (VfgcnxDa).
+  → **Frontendda:** 🔧 `PostOrder` ichidagi boyitilgan obyekt tiplarini
+  toraytiring; pochta detalida faqat shu maydonlardan foydalaning.
+
 ### 2026-10-10 — Qaytgan kartalar (backend)
 
 - [2026-10-10] ✏️ [logistics] — Tuman/viloyat o'chirish himoyasi endi faqat

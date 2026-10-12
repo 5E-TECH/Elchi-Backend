@@ -285,17 +285,12 @@ describe('FIX3 A7 — analytics scoping', () => {
       },
     );
 
-    it('downstream xatosi (null) o‘z holicha qaytadi', async () => {
+    it('overview xatosi 200+soxta nollar emas, 503 qaytaradi', async () => {
       rmqSendMock.mockRejectedValue(new Error('timeout'));
 
-      const res = await service.getDashboard(
-        { id: '1', roles: ['superadmin'] },
-        {} as any,
-      );
-
-      expect(res.statusCode).toBe(200);
-      expect(res.data.markets).toBeNull();
-      expect(res.data.couriers).toBeNull();
+      await expect(
+        service.getDashboard({ id: '1', roles: ['superadmin'] }, {} as any),
+      ).rejects.toThrow(/overview/);
     });
   });
 

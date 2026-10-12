@@ -73,8 +73,8 @@ export class SmsConsentService {
         !consent.revoked_at &&
         consent.granted_at.getTime() >= minGrantedAt &&
         (!consent.customer_id ||
-          !recipient.customer_id ||
-          String(consent.customer_id) === String(recipient.customer_id));
+          (recipient.customer_id &&
+            String(consent.customer_id) === String(recipient.customer_id)));
       (ok ? allowed : blocked).push(recipient);
     }
     return { allowed, blocked };

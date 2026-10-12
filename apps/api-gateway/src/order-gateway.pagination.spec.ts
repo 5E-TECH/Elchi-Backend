@@ -249,76 +249,29 @@ describe('OrderGatewayController pagination', () => {
   it('courier cancelled tab returns only unsent cancelled orders for the courier', async () => {
     const { controller, orderClient, logisticsClient, branchClient } =
       makeController();
-    logisticsClient.send
-      .mockReturnValueOnce(
-        of({
-          data: {
-            data: [{ id: 'post-1' }],
-            totalPages: 2,
-            page: 1,
-            limit: 100,
+    orderClient.send.mockReturnValue(
+      of({
+        data: [
+          { id: '77', status: 'cancelled' },
+          {
+            id: '84',
+            status: 'cancelled',
+            holder_type: 'COURIER',
+            holder_courier_id: '77',
           },
-        }),
-      )
-      .mockReturnValueOnce(
-        of({
-          data: {
-            data: [{ id: 'old-post' }],
-            totalPages: 2,
-            page: 2,
-            limit: 100,
+          {
+            id: 'partial-child',
+            status: 'cancelled',
+            post_id: 'old-post',
+            courier_id: '77',
+            holder_type: 'BRANCH',
+            parent_order_id: '75',
+            canceled_post_id: null,
           },
-        }),
-      );
-    orderClient.send.mockImplementation((_pattern, payload) => {
-      if (payload?.query?.holder_courier_ids) {
-        return of({
-          data: [
-            {
-              id: '84',
-              status: 'cancelled',
-              holder_type: 'COURIER',
-              holder_courier_id: '77',
-            },
-          ],
-          total: 1,
-        });
-      }
-      if (payload?.query?.post_ids) {
-        return of({
-          data: [
-            {
-              id: 'post-cancelled',
-              status: 'cancelled',
-              post_id: 'old-post',
-              holder_type: 'BRANCH',
-              canceled_post_id: null,
-            },
-            {
-              id: 'partial-child',
-              status: 'cancelled',
-              post_id: 'old-post',
-              courier_id: '77',
-              holder_type: 'BRANCH',
-              parent_order_id: '75',
-              canceled_post_id: null,
-            },
-            {
-              id: 'accepted-cancelled',
-              status: 'cancelled (sent)',
-              post_id: 'old-post',
-              holder_type: 'BRANCH',
-              canceled_post_id: '70',
-            },
-          ],
-          total: 3,
-        });
-      }
-      return of({
-        data: [{ id: '77', status: 'cancelled' }],
-        total: 1,
-      });
-    });
+        ],
+        total: 3,
+      }),
+    );
 
     const response: any = await controller.findAll(
       undefined,
@@ -346,25 +299,20 @@ describe('OrderGatewayController pagination', () => {
     );
 
     const payload = orderClient.send.mock.calls[0][1];
-    expect(payload.query.status).toEqual(['cancelled', 'cancelled (sent)']);
+    expect(payload.query.status).toEqual(['cancelled']);
     expect(payload.query.courier_ids).toEqual(['77']);
+    expect(payload.query.holder_courier_ids).toEqual(['77']);
+    expect(payload.query.courier_scope).toBe('any');
+    expect(payload.query.courier_post_history).toBe(true);
+    expect(payload.query.courier_cancelled_tab).toBe(true);
+    expect(payload.query.page).toBe(1);
+    expect(payload.query.limit).toBe(10);
     expect(payload.query.include_courier_history).toBeUndefined();
     expect(payload.query.canceled_post_unassigned).toBeUndefined();
     expect(payload.query.branch_id).toBeUndefined();
     expect(payload.query.holder_type).toBeUndefined();
-    expect(orderClient.send.mock.calls).toEqual(
-      expect.arrayContaining([
-        expect.arrayContaining([
-          expect.anything(),
-          expect.objectContaining({
-            query: expect.objectContaining({
-              status: ['cancelled', 'cancelled (sent)'],
-              holder_courier_ids: ['77'],
-            }),
-          }),
-        ]),
-      ]),
-    );
+    expect(orderClient.send).toHaveBeenCalledTimes(1);
+    expect(logisticsClient.send).not.toHaveBeenCalled();
     expect(response.data).toEqual([
       { id: '77', status: 'cancelled' },
       {
@@ -396,13 +344,13 @@ describe('OrderGatewayController pagination', () => {
     expect(branchClient.send).not.toHaveBeenCalled();
   });
 
-  it('courier cancelled tab still works when logistics post history is unavailable', async () => {
+  it('courier cancelled tab requests page 2 without re-fetching page 1', async () => {
     const { controller, orderClient, logisticsClient } = makeController();
     logisticsClient.send.mockReturnValue(
       throwError(() => new Error('logistics unavailable')),
     );
     orderClient.send.mockReturnValue(
-      of({ data: [{ id: '84', status: 'cancelled' }], total: 1 }),
+      of({ data: [{ id: '84', status: 'cancelled' }], total: 11 }),
     );
 
     const response: any = await controller.findAll(
@@ -419,7 +367,7 @@ describe('OrderGatewayController pagination', () => {
       undefined,
       undefined,
       undefined,
-      '1',
+      '2',
       '10',
       {
         user: {
@@ -433,82 +381,43 @@ describe('OrderGatewayController pagination', () => {
     const payload = orderClient.send.mock.calls[0][1];
     expect(payload.query).toEqual(
       expect.objectContaining({
-        status: ['cancelled', 'cancelled (sent)'],
+        status: ['cancelled'],
         courier_ids: ['77'],
+        page: 2,
+        limit: 10,
       }),
     );
     expect(response.data).toEqual([{ id: '84', status: 'cancelled' }]);
+    expect(response.total).toBe(11);
+    expect(response.has_prev).toBe(true);
+    expect(orderClient.send).toHaveBeenCalledTimes(1);
+    expect(logisticsClient.send).not.toHaveBeenCalled();
   });
 
   it('legacy courier cancelled list includes current courier-held cancelled orders only', async () => {
     const { controller, orderClient, logisticsClient } = makeController();
-    logisticsClient.send
-      .mockReturnValueOnce(
-        of({ data: { data: [{ id: 'new-post' }], totalPages: 2 } }),
-      )
-      .mockReturnValueOnce(
-        of({ data: { data: [{ id: 'old-post' }], totalPages: 2 } }),
-      );
-    orderClient.send.mockImplementation((_pattern, payload) => {
-      if (payload?.query?.holder_courier_ids) {
-        return of({
-          data: [
-            {
-              id: '84',
-              status: 'cancelled',
-              holder_type: 'COURIER',
-              holder_courier_id: '77',
-              canceled_post_id: null,
-            },
-          ],
-          total: 1,
-        });
-      }
-      if (payload?.query?.post_ids) {
-        return of({
-          data: [
-            {
-              id: 'post-cancelled',
-              status: 'cancelled',
-              post_id: 'old-post',
-              holder_type: 'BRANCH',
-              canceled_post_id: null,
-            },
-            {
-              id: 'partial-child',
-              status: 'cancelled',
-              post_id: 'old-post',
-              courier_id: '77',
-              holder_type: 'BRANCH',
-              parent_order_id: '75',
-              canceled_post_id: null,
-            },
-            {
-              id: 'accepted-cancelled',
-              status: 'cancelled (sent)',
-              post_id: 'old-post',
-              holder_type: 'BRANCH',
-              canceled_post_id: '70',
-            },
-          ],
-          total: 3,
-        });
-      }
-      return of({
+    orderClient.send.mockReturnValue(
+      of({
         data: [
           {
-            id: 'branch-held',
+            id: '84',
+            status: 'cancelled',
+            holder_type: 'COURIER',
+            holder_courier_id: '77',
+          },
+          {
+            id: 'partial-child',
             status: 'cancelled',
             post_id: 'old-post',
+            courier_id: '77',
             holder_type: 'BRANCH',
-            holder_branch_id: '11',
             parent_order_id: '75',
             canceled_post_id: null,
           },
         ],
-        total: 1,
-      });
-    });
+        total: 2,
+      }),
+    );
 
     const response: any = await controller.findCourierOrdersLegacy(
       'cancelled',
@@ -526,28 +435,18 @@ describe('OrderGatewayController pagination', () => {
       },
     );
 
-    const orderQueries = orderClient.send.mock.calls
-      .map((call) => call[1]?.query)
-      .filter(Boolean);
-    expect(orderQueries).toContainEqual(
+    expect(orderClient.send).toHaveBeenCalledTimes(1);
+    expect(orderClient.send.mock.calls[0][1].query).toEqual(
       expect.objectContaining({
-        status: ['cancelled', 'cancelled (sent)'],
+        status: ['cancelled'],
         courier_ids: ['77'],
-      }),
-    );
-    expect(orderQueries).toContainEqual(
-      expect.objectContaining({
-        status: ['cancelled', 'cancelled (sent)'],
         holder_courier_ids: ['77'],
+        courier_scope: 'any',
+        page: 1,
+        limit: 10,
       }),
     );
-    expect(orderQueries).toContainEqual(
-      expect.objectContaining({
-        status: ['cancelled', 'cancelled (sent)'],
-        post_ids: ['new-post', 'old-post'],
-      }),
-    );
-    expect(logisticsClient.send).toHaveBeenCalledTimes(2);
+    expect(logisticsClient.send).not.toHaveBeenCalled();
     expect(response.data.data).toEqual([
       expect.objectContaining({
         id: '84',
@@ -557,12 +456,5 @@ describe('OrderGatewayController pagination', () => {
       }),
       expect.objectContaining({ id: 'partial-child' }),
     ]);
-    expect(response.data.data).not.toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: 'post-cancelled' }),
-        expect.objectContaining({ id: 'accepted-cancelled' }),
-        expect.objectContaining({ id: 'branch-held' }),
-      ]),
-    );
   });
 });

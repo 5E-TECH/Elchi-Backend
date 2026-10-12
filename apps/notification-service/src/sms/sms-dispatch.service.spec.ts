@@ -22,7 +22,10 @@ describe('SmsDispatchService', () => {
   let registry: { hasAccount: jest.Mock };
   let patches: Array<{ ids: string[]; patch: Record<string, unknown> }>;
   let manager: { getRepository: () => unknown };
-  let notifications: { query: jest.Mock };
+  let notifications: {
+    query: jest.Mock;
+    manager: { transaction: jest.Mock };
+  };
   const make = (env: Record<string, unknown> = { SMS_ENABLED: 'true' }) =>
     new SmsDispatchService(
       notifications as never,
@@ -73,7 +76,14 @@ describe('SmsDispatchService', () => {
       }),
     });
     manager = { getRepository: () => ({ createQueryBuilder: () => builder }) };
-    notifications = { query: jest.fn() };
+    notifications = {
+      query: jest.fn(),
+      manager: {
+        transaction: jest.fn((work: (tx: unknown) => Promise<unknown>) =>
+          work({ ...manager, query: notifications.query }),
+        ),
+      },
+    };
   });
 
   it('SMS_ENABLED=false → no sms_outbox row, delivery.sms = no_provider in DB, reason returned (uFmUS86e)', async () => {
@@ -170,6 +180,43 @@ describe('SmsDispatchService', () => {
     outbox.enqueue.mockClear();
     expect(await make().escalate(['7'])).toBe(0);
     expect(outbox.enqueue).not.toHaveBeenCalled();
+  });
+
+  it('keeps the escalation marker and SMS enqueue in one transaction', async () => {
+    const txManager = {
+      query: jest
+        .fn()
+        .mockResolvedValue([
+          [{ id: '7', recipient_id: '42', title: 'Kritik', body: null }],
+          1,
+        ]),
+      getRepository: manager.getRepository,
+    };
+    const transaction = jest.fn(
+      async (work: (manager: unknown) => Promise<unknown>) => work(txManager),
+    );
+    (notifications as unknown as { manager: unknown }).manager = {
+      transaction,
+    };
+    await make().escalate(['7']);
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(outbox.enqueue).toHaveBeenCalledWith(expect.any(Array), {
+      manager: txManager,
+    });
+    expect(txManager.query).toHaveBeenCalledWith(
+      expect.stringContaining('escalated_at'),
+      [['7']],
+    );
+  });
+
+  it('rolls back the escalation marker when SMS enqueue fails', async () => {
+    notifications.query.mockResolvedValue([
+      [{ id: '7', recipient_id: '42', title: 'Kritik', body: null }],
+      1,
+    ]);
+    outbox.enqueue.mockRejectedValue(new Error('SMS insert failed'));
+    await expect(make().escalate(['7'])).rejects.toThrow('SMS insert failed');
+    expect(notifications.manager.transaction).toHaveBeenCalledTimes(1);
   });
 
   it('fan-out guard', () => {

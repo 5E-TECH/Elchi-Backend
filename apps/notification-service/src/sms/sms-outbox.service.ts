@@ -19,6 +19,7 @@ import {
 
 export interface EnqueueSmsInput {
   to: string;
+  customerId?: string | null;
   text: string;
   messageClass: SmsMessageClass;
   templateCode?: string | null;
@@ -95,7 +96,8 @@ export class SmsOutboxService {
   /**
    * Darvozadan o'tkazib navbatga qo'yadi. Darvoza rad etsa `SmsBlockedError`
    * (hech qanday qator yozilmaydi), takror bo'lsa `SmsDuplicateError`.
-   * Rozilik tekshiruvi CHAQIRUVCHIDA (kampaniya) — bu yerda faqat opt-out matni.
+   * Promo roziligi shu chegarada ham tekshiriladi — boshqa chaqiruvchilar
+   * kampaniya tekshiruvini chetlab o'tolmaydi.
    */
   async enqueue(
     inputs: EnqueueSmsInput[],
@@ -111,6 +113,24 @@ export class SmsOutboxService {
       else valid.push({ ...input, to });
     }
     if (!valid.length) return { queued: [], skipped, estimated_cost: 0 };
+
+    const promo = valid.filter((input) => input.messageClass === 'promo');
+    if (promo.length) {
+      const { blocked } = await this.consent.partition(
+        promo.map((input) => ({
+          phone: input.to,
+          customer_id: input.customerId ?? null,
+        })),
+        now,
+      );
+      if (blocked.length) {
+        throw new SmsBlockedError(
+          'no_consent',
+          `Reklama SMS uchun rozilik yo'q (${blocked.length} ta raqam)`,
+          { blocked: blocked.length },
+        );
+      }
+    }
 
     await this.gate.assertCanEnqueue(valid.length, now);
 
@@ -130,6 +150,7 @@ export class SmsOutboxService {
       const cost = this.config.cost(input.messageClass, segments.parts);
       return {
         to_phone: input.to,
+        customer_id: input.customerId ?? null,
         text,
         message_class: input.messageClass,
         template_code: input.templateCode ?? null,

@@ -185,8 +185,8 @@ export class SmsDispatchService {
    */
   async escalate(notificationIds: string[]): Promise<number> {
     if (!notificationIds.length || !this.config.enabled) return 0;
-    const claimed: Notification[] = await this.notifications
-      .query(
+    return this.notifications.manager.transaction(async (manager) => {
+      const claimResult: unknown = await manager.query(
         `UPDATE "notification_schema"."notifications"
           SET "delivery" = COALESCE("delivery", '{}'::jsonb)
                 || jsonb_build_object('escalated_at', to_jsonb(NOW()))
@@ -194,28 +194,34 @@ export class SmsDispatchService {
           AND ("delivery"->>'escalated_at') IS NULL
         RETURNING "id", "recipient_id", "title", "body"`,
         [notificationIds],
-      )
-      .then((result: unknown) =>
-        Array.isArray(result) && Array.isArray(result[0])
-          ? (result[0] as Notification[])
-          : (result as Notification[]),
       );
-    if (!claimed.length) return 0;
-    const contacts = await this.contacts([
-      ...new Set(claimed.map((row) => String(row.recipient_id))),
-    ]);
-    const messages = claimed
-      .map((row) => ({
-        row,
-        phone: normalizeSmsPhone(
-          contacts.get(String(row.recipient_id))?.phone_number,
-        ),
-      }))
-      .filter((item): item is { row: Notification; phone: string } =>
-        Boolean(item.phone),
-      );
-    if (!messages.length) return 0;
-    try {
+      const claimed = (
+        Array.isArray(claimResult) && Array.isArray(claimResult[0])
+          ? claimResult[0]
+          : claimResult
+      ) as Notification[];
+      if (!claimed.length) return 0;
+      const contacts = await this.contacts([
+        ...new Set(claimed.map((row) => String(row.recipient_id))),
+      ]);
+      const messages = claimed
+        .map((row) => ({
+          row,
+          phone: normalizeSmsPhone(
+            contacts.get(String(row.recipient_id))?.phone_number,
+          ),
+        }))
+        .filter((item): item is { row: Notification; phone: string } =>
+          Boolean(item.phone),
+        );
+      const withoutPhone = claimed
+        .filter((row) => !messages.some((item) => item.row.id === row.id))
+        .map((row) => String(row.id));
+      await this.patch(manager, withoutPhone, {
+        sms: 'skipped',
+        sms_reason: 'no_phone',
+      });
+      if (!messages.length) return 0;
       const result = await this.outbox.enqueue(
         messages.map(({ row, phone }) => ({
           to: phone,
@@ -224,18 +230,15 @@ export class SmsDispatchService {
           notificationId: String(row.id),
           clientMessageId: `esc-${row.id}`,
         })),
+        { manager },
       );
-      await this.outbox.patchNotifications(
+      await this.patch(
+        manager,
         messages.map(({ row }) => String(row.id)),
         { sms: 'queued', escalation: 'sms' },
       );
       return result.queued.length;
-    } catch (error) {
-      this.logger.error(
-        `CRITICAL eskalatsiya SMS navbatga tushmadi: ${(error as Error).message}`,
-      );
-      return 0;
-    }
+    });
   }
 
   private async patch(

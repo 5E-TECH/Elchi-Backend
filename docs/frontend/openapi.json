@@ -2856,7 +2856,7 @@
             "name": "id",
             "required": true,
             "in": "path",
-            "description": "Order ID (uuid)",
+            "description": "Order ID (bigint)",
             "schema": {
               "type": "string"
             }
@@ -2864,7 +2864,10 @@
         ],
         "responses": {
           "200": {
-            "description": ""
+            "description": "Order deleted"
+          },
+          "409": {
+            "description": "A post-linked order can only be deleted before dispatch, without payment or an active return/batch"
           }
         },
         "security": [
@@ -5815,6 +5818,14 @@
             "schema": {
               "type": "string"
             }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "requestBody": {
@@ -5828,8 +5839,11 @@
           }
         },
         "responses": {
+          "200": {
+            "description": "Zero amount skipped; no ledger entry"
+          },
           "201": {
-            "description": ""
+            "description": "Ledger entry recorded"
           }
         },
         "security": [
@@ -5852,6 +5866,16 @@
             "required": false,
             "in": "query",
             "schema": {
+              "enum": [
+                "sell_profit",
+                "sell_extra_cost",
+                "cancel_extra_cost",
+                "manual_income",
+                "manual_expense",
+                "salary",
+                "correction",
+                "bills"
+              ],
               "type": "string"
             }
           },

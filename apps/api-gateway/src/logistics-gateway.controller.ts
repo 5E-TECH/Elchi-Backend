@@ -63,6 +63,19 @@ interface OrderRowForEnrichment {
   [key: string]: unknown;
 }
 
+// (VfgcnxDa) Tashqi servis obyektidan faqat javob kontraktidagi maydonlarni olamiz.
+function pickFields(value: unknown, keys: readonly string[]) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    return null;
+  }
+  const source = value as Record<string, unknown>;
+  return Object.fromEntries(
+    keys
+      .filter((key) => Object.prototype.hasOwnProperty.call(source, key))
+      .map((key) => [key, source[key]]),
+  );
+}
+
 /** CODE-12 — o'chirilgan eski pochta route'lari (PATCH post/:id, post/reassign/:id). */
 export const LEGACY_POST_ROUTE_DISABLED_MESSAGE =
   "Bu eski pochta amali o'chirilgan (buyurtma custody'sini tekshiruvsiz o'zgartirardi). Pochtani filialga POST /branches/posts/:postId/dispatch, kuryerga esa POST /orders/assign-to-courier yoki skan orqali bering";
@@ -158,16 +171,34 @@ export class LogisticsGatewayController {
     const customerMap = new Map(customers);
     const districtMap = new Map(districts);
 
-    return rows.map((row) => ({
-      ...row,
-      market: row.market_id ? (marketMap.get(row.market_id) ?? null) : null,
-      customer: row.customer_id
-        ? (customerMap.get(row.customer_id) ?? null)
-        : null,
-      district: row.district_id
-        ? (districtMap.get(row.district_id) ?? null)
-        : null,
-    }));
+    return rows.map((row) => {
+      const district = row.district_id
+        ? pickFields(districtMap.get(row.district_id), ['id', 'name', 'region'])
+        : null;
+      if (district && 'region' in district) {
+        district.region = pickFields(district.region, ['id', 'name']);
+      }
+      return {
+        ...row,
+        market: row.market_id
+          ? pickFields(marketMap.get(row.market_id), [
+              'id',
+              'name',
+              'phone_number',
+            ])
+          : null,
+        customer: row.customer_id
+          ? pickFields(customerMap.get(row.customer_id), [
+              'id',
+              'name',
+              'phone_number',
+              'address',
+              'district_id',
+            ])
+          : null,
+        district,
+      };
+    });
   }
 
   private async enrichOrdersByPostResponse(response: {

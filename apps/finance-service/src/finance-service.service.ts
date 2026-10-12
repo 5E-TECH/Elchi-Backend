@@ -2235,6 +2235,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         // cashbox row lock). Absent token → no dedup (prior behaviour).
         dedup_epoch: data.dedup_epoch,
       });
+      if (update?.data?.idempotent) {
+        // (TMgL1zvq) Takroriy so'rov pul ham, audit ham qayta yozmaydi.
+        return this.successRes(
+          update.data,
+          200,
+          "Kassa chiqimi allaqachon bajarilgan (takroriy so'rov)",
+        );
+      }
       await this.activityLog.log({
         entity_type: 'Cashbox',
         entity_id: String(update?.data?.cashbox?.id ?? targetUserId),
@@ -2287,6 +2295,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         // source_id stays NULL (bigint column can't hold the free-form token).
         dedup_epoch: data.dedup_epoch,
       });
+      if (update?.data?.idempotent) {
+        // (TMgL1zvq) Takroriy so'rov pul ham, audit ham qayta yozmaydi.
+        return this.successRes(
+          update.data,
+          200,
+          "Kassa kirimi allaqachon bajarilgan (takroriy so'rov)",
+        );
+      }
       await this.activityLog.log({
         entity_type: 'Cashbox',
         entity_id: String(update?.data?.cashbox?.id ?? targetUserId),
@@ -3437,14 +3453,158 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async financialBalance() {
+  /**
+   * G1 / financial-balance-lists (2026-10-09 prod UI testi) — /financial-balance
+   * "Marketlar" va "Kuryerlar" ro'yxatlari uchun bitta ro'yxatdagi qatorlar
+   * chegarasi. Ro'yxat faqat balansi NOL BO'LMAGAN kassalardan iborat
+   * (kassa = bitta foydalanuvchi), shu bois amalda bu chegaraga yetilmaydi;
+   * yetilsa eng katta |balans| lar qaytadi va `truncated: true`.
+   */
+  private static readonly FINANCIAL_BALANCE_PARTY_LIST_LIMIT = 500;
+
+  /**
+   * G1 / financial-balance-lists — kuryer/market kassalari ro'yxati (balans ≠ 0)
+   * egasining nomi bilan. Elchi-Frontend `normalizeFinancialBalance` qatordan
+   * `id`, `user.name` va `balance` ni o'qiydi (BeePost'dagi
+   * `relations: ['user']` shakli bilan bir xil).
+   *
+   * • Faqat SQL'da filtrlangan, chegaralangan so'rov — d3c83af6 perf
+   *   tuzatishidagi "har bir kassani yuklash" qaytmaydi.
+   * • `user` — identity'dan BITTA batch chaqiruv (`*.find_by_ids`), faqat
+   *   id/name/phone_number/region_id; maosh, tarif, sozlamalar sizmaydi.
+   * • Yordamchi ro'yxat: identity yiqilsa qatorlar `user: null` bilan,
+   *   so'rov yiqilsa bo'sh ro'yxat qaytadi — kompaniya holati hisoboti
+   *   to'xtamaydi (`findBranchCashExceedingPayable` bilan bir xil).
+   */
+  private async listNonZeroCashboxesWithOwners(
+    cashboxType: Cashbox_type.FOR_COURIER | Cashbox_type.FOR_MARKET,
+  ): Promise<{
+    items: Array<{
+      id: string;
+      user_id: string;
+      cashbox_type: Cashbox_type;
+      balance: number;
+      balance_cash: number;
+      balance_card: number;
+      user: {
+        id: string;
+        name: string | null;
+        phone_number: string | null;
+        region_id: string | null;
+      } | null;
+    }>;
+    nonZeroCount: number;
+    truncated: boolean;
+  }> {
+    const limit = FinanceServiceService.FINANCIAL_BALANCE_PARTY_LIST_LIMIT;
+    let rows: Cashbox[] = [];
+    let nonZeroCount = 0;
     try {
+      [rows, nonZeroCount] = await this.cashboxRepo
+        .createQueryBuilder('c')
+        .where('c.cashbox_type = :cashboxType', { cashboxType })
+        .andWhere('c.isDeleted = :active', { active: false })
+        .andWhere('c.balance <> 0')
+        .orderBy('ABS(c.balance)', 'DESC')
+        .addOrderBy('c.id', 'ASC')
+        .limit(limit)
+        .getManyAndCount();
+    } catch (error) {
+      this.logger.warn(
+        `Moliyaviy balans ro'yxati (${cashboxType}) olinmadi: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return { items: [], nonZeroCount: 0, truncated: false };
+    }
+
+    const ownerIds = Array.from(
+      new Set(rows.map((row) => String(row.user_id))),
+    );
+    const owners = new Map<
+      string,
+      {
+        id: string;
+        name: string | null;
+        phone_number: string | null;
+        region_id: string | null;
+      }
+    >();
+    if (ownerIds.length) {
+      try {
+        const response = await rmqSend<{
+          data?: Array<{
+            id?: string | number | null;
+            name?: string | null;
+            phone_number?: string | null;
+            region_id?: string | number | null;
+          }>;
+        }>(
+          this.identityClient,
+          {
+            cmd:
+              cashboxType === Cashbox_type.FOR_COURIER
+                ? 'identity.courier.find_by_ids'
+                : 'identity.market.find_by_ids',
+          },
+          { ids: ownerIds },
+        );
+        const users = Array.isArray(response?.data) ? response.data : [];
+        for (const user of users) {
+          if (user?.id === undefined || user?.id === null) continue;
+          const id = String(user.id);
+          owners.set(id, {
+            id,
+            name: user.name ?? null,
+            phone_number: user.phone_number ?? null,
+            region_id:
+              user.region_id === undefined || user.region_id === null
+                ? null
+                : String(user.region_id),
+          });
+        }
+      } catch (error) {
+        this.logger.warn(
+          `Moliyaviy balans ro'yxati (${cashboxType}) egalari nomlanmadi: ${
+            error instanceof Error ? error.message : String(error)
+          }`,
+        );
+      }
+    }
+
+    return {
+      items: rows.map((row) => ({
+        id: String(row.id),
+        user_id: String(row.user_id),
+        cashbox_type: row.cashbox_type,
+        balance: Number(row.balance) || 0,
+        balance_cash: Number(row.balance_cash) || 0,
+        balance_card: Number(row.balance_card) || 0,
+        user: owners.get(String(row.user_id)) ?? null,
+      })),
+      nonZeroCount,
+      truncated: nonZeroCount > rows.length,
+    };
+  }
+
+  /**
+   * @param options.include_party_lists — G1 / financial-balance-lists: faqat
+   *   /financial-balance sahifasi (gateway) so'raydi. Analytics (dashboard,
+   *   moliya hisoboti) flag'siz chaqiradi — unga ro'yxat kerak emas, javobi
+   *   va narxi avvalgidek qoladi.
+   */
+  async financialBalance(options?: { include_party_lists?: boolean }) {
+    try {
+      const includePartyLists = options?.include_party_lists === true;
       const mainCashbox = await this.ensureMainCashbox();
       // Perf/unbounded (audit): this used to `find()` EVERY market cashbox row
       // and return the whole array (+ a per-row `items` map) purely to derive
       // one total — an unbounded load and payload as markets grow. The total is
-      // all this summary needs, so push it down to SQL SUM. The full list is not
-      // consumed by any client, so it is no longer returned.
+      // all this summary needs, so push it down to SQL SUM.
+      // ⚠️ G1 / financial-balance-lists: "ro'yxatni hech bir klient o'qimaydi"
+      // degan taxmin NOTO'G'RI edi — /financial-balance sahifasi uni o'qiydi.
+      // Ro'yxat endi faqat `include_party_lists` bilan, chegaralangan va
+      // nol balanslarsiz qaytadi (`listNonZeroCashboxesWithOwners`).
       const marketCashboxTotal = await this.sumCashboxBalanceByType(
         Cashbox_type.FOR_MARKET,
       );
@@ -3516,6 +3676,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         this.sumCashboxBalanceByType(Cashbox_type.FOR_COURIER),
         this.sumCashboxBalanceByType(Cashbox_type.BRANCH),
       ]);
+      // G1 / financial-balance-lists — jami bilan BIR XIL filtr (faol kassa,
+      // turi bo'yicha), nol balanslar tashlanadi: Σ ro'yxat == jami.
+      const [courierList, marketList] = includePartyLists
+        ? await Promise.all([
+            this.listNonZeroCashboxesWithOwners(Cashbox_type.FOR_COURIER),
+            this.listNonZeroCashboxesWithOwners(Cashbox_type.FOR_MARKET),
+          ])
+        : [null, null];
       const marketPayable = marketCashboxTotal;
       const difference = chainReceivable + providerReceivable - marketPayable;
       const currentSituation = Number(mainCashbox.balance) + difference;
@@ -3552,12 +3720,36 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           markets: {
             marketPayable,
             marketsTotalBalans: -marketPayable,
+            /**
+             * G1 / financial-balance-lists — prod'da "Marketlar 0 ta", lekin
+             * "jami -240 000": d3c83af6 bu ro'yxatni "hech bir klient
+             * o'qimaydi" deb olib tashlagan, holbuki frontend aynan
+             * `allMarketCashboxes` dan ro'yxat chizadi. `balance` — kassaning
+             * IMZOLI balansi (musbat = marketga qarzmiz, manfiy = market
+             * bizga qarzdor); Σ balance == `marketPayable`.
+             */
+            ...(marketList
+              ? {
+                  allMarketCashboxes: marketList.items,
+                  nonZeroCount: marketList.nonZeroCount,
+                  truncated: marketList.truncated,
+                }
+              : {}),
           },
           couriers: {
-            allCourierCashboxes: [],
+            // G1 / financial-balance-lists — ilgari doim `[]` deb qotirilgan
+            // edi ("Kuryerlar 0 ta", lekin "jami 90 000"). Flag'siz
+            // chaqiruvda shakl avvalgidek (`[]`) qoladi.
+            allCourierCashboxes: courierList?.items ?? [],
             // Kuryerlar qo'lidagi yig'indi qarz — ma'lumot uchun (ilgari
             // 0 deb qotib qolgan edi).
             couriersTotalBalanse: courierCashboxTotal,
+            ...(courierList
+              ? {
+                  nonZeroCount: courierList.nonZeroCount,
+                  truncated: courierList.truncated,
+                }
+              : {}),
           },
           /**
            * znD3KaZL — "Taqsimlanmagan qoldiq": kassada yuqoriga ko'chgan,
@@ -3737,71 +3929,153 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       this.assertBigIntId(input.operator_id, 'operator_id');
       const amount = Number(input.amount);
       this.assertPositiveAmount(amount, 'amount');
+      const operatorId = String(input.operator_id);
+      const paidById = input.paid_by_id ? String(input.paid_by_id) : null;
+      const queryRunner = this.dataSource.createQueryRunner();
+      await queryRunner.connect();
+      await queryRunner.startTransaction();
+      let committed = false;
+      try {
+        // (FJVqcUTv) Bir operatorning parallel to'lovlari bir xil qarzni sarflamasin.
+        await queryRunner.query(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))',
+          [`operator-payment:${operatorId}`],
+        );
+        const operatorBalance = await this.findOperatorBalance({
+          operator_id: operatorId,
+        });
+        if (amount > Number(operatorBalance.data.balance)) {
+          throw new BadRequestException(
+            "To'lov miqdori operatorga qarzdan oshib ketdi",
+          );
+        }
 
-      const entity = this.paymentRepo.create({
-        operator_id: String(input.operator_id),
-        market_id: input.market_id ? String(input.market_id) : null,
-        paid_by_id: input.paid_by_id ? String(input.paid_by_id) : null,
-        amount,
-        note: input.note ?? null,
-      });
-      const saved = await this.paymentRepo.save(entity);
-
-      /**
-       * ⚠️ PUL ENDI KASSADAN HAM YECHILADI (audit M6).
-       *
-       * Ilgari operator komissiyasini to'lash faqat `operator_payments`
-       * jadvaliga yozilardi: MAIN kassa tegilmasdi, P&L daftariga ham
-       * tushmasdi. Ya'ni kompaniyadan haqiqatan chiqqan pul hisobotda
-       * ko'rinmasdi — MAIN qoldig'i doimiy ravishda haqiqiy naqddan ko'p,
-       * foyda esa haqiqiy foydadan yuqori bo'lib turardi. Ikkisi birga
-       * bo'lgani uchun xato o'zini yashirardi: "bor" pul asosida yangi to'lov
-       * qilinardi.
-       *
-       * Idempotentlik: `source_id` = to'lov qatori ID'si, ya'ni takroriy
-       * yetkazish/qayta bosish pulni ikki marta yechmaydi.
-       */
-      await this.updateBalance({
-        user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
-        cashbox_type: Cashbox_type.MAIN,
-        amount,
-        operation_type: Operation_type.EXPENSE,
-        source_type: Source_type.SALARY,
-        source_id: String(saved.id),
-        source_user_id: String(input.operator_id),
-        comment: input.note ?? `Operator #${String(input.operator_id)} to'lovi`,
-        created_by: input.paid_by_id ? String(input.paid_by_id) : undefined,
-      }).catch(async (error) => {
-        // Kassa harakati o'tmasa to'lov qatori ham qolmasin — aks holda
-        // "to'landi" deb ko'rinadi, pul esa chiqmagan bo'ladi.
-        await this.paymentRepo
-          .softDelete({ id: saved.id })
-          .catch(() => undefined);
-        throw error;
-      });
-
-      await this.recordFinancialBalance({
-        amount: -amount,
-        source_type: FinancialSource_type.SALARY,
-        related_user_id: String(input.operator_id),
-        comment: `Operator #${String(input.operator_id)} komissiya to'lovi`,
-        created_by: input.paid_by_id ? String(input.paid_by_id) : null,
-        dedup_key: `operator-payment:${String(saved.id)}`,
-      });
-
-      await this.activityLog.log({
-        entity_type: 'OperatorPayment',
-        entity_id: saved.id,
-        action: ActivityAction.PAYMENT,
-        new_value: { amount, operator_id: String(input.operator_id) },
-        user_id: input.paid_by_id ? String(input.paid_by_id) : null,
-        metadata: { note: input.note ?? null },
-        description: ActivityDescribeUz.operatorPayment(
-          input.operator_id,
+        const mainCashbox = await this.getCashboxBySelectorWithManager(
+          queryRunner.manager,
+          {
+            user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+            cashbox_type: Cashbox_type.MAIN,
+          },
+          { lock: true },
+        );
+        this.updateBalancesByMethod(
+          mainCashbox,
           amount,
-        ),
-      });
-      return this.successRes(saved, 201, 'operator payment recorded');
+          Operation_type.EXPENSE,
+          PaymentMethod.CASH,
+        );
+
+        const saved = await queryRunner.manager.save(
+          this.paymentRepo.create({
+            operator_id: operatorId,
+            market_id: input.market_id ? String(input.market_id) : null,
+            paid_by_id: paidById,
+            amount,
+            note: input.note ?? null,
+          }),
+        );
+        const savedCashbox = await queryRunner.manager.save(mainCashbox);
+        await queryRunner.manager.save(
+          queryRunner.manager.create(CashboxHistory, {
+            operation_type: Operation_type.EXPENSE,
+            cashbox_id: savedCashbox.id,
+            source_type: Source_type.SALARY,
+            source_id: String(saved.id),
+            dedup_epoch: '',
+            source_user_id: operatorId,
+            amount,
+            balance_after: savedCashbox.balance,
+            balance_cash_after: savedCashbox.balance_cash,
+            balance_card_after: savedCashbox.balance_card,
+            payment_method: PaymentMethod.CASH,
+            comment: input.note ?? `Operator #${operatorId} to'lovi`,
+            created_by: paidById,
+          }),
+        );
+
+        await queryRunner.query('SELECT pg_advisory_xact_lock($1::bigint)', [
+          FinanceServiceService.FBH_ADVISORY_LOCK_KEY.toString(),
+        ]);
+        const previous = await queryRunner.manager.findOne(
+          FinancialBalanceHistory,
+          { where: {}, order: { id: 'DESC' } },
+        );
+        const balanceBefore = Number(previous?.balance_after ?? 0);
+        const savedLedger = await queryRunner.manager.save(
+          queryRunner.manager.create(FinancialBalanceHistory, {
+            amount: -amount,
+            balance_before: balanceBefore,
+            balance_after: balanceBefore - amount,
+            source_type: FinancialSource_type.SALARY,
+            dedup_key: `operator-payment:${String(saved.id)}`,
+            order_id: null,
+            related_user_id: operatorId,
+            comment: `Operator #${operatorId} komissiya to'lovi`,
+            created_by: paidById,
+          }),
+        );
+
+        await queryRunner.commitTransaction();
+        committed = true;
+        const auditResults = await Promise.allSettled([
+          this.activityLog.log({
+            entity_type: 'Cashbox',
+            entity_id: savedCashbox.id,
+            action: 'finance.balance_update',
+            new_value: {
+              balance: savedCashbox.balance,
+              operation_type: Operation_type.EXPENSE,
+              amount,
+            },
+            user_id: paidById,
+            metadata: {
+              user_id: FinanceServiceService.MAIN_CASHBOX_USER_ID,
+              source_id: String(saved.id),
+              source_user_id: operatorId,
+              amount,
+              created_by: paidById,
+              direction: Operation_type.EXPENSE,
+            },
+          }),
+          this.activityLog.log({
+            entity_type: 'FinancialBalanceHistory',
+            entity_id: savedLedger.id,
+            action: ActivityAction.CREATED,
+            new_value: {
+              amount: -amount,
+              balance_after: balanceBefore - amount,
+              source_type: FinancialSource_type.SALARY,
+            },
+            user_id: paidById,
+            metadata: { order_id: null },
+          }),
+          this.activityLog.log({
+            entity_type: 'OperatorPayment',
+            entity_id: saved.id,
+            action: ActivityAction.PAYMENT,
+            new_value: { amount, operator_id: operatorId },
+            user_id: paidById,
+            metadata: { note: input.note ?? null },
+            description: ActivityDescribeUz.operatorPayment(operatorId, amount),
+          }),
+        ]);
+        for (const result of auditResults) {
+          if (result.status === 'rejected') {
+            this.logger.error(
+              "Operator to'lovi audit jurnaliga yozilmadi",
+              result.reason,
+            );
+          }
+        }
+        return this.successRes(saved, 201, 'operator payment recorded');
+      } catch (error) {
+        if (!committed) {
+          await queryRunner.rollbackTransaction();
+        }
+        throw error;
+      } finally {
+        await queryRunner.release();
+      }
     } catch (error) {
       this.toRpcError(error);
     }
@@ -4010,6 +4284,9 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
        * yozuvlarini ketma-ketlashtirgani uchun bu tekshiruv poygaga chidamli.
        */
       const dedupKey = String(input.dedup_key ?? '');
+      if (!dedupKey && !input.order_id) {
+        this.logger.warn('financial balance entry without dedup_key');
+      }
       if (input.order_id || dedupKey) {
         const existing = await queryRunner.manager.findOne(
           FinancialBalanceHistory,
@@ -4022,6 +4299,21 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           },
         );
         if (existing) {
+          if (
+            dedupKey &&
+            (Math.round(Number(existing.amount) * 100) !==
+              Math.round(amount * 100) ||
+              String(existing.created_by ?? '') !==
+                String(input.created_by ?? '') ||
+              String(existing.related_user_id ?? '') !==
+                String(input.related_user_id ?? '') ||
+              String(existing.comment ?? '') !== String(input.comment ?? ''))
+          ) {
+            throw new RpcException({
+              statusCode: 409,
+              message: 'Idempotency-Key was already used for another entry',
+            });
+          }
           await queryRunner.commitTransaction();
           return this.successRes(
             existing,

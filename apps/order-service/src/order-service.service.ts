@@ -42,6 +42,7 @@ import { OrderCustodyService } from './custody/order-custody.service';
 
 /** Qidiruvda identity-service'dan olinadigan mijozlar chegarasi. */
 const CUSTOMER_SEARCH_LIMIT = 1000;
+const MAX_FETCH_ALL = 5000;
 
 /**
  * Qidiruv matni buyurtma raqamimi (Elchida buyurtma raqami = `id`)? Faqat
@@ -556,6 +557,7 @@ export class OrderServiceService {
   ) {
     if (!sort) {
       qb.orderBy('order.createdAt', 'DESC');
+      qb.addOrderBy('order.id', 'DESC');
       return;
     }
     if (sort.field === 'status') {
@@ -585,7 +587,6 @@ export class OrderServiceService {
       Number.isFinite(Number(maxLimit)) && Number(maxLimit) > 100
         ? Math.min(Number(maxLimit), 500)
         : 100;
-    const MAX_FETCH_ALL = 5000;
     const parsedPage = Number(page ?? 1);
     const parsedLimit = Number(limit ?? DEFAULT_LIMIT);
 
@@ -687,6 +688,9 @@ export class OrderServiceService {
     courier?: string;
     courier_ids?: string[];
     holder_courier_ids?: string[];
+    courier_scope?: 'any';
+    courier_post_history?: boolean;
+    courier_cancelled_tab?: boolean;
     include_courier_history?: boolean | string;
     region_id?: string;
     district_id?: string;
@@ -725,6 +729,9 @@ export class OrderServiceService {
       courier,
       courier_ids,
       holder_courier_ids,
+      courier_scope,
+      courier_post_history,
+      courier_cancelled_tab,
       include_courier_history,
       region_id,
       district_id,
@@ -809,7 +816,7 @@ export class OrderServiceService {
     if (post_id) {
       qb.andWhere('order.post_id = :post_id', { post_id });
     }
-    if (post_ids?.length) {
+    if (post_ids?.length && courier_scope !== 'any') {
       qb.andWhere('order.post_id IN (:...post_ids)', { post_ids });
     }
     if (canceled_post_id) {
@@ -888,10 +895,98 @@ export class OrderServiceService {
         }),
       );
     }
-    if (courier_ids?.length) {
-      const normalizedCourierIds = courier_ids
-        .map((id) => String(id))
-        .filter(Boolean);
+    const normalizedCourierIds = (courier_ids ?? [])
+      .map((id) => String(id).trim())
+      .filter(Boolean);
+    const normalizedHolderCourierIds = (holder_courier_ids ?? [])
+      .map((id) => String(id).trim())
+      .filter(Boolean);
+    // (9Rdi2gJF) Bekor tabida kuryer, ushlab turgan kuryer va eski pochta
+    // doiralari bitta SQL OR bo'ladi; COUNT va sahifalash ham shu doirada.
+    if (courier_scope === 'any') {
+      if (!normalizedCourierIds.length && !normalizedHolderCourierIds.length) {
+        this.badRequest('courier_scope requires a courier id');
+      }
+      if (
+        courier_cancelled_tab &&
+        (!normalizedCourierIds.length || !normalizedHolderCourierIds.length)
+      ) {
+        this.badRequest('courier_cancelled_tab requires both courier scopes');
+      }
+      qb.andWhere(
+        new Brackets((nested) => {
+          if (normalizedCourierIds.length) {
+            nested.where('order.courier_id IN (:...courier_ids)', {
+              courier_ids: normalizedCourierIds,
+            });
+          }
+          if (normalizedHolderCourierIds.length) {
+            nested.orWhere(
+              'order.holder_courier_id IN (:...holder_courier_ids)',
+              {
+                holder_courier_ids: normalizedHolderCourierIds,
+              },
+            );
+          }
+          if (post_ids?.length) {
+            nested.orWhere('order.post_id IN (:...post_ids)', { post_ids });
+          }
+          if (courier_post_history && normalizedCourierIds.length) {
+            nested.orWhere(
+              `EXISTS (
+                SELECT 1 FROM "logistics_schema"."posts" courier_posts
+                WHERE courier_posts.id = "order"."post_id"
+                  AND courier_posts.courier_id IN (:...courier_ids)
+              )`,
+              { courier_ids: normalizedCourierIds },
+            );
+          }
+        }),
+      );
+      if (courier_cancelled_tab) {
+        qb.andWhere(
+          new Brackets((nested) => {
+            nested
+              .where(
+                `order.holder_type IS NULL AND (
+                  (order.courier_id IS NULL AND order.holder_courier_id IS NULL)
+                  OR order.courier_id IN (:...courier_ids)
+                  OR order.holder_courier_id IN (:...holder_courier_ids)
+                )`,
+                {
+                  courier_ids: normalizedCourierIds,
+                  holder_courier_ids: normalizedHolderCourierIds,
+                },
+              )
+              .orWhere(
+                `order.holder_type NOT IN ('COURIER', 'BRANCH', 'HQ') AND (
+                  order.courier_id IN (:...courier_ids)
+                  OR order.holder_courier_id IN (:...holder_courier_ids)
+                )`,
+                {
+                  courier_ids: normalizedCourierIds,
+                  holder_courier_ids: normalizedHolderCourierIds,
+                },
+              )
+              .orWhere(
+                `order.holder_type = 'COURIER' AND (
+                  order.courier_id IN (:...courier_ids)
+                  OR order.holder_courier_id IN (:...holder_courier_ids)
+                )`,
+                {
+                  courier_ids: normalizedCourierIds,
+                  holder_courier_ids: normalizedHolderCourierIds,
+                },
+              )
+              .orWhere(
+                `order.holder_type IN ('BRANCH', 'HQ')
+                  AND order.parent_order_id IS NOT NULL
+                  AND order.canceled_post_id IS NULL`,
+              );
+          }),
+        );
+      }
+    } else if (courier_ids?.length) {
       if (normalizedCourierIds.length) {
         qb.andWhere(
           new Brackets((nested) => {
@@ -920,10 +1015,7 @@ export class OrderServiceService {
         );
       }
     }
-    if (holder_courier_ids?.length) {
-      const normalizedHolderCourierIds = holder_courier_ids
-        .map((id) => String(id))
-        .filter(Boolean);
+    if (courier_scope !== 'any' && holder_courier_ids?.length) {
       if (normalizedHolderCourierIds.length) {
         qb.andWhere('order.holder_courier_id IN (:...holder_courier_ids)', {
           holder_courier_ids: normalizedHolderCourierIds,
@@ -966,7 +1058,9 @@ export class OrderServiceService {
       'branch',
     );
     this.applyOrderListSort(qb, sort);
-    if (!disable_pagination) {
+    if (disable_pagination) {
+      qb.take(MAX_FETCH_ALL);
+    } else {
       qb.skip((pagination.page - 1) * pagination.limit).take(pagination.limit);
     }
 
@@ -979,7 +1073,7 @@ export class OrderServiceService {
     }
 
     if (disable_pagination) {
-      return { data, total };
+      return { data, total, truncated: total > MAX_FETCH_ALL };
     }
 
     return {
@@ -1978,6 +2072,9 @@ export class OrderServiceService {
     courier?: string;
     courier_ids?: string[];
     holder_courier_ids?: string[];
+    courier_scope?: 'any';
+    courier_post_history?: boolean;
+    courier_cancelled_tab?: boolean;
     include_courier_history?: boolean | string;
     region_id?: string;
     district_id?: string;
@@ -1988,6 +2085,7 @@ export class OrderServiceService {
     // qo'llab-quvvatlaydi; bu yerda faqat tip ochiladi.
     source?: Order_source | 'internal' | 'external' | 'branch';
     fetch_all?: boolean | string;
+    disable_pagination?: boolean;
     page?: number;
     limit?: number;
     max_limit?: number;
@@ -2042,6 +2140,9 @@ export class OrderServiceService {
       total_pages: result.total_pages ?? 0,
       totalPages: result.totalPages ?? result.total_pages ?? 0,
       search_truncated,
+      ...(result.truncated === undefined
+        ? {}
+        : { truncated: result.truncated }),
     };
   }
 
@@ -2199,6 +2300,7 @@ export class OrderServiceService {
     return {
       data: enriched,
       total: result.total,
+      truncated: result.truncated,
     };
   }
 

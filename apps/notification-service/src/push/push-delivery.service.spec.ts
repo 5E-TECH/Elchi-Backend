@@ -30,6 +30,7 @@ describe('PushDeliveryService', () => {
   let outbox: any;
   let smsDispatch: any;
   let service: PushDeliveryService;
+  let dataSource: any;
   let patches: Array<{ ids: string[]; sql: string; patch?: unknown }>;
 
   beforeEach(() => {
@@ -69,12 +70,20 @@ describe('PushDeliveryService', () => {
     };
     outbox = { enqueue: jest.fn().mockResolvedValue({}) };
     smsDispatch = { escalate: jest.fn().mockResolvedValue(1) };
+    dataSource = {
+      createQueryRunner: jest.fn(() => ({
+        connect: jest.fn().mockResolvedValue(undefined),
+        query: jest.fn().mockResolvedValue([{ locked: true }]),
+        release: jest.fn().mockResolvedValue(undefined),
+      })),
+    };
     service = new PushDeliveryService(
       notifications,
       subscriptions,
       webPush,
       outbox,
       smsDispatch,
+      dataSource,
     );
   });
 
@@ -211,5 +220,17 @@ describe('PushDeliveryService', () => {
   it('ignores an empty payload', async () => {
     expect(await service.deliver({})).toEqual({ processed: 0 });
     expect(notifications.find).not.toHaveBeenCalled();
+  });
+
+  it('retries a duplicate event when another replica holds its delivery lock', async () => {
+    const runner = dataSource.createQueryRunner();
+    runner.query.mockResolvedValueOnce([{ locked: false }]);
+    dataSource.createQueryRunner.mockReturnValue(runner);
+    await expect(service.deliver({ notification_ids: ['1'] })).rejects.toThrow(
+      /boshqa ishchi/,
+    );
+    expect(notifications.find).not.toHaveBeenCalled();
+    expect(webPush.sendToSubscriptions).not.toHaveBeenCalled();
+    expect(runner.release).toHaveBeenCalled();
   });
 });

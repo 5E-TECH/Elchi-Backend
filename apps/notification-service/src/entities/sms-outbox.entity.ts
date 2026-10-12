@@ -68,6 +68,10 @@ export class SmsOutbox {
   @Column({ type: 'varchar', length: 16 })
   to_phone!: string;
 
+  /** Promo yuborishda rozilikni delivery vaqtida qayta tekshirish uchun. */
+  @Column({ type: 'bigint', nullable: true })
+  customer_id!: string | null;
+
   @Column({ type: 'text' })
   text!: string;
 

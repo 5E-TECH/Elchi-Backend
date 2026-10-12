@@ -37,7 +37,16 @@ describe('Settlement amount DTOs', () => {
     expect(await amountErrors(dto)).not.toHaveLength(0);
   });
 
-  it('accepts a valid non-negative 2-dp amount', async () => {
+  it.each([
+    SettlementCourierToBranchDto,
+    SettlementBranchToHqDto,
+    SettlementHqToMarketDto,
+  ])('qGaxcaD4: %s nol summani rad etadi', async (Dto) => {
+    const dto = plainToInstance(Dto, { amount: 0 });
+    expect(await amountErrors(dto)).not.toHaveLength(0);
+  });
+
+  it('accepts a valid positive 2-dp amount', async () => {
     const dto = plainToInstance(SettlementCourierToBranchDto, {
       courier_id: '5',
       amount: 1000.5,

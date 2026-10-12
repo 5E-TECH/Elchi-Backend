@@ -953,12 +953,12 @@ export class CreateOrderByTelegramBotRequestDto {
  * Settlement amount validation (Audit money/API-design P1: the settlement routes
  * accepted an inline-typed { *_id, amount } body, so a negative or NaN amount
  * reached order.settlement.* unvalidated). A shared amount field enforces a
- * non-negative, 2-dp money value.
+ * positive, 2-dp money value.
  */
 class SettlementAmountDto {
-  @ApiProperty({ description: 'Amount to settle in som (>= 0, 2 dp)' })
+  @ApiProperty({ description: 'Amount to settle in som (>= 0.01, 2 dp)' })
   @IsNumber({ maxDecimalPlaces: 2 })
-  @Min(0)
+  @Min(0.01) // (qGaxcaD4) Nol summali hisob-kitob yozuvi yaratilmasin.
   amount!: number;
 }
 

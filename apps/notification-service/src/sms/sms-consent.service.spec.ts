@@ -81,6 +81,17 @@ describe('SmsConsentService', () => {
     ).toHaveLength(1);
   });
 
+  it('a customer-bound consent is not accepted for an unidentified recipient', async () => {
+    expect(
+      (
+        await check([row({ customer_id: '7' })], {
+          phone: '+998901111111',
+          customer_id: null,
+        })
+      ).blocked,
+    ).toHaveLength(1);
+  });
+
   it('the LATEST record decides (a later revoke wins over an older grant)', async () => {
     const rows = [
       row({ revoked_at: now, granted_at: new Date(now.getTime() - 1000) }),

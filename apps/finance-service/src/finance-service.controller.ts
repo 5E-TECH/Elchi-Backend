@@ -237,9 +237,16 @@ export class FinanceServiceController {
   }
 
   @MessagePattern({ cmd: 'finance.cashbox.financial_balance' })
-  financialBalance(@Ctx() context: RmqContext) {
+  financialBalance(
+    // G1 / financial-balance-lists — gateway /financial-balance uchun
+    // `include_party_lists: true` yuboradi; analytics payload'siz chaqiradi.
+    @Payload() data: { include_party_lists?: boolean } | undefined,
+    @Ctx() context: RmqContext,
+  ) {
     return this.executeAndAck(context, () =>
-      this.financeService.financialBalance(),
+      this.financeService.financialBalance({
+        include_party_lists: data?.include_party_lists === true,
+      }),
     );
   }
 

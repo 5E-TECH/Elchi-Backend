@@ -10,10 +10,12 @@ import {
   Inject,
   NotFoundException,
   Param,
+  ParseEnumPipe,
   Patch,
   Post,
   Query,
   Req,
+  Res,
   ServiceUnavailableException,
   UseGuards,
 } from '@nestjs/common';
@@ -21,13 +23,15 @@ import { ClientProxy } from '@nestjs/microservices';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiCreatedResponse,
+  ApiHeader,
   ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiQuery,
   ApiTags,
 } from '@nestjs/swagger';
-import { createHash } from 'node:crypto';
+import type { Response } from 'express';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { Roles } from './auth/roles.decorator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -36,6 +40,7 @@ import { RolesGuard } from './auth/roles.guard';
 import { projectOrderPayloadForRoles } from './auth/order-role-projection';
 import {
   Cashbox_type,
+  FinancialSource_type,
   Operation_type,
   PaymentMethod,
   Roles as RoleEnum,
@@ -1906,48 +1911,9 @@ export class FinanceGatewayController {
     return this.attachCreatedByUsersToHistory(response);
   }
 
-  // Window in which an identical manual transfer with no client Idempotency-Key
-  // is treated as an accidental resubmit (double-click / retry) and deduped.
-  // A deliberate identical transfer in a later window is still allowed.
-  private static readonly MANUAL_TRANSFER_DEDUP_WINDOW_MS = 30_000;
-
-  /**
-   * Resolve the idempotency token for a manual cash transfer.
-   *
-   * Prefers a client-supplied `Idempotency-Key` header so a UI double-click /
-   * accidental resubmit of the SAME logical payment reuses the SAME token and
-   * finance dedupes it (the cash is moved at most once).
-   *
-   * When the client sends NO key we no longer mint a random UUID (which made
-   * every HTTP submit unique and left a real double-submit UNPROTECTED — Audit
-   * money P1). Instead we derive a DETERMINISTIC token from the payment's
-   * identity (actor + kind + payload) plus a coarse time bucket, so two
-   * identical submits within the window collapse to the same token and finance
-   * moves the cash at most once, while an intentional identical transfer in a
-   * later window still goes through.
-   */
-  private resolveTransferToken(
-    idempotencyKey: string | undefined,
-    fingerprint: { actorId: string; kind: string; payload: unknown },
-  ): string {
-    const key = String(idempotencyKey ?? '').trim();
-    if (key.length > 0) {
-      return key;
-    }
-    const bucket = Math.floor(
-      Date.now() / FinanceGatewayController.MANUAL_TRANSFER_DEDUP_WINDOW_MS,
-    );
-    return createHash('sha256')
-      .update(
-        [
-          'manual-transfer',
-          fingerprint.kind,
-          fingerprint.actorId,
-          JSON.stringify(fingerprint.payload ?? null),
-          String(bucket),
-        ].join('|'),
-      )
-      .digest('hex');
+  // (TMgL1zvq) Kalitsiz haqiqiy ikkita bir xil to'lov vaqtga qarab yutilmasin.
+  private resolveTransferToken(idempotencyKey?: string): string {
+    return String(idempotencyKey ?? '').trim();
   }
 
   // NOTE: the per-order FIFO settlement advance is no longer triggered from the
@@ -2007,15 +1973,7 @@ export class FinanceGatewayController {
       await this.assertHqCourierReceivable(dto.courier_id, req.user);
     }
 
-    // Idempotency token: prefer the client's Idempotency-Key (stops a UI
-    // double-click double-paying); fall back to a fresh UUID. A redelivered RMQ
-    // message reuses it so the cash transfer is applied at most once (P0-3), and
-    // the settlement advance reuses the same token so it dedupes too (I1/I2).
-    const token = this.resolveTransferToken(idempotencyKey, {
-      actorId: String(req.user.sub),
-      kind: 'payment_courier',
-      payload: dto,
-    });
+    const token = this.resolveTransferToken(idempotencyKey);
     const result = await this.send(
       { cmd: 'finance.cashbox.payment_courier' },
       {
@@ -2046,20 +2004,7 @@ export class FinanceGatewayController {
     @Body() dto: PaymentToMarketRequestDto,
     @Headers('idempotency-key') idempotencyKey?: string,
   ) {
-    // C1 / audit M2: kalit bo'lmasa zaxira barmoq izi FAQAT to'lovning o'zidan
-    // (market, summa, usul). Ilgari butun dto (`payment_date`, `comment`)
-    // olinardi — frontend har bosishda yangi `payment_date` yuborgani uchun
-    // 504 dan keyingi qayta bosish hech qachon bir xil token bermasdi va
-    // to'lov IKKI MARTA yozilardi.
-    const token = this.resolveTransferToken(idempotencyKey, {
-      actorId: String(req.user.sub),
-      kind: 'payment_market',
-      payload: {
-        market_id: dto.market_id,
-        amount: dto.amount,
-        payment_method: dto.payment_method,
-      },
-    });
+    const token = this.resolveTransferToken(idempotencyKey);
     const result = await this.send(
       { cmd: 'finance.cashbox.payment_market' },
       { ...dto, created_by: req.user.sub, dedup_epoch: token },
@@ -2111,17 +2056,7 @@ export class FinanceGatewayController {
       { id: branchId, requester: this.toRequester(req.user) },
     );
 
-    // C1 / audit M2: zaxira barmoq izida `payment_date` YO'Q (har bosishda
-    // yangi bo'lgani uchun qayta bosish dedup qilinmasdi).
-    const token = this.resolveTransferToken(idempotencyKey, {
-      actorId: String(req.user.sub),
-      kind: 'payment_branch_main',
-      payload: {
-        branch_id: branchId,
-        amount: dto.amount,
-        payment_method: dto.payment_method,
-      },
-    });
+    const token = this.resolveTransferToken(idempotencyKey);
     const result = await this.send(
       { cmd: 'finance.cashbox.payment_branch_main' },
       {
@@ -2336,7 +2271,13 @@ export class FinanceGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Get financial balance' })
   financialBalance() {
-    return this.send({ cmd: 'finance.cashbox.financial_balance' }, {});
+    // G1 / financial-balance-lists — sahifa "Marketlar" va "Kuryerlar"
+    // ro'yxatlarini chizadi (`markets.allMarketCashboxes`,
+    // `couriers.allCourierCashboxes`); ular faqat shu flag bilan to'ldiriladi.
+    return this.send(
+      { cmd: 'finance.cashbox.financial_balance' },
+      { include_party_lists: true },
+    );
   }
 
   // --- Financial balance ledger (company-wide P&L history) ---
@@ -2350,57 +2291,37 @@ export class FinanceGatewayController {
       'Record a manual financial ledger entry (income/expense/bills/salary/correction)',
   })
   @ApiBody({ type: RecordFinancialBalanceRequestDto })
+  @ApiHeader({ name: 'Idempotency-Key', required: true })
+  @ApiCreatedResponse({ description: 'Ledger entry recorded' })
+  @ApiOkResponse({ description: 'Zero amount skipped; no ledger entry' })
   recordFinancialBalance(
     @Body() dto: RecordFinancialBalanceRequestDto,
     @Req() req: { user?: JwtUser },
     @Headers('idempotency-key') idempotencyKey?: string,
+    @Res({ passthrough: true }) res?: Response,
   ) {
-    const actorId = String(req.user?.sub ?? '');
-    return this.send(
+    const dedupKey = String(idempotencyKey ?? '').trim();
+    if (!dedupKey || dedupKey.length > 255) {
+      throw new BadRequestException('Idempotency-Key must be 1-255 characters');
+    }
+    return this.send<{ statusCode?: number; data?: unknown }>(
       { cmd: 'finance.financial_balance.record' },
       {
         ...dto,
         created_by: req.user?.sub ?? null,
-        dedup_key: this.resolveLedgerEntryToken(idempotencyKey, actorId, dto),
+        dedup_key: dedupKey,
       },
-    );
-  }
-
-  /**
-   * Qo'lda daftar yozuvining takror tokeni (GtAoqHlk "Yozuv qo'shish").
-   * Ilgari bu endpoint dedup qilinmasdi: ikki marta bosilgan tugma ikkita
-   * chiqim yozardi. Mijoz kaliti yozuvning O'ZI (summa/manba/izoh) bilan
-   * birga xeshlanadi — eski kalit boshqa summa bilan kelib qolsa, yangi yozuv
-   * jimgina "allaqachon bor" bo'lib yutilmaydi. Kalitsiz so'rov — 30 soniyalik
-   * oynadagi aynan bir xil yozuv (qo'lda o'tkazmadagi zaxira naqsh).
-   */
-  private resolveLedgerEntryToken(
-    idempotencyKey: string | undefined,
-    actorId: string,
-    dto: RecordFinancialBalanceRequestDto,
-  ): string {
-    const key = String(idempotencyKey ?? '').trim();
-    const payload = {
-      amount: dto.amount,
-      source_type: dto.source_type,
-      order_id: dto.order_id ?? null,
-      related_user_id: dto.related_user_id ?? null,
-      comment: dto.comment ?? null,
-    };
-    if (!key) {
-      return this.resolveTransferToken(undefined, {
-        actorId,
-        kind: 'financial-balance-entry',
-        payload,
-      });
-    }
-    return createHash('sha256')
-      .update(
-        ['financial-balance-entry', actorId, key, JSON.stringify(payload)].join(
-          '|',
-        ),
-      )
-      .digest('hex');
+    ).then((result) => {
+      // (cSNJN7GP) Nol summada daftar yozuvi yo'q: HTTP ham body kabi 200.
+      if (
+        dto.amount === 0 &&
+        result?.statusCode === 200 &&
+        result.data == null
+      ) {
+        res?.status(200);
+      }
+      return result;
+    });
   }
 
   @Get('financial-balance/history')
@@ -2410,7 +2331,11 @@ export class FinanceGatewayController {
   @ApiOperation({
     summary: 'List financial balance ledger entries + current balance',
   })
-  @ApiQuery({ name: 'source_type', required: false })
+  @ApiQuery({
+    name: 'source_type',
+    required: false,
+    enum: FinancialSource_type,
+  })
   @ApiQuery({ name: 'from_date', required: false })
   @ApiQuery({ name: 'to_date', required: false })
   @ApiQuery({ name: 'fromDate', required: false })
@@ -2419,7 +2344,11 @@ export class FinanceGatewayController {
   @ApiQuery({ name: 'limit', required: false })
   @ApiQuery({ name: 'offset', required: false })
   async financialBalanceHistory(
-    @Query('source_type') source_type?: string,
+    @Query(
+      'source_type',
+      new ParseEnumPipe(FinancialSource_type, { optional: true }),
+    )
+    source_type?: FinancialSource_type,
     @Query('from_date') from_date?: string,
     @Query('to_date') to_date?: string,
     @Query('fromDate') fromDate?: string,
@@ -2527,11 +2456,7 @@ export class FinanceGatewayController {
       throw new ForbiddenException("Managerning branch'i topilmadi");
     }
     const targetUserId = isManager ? branchId : req.user.sub;
-    const token = this.resolveTransferToken(idempotencyKey, {
-      actorId: String(req.user.sub),
-      kind: 'cashbox_spend',
-      payload: { target: targetUserId, dto },
-    });
+    const token = this.resolveTransferToken(idempotencyKey);
     return this.send(
       { cmd: 'finance.cashbox.spend' },
       {
@@ -2564,11 +2489,7 @@ export class FinanceGatewayController {
       throw new ForbiddenException("Managerning branch'i topilmadi");
     }
     const targetUserId = isManager ? branchId : req.user.sub;
-    const token = this.resolveTransferToken(idempotencyKey, {
-      actorId: String(req.user.sub),
-      kind: 'cashbox_fill',
-      payload: { target: targetUserId, dto },
-    });
+    const token = this.resolveTransferToken(idempotencyKey);
     return this.send(
       { cmd: 'finance.cashbox.fill' },
       {
