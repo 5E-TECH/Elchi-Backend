@@ -12,7 +12,13 @@ import { LogisticsServiceService } from './logistics-service.service';
  * bajariladi — "aynan o'sha ID'lar qaytdimi" tekshiriladi.
  */
 type Kind = 'orders' | 'users' | 'branches';
-type GeoRow = { id: string; district_id: string; region_id: string | null };
+type GeoRow = {
+  id: string;
+  district_id: string;
+  region_id: string | null;
+  /** oNAE3LW9 (prod 2-tur): o'chirilgan (is_deleted / deleted_at) yozuv. */
+  deleted?: boolean;
+};
 type Fault = 'timeout' | 'timeout_after_move' | { statusCode: number };
 
 const CMD: Record<Kind, { usage: string; move: string }> = {
@@ -32,8 +38,17 @@ function make(
     rows?: Partial<Record<Kind, GeoRow[]>>;
     /** order_schema.branch_transfer_batches.target_region_id */
     batches?: string[];
+    /** O'chirilgan (is_deleted) jo'natmalar — viloyat ID lari. */
+    deletedBatches?: string[];
     /** Eski order-service: `transfer_batches` maydonini qaytarmaydi. */
     legacyOrderUsage?: boolean;
+    /**
+     * oNAE3LW9 (prod 2-tur) — eski servislar: `deleted_*` maydoni yo'q,
+     * o'chirilganlar asosiy maydonda sanaladi.
+     */
+    legacyDeletedFields?: boolean;
+    /** Shu tur `deleted_*` maydonini buzuq qaytaradi. */
+    badDeletedField?: Kind;
     usageDown?: boolean;
     posts?: number;
     regionDistricts?: number;
@@ -122,12 +137,20 @@ function make(
         ? r.district_id === String(where.district_id)
         : r.region_id === String(where.region_id),
     );
-    const data: Record<string, unknown> = { [kind]: list.length };
+    const live = list.filter((r) => !r.deleted).length;
+    const data: Record<string, unknown> = opts.legacyDeletedFields
+      ? { [kind]: list.length }
+      : { [kind]: live, [`deleted_${kind}`]: list.length - live };
+    if (opts.badDeletedField === kind) data[`deleted_${kind}`] = 'abc';
     if (kind === 'orders' && !opts.legacyOrderUsage) {
-      data.transfer_batches = where.district_id
-        ? 0
-        : (opts.batches ?? []).filter((r) => r === String(where.region_id))
-            .length;
+      const inRegion = (ids?: string[]) =>
+        where.district_id
+          ? 0
+          : (ids ?? []).filter((r) => r === String(where.region_id)).length;
+      data.transfer_batches = inRegion(opts.batches);
+      if (!opts.legacyDeletedFields) {
+        data.deleted_transfer_batches = inRegion(opts.deletedBatches);
+      }
     }
     return of({ statusCode: 200, data });
   };
@@ -192,10 +215,16 @@ function make(
   return { svc, rows, districts, calls, inDistrict };
 }
 
-const order = (id: string, district_id: string, region_id: string | null) => ({
+const order = (
+  id: string,
+  district_id: string,
+  region_id: string | null,
+  deleted = false,
+): GeoRow => ({
   id,
   district_id,
   region_id,
+  ...(deleted ? { deleted: true } : {}),
 });
 /** A (#173) da 5 ta buyurtma (biri region_id = null), B (#28) da 3 ta. */
 const fiveInA = () => [
@@ -676,5 +705,197 @@ describe('o`chirish xabarlari — foydalanuvchiga tushunarli (oNAE3LW9 merge-mes
     expect(err.message).toContain(
       "Pochta va filiallararo jo'natmalar tarixiy yozuv bo'lgani uchun ularni boshqa viloyatga ko'chirib bo'lmaydi.",
     );
+  });
+});
+
+/**
+ * oNAE3LW9 (2026-10-09 prod, 2-tur): tuman himoyasi O'CHIRILGAN (soft-delete)
+ * buyurtmalarni ham sanardi — TEST buyurtma o'chirilgandan keyin ham tuman
+ * "1 ta buyurtma bor" deb 400 qaytarardi, foydalanuvchi esa tumanda hech
+ * narsa ko'rmaydi (o'chirilgan buyurtma 404, uni ko'chirib bo'lmaydi).
+ * Endi himoya faqat tirik yozuvlarga qaraydi; birlashtirish esa o'chirilganlarni
+ * ham ko'chiradi va jami bo'yicha tekshiradi (A da hech narsa qolmaydi).
+ */
+describe('o`chirilgan (soft-delete) yozuvlar — himoya va birlashtirish (oNAE3LW9 prod 2-tur)', () => {
+  it('⭐ o`chirilgan buyurtma bor, tirik yo`q → o`chirish 200; activity log da deleted_refs', async () => {
+    const { svc, districts } = make({
+      rows: { orders: [order('40', '173', '3', true)] },
+    });
+    const res = await svc.deleteDistrict('173');
+    expect(res.statusCode).toBe(200);
+    expect(districts['173']).toBeUndefined();
+    expect(svc.activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entity_type: 'District',
+        entity_id: '173',
+        action: 'deleted',
+        old_value: expect.objectContaining({ name: 'Andijon shahri' }),
+        metadata: {
+          region_id: '3',
+          deleted_refs: {
+            orders: 1,
+            users: 0,
+            branches: 0,
+            transfer_batches: 0,
+          },
+        },
+      }),
+    );
+  });
+
+  it('⭐ tirik buyurtma bor → 400 (avvalgidek); xabar va `usage` faqat tiriklarni sanaydi', async () => {
+    const { svc, districts } = make({
+      rows: {
+        orders: [order('40', '173', '3'), order('41', '173', '3', true)],
+      },
+    });
+    const err = await errorOf(svc.deleteDistrict('173'));
+    expect(err.statusCode).toBe(400);
+    expect(err.message).toContain('Bu tumanda 1 ta buyurtma bor');
+    expect(err.data.usage).toEqual({
+      orders: 1,
+      users: 0,
+      branches: 0,
+      transfer_batches: 0,
+    });
+    expect(districts['173']).toBeDefined();
+  });
+
+  it('faqat o`chirilgan foydalanuvchi/filial — o`chirish 200', async () => {
+    const { svc, districts } = make({
+      rows: {
+        users: [order('301', '173', '3', true)],
+        branches: [order('7', '173', '3', true)],
+      },
+    });
+    expect((await svc.deleteDistrict('173')).statusCode).toBe(200);
+    expect(districts['173']).toBeUndefined();
+  });
+
+  it('tirik buyurtmasi yo`q tuman: o`chirilganlari bo`lmasa activity log da deleted_refs yo`q', async () => {
+    const { svc } = make();
+    await svc.deleteDistrict('173');
+    expect(svc.activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({ metadata: { region_id: '3' } }),
+    );
+  });
+
+  it('viloyat: faqat o`chirilgan buyurtma/foydalanuvchi/filial/jo`natma → 200; tirik bo`lsa 400', async () => {
+    const deletedOnly = make({
+      rows: {
+        orders: [order('11', '999', '3', true)],
+        users: [order('301', '999', '3', true)],
+        branches: [order('7', '999', '3', true)],
+      },
+      deletedBatches: ['3'],
+    });
+    const res = await deletedOnly.svc.deleteRegion('3');
+    expect(res.statusCode).toBe(200);
+    expect(deletedOnly.svc.activityLog.log).toHaveBeenCalledWith(
+      expect.objectContaining({
+        entity_type: 'Region',
+        metadata: {
+          deleted_refs: {
+            orders: 1,
+            users: 1,
+            branches: 1,
+            transfer_batches: 1,
+          },
+        },
+      }),
+    );
+
+    const live = make({
+      rows: {
+        orders: [order('11', '999', '3'), order('12', '999', '3', true)],
+      },
+    });
+    const err = await errorOf(live.svc.deleteRegion('3'));
+    expect(err.statusCode).toBe(400);
+    expect(err.message).toContain("Bu viloyatga 1 ta buyurtma bog'langan");
+    expect(live.svc.regionRepo.remove).not.toHaveBeenCalled();
+  });
+
+  it('⭐ birlashtirish: o`chirilgan buyurtmalar ham B ga ko`chadi, A da hech narsa qolmaydi, tekshiruv jami bo`yicha', async () => {
+    const { svc, districts, inDistrict } = make({
+      rows: {
+        orders: [
+          order('11', '173', '3'),
+          order('12', '173', '3'),
+          order('13', '173', '3', true),
+          order('91', '28', '3'),
+          order('92', '28', '3', true),
+        ],
+        users: [order('301', '173', '3', true)],
+      },
+    });
+    const res = await svc.mergeDistricts('173', '28');
+    expect(res.statusCode).toBe(200);
+    expect(res.data.moved).toEqual({ orders: 3, users: 1, branches: 0 });
+    expect(inDistrict('orders', '173')).toEqual([]);
+    expect(inDistrict('users', '173')).toEqual([]);
+    expect(inDistrict('orders', '28').sort()).toEqual([
+      '11',
+      '12',
+      '13',
+      '91',
+      '92',
+    ]);
+    // tiriklar: 1 + 2 = 3; o'chirilganlar: 1 + 1 = 2
+    expect(res.data.target_before).toEqual(
+      expect.objectContaining({
+        orders: 1,
+        deleted: expect.objectContaining({ orders: 1 }),
+      }),
+    );
+    expect(res.data.target_after).toEqual(
+      expect.objectContaining({
+        orders: 3,
+        users: 0,
+        deleted: expect.objectContaining({ orders: 2, users: 1 }),
+      }),
+    );
+    expect(districts['173']).toBeUndefined();
+  });
+
+  it('⭐ birlashtirishdan keyin A da o`chirilgan buyurtma qolsa — 409, A o`chirilMAYDI (yetim qolmasin)', async () => {
+    const { svc, districts, inDistrict } = make({
+      rows: { orders: [order('11', '173', '3')] },
+      afterForward: (kind, rows) => {
+        // masalan, o'chirilganlarni ko'chirmaydigan eski order-service
+        if (kind === 'orders') rows.orders.push(order('16', '173', '3', true));
+      },
+    });
+    const err = await errorOf(svc.mergeDistricts('173', '28'));
+    expect(err.statusCode).toBe(409);
+    expect(err.message).toContain(
+      "A tumanda hali 1 ta buyurtma qoldi (shundan 1 tasi o'chirilgan)",
+    );
+    expect(districts['173']).toBeDefined();
+    expect(inDistrict('orders', '173').sort()).toEqual(['11', '16']);
+  });
+
+  it('eski servislar (`deleted_*` yo`q, o`chirilganlarni asosiy maydonda sanaydi): himoya qattiqroq (400), birlashtirish baribir to`g`ri', async () => {
+    const guard = make({
+      rows: { orders: [order('40', '173', '3', true)] },
+      legacyDeletedFields: true,
+    });
+    expect(await statusOf(guard.svc.deleteDistrict('173'))).toBe(400);
+
+    const merge = make({
+      rows: {
+        orders: [order('11', '173', '3'), order('12', '173', '3', true)],
+      },
+      legacyDeletedFields: true,
+    });
+    const res = await merge.svc.mergeDistricts('173', '28');
+    expect(res.statusCode).toBe(200);
+    expect(merge.inDistrict('orders', '173')).toEqual([]);
+  });
+
+  it('`deleted_*` buzuq bo`lsa — FAIL-CLOSED 503, o`chirilmaydi', async () => {
+    const { svc } = make({ badDeletedField: 'users' });
+    expect(await statusOf(svc.deleteDistrict('173'))).toBe(503);
+    expect(svc.districtRepo.remove).not.toHaveBeenCalled();
   });
 });

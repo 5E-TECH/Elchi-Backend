@@ -23,6 +23,18 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-10 — Qaytgan kartalar (backend)
+
+- [2026-10-10] ✏️ [logistics] — Tuman/viloyat o'chirish himoyasi endi faqat
+  o'chirilmagan buyurtma/foydalanuvchi/filiallarni sanaydi (oNAE3LW9): faqat
+  o'chirilgan buyurtmasi bor tuman o'chiriladi (200). `POST /district/:id/merge`
+  o'chirilgan buyurtmalarni ham B ga ko'chiradi; javobdagi `moved` ularni ham
+  sanaydi, `target_before`/`target_after` da `deleted` qismi.
+- [2026-10-10] 🟢 [search/identity] — Telefon bo'yicha qidiruv istalgan
+  formatda ishlaydi (`0330991009`, `+998 33 099 10 09`, `330991009`,
+  `998330991009`): `GET /search?q=`, buyurtmalar ro'yxatidagi `search`, mijoz va
+  foydalanuvchi qidiruvlari (zfPNDCCr). Kontrakt o'zgarmagan.
+
 ### 2026-10-09 — Prod testidan keyingi backend tuzatishlar (3-bosqich)
 
 - [2026-10-09] ⚠️ [order/identity] — Mijoz telefoni hamma yo'lda (POST /orders,

@@ -230,6 +230,52 @@ describe('findAllEnriched — qidiruv', () => {
     expect(res.search_truncated).toBe(false);
   });
 
+  /**
+   * zfPNDCCr: telefon formatidan qat'i nazar — normallashtirish
+   * identity `searchCustomers` da (user-service.phone-search.spec.ts);
+   * bu yerda qidiruv matni identity'ga O'ZGARMAY boradi va topilgan mijoz
+   * ('+998330991009', id=50) buyurtmalari filtrlanadi. Faqat raqamdan iborat
+   * shakl buyurtma raqami ham bo'lishi mumkin — mijoz bilan OR.
+   */
+  it.each([
+    ['0330991009', '0330991009'],
+    ['+998 33 099 10 09', null],
+    ['330991009', '330991009'],
+    ['998330991009', '998330991009'],
+  ])(
+    "⭐ telefon %p → identity'ga xom matn, '+998330991009' mijoz buyurtmalari",
+    async (search, orderNumber) => {
+      const { service, conds, bracketConds } = setup();
+      rmqSendMock.mockResolvedValue({ data: [{ id: '50' }] });
+
+      await service.findAllEnriched({ search, page: 1, limit: 10 });
+
+      expect((rmqSendMock.mock.calls[0] as unknown[])[1]).toEqual({
+        cmd: 'identity.customer.search',
+      });
+      expect((rmqSendMock.mock.calls[0] as unknown[])[2]).toEqual({
+        search,
+        limit: 1001,
+      });
+      const customerCond = {
+        sql: 'order.customer_id IN (:...customer_ids)',
+        params: { customer_ids: ['50'] },
+      };
+      if (orderNumber) {
+        expect(bracketConds).toEqual([
+          {
+            sql: 'order.id = :search_order_id',
+            params: { search_order_id: orderNumber },
+          },
+          customerCond,
+        ]);
+      } else {
+        expect(conds).toContainEqual(customerCond);
+        expect(conds.some((c) => c.sql === '<brackets>')).toBe(false);
+      }
+    },
+  );
+
   it("qidiruvsiz so'rov identity'ga murojaat qilmaydi va ro'yxat to'liq qaytadi", async () => {
     const { service, conds } = setup();
 

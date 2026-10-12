@@ -160,13 +160,24 @@ function canonicalBigintId(value: unknown): string | null {
  * oNAE3LW9 — tuman/viloyat boshqa servislarda qayerda ishlatilyapti (FK yo'q —
  * har biri o'z sxemasida, RPC bilan sanaladi).
  */
-type GeoUsage = {
+type GeoCounts = {
   orders: number;
   users: number;
   branches: number;
   /** `order_schema.branch_transfer_batches.target_region_id` — faqat viloyat. */
   transfer_batches: number;
 };
+/**
+ * Asosiy maydonlar — faqat O'CHIRILMAGAN yozuvlar (himoya shularga qaraydi).
+ *
+ * oNAE3LW9 (2026-10-09 prod, 2-tur): ilgari o'chirilganlar ham sanalardi —
+ * TEST buyurtma o'chirilgandan keyin ham tuman "1 ta buyurtma bor" deb 400
+ * qaytarardi, foydalanuvchi esa uni ko'rmaydi (404) va ko'chira olmaydi.
+ * `deleted` — o'chirilgan (`is_deleted` / `deleted_at`) yozuvlar: o'chirishni
+ * TO'SMAYDI, lekin birlashtirishda ular ham ko'chadi va tasdiqlash (A bo'sh,
+ * B = eski B + ko'chgan) JAMI (tirik + o'chirilgan) bo'yicha qilinadi.
+ */
+type GeoUsage = GeoCounts & { deleted: GeoCounts };
 type GeoMoveKind = 'orders' | 'users' | 'branches';
 type GeoMoveStep = {
   kind: GeoMoveKind;
@@ -4932,22 +4943,26 @@ export class LogisticsServiceService implements OnModuleInit {
    * filial boshqa sxemalarda — FK yo'q, shuning uchun har biridan RPC bilan
    * sanaladi. Bittasi javob bermasa — FAIL-CLOSED (503): tekshiruvsiz
    * o'chirish buyurtmalarni yetim qoldirishi mumkin.
+   *
+   * oNAE3LW9 (prod 2-tur): asosiy sonlar — faqat O'CHIRILMAGAN yozuvlar,
+   * o'chirilganlari `deleted` da (`GeoUsage` izohi).
    */
   private async collectGeoUsage(
     where: { district_id?: string; region_id?: string },
     purpose = "o'chirish",
   ): Promise<GeoUsage> {
+    type Asked = { live: Partial<GeoCounts>; deleted: Partial<GeoCounts> };
     const ask = async (
       client: ClientProxy,
       cmd: string,
-      fields: Array<keyof GeoUsage>,
-    ): Promise<Partial<GeoUsage>> => {
+      fields: Array<keyof GeoCounts>,
+    ): Promise<Asked> => {
       try {
         const res = await lastValueFrom(
           client.send({ cmd }, where).pipe(timeout(8000)),
         );
         const data = (res as { data?: Record<string, unknown> })?.data ?? {};
-        const out: Partial<GeoUsage> = {};
+        const out: Asked = { live: {}, deleted: {} };
         for (const field of fields) {
           const raw = data[field];
           const value = Number(raw);
@@ -4955,7 +4970,22 @@ export class LogisticsServiceService implements OnModuleInit {
           if (raw === undefined || raw === null || !Number.isFinite(value)) {
             throw new Error(`${cmd}: noto'g'ri javob (${field})`);
           }
-          out[field] = value;
+          out.live[field] = value;
+          /**
+           * oNAE3LW9 (prod 2-tur): `deleted_<maydon>` — o'chirilganlar.
+           * Bo'lmasa 0: eski servis o'chirilganlarni asosiy maydonda sanaydi
+           * (himoya ortiqcha qattiq bo'ladi, tasdiqlash jami bo'yicha baribir
+           * to'g'ri). Bor-u noto'g'ri bo'lsa — FAIL-CLOSED.
+           */
+          const rawDeleted = data[`deleted_${field}`];
+          const deleted = Number(rawDeleted);
+          if (rawDeleted === undefined || rawDeleted === null) {
+            out.deleted[field] = 0;
+          } else if (!Number.isFinite(deleted) || deleted < 0) {
+            throw new Error(`${cmd}: noto'g'ri javob (deleted_${field})`);
+          } else {
+            out.deleted[field] = deleted;
+          }
         }
         return out;
       } catch (error) {
@@ -4982,16 +5012,47 @@ export class LogisticsServiceService implements OnModuleInit {
       ask(this.identityClient, 'identity.user.geo_usage', ['users']),
       ask(this.branchClient, 'branch.geo_usage', ['branches']),
     ]);
+    const pick = (part: 'live' | 'deleted'): GeoCounts => ({
+      orders: order[part].orders ?? 0,
+      users: identity[part].users ?? 0,
+      branches: branch[part].branches ?? 0,
+      transfer_batches: order[part].transfer_batches ?? 0,
+    });
+    return { ...pick('live'), deleted: pick('deleted') };
+  }
+
+  /** Himoya uchun: faqat O'CHIRILMAGAN yozuvlar (oNAE3LW9 prod 2-tur). */
+  private geoUsageTotal(usage: GeoUsage): number {
+    return usage.orders + usage.users + usage.branches + usage.transfer_batches;
+  }
+
+  /** Xato javobidagi `usage` — faqat o'chirishni to'sgan (tirik) yozuvlar. */
+  private liveGeoCounts(usage: GeoUsage): GeoCounts {
     return {
-      orders: order.orders ?? 0,
-      users: identity.users ?? 0,
-      branches: branch.branches ?? 0,
-      transfer_batches: order.transfer_batches ?? 0,
+      orders: usage.orders,
+      users: usage.users,
+      branches: usage.branches,
+      transfer_batches: usage.transfer_batches,
     };
   }
 
-  private geoUsageTotal(usage: GeoUsage): number {
-    return usage.orders + usage.users + usage.branches + usage.transfer_batches;
+  /**
+   * oNAE3LW9 (prod 2-tur) — birlashtirish tekshiruvi uchun JAMI (tirik +
+   * o'chirilgan): ko'chirish (`reassign_district`) ikkalasini ham ko'chiradi.
+   */
+  private geoAllOf(usage: GeoUsage, kind: GeoMoveKind): number {
+    return usage[kind] + usage.deleted[kind];
+  }
+
+  /**
+   * oNAE3LW9 (prod 2-tur) — o'chirilgan hudud ostida qolgan O'CHIRILGAN
+   * yozuvlar (activity log uchun); yo'q bo'lsa `null`.
+   */
+  private deletedGeoRefs(usage: GeoUsage): GeoCounts | null {
+    const d = usage.deleted;
+    return d.orders + d.users + d.branches + d.transfer_batches > 0
+      ? { ...d }
+      : null;
   }
 
   private describeGeoUsage(usage: GeoUsage): string {
@@ -5033,7 +5094,8 @@ export class LogisticsServiceService implements OnModuleInit {
   /**
    * oNAE3LW9 — Soft delete EMAS: karta TC2 "buyurtmasi yo'q tuman DELETE →
    * 200 va DB dan yo'qoladi" — bog'lanishi bo'lmagan tuman qattiq o'chadi,
-   * bog'langani esa umuman o'chirilmaydi (400).
+   * bog'langani esa umuman o'chirilmaydi (400). Bog'lanish — faqat
+   * O'CHIRILMAGAN buyurtma/foydalanuvchi/filial (oNAE3LW9 prod 2-tur).
    */
   async deleteDistrict(id: string) {
     const district = await this.districtRepo.findOne({ where: { id } });
@@ -5057,7 +5119,7 @@ export class LogisticsServiceService implements OnModuleInit {
           (movable ? ` yoki ${movable} boshqa tumanga ko'chiring.` : '.'),
         {
           reason: 'district_in_use',
-          usage,
+          usage: this.liveGeoCounts(usage),
           hint: {
             action: 'merge',
             method: 'POST',
@@ -5079,12 +5141,27 @@ export class LogisticsServiceService implements OnModuleInit {
     await this.districtRepo.remove(district);
     void this.removeDistrictFromSearch(searchRef);
 
+    /**
+     * oNAE3LW9 (prod 2-tur): faqat O'CHIRILGAN yozuvlari bor tuman o'chadi —
+     * ular o'z `district_id` sini SAQLAB qoladi (endi mavjud bo'lmagan ID).
+     * Ataylab: o'chirilgan yozuv hech qayerda ko'rinmaydi (404, hisobotlar
+     * `is_deleted = false`), uni tiklash (restore) yo'li yo'q; tarixni
+     * o'zgartirmaslik uchun ularga tegilmaydi. Qaysi tuman ekanini topish
+     * uchun shu yozuv: `old_value` (nom/SATO) + `metadata.deleted_refs`.
+     * Kelajakda tiklash qo'shilsa — tumanni qayta tekshirish SHART.
+     * Yetim qoldirmaslik kerak bo'lsa — o'chirish o'rniga birlashtirish
+     * (`mergeDistricts` o'chirilganlarni ham ko'chiradi).
+     */
+    const deletedRefs = this.deletedGeoRefs(usage);
     await this.activityLog.log({
       entity_type: 'District',
       entity_id: String(id),
       action: ActivityAction.DELETED,
       old_value: deletedSnapshot,
-      metadata: { region_id: deletedSnapshot.region_id },
+      metadata: {
+        region_id: deletedSnapshot.region_id,
+        ...(deletedRefs ? { deleted_refs: deletedRefs } : {}),
+      },
     });
 
     return successRes({ id }, 200, 'District deleted');
@@ -5779,12 +5856,16 @@ export class LogisticsServiceService implements OnModuleInit {
         { district_id: fromId },
         'birlashtirish',
       );
-      if (nowA[step.kind] >= beforeA[step.kind]) return null;
+      // oNAE3LW9 (prod 2-tur): JAMI (tirik + o'chirilgan) — ko'chirish
+      // o'chirilganlarni ham olib ketadi.
+      const was = this.geoAllOf(beforeA, step.kind);
+      const now = this.geoAllOf(nowA, step.kind);
+      if (now >= was) return null;
       return {
         kind: step.kind,
         district_id: toId,
         ids: null,
-        reason: `${step.cmd} javobi kelmadi, lekin A dagi ${step.plural} ${beforeA[step.kind]} → ${nowA[step.kind]} ga kamaydi — B tumanga (#${toId}) ko'chgan bo'lishi mumkin`,
+        reason: `${step.cmd} javobi kelmadi, lekin A dagi ${step.plural} ${was} → ${now} ga kamaydi — B tumanga (#${toId}) ko'chgan bo'lishi mumkin`,
       };
     } catch (error) {
       return {
@@ -5878,7 +5959,14 @@ export class LogisticsServiceService implements OnModuleInit {
     );
   }
 
-  /** oNAE3LW9 — A bo'sh va B = eski B + ko'chirilgan (BeePost :434-446, :495-497). */
+  /**
+   * oNAE3LW9 — A bo'sh va B = eski B + ko'chirilgan (BeePost :434-446, :495-497).
+   *
+   * oNAE3LW9 (prod 2-tur): JAMI (tirik + o'chirilgan) bo'yicha — ko'chirish
+   * o'chirilganlarni ham ko'chiradi (`moved` ularni ham o'z ichiga oladi),
+   * A da o'chirilgan yozuv ham qolmasligi kerak: aks holda A o'chgach u
+   * mavjud bo'lmagan `district_id` ga ishora qilib qolardi.
+   */
   private districtMergeMismatches(
     beforeB: GeoUsage,
     afterA: GeoUsage,
@@ -5888,13 +5976,20 @@ export class LogisticsServiceService implements OnModuleInit {
     const problems: string[] = [];
     for (const step of this.geoMoveSteps()) {
       const kind = step.kind;
-      if (afterA[kind] > 0) {
-        problems.push(`A tumanda hali ${afterA[kind]} ta ${step.label} qoldi`);
-      }
-      const expected = beforeB[kind] + moved[kind];
-      if (afterB[kind] !== expected) {
+      const leftInA = this.geoAllOf(afterA, kind);
+      if (leftInA > 0) {
+        const deletedLeft = afterA.deleted[kind];
         problems.push(
-          `B tumandagi ${step.plural} soni ${afterB[kind]}, kutilgan ${beforeB[kind]} + ${moved[kind]} = ${expected}`,
+          `A tumanda hali ${leftInA} ta ${step.label} qoldi` +
+            (deletedLeft ? ` (shundan ${deletedLeft} tasi o'chirilgan)` : ''),
+        );
+      }
+      const before = this.geoAllOf(beforeB, kind);
+      const after = this.geoAllOf(afterB, kind);
+      const expected = before + moved[kind];
+      if (after !== expected) {
+        problems.push(
+          `B tumandagi ${step.plural} soni ${after}, kutilgan ${before} + ${moved[kind]} = ${expected}`,
         );
       }
     }
@@ -5904,7 +5999,10 @@ export class LogisticsServiceService implements OnModuleInit {
   /**
    * oNAE3LW9 TC5 — tumanlarni BIRLASHTIRISH: A (`id`) dagi buyurtma,
    * foydalanuvchi va filiallar B (`target_district_id`) ga (va B ning
-   * viloyatiga) ko'chadi, so'ng A o'chadi.
+   * viloyatiga) ko'chadi, so'ng A o'chadi. O'chirilgan (`is_deleted` /
+   * `deleted_at`) yozuvlar HAM ko'chadi va tekshiruv jami (tirik +
+   * o'chirilgan) bo'yicha — A o'chgach hech narsa unga ishora qilib
+   * qolmaydi (oNAE3LW9 prod 2-tur).
    *
    * Ma'lumot uch xil servis sxemasida — servislararo DB tranzaksiyasi yo'q,
    * shuning uchun KOMPENSATSIYA:
@@ -6083,7 +6181,8 @@ export class LogisticsServiceService implements OnModuleInit {
      * o'chirilmaydi; viloyatga to'g'ridan-to'g'ri bog'langan BARCHA yozuvlar
      * ham tekshiriladi: buyurtma va filiallararo jo'natma
      * (`order_schema.branch_transfer_batches.target_region_id`),
-     * foydalanuvchi, filial va pochta.
+     * foydalanuvchi, filial va pochta. Buyurtma/jo'natma/foydalanuvchi/
+     * filial — faqat o'chirilmaganlari (oNAE3LW9 prod 2-tur).
      */
     const districtCount = await this.districtRepo.count({
       where: { region_id: String(id) },
@@ -6132,7 +6231,10 @@ export class LogisticsServiceService implements OnModuleInit {
         : `Avval ${movable} boshqa viloyatga ko'chiring.`;
       this.badRequest(
         `Bu viloyatga ${details} bog'langan, shuning uchun uni o'chirib bo'lmaydi. ${advice}`,
-        { reason: 'region_in_use', usage: { ...usage, posts } },
+        {
+          reason: 'region_in_use',
+          usage: { ...this.liveGeoCounts(usage), posts },
+        },
       );
     }
 
@@ -6143,11 +6245,15 @@ export class LogisticsServiceService implements OnModuleInit {
     await this.regionRepo.remove(region);
     void this.removeRegionFromSearch(searchRef);
 
+    // oNAE3LW9 (prod 2-tur): faqat O'CHIRILGAN yozuvlari bor viloyat o'chadi;
+    // ular `region_id` sini saqlab qoladi (sabab — `deleteDistrict` dagi izoh).
+    const deletedRefs = this.deletedGeoRefs(usage);
     await this.activityLog.log({
       entity_type: 'Region',
       entity_id: String(id),
       action: ActivityAction.DELETED,
       old_value: deletedSnapshot,
+      ...(deletedRefs ? { metadata: { deleted_refs: deletedRefs } } : {}),
     });
 
     return successRes({ id }, 200, 'Region deleted');

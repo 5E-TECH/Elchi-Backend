@@ -4465,7 +4465,14 @@ export class BranchServiceService implements OnModuleInit {
 
   /**
    * oNAE3LW9 — hududni o'chirishdan OLDIN: shu tuman/viloyatdagi filiallar
-   * soni (o'chirilganlari ham — tarix va hisobotlarda ko'rinadi).
+   * soni.
+   *
+   * oNAE3LW9 (prod 2-tur): `branches` — faqat O'CHIRILMAGAN
+   * (`is_deleted = false`) filiallar; himoya faqat shularga qaraydi (ilgari
+   * o'chirilgan, ro'yxatda ko'rinmaydigan filial ham tumanni "band" qilardi).
+   * O'chirilganlar alohida `deleted_branches` da: logistics birlashtirishda
+   * ularni ham ko'chiradi (`reassignDistrict` filtrsiz) va tasdiqlashda
+   * hisobga oladi.
    */
   async countGeoUsage(input: { district_id?: string; region_id?: string }) {
     const districtId = String(input?.district_id ?? '').trim();
@@ -4475,18 +4482,24 @@ export class BranchServiceService implements OnModuleInit {
         errorRes('district_id yoki region_id majburiy', 400),
       );
     }
-    const branches = await this.branchRepo
+    const counts = await this.branchRepo
       .createQueryBuilder('b')
+      .select('COUNT(*) FILTER (WHERE b.is_deleted = false)', 'live')
+      .addSelect('COUNT(*) FILTER (WHERE b.is_deleted = true)', 'deleted')
       .where(
         districtId ? 'b.district_id = :districtId' : 'b.region_id = :regionId',
         districtId ? { districtId } : { regionId },
       )
-      .getCount();
+      .getRawOne<{
+        live: string | number | null;
+        deleted: string | number | null;
+      }>();
     return successRes(
       {
         district_id: districtId || null,
         region_id: regionId || null,
-        branches,
+        branches: Number(counts?.live ?? 0),
+        deleted_branches: Number(counts?.deleted ?? 0),
       },
       200,
       'Geo usage',
