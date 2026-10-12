@@ -960,13 +960,29 @@ describe('FinanceServiceService operator earnings & payments', () => {
    */
   it('records an operator payment AND debits the MAIN cashbox + ledger', async () => {
     const manager = makeManager();
-    const { service, paymentRepo, activityLog } = makeService(manager);
-    const cashbox = jest
-      .spyOn(service, 'updateBalance')
-      .mockResolvedValue({} as never);
-    const ledger = jest
-      .spyOn(service, 'recordFinancialBalance')
-      .mockResolvedValue({} as never);
+    const { service, paymentRepo, activityLog, queryRunner } =
+      makeService(manager);
+    jest.spyOn(service, 'findOperatorBalance').mockResolvedValue({
+      data: { balance: 30000 },
+    } as never);
+    manager.findOne.mockImplementation((entity: { name: string }) =>
+      entity.name === 'Cashbox'
+        ? Promise.resolve({
+            id: 'c1',
+            user_id: '0',
+            cashbox_type: 'main',
+            balance_cash: 25000,
+            balance_card: 0,
+            balance: 25000,
+          })
+        : Promise.resolve(null),
+    );
+    manager.save.mockImplementation((entity: any) =>
+      Promise.resolve({
+        id: entity.operator_id ? 'p1' : (entity.id ?? 'h1'),
+        ...entity,
+      }),
+    );
 
     const res = await service.createOperatorPayment({
       operator_id: '42',
@@ -976,40 +992,98 @@ describe('FinanceServiceService operator earnings & payments', () => {
     });
 
     expect(res.statusCode).toBe(201);
-    expect(paymentRepo.save).toHaveBeenCalledWith(
+    expect(paymentRepo.save).not.toHaveBeenCalled();
+    expect(manager.save).toHaveBeenCalledWith(
       expect.objectContaining({ amount: 15000, operator_id: '42' }),
     );
-    expect(cashbox).toHaveBeenCalledWith(
+    expect(manager.save).toHaveBeenCalledWith(
       expect.objectContaining({
-        cashbox_type: 'main',
         operation_type: 'expense',
+        source_type: 'salary',
         amount: 15000,
         source_id: 'p1',
       }),
     );
-    expect(ledger).toHaveBeenCalledWith(
+    expect(manager.save).toHaveBeenCalledWith(
       expect.objectContaining({
         amount: -15000,
         dedup_key: 'operator-payment:p1',
       }),
     );
+    expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+    expect(queryRunner.rollbackTransaction).not.toHaveBeenCalled();
     expect(activityLog.log).toHaveBeenCalled();
-    cashbox.mockRestore();
-    ledger.mockRestore();
   });
 
   it('kassa harakati o`tmasa to`lov qatori ham qoldirilmaydi', async () => {
     const manager = makeManager();
-    const { service, paymentRepo } = makeService(manager);
-    const cashbox = jest
-      .spyOn(service, 'updateBalance')
-      .mockRejectedValue(new Error('Insufficient cash balance'));
+    const { service, paymentRepo, queryRunner } = makeService(manager);
+    jest.spyOn(service, 'findOperatorBalance').mockResolvedValue({
+      data: { balance: 20000 },
+    } as never);
+    manager.findOne.mockResolvedValue({
+      id: 'c1',
+      user_id: '0',
+      cashbox_type: 'main',
+      balance_cash: 10000,
+      balance_card: 0,
+      balance: 10000,
+    });
 
     await expect(
       service.createOperatorPayment({ operator_id: '42', amount: 15000 }),
     ).rejects.toBeTruthy();
-    expect(paymentRepo.softDelete).toHaveBeenCalledWith({ id: 'p1' });
-    cashbox.mockRestore();
+    expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
+    expect(paymentRepo.save).not.toHaveBeenCalled();
+    expect(paymentRepo.softDelete).not.toHaveBeenCalled();
+    expect(manager.save).not.toHaveBeenCalled();
+  });
+
+  it('FJVqcUTv: qarzdan ortiq tolovni hech narsa yozmasdan rad etadi', async () => {
+    const manager = makeManager();
+    const { service, paymentRepo, queryRunner } = makeService(manager);
+    jest.spyOn(service, 'findOperatorBalance').mockResolvedValue({
+      data: { balance: 5000 },
+    } as never);
+
+    await expect(
+      service.createOperatorPayment({ operator_id: '42', amount: 15000 }),
+    ).rejects.toBeTruthy();
+    expect(paymentRepo.save).not.toHaveBeenCalled();
+    expect(manager.save).not.toHaveBeenCalled();
+    expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
+  });
+
+  it('FJVqcUTv: daftar yozuvi yiqilsa barcha oyoqlar rollback boladi', async () => {
+    const manager = makeManager();
+    const { service, queryRunner } = makeService(manager);
+    jest.spyOn(service, 'findOperatorBalance').mockResolvedValue({
+      data: { balance: 20000 },
+    } as never);
+    manager.findOne.mockImplementation((entity: { name: string }) =>
+      entity.name === 'Cashbox'
+        ? Promise.resolve({
+            id: 'c1',
+            user_id: '0',
+            cashbox_type: 'main',
+            balance_cash: 25000,
+            balance_card: 0,
+            balance: 25000,
+          })
+        : Promise.reject(new Error('ledger failed')),
+    );
+    manager.save.mockImplementation((entity: any) =>
+      Promise.resolve({
+        id: entity.operator_id ? 'p1' : (entity.id ?? 'h1'),
+        ...entity,
+      }),
+    );
+
+    await expect(
+      service.createOperatorPayment({ operator_id: '42', amount: 15000 }),
+    ).rejects.toBeTruthy();
+    expect(queryRunner.rollbackTransaction).toHaveBeenCalled();
+    expect(queryRunner.commitTransaction).not.toHaveBeenCalled();
   });
 
   it('rejects a non-positive payment amount', async () => {
@@ -1137,6 +1211,27 @@ describe('FinanceServiceService manual branch cashbox operations', () => {
     const where = manager.findOne.mock.calls[1][1].where;
     expect(where.dedup_epoch).toBe('tok-abc');
   });
+
+  it.each(['spendMoney', 'fillTheCashbox'] as const)(
+    'TMgL1zvq: %s takroriy kalitni aniq bildiradi va auditni takrorlamaydi',
+    async (method) => {
+      const manager = makeManager();
+      const { service, activityLog } = makeService(manager);
+      jest.spyOn(service, 'updateBalance').mockResolvedValue({
+        data: { idempotent: true, history: { id: 'h1' } },
+      } as never);
+
+      const result = await service[method]({
+        user_id: '9',
+        amount: 1000,
+        dedup_epoch: 'fe-key-1',
+      });
+
+      expect(result.data.idempotent).toBe(true);
+      expect(result.message).toMatch(/takror|already/i);
+      expect(activityLog.log).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe('FinanceServiceService.paymentsToMarket', () => {
@@ -1301,6 +1396,72 @@ describe('FinanceServiceService financial balance ledger', () => {
     expect(res.message).toMatch(/already recorded/);
     expect(manager.save).not.toHaveBeenCalled();
     expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+  });
+
+  it('records a manual entry once for the same dedup_key', async () => {
+    const entry = {
+      id: 'fbh-1',
+      amount: -50000,
+      source_type: 'manual_expense',
+      dedup_key: 'manual-1',
+      created_by: '9',
+      related_user_id: null,
+      comment: 'Rent',
+    };
+    const manager = makeManager({
+      findOne: jest
+        .fn()
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(entry),
+      create: jest.fn((_e: any, dto: any) => dto),
+      save: jest.fn().mockResolvedValue(entry),
+    });
+    const { service, queryRunner } = makeService(manager);
+    const input = {
+      amount: -50000,
+      source_type: 'manual_expense' as any,
+      dedup_key: 'manual-1',
+      created_by: '9',
+      comment: 'Rent',
+    };
+
+    const first = await service.recordFinancialBalance(input);
+    const second = await service.recordFinancialBalance(input);
+
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(200);
+    expect(second.data).toEqual(entry);
+    expect(manager.save).toHaveBeenCalledTimes(1);
+    expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(2);
+  });
+
+  it('rejects reusing a manual key for a different amount', async () => {
+    const manager = makeManager({
+      findOne: jest.fn().mockResolvedValue({
+        id: 'fbh-1',
+        amount: -50000,
+        created_by: '9',
+        related_user_id: null,
+        comment: 'Rent',
+      }),
+      save: jest.fn(),
+    });
+    const { service, queryRunner } = makeService(manager);
+
+    await expect(
+      service.recordFinancialBalance({
+        amount: -60000,
+        source_type: 'manual_expense' as any,
+        dedup_key: 'manual-1',
+        created_by: '9',
+        comment: 'Rent',
+      }),
+    ).rejects.toMatchObject({
+      error: { statusCode: 409 },
+    });
+    expect(queryRunner.rollbackTransaction).toHaveBeenCalledTimes(1);
+    expect(manager.save).not.toHaveBeenCalled();
   });
 
   it('skips a zero-amount entry without opening a transaction', async () => {

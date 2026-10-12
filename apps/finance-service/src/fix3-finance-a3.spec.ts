@@ -1114,6 +1114,35 @@ describe('C2 / CODE-22 — moliyaviy balans sana filtri Toshkent kuni', () => {
     });
   });
 
+  it('vmLTsAok: top-impacts 11-sahifani SQL dan oladi va jami sahifani qaytaradi', async () => {
+    const { service, financialHistoryRepo } = makeService();
+    const skip = jest.fn().mockReturnThis();
+    const take = jest.fn().mockReturnThis();
+    financialHistoryRepo.createQueryBuilder.mockReturnValue({
+      addSelect: jest.fn().mockReturnThis(),
+      where: jest.fn().mockReturnThis(),
+      orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
+      skip,
+      take,
+      getManyAndCount: jest.fn().mockResolvedValue([[], 105]),
+    });
+
+    const result = await service.financialBalanceTopImpacts({
+      page: 11,
+      limit: 10,
+    });
+
+    expect(skip).toHaveBeenCalledWith(100);
+    expect(take).toHaveBeenCalledWith(10);
+    expect(result.data.pagination).toEqual({
+      total: 105,
+      page: 11,
+      limit: 10,
+      totalPages: 11,
+    });
+  });
+
   it('findCashboxByUser (turi berilmagan, barcha kassalar) ham sana filtrini qo`llaydi', async () => {
     const { service, cashboxRepo, historyRepo } = makeService();
     cashboxRepo.find.mockResolvedValue([{ id: 'c1' }]);

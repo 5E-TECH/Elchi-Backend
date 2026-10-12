@@ -136,7 +136,7 @@ describe('AnalyticsServiceService', () => {
     expect(res.data).not.toHaveProperty('newUsersCount');
   });
 
-  it('getDashboard uses the lightweight all-time path', async () => {
+  it('getDashboard includes market and courier slices for all-time', async () => {
     rmqSendMock.mockResolvedValue({
       data: { acceptedCount: 100, soldAndPaid: 70, totalRevenue: 5000 },
     });
@@ -160,12 +160,12 @@ describe('AnalyticsServiceService', () => {
       rmqSendMock.mock.calls.some(
         ([, pattern]) => pattern?.cmd === 'order.analytics.market_stats',
       ),
-    ).toBe(false);
+    ).toBe(true);
     expect(
       rmqSendMock.mock.calls.some(
         ([, pattern]) => pattern?.cmd === 'order.analytics.courier_stats',
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('removes all financial totals from registrator all-time dashboard', async () => {
@@ -464,6 +464,7 @@ describe('AnalyticsServiceService', () => {
       expect.anything(),
       { cmd: 'order.analytics.revenue' },
       expect.objectContaining({ period: 'yearly' }),
+      { timeoutMs: 2500, retries: 0, deadlineMs: 2500 },
     );
   });
 
@@ -658,6 +659,7 @@ describe('AnalyticsServiceService', () => {
       expect(overviewPayload()).toEqual({
         startDate: '1969-12-31T19:00:00.000Z',
         endDate: '2026-10-01T10:00:00.000Z',
+        all: true,
       });
     });
 

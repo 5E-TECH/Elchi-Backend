@@ -107,17 +107,8 @@ const courierUser = (id: string) => ({
   status: 'active',
 });
 
-describe('C1 / M2 — market va filial→HQ to`lovi: zaxira token payment_date ga bog`liq emas', () => {
-  // 30 s dedup oynasi chegarasiga tushib qolmaslik uchun soat qotiriladi.
-  let nowSpy: jest.SpyInstance<number, []>;
-  beforeEach(() => {
-    nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1_790_000_005_000);
-  });
-  afterEach(() => {
-    nowSpy.mockRestore();
-  });
-
-  it('market: kalitsiz ikki bosish (yangi payment_date/comment) → BIR XIL token', async () => {
+describe('TMgL1zvq — tolov tokeni faqat Idempotency-Key dan', () => {
+  it('market: kalitsiz ikki bosish dedup qilinmaydi', async () => {
     const env = setup();
     route(env.financeClient, {
       'finance.cashbox.payment_market': () => ({ statusCode: 200, data: {} }),
@@ -143,39 +134,42 @@ describe('C1 / M2 — market va filial→HQ to`lovi: zaxira token payment_date g
       env.financeClient,
       'finance.cashbox.payment_market',
     );
-    expect(first.dedup_epoch).toBeTruthy();
-    expect(second.dedup_epoch).toBe(first.dedup_epoch);
+    expect(first.dedup_epoch).toBe('');
+    expect(second.dedup_epoch).toBe('');
     // payment_date tarixga baribir yoziladi.
     expect(second.payment_date).toBe('2026-10-01T06:00:09.000Z');
   });
 
-  it('market: summa yoki market farq qilsa — boshqa token', async () => {
+  it('market: bir xil summa ham turli kalit bilan ikki alohida tolov', async () => {
     const env = setup();
     route(env.financeClient, {
       'finance.cashbox.payment_market': () => ({ statusCode: 200, data: {} }),
     });
 
-    await env.controller.paymentToMarket(superadmin, {
-      market_id: '201',
-      amount: 1000,
-      payment_method: 'cash',
-    } as any);
-    await env.controller.paymentToMarket(superadmin, {
-      market_id: '201',
-      amount: 2000,
-      payment_method: 'cash',
-    } as any);
-    await env.controller.paymentToMarket(superadmin, {
-      market_id: '305',
-      amount: 1000,
-      payment_method: 'cash',
-    } as any);
+    await env.controller.paymentToMarket(
+      superadmin,
+      {
+        market_id: '201',
+        amount: 1000,
+        payment_method: 'cash',
+      } as any,
+      'fe-key-1',
+    );
+    await env.controller.paymentToMarket(
+      superadmin,
+      {
+        market_id: '201',
+        amount: 1000,
+        payment_method: 'cash',
+      } as any,
+      'fe-key-2',
+    );
 
     const tokens = payloadsOf(
       env.financeClient,
       'finance.cashbox.payment_market',
     ).map((payload) => payload.dedup_epoch);
-    expect(new Set(tokens).size).toBe(3);
+    expect(tokens).toEqual(['fe-key-1', 'fe-key-2']);
   });
 
   it('market: Idempotency-Key kelsa aynan o`sha kalit dedup token bo`ladi', async () => {
@@ -201,7 +195,7 @@ describe('C1 / M2 — market va filial→HQ to`lovi: zaxira token payment_date g
     expect(res).toEqual({ statusCode: 200, data: { idempotent: true } });
   });
 
-  it('filial→HQ: kalitsiz ikki bosish (yangi payment_date) → BIR XIL token; kalit bo`lsa — kalit', async () => {
+  it('filial→HQ: kalitsiz dedup yoq, kalit bolsa aynan kalit', async () => {
     const env = setup();
     route(env.branchClient, {
       'branch.find_by_id': () => ({ data: { id: '15' } }),
@@ -229,7 +223,8 @@ describe('C1 / M2 — market va filial→HQ to`lovi: zaxira token payment_date g
       env.financeClient,
       'finance.cashbox.payment_branch_main',
     ).map((payload) => payload.dedup_epoch);
-    expect(tokens[1]).toBe(tokens[0]);
+    expect(tokens[0]).toBe('');
+    expect(tokens[1]).toBe('');
     expect(tokens[2]).toBe('fe-branch-key');
   });
 });

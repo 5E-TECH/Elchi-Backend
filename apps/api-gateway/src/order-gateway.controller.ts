@@ -30,6 +30,8 @@ import {
   ApiBearerAuth,
   ApiBody,
   ApiConsumes,
+  ApiConflictResponse,
+  ApiOkResponse,
   ApiOperation,
   ApiParam,
   ApiQuery,
@@ -460,114 +462,46 @@ export class OrderGatewayController {
   private async findCourierCancelledRows(
     reqUser: JwtUser | undefined,
     filters: Record<string, unknown>,
-  ): Promise<Array<Record<string, unknown>>> {
+    page: number,
+    limit: number,
+  ): Promise<{ data: Array<Record<string, unknown>>; total: number }> {
     const requesterId = String(reqUser?.sub ?? '').trim();
     if (!requesterId) {
-      return [];
+      return { data: [], total: 0 };
     }
 
-    const courierPostIds = await this.findAllCourierPostIds(reqUser).catch(
-      () => [],
+    // (9Rdi2gJF) Kuryerning bekor tabi order-service'da SQL sahifalanadi.
+    const response: unknown = await this.sendOrderWithTimeout(
+      { cmd: 'order.find_all_enriched' },
+      {
+        query: {
+          ...filters,
+          status: [Order_status.CANCELLED],
+          courier_ids: [requesterId],
+          holder_courier_ids: [requesterId],
+          courier_scope: 'any',
+          courier_post_history: true,
+          courier_cancelled_tab: true,
+          page,
+          limit,
+        },
+      },
     );
-    const courierPostIdSet = new Set(courierPostIds);
-    const baseQuery = {
-      ...filters,
-      status: [Order_status.CANCELLED, Order_status.CANCELLED_SENT],
-      fetch_all: true,
-      disable_pagination: true,
-      page: undefined,
-      limit: undefined,
+    const outer =
+      response && typeof response === 'object'
+        ? (response as Record<string, unknown>)
+        : {};
+    const nested = outer.data;
+    const body =
+      nested && typeof nested === 'object' && !Array.isArray(nested)
+        ? (nested as Record<string, unknown>)
+        : outer;
+    return {
+      data: this.extractRows(body).map((row) =>
+        this.normalizeCourierCancelledRowForDisplay(row),
+      ),
+      total: Number(body?.total ?? 0),
     };
-    const requests = [
-      this.sendOrderWithFallback(
-        { cmd: 'order.find_all_enriched' },
-        { cmd: 'order.find_all' },
-        { query: { ...baseQuery, courier_ids: [requesterId] } },
-      ),
-      this.sendOrderWithFallback(
-        { cmd: 'order.find_all_enriched' },
-        { cmd: 'order.find_all' },
-        { query: { ...baseQuery, holder_courier_ids: [requesterId] } },
-      ),
-    ];
-
-    if (courierPostIds.length) {
-      requests.push(
-        this.sendOrderWithFallback(
-          { cmd: 'order.find_all_enriched' },
-          { cmd: 'order.find_all' },
-          { query: { ...baseQuery, post_ids: courierPostIds } },
-        ),
-      );
-    }
-
-    const responses = await Promise.all(requests);
-    const postHistoryRowIds = new Set(
-      (courierPostIds.length
-        ? this.extractRows(responses[2]?.data ?? responses[2])
-        : []
-      )
-        .map((row) => this.asStr(row?.id).trim())
-        .filter(Boolean),
-    );
-    const uniqueRows = new Map<string, Record<string, unknown>>();
-    responses
-      .flatMap((response) => this.extractRows(response?.data ?? response))
-      .filter((row) => {
-        const holderType = this.asStr(row?.holder_type ?? row?.holderType)
-          .trim()
-          .toUpperCase();
-        const courierId = this.asStr(row?.courier_id ?? row?.courierId).trim();
-        const holderCourierId = this.asStr(
-          row?.holder_courier_id ?? row?.holderCourierId,
-        ).trim();
-        const status = this.asStr(row?.status).trim().toLowerCase();
-        const transportStatus = this.asStr(
-          row?.transport_status ?? row?.transportStatus,
-        )
-          .trim()
-          .toLowerCase();
-        const canceledPostId = this.asStr(
-          row?.canceled_post_id ?? row?.canceledPostId,
-        ).trim();
-        const parentOrderId = this.asStr(
-          row?.parent_order_id ?? row?.parentOrderId,
-        ).trim();
-        const postId = this.asStr(row?.post_id ?? row?.postId).trim();
-
-        if (
-          status === Order_status.CANCELLED_SENT ||
-          transportStatus === Order_status.CANCELLED_SENT
-        ) {
-          return false;
-        }
-        if (holderType === 'COURIER') {
-          return holderCourierId === requesterId || courierId === requesterId;
-        }
-        if (holderType === 'BRANCH' || holderType === 'HQ') {
-          return (
-            Boolean(parentOrderId) &&
-            !canceledPostId &&
-            (courierId === requesterId ||
-              holderCourierId === requesterId ||
-              (courierPostIdSet.has(postId) &&
-                postHistoryRowIds.has(this.asStr(row?.id).trim())))
-          );
-        }
-        if (!holderType && !courierId && !holderCourierId) {
-          return true;
-        }
-        return courierId === requesterId || holderCourierId === requesterId;
-      })
-      .forEach((row) => {
-        const id = this.asStr(row?.id).trim();
-        if (id) {
-          uniqueRows.set(id, row);
-        }
-      });
-    return Array.from(uniqueRows.values()).map((row) =>
-      this.normalizeCourierCancelledRowForDisplay(row),
-    );
   }
 
   private normalizeProofFileKeys(value: unknown): string[] {
@@ -2987,19 +2921,21 @@ export class OrderGatewayController {
           : undefined;
 
     if (isCourier && isCancelledTab) {
-      const allCancelledRows = await this.findCourierCancelledRows(req?.user, {
-        market_id: resolvedMarketId,
-        customer_id,
-        search,
-        start_day,
-        end_day,
-        region_id,
-        district_id,
-        source,
-      });
-      const total = allCancelledRows.length;
-      const offset = (pagination.page - 1) * pagination.limit;
-      const data = allCancelledRows.slice(offset, offset + pagination.limit);
+      const { data, total } = await this.findCourierCancelledRows(
+        req?.user,
+        {
+          market_id: resolvedMarketId,
+          customer_id,
+          search,
+          start_day,
+          end_day,
+          region_id,
+          district_id,
+          source,
+        },
+        pagination.page,
+        pagination.limit,
+      );
       const paginationMeta = this.buildPaginationMeta(
         total,
         pagination.page,
@@ -3194,18 +3130,13 @@ export class OrderGatewayController {
       Boolean(statuses?.length) &&
       statuses!.every((value) => cancelledTabStatuses.includes(value));
     if (isCancelledTab) {
-      const allCancelledRows = await this.findCourierCancelledRows(req?.user, {
-        search,
-        start_day: startDate,
-        end_day: endDate,
-      });
-      const total = allCancelledRows.length;
-      const offset = (pagination.page - 1) * pagination.limit;
-      const pageRows = allCancelledRows.slice(
-        offset,
-        offset + pagination.limit,
+      const { data, total } = await this.findCourierCancelledRows(
+        req?.user,
+        { search, start_day: startDate, end_day: endDate },
+        pagination.page,
+        pagination.limit,
       );
-      const legacyData = this.toLegacyShape(pageRows).map((row) =>
+      const legacyData = this.toLegacyShape(data).map((row) =>
         this.normalizeLegacyOrderRow(row),
       );
       const paginationMeta = this.buildPaginationMeta(
@@ -4570,7 +4501,12 @@ export class OrderGatewayController {
   )
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Delete order (status-based role rules)' })
-  @ApiParam({ name: 'id', description: 'Order ID (uuid)' })
+  @ApiOkResponse({ description: 'Order deleted' })
+  @ApiConflictResponse({
+    description:
+      'A post-linked order can only be deleted before dispatch, without payment or an active return/batch',
+  })
+  @ApiParam({ name: 'id', description: 'Order ID (bigint)' })
   async remove(@Param('id') id: string, @Req() req: { user: JwtUser }) {
     const roles = this.normalizeRoles(req.user.roles);
     const isSystemPrivileged =

@@ -27,6 +27,7 @@ describe('SmsOutboxScheduler', () => {
   let adapter: { send: jest.Mock };
   let registry: { resolve: jest.Mock; callbackUrl: jest.Mock };
   let runner: { connect: jest.Mock; query: jest.Mock; release: jest.Mock };
+  let consent: { partition: jest.Mock };
   let locked: boolean;
   const make = (env: Record<string, unknown> = { SMS_ENABLED: 'true' }) => {
     const config = new SmsConfigService({
@@ -38,6 +39,7 @@ describe('SmsOutboxScheduler', () => {
       registry as never,
       { addCronJob: jest.fn() } as never,
       { createQueryRunner: () => runner } as never,
+      consent as never,
     );
   };
 
@@ -56,6 +58,9 @@ describe('SmsOutboxScheduler', () => {
     registry = {
       resolve: jest.fn().mockResolvedValue(adapter),
       callbackUrl: jest.fn().mockReturnValue(null),
+    };
+    consent = {
+      partition: jest.fn().mockResolvedValue({ allowed: [{}], blocked: [] }),
     };
     runner = {
       connect: jest.fn(),
@@ -92,6 +97,21 @@ describe('SmsOutboxScheduler', () => {
     const result = await make().tick();
     expect(result).toEqual({ processed: 2, sent: 2, failed: 0 });
     expect(outbox.markAccepted).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not send queued promo when consent has since been revoked', async () => {
+    outbox.claimDue.mockResolvedValue([
+      row('1', { message_class: 'promo', customer_id: '7' }),
+    ]);
+    consent.partition.mockResolvedValue({ allowed: [], blocked: [{}] });
+    const scheduler = make();
+    await scheduler.tick();
+    expect(adapter.send).not.toHaveBeenCalled();
+    expect(outbox.markFailed).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.stringMatching(/rozilik/),
+      false,
+    );
   });
 
   it('provider errors go to markFailed with the retryable flag', async () => {

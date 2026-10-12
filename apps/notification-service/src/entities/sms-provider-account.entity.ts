@@ -11,8 +11,8 @@ import type { SmsSenderProfile } from '../sms/sms.port';
 /**
  * SMS provayder akkaunti (8auPBa1O #2, rkz0yBxr #7).
  *
- * Login/parol FAQAT shifrlangan (`enc:gcm:...`, SMS_CREDENTIAL_SECRET) — SELECT
- * bilan ochiq matn ko'rinmaydi. `sender_profile`: 'default' (transaksion/reklama)
+ * Login/parol/alfa-nom FAQAT shifrlangan (`enc:gcm:...`, SMS_CREDENTIAL_SECRET)
+ * — SELECT bilan ochiq matn ko'rinmaydi. `sender_profile`: 'default' (transaksion/reklama)
  * va 'otp' — OTP alohida akkaunt/alfa-nomdan ketadi, reklama bloki login
  * oqimini o'ldirmasin.
  */
@@ -36,9 +36,9 @@ export class SmsProviderAccount {
   @Column({ type: 'text' })
   password_enc!: string;
 
-  /** Provayderda tasdiqlangan alfa-nom (masalan "ELCHI"). */
-  @Column({ type: 'varchar', length: 32 })
-  sender!: string;
+  /** Provayderda tasdiqlangan alfa-nomning shifrlangan qiymati. */
+  @Column({ type: 'text' })
+  sender_enc!: string;
 
   @Column({ type: 'boolean', default: true })
   is_active!: boolean;

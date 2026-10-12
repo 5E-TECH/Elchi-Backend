@@ -503,9 +503,12 @@ describe('FinanceGatewayController', () => {
       const response: any = await controller.financialBalance();
 
       expect(financeClient.send).toHaveBeenCalledTimes(1);
+      // G1 / financial-balance-lists — sahifa ro'yxatlarni chizadi, shuning
+      // uchun gateway ularni aniq so'raydi (flag'siz finance ro'yxat bermaydi:
+      // prod'da "Kuryerlar 0 ta", lekin "jami 90 000").
       expect(financeClient.send).toHaveBeenCalledWith(
         { cmd: 'finance.cashbox.financial_balance' },
-        {},
+        { include_party_lists: true },
       );
       // Filiallar ro'yxatidan o'z hisobini QILMAYDI (HQ tashlab yuborilardi).
       expect(branchClient.send).not.toHaveBeenCalled();

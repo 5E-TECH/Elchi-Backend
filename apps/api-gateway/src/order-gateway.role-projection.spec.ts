@@ -522,7 +522,16 @@ describe("kH2zZsz3 — QR, ro'yxat va skan yo'llari", () => {
       user('26', ['courier']),
     );
 
-    expectCourierView(res.data.allOrdersByPostId[0]);
+    const enriched = res.data.allOrdersByPostId[0];
+    for (const key of COURIER_SECRET_KEYS) {
+      expect(enriched).not.toHaveProperty(key);
+    }
+    expect(enriched.market).toEqual({
+      id: '16',
+      name: 'TEST E2E Market',
+      phone_number: '+998887000701',
+    });
+    expect(enriched.courier_tariff).toBe(15000);
     expect(res.data.centerOrders.centerOrdersTotalPrice).toBe(100000);
   });
 });

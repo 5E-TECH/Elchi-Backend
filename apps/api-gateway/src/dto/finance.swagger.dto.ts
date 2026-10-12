@@ -638,6 +638,8 @@ export class RecordFinancialBalanceRequestDto {
   })
   @Type(() => Number)
   @IsNumber()
+  @Min(-1e15)
+  @Max(1e15)
   amount!: number;
 
   @ApiProperty({

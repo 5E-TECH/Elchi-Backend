@@ -72,7 +72,7 @@ export class SmsProviderAccountsService {
       senderProfile,
       login: this.cipher.decrypt(row.login_enc),
       password: this.cipher.decrypt(row.password_enc),
-      sender: row.sender,
+      sender: this.cipher.decrypt(row.sender_enc),
     };
   }
 
@@ -110,7 +110,7 @@ export class SmsProviderAccountsService {
       sender_profile: input.sender_profile as SmsSenderProfile,
       login_enc: this.cipher.encrypt(login),
       password_enc: this.cipher.encrypt(password),
-      sender,
+      sender_enc: this.cipher.encrypt(sender),
       is_active: input.is_active ?? true,
       updated_by: userId,
     });
@@ -143,9 +143,17 @@ export class SmsProviderAccountsService {
       provider: row.provider,
       sender_profile: row.sender_profile,
       login: mask(login),
-      sender: row.sender,
+      sender: this.publicSender(row),
       is_active: row.is_active,
       updated_at: row.updated_at,
     };
+  }
+
+  private publicSender(row: SmsProviderAccount): string {
+    try {
+      return this.cipher.decrypt(row.sender_enc);
+    } catch {
+      return '****';
+    }
   }
 }

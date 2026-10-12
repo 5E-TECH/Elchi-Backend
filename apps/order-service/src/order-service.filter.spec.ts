@@ -11,8 +11,11 @@ describe('OrderServiceService filters', () => {
       leftJoinAndSelect: jest.fn().mockReturnThis(),
       where: jest.fn().mockReturnThis(),
       andWhere: jest.fn().mockReturnThis(),
+      setParameters: jest.fn().mockReturnThis(),
+      setParameter: jest.fn().mockReturnThis(),
       groupBy: jest.fn().mockReturnThis(),
       orderBy: jest.fn().mockReturnThis(),
+      addOrderBy: jest.fn().mockReturnThis(),
       skip: jest.fn().mockReturnThis(),
       take: jest.fn().mockReturnThis(),
       // `findAll` hisobni join'lardan OLDIN nusxalaydi (Scale 1) — mock ham
@@ -304,7 +307,115 @@ describe('OrderServiceService filters', () => {
     );
   });
 
-  it('returns all NEW market orders without pagination', async () => {
+  it('caps disable_pagination at 5000 rows and reports truncation', async () => {
+    const { service, qb } = setup();
+    qb.getCount.mockResolvedValue(5001);
+
+    const result = await service.findAll({ disable_pagination: true });
+
+    expect(qb.take).toHaveBeenCalledWith(5000);
+    expect(qb.skip).not.toHaveBeenCalled();
+    expect(result).toEqual({ data: [], total: 5001, truncated: true });
+  });
+
+  it('passes all=true through every dashboard SQL aggregate (uN1tjjGu)', async () => {
+    const { analytics, qb } = setup();
+    const from = '1970-01-01';
+    const to = '2026-10-12';
+    const rangeSpy = jest.spyOn(analytics as any, 'analyticsDateRange');
+
+    await analytics.getMarketStats(from, to, undefined, true);
+    await analytics.getCourierStats(from, to, undefined, true);
+    await analytics.getTopMarkets(10, undefined, from, to, 1, true, true);
+    await analytics.getTopCouriers(10, undefined, from, to, 1, true, true);
+    await analytics.getTopBranches(10, undefined, from, to, 1, true, true);
+    await analytics.getMarketStat('4', from, to, true);
+
+    expect(rangeSpy).toHaveBeenCalledTimes(6);
+    for (const call of rangeSpy.mock.calls) {
+      expect(call).toEqual([from, to, true]);
+    }
+    expect(
+      qb.andWhere.mock.calls.some(([, params]) =>
+        Object.values(params ?? {}).some(
+          (value) =>
+            value instanceof Date &&
+            value.toISOString() === '1969-12-31T19:00:00.000Z',
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it('propagates truncation through both enriched list responses', async () => {
+    const { service, qb } = setup();
+    qb.getCount.mockResolvedValue(5001);
+
+    const all = await service.findAllEnriched({ disable_pagination: true });
+    const market = await service.findNewByMarketEnriched('16');
+
+    expect(all.truncated).toBe(true);
+    expect(market.truncated).toBe(true);
+  });
+
+  it('uses one OR scope for courier, holder and post history with stable paging', async () => {
+    const { service, qb } = setup();
+
+    await service.findAll({
+      status: ['cancelled'],
+      courier_ids: ['77'],
+      holder_courier_ids: ['77'],
+      courier_scope: 'any',
+      courier_post_history: true,
+      courier_cancelled_tab: true,
+      page: 2,
+      limit: 10,
+    });
+
+    const scope = qb.andWhere.mock.calls.find(
+      ([value]) =>
+        typeof value === 'object' &&
+        value !== null &&
+        value.whereFactory?.toString().includes('courier_posts'),
+    )?.[0];
+    const nested = {
+      where: jest.fn().mockReturnThis(),
+      orWhere: jest.fn().mockReturnThis(),
+    };
+    scope?.whereFactory?.(nested);
+    expect(nested.where).toHaveBeenCalledWith(
+      'order.courier_id IN (:...courier_ids)',
+      { courier_ids: ['77'] },
+    );
+    expect(nested.orWhere).toHaveBeenCalledWith(
+      'order.holder_courier_id IN (:...holder_courier_ids)',
+      { holder_courier_ids: ['77'] },
+    );
+    expect(nested.orWhere).toHaveBeenCalledWith(
+      expect.stringContaining('"logistics_schema"."posts" courier_posts'),
+      { courier_ids: ['77'] },
+    );
+    const holderRule = qb.andWhere.mock.calls
+      .map(([value]) => value)
+      .filter((value) => value?.whereFactory)[1];
+    const holderNested = {
+      where: jest.fn().mockReturnThis(),
+      orWhere: jest.fn().mockReturnThis(),
+    };
+    holderRule.whereFactory(holderNested);
+    expect(holderNested.where).toHaveBeenCalledWith(
+      expect.stringContaining('order.holder_type IS NULL AND'),
+      expect.anything(),
+    );
+    expect(holderNested.orWhere).toHaveBeenCalledWith(
+      expect.stringContaining("NOT IN ('COURIER', 'BRANCH', 'HQ') AND"),
+      expect.anything(),
+    );
+    expect(qb.skip).toHaveBeenCalledWith(10);
+    expect(qb.take).toHaveBeenCalledWith(10);
+    expect(qb.addOrderBy).toHaveBeenCalledWith('order.id', 'DESC');
+  });
+
+  it('caps NEW market orders requested without pagination', async () => {
     const { service, qb } = setup();
 
     const result = await service.findNewOrdersByMarket('16');
@@ -317,8 +428,8 @@ describe('OrderServiceService filters', () => {
     });
     expect(qb.andWhere).toHaveBeenCalledWith('order.current_batch_id IS NULL');
     expect(qb.skip).not.toHaveBeenCalled();
-    expect(qb.take).not.toHaveBeenCalled();
-    expect(result).toEqual({ data: [], total: 0 });
+    expect(qb.take).toHaveBeenCalledWith(5000);
+    expect(result).toEqual({ data: [], total: 0, truncated: false });
   });
 
   it('groups only unassigned CANCELLED orders held by the requested scope', async () => {
@@ -767,9 +878,8 @@ describe('OrderServiceService filters', () => {
   // the span so a pathologically-wide range can't pull the whole orders table.
   describe('analytics date-span cap', () => {
     const DAY = 24 * 60 * 60 * 1000;
-    // Audit C3: oyna 768 kundan 180 kunga tushirildi — 768 kun kuniga 1 000
-    // buyurtmada ~770 ming qatorni JS xotirasiga yuklash degani edi.
-    const MAX_SPAN = 180 * DAY;
+    // To'liq kalendar yil sig'adi, lekin cheksiz oraliq hanuz kesiladi.
+    const MAX_SPAN = 366 * DAY;
 
     const revenueSpanMs = (qb: any): number => {
       const call = qb.andWhere.mock.calls.find(

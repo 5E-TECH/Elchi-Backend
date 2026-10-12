@@ -165,6 +165,7 @@ export class SmsCampaignService {
       const result = await this.outbox.enqueue(
         plan.allowed.map((recipient) => ({
           to: recipient.phone,
+          customerId: recipient.customer_id,
           text: plan.text,
           messageClass: plan.messageClass,
           templateCode: input.template_code ?? null,

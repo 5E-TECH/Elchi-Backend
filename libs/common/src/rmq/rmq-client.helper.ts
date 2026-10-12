@@ -9,6 +9,8 @@ export const RMQ_FIRE_AND_FORGET_TIMEOUT = 1500;
 
 export interface RmqSendOptions {
   timeoutMs?: number;
+  /** All attempts and retry delays combined must finish within this budget. */
+  deadlineMs?: number;
   retries?: number;
   retryBaseDelayMs?: number;
   /** Set false to skip auto-injecting request_id (e.g. for read-only queries). Default: true. */
@@ -105,19 +107,22 @@ export async function rmqSend<T = unknown>(
   const payload =
     options?.attachRequestId === false ? data : withRequestId(data);
 
+  const request = client.send<T>(pattern, payload).pipe(
+    timeout(ms),
+    retry({
+      count: maxRetries,
+      delay: (error, retryCount) => {
+        if (error instanceof RpcException) {
+          return throwError(() => error);
+        }
+        const delay = Math.min(baseDelay * Math.pow(2, retryCount - 1), 2000);
+        return timer(delay);
+      },
+    }),
+  );
   return firstValueFrom(
-    client.send<T>(pattern, payload).pipe(
-      timeout(ms),
-      retry({
-        count: maxRetries,
-        delay: (error, retryCount) => {
-          if (error instanceof RpcException) {
-            return throwError(() => error);
-          }
-          const delay = Math.min(baseDelay * Math.pow(2, retryCount - 1), 2000);
-          return timer(delay);
-        },
-      }),
-    ),
+    options?.deadlineMs
+      ? request.pipe(timeout({ first: options.deadlineMs }))
+      : request,
   );
 }

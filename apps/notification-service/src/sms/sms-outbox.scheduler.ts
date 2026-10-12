@@ -9,6 +9,7 @@ import { CronJob } from 'cron';
 import { DataSource } from 'typeorm';
 import { captureException } from '@app/common';
 import { SmsConfigService } from './sms-config.service';
+import { SmsConsentService } from './sms-consent.service';
 import { SmsOutboxService } from './sms-outbox.service';
 import { SmsProviderRegistry } from './sms-provider.registry';
 import { maskPhone } from './sms-phone.util';
@@ -45,6 +46,7 @@ export class SmsOutboxScheduler implements OnModuleInit, OnModuleDestroy {
     private readonly registry: SmsProviderRegistry,
     private readonly scheduler: SchedulerRegistry,
     private readonly dataSource: DataSource,
+    private readonly consent: SmsConsentService,
   ) {}
 
   onModuleInit(): void {
@@ -141,6 +143,20 @@ export class SmsOutboxScheduler implements OnModuleInit, OnModuleDestroy {
         continue;
       }
       try {
+        if (row.message_class === 'promo') {
+          const { blocked } = await this.consent.partition([
+            { phone: row.to_phone, customer_id: row.customer_id },
+          ]);
+          if (blocked.length) {
+            await this.outbox.markFailed(
+              row,
+              "Reklama uchun rozilik yo'q",
+              false,
+            );
+            failed += 1;
+            continue;
+          }
+        }
         const adapter = await this.registry.resolve(row.sender_profile);
         if (!adapter) {
           throw new SmsProviderError(
