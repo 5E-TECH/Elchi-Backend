@@ -1,4 +1,4 @@
-import { normalizeUzPhone } from './';
+import { normalizeUzPhone, parseUzPhoneSearch, uzPhoneDigitsLikeSql } from './';
 
 /**
  * I73soTpf, 32fNx0Ci. Telefon normalizatsiyasi — HECH QACHON "tuzatmaydi":
@@ -72,5 +72,64 @@ describe('normalizeUzPhone', () => {
     expect(normalizeUzPhone(undefined)).toBeNull();
     expect(normalizeUzPhone({ phone: '901234567' })).toBeNull();
     expect(normalizeUzPhone(['901234567'])).toBeNull();
+  });
+});
+
+/**
+ * zfPNDCCr: qidiruv matni telefonga o'xshasa — saqlangan telefonning
+ * raqamlari ichidan izlanadigan kalit (prod 2-tur: global qidiruv
+ * '0330991009' / '+998 33 099 10 09' bilan 0 natija berardi).
+ */
+describe('parseUzPhoneSearch (zfPNDCCr)', () => {
+  it.each([
+    '0330991009',
+    '+998 33 099 10 09',
+    '330991009',
+    '998330991009',
+    '+998330991009',
+    '+998 (33) 099-10-09',
+    ' 33 099 10 09 ',
+  ])("⭐ %p → kanonik '+998330991009', milliy '330991009'", (input) => {
+    expect(parseUzPhoneSearch(input)).toEqual({
+      canonical: '+998330991009',
+      digits: '330991009',
+    });
+  });
+
+  it('qisman raqam (7+ raqam) — kiritilgan raqamlar bo`yicha', () => {
+    expect(parseUzPhoneSearch('099-10-09')).toEqual({
+      canonical: null,
+      digits: '0991009',
+    });
+    expect(parseUzPhoneSearch('+1 202 555 0100')).toEqual({
+      canonical: null,
+      digits: '12025550100',
+    });
+  });
+
+  it.each([
+    'Ali',
+    'Ali 90 123 45 67',
+    'abc330991009',
+    '330 99',
+    '123456',
+    '90.123.45.67',
+    '1234567890123456',
+    '',
+    '   ',
+    null,
+    undefined,
+    330991009,
+  ])('%p → telefon qidiruvi EMAS (null)', (input) => {
+    expect(parseUzPhoneSearch(input)).toBeNull();
+  });
+
+  it('SQL: ustun raqamlari ichidan parametr bilan LIKE', () => {
+    expect(uzPhoneDigitsLikeSql('u.phone_number')).toBe(
+      "regexp_replace(u.phone_number, '[^0-9]', '', 'g') LIKE :phoneDigits",
+    );
+    expect(uzPhoneDigitsLikeSql("doc.metadata->>'phone_number'", 'p')).toBe(
+      "regexp_replace(doc.metadata->>'phone_number', '[^0-9]', '', 'g') LIKE :p",
+    );
   });
 });

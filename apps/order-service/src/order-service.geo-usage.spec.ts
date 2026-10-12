@@ -7,23 +7,43 @@ import { OrderServiceService } from './order-service.service';
  */
 type Row = { id: string; region_id: string | null };
 
-function make(locked: Row[] = []) {
+type Counts = { live: string | null; deleted: string | null } | undefined;
+
+function make(
+  locked: Row[] = [],
+  counts: { orders?: Counts; batches?: Counts } = {},
+) {
   const svc: any = Object.create(OrderServiceService.prototype);
-  // countGeoUsage — buyurtmalar.
+  // countGeoUsage — buyurtmalar: BITTA so'rovda tirik + o'chirilgan
+  // (`COUNT(*) FILTER`, pg bigint matn bo'lib keladi).
   const countQb: any = {
+    withDeleted: jest.fn(() => countQb),
+    select: jest.fn(() => countQb),
+    addSelect: jest.fn(() => countQb),
     where: jest.fn(() => countQb),
-    getCount: jest.fn(() => Promise.resolve(5)),
+    getRawOne: jest.fn(() =>
+      Promise.resolve(
+        'orders' in counts ? counts.orders : { live: '5', deleted: '0' },
+      ),
+    ),
   };
   svc.orderRepo = { createQueryBuilder: jest.fn(() => countQb) };
   // countGeoUsage — filiallararo jo'natmalar (viloyat bo'yicha).
   const batchQb: any = {
+    select: jest.fn(() => batchQb),
+    addSelect: jest.fn(() => batchQb),
     where: jest.fn(() => batchQb),
-    getCount: jest.fn(() => Promise.resolve(2)),
+    getRawOne: jest.fn(() =>
+      Promise.resolve(
+        'batches' in counts ? counts.batches : { live: '2', deleted: '0' },
+      ),
+    ),
   };
   svc.transferBatchRepo = { createQueryBuilder: jest.fn(() => batchQb) };
 
   // reassignDistrict — tranzaksiya ichidagi SELECT ... FOR UPDATE va UPDATE'lar.
   const selectQb: any = {
+    withDeleted: jest.fn(() => selectQb),
     select: jest.fn(() => selectQb),
     addSelect: jest.fn(() => selectQb),
     where: jest.fn(() => selectQb),
@@ -95,19 +115,57 @@ const statusOf = async (p: Promise<unknown>): Promise<number | undefined> => {
 };
 
 describe('OrderServiceService.countGeoUsage (oNAE3LW9)', () => {
-  it('district_id bo`yicha sanaydi (o`chirilganlar ham — is_deleted filtri yo`q); jo`natma sanalmaydi', async () => {
+  it('district_id bo`yicha sanaydi; jo`natma sanalmaydi', async () => {
     const { svc, countQb, batchQb } = make();
     const res = await svc.countGeoUsage({ district_id: '173' });
     expect(countQb.where).toHaveBeenCalledWith('o.district_id = :districtId', {
       districtId: '173',
     });
     expect(res.data.orders).toBe(5);
+    expect(res.data.deleted_orders).toBe(0);
     expect(res.data.transfer_batches).toBe(0);
-    expect(batchQb.getCount).not.toHaveBeenCalled();
+    expect(res.data.deleted_transfer_batches).toBe(0);
+    expect(batchQb.getRawOne).not.toHaveBeenCalled();
   });
 
-  it('region_id bo`yicha: buyurtmalar + branch_transfer_batches.target_region_id', async () => {
-    const { svc, countQb, batchQb } = make();
+  /**
+   * oNAE3LW9 (2026-10-09 prod, 2-tur): o'chirilgan TEST buyurtma tumanni
+   * "1 ta buyurtma bor" deb band qilib turardi. `orders` — faqat tiriklar
+   * (`deleteOrder` faqat `is_deleted` ni, qisman sotuvni qaytarish
+   * `deleted_at` ni ham qo'yadi — ikkalasi ham chiqariladi); o'chirilganlar
+   * `deleted_orders` da (birlashtirish ularni ham ko'chiradi).
+   */
+  it('⭐ himoya faqat O`CHIRILMAGAN buyurtmalarni sanaydi; o`chirilganlar alohida (bitta so`rov)', async () => {
+    const { svc, countQb } = make([], {
+      orders: { live: '0', deleted: '1' },
+    });
+    const res = await svc.countGeoUsage({ district_id: '187' });
+    expect(res.data).toEqual({
+      district_id: '187',
+      region_id: null,
+      orders: 0,
+      deleted_orders: 1,
+      transfer_batches: 0,
+      deleted_transfer_batches: 0,
+    });
+    // `deleted_at` lilar TypeORM avto-filtridan chiqarilmasin — ular ham sanaladi.
+    expect(countQb.withDeleted).toHaveBeenCalled();
+    const live = 'o.is_deleted = false AND o.deleted_at IS NULL';
+    expect(countQb.select).toHaveBeenCalledWith(
+      `COUNT(*) FILTER (WHERE ${live})`,
+      'live',
+    );
+    expect(countQb.addSelect).toHaveBeenCalledWith(
+      `COUNT(*) FILTER (WHERE NOT (${live}))`,
+      'deleted',
+    );
+  });
+
+  it('region_id bo`yicha: buyurtmalar + branch_transfer_batches.target_region_id (o`chirilgan jo`natma alohida)', async () => {
+    const { svc, countQb, batchQb } = make([], {
+      orders: { live: '5', deleted: '2' },
+      batches: { live: '2', deleted: '1' },
+    });
     const res = await svc.countGeoUsage({ region_id: '3' });
     expect(countQb.where).toHaveBeenCalledWith('o.region_id = :regionId', {
       regionId: '3',
@@ -116,8 +174,30 @@ describe('OrderServiceService.countGeoUsage (oNAE3LW9)', () => {
       'b.target_region_id = :regionId',
       { regionId: '3' },
     );
+    expect(batchQb.select).toHaveBeenCalledWith(
+      'COUNT(*) FILTER (WHERE b.is_deleted = false)',
+      'live',
+    );
     expect(res.data).toEqual(
-      expect.objectContaining({ orders: 5, transfer_batches: 2 }),
+      expect.objectContaining({
+        orders: 5,
+        deleted_orders: 2,
+        transfer_batches: 2,
+        deleted_transfer_batches: 1,
+      }),
+    );
+  });
+
+  it('getRawOne bo`sh qaytarsa — 0 (NaN emas)', async () => {
+    const { svc } = make([], { orders: undefined, batches: undefined });
+    const res = await svc.countGeoUsage({ region_id: '3' });
+    expect(res.data).toEqual(
+      expect.objectContaining({
+        orders: 0,
+        deleted_orders: 0,
+        transfer_batches: 0,
+        deleted_transfer_batches: 0,
+      }),
     );
   });
 
@@ -145,6 +225,9 @@ describe('OrderServiceService.reassignDistrict (oNAE3LW9 TC5)', () => {
       from: '173',
     });
     expect(selectQb.andWhere).not.toHaveBeenCalled();
+    // oNAE3LW9 (prod 2-tur): o'chirilganlar (`deleted_at` lilar ham) ko'chadi —
+    // A o'chgach mavjud bo'lmagan district_id ga ishora qilib qolmasin.
+    expect(selectQb.withDeleted).toHaveBeenCalled();
     expect(selectQb.setLock).toHaveBeenCalledWith('pessimistic_write');
     expect(updates).toEqual([
       {

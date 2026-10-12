@@ -2,6 +2,7 @@ import { Injectable } from '@nestjs/common';
 import { RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { parseUzPhoneSearch, uzPhoneDigitsLikeSql } from '@app/common';
 import { SearchDocument } from './entities/search-document.entity';
 
 interface UpsertPayload {
@@ -149,9 +150,27 @@ export class SearchServiceService {
     }
 
     if (q) {
+      // zfPNDCCr: header global qidiruvi (GET /search?q=) telefonni
+      // normallashtirmasdi — '+998330991009' mijoz '0330991009' yoki
+      // '+998 33 099 10 09' bilan 0 natija berardi. Matn telefonga o'xshasa
+      // milliy 9 raqam (qisman raqamda — kiritilgan raqamlar) bo'yicha ham
+      // izlanadi: content ichida AYNAN (masalan buyurtma izohidagi raqam) va
+      // `metadata.phone_number` ning FAQAT RAQAMLARI ichida — eski
+      // (normallashtirilmagan) indeks yozuvlari ham topiladi, qayta
+      // indekslash shart emas. Harfli matn ("Ali") — avvalgidek.
+      const phone = parseUzPhoneSearch(q);
+      const phoneSql = phone
+        ? ` OR doc.content ILIKE :phoneDigits OR ${uzPhoneDigitsLikeSql(
+            "doc.metadata->>'phone_number'",
+          )}`
+        : '';
       qb.andWhere(
-        '(doc.title ILIKE :qLike OR doc.content ILIKE :qLike OR :qRaw = ANY(doc.tags))',
-        { qLike: `%${q}%`, qRaw: q },
+        `(doc.title ILIKE :qLike OR doc.content ILIKE :qLike OR :qRaw = ANY(doc.tags)${phoneSql})`,
+        {
+          qLike: `%${q}%`,
+          qRaw: q,
+          ...(phone ? { phoneDigits: `%${phone.digits}%` } : {}),
+        },
       );
     }
 

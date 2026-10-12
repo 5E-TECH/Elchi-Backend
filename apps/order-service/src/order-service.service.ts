@@ -153,6 +153,19 @@ export interface GeoReassignInput {
 /** oNAE3LW9 — bigint ID (musbat butun son, ko'pi bilan 19 xona). */
 const GEO_ID_PATTERN = /^\d{1,19}$/;
 
+/**
+ * oNAE3LW9 (prod 2-tur) — O'CHIRILMAGAN buyurtma: o'chirishning ikkala yo'li
+ * ham hisobga olinadi — `deleteOrder` faqat `is_deleted` ni qo'yadi, qisman
+ * sotuvni qaytarish esa `deleted_at` ni ham (`order-lifecycle`).
+ */
+const GEO_LIVE_ORDER = 'o.is_deleted = false AND o.deleted_at IS NULL';
+
+/** oNAE3LW9 — `COUNT(*) FILTER` natijasi (pg bigint — matn bo'lib keladi). */
+type GeoCountRow = {
+  live: string | number | null;
+  deleted: string | number | null;
+};
+
 const geoBadRequest = (message: string) =>
   new RpcException(errorRes(message, 400));
 
@@ -1218,8 +1231,19 @@ export class OrderServiceService {
    * oNAE3LW9 — hududni o'chirishdan OLDIN: shu tuman/viloyatga ishora qilgan
    * buyurtmalar soni. Buyurtmalar boshqa sxemada (FK yo'q) — ilgari tuman
    * o'chsa `order.district_id` mavjud bo'lmagan ID ga ishora qilib qolardi va
-   * hudud kesimidagi hisobotlar buzilardi. O'chirilgan (is_deleted) buyurtmalar
-   * ham sanaladi: ular ham hisobotlarda va tarixda ko'rinadi.
+   * hudud kesimidagi hisobotlar buzilardi.
+   *
+   * oNAE3LW9 (2026-10-09 prod, 2-tur): `orders` — faqat O'CHIRILMAGAN
+   * buyurtmalar (`is_deleted = false` VA `deleted_at IS NULL`), himoya faqat
+   * shularga qaraydi. Ilgari o'chirilganlar ham sanalardi: TEST buyurtma
+   * o'chirilgandan keyin ham tuman "1 ta buyurtma bor" deb 400 qaytarardi,
+   * vaholanki o'chirilgan buyurtmani foydalanuvchi ko'rmaydi (404), ko'chira
+   * olmaydi, hisobotlar ham uni sanamaydi (`order-analytics` —
+   * `isDeleted = false`) — tumanni o'chirishning iloji qolmasdi.
+   * O'chirilganlar alohida `deleted_orders` da qaytadi: logistics ularni
+   * birlashtirishda ham ko'chiradi (`reassignDistrict`) va tasdiqlashda
+   * (A bo'sh, B = eski B + ko'chgan) hisobga oladi. Ikkala son BITTA
+   * so'rovda — bir xil holat ustida — olinadi.
    */
   async countGeoUsage(input: { district_id?: string; region_id?: string }) {
     const districtId = String(input?.district_id ?? '').trim();
@@ -1227,30 +1251,41 @@ export class OrderServiceService {
     if (!districtId && !regionId) {
       this.badRequest('district_id yoki region_id majburiy');
     }
-    const qb = this.orderRepo.createQueryBuilder('o');
+    // `withDeleted` — `deleted_at` qo'yilgan qatorlar TypeORM tomonidan
+    // avtomatik chiqarib tashlanmasin: ular `deleted_orders` da sanaladi.
+    const qb = this.orderRepo
+      .createQueryBuilder('o')
+      .withDeleted()
+      .select(`COUNT(*) FILTER (WHERE ${GEO_LIVE_ORDER})`, 'live')
+      .addSelect(`COUNT(*) FILTER (WHERE NOT (${GEO_LIVE_ORDER}))`, 'deleted');
     if (districtId) {
       qb.where('o.district_id = :districtId', { districtId });
     } else {
       qb.where('o.region_id = :regionId', { regionId });
     }
-    const orders = await qb.getCount();
+    const orderCounts = await qb.getRawOne<GeoCountRow>();
     // oNAE3LW9: filiallararo jo'natmalar ham viloyatga bog'langan
     // (`branch_transfer_batches.target_region_id`, shu sxemada, FK yo'q) —
     // viloyat o'chsa ular ham mavjud bo'lmagan ID ga ishora qilib qolardi.
     // Tumanga bog'lanmagan (district ustuni yo'q) — tuman so'rovida 0.
-    const transferBatches =
+    // O'chirilgan (is_deleted) jo'natmalar himoyada sanalmaydi — alohida.
+    const batchCounts: GeoCountRow | undefined =
       !districtId && regionId
         ? await this.transferBatchRepo
             .createQueryBuilder('b')
+            .select('COUNT(*) FILTER (WHERE b.is_deleted = false)', 'live')
+            .addSelect('COUNT(*) FILTER (WHERE b.is_deleted = true)', 'deleted')
             .where('b.target_region_id = :regionId', { regionId })
-            .getCount()
-        : 0;
+            .getRawOne<GeoCountRow>()
+        : undefined;
     return successRes(
       {
         district_id: districtId || null,
         region_id: regionId || null,
-        orders,
-        transfer_batches: transferBatches,
+        orders: Number(orderCounts?.live ?? 0),
+        deleted_orders: Number(orderCounts?.deleted ?? 0),
+        transfer_batches: Number(batchCounts?.live ?? 0),
+        deleted_transfer_batches: Number(batchCounts?.deleted ?? 0),
       },
       200,
       'Geo usage',
@@ -1259,7 +1294,9 @@ export class OrderServiceService {
 
   /**
    * oNAE3LW9 — tumanlarni birlashtirish (logistics `mergeDistricts`):
-   * buyurtmalar A → B tumaniga (va B ning viloyatiga).
+   * buyurtmalar A → B tumaniga (va B ning viloyatiga). O'chirilganlari ham
+   * (`is_deleted` / `deleted_at`) — `countGeoUsage` ning `orders` +
+   * `deleted_orders` jamiga mos (oNAE3LW9 prod 2-tur).
    *
    * ID rejimi (`ids`): faqat shu qatorlar va faqat hali A da turganlari —
    * logistics KOMPENSATSIYASI (B → A); `restore_regions` bilan `region_id`
@@ -1278,9 +1315,16 @@ export class OrderServiceService {
     try {
       rows = await this.orderRepo.manager.transaction(async (manager) => {
         if (req.ids && !req.ids.length) return [];
+        // oNAE3LW9 (prod 2-tur): O'CHIRILGAN buyurtmalar ham ko'chadi — A
+        // o'chgandan keyin ular mavjud bo'lmagan `district_id` ga ishora
+        // qilib qolmasin. `is_deleted` lilar avvaldan ko'chardi, lekin
+        // `deleted_at` lilarni TypeORM SELECT dan avtomatik chiqarardi —
+        // `withDeleted` bo'lmasa ular A da yetim qolardi (logistics sanog'i
+        // ham ularni ko'rmagani uchun tekshiruv buni ushlamasdi).
         const select = manager
           .getRepository(Order)
           .createQueryBuilder('t')
+          .withDeleted()
           .select('t.id', 'id')
           .addSelect('t.region_id', 'region_id')
           .where('t.district_id = :from', { from: req.from });

@@ -1,7 +1,15 @@
 import { Inject, Injectable, Logger, OnModuleInit } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { ConfigService } from '@nestjs/config';
-import { Brackets, ILike, In, QueryFailedError, Repository } from 'typeorm';
+import {
+  Brackets,
+  ILike,
+  In,
+  QueryFailedError,
+  Raw,
+  Repository,
+  WhereExpressionBuilder,
+} from 'typeorm';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { lastValueFrom, timeout } from 'rxjs';
 import { randomBytes } from 'crypto';
@@ -29,9 +37,11 @@ import {
   Roles,
   Status,
   normalizeUzPhone,
+  parseUzPhoneSearch,
   rmqSend,
+  uzPhoneDigitsLikeSql,
 } from '@app/common';
-import type { ActivityLogQuery } from '@app/common';
+import type { ActivityLogQuery, UzPhoneSearch } from '@app/common';
 import {
   catchError,
   errorRes,
@@ -918,6 +928,24 @@ export class UserServiceService implements OnModuleInit {
       limit,
       skip: (page - 1) * limit,
     };
+  }
+
+  /**
+   * zfPNDCCr: qidiruv matni telefonga o'xshasa (`parseUzPhoneSearch`),
+   * `<alias>.phone_number` ning FAQAT RAQAMLARI ichidan milliy 9 raqam
+   * (qisman raqamda — kiritilgan raqamlar) izlanadi: "0330991009" yoki
+   * "+998 33 099 10 09" bilan "+998330991009" (va eski "998330991009",
+   * "+998 33 099 10 09") topiladi. Telefon bo'lmasa hech narsa qo'shilmaydi.
+   */
+  private orWherePhoneDigits(
+    q: WhereExpressionBuilder,
+    alias: string,
+    phoneSearch: UzPhoneSearch | null,
+  ) {
+    if (!phoneSearch) return;
+    q.orWhere(uzPhoneDigitsLikeSql(`${alias}.phone_number`), {
+      phoneDigits: `%${phoneSearch.digits}%`,
+    });
   }
 
   private async ensurePhoneUnique(phone: string, exceptId?: string) {
@@ -1996,6 +2024,8 @@ export class UserServiceService implements OnModuleInit {
               search: `%${search}%`,
             })
             .orWhere('admin.username ILIKE :search', { search: `%${search}%` });
+          // zfPNDCCr: telefon formatidan qat'i nazar.
+          this.orWherePhoneDigits(nested, 'admin', parseUzPhoneSearch(search));
         }),
       );
     }
@@ -2072,6 +2102,12 @@ export class UserServiceService implements OnModuleInit {
             .orWhere('courier.username ILIKE :search', {
               search: `%${search}%`,
             });
+          // zfPNDCCr: telefon formatidan qat'i nazar.
+          this.orWherePhoneDigits(
+            nested,
+            'courier',
+            parseUzPhoneSearch(search),
+          );
         }),
       );
     }
@@ -2645,8 +2681,15 @@ export class UserServiceService implements OnModuleInit {
 
   /**
    * oNAE3LW9 — hududni o'chirishdan OLDIN: shu tuman/viloyatga bog'langan
-   * foydalanuvchilar (mijozlar, kuryerlar, marketlar) soni. O'chirilganlari
-   * ham sanaladi — ular buyurtma tarixida ko'rinadi.
+   * foydalanuvchilar (mijozlar, kuryerlar, marketlar) soni.
+   *
+   * oNAE3LW9 (prod 2-tur): `users` / `by_role` — faqat O'CHIRILMAGAN
+   * (`is_deleted = false`) foydalanuvchilar; himoya faqat shularga qaraydi.
+   * Ilgari o'chirilganlar ham sanalardi — ro'yxatlarda ko'rinmaydigan
+   * (o'chirilgan) kuryer/market tumanni o'chirishga to'sqinlik qilardi.
+   * O'chirilganlar alohida `deleted_users` da: logistics birlashtirishda
+   * ularni ham ko'chiradi (`reassignDistrict` filtrsiz) va tasdiqlashda
+   * hisobga oladi.
    */
   async countGeoUsage(input: { district_id?: string; region_id?: string }) {
     const districtId = String(input?.district_id ?? '').trim();
@@ -2659,22 +2702,35 @@ export class UserServiceService implements OnModuleInit {
     const rows = await this.users
       .createQueryBuilder('u')
       .select('u.role', 'role')
-      .addSelect('COUNT(*)', 'count')
+      .addSelect('COUNT(*) FILTER (WHERE u.is_deleted = false)', 'count')
+      .addSelect('COUNT(*) FILTER (WHERE u.is_deleted = true)', 'deleted')
       .where(
         districtId ? 'u.district_id = :districtId' : 'u.region_id = :regionId',
         districtId ? { districtId } : { regionId },
       )
       .groupBy('u.role')
-      .getRawMany<{ role: string; count: string }>();
+      .getRawMany<{
+        role: string;
+        count: string | null;
+        deleted?: string | null;
+      }>();
+    // Faqat tirik foydalanuvchisi bor rollar (o'chirilganlari faqat `deleted_users` da).
     const by_role = Object.fromEntries(
-      rows.map((r) => [String(r.role), Number(r.count ?? 0)]),
+      rows
+        .map((r) => [String(r.role), Number(r.count ?? 0)] as const)
+        .filter(([, count]) => count > 0),
     );
     const users = rows.reduce((sum, r) => sum + Number(r.count ?? 0), 0);
+    const deletedUsers = rows.reduce(
+      (sum, r) => sum + Number(r.deleted ?? 0),
+      0,
+    );
     return successRes(
       {
         district_id: districtId || null,
         region_id: regionId || null,
         users,
+        deleted_users: deletedUsers,
         by_role,
       },
       200,
@@ -3025,6 +3081,8 @@ export class UserServiceService implements OnModuleInit {
             .orWhere('market.username ILIKE :search', {
               search: `%${search}%`,
             });
+          // zfPNDCCr: telefon formatidan qat'i nazar.
+          this.orWherePhoneDigits(nested, 'market', parseUzPhoneSearch(search));
         }),
       );
     }
@@ -3163,10 +3221,14 @@ export class UserServiceService implements OnModuleInit {
       return { success: true, data: [] };
     }
 
-    // zfPNDCCr: qidiruv telefon bo'lsa ("0901234567", "+998 90 123 45 67"),
-    // milliy 9 raqam bo'yicha ham izlanadi — kanonik (+998XXXXXXXXX) va eski
-    // "998..."/"9 xona" yozuvlar topiladi. Ism qidiruviga ta'sir qilmaydi.
-    const searchPhone = normalizeUzPhone(search.trim());
+    // zfPNDCCr: qidiruv telefonga o'xshasa ("0901234567", "+998 90 123 45 67",
+    // "998901234567", "901234567"), saqlangan telefonning FAQAT RAQAMLARI
+    // ichidan milliy 9 raqam izlanadi — kanonik (+998XXXXXXXXX) ham, eski
+    // "998..."/"9 xona"/"+998 90 123 45 67" yozuvlar ham topiladi. Ism
+    // qidiruviga ta'sir qilmaydi (harfli matn telefon emas).
+    // Buyurtmalar ro'yxati qidiruvi (order-service `search`) ham shu RPC'dan
+    // o'tadi.
+    const phoneSearch = parseUzPhoneSearch(search);
     const qb = this.users
       .createQueryBuilder('u')
       .where('u.isDeleted = :isDeleted', { isDeleted: false })
@@ -3177,11 +3239,7 @@ export class UserServiceService implements OnModuleInit {
             'u.phone_number ILIKE :s',
             { s: `%${search.trim()}%` },
           );
-          if (searchPhone) {
-            q.orWhere('u.phone_number LIKE :national', {
-              national: `%${searchPhone.slice(4)}%`,
-            });
-          }
+          this.orWherePhoneDigits(q, 'u', phoneSearch);
         }),
       )
       // Barqaror tartib: limitdan oshganda qaysi mijozlar qaytishi tasodifiy
@@ -3499,10 +3557,22 @@ export class UserServiceService implements OnModuleInit {
       isDeleted: false,
       ...(status ? { status } : {}),
     };
+    // zfPNDCCr: telefonga o'xshash qidiruv — raqamlar ichidan (formatsiz).
+    const phoneSearch = parseUzPhoneSearch(search);
     const where = search
       ? [
           { ...base, name: ILike(`%${search}%`) },
           { ...base, phone_number: ILike(`%${search}%`) },
+          ...(phoneSearch
+            ? [
+                {
+                  ...base,
+                  phone_number: Raw((column) => uzPhoneDigitsLikeSql(column), {
+                    phoneDigits: `%${phoneSearch.digits}%`,
+                  }),
+                },
+              ]
+            : []),
         ]
       : base;
 

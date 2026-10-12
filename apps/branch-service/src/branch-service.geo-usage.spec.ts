@@ -55,11 +55,16 @@ const statusOf = async (p: Promise<unknown>): Promise<number | undefined> => {
 };
 
 describe('BranchServiceService geo usage / reassign (oNAE3LW9)', () => {
-  const make = (locked: Row[] = []) => {
+  const make = (
+    locked: Row[] = [],
+    counts: { live: string; deleted: string } = { live: '2', deleted: '0' },
+  ) => {
     const svc: any = Object.create(BranchServiceService.prototype);
     const qb: any = {
+      select: jest.fn(() => qb),
+      addSelect: jest.fn(() => qb),
       where: jest.fn(() => qb),
-      getCount: jest.fn(() => Promise.resolve(2)),
+      getRawOne: jest.fn(() => Promise.resolve(counts)),
     };
     svc.branchRepo = { createQueryBuilder: jest.fn(() => qb) };
     const tx = attachTx(svc.branchRepo, locked);
@@ -78,6 +83,25 @@ describe('BranchServiceService geo usage / reassign (oNAE3LW9)', () => {
       regionId: '3',
     });
     expect(await statusOf(svc.countGeoUsage({}))).toBe(400);
+  });
+
+  it('⭐ himoya faqat O`CHIRILMAGAN filiallarni sanaydi; o`chirilganlar `deleted_branches` da (oNAE3LW9 prod 2-tur)', async () => {
+    const { svc, qb } = make([], { live: '0', deleted: '1' });
+    const res = await svc.countGeoUsage({ district_id: '173' });
+    expect(qb.select).toHaveBeenCalledWith(
+      'COUNT(*) FILTER (WHERE b.is_deleted = false)',
+      'live',
+    );
+    expect(qb.addSelect).toHaveBeenCalledWith(
+      'COUNT(*) FILTER (WHERE b.is_deleted = true)',
+      'deleted',
+    );
+    expect(res.data).toEqual({
+      district_id: '173',
+      region_id: null,
+      branches: 0,
+      deleted_branches: 1,
+    });
   });
 
   it('⭐ reassign A → B: ko`chgan ID lar qaytadi; kompensatsiya rejimi aynan tiklaydi', async () => {

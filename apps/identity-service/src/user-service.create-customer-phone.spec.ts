@@ -214,9 +214,12 @@ describe('searchCustomers — telefon shakli bo`yicha qidiruv (zfPNDCCr)', () =>
     async (search) => {
       const { svc, clauses } = searchSvc();
       await svc.searchCustomers(search);
+      // Saqlangan qiymatning faqat raqamlari ichidan — eski
+      // "+998 90 123 45 67" yozuvlar ham topiladi (to'liq tekshiruv:
+      // user-service.phone-search.spec.ts).
       expect(clauses).toContainEqual([
-        'u.phone_number LIKE :national',
-        { national: '%901234567%' },
+        "regexp_replace(u.phone_number, '[^0-9]', '', 'g') LIKE :phoneDigits",
+        { phoneDigits: '%901234567%' },
       ]);
     },
   );

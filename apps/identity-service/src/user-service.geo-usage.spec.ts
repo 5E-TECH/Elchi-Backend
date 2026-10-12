@@ -78,7 +78,33 @@ describe('UserServiceService geo usage / reassign (oNAE3LW9)', () => {
     const { svc } = make();
     const res = await svc.countGeoUsage({ district_id: '173' });
     expect(res.data.users).toBe(8);
+    expect(res.data.deleted_users).toBe(0);
     expect(res.data.by_role).toEqual({ customer: 7, courier: 1 });
+  });
+
+  it('⭐ himoya faqat O`CHIRILMAGAN foydalanuvchilarni sanaydi; o`chirilganlar `deleted_users` da (oNAE3LW9 prod 2-tur)', async () => {
+    const { svc, qb } = make();
+    qb.getRawMany.mockResolvedValue([
+      { role: 'customer', count: '2', deleted: '1' },
+      // faqat o'chirilgan kuryeri bor rol `by_role` ga kirmaydi
+      { role: 'courier', count: '0', deleted: '3' },
+    ]);
+    const res = await svc.countGeoUsage({ district_id: '173' });
+    expect(qb.addSelect).toHaveBeenCalledWith(
+      'COUNT(*) FILTER (WHERE u.is_deleted = false)',
+      'count',
+    );
+    expect(qb.addSelect).toHaveBeenCalledWith(
+      'COUNT(*) FILTER (WHERE u.is_deleted = true)',
+      'deleted',
+    );
+    expect(res.data).toEqual({
+      district_id: '173',
+      region_id: null,
+      users: 2,
+      deleted_users: 4,
+      by_role: { customer: 2 },
+    });
   });
 
   it('⭐ reassign A → B: qulflab ko`chiradi, ko`chgan ID + eski viloyatlarni qaytaradi', async () => {
