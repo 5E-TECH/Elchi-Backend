@@ -277,4 +277,9 @@ export enum NotificationDeliveryStatus {
   NO_PROVIDER = 'no_provider',
   /** Kanal so'raldi, lekin nishon yo'q (masalan marketda Telegram guruhi yo'q). */
   NOT_ELIGIBLE = 'not_eligible',
+  /**
+   * (Jht84wGp TC3) Push so'raldi, lekin foydalanuvchida faol push obunasi
+   * yo'q — `not_eligible` ning push uchun aniq ko'rinishi.
+   */
+  NO_SUBSCRIPTION = 'no_subscription',
 }

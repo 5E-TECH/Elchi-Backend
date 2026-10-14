@@ -100,6 +100,31 @@ describe('SmsConsentService', () => {
     expect((await check(rows)).blocked).toHaveLength(1);
   });
 
+  it('(sVByLMnt) consent is looked up by the NORMALISED phone (+998XXXXXXXXX) whatever the input format', async () => {
+    repo.find.mockResolvedValue([row({})]);
+    const recipients = [
+      { phone: '998901111111', customer_id: '7' },
+      { phone: '90 111 11 11', customer_id: '7' },
+    ];
+    const { allowed, blocked } = await make().partition(recipients, now);
+    expect(repo.find.mock.calls[0][0].where.phone.value).toEqual([
+      '+998901111111',
+    ]);
+    // Asl obyektlar qaytadi (chaqiruvchi o'z maydonlarini yo'qotmaydi).
+    expect(allowed).toEqual(recipients);
+    expect(blocked).toEqual([]);
+  });
+
+  it('(sVByLMnt) a phone that does not normalise is BLOCKED and never queried', async () => {
+    const { allowed, blocked } = await make().partition(
+      [{ phone: '12345', customer_id: '7' }],
+      now,
+    );
+    expect(allowed).toEqual([]);
+    expect(blocked).toHaveLength(1);
+    expect(repo.find).not.toHaveBeenCalled();
+  });
+
   it('opt-out link: appended to the text, token round-trips, tampering is rejected', () => {
     const service = make();
     const text = service.appendOptOut('Chegirma 20%', '+998901111111');

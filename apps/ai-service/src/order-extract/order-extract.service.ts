@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { Injectable, Logger, Optional } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   AI_MAX_ITEMS_PER_ORDER,
@@ -11,7 +11,11 @@ import {
   type AiOrderExtractResponse,
   type ClaudeImageInput,
 } from '@app/common';
-import { ORDER_EXTRACT_SYSTEM } from '../prompts/order-extract.prompt';
+import { AiDraftService } from '../draft/ai-draft.service';
+import {
+  ORDER_EXTRACT_PROMPT_VERSION,
+  ORDER_EXTRACT_SYSTEM,
+} from '../prompts/order-extract.prompt';
 import { ORDER_EXTRACT_SCHEMA } from '../prompts/order-extract.schema';
 import { sanitizeExtraction } from './sanitize-extraction';
 
@@ -40,6 +44,9 @@ export class OrderExtractService {
   constructor(
     private readonly claude: ClaudeService,
     private readonly config: ConfigService,
+    // vncdmXOy: audit izi (ai_order_draft). Ixtiyoriy — berilmasa (spec)
+    // ekstraksiya o'zgarishsiz ishlaydi.
+    @Optional() private readonly drafts?: AiDraftService,
   ) {}
 
   private model(key: 'AI_ORDER_MODEL' | 'AI_ORDER_VISION_MODEL'): string {
@@ -79,13 +86,14 @@ export class OrderExtractService {
     // gap qo'shilmaydi (rasm yo'riqnomasi system-prompt'da, kesh buzilmaydi).
     const userText = masked;
 
+    const model = hasImages
+      ? this.model('AI_ORDER_VISION_MODEL')
+      : this.model('AI_ORDER_MODEL');
     const r = await this.claude.extractJson<{ orders: unknown[] }>({
       system: ORDER_EXTRACT_SYSTEM,
       userText,
       schema: ORDER_EXTRACT_SCHEMA,
-      model: hasImages
-        ? this.model('AI_ORDER_VISION_MODEL')
-        : this.model('AI_ORDER_MODEL'),
+      model,
       maxTokens: ORDER_EXTRACT_MAX_TOKENS,
       images,
       deadlineAt,
@@ -98,6 +106,28 @@ export class OrderExtractService {
         draftId: req.draft_id ?? null,
       },
     });
+
+    // vncdmXOy: audit izi — Claude'ga AYNAN ketgan maskalangan matn, asl
+    // matn+rasm xeshi (rasmning o'zi YO'Q), model, prompt versiyasi va LLM xom
+    // chiqishi ([TEL_n] tokenlari bilan, unmask'dan OLDIN). Xatosi javobni
+    // buzmaydi (recordExtraction reject qilmaydi); kutiladi — gateway
+    // attach_preview'i qatordan oldin kelmasin. AI chaqirilmagan holat
+    // ('disabled' — kalit yo'q / shift) yozilmaydi.
+    if (r.ok || r.attempts > 0) {
+      await this.drafts?.recordExtraction({
+        draftId: req.draft_id,
+        marketId: req.market_id,
+        userId: req.requester?.id,
+        traceId: req.trace_id,
+        maskedText: userText,
+        originalText: text,
+        imagesBase64: images.map((img) => img.dataBase64),
+        model: r.ok ? r.model : model,
+        promptVersion: ORDER_EXTRACT_PROMPT_VERSION,
+        outcome: r.ok ? 'ok' : r.reason,
+        rawExtraction: r.ok ? r.data : null,
+      });
+    }
 
     if (!r.ok) {
       if (r.reason === 'cap_exceeded') {

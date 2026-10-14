@@ -25,6 +25,11 @@ import type { PartlySellRequestItem } from './lifecycle/partly-sell-items';
 import { OrderHolderType, Order_source } from './entities/order.entity';
 import { AiPreviewService } from './ai/ai-preview.service';
 import type { AiResolvePreviewRequest } from './ai/ai-preview.types';
+import {
+  isAiStableRequestId,
+  runWithAiSignature,
+  sanitizeAiAuditMetadata,
+} from './ai/ai-create-dedupe';
 
 /**
  * ai-confirm (gateway) har buyurtma uchun DETERMINISTIK `request_id` yuboradi:
@@ -40,6 +45,16 @@ import type { AiResolvePreviewRequest } from './ai/ai-preview.types';
 const AI_DEDUPE_REQUEST_PREFIX = 'ai-dedupe:';
 const AI_DEDUPE_CREATE_OPTIONS = {
   completedTtlMs: 600_000,
+  reclaimFailed: true,
+  markReplay: true,
+} as const;
+/**
+ * Cp2v3ZJ7: barqaror `ai:<market>:<draft>:<idx>` kaliti — kesh MUDDATSIZ
+ * (TTL yo'q), yiqilgan urinish qayta egallanadi, takror javobda
+ * `idempotent_replay:true`. Ichida mazmun imzosi qatlami
+ * (`ai/ai-create-dedupe.ts`).
+ */
+const AI_STABLE_CREATE_OPTIONS = {
   reclaimFailed: true,
   markReplay: true,
 } as const;
@@ -137,10 +152,30 @@ export class OrderServiceController {
       };
       requester?: { id: string; roles?: string[] };
       request_id?: string;
+      /** Cp2v3ZJ7: mazmun imzosi (faqat barqaror `ai:` kaliti bilan). */
+      ai_signature?: string;
+      /** vncdmXOy: activity_log CREATED metadata'siga AI belgisi. */
+      ai_audit?: Record<string, unknown>;
     },
     @Ctx() context: RmqContext,
   ) {
     const requestId = data.request_id;
+    const isStable = isAiStableRequestId(requestId);
+    const isAiRequest =
+      isStable ||
+      (typeof requestId === 'string' &&
+        requestId.startsWith(AI_DEDUPE_REQUEST_PREFIX));
+    // ⚠️ AI belgisi FAQAT ai-confirm kalitlari bilan qabul qilinadi — oddiy
+    // POST /orders yo'li (tasodifiy UUID) uni bera olmaydi.
+    const auditMetadata = isAiRequest
+      ? sanitizeAiAuditMetadata(data.ai_audit)
+      : null;
+    const create = () =>
+      auditMetadata
+        ? this.lifecycleService.create(data.dto, data.requester, {
+            auditMetadata,
+          })
+        : this.lifecycleService.create(data.dto, data.requester);
     return executeIdempotent(
       this.rmqService,
       this.idempotencyService,
@@ -148,12 +183,20 @@ export class OrderServiceController {
       {
         requestId,
         pattern: 'order.create',
-        ...(typeof requestId === 'string' &&
-        requestId.startsWith(AI_DEDUPE_REQUEST_PREFIX)
-          ? AI_DEDUPE_CREATE_OPTIONS
-          : {}),
+        ...(isStable
+          ? AI_STABLE_CREATE_OPTIONS
+          : isAiRequest
+            ? AI_DEDUPE_CREATE_OPTIONS
+            : {}),
       },
-      () => this.lifecycleService.create(data.dto, data.requester),
+      isStable
+        ? () =>
+            runWithAiSignature(
+              this.idempotencyService,
+              data.ai_signature,
+              create,
+            )
+        : create,
     );
   }
 
@@ -873,7 +916,11 @@ export class OrderServiceController {
         qr_code_token?: string | null;
         external_id?: string | null;
         source?: Order_source;
-        items?: Array<{ product_id: string; quantity?: number }>;
+        items?: Array<{
+          product_id?: string | null;
+          product_name?: string | null;
+          quantity?: number;
+        }>;
       };
       requester?: { id?: string; roles?: string[]; note?: string | null };
     },
@@ -916,7 +963,11 @@ export class OrderServiceController {
         qr_code_token?: string | null;
         external_id?: string | null;
         source?: Order_source;
-        items?: Array<{ product_id: string; quantity?: number }>;
+        items?: Array<{
+          product_id?: string | null;
+          product_name?: string | null;
+          quantity?: number;
+        }>;
       };
       requester?: { id?: string; roles?: string[]; note?: string | null };
     },
@@ -1509,6 +1560,22 @@ export class OrderServiceController {
         data.startDate,
         data.endDate,
         data.all,
+      ),
+    );
+  }
+
+  /** (mKS1mjNr) KPI yetkazish vaqti / SLA — bitta SQL agregatsiyasi. */
+  @MessagePattern({ cmd: 'order.analytics.fulfillment_stats' })
+  analyticsFulfillmentStats(
+    @Payload()
+    data: { startDate?: string; endDate?: string; branch_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.orderAnalyticsService.getFulfillmentStats(
+        data?.startDate,
+        data?.endDate,
+        data?.branch_id,
       ),
     );
   }

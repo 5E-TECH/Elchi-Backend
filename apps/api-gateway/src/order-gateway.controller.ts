@@ -60,6 +60,11 @@ import {
   type AiParseFailureReason,
 } from './ai-order/ai-order.helpers';
 import {
+  aiStableRequestId,
+  buildPreviewSnapshots,
+  computeEditedFields,
+} from './ai-order/ai-edited-fields';
+import {
   AiConfirmOrderDto,
   AiConfirmRequestDto,
   AiParseRequestDto,
@@ -94,6 +99,10 @@ import {
   matchesDeclaredType,
   recordReceiveByScanOutcome,
   requestContext,
+  type AiAuditedField,
+  type AiDraftConfirmContext,
+  type AiDraftLinkItem,
+  type AiDraftTrace,
   type AiHealthState,
   type AiOrderExtractRequest,
   type AiOrderExtractResponse,
@@ -145,6 +154,11 @@ type AiConfirmResult = {
   reason?: string;
   /** Mashina kaliti (district_not_found, duplicate_recent, ...). */
   code?: string;
+  /**
+   * Cp2v3ZJ7 #3: faqat `ok:true` da — `true` bo'lsa buyurtma AVVAL (shu
+   * draft bandi bilan) yaratilgan, bu chaqiruv uni qayta YARATMADI.
+   */
+  idempotent_replay?: boolean;
 };
 
 /**
@@ -179,6 +193,15 @@ type EligibleAiOrder = {
   /** DB'dagi tuman yozuvidan — mijoz yuborgan qiymat EMAS. */
   districtId: string;
   regionId: string;
+  /**
+   * Cp2v3ZJ7: `ai:<market>:<draft>:<idx>` — draft_id va ai_item_index bo'lsa;
+   * aks holda null (eski `ai-dedupe:<imzo>` yo'li).
+   */
+  stableRequestId: string | null;
+  /** vncdmXOy: activity_log metadata'si (server tomonda yig'ilgan). */
+  aiAudit: Record<string, unknown> | null;
+  /** Server hisoblagan o'zgargan maydonlar; preview topilmasa null. */
+  editedFields: AiAuditedField[] | null;
 };
 
 /**
@@ -203,6 +226,10 @@ const createAiImageMemoryStorage = memoryStorage as () => unknown;
 const AI_MIN_PREVIEW_BUDGET_MS = 5_000;
 /** ai-confirm'dagi find_by_ids tekshiruvlari (partiyaga BITTADAN). */
 const AI_CONFIRM_LOOKUP_TIMEOUT_MS = 8_000;
+/** vncdmXOy: `ai.draft.confirm_context` — audit uchun, yaratishni kechiktirmasin. */
+const AI_DRAFT_CONTEXT_TIMEOUT_MS = 3_000;
+/** vncdmXOy: `GET /orders/:id/ai-trace` → `ai.draft.trace_by_order`. */
+const AI_DRAFT_TRACE_TIMEOUT_MS = 8_000;
 
 /**
  * BUYURTMA YARATISHDA MIJOZ YUBORA OLMAYDIGAN MAYDONLAR (fix3 C6; RBAC-05,
@@ -1465,8 +1492,15 @@ export class OrderGatewayController {
       ),
     };
 
+    // Cp2v3ZJ7: draft_id + ai_item_index bo'lsa BARQAROR kalit
+    // (`ai:<market>:<draft>:<idx>`, ⚠️ request_id payloadga shu yerda ANIQ
+    // yoziladi — aks holda rmqSend/withRequestId random UUID qo'yib himoyani
+    // jimgina o'chirardi), mazmun imzosi esa ichki 2-qatlam (`ai_signature`).
+    // Bo'lmasa — eski yo'l: request_id = `ai-dedupe:<imzo>` (10 daqiqa).
     const response: unknown = await this.createOrderInternal(mapped, req, {
-      requestId: `${AI_DEDUPE_PREFIX}${item.signature}`,
+      requestId: item.stableRequestId ?? `${AI_DEDUPE_PREFIX}${item.signature}`,
+      ...(item.stableRequestId ? { aiSignature: item.signature } : {}),
+      aiAudit: item.aiAudit,
       marketId: ctx.marketId,
       branchAssignment: ctx.branchAssignment,
     });
@@ -1476,6 +1510,17 @@ export class OrderGatewayController {
       idempotent_replay?: unknown;
     };
     const orderId = this.asStr(body.data?.id ?? body.id).trim();
+
+    // Cp2v3ZJ7 TC2: AYNI draft bandi avval yaratilgan — o'sha buyurtma
+    // qaytdi (yangisi yaratilmadi). Bu MUVAFFAQIYAT: UI kartani qulflaydi.
+    if (item.stableRequestId && body.idempotent_replay === true) {
+      return {
+        index,
+        ok: true,
+        ...(orderId ? { order_id: orderId } : {}),
+        idempotent_replay: true,
+      };
+    }
 
     // order.create keshdan qaytdi — xuddi shu buyurtma 10 daqiqa ichida
     // allaqachon yaratilgan; yangisi YARATILMADI (wgqxS0Cp #13).
@@ -1490,37 +1535,68 @@ export class OrderGatewayController {
         } — takror yaratilmadi`,
       };
     }
-    return { index, ok: true, ...(orderId ? { order_id: orderId } : {}) };
+    return {
+      index,
+      ok: true,
+      ...(orderId ? { order_id: orderId } : {}),
+      idempotent_replay: false,
+    };
   }
 
   /**
    * AI xarajatini (ai_usage_log) yaratilgan buyurtmalarga bog'laydi — har
    * `draft_id` uchun BITTA `ai.usage.link_orders` (lYVuADRE #18).
+   * vncdmXOy: shu xabarda `items` (order_id, item_index, server hisoblagan
+   * edited_fields) va `confirmed_by` — ai-service `ai_order_draft_item` ga
+   * yozadi (draft ↔ buyurtma bog'lanishining asosiy manbai).
    * Fire-and-forget: javob kutilmaydi, xato faqat WARN — buyurtma natijasiga
    * TA'SIR QILMAYDI. ⚠️ Qayta urinish YO'Q (ai.* RPC).
+   * Cp2v3ZJ7: `idempotent_replay` (avval yaratilgan) natijalar QAYTA
+   * bog'lanmaydi — ular birinchi chaqiruvda bog'langan.
    */
   private linkAiUsageOrders(
     orders: AiConfirmOrderDto[],
     results: Map<number, AiConfirmResult>,
     marketId: string,
+    eligible: EligibleAiOrder[] = [],
+    confirmedBy?: string,
   ): void {
     if (!this.aiClient) return;
-    const orderIdsByDraft = new Map<string, string[]>();
+    const editedByIndex = new Map(
+      eligible.map((item) => [item.index, item.editedFields]),
+    );
+    const byDraft = new Map<
+      string,
+      { orderIds: string[]; items: AiDraftLinkItem[] }
+    >();
     orders.forEach((order, index) => {
       const result = results.get(index);
       const draftId = this.asStr(order?.draft_id).trim();
       if (!result?.ok || !result.order_id || !draftId) return;
-      orderIdsByDraft.set(draftId, [
-        ...(orderIdsByDraft.get(draftId) ?? []),
-        result.order_id,
-      ]);
+      if (result.idempotent_replay === true) return;
+      const entry = byDraft.get(draftId) ?? { orderIds: [], items: [] };
+      entry.orderIds.push(result.order_id);
+      entry.items.push({
+        item_index:
+          typeof order.ai_item_index === 'number' ? order.ai_item_index : null,
+        order_id: result.order_id,
+        edited_fields: editedByIndex.get(index) ?? null,
+      });
+      byDraft.set(draftId, entry);
     });
-    for (const [draftId, orderIds] of orderIdsByDraft) {
+    const confirmer = this.asStr(confirmedBy).trim();
+    for (const [draftId, entry] of byDraft) {
       void firstValueFrom(
         this.aiClient
           .send(
             { cmd: 'ai.usage.link_orders' },
-            { draft_id: draftId, order_ids: orderIds, market_id: marketId },
+            {
+              draft_id: draftId,
+              order_ids: entry.orderIds,
+              market_id: marketId,
+              items: entry.items,
+              ...(confirmer ? { confirmed_by: confirmer } : {}),
+            },
           )
           .pipe(timeout(RMQ_FIRE_AND_FORGET_TIMEOUT)),
       ).catch((error: unknown) => {
@@ -1528,6 +1604,136 @@ export class OrderGatewayController {
           `ai.usage.link_orders yuborilmadi (draft ${draftId}): ${this.errorName(error)}`,
         );
       });
+    }
+  }
+
+  /**
+   * vncdmXOy: partiyadagi draft'lar konteksti (`ai.draft.confirm_context`) —
+   * BITTA RPC, qisqa timeout. Xato/timeout/AI o'chiq → bo'sh Map (yaratish
+   * to'xtamaydi). Faqat shu marketning draft'lari qaytadi (ai-service sharti).
+   */
+  private async loadAiDraftContexts(
+    marketId: string,
+    draftIds: string[],
+  ): Promise<Map<string, AiDraftConfirmContext>> {
+    const out = new Map<string, AiDraftConfirmContext>();
+    if (!this.aiClient || draftIds.length === 0) return out;
+    try {
+      const response: unknown = await firstValueFrom(
+        this.aiClient
+          .send<unknown>(
+            { cmd: 'ai.draft.confirm_context' },
+            { market_id: marketId, draft_ids: draftIds },
+          )
+          .pipe(timeout(AI_DRAFT_CONTEXT_TIMEOUT_MS)),
+      );
+      const drafts = (response as { drafts?: unknown } | null)?.drafts;
+      for (const d of Array.isArray(drafts) ? drafts : []) {
+        const ctx = d as AiDraftConfirmContext;
+        if (typeof ctx?.draft_id === 'string') out.set(ctx.draft_id, ctx);
+      }
+    } catch (error: unknown) {
+      this.logger.warn(
+        `ai.draft.confirm_context ishlamadi (${this.errorName(error)}) — audit metadata qisqartirilgan`,
+      );
+    }
+    return out;
+  }
+
+  /**
+   * vncdmXOy #2: har eligible buyurtmaga `aiAudit` (activity_log metadata) va
+   * SERVER tomonda hisoblangan `editedFields`. draft_id bo'lmasa — audit yo'q
+   * (oddiy qo'lda kiritilgan buyurtma kabi).
+   */
+  private async attachAiAudit(
+    eligible: EligibleAiOrder[],
+    marketId: string,
+  ): Promise<void> {
+    const draftIds = this.distinctIds(
+      eligible.map((item) => item.order.draft_id),
+    );
+    if (draftIds.length === 0) return;
+    const contexts = await this.loadAiDraftContexts(marketId, draftIds);
+    for (const item of eligible) {
+      const draftId = this.asStr(item.order.draft_id).trim();
+      if (!draftId) continue;
+      const ctx = contexts.get(draftId) ?? null;
+      const itemIndex =
+        typeof item.order.ai_item_index === 'number'
+          ? item.order.ai_item_index
+          : null;
+      const preview =
+        ctx?.previews && itemIndex !== null
+          ? (ctx.previews.find((p) => p.index === itemIndex) ?? null)
+          : null;
+      item.editedFields = preview
+        ? computeEditedFields(preview, {
+            customer: item.order.customer,
+            district_id: item.districtId,
+            region_id: item.regionId,
+            address: item.order.address,
+            total_price: item.order.total_price,
+            where_deliver: item.order.where_deliver,
+            comment: item.order.comment,
+            operator: item.order.operator,
+            items: item.order.items,
+          })
+        : null;
+      const draftCostUzs = ctx ? Number(ctx.cost_uzs) || 0 : null;
+      item.aiAudit = {
+        ai: true,
+        ai_draft_id: draftId,
+        ai_item_index: itemIndex,
+        // draft shu marketniki va ai-service'da topildi.
+        ai_draft_verified: ctx !== null,
+        model: ctx?.model ?? null,
+        prompt_version: ctx?.prompt_version ?? null,
+        ai_draft_cost_uzs: draftCostUzs,
+        // Buyurtma ulushi: draft xarajati / AI taklif qilgan buyurtmalar soni.
+        ai_cost_uzs:
+          draftCostUzs === null
+            ? null
+            : Math.round(
+                (draftCostUzs / Math.max(1, Number(ctx?.preview_count) || 1)) *
+                  100,
+              ) / 100,
+        edited_fields: item.editedFields,
+      };
+    }
+  }
+
+  /**
+   * vncdmXOy: AI TAKLIFI snapshot'i ai-service'ga (`ai_order_draft.
+   * resolved_preview`) — fire-and-forget, javobga ta'sir qilmaydi. Telefon
+   * faqat maskalangan + sha256 (`buildPreviewSnapshots`).
+   */
+  private attachAiDraftPreview(
+    draftId: string,
+    marketId: string,
+    previews: unknown[],
+  ): void {
+    if (!this.aiClient || previews.length === 0) return;
+    try {
+      void firstValueFrom(
+        this.aiClient
+          .send(
+            { cmd: 'ai.draft.attach_preview' },
+            {
+              draft_id: draftId,
+              market_id: marketId,
+              previews: buildPreviewSnapshots(previews),
+            },
+          )
+          .pipe(timeout(RMQ_FIRE_AND_FORGET_TIMEOUT)),
+      ).catch((error: unknown) => {
+        this.logger.warn(
+          `ai.draft.attach_preview yuborilmadi (draft ${draftId}): ${this.errorName(error)}`,
+        );
+      });
+    } catch (error: unknown) {
+      this.logger.warn(
+        `ai.draft.attach_preview yuborilmadi (draft ${draftId}): ${this.errorName(error)}`,
+      );
     }
   }
 
@@ -1576,6 +1782,10 @@ export class OrderGatewayController {
     req: { user: JwtUser },
     opts?: {
       requestId?: string;
+      /** Cp2v3ZJ7: barqaror kalit bilan mazmun imzosi (2-qatlam). */
+      aiSignature?: string;
+      /** vncdmXOy: activity_log CREATED metadata'siga AI belgisi. */
+      aiAudit?: Record<string, unknown> | null;
       marketId?: string;
       branchAssignment?: BranchAssignment | null;
     },
@@ -1739,6 +1949,8 @@ export class OrderGatewayController {
             },
             requester: { id: req.user.sub, roles },
             ...(opts?.requestId ? { request_id: opts.requestId } : {}),
+            ...(opts?.aiSignature ? { ai_signature: opts.aiSignature } : {}),
+            ...(opts?.aiAudit ? { ai_audit: opts.aiAudit } : {}),
           },
         )
         .pipe(timeout(8000)),
@@ -1974,6 +2186,8 @@ export class OrderGatewayController {
       return successRes(toParseFailure({ reason: 'ai_error' }));
     }
 
+    // vncdmXOy: AI taklifi audit izi uchun (fire-and-forget).
+    this.attachAiDraftPreview(draftId, market.marketId, previews);
     return successRes({ ok: true, orders: previews, draft_id: draftId });
   }
 
@@ -2005,6 +2219,58 @@ export class OrderGatewayController {
       enabled: this.isAiOrderEnabled(),
       state: this.aiStatus?.getState() ?? 'unknown',
     });
+  }
+
+  /**
+   * vncdmXOy #5: AI buyurtma AUDIT IZI — qaysi matndan (maskalangan,
+   * `[TEL_n]`), qaysi model/prompt bilan, AI nimani taklif qildi (telefon
+   * faqat maskalangan), operator nimani o'zgartirdi (server hisoblagan
+   * `edited_fields`), kim tasdiqladi va xarajat (`ai_usage_log` JOIN).
+   *
+   * ⚠️ Faqat SUPERADMIN/ADMIN — matnda mijoz PII'si bor. Buyurtma AI'dan
+   * yaratilmagan bo'lsa 404. Anthropic CHAQIRILMAYDI.
+   */
+  @Get(':id/ai-trace')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(RoleEnum.SUPERADMIN, RoleEnum.ADMIN)
+  @ApiBearerAuth()
+  @ApiParam({ name: 'id', example: '1024' })
+  @ApiOperation({
+    summary:
+      'AI buyurtma audit izi: maskalangan matn, model, AI taklifi, edited_fields, xarajat',
+  })
+  async aiTrace(
+    @Param('id') id: string,
+  ): Promise<AiSuccessEnvelope<AiDraftTrace>> {
+    const orderId = this.asStr(id).trim();
+    if (!/^\d{1,19}$/.test(orderId)) {
+      throw new BadRequestException("Buyurtma ID raqam bo'lishi kerak");
+    }
+    if (!this.aiClient) {
+      throw new ServiceUnavailableException('AI servis ulanmagan');
+    }
+    let trace: AiDraftTrace | null;
+    try {
+      trace = await firstValueFrom(
+        this.aiClient
+          .send<AiDraftTrace | null>(
+            { cmd: 'ai.draft.trace_by_order' },
+            { order_id: orderId },
+          )
+          .pipe(timeout(AI_DRAFT_TRACE_TIMEOUT_MS)),
+      );
+    } catch (error: unknown) {
+      if (error instanceof TimeoutError) {
+        throw new GatewayTimeoutException('AI service javob bermadi');
+      }
+      throw error;
+    }
+    if (!trace || typeof trace !== 'object') {
+      throw new NotFoundException(
+        'Bu buyurtma uchun AI audit izi topilmadi (AI orqali yaratilmagan)',
+      );
+    }
+    return successRes(trace);
   }
 
   /**
@@ -2144,8 +2410,20 @@ export class OrderGatewayController {
         signature,
         districtId: this.asStr(verdict.district_id),
         regionId: this.asStr(verdict.region_id),
+        stableRequestId: aiStableRequestId(
+          marketId,
+          order.draft_id,
+          order.ai_item_index,
+        ),
+        aiAudit: null,
+        editedFields: null,
       });
     });
+
+    // vncdmXOy: audit metadata (model, prompt versiyasi, xarajat, server
+    // hisoblagan edited_fields). ai-service ishlamasa ham yaratish TO'XTAMAYDI
+    // — metadata faqat draft_id/ai_item_index bilan qoladi.
+    await this.attachAiAudit(eligible, marketId);
 
     // 4) Yaratish — cheklangan parallellik, telefon bo'yicha yo'laklar.
     const ctx = {
@@ -2180,7 +2458,7 @@ export class OrderGatewayController {
       }
     });
 
-    this.linkAiUsageOrders(orders, results, marketId);
+    this.linkAiUsageOrders(orders, results, marketId, eligible, req.user?.sub);
 
     return successRes({
       results: orders.map(

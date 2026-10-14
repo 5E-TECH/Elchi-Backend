@@ -4,6 +4,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
@@ -37,10 +38,27 @@ import {
   SmsDispatchService,
 } from './sms/sms-dispatch.service';
 import { SmsBlockedError } from './sms/sms-gate.service';
+import {
+  AUDIENCE_RESOLVE_PATTERN,
+  IdentityAudienceTarget,
+  audienceRpcError,
+  buildAudienceTarget,
+  toAudiencePage,
+} from './audience/audience-request';
+import {
+  DispatchAbortedError,
+  InternalDispatchOptions,
+} from './campaign/dispatch-hooks';
+import { ChannelPlannerService } from './channels/channel-planner.service';
+import {
+  initialChannelStatus,
+  requestedChannels,
+} from './channels/resolve-channels';
+import { NotificationEscalationService } from './escalation/notification-escalation.service';
 
 /** Upper bound on role/broadcast fan-out, so one dispatch can't insert millions
  * of rows. (QFoRULeu) Oshsa dispatch 400 bilan rad etiladi — jimgina kesilmaydi. */
-const MAX_FANOUT = 5000;
+export const MAX_FANOUT = 5000;
 const IDENTITY_PAGE_SIZE = 100;
 /** Bitta INSERT dagi qatorlar — Postgres 65 535 parametr chegarasidan uzoq. */
 const INSERT_CHUNK = 500;
@@ -71,6 +89,15 @@ interface TelegramOutcome extends DeliveryPatch {
   telegram: NotificationDeliveryStatus;
 }
 
+/** Qabul qiluvchi bo'yicha boshlang'ich `delivery` (kanal rejasi, 7Ec56EIw). */
+type DeliveryFor = (recipientId: string) => Record<string, string>;
+
+interface ChannelPlanView {
+  deliveryFor: DeliveryFor;
+  /** Sozlama bilan ro'yxatdan tushganlar (mP1WGG1W `skipped_by_preference`). */
+  skipped: ReadonlySet<string>;
+}
+
 /**
  * Xato sababini `delivery` ga yozishga yaroqli qiladi: telefonlar maskalanadi,
  * 200 belgiga kesiladi — provayder/xom javob to'liq saqlanmaydi (uFmUS86e).
@@ -93,6 +120,22 @@ const IMPORTANT_PRIORITIES = [
   NotificationPriority.CRITICAL,
   NotificationPriority.HIGH,
 ] as const;
+
+/** Postgres BIGINT yuqori chegarasi. */
+const BIGINT_MAX = BigInt('9223372036854775807');
+
+/** (BoMa1A1R) Qabul qiluvchi id — `^\d+$` va BIGINT'ga sig'adi (raqam ham qabul). */
+function isBigintId(value: unknown): boolean {
+  const text =
+    typeof value === 'string'
+      ? value.trim()
+      : typeof value === 'number' && Number.isSafeInteger(value)
+        ? String(value)
+        : '';
+  if (!/^\d{1,19}$/.test(text)) return false;
+  const id = BigInt(text);
+  return id > BigInt(0) && id <= BIGINT_MAX;
+}
 @Injectable()
 export class NotificationInboxService {
   private readonly logger = new Logger(NotificationInboxService.name);
@@ -106,20 +149,69 @@ export class NotificationInboxService {
     private readonly activityLog: ActivityLogService,
     private readonly pushDelivery: PushDeliveryService,
     private readonly smsDispatch: SmsDispatchService,
+    /**
+     * (7Ec56EIw / mP1WGG1W) Kanal rejasi: sozlamalar + kanal imkoniyati.
+     * Modulda DOIM bor; yo'q bo'lsa (eski unit spec'lar) — avvalgi xulq:
+     * hamma so'ralgan kanal hamma qabul qiluvchiga.
+     */
+    @Optional() private readonly planner?: ChannelPlannerService,
+    /** (7Ec56EIw #5) CRITICAL → N daqiqadan keyin SMS eskalatsiyasi. */
+    @Optional() private readonly escalation?: NotificationEscalationService,
   ) {}
 
   private toRpcError(error: unknown): never {
     if (error instanceof RpcException) throw error;
+    // (xHPdpj0W) Kampaniya partiyasi ataylab to'xtatdi — o'ralmaydi.
+    if (error instanceof DispatchAbortedError) throw error;
     if (error instanceof NotFoundException) {
       throw new RpcException({ statusCode: 404, message: error.message });
     }
     if (error instanceof BadRequestException) {
       throw new RpcException({ statusCode: 400, message: error.message });
     }
+    // (BoMa1A1R) DB drayveri / kutilmagan xato matni mijozga UZATILMAYDI:
+    // avval `error.message` to'g'ridan-to'g'ri qaytardi va Postgres tip
+    // nomlari hamda ustun qiymatlari (`invalid input syntax for type bigint:
+    // "abc"`) javobda ochilardi. To'liq sabab faqat logda (telefon maskada).
+    this.logger.error(
+      `notification RPC xatosi: ${shortReason(error)}`,
+      error instanceof Error ? error.stack : undefined,
+    );
     throw new RpcException({
       statusCode: 500,
-      message: error instanceof Error ? error.message : 'Internal server error',
+      message: 'Internal server error',
     });
+  }
+
+  /**
+   * (BoMa1A1R) `recipient_id(s)` — faqat bigint'ga sig'adigan musbat raqam.
+   * Dispatch UMUMAN boshlanmaydi (400): qisman yozish ham, xom DB xatosi ham
+   * bo'lmaydi. RMQ'da ValidationPipe yo'q, shuning uchun tekshiruv shu yerda.
+   */
+  private assertRecipientIds(dto: DispatchNotificationDto) {
+    const invalid: string[] = [];
+    if (dto.recipient_id !== undefined && dto.recipient_id !== null) {
+      if (!isBigintId(dto.recipient_id)) invalid.push(String(dto.recipient_id));
+    }
+    if (dto.recipient_ids !== undefined && dto.recipient_ids !== null) {
+      if (!Array.isArray(dto.recipient_ids)) {
+        throw new BadRequestException('recipient_ids must be an array');
+      }
+      for (const id of dto.recipient_ids) {
+        if (!isBigintId(id)) invalid.push(String(id));
+      }
+    }
+    if (invalid.length) {
+      const sample = invalid
+        .slice(0, 5)
+        .map((id) => JSON.stringify(id.slice(0, 32)))
+        .join(', ');
+      throw new BadRequestException(
+        `recipient_ids: har element musbat butun son (bigint) bo'lishi kerak — noto'g'ri: ${sample}${
+          invalid.length > 5 ? ` (+${invalid.length - 5})` : ''
+        }`,
+      );
+    }
   }
 
   // ==================== DISPATCH (the generic entry point) ====================
@@ -132,7 +224,14 @@ export class NotificationInboxService {
     return requestId && requestId.length <= 100 ? requestId : randomUUID();
   }
 
-  async dispatch(dto: DispatchNotificationDto) {
+  /**
+   * `internal` — FAQAT kod ichidan (xHPdpj0W kampaniya partiyasi): tayyor
+   * qabul qiluvchilar va tranzaksiya ilgaklari. RMQ controller uni bermaydi.
+   */
+  async dispatch(
+    dto: DispatchNotificationDto,
+    internal?: InternalDispatchOptions,
+  ) {
     try {
       if (!dto.type?.trim()) throw new BadRequestException('type is required');
       if (!dto.title?.trim())
@@ -158,12 +257,24 @@ export class NotificationInboxService {
       dto.priority = defaults.priority;
       dto.group_key = defaults.group_key ?? undefined;
 
-      const channels = [...new Set(defaults.channels)];
+      // (7Ec56EIw #2 a/b) Katalog sukuti yoki chaqiruvchi so'ragani ∩
+      // katalogda ruxsat etilgan kanallar — ortiqcha kanal qo'shilmaydi.
+      const channels = requestedChannels(dto.type, defaults.channels);
 
-      const recipients = await this.resolveRecipients(dto);
+      this.assertRecipientIds(dto);
+      const recipients: ResolvedRecipient[] = internal?.recipients
+        ? internal.recipients.map((recipient) => ({
+            id: String(recipient.id),
+            role: recipient.role ?? null,
+            via: 'explicit' as const,
+          }))
+        : await this.resolveRecipients(dto);
       if (!recipients.length) {
+        // (W8aerwL6) Nishon berilgan-u, hech kim topilmagan bo'lsa — buni aytamiz.
         throw new BadRequestException(
-          'No recipients resolved. Provide recipient_id, recipient_ids, roles, or broadcast=true.',
+          buildAudienceTarget(dto) || dto.recipient_id || dto.recipient_ids
+            ? "No recipients resolved: tanlangan auditoriyada faol foydalanuvchi yo'q (rol / segment bo'sh)."
+            : 'No recipients resolved. Provide recipient_id, recipient_ids, roles, broadcast=true or include_customers=true (+segment).',
         );
       }
 
@@ -182,39 +293,83 @@ export class NotificationInboxService {
       }
       let smsResult: SmsChannelResult | null = null;
 
+      // (mP1WGG1W / 7Ec56EIw) Sozlamalar va kanal imkoniyati — BULK (sikl
+      // ichida so'rov yo'q). Hamma filtrlansa — 400 emas, skipped_by_preference.
+      const plan = await this.planChannels(dto, recipients);
+      const targets = recipients.filter((r) => !plan.skipped.has(r.id));
+      // (7Ec56EIw #5) CRITICAL: N daqiqadan keyin o'qilmagan bo'lsa SMS.
+      const escalationDueAt =
+        this.escalation?.dueAt(dto.priority, channels) ?? null;
+      const deliveryFor: DeliveryFor = escalationDueAt
+        ? (id) => ({
+            ...plan.deliveryFor(id),
+            escalation: 'scheduled',
+            escalation_due_at: escalationDueAt.toISOString(),
+          })
+        : plan.deliveryFor;
+
       // 1) Persist one inbox row per recipient (the in_app channel & system of record).
       //    Push is only QUEUED here (outbox) — in the same transaction as the rows,
       //    so a rolled-back dispatch never sends a push. Delivery is async.
-      const wantsPush = channels.includes(NotificationChannel.PUSH);
-      const rows = await this.repo.manager.transaction(async (manager) => {
-        const persisted = await this.persistRows(
-          manager,
-          dto,
-          recipients,
-          channels,
-        );
-        if (wantsPush && persisted.length) {
-          await this.pushDelivery.enqueue(
-            manager,
-            persisted.map((row) => row.id),
-          );
-        }
-        // SMS: navbatga ham shu tranzaksiyada; holat har qatorning delivery.sms ida.
-        if (wantsSms && persisted.length) {
-          smsResult = await this.smsDispatch.queueForNotifications(
-            persisted,
-            manager,
-          );
-        }
-        return persisted;
-      });
+      //    Faqat `delivery.push = queued` qatorlar navbatga (obunasi yo'q /
+      //    VAPID yo'q / o'chirilgan — outbox hodisasi yaratilmaydi).
+      //    (xHPdpj0W) Kampaniya ilgaklari (before/afterPersist) qabul qiluvchi
+      //    qolmasa ham ishlaydi — aks holda partiya da'vo qilinmay, kampaniya
+      //    navbati to'xtab qolardi.
+      let pushQueued = 0;
+      const rows =
+        !targets.length && !internal
+          ? []
+          : await this.repo.manager.transaction(async (manager) => {
+              await internal?.beforePersist?.(manager);
+              const persisted = targets.length
+                ? await this.persistRows(
+                    manager,
+                    dto,
+                    targets,
+                    channels,
+                    deliveryFor,
+                  )
+                : [];
+              const pushIds = persisted
+                .filter(
+                  (row) =>
+                    row.delivery?.[NotificationChannel.PUSH] ===
+                    NotificationDeliveryStatus.QUEUED,
+                )
+                .map((row) => row.id);
+              if (pushIds.length) {
+                await this.pushDelivery.enqueue(manager, pushIds);
+              }
+              pushQueued = pushIds.length;
+              // SMS: navbatga ham shu tranzaksiyada; holat har qatorning delivery.sms ida.
+              if (wantsSms && persisted.length) {
+                smsResult = await this.queueSms(persisted, manager);
+              }
+              if (escalationDueAt && persisted.length && this.escalation) {
+                await this.escalation.schedule(
+                  manager,
+                  persisted.map((row) => row.id),
+                  escalationDueAt,
+                );
+              }
+              await internal?.afterPersist?.(manager, persisted);
+              return persisted;
+            });
 
       // 2) Realtime (best-effort). Aniq qabul qiluvchilar — har biriga
       //    `user_id` emit; rol/broadcast — BITTA emit (QFoRULeu). Natija
       //    `delivery.realtime` ga: `emitted` (ack yo'q — `sent` EMAS) | `failed`.
-      const realtime = channels.includes(NotificationChannel.REALTIME)
-        ? await this.pushRealtime(rows, dto, recipients)
-        : null;
+      //    Realtime'ni o'chirgan qabul qiluvchilar (`skipped`) chiqarib tashlanadi.
+      const realtimeRows = rows.filter(
+        (row) =>
+          row.delivery?.[NotificationChannel.REALTIME] ===
+          NotificationDeliveryStatus.PENDING,
+      );
+      const realtime =
+        channels.includes(NotificationChannel.REALTIME) && realtimeRows.length
+          ? await this.pushRealtime(realtimeRows, dto, recipients)
+          : null;
 
       // 3) Telegram relay (optional, best-effort) — natija `delivery.telegram`.
       let telegram: unknown = null;
@@ -254,6 +409,7 @@ export class NotificationInboxService {
           type: dto.type.trim(),
           category: dto.category ?? NotificationCategory.SYSTEM,
           dispatched_count: rows.length,
+          skipped_by_preference: plan.skipped.size,
           channels,
           notification_ids: rows.slice(0, 20).map((row) => String(row.id)),
         },
@@ -267,7 +423,12 @@ export class NotificationInboxService {
         realtime,
         telegramOutcome,
         smsResult as SmsChannelResult | null,
+        pushQueued,
       );
+      const message =
+        !rows.length && plan.skipped.size
+          ? 'Skipped by recipient preferences — nothing dispatched'
+          : summary.message;
 
       return successRes(
         {
@@ -287,13 +448,80 @@ export class NotificationInboxService {
           },
           by_channel: summary.by_channel,
           no_provider: summary.no_provider,
+          // (mP1WGG1W) Sozlama bilan tushib qolganlar — 400 emas, hisob.
+          skipped_by_preference: plan.skipped.size,
         },
         201,
-        summary.message,
+        message,
       );
     } catch (error) {
       this.toRpcError(error);
     }
+  }
+
+  /**
+   * (7Ec56EIw / mP1WGG1W) Har qabul qiluvchi uchun boshlang'ich `delivery`.
+   * Planner yo'q (eski unit spec'lar) — avvalgi xulq: hammaga bir xil.
+   */
+  private async planChannels(
+    dto: DispatchNotificationDto,
+    recipients: ResolvedRecipient[],
+  ): Promise<ChannelPlanView> {
+    const channels = requestedChannels(dto.type, dto.channels);
+    if (!this.planner) {
+      const delivery = this.initialDelivery(channels);
+      return { deliveryFor: () => delivery, skipped: new Set() };
+    }
+    const plan = await this.planner.plan({
+      type: dto.type.trim(),
+      category: dto.category ?? NotificationCategory.SYSTEM,
+      priority: dto.priority ?? NotificationPriority.NORMAL,
+      requested: dto.channels,
+      recipientIds: recipients.map((r) => r.id),
+    });
+    const fallback = this.initialDelivery(plan.channels);
+    return {
+      deliveryFor: (id) => plan.byRecipient.get(id)?.delivery ?? fallback,
+      skipped: new Set(plan.skippedByPreference),
+    };
+  }
+
+  /**
+   * SMS navbati — faqat `delivery.sms = pending` qatorlar (telefoni yo'q —
+   * `not_eligible`, o'chirgan — `skipped`; ular SMS servisiga bormaydi).
+   */
+  private async queueSms(
+    rows: Notification[],
+    manager: EntityManager,
+  ): Promise<SmsChannelResult> {
+    const eligible = rows.filter(
+      (row) =>
+        row.delivery?.[NotificationChannel.SMS] ===
+        NotificationDeliveryStatus.PENDING,
+    );
+    const skipped = rows.length - eligible.length;
+    if (!eligible.length) {
+      const reason = rows.find(
+        (row) => row.delivery?.[`${NotificationChannel.SMS}_reason`],
+      )?.delivery?.[`${NotificationChannel.SMS}_reason`];
+      return {
+        sms: 0,
+        sms_status: 'skipped',
+        sms_reason: typeof reason === 'string' ? reason : 'not_eligible',
+        sms_skipped: skipped,
+      };
+    }
+    const result = await this.smsDispatch.queueForNotifications(
+      eligible,
+      manager,
+    );
+    if (!skipped) return result;
+    return {
+      ...result,
+      sms_status:
+        result.sms_status === 'queued' ? 'partial' : result.sms_status,
+      sms_skipped: (result.sms_skipped ?? 0) + skipped,
+    };
   }
 
   private async resolveRecipients(
@@ -314,14 +542,10 @@ export class NotificationInboxService {
       if (clean) map.set(clean, { id: clean, role: null, via: 'explicit' });
     }
 
-    if (dto.broadcast) {
-      await this.collectFromIdentity(undefined, map);
-    } else if (dto.roles?.length) {
-      for (const role of dto.roles) {
-        if (map.size > MAX_FANOUT) break;
-        await this.collectFromIdentity(String(role).trim().toLowerCase(), map);
-      }
-    }
+    // (W8aerwL6) Rol/broadcast/mijoz nishoni — yangi `identity.audience.resolve`
+    // (superadmin va mijoz ham). Mijoz qoidalari (TC6/TC7) shu yerda.
+    const target = buildAudienceTarget(dto);
+    if (target) await this.collectFromIdentity(target, map);
 
     // (QFoRULeu) Chegaradan oshsa XATO — jimgina kesilgan kampaniya
     // "muvaffaqiyat" deb yozilmasin. Yig'ish MAX_FANOUT+1 da to'xtaydi,
@@ -336,50 +560,65 @@ export class NotificationInboxService {
   }
 
   /**
-   * Page through identity users (optionally filtered by role) into `map`.
-   * NOTE: `identity.user.find_all` excludes superadmin and customer roles, so
-   * those are not reachable by role/broadcast — target them by explicit
-   * recipient_id instead.
+   * (W8aerwL6) Auditoriyani `identity.audience.resolve` dan keyset sahifalab
+   * `map` ga yig'adi. Avval `identity.user.find_all` edi — u superadmin va
+   * mijozni ataylab chiqarib tashlaydi (GET /users xavfsizligi, unga
+   * TEGILMAYDI), shuning uchun `roles:['customer'|'superadmin']` 0 qaytarardi.
+   *
+   * ⚠️ PII: `fields: 'minimal'` — faqat id/rol/til; ism va telefon bu
+   * servis xotirasiga va log'iga tushmaydi. ⚠️ identity xatosi endi
+   * YUTILMAYDI (ilgari warn + to'xtash — yarim auditoriyaga "muvaffaqiyat").
    */
   private async collectFromIdentity(
-    role: string | undefined,
+    target: IdentityAudienceTarget,
     map: Map<string, ResolvedRecipient>,
   ) {
-    let page = 1;
+    let afterId: string | null = null;
+    // Yagona rol so'ralgan bo'lsa — javobda rol bo'lmasa ham o'sha rol.
+    const onlyRole =
+      !target.broadcast &&
+      !target.include_customers &&
+      target.roles?.length === 1
+        ? target.roles[0]
+        : null;
 
     while (true) {
       if (map.size > MAX_FANOUT) return;
-      const res = await rmqSend<any>(
-        this.identityClient,
-        { cmd: 'identity.user.find_all' },
-        { query: { role, page, limit: IDENTITY_PAGE_SIZE } },
-      ).catch((err) => {
-        this.logger.warn(
-          `identity.user.find_all failed (role=${role ?? 'all'}, page=${page}): ${
-            err instanceof Error ? err.message : 'unknown'
-          }`,
+      let res: unknown;
+      try {
+        res = await rmqSend<unknown>(
+          this.identityClient,
+          { cmd: AUDIENCE_RESOLVE_PATTERN },
+          {
+            ...target,
+            after_id: afterId,
+            limit: IDENTITY_PAGE_SIZE,
+            fields: 'minimal',
+            with_total: false,
+          },
         );
-        return null;
-      });
+      } catch (error) {
+        throw audienceRpcError(error);
+      }
 
-      const data = res?.data ?? res ?? {};
-      const items: Array<{ id: string | number; role?: string }> =
-        data.items ?? data.data ?? (Array.isArray(data) ? data : []);
+      const page = toAudiencePage(res);
+      if (!page.items.length) return;
 
-      if (!items.length) return;
-
-      for (const u of items) {
+      let lastId: string | null = null;
+      for (const u of page.items) {
         const id = String(u?.id ?? '').trim();
         if (id) {
-          map.set(id, { id, role: u?.role ?? role ?? null, via: 'identity' });
+          lastId = id;
+          map.set(id, { id, role: u?.role ?? onlyRole, via: 'identity' });
           if (map.size > MAX_FANOUT) return;
         }
       }
 
-      const total: number | undefined = data?.meta?.total;
-      if (total !== undefined && page * IDENTITY_PAGE_SIZE >= total) return;
-      if (items.length < IDENTITY_PAGE_SIZE) return;
-      page += 1;
+      if (page.items.length < IDENTITY_PAGE_SIZE) return;
+      const next = page.next_after_id ?? lastId;
+      // Kursor oldinga siljimasa — cheksiz sikl emas, to'xtaymiz.
+      if (!next || next === afterId) return;
+      afterId = next;
     }
   }
 
@@ -394,6 +633,7 @@ export class NotificationInboxService {
     dto: DispatchNotificationDto,
     recipients: ResolvedRecipient[],
     channels: NotificationChannel[],
+    deliveryFor: DeliveryFor = () => this.initialDelivery(channels),
   ): Promise<Notification[]> {
     const repo = manager.getRepository(Notification);
     const base = {
@@ -406,10 +646,10 @@ export class NotificationInboxService {
       link: dto.link ?? null,
       channels,
       group_key: dto.group_key ?? null,
-      // (uFmUS86e) Har so'ralgan kanal uchun boshlang'ich holat — qator
-      // yozilgan zahoti "kimga nima ketmagani" DB'da ko'rinadi.
-      delivery: this.initialDelivery(channels),
     };
+    // (uFmUS86e) Har so'ralgan kanal uchun boshlang'ich holat — qator
+    // yozilgan zahoti "kimga nima ketmagani" DB'da ko'rinadi. (7Ec56EIw)
+    // Endi qabul qiluvchi bo'yicha: o'chirilgan / imkoniyati yo'q kanal.
 
     const rowIdByRecipient = new Map<string, string>();
     let toInsert = recipients;
@@ -428,19 +668,33 @@ export class NotificationInboxService {
         if (!rowIdByRecipient.has(key)) rowIdByRecipient.set(key, row.id);
       }
 
-      const idsByRole = new Map<string | null, string[]>();
+      // Bir xil rol + bir xil boshlang'ich `delivery` — BITTA UPDATE.
+      const groups = new Map<
+        string,
+        {
+          role: string | null;
+          delivery: Record<string, string>;
+          ids: string[];
+        }
+      >();
       for (const recipient of recipients) {
         const rowId = rowIdByRecipient.get(recipient.id);
         if (!rowId) continue;
-        idsByRole.set(recipient.role, [
-          ...(idsByRole.get(recipient.role) ?? []),
-          rowId,
-        ]);
+        const delivery = deliveryFor(recipient.id);
+        const key = JSON.stringify([recipient.role, delivery]);
+        const group = groups.get(key) ?? {
+          role: recipient.role,
+          delivery,
+          ids: [],
+        };
+        group.ids.push(rowId);
+        groups.set(key, group);
       }
-      for (const [role, ids] of idsByRole) {
+      for (const { role, delivery, ids } of groups.values()) {
         // jsonb ustunlari (`data`, `delivery`) TypeORM deep-partial turiga sig'maydi.
         await repo.update({ id: In(ids) }, {
           ...base,
+          delivery,
           recipient_role: role,
           is_read: false,
           read_at: null,
@@ -467,6 +721,7 @@ export class NotificationInboxService {
         batch.map((recipient) =>
           repo.create({
             ...base,
+            delivery: deliveryFor(recipient.id),
             recipient_id: recipient.id,
             recipient_role: recipient.role,
             is_read: false,
@@ -496,21 +751,17 @@ export class NotificationInboxService {
     );
   }
 
-  /** Boshlang'ich `delivery`: in_app darhol `sent` (qatorning o'zi), qolganlar `pending`. */
+  /**
+   * Boshlang'ich `delivery`: in_app darhol `sent` (qatorning o'zi), push
+   * `queued`, email `no_provider`, qolganlar `pending` (resolve-channels.ts).
+   */
   private initialDelivery(channels: NotificationChannel[]) {
     const delivery: Record<string, string> = {
       [NotificationChannel.IN_APP]: NotificationDeliveryStatus.SENT,
     };
     for (const channel of channels) {
       if (channel === NotificationChannel.IN_APP) continue;
-      delivery[channel] =
-        channel === NotificationChannel.PUSH
-          ? // Push faqat navbatga qo'yiladi (outbox) — darhol "navbatda".
-            NotificationDeliveryStatus.QUEUED
-          : channel === NotificationChannel.EMAIL
-            ? // Email provayderi ulanmagan — jim "skipped" emas, DB'da ko'rinadi.
-              NotificationDeliveryStatus.NO_PROVIDER
-            : NotificationDeliveryStatus.PENDING;
+      delivery[channel] = initialChannelStatus(channel);
     }
     return delivery;
   }
@@ -767,6 +1018,7 @@ export class NotificationInboxService {
     realtime: RealtimeResult | null,
     telegram: TelegramOutcome | null,
     sms: SmsChannelResult | null,
+    pushQueued = rows,
   ) {
     const byChannel: Record<string, number> = { in_app: rows };
     const noProvider: string[] = [];
@@ -779,7 +1031,8 @@ export class NotificationInboxService {
         byChannel.sms = Number(sms?.sms ?? 0);
         if (sms?.sms_status === 'no_provider') noProvider.push(channel);
       } else if (channel === NotificationChannel.PUSH) {
-        byChannel.push = rows;
+        // Navbatga qo'yilganlar (obunasi bor) — hammasi emas.
+        byChannel.push = pushQueued;
       } else if (channel === NotificationChannel.EMAIL) {
         byChannel.email = 0;
         noProvider.push(channel);

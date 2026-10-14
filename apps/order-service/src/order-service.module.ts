@@ -17,6 +17,11 @@ import {
   RmqProductDisambiguator,
 } from './ai/product-disambiguator';
 import {
+  DISTRICT_PICKER,
+  DistrictLlmFallbackService,
+  RmqDistrictPicker,
+} from './ai/district-llm-fallback';
+import {
   AppLoggerModule,
   RmqModule,
   DatabaseModule,
@@ -115,6 +120,9 @@ import { CustomerSegmentController } from './segment/customer-segment.controller
     ProductResolverService,
     AiPreviewService,
     { provide: PRODUCT_DISAMBIGUATOR, useClass: RmqProductDisambiguator },
+    // 5Z1ZvvzE: tuman LLM fallback'i (ai-service `ai.district.pick`).
+    { provide: DISTRICT_PICKER, useClass: RmqDistrictPicker },
+    DistrictLlmFallbackService,
   ],
 })
 export class OrderServiceModule {}

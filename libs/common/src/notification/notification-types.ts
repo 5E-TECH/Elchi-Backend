@@ -33,6 +33,13 @@ export interface NotificationTypeDefinition {
   /** Dispatch `channels` bermasa shu kanallar ishlatiladi. */
   default_channels: readonly NotificationChannel[];
   /**
+   * (7Ec56EIw) Shu tur uchun RUXSAT etilgan kanallar: dispatch `channels`
+   * bersa — KESISHMA olinadi (chaqiruvchi faqat toraytira oladi, katalogda
+   * yo'q kanal qo'shilmaydi). Sukut — `default_channels`. Qo'lda yuboriladigan
+   * (`*.manual`) va `x.` turlar uchun — barcha kanallar.
+   */
+  allowed_channels: readonly NotificationChannel[];
+  /**
    * Dedupe kaliti shabloni: `{{o'zgaruvchi}}` lar `dto.data` dan to'ldiriladi
    * (masalan `order:{{order_id}}:status`). O'zgaruvchi yetishmasa `group_key`
    * UMUMAN berilmaydi (bo'sh satr emas). `null` — har dispatch yangi qator.
@@ -56,6 +63,10 @@ const IN_APP_REALTIME: readonly NotificationChannel[] = Object.freeze([
   NotificationChannel.REALTIME,
 ]);
 
+/** (7Ec56EIw) Barcha kanallar — `*.manual` va `x.` turlarida ruxsat. */
+export const ALL_NOTIFICATION_CHANNELS: readonly NotificationChannel[] =
+  Object.freeze(Object.values(NotificationChannel));
+
 /** Buyurtma hodisalari: bir buyurtma = inboxda BITTA qator (holat yangilanadi). */
 const ORDER_STATUS_GROUP = 'order:{{order_id}}:status';
 // (i76gGjyq) Buyurtmaning `operator_id` si — market xodimi (`market_operator`),
@@ -67,15 +78,25 @@ const ORDER_AUDIENCE: readonly string[] = Object.freeze([
 ]);
 
 const def = (
-  entry: Omit<NotificationTypeDefinition, 'default_channels'> & {
+  entry: Omit<
+    NotificationTypeDefinition,
+    'default_channels' | 'allowed_channels'
+  > & {
     default_channels?: readonly NotificationChannel[];
+    allowed_channels?: readonly NotificationChannel[];
   },
-): NotificationTypeDefinition =>
-  Object.freeze({
+): NotificationTypeDefinition => {
+  const defaults = entry.default_channels ?? IN_APP_REALTIME;
+  return Object.freeze({
     ...entry,
-    default_channels: entry.default_channels ?? IN_APP_REALTIME,
+    default_channels: defaults,
+    // Sukut kanallari doim ruxsat etilganlar ichida.
+    allowed_channels: Object.freeze([
+      ...new Set([...defaults, ...(entry.allowed_channels ?? [])]),
+    ]),
     default_audience: Object.freeze([...entry.default_audience]),
   });
+};
 
 /** Admin "Xabar yuborish" formasi `${category}.manual` yuboradi — har kategoriya uchun. */
 const MANUAL_TYPES: NotificationTypeDefinition[] = (
@@ -89,6 +110,8 @@ const MANUAL_TYPES: NotificationTypeDefinition[] = (
     label_uz: "Qo'lda yuborilgan xabar",
     default_audience: [],
     user_can_mute: true,
+    // Admin "Xabar yuborish" formasi telegram/sms/push ni o'zi tanlaydi.
+    allowed_channels: ALL_NOTIFICATION_CHANNELS,
   }),
 );
 
@@ -344,6 +367,18 @@ export const NOTIFICATION_TYPES: readonly NotificationTypeDefinition[] =
       default_audience: [Roles.SUPERADMIN, Roles.ADMIN],
       user_can_mute: false,
     }),
+    // (8auPBa1O #7) SMS provayder balansi chegaradan tushdi — notification-service
+    // SmsBalanceMonitor, Toshkent kuniga bir marta. Katalogda bo'lmasa dispatch
+    // 400 qaytarib, ogohlantirish adminlarga UMUMAN yetmasdi.
+    def({
+      key: 'sms.balance_low',
+      category: NotificationCategory.SYSTEM,
+      priority: NotificationPriority.CRITICAL,
+      group_key_pattern: 'sms:balance_low:{{day}}',
+      label_uz: 'SMS balansi tugayapti',
+      default_audience: [Roles.SUPERADMIN, Roles.ADMIN],
+      user_can_mute: false,
+    }),
 
     // ---- Marketing ----
     def({
@@ -372,6 +407,18 @@ export function findNotificationType(
 /** Vaqtinchalik `x.` prefiksli erkin tur. */
 export function isFreeNotificationType(key: string | null | undefined) {
   return FREE_NOTIFICATION_TYPE_RE.test(String(key ?? '').trim());
+}
+
+/**
+ * (7Ec56EIw) Tur uchun ruxsat etilgan kanallar: katalogdagi
+ * `allowed_channels`; katalogdan tashqari (`x.`) tur — barcha kanallar.
+ */
+export function allowedNotificationChannels(
+  key: string | null | undefined,
+): readonly NotificationChannel[] {
+  return (
+    findNotificationType(key)?.allowed_channels ?? ALL_NOTIFICATION_CHANNELS
+  );
 }
 
 /** Fail-closed: katalogda bor YOKI `x.` prefiksli bo'lsagina true. */

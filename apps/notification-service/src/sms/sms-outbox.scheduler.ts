@@ -10,6 +10,7 @@ import { DataSource } from 'typeorm';
 import { captureException } from '@app/common';
 import { SmsConfigService } from './sms-config.service';
 import { SmsConsentService } from './sms-consent.service';
+import { SmsGateService } from './sms-gate.service';
 import { SmsOutboxService } from './sms-outbox.service';
 import { SmsProviderRegistry } from './sms-provider.registry';
 import { maskPhone } from './sms-phone.util';
@@ -47,6 +48,7 @@ export class SmsOutboxScheduler implements OnModuleInit, OnModuleDestroy {
     private readonly scheduler: SchedulerRegistry,
     private readonly dataSource: DataSource,
     private readonly consent: SmsConsentService,
+    private readonly gate: SmsGateService,
   ) {}
 
   onModuleInit(): void {
@@ -93,7 +95,7 @@ export class SmsOutboxScheduler implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Bitta tick. Xatolar yutiladi (log + Sentry) — scheduler yiqilmaydi. */
-  async tick(): Promise<{
+  async tick(now?: Date): Promise<{
     processed: number;
     sent: number;
     failed: number;
@@ -110,7 +112,7 @@ export class SmsOutboxScheduler implements OnModuleInit, OnModuleDestroy {
       )) as Array<{ locked: boolean }>;
       locked = Boolean(row?.locked);
       if (!locked) return null;
-      return await this.processBatch();
+      return await this.processBatch(now);
     } catch (error) {
       const e = error as Error;
       this.logger.error(`SMS tick yiqildi: ${e.message}`, e.stack);
@@ -129,21 +131,37 @@ export class SmsOutboxScheduler implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  private async processBatch() {
+  private async processBatch(at?: Date) {
     // Kill-switch: navbat SAQLANADI (qatorlar urinish sarflab 'failed' bo'lmaydi),
     // faqat yuborish to'xtaydi. Yoqilganda davom etadi.
     if (!this.config.enabled) return { processed: 0, sent: 0, failed: 0 };
-    const rows = await this.outbox.claimDue(this.config.batchSize);
+    const rows = await this.outbox.claimDue(this.config.batchSize, at);
     let sent = 0;
     let failed = 0;
-    for (const row of rows) {
+    for (const [index, row] of rows.entries()) {
       if (this.shuttingDown) {
         // Egallangan, lekin yuborilmagan — darhol qayta navbatga (qotmasin).
-        await this.outbox.markFailed(row, 'shutdown before send', true);
-        continue;
+        // (3fRbyadQ TC11) Urinish SARFLANMAYDI va backoff qo'yilmaydi:
+        // provayderga hech narsa ketmagan; markFailed ishlatilsa 2 marta
+        // xato bergan qator restartda nohaq terminal 'failed' bo'lardi.
+        await this.outbox.releaseClaimed(
+          rows.slice(index).map((pending) => pending.id),
+        );
+        break;
       }
       try {
         if (row.message_class === 'promo') {
+          // (sVByLMnt #3) Tungi taqiq YUBORISH paytida ham: navbat tiqilib
+          // qolsa, SMS_ENABLED kechroq yoqilsa yoki qayta urinish (backoff)
+          // taqiq oynasiga tushsa — reklama tunda KETMAYDI, oyna tugashiga
+          // suriladi (tashlanmaydi, urinish sarflanmaydi). Hisob yagona
+          // `gate.scheduleFor` qoidasi orqali (qo'shaloq konversiya yo'q).
+          const sendAt = at ?? new Date();
+          const release = this.gate.scheduleFor('promo', sendAt);
+          if (release.getTime() > sendAt.getTime()) {
+            await this.outbox.deferUntil(row.id, release);
+            continue;
+          }
           const { blocked } = await this.consent.partition([
             { phone: row.to_phone, customer_id: row.customer_id },
           ]);

@@ -98,6 +98,11 @@ export interface AiOrderPreview {
   is_replacement: boolean;
   /** Faqat matn ("#sevinch" → "sevinch"); `operator_id` ga HECH QACHON bog'lanmaydi. */
   operator: string | null;
+  /**
+   * 5Z1ZvvzE: faqat tuman LLM fallback'i tanlaganda `'ai'` (viloyat qulfi +
+   * SOATO darvozasidan o'tgan). Frontend e'tiborsiz qoldirishi mumkin.
+   */
+  district_source?: 'ai';
 }
 
 /** `logistics.district.resolve_by_text` so'rovining bitta elementi (C7). */
@@ -134,6 +139,8 @@ export interface DistrictTextResolution {
     | 'no_place_signal'
     | 'cross_region_confusable'
     | 'sato_mismatch';
+  /** 5Z1ZvvzE: order-service ichida — tuman LLM fallback'i tanladi. */
+  llm_picked?: boolean;
 }
 
 /** `order.ai_resolve_preview` so'rovi (gateway → order-service). */

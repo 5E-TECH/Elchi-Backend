@@ -76,6 +76,39 @@ describe("yokjwjXG - superadmin buyurtmani pochtadan xavfsiz o'chiradi", () => {
     expect(h.save).not.toHaveBeenCalled();
   });
 
+  it("holat parallel o'zgargan bo'lsa (UPDATE 0 qator) 409, pochta sanog'iga tegilmaydi", async () => {
+    const h = makeHarness();
+    h.query
+      .mockResolvedValueOnce([{ id: '88', status: 'new' }])
+      .mockResolvedValueOnce([]);
+
+    expect(await statusCode(h.service.remove('700', requester))).toBe(409);
+    expect(
+      h.query.mock.calls.some(([sql]) =>
+        String(sql).includes('UPDATE "logistics_schema"."posts"'),
+      ),
+    ).toBe(false);
+  });
+
+  it("kuryer qo'lidagi buyurtmani o'chirmaydi", async () => {
+    const h = makeHarness({ holder_type: 'COURIER' });
+
+    expect(await statusCode(h.service.remove('700', requester))).toBe(409);
+    expect(h.transaction).not.toHaveBeenCalled();
+  });
+
+  it("pochtasiz received buyurtma avvalgi yo'l bilan o'chadi (pochta SQL yo'q)", async () => {
+    const h = makeHarness({ post_id: null });
+
+    await expect(h.service.remove('700', requester)).resolves.toMatchObject({
+      statusCode: 200,
+    });
+    expect(h.save).toHaveBeenCalledWith(
+      expect.objectContaining({ id: '700', isDeleted: true }),
+    );
+    expect(h.query).not.toHaveBeenCalled();
+  });
+
   it("oldindan to'langan buyurtmani moliyaviy qaytarishsiz o'chirmaydi", async () => {
     const h = makeHarness({ paid_online_amount: 25_000 });
 

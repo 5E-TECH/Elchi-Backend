@@ -276,7 +276,13 @@ function clip(text: string): string {
 export function toConfirmFailure(error: unknown): {
   code: AiConfirmFailureCode;
   reason: string;
+  order_id?: string;
 } {
+  // Cp2v3ZJ7: barqaror kalit + mazmun imzosi — order-service
+  // `RpcException({statusCode:409, code:'duplicate_recent', order_id})`.
+  const duplicate = duplicateRecentOf(error);
+  if (duplicate) return duplicate;
+
   if (isTimeoutError(error)) {
     return {
       code: 'timeout_unknown',
@@ -310,6 +316,35 @@ export function toConfirmFailure(error: unknown): {
   return {
     code: 'create_failed',
     reason: AI_CONFIRM_REASON_TEXT.create_failed,
+  };
+}
+
+/**
+ * order-service imzo qatlamining xatosi (`ai/ai-create-dedupe.ts`): boshqa
+ * draft'dan ayni buyurtma 10 daqiqa ichida yaratilgan. `order_id` faqat
+ * raqam bo'lsa o'tkaziladi.
+ */
+function duplicateRecentOf(
+  error: unknown,
+): { code: 'duplicate_recent'; reason: string; order_id?: string } | null {
+  if (!error || typeof error !== 'object') return null;
+  const obj = error as {
+    code?: unknown;
+    order_id?: unknown;
+    error?: { code?: unknown; order_id?: unknown } | null;
+  };
+  const code = obj.code ?? obj.error?.code;
+  if (code !== 'duplicate_recent') return null;
+  const raw = obj.order_id ?? obj.error?.order_id;
+  const orderId =
+    typeof raw === 'string' || typeof raw === 'number' ? String(raw) : '';
+  const valid = /^\d{1,19}$/.test(orderId);
+  return {
+    code: 'duplicate_recent',
+    ...(valid ? { order_id: orderId } : {}),
+    reason: valid
+      ? `Bu buyurtma 10 daqiqa ichida allaqachon yaratilgan (#${orderId}) — takror yaratilmadi`
+      : AI_CONFIRM_REASON_TEXT.duplicate_recent,
   };
 }
 

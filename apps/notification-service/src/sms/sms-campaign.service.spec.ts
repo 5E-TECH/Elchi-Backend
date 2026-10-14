@@ -203,4 +203,62 @@ describe('SmsCampaignService', () => {
     });
     expect(preview.recipients).toBe(1);
   });
+
+  it('(sVByLMnt TC14) history keeps queued/blocked/skipped and derives sent/failed/pending from sms_outbox', async () => {
+    repo.find.mockResolvedValue([
+      {
+        id: '5',
+        idempotency_key: 'k',
+        status: 'queued',
+        total: 6,
+        queued: 4,
+        blocked: 1,
+        skipped: 1,
+      },
+    ]);
+    outbox.countByCampaign.mockResolvedValue(
+      new Map([['5', { delivered: 2, sent: 1, failed: 1 }]]),
+    );
+    const [row] = await make().history();
+    expect(outbox.countByCampaign).toHaveBeenCalledWith(['5']);
+    expect(row).toMatchObject({
+      total: 6,
+      queued: 4,
+      blocked: 1,
+      skipped: 1,
+      sent: 3,
+      delivered: 2,
+      failed: 1,
+      pending: 0,
+    });
+  });
+
+  it('(sVByLMnt TC14) a campaign the gate rejected stays in history as failed with its blocked count', async () => {
+    const { SmsBlockedError } = jest.requireActual('./sms-gate.service');
+    outbox.enqueue.mockRejectedValue(
+      new SmsBlockedError('daily_cap_exceeded', 'Kunlik SMS kvotasi tugadi', {
+        cap: 3,
+      }),
+    );
+    await expect(
+      make().send(
+        {
+          message_class: 'transactional',
+          text: 'Filial manzili o‘zgardi',
+          segment: { phones: ['+998901111111'] },
+        },
+        'key-cap',
+        '1',
+      ),
+    ).rejects.toMatchObject({
+      error: expect.objectContaining({
+        statusCode: 409,
+        reason: 'daily_cap_exceeded',
+      }),
+    });
+    expect(repo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ idempotency_key: 'key-cap', total: 1 }),
+    );
+    expect(repo.update).toHaveBeenCalledWith({ id: '5' }, { status: 'failed' });
+  });
 });

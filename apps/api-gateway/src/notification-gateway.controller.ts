@@ -37,6 +37,7 @@ import {
   SendNotificationRequestDto,
   SubscribePushRequestDto,
   UnsubscribePushRequestDto,
+  UpdateNotificationPreferencesRequestDto,
   UpdateTelegramMarketRequestDto,
 } from './dto/notification.swagger.dto';
 
@@ -173,6 +174,38 @@ export class NotificationGatewayController {
     return this.send(
       { cmd: 'notification.inbox.delete' },
       { recipient_id: this.requireUserId(req), id },
+    );
+  }
+
+  // ==================== Sozlamalar (mP1WGG1W) — o'z sozlamasi ====================
+  // `:id` marshrutlaridan OLDIN. Rol talab qilinmaydi; `user_id` FAQAT JWT'dan.
+
+  @Get('preferences')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: "Current user's notification preferences" })
+  getPreferences(@Req() req: AuthedRequest) {
+    return this.send(
+      { cmd: 'notification.preferences.get' },
+      { user_id: this.requireUserId(req) },
+    );
+  }
+
+  @Patch('preferences')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth()
+  @ApiOperation({
+    summary:
+      'Update current user preferences (critical types cannot be disabled → 400)',
+  })
+  @ApiBody({ type: UpdateNotificationPreferencesRequestDto })
+  updatePreferences(
+    @Req() req: AuthedRequest,
+    @Body() dto: UpdateNotificationPreferencesRequestDto,
+  ) {
+    return this.send(
+      { cmd: 'notification.preferences.update' },
+      { items: dto.items, user_id: this.requireUserId(req) },
     );
   }
 

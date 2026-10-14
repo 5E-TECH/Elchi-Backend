@@ -189,6 +189,40 @@ describe('markProfitPaid', () => {
     );
   });
 
+  it('vpKijXce: requester (gateway endi uzatadi) — chiqim va audit aktori admin, summa/dedup o`zgarmaydi', async () => {
+    const { service, profitShareRepo, financeSent } = makeService({});
+    profitShareRepo.findOne.mockResolvedValue({
+      id: 'ps9',
+      investor_id: '42',
+      amount: 250000,
+      is_paid: false,
+      isDeleted: false,
+    });
+
+    await service.markProfitPaid('ps9', { id: '17', roles: ['admin'] });
+
+    const spend = financeSent.find((m) => m.cmd === 'finance.cashbox.spend');
+    expect(spend?.payload).toEqual(
+      expect.objectContaining({
+        user_id: '17',
+        created_by: '17',
+        amount: 250000,
+        cashbox_type: 'main',
+        dedup_epoch: 'investor-profit:ps9',
+      }),
+    );
+    const ledger = financeSent.find(
+      (m) => m.cmd === 'finance.financial_balance.record',
+    );
+    expect(ledger?.payload).toEqual(
+      expect.objectContaining({
+        amount: -250000,
+        created_by: '17',
+        dedup_key: 'investor-profit:ps9',
+      }),
+    );
+  });
+
   it('allaqachon to`langan qatorni ikkinchi marta yechmaydi', async () => {
     const { service, profitShareRepo, financeSent } = makeService({});
     profitShareRepo.findOne.mockResolvedValue({

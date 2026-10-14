@@ -76,6 +76,54 @@ function pickFields(value: unknown, keys: readonly string[]) {
   );
 }
 
+/**
+ * (VfgcnxDa) Pochta buyurtmalari (GET /post/orders/:id, /post/orders/rejected/:id,
+ * qaytarish so'rovlari) ichidagi boyitilgan obyektlarning OQ RO'YXATI.
+ *
+ * identity `market`/`customer` — `admins` jadvalining to'liq qatori
+ * (market_tg_token, username, salary, tarif, komissiya...), shuning uchun
+ * faqat shu kalitlar chiqadi. Yangi kalit faqat shu ro'yxat orqali qo'shiladi
+ * (logistics-gateway.enrichment.spec kalitlar to'plamini qotiradi).
+ *
+ * Mijoz `extra_number`/`region_id` va tuman `sato_code`/`region_id`/
+ * `assigned_region`/`assignedToRegion` — maxfiy emas, pochta detali ularni
+ * ishlatadi: chop etish yorlig'idagi qo'shimcha raqam va fix3 LC-09
+ * (`resolveDispatchRegionId` — tuman qayta biriktirilgan viloyat).
+ */
+export const POST_ORDER_MARKET_FIELDS = ['id', 'name', 'phone_number'] as const;
+export const POST_ORDER_CUSTOMER_FIELDS = [
+  'id',
+  'name',
+  'phone_number',
+  'extra_number',
+  'address',
+  'district_id',
+  'region_id',
+] as const;
+export const POST_ORDER_DISTRICT_FIELDS = [
+  'id',
+  'name',
+  'sato_code',
+  'region_id',
+  'assigned_region',
+  'region',
+  'assignedToRegion',
+] as const;
+export const POST_ORDER_REGION_FIELDS = ['id', 'name', 'sato_code'] as const;
+
+function pickPostOrderDistrict(value: unknown) {
+  const district = pickFields(value, POST_ORDER_DISTRICT_FIELDS);
+  if (!district) {
+    return null;
+  }
+  for (const key of ['region', 'assignedToRegion'] as const) {
+    if (key in district) {
+      district[key] = pickFields(district[key], POST_ORDER_REGION_FIELDS);
+    }
+  }
+  return district;
+}
+
 /** CODE-12 — o'chirilgan eski pochta route'lari (PATCH post/:id, post/reassign/:id). */
 export const LEGACY_POST_ROUTE_DISABLED_MESSAGE =
   "Bu eski pochta amali o'chirilgan (buyurtma custody'sini tekshiruvsiz o'zgartirardi). Pochtani filialga POST /branches/posts/:postId/dispatch, kuryerga esa POST /orders/assign-to-courier yoki skan orqali bering";
@@ -171,34 +219,21 @@ export class LogisticsGatewayController {
     const customerMap = new Map(customers);
     const districtMap = new Map(districts);
 
-    return rows.map((row) => {
-      const district = row.district_id
-        ? pickFields(districtMap.get(row.district_id), ['id', 'name', 'region'])
-        : null;
-      if (district && 'region' in district) {
-        district.region = pickFields(district.region, ['id', 'name']);
-      }
-      return {
-        ...row,
-        market: row.market_id
-          ? pickFields(marketMap.get(row.market_id), [
-              'id',
-              'name',
-              'phone_number',
-            ])
-          : null,
-        customer: row.customer_id
-          ? pickFields(customerMap.get(row.customer_id), [
-              'id',
-              'name',
-              'phone_number',
-              'address',
-              'district_id',
-            ])
-          : null,
-        district,
-      };
-    });
+    return rows.map((row) => ({
+      ...row,
+      market: row.market_id
+        ? pickFields(marketMap.get(row.market_id), POST_ORDER_MARKET_FIELDS)
+        : null,
+      customer: row.customer_id
+        ? pickFields(
+            customerMap.get(row.customer_id),
+            POST_ORDER_CUSTOMER_FIELDS,
+          )
+        : null,
+      district: row.district_id
+        ? pickPostOrderDistrict(districtMap.get(row.district_id))
+        : null,
+    }));
   }
 
   private async enrichOrdersByPostResponse(response: {

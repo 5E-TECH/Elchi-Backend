@@ -3924,6 +3924,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     paid_by_id?: string | null;
     amount: number;
     note?: string | null;
+    idempotency_key?: string | null;
   }) {
     try {
       this.assertBigIntId(input.operator_id, 'operator_id');
@@ -3931,6 +3932,17 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
       this.assertPositiveAmount(amount, 'amount');
       const operatorId = String(input.operator_id);
       const paidById = input.paid_by_id ? String(input.paid_by_id) : null;
+      // (FJVqcUTv) Kalit MAIN kassa tarixining `dedup_epoch` ida saqlanadi
+      // (migratsiyasiz): prefiks boshqa SALARY yozuvlari bilan to'qnashmasin.
+      const idempotencyKey = String(input.idempotency_key ?? '').trim();
+      if (idempotencyKey.length > 255) {
+        throw new BadRequestException(
+          'Idempotency-Key 255 belgidan oshmasligi kerak',
+        );
+      }
+      const dedupEpoch = idempotencyKey
+        ? `operator-payment:${idempotencyKey}`
+        : '';
       const queryRunner = this.dataSource.createQueryRunner();
       await queryRunner.connect();
       await queryRunner.startTransaction();
@@ -3941,9 +3953,45 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           'SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))',
           [`operator-payment:${operatorId}`],
         );
-        const operatorBalance = await this.findOperatorBalance({
-          operator_id: operatorId,
-        });
+
+        // (FJVqcUTv) Takroriy so'rov (ikki marta bosish / javobi yo'qolgan
+        // retry) — qulf ostida, qarz tekshiruvidan OLDIN: muvaffaqiyatli
+        // to'lovning retry'i "qarzdan oshib ketdi" 400 olmasin.
+        if (dedupEpoch) {
+          const replayHistory = await queryRunner.manager.findOne(
+            CashboxHistory,
+            {
+              where: {
+                source_type: Source_type.SALARY,
+                operation_type: Operation_type.EXPENSE,
+                source_user_id: operatorId,
+                dedup_epoch: dedupEpoch,
+                isDeleted: false,
+              },
+            },
+          );
+          const replayPayment = replayHistory?.source_id
+            ? await queryRunner.manager.findOne(OperatorPayment, {
+                where: { id: String(replayHistory.source_id) },
+              })
+            : null;
+          if (replayPayment) {
+            await queryRunner.commitTransaction();
+            committed = true;
+            return this.successRes(
+              { ...replayPayment, idempotent: true },
+              200,
+              "Operator to'lovi allaqachon qayd qilingan (takroriy so'rov)",
+            );
+          }
+        }
+
+        // (FJVqcUTv) Qarz shu tranzaksiya ulanishida o'qiladi (pool'dan
+        // ikkinchi ulanish olinmaydi; qulf ostida oldingi to'lov ko'rinadi).
+        const operatorBalance = await this.findOperatorBalance(
+          { operator_id: operatorId },
+          queryRunner.manager,
+        );
         if (amount > Number(operatorBalance.data.balance)) {
           throw new BadRequestException(
             "To'lov miqdori operatorga qarzdan oshib ketdi",
@@ -3981,7 +4029,7 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
             cashbox_id: savedCashbox.id,
             source_type: Source_type.SALARY,
             source_id: String(saved.id),
-            dedup_epoch: '',
+            dedup_epoch: dedupEpoch,
             source_user_id: operatorId,
             amount,
             balance_after: savedCashbox.balance,
@@ -4085,19 +4133,30 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
    * Operator balance = SUM(non-deleted earnings) - SUM(non-deleted payments).
    * Positive balance means we owe the operator.
    */
-  async findOperatorBalance(input: { operator_id: string }) {
+  async findOperatorBalance(
+    input: { operator_id: string },
+    // (FJVqcUTv) createOperatorPayment tranzaksiyasi ichidan chaqirilganda —
+    // o'sha ulanish (qulf ostidagi izchil o'qish).
+    manager?: EntityManager,
+  ) {
     try {
       this.assertBigIntId(input.operator_id, 'operator_id');
       const operatorId = String(input.operator_id);
+      const earningRepo = manager
+        ? manager.getRepository(OperatorEarning)
+        : this.earningRepo;
+      const paymentRepo = manager
+        ? manager.getRepository(OperatorPayment)
+        : this.paymentRepo;
 
-      const earnedRow = await this.earningRepo
+      const earnedRow = await earningRepo
         .createQueryBuilder('e')
         .select('COALESCE(SUM(e.amount), 0)', 'total')
         .where('e.operator_id = :operatorId', { operatorId })
         .andWhere('e.is_deleted = false')
         .getRawOne<{ total: string }>();
 
-      const paidRow = await this.paymentRepo
+      const paidRow = await paymentRepo
         .createQueryBuilder('p')
         .select('COALESCE(SUM(p.amount), 0)', 'total')
         .where('p.operator_id = :operatorId', { operatorId })
@@ -4299,8 +4358,14 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           },
         );
         if (existing) {
+          // (cSNJN7GP) Kalit boshqa summa/izoh bilan qayta ishlatilsa — 409.
+          // Faqat BUYURTMASIZ (qo'lda/to'lov) yozuvlarda: buyurtma
+          // yozuvlari outbox'dan keladi va ularning takroriy yetkazilishi
+          // avvalgidek jim 200 (409 outbox'ni 10 marta qayta urib DLQ'ga
+          // tashlardi).
           if (
             dedupKey &&
+            !input.order_id &&
             (Math.round(Number(existing.amount) * 100) !==
               Math.round(amount * 100) ||
               String(existing.created_by ?? '') !==
@@ -4316,7 +4381,8 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
           }
           await queryRunner.commitTransaction();
           return this.successRes(
-            existing,
+            // (cSNJN7GP) Takroriy so'rov aniq farqlansin (TMgL1zvq naqshi).
+            { ...existing, idempotent: true },
             200,
             'ledger entry already recorded',
           );
@@ -4383,6 +4449,17 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
         isDeleted: false,
       };
       if (input.source_type) {
+        // (b1QxU3qa) Gateway ParseEnumPipe'dan tashqari RMQ chaqiruvchisi ham
+        // enumga kirmagan qiymat bilan Postgres 500'ini olmasin — 400.
+        if (
+          !(Object.values(FinancialSource_type) as string[]).includes(
+            String(input.source_type),
+          )
+        ) {
+          throw new BadRequestException(
+            `source_type noto'g'ri: ${String(input.source_type)}`,
+          );
+        }
         where.source_type = input.source_type;
       }
       // Toshkent kuni (C2 / CODE-22): 'YYYY-MM-DD' — butun kun (ilgari UTC
@@ -4605,8 +4682,16 @@ export class FinanceServiceService implements OnModuleInit, OnModuleDestroy {
     limit?: number;
   }) {
     try {
-      const page = Math.max(1, Number(input.page ?? 1));
-      const limit = Math.min(Math.max(Number(input.limit ?? 20), 1), 100);
+      // (vmLTsAok) Server sahifalashi: `limit` 1..100 ga qisiladi (10 000
+      // so'ralsa ham 100), javobdagi `pagination.limit/totalPages` — haqiqiy
+      // qo'llangan qiymatlar. Son bo'lmagan page/limit (`?page=abc`) ilgari
+      // NaN bo'lib OFFSET'ga tushardi — endi sukut qiymati.
+      const rawPage = Math.floor(Number(input.page ?? 1));
+      const rawLimit = Math.floor(Number(input.limit ?? 20));
+      const page = Number.isFinite(rawPage) ? Math.max(1, rawPage) : 1;
+      const limit = Number.isFinite(rawLimit)
+        ? Math.min(Math.max(rawLimit, 1), 100)
+        : 20;
 
       const qb = this.financialHistoryRepo
         .createQueryBuilder('h')

@@ -40,6 +40,15 @@ import { SmsCampaignService } from './sms/sms-campaign.service';
 import { SmsDlrService } from './sms/sms-dlr.service';
 import { SmsBalanceMonitor } from './sms/sms-balance.monitor';
 import { SmsOtpService } from './sms/sms-otp.service';
+// (W8aerwL6 / xHPdpj0W) auditoriya ko'rinishi va kampaniya navbati.
+import { NotificationCampaign } from './campaign/notification-campaign.entity';
+import { CampaignController } from './campaign/campaign.controller';
+import { CampaignService } from './campaign/campaign.service';
+import { AudiencePreviewService } from './audience/audience-preview.service';
+import { NotificationPreference } from './entities/notification-preference.entity';
+import { NotificationPreferencesService } from './preferences/notification-preferences.service';
+import { ChannelPlannerService } from './channels/channel-planner.service';
+import { NotificationEscalationService } from './escalation/notification-escalation.service';
 
 @Module({
   imports: [
@@ -71,6 +80,9 @@ import { SmsOtpService } from './sms/sms-otp.service';
       SmsTemplate,
       CustomerConsent,
       SmsCampaign,
+      NotificationCampaign,
+      // (mP1WGG1W) foydalanuvchi sozlamalari (migratsiya 1716000000075).
+      NotificationPreference,
     ]),
     // Push yetkazish bir partiyada 100 tagacha bildirishnomani parallel
     // yuboradi — 5 s lik standart javob muddati qisqa: muddat o'tsa outbox
@@ -80,7 +92,11 @@ import { SmsOtpService } from './sms/sms-otp.service';
       options: { publishTimeoutMs: 20_000 },
     }),
   ],
-  controllers: [NotificationServiceController, SmsController],
+  controllers: [
+    NotificationServiceController,
+    SmsController,
+    CampaignController,
+  ],
   providers: [
     NotificationServiceService,
     NotificationInboxService,
@@ -102,6 +118,12 @@ import { SmsOtpService } from './sms/sms-otp.service';
     SmsDlrService,
     SmsBalanceMonitor,
     SmsOtpService,
+    AudiencePreviewService,
+    CampaignService,
+    // (mP1WGG1W / 7Ec56EIw) sozlamalar, kanal rejasi, CRITICAL eskalatsiya.
+    NotificationPreferencesService,
+    ChannelPlannerService,
+    NotificationEscalationService,
   ],
 })
 export class NotificationServiceModule {}

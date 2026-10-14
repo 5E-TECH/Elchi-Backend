@@ -119,6 +119,7 @@ describe('WebPushService', () => {
       gone: 2,
       failed: 1,
       error: 'HTTP 500: oops',
+      retryable: true,
     });
     expect(repo.update).toHaveBeenCalledWith(
       { id: expect.objectContaining({ value: ['1'] }) },

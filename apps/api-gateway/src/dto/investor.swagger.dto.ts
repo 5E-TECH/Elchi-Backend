@@ -1,5 +1,6 @@
 import { Status } from '@app/common';
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
+import { Transform } from 'class-transformer';
 import {
   IsDateString,
   IsEnum,
@@ -7,9 +8,15 @@ import {
   IsOptional,
   IsPhoneNumber,
   IsString,
+  Matches,
   Max,
   Min,
 } from 'class-validator';
+
+/** vpKijXce: users.id — musbat butun son (raqam yoki satr qabul qilinadi). */
+const LINKED_USER_ID_RE = /^[1-9]\d{0,18}$/;
+const toIdString = ({ value }: { value: unknown }) =>
+  typeof value === 'number' ? String(value) : value;
 
 export class CreateInvestorDto {
   @ApiProperty()
@@ -29,6 +36,19 @@ export class CreateInvestorDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  /**
+   * vpKijXce: investor login qiladigan foydalanuvchi (users.id, rol =
+   * investor). `GET /investors/me` investorni shu orqali topadi. Ilgari bu
+   * maydon gateway'da yo'q edi (forbidNonWhitelisted → 400) — natijada hech
+   * bir investor login bilan bog'lanmagan (user_id = '0').
+   */
+  @ApiPropertyOptional({ example: '25', description: 'users.id (investor)' })
+  @IsOptional()
+  @Transform(toIdString)
+  @IsString()
+  @Matches(LINKED_USER_ID_RE, { message: 'user_id must be a positive integer' })
+  user_id?: string;
 }
 
 export class UpdateInvestorDto {
@@ -51,6 +71,18 @@ export class UpdateInvestorDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  /** vpKijXce: login bilan bog'lash; `null` — bog'lanishni uzish. */
+  @ApiPropertyOptional({
+    example: '25',
+    nullable: true,
+    description: 'users.id (investor); null — uzish',
+  })
+  @IsOptional()
+  @Transform(toIdString)
+  @IsString()
+  @Matches(LINKED_USER_ID_RE, { message: 'user_id must be a positive integer' })
+  user_id?: string | null;
 }
 
 export class CreateInvestmentDto {

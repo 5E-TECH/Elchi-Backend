@@ -149,7 +149,9 @@ const localTestDatabase = (() => {
       expect(queries.filter((sql) => /LIMIT 10\b/i.test(sql))).toHaveLength(2);
     }, 30_000);
 
-    it("all=true 366 kundan eski buyurtmani ham SQL hisobiga qo'shadi", async () => {
+    // (uN1tjjGu) "Barchasi" ham 366 kunlik chegaradan o'tadi (audit C3) —
+    // 2024 yilgi buyurtma hisobga tushmaydi, javob esa buni aytadi.
+    it('all=true 366 kunlik oynada hisoblaydi va clamped=true deydi', async () => {
       const end = new Date().toISOString();
       const allOverview = await analytics.getOverviewStats(
         undefined,
@@ -165,9 +167,10 @@ const localTestDatabase = (() => {
       );
       const cappedMarkets = await analytics.getMarketStats('1970-01-01', end);
 
-      expect(allOverview.acceptedCount).toBe(5001);
-      expect(allOverview.applied_range.clamped).toBe(false);
-      expect(allMarkets[0].totalOrders).toBe(5001);
+      expect(allOverview.acceptedCount).toBe(5000);
+      expect(allOverview.applied_range.clamped).toBe(true);
+      expect(allOverview.applied_range.requested_from).toBeNull();
+      expect(allMarkets[0].totalOrders).toBe(5000);
       expect(cappedMarkets[0].totalOrders).toBe(5000);
     }, 30_000);
   },

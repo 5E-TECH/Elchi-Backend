@@ -333,6 +333,16 @@ export const notificationValidationSchema = Joi.object({
     .uri({ scheme: ['https'] })
     .allow('')
     .optional(),
+  // (7Ec56EIw / Jht84wGp) CRITICAL xabar shuncha daqiqada o'qilmasa va push
+  // yetmagan bo'lsa — SMS eskalatsiyasi (ATIGI BIR MARTA). 0 — o'chiq.
+  // SMS faqat SMS_ENABLED=true bo'lsa ketadi.
+  NOTIF_ESCALATION_MINUTES: Joi.number().integer().min(0).max(1440).default(10),
+  // (7Ec56EIw #4) Onlayn (socket ulangan) foydalanuvchiga push yubormaslik —
+  // gateway `realtime.presence.check` patterni deploy qilinguncha false.
+  NOTIF_PUSH_PRESENCE_CHECK: Joi.boolean()
+    .truthy('true', '1')
+    .falsy('false', '0')
+    .default(false),
   // Reklama taqiq oynasi (Toshkent vaqti), qonun soatlari o'zgarishi mumkin.
   NOTIF_PROMO_QUIET_HOURS: Joi.string()
     .pattern(/^\d{1,2}:\d{2}-\d{1,2}:\d{2}$/)

@@ -442,9 +442,29 @@ describe('OrderGatewayController — POST /orders/ai-parse', () => {
         },
       });
 
-      expect(fx.ai.send).toHaveBeenCalledTimes(1);
+      // 1) ai.order.extract, 2) vncdmXOy: ai.draft.attach_preview (audit izi).
+      expect(fx.ai.send).toHaveBeenCalledTimes(2);
       const [pattern, payload] = fx.ai.send.mock.calls[0];
       expect(pattern).toEqual({ cmd: 'ai.order.extract' });
+      const [attachPattern, attachPayload] = fx.ai.send.mock.calls[1] as [
+        { cmd: string },
+        Record<string, unknown>,
+      ];
+      expect(attachPattern).toEqual({ cmd: 'ai.draft.attach_preview' });
+      expect(attachPayload).toMatchObject({
+        draft_id: res.data.draft_id,
+        market_id: '77',
+        previews: [
+          expect.objectContaining({
+            index: 0,
+            district_id: '12',
+            total_price: 150000,
+            phone_sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+          }),
+        ],
+      });
+      // MAXFIYLIK: snapshot'da to'liq telefon YO'Q (faqat maskalangan + xesh).
+      expect(JSON.stringify(attachPayload)).not.toContain(SECRET_PHONE);
       expect(payload).toEqual({
         text: SECRET_TEXT,
         images: [],

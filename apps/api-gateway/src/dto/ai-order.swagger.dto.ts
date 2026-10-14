@@ -256,6 +256,21 @@ export class AiConfirmOrderDto {
   @IsUUID('all', { message: "draft_id UUID bo'lishi kerak" })
   draft_id?: string;
 
+  @ApiPropertyOptional({
+    example: 0,
+    minimum: 0,
+    maximum: AI_MAX_ORDERS_PER_PARSE - 1,
+    description:
+      'Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`) va audit (edited_fields) uchun. Qayta yuborishda O‘ZGARTIRMANG.',
+  })
+  @IsOptional()
+  @IsInt({ message: "ai_item_index butun son bo'lishi kerak" })
+  @Min(0, { message: "ai_item_index manfiy bo'lishi mumkin emas" })
+  @Max(AI_MAX_ORDERS_PER_PARSE - 1, {
+    message: `ai_item_index ${AI_MAX_ORDERS_PER_PARSE - 1} dan oshmasligi kerak`,
+  })
+  ai_item_index?: number;
+
   @ApiProperty({
     type: () => [AiConfirmItemDto],
     maxItems: AI_MAX_ITEMS_PER_ORDER,

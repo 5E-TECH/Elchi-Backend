@@ -10,6 +10,8 @@ import type {
 } from '@app/common';
 import { AiServiceController } from './ai-service.controller';
 import type { AiBudgetService } from './budget/ai-budget.service';
+import type { AiDraftService } from './draft/ai-draft.service';
+import type { DistrictPickService } from './district-pick/district-pick.service';
 import { OrderExtractService } from './order-extract/order-extract.service';
 import type { ProductDisambiguateService } from './product-disambiguate/product-disambiguate.service';
 import type { AiUsageService } from './usage/ai-usage.service';
@@ -67,12 +69,19 @@ describe('AiServiceController', () => {
   };
   let extract: jest.Mock;
   let pick: jest.Mock;
+  let districtPick: jest.Mock;
   let usage: {
     summary: jest.Mock;
     linkOrders: jest.Mock;
     persistFailures: jest.Mock;
   };
   let budget: { status: jest.Mock; raise: jest.Mock };
+  let drafts: {
+    attachPreview: jest.Mock;
+    confirmContext: jest.Mock;
+    linkItems: jest.Mock;
+    traceByOrder: jest.Mock;
+  };
   let config: { get: jest.Mock };
 
   function build(orderExtract?: OrderExtractService): AiServiceController {
@@ -84,6 +93,8 @@ describe('AiServiceController', () => {
       { pick } as unknown as ProductDisambiguateService,
       usage as unknown as AiUsageService,
       budget as unknown as AiBudgetService,
+      drafts as unknown as AiDraftService,
+      { pick: districtPick } as unknown as DistrictPickService,
     );
   }
 
@@ -107,12 +118,19 @@ describe('AiServiceController', () => {
     };
     extract = jest.fn();
     pick = jest.fn();
+    districtPick = jest.fn();
     usage = {
       summary: jest.fn(),
       linkOrders: jest.fn(),
       persistFailures: jest.fn().mockReturnValue(0),
     };
     budget = { status: jest.fn().mockResolvedValue(CAP), raise: jest.fn() };
+    drafts = {
+      attachPreview: jest.fn().mockResolvedValue({ updated: 1 }),
+      confirmContext: jest.fn().mockResolvedValue({ drafts: [] }),
+      linkItems: jest.fn().mockResolvedValue({ linked: 2 }),
+      traceByOrder: jest.fn().mockResolvedValue(null),
+    };
   });
 
   afterEach(() => {
@@ -224,6 +242,55 @@ describe('AiServiceController', () => {
     });
   });
 
+  describe('ai.district.pick (5Z1ZvvzE)', () => {
+    const req = {
+      market_id: '121',
+      requester: { id: '7', roles: ['market'] },
+      trace_id: null,
+      draft_id: null,
+      deadline_at: Date.now() + 20_000,
+      items: [
+        {
+          item_index: 0,
+          place_text: 'xojaobd',
+          region_name: null,
+          pool: [
+            { index: 1, region_name: 'Andijon', district_name: "Xo'jaobod" },
+          ],
+        },
+      ],
+    };
+
+    it('servis natijasi va ack', async () => {
+      districtPick.mockResolvedValue({
+        ok: true,
+        picks: [{ item_index: 0, choice: 1 }],
+      });
+      await expect(build().pickDistricts(req, ctx)).resolves.toEqual({
+        ok: true,
+        picks: [{ item_index: 0, choice: 1 }],
+      });
+      expect(ack).toHaveBeenCalledWith(ctx);
+    });
+
+    it('servis reject qilsa → {ok:false, reason:network}, throw YO‘Q', async () => {
+      districtPick.mockRejectedValue(new Error('boom'));
+      await expect(build().pickDistricts(req, ctx)).resolves.toEqual({
+        ok: false,
+        reason: 'network',
+      });
+    });
+
+    it('eskirgan xabar → servis chaqirilmaydi', async () => {
+      const res = await build().pickDistricts(
+        { ...req, deadline_at: Date.now() - 1 },
+        ctx,
+      );
+      expect(res).toMatchObject({ ok: false });
+      expect(districtPick).not.toHaveBeenCalled();
+    });
+  });
+
   describe('ai.status', () => {
     it('AiStatusResponse: holat, modellar, shift, jurnal xatolari', async () => {
       usage.persistFailures.mockReturnValue(2);
@@ -235,8 +302,27 @@ describe('AiServiceController', () => {
           vision: 'claude-sonnet-5',
           classify: 'claude-haiku-4-5',
         },
+        model_policy: {
+          ok: true,
+          order: 'ok',
+          vision: 'ok',
+          classify: 'ok',
+        },
         cap: CAP,
         usage_persist_failures: 2,
+      });
+      expect(ack).toHaveBeenCalledWith(ctx);
+    });
+
+    it('LP3RKvXY TC3: AI_ORDER_MODEL=haiku → model_policy.ok:false (dashboard qizil), status yiqilmaydi', async () => {
+      configValues.AI_ORDER_MODEL = 'claude-haiku-4-5';
+      const res = await build().status(ctx);
+      expect(res.models.order).toBe('claude-haiku-4-5');
+      expect(res.model_policy).toEqual({
+        ok: false,
+        order: 'weak',
+        vision: 'ok',
+        classify: 'ok',
       });
       expect(ack).toHaveBeenCalledWith(ctx);
     });
@@ -275,6 +361,28 @@ describe('AiServiceController', () => {
     });
   });
 
+  describe('onApplicationBootstrap — model pasaytirish qulfi (LP3RKvXY TC3)', () => {
+    it('kuchsiz ekstraksiya modeli → ERROR log (boot yiqilmaydi)', () => {
+      const error = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => {});
+      configValues.AI_ORDER_MODEL = 'claude-haiku-4-5';
+      expect(() => build().onApplicationBootstrap()).not.toThrow();
+      expect(error).toHaveBeenCalledTimes(1);
+      expect(String(error.mock.calls[0][0])).toContain(
+        'ai_model_downgrade AI_ORDER_MODEL=claude-haiku-4-5',
+      );
+    });
+
+    it("sukut modellar → ERROR yo'q", () => {
+      const error = jest
+        .spyOn(Logger.prototype, 'error')
+        .mockImplementation(() => {});
+      build().onApplicationBootstrap();
+      expect(error).not.toHaveBeenCalled();
+    });
+  });
+
   describe('admin handlerlar', () => {
     it('ai.cap.raise → budget.raise(extra_usd, reason, requester)', async () => {
       const out = {
@@ -309,6 +417,42 @@ describe('AiServiceController', () => {
         ),
       ).resolves.toEqual({ updated: 2 });
       expect(usage.linkOrders).toHaveBeenCalledWith('d-1', ['10', '11'], '121');
+      // items yo'q (eski gateway) — draft bog'lanishi chaqirilmaydi.
+      expect(drafts.linkItems).not.toHaveBeenCalled();
+    });
+
+    it('vncdmXOy: link_orders items bilan → drafts.linkItems + usage.linkOrders', async () => {
+      usage.linkOrders.mockResolvedValue({ updated: 2 });
+      const items = [
+        { item_index: 0, order_id: '10', edited_fields: ['district_id'] },
+        { item_index: 1, order_id: '11', edited_fields: [] },
+      ];
+      await expect(
+        build().linkOrders(
+          {
+            draft_id: 'd-1',
+            order_ids: ['10', '11'],
+            market_id: '121',
+            items: items as never,
+            confirmed_by: '7',
+          },
+          ctx,
+        ),
+      ).resolves.toEqual({ updated: 2, linked: 2 });
+      expect(drafts.linkItems).toHaveBeenCalledWith('d-1', '121', items, '7');
+    });
+
+    it('vncdmXOy: ai.draft.* handlerlari servisga uzatiladi', async () => {
+      const c = build();
+      await c.attachPreview(
+        { draft_id: 'd', market_id: '1', previews: [] },
+        ctx,
+      );
+      expect(drafts.attachPreview).toHaveBeenCalledWith('d', '1', []);
+      await c.confirmContext({ market_id: '1', draft_ids: ['d'] }, ctx);
+      expect(drafts.confirmContext).toHaveBeenCalledWith('1', ['d']);
+      await expect(c.traceByOrder({ order_id: '5' }, ctx)).resolves.toBeNull();
+      expect(drafts.traceByOrder).toHaveBeenCalledWith('5');
     });
 
     it('kutilmagan xato RpcException’ga o‘raladi (DLQ, requeue YO‘Q)', async () => {

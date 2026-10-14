@@ -6,3 +6,5 @@ export * from './ai-key-check';
 export * from './order-extract.contract';
 export * from './product-disambiguate.contract';
 export * from './ai-status.contract';
+export * from './ai-draft.contract';
+export * from './district-pick.contract';

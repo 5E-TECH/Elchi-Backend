@@ -14,6 +14,19 @@ import { UpdateInvestmentDto } from './dto/update-investment.dto';
 import { CreateProfitShareDto } from './dto/create-profit-share.dto';
 import { CalculateProfitDto } from './dto/calculate-profit.dto';
 
+/** vpKijXce: `investor.me.*` payload'i (gateway: requester = JWT). */
+type MePayload = {
+  requester?: { id?: string; roles?: string[] } | null;
+  query?: {
+    months?: number;
+    from_date?: string;
+    to_date?: string;
+    is_paid?: boolean;
+    page?: number;
+    limit?: number;
+  };
+};
+
 @Controller()
 export class InvestorServiceController {
   constructor(
@@ -248,6 +261,61 @@ export class InvestorServiceController {
       this.investorService.markProfitPaid(
         String(data?.id ?? data?.profit_id),
         data?.requester,
+      ),
+    );
+  }
+
+  // --- vpKijXce: investorning o'zi ("me") ---
+  // Doira faqat `requester` (JWT sub) dan. Payload'dagi `investor_id` /
+  // `query.investor_id` ATAYLAB o'qilmaydi — maydonlar bittalab olinadi.
+  @MessagePattern({ cmd: 'investor.me.profile' })
+  meProfile(@Payload() data: MePayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.investorService.getMyProfile(data?.requester),
+    );
+  }
+
+  @MessagePattern({ cmd: 'investor.me.dashboard' })
+  meDashboard(@Payload() data: MePayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.investorService.getMyDashboard(data?.requester, data?.query?.months),
+    );
+  }
+
+  @MessagePattern({ cmd: 'investor.me.investments' })
+  meInvestments(@Payload() data: MePayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.investorService.getMyInvestments(data?.requester, {
+        from_date: data?.query?.from_date,
+        to_date: data?.query?.to_date,
+        page: data?.query?.page,
+        limit: data?.query?.limit,
+      }),
+    );
+  }
+
+  @MessagePattern({ cmd: 'investor.me.profits' })
+  meProfits(@Payload() data: MePayload, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () =>
+      this.investorService.getMyProfits(data?.requester, {
+        is_paid: data?.query?.is_paid,
+        page: data?.query?.page,
+        limit: data?.query?.limit,
+      }),
+    );
+  }
+
+  /** Superadmin/admin nazorati (TC7): investor ko'radigan dashboard. */
+  @MessagePattern({ cmd: 'investor.dashboard' })
+  investorDashboard(
+    @Payload()
+    data: { investor_id?: string; id?: string; query?: { months?: number } },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.investorService.getInvestorDashboard(
+        String(data?.investor_id ?? data?.id),
+        data?.query?.months,
       ),
     );
   }

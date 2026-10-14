@@ -48,6 +48,10 @@ import {
   successRes,
 } from '../../../libs/common/helpers/response';
 import { RequesterContext } from './contracts/user.payloads';
+import {
+  resolveAudience,
+  type AudienceResolveInput,
+} from './audience/audience-resolver';
 
 /**
  * HQ (bosh ofis) da MENEJER bo'lmaydi. Matn branch-service
@@ -3159,6 +3163,16 @@ export class UserServiceService implements OnModuleInit {
   }
 
   /**
+   * (W8aerwL6) Bildirishnoma/kampaniya auditoriyasi — ICHKI RMQ
+   * `identity.audience.resolve`. Rol filtrisiz (superadmin ham, mijoz ham —
+   * mijoz faqat `include_customers` + segment/tasdiq bilan). `findAllAdmins`
+   * ning rol filtriga TEGILMAYDI. Mantiq: `audience/audience-resolver.ts`.
+   */
+  async resolveAudience(input: AudienceResolveInput) {
+    return resolveAudience(this.users, this.orderClient, input);
+  }
+
+  /**
    * (2WRzdWpZ topilma, audit-actor-name) Gateway faoliyat jurnali "Kim"
    * ustuni uchun ICHKI batch. `identity.user.find_all` (GET /users ro'yxati)
    * SUPERADMIN va mijozni ataylab chiqarib tashlaydi — shu sabab superadmin
@@ -3286,9 +3300,11 @@ export class UserServiceService implements OnModuleInit {
     });
     return successRes(
       rows.map((row) => {
-        const appearance = (
-          row.settings as { appearance?: { language?: unknown } } | null
-        )?.appearance;
+        const settings = row.settings as {
+          appearance?: { language?: unknown };
+          notifications?: { quiet_hours?: unknown };
+        } | null;
+        const appearance = settings?.appearance;
         const staffLanguage =
           typeof appearance?.language === 'string' ? appearance.language : null;
         return {
@@ -3299,6 +3315,8 @@ export class UserServiceService implements OnModuleInit {
             row.role === Roles.CUSTOMER
               ? row.language
               : (staffLanguage ?? row.language),
+          // (mP1WGG1W) tinch soatlar — notification-service push'ni suradi.
+          quiet_hours: settings?.notifications?.quiet_hours ?? null,
         };
       }),
     );

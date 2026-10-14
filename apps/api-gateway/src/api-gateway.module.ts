@@ -30,6 +30,7 @@ import { OrderGatewayController } from './order-gateway.controller';
 import { FinanceGatewayController } from './finance-gateway.controller';
 import { AnalyticsGatewayController } from './analytics-gateway.controller';
 import { NotificationGatewayController } from './notification-gateway.controller';
+import { NotificationCampaignGatewayController } from './notification-campaign-gateway.controller';
 import {
   SmsGatewayController,
   SmsPublicGatewayController,
@@ -114,6 +115,8 @@ import type { StringValue } from 'ms';
     LogisticsGatewayController,
     SearchGatewayController,
     FinanceGatewayController,
+    // (W8aerwL6/xHPdpj0W) `notifications/campaigns` — `notifications/:id` dan OLDIN.
+    NotificationCampaignGatewayController,
     NotificationGatewayController,
     SmsGatewayController,
     SmsPublicGatewayController,

@@ -1,14 +1,16 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { ClientProxy, RpcException } from '@nestjs/microservices';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Between, ILike, In, Repository } from 'typeorm';
+import { Between, ILike, In, MoreThanOrEqual, Repository } from 'typeorm';
 import {
   ActivityAction,
   ActivityLogQuery,
   ActivityLogService,
   Cashbox_type,
   FinancialSource_type,
+  Roles,
   Status,
+  TASHKENT_OFFSET_MINUTES,
   rmqSend,
 } from '@app/common';
 import { Investor } from './entities/investor.entity';
@@ -43,6 +45,98 @@ type ProfitQuery = {
   page?: number;
   limit?: number;
 };
+
+/** Gateway'dan keladigan so'rovchi (JWT: id = sub). */
+type Requester = { id?: string; roles?: string[] } | null | undefined;
+
+/**
+ * vpKijXce: investorning o'zi ko'radigan maydonlar — OQ RO'YXAT.
+ * `user_id`, `description` (admin ichki izohi), `isDeleted`, `updatedAt`
+ * ATAYLAB yo'q: entity'ga yangi ustun qo'shilsa ham u investorga avtomatik
+ * chiqib ketmaydi.
+ */
+export type SelfInvestorProfile = {
+  id: string;
+  name: string;
+  phone_number: string;
+  status: Status;
+  created_at: Date;
+};
+
+export type SelfInvestment = {
+  id: string;
+  amount: number;
+  invested_at: Date;
+  branch_id: string | null;
+  created_at: Date;
+};
+
+export type SelfProfitShare = {
+  id: string;
+  amount: number;
+  percentage: number;
+  period_start: Date;
+  period_end: Date;
+  is_paid: boolean;
+  paid_at: Date | null;
+  created_at: Date;
+};
+
+export type InvestorSummary = {
+  total_invested: number;
+  investments_count: number;
+  first_invested_at: Date | null;
+  last_invested_at: Date | null;
+  total_paid_profit: number;
+  total_unpaid_profit: number;
+  total_profit: number;
+  profit_shares_count: number;
+  current_percentage: number | null;
+  last_paid_at: Date | null;
+};
+
+export type MonthlyProfitPoint = {
+  month: string;
+  paid_amount: number;
+  unpaid_amount: number;
+  total_amount: number;
+};
+
+/** vpKijXce: oylik foyda grafigi oynasi (oy). */
+const MONTHLY_DEFAULT = 12;
+const MONTHLY_MAX = 36;
+const TASHKENT_OFFSET_MS = TASHKENT_OFFSET_MINUTES * 60 * 1000;
+/** users.id — bigint; '0' = "login bilan bog'lanmagan" investor. */
+const LINKED_USER_ID_RE = /^[1-9]\d{0,18}$/;
+
+/** Pul yig'indisi: tiyinlarda butun son bilan — float driftisiz. */
+function toCents(value: unknown): number {
+  const n = Number(value);
+  return Number.isFinite(n) ? Math.round(n * 100) : 0;
+}
+
+function fromCents(cents: number): number {
+  return cents / 100;
+}
+
+function toDateOrNull(value: unknown): Date | null {
+  let date: Date;
+  if (value instanceof Date) {
+    date = value;
+  } else if (typeof value === 'string' && value !== '') {
+    date = new Date(value);
+  } else {
+    return null;
+  }
+  return Number.isNaN(date.getTime()) ? null : date;
+}
+
+/** `date` tushgan Toshkent oyi — 'YYYY-MM'. */
+function tashkentMonthKey(date: Date): string {
+  const shifted = new Date(date.getTime() + TASHKENT_OFFSET_MS);
+  const month = String(shifted.getUTCMonth() + 1).padStart(2, '0');
+  return `${shifted.getUTCFullYear()}-${month}`;
+}
 
 @Injectable()
 export class InvestorServiceService {
@@ -86,6 +180,46 @@ export class InvestorServiceService {
 
   private notFound(message: string): never {
     throw new RpcException(errorRes(message, 404));
+  }
+
+  private forbidden(message: string): never {
+    throw new RpcException(errorRes(message, 403));
+  }
+
+  private conflict(message: string): never {
+    throw new RpcException(errorRes(message, 409));
+  }
+
+  /**
+   * vpKijXce: investor yozuvini login (users.id) bilan bog'lash qiymati.
+   * Faqat musbat butun son; '0' / bo'sh / boshqa narsa → null.
+   */
+  private normalizeLinkedUserId(raw: unknown): string | null {
+    if (typeof raw !== 'string' && typeof raw !== 'number') {
+      return null;
+    }
+    const value = String(raw).trim();
+    return LINKED_USER_ID_RE.test(value) ? value : null;
+  }
+
+  /**
+   * vpKijXce: bitta login — bitta investor. Aks holda `/investors/me` qaysi
+   * yozuvni ko'rsatishni bilmaydi (u yerda fail-closed 409 qaytadi).
+   */
+  private async assertUserIdFree(
+    userId: string,
+    exceptInvestorId?: string,
+  ): Promise<void> {
+    const rows = await this.investorRepo.find({
+      where: { user_id: userId, isDeleted: false },
+      take: 2,
+    });
+    const taken = rows.some(
+      (row) => String(row.id) !== String(exceptInvestorId ?? ''),
+    );
+    if (taken) {
+      this.badRequest('user_id already linked to another investor');
+    }
   }
 
   private normalizePagination(page?: number, limit?: number) {
@@ -160,8 +294,24 @@ export class InvestorServiceService {
       this.badRequest('phone_number already exists');
     }
 
+    // vpKijXce: login bilan bog'lash — `/investors/me` investorni shu orqali
+    // topadi. Ilgari istalgan satr tekshiruvsiz yozilardi.
+    let linkedUserId = '0';
+    if (
+      dto.user_id !== undefined &&
+      dto.user_id !== null &&
+      String(dto.user_id).trim() !== ''
+    ) {
+      const normalized = this.normalizeLinkedUserId(dto.user_id);
+      if (!normalized) {
+        this.badRequest('user_id must be a positive integer');
+      }
+      await this.assertUserIdFree(normalized);
+      linkedUserId = normalized;
+    }
+
     const investor = this.investorRepo.create({
-      user_id: dto.user_id ? String(dto.user_id) : '0',
+      user_id: linkedUserId,
       name,
       phone_number: phoneNumber,
       status: (dto.status as Status) ?? Status.ACTIVE,
@@ -313,6 +463,21 @@ export class InvestorServiceService {
         this.badRequest('status must be active or inactive');
       }
       investor.status = dto.status;
+    }
+    // vpKijXce: login bilan bog'lash / uzish (null yoki '' → '0').
+    if (dto.user_id !== undefined) {
+      if (dto.user_id === null || String(dto.user_id).trim() === '') {
+        investor.user_id = '0';
+      } else {
+        const normalized = this.normalizeLinkedUserId(dto.user_id);
+        if (!normalized) {
+          this.badRequest('user_id must be a positive integer');
+        }
+        if (normalized !== String(investor.user_id)) {
+          await this.assertUserIdFree(normalized, investor.id);
+        }
+        investor.user_id = normalized;
+      }
     }
 
     const saved = await this.investorRepo.save(investor);
@@ -863,5 +1028,308 @@ export class InvestorServiceService {
     });
 
     return successRes(saved, 200, 'profit marked as paid');
+  }
+
+  // ---------------------------------------------------------------------
+  // vpKijXce: investorning O'ZI uchun ("mening investitsiyam") o'qish.
+  //
+  // Doira FAQAT so'rovchidan (JWT sub → investors.user_id) aniqlanadi —
+  // payload'dagi `investor_id` umuman o'qilmaydi, shuning uchun boshqa
+  // investorni ko'rib bo'lmaydi. Har qanday noaniqlik (rol yo'q, sub yo'q,
+  // bog'lanmagan, bir nechta yozuv, nofaol) → ma'lumot QAYTMAYDI (fail-closed).
+  // ---------------------------------------------------------------------
+
+  private async resolveSelfInvestor(requester: Requester): Promise<Investor> {
+    const roles = (requester?.roles ?? []).map((role) =>
+      String(role ?? '')
+        .trim()
+        .toLowerCase(),
+    );
+    if (!roles.includes(Roles.INVESTOR)) {
+      this.forbidden('investor role required');
+    }
+    const userId = this.normalizeLinkedUserId(requester?.id);
+    if (!userId) {
+      this.forbidden('investor profile is not available');
+    }
+
+    const rows = await this.investorRepo.find({
+      where: { user_id: userId, isDeleted: false },
+      order: { id: 'ASC' },
+      take: 2,
+    });
+    if (rows.length === 0) {
+      this.notFound('investor profile not linked to this user');
+    }
+    if (rows.length > 1) {
+      // Qaysi biri "men" ekanini taxmin qilmaymiz — admin tuzatishi kerak.
+      this.conflict('multiple investor profiles linked to this user');
+    }
+    const investor = rows[0];
+    if (investor.status !== Status.ACTIVE) {
+      this.forbidden('investor profile is inactive');
+    }
+    return investor;
+  }
+
+  private toSelfProfile(investor: Investor): SelfInvestorProfile {
+    return {
+      id: String(investor.id),
+      name: investor.name,
+      phone_number: investor.phone_number,
+      status: investor.status,
+      created_at: investor.createdAt,
+    };
+  }
+
+  private toSelfInvestment(row: Investment): SelfInvestment {
+    return {
+      id: String(row.id),
+      amount: Number(row.amount),
+      invested_at: row.invested_at,
+      branch_id: row.branch_id ? String(row.branch_id) : null,
+      created_at: row.createdAt,
+    };
+  }
+
+  private toSelfProfit(row: ProfitShare): SelfProfitShare {
+    return {
+      id: String(row.id),
+      amount: Number(row.amount),
+      percentage: Number(row.percentage),
+      period_start: row.period_start,
+      period_end: row.period_end,
+      is_paid: Boolean(row.is_paid),
+      paid_at: row.paid_at ?? null,
+      created_at: row.createdAt,
+    };
+  }
+
+  /**
+   * Dashboard kartalari: "Mening investitsiyam" (total_invested), "Ulush
+   * foizi" (current_percentage — oxirgi davr foiz stavkasi), "To'langan foyda"
+   * (total_paid_profit), "Kutilayotgan foyda" (total_unpaid_profit).
+   * Faqat shu investorning yozuvlari (soft-delete'lar hisobga kirmaydi).
+   */
+  private async buildInvestorSummary(
+    investorId: string,
+  ): Promise<InvestorSummary> {
+    const id = String(investorId);
+    const [investmentAgg, profitAgg, latestProfit] = await Promise.all([
+      this.investmentRepo
+        .createQueryBuilder('investment')
+        .select('COALESCE(SUM(investment.amount), 0)', 'total')
+        .addSelect('COUNT(investment.id)', 'count')
+        .addSelect('MIN(investment.invested_at)', 'first_at')
+        .addSelect('MAX(investment.invested_at)', 'last_at')
+        .where('investment.investor_id = :investorId', { investorId: id })
+        .andWhere('investment.isDeleted = :isDeleted', { isDeleted: false })
+        .getRawOne<{
+          total: string | null;
+          count: string | null;
+          first_at: Date | string | null;
+          last_at: Date | string | null;
+        }>(),
+      this.profitShareRepo
+        .createQueryBuilder('profit')
+        .select(
+          'COALESCE(SUM(CASE WHEN profit.is_paid = true THEN profit.amount ELSE 0 END), 0)',
+          'paid',
+        )
+        .addSelect(
+          'COALESCE(SUM(CASE WHEN profit.is_paid = false THEN profit.amount ELSE 0 END), 0)',
+          'unpaid',
+        )
+        .addSelect('COUNT(profit.id)', 'count')
+        .addSelect('MAX(profit.paid_at)', 'last_paid_at')
+        .where('profit.investor_id = :investorId', { investorId: id })
+        .andWhere('profit.isDeleted = :isDeleted', { isDeleted: false })
+        .getRawOne<{
+          paid: string | null;
+          unpaid: string | null;
+          count: string | null;
+          last_paid_at: Date | string | null;
+        }>(),
+      this.profitShareRepo.findOne({
+        where: { investor_id: id, isDeleted: false },
+        order: { period_end: 'DESC', createdAt: 'DESC' },
+      }),
+    ]);
+
+    const paidCents = toCents(profitAgg?.paid);
+    const unpaidCents = toCents(profitAgg?.unpaid);
+    return {
+      total_invested: fromCents(toCents(investmentAgg?.total)),
+      investments_count: Number(investmentAgg?.count ?? 0) || 0,
+      first_invested_at: toDateOrNull(investmentAgg?.first_at),
+      last_invested_at: toDateOrNull(investmentAgg?.last_at),
+      total_paid_profit: fromCents(paidCents),
+      total_unpaid_profit: fromCents(unpaidCents),
+      total_profit: fromCents(paidCents + unpaidCents),
+      profit_shares_count: Number(profitAgg?.count ?? 0) || 0,
+      current_percentage: latestProfit ? Number(latestProfit.percentage) : null,
+      last_paid_at: toDateOrNull(profitAgg?.last_paid_at),
+    };
+  }
+
+  private normalizeMonths(raw: unknown): number {
+    if (raw === undefined || raw === null || raw === '') {
+      return MONTHLY_DEFAULT;
+    }
+    const months = Number(raw);
+    if (!Number.isInteger(months) || months < 1 || months > MONTHLY_MAX) {
+      this.badRequest(`months must be an integer between 1 and ${MONTHLY_MAX}`);
+    }
+    return months;
+  }
+
+  /**
+   * Oylik foyda grafigi: oxirgi `months` ta Toshkent oyi (joriy oy ham),
+   * bo'sh oylar 0 bilan. Oy — foyda DAVRINING oxiri (period_end) bo'yicha.
+   */
+  async buildMonthlyProfits(
+    investorId: string,
+    months: number,
+    now: Date = new Date(),
+  ): Promise<MonthlyProfitPoint[]> {
+    const shiftedNow = new Date(now.getTime() + TASHKENT_OFFSET_MS);
+    const year = shiftedNow.getUTCFullYear();
+    const month = shiftedNow.getUTCMonth();
+    const rangeStart = new Date(
+      Date.UTC(year, month - (months - 1), 1) - TASHKENT_OFFSET_MS,
+    );
+
+    const keys: string[] = [];
+    for (let i = months - 1; i >= 0; i -= 1) {
+      const monthStart = new Date(Date.UTC(year, month - i, 1));
+      keys.push(
+        `${monthStart.getUTCFullYear()}-${String(
+          monthStart.getUTCMonth() + 1,
+        ).padStart(2, '0')}`,
+      );
+    }
+
+    const rows = await this.profitShareRepo.find({
+      where: {
+        investor_id: String(investorId),
+        isDeleted: false,
+        period_end: MoreThanOrEqual(rangeStart),
+      },
+      order: { period_end: 'ASC' },
+    });
+
+    const buckets = new Map<string, { paid: number; unpaid: number }>(
+      keys.map((key) => [key, { paid: 0, unpaid: 0 }]),
+    );
+    for (const row of rows) {
+      const end = toDateOrNull(row.period_end);
+      if (!end) {
+        continue;
+      }
+      const bucket = buckets.get(tashkentMonthKey(end));
+      if (!bucket) {
+        // Oynadan tashqari (masalan kelajak davri) — grafikka kirmaydi.
+        continue;
+      }
+      if (row.is_paid) {
+        bucket.paid += toCents(row.amount);
+      } else {
+        bucket.unpaid += toCents(row.amount);
+      }
+    }
+
+    return keys.map((key) => {
+      const bucket = buckets.get(key) ?? { paid: 0, unpaid: 0 };
+      return {
+        month: key,
+        paid_amount: fromCents(bucket.paid),
+        unpaid_amount: fromCents(bucket.unpaid),
+        total_amount: fromCents(bucket.paid + bucket.unpaid),
+      };
+    });
+  }
+
+  private async buildDashboard(investor: Investor, monthsRaw: unknown) {
+    const months = this.normalizeMonths(monthsRaw);
+    const [summary, items] = await Promise.all([
+      this.buildInvestorSummary(investor.id),
+      this.buildMonthlyProfits(investor.id, months),
+    ]);
+    return {
+      investor: this.toSelfProfile(investor),
+      summary,
+      monthly: { months, items },
+    };
+  }
+
+  /** GET /investors/me — o'z profili + kartalar uchun yig'indi. */
+  async getMyProfile(requester: Requester) {
+    const investor = await this.resolveSelfInvestor(requester);
+    const summary = await this.buildInvestorSummary(investor.id);
+    return successRes({ investor: this.toSelfProfile(investor), summary });
+  }
+
+  /** GET /investors/me/dashboard — kartalar + oylik foyda grafigi. */
+  async getMyDashboard(requester: Requester, months?: unknown) {
+    const investor = await this.resolveSelfInvestor(requester);
+    return successRes(await this.buildDashboard(investor, months));
+  }
+
+  /** GET /investors/me/investments — faqat o'z investitsiyalari. */
+  async getMyInvestments(
+    requester: Requester,
+    query?: Pick<InvestmentQuery, 'from_date' | 'to_date' | 'page' | 'limit'>,
+  ) {
+    const investor = await this.resolveSelfInvestor(requester);
+    const res = await this.findAllInvestments({
+      investor_id: investor.id,
+      from_date: query?.from_date,
+      to_date: query?.to_date,
+      page: query?.page,
+      limit: query?.limit,
+    });
+    const data = res.data as {
+      items: Investment[];
+      meta: unknown;
+      summary: unknown;
+    };
+    return successRes({
+      items: data.items.map((row) => this.toSelfInvestment(row)),
+      meta: data.meta,
+      summary: data.summary,
+    });
+  }
+
+  /** GET /investors/me/profits — foyda tarixi (faqat o'ziniki). */
+  async getMyProfits(
+    requester: Requester,
+    query?: Pick<ProfitQuery, 'is_paid' | 'page' | 'limit'>,
+  ) {
+    const investor = await this.resolveSelfInvestor(requester);
+    const res = await this.findAllProfits({
+      investor_id: investor.id,
+      is_paid: query?.is_paid,
+      page: query?.page,
+      limit: query?.limit,
+    });
+    const data = res.data as {
+      items: ProfitShare[];
+      meta: unknown;
+      summary: unknown;
+    };
+    return successRes({
+      items: data.items.map((row) => this.toSelfProfit(row)),
+      meta: data.meta,
+      summary: data.summary,
+    });
+  }
+
+  /**
+   * GET /investors/:investor_id/dashboard — superadmin/admin nazorati uchun
+   * (TC7): investor ko'radigan AYNAN shu ko'rinish.
+   */
+  async getInvestorDashboard(investorId: string, months?: unknown) {
+    const investor = await this.getInvestorOrThrow(investorId);
+    return successRes(await this.buildDashboard(investor, months));
   }
 }

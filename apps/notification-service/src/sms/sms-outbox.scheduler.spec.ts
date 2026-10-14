@@ -3,6 +3,7 @@ import {
   SMS_OUTBOX_LOCK_NAME,
 } from './sms-outbox.scheduler';
 import { SmsConfigService } from './sms-config.service';
+import { SmsGateService } from './sms-gate.service';
 import { SmsProviderError } from './sms.port';
 
 const row = (id: string, extra: Record<string, unknown> = {}) =>
@@ -23,6 +24,8 @@ describe('SmsOutboxScheduler', () => {
     claimDue: jest.Mock;
     markAccepted: jest.Mock;
     markFailed: jest.Mock;
+    releaseClaimed: jest.Mock;
+    deferUntil: jest.Mock;
   };
   let adapter: { send: jest.Mock };
   let registry: { resolve: jest.Mock; callbackUrl: jest.Mock };
@@ -40,6 +43,7 @@ describe('SmsOutboxScheduler', () => {
       { addCronJob: jest.fn() } as never,
       { createQueryRunner: () => runner } as never,
       consent as never,
+      new SmsGateService(config, {} as never),
     );
   };
 
@@ -49,6 +53,8 @@ describe('SmsOutboxScheduler', () => {
       claimDue: jest.fn().mockResolvedValue([row('1'), row('2')]),
       markAccepted: jest.fn().mockResolvedValue(undefined),
       markFailed: jest.fn().mockResolvedValue(false),
+      releaseClaimed: jest.fn().mockResolvedValue(undefined),
+      deferUntil: jest.fn().mockResolvedValue(undefined),
     };
     adapter = {
       send: jest
@@ -169,5 +175,70 @@ describe('SmsOutboxScheduler', () => {
     await shutdown;
     await tick;
     expect(outbox.markAccepted).toHaveBeenCalledTimes(1);
+  });
+
+  it('(3fRbyadQ TC11) shutdown mid-batch: unsent claimed rows go back to pending WITHOUT burning an attempt', async () => {
+    let release!: () => void;
+    adapter.send.mockReturnValueOnce(
+      new Promise(
+        (resolve) =>
+          (release = () =>
+            resolve({ providerMessageId: 'p', acceptedAt: new Date() })),
+      ),
+    );
+    outbox.claimDue.mockResolvedValue([row('1'), row('2'), row('3')]);
+    const scheduler = make();
+    const tick = scheduler.tick();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const shutdown = scheduler.onModuleDestroy();
+    release();
+    await shutdown;
+    await tick;
+    expect(outbox.markAccepted).toHaveBeenCalledTimes(1);
+    expect(adapter.send).toHaveBeenCalledTimes(1);
+    // markFailed urinishni sarflardi (2 marta xato bergan qator nohaq terminal bo'lardi).
+    expect(outbox.markFailed).not.toHaveBeenCalled();
+    expect(outbox.releaseClaimed).toHaveBeenCalledWith(['2', '3']);
+  });
+
+  describe('(sVByLMnt #3) tungi taqiq YUBORISH paytida ham', () => {
+    const tashkent = (iso: string) => new Date(`${iso}+05:00`);
+
+    it('19:30 da navbatdan chiqqan reklama YUBORILMAYDI — ertangi 09:00 ga suriladi (urinish sarflanmaydi)', async () => {
+      outbox.claimDue.mockResolvedValue([
+        row('1', { message_class: 'promo' }),
+        row('2', { message_class: 'transactional' }),
+      ]);
+      const result = await make().tick(tashkent('2026-10-14T19:30:00'));
+      expect(outbox.deferUntil).toHaveBeenCalledWith(
+        '1',
+        tashkent('2026-10-15T09:00:00'),
+      );
+      // Faqat transaksion ketdi; reklama na yuborildi, na markFailed.
+      expect(adapter.send).toHaveBeenCalledTimes(1);
+      expect(adapter.send.mock.calls[0][0]).toMatchObject({
+        clientMessageId: 'c-2',
+      });
+      expect(outbox.markFailed).not.toHaveBeenCalled();
+      expect(consent.partition).not.toHaveBeenCalled();
+      expect(result).toEqual({ processed: 2, sent: 1, failed: 0 });
+    });
+
+    it('10:00 da reklama darhol ketadi (rozilik qayta tekshiriladi)', async () => {
+      outbox.claimDue.mockResolvedValue([row('1', { message_class: 'promo' })]);
+      await make().tick(tashkent('2026-10-14T10:00:00'));
+      expect(outbox.deferUntil).not.toHaveBeenCalled();
+      expect(consent.partition).toHaveBeenCalled();
+      expect(adapter.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('tungi OTP (security) taqiqqa tushmaydi', async () => {
+      outbox.claimDue.mockResolvedValue([
+        row('1', { message_class: 'security', sender_profile: 'otp' }),
+      ]);
+      await make().tick(tashkent('2026-10-14T02:00:00'));
+      expect(outbox.deferUntil).not.toHaveBeenCalled();
+      expect(adapter.send).toHaveBeenCalledTimes(1);
+    });
   });
 });

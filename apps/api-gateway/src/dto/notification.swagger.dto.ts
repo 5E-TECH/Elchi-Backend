@@ -1,6 +1,7 @@
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
 import { Transform, Type } from 'class-transformer';
 import {
+  ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
   IsBoolean,
@@ -14,6 +15,7 @@ import {
   Matches,
   MaxLength,
   Min,
+  ValidateIf,
   ValidateNested,
 } from 'class-validator';
 import {
@@ -23,6 +25,7 @@ import {
   NotificationChannel,
   NotificationPriority,
 } from '@app/common';
+import { AudienceSegmentDto } from './notification-campaign.swagger.dto';
 
 export class CreateTelegramMarketRequestDto {
   @ApiProperty({ example: '2' })
@@ -245,6 +248,8 @@ export class DispatchNotificationRequestDto {
   @IsArray()
   @ArrayNotEmpty()
   @IsString({ each: true })
+  // (BoMa1A1R) har element faqat raqam — "abc" bigint ustunigacha yetmasin.
+  @Matches(/^\d+$/, { each: true })
   recipient_ids?: string[];
 
   @ApiPropertyOptional({
@@ -270,6 +275,49 @@ export class DispatchNotificationRequestDto {
   )
   @IsBoolean()
   broadcast?: boolean;
+
+  // (W8aerwL6) Mijozlarni nishonlash: `include_customers` + segment YOKI
+  // `confirm_all_customers` (aks holda 400). `roles:['customer']` ham shu bilan.
+  @ApiPropertyOptional({
+    example: false,
+    description:
+      'Mijozlarni ham — segment YOKI confirm_all_customers bilan (aks holda 400)',
+  })
+  @IsOptional()
+  @Transform(({ value }) =>
+    value === true || value === 'true'
+      ? true
+      : value === false || value === 'false'
+        ? false
+        : value,
+  )
+  @IsBoolean()
+  include_customers?: boolean;
+
+  @ApiPropertyOptional({
+    example: false,
+    description: 'Segmentsiz BARCHA mijozlarga — aniq tasdiq',
+  })
+  @IsOptional()
+  @Transform(({ value }) =>
+    value === true || value === 'true'
+      ? true
+      : value === false || value === 'false'
+        ? false
+        : value,
+  )
+  @IsBoolean()
+  confirm_all_customers?: boolean;
+
+  @ApiPropertyOptional({
+    type: AudienceSegmentDto,
+    description: 'Mijoz segmenti (buyurtmalar bo‘yicha) — faqat mijozlarga',
+  })
+  @IsOptional()
+  @IsObject()
+  @ValidateNested()
+  @Type(() => AudienceSegmentDto)
+  segment?: AudienceSegmentDto;
 
   @ApiProperty({
     example: 'order.sold',
@@ -467,6 +515,44 @@ export class SubscribePushRequestDto {
   @IsOptional()
   @IsBoolean()
   is_standalone?: boolean;
+}
+
+/** (mP1WGG1W) Bitta sozlama: kategoriya yoki tur × kanal. */
+export class NotificationPreferenceItemDto {
+  @ApiProperty({
+    example: 'order',
+    description: 'Kategoriya (order, marketing, …) yoki aniq tur (order.sold)',
+  })
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(120)
+  scope!: string;
+
+  @ApiProperty({
+    enum: ['all', 'in_app', 'realtime', 'push', 'sms', 'email'],
+    example: 'push',
+  })
+  @IsIn(['all', 'in_app', 'realtime', 'push', 'sms', 'email'])
+  channel!: string;
+
+  @ApiProperty({
+    example: false,
+    nullable: true,
+    description: 'null — sozlamani olib tashlash (sukutga qaytish)',
+  })
+  @ValidateIf((_, value) => value !== null)
+  @IsBoolean()
+  enabled!: boolean | null;
+}
+
+export class UpdateNotificationPreferencesRequestDto {
+  @ApiProperty({ type: [NotificationPreferenceItemDto] })
+  @IsArray()
+  @ArrayNotEmpty()
+  @ArrayMaxSize(100)
+  @ValidateNested({ each: true })
+  @Type(() => NotificationPreferenceItemDto)
+  items!: NotificationPreferenceItemDto[];
 }
 
 export class UnsubscribePushRequestDto {

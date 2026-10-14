@@ -23,6 +23,414 @@ Har yozuv: `[sana] [tur] [servis] — tavsif → frontendda nima qilish kerak`.
 
 <!-- Yangi yozuvlar shu yerga (eng yangisi tepada) -->
 
+### 2026-10-14 — Investor dashboard API (vpKijXce)
+
+- [2026-10-14] 🆕 [investor] — investorning O'ZI uchun marshrutlar
+  (`@Roles(investor)`; doira faqat JWT `sub` → `investors.user_id`; query'dagi
+  `investor_id` e'tiborsiz qoldiriladi va servisga yuborilmaydi):
+  - `GET /investors/me` → `{ investor, summary }`.
+    `investor`: `id, name, phone_number, status, created_at` (admin izohi
+    `description`, `user_id` YO'Q).
+    `summary`: `total_invested`, `investments_count`, `first_invested_at`,
+    `last_invested_at`, `total_paid_profit`, `total_unpaid_profit`,
+    `total_profit`, `profit_shares_count`, `current_percentage` (oxirgi foyda
+    davrining foiz stavkasi, yozuv bo'lmasa `null`), `last_paid_at`.
+  - `GET /investors/me/dashboard?months=12` (1..36, default 12) →
+    `{ investor, summary, monthly: { months, items: [{ month: 'YYYY-MM',
+    paid_amount, unpaid_amount, total_amount }] } }` — oy Toshkent bo'yicha,
+    foyda davrining oxiri (`period_end`) ga ko'ra; bo'sh oylar 0 bilan.
+  - `GET /investors/me/investments?page&limit&from_date&to_date` →
+    `{ items: [{ id, amount, invested_at, branch_id, created_at }], meta,
+    summary: { total_amount } }`.
+  - `GET /investors/me/profits?page&limit&is_paid` → `{ items: [{ id, amount,
+    percentage, period_start, period_end, is_paid, paid_at, created_at }],
+    meta, summary: { total_paid_amount, total_unpaid_amount } }`.
+  - Xatolar: login investorga bog'lanmagan → 404; bitta loginga 2+ investor →
+    409; investor nofaol → 403; rol/sub yo'q → 403. Hech birida kompaniya
+    ma'lumoti qaytmaydi (fail-closed).
+  → **Frontendda:** 🔧 kartadagi 4–8-bandlar: `src/pages/investor-dashboard/`
+  ("Mening investitsiyam" = `summary.total_invested`, "Ulush foizi" =
+  `summary.current_percentage`, "To'langan foyda" = `summary.total_paid_profit`,
+  "Kutilayotgan foyda" = `summary.total_unpaid_profit`; foyda tarixi jadvali —
+  `/investors/me/profits`; oylik grafik — `/investors/me/dashboard`
+  `monthly.items`). `DashboardEntry` da `role === "investor"` →
+  `<Navigate replace to="/investor" />`; `/investor` marshruti
+  investor/superadmin uchun; investor sidebar'ida operatsion menyular yo'q.
+  404/409/403 da bo'sh holat + "administratorga murojaat qiling" ko'rsating —
+  kompaniya dashboardiga QAYTARMANG.
+- [2026-10-14] 🆕 [investor] — `GET /investors/:investor_id/dashboard?months=`
+  (superadmin/admin) — investor ko'radigan AYNAN shu `{ investor, summary,
+  monthly }` javobi (TC7 nazorat).
+  → **Frontendda:** 🔧 superadmin `/investor` sahifasini ochganda investor
+  tanlab shu endpointdan foydalaning (tarix uchun mavjud
+  `/investors/:investor_id/investments` va `/investors/:investor_id/profits`).
+- [2026-10-14] ✏️ [investor] — `POST /investors` va `PATCH /investors/:id`
+  endi `user_id` qabul qiladi (investor login qiladigan `users.id`; satr yoki
+  raqam, musbat butun son). `PATCH` da `user_id: null` — bog'lanishni uzadi.
+  Bitta login ikkinchi investorga bog'lansa 400. Ilgari bu maydon gateway'da
+  yo'q edi (400 `property user_id should not exist`) — natijada hech bir
+  investor login bilan bog'lanmagan.
+  → **Frontendda:** 🔧 investors-ops formasiga "Login (foydalanuvchi)"
+  tanlovini qo'shing va `user_id` yuboring.
+- [2026-10-14] 🟢 [investor] — `GET /analytics/dashboard` investorga allaqachon
+  403 (DASHBOARD_ROLES, ukulko6O/EgizXSKW) — o'zgarish yo'q.
+
+### 2026-10-14 — Moliya/kassa kartalari (Codex ishini tekshirish)
+
+- [2026-10-14] ✏️ [branch] — `DELETE /branches/:id` endi filialning PULINI
+  ham tekshiradi (T4eu8kxu): HQ'ga qarzi bo'lsa (sotilgan, lekin
+  topshirilmagan savdo) 400 "… filialning HQ'ga N so'm qarzi bor …";
+  BRANCH kassasida qoldiq bo'lsa (musbat/manfiy, naqd yoki karta) 400
+  "… filial kassasida qoldiq bor …"; moliya/buyurtmalar xizmati javob
+  bermasa 503 (o'chirish bo'lmaydi). → **Frontendda:** 🔧 o'chirish
+  tasdig'idan keyin 400/503 javobidagi `message` ni to'liq ko'rsating
+  (umumiy "Xatolik" emas); 503 da "qayta urinib ko'ring".
+- [2026-10-14] 🟢 [api-gateway/finance] — `/finance/cashbox/payment/courier|market|branch-to-main`
+  DTO'lari `amount` = 0, bo'sh, `null` (FE'dagi `Number('100 000')` → NaN →
+  JSON `null`) va manfiyni 400 bilan rad etadi — regressiya spec qo'shildi
+  (qGaxcaD4). → **Frontendda:** 🔧 summa `InputNumber` (probel-ajratgich
+  parser) yoki yuborishdan oldin `amount > 0` tekshiruvi; xatoda backend
+  `message`; har uch oyoqqa tasdiq.
+
+- [2026-10-14] ✏️ [api-gateway/finance] — qo'lda kuryer/market/filial→HQ
+  to'lovi va `PATCH /finance/cashbox/spend|fill`: `Idempotency-Key`
+  bo'lmasa har HTTP so'rov ALOHIDA to'lov (soatga bog'liq emas — eski 30 s
+  oynasi butunlay yo'q). Kalit bo'lsa — ayni kalitli takroriy so'rov 200 va
+  `data.idempotent: true` (kassa kirim/chiqimida xabar "... allaqachon
+  bajarilgan (takroriy so'rov)"). 255 belgidan uzun kalit — 400 (TMgL1zvq).
+  → **Frontendda:** 🔧 kuryer/market/filial to'lovlarida kalit allaqachon bor
+  (`paymentIdempotency.ts`). `cashboxSpend`/`cashboxFill` (`entities/payments/index.ts`)
+  hali kalitsiz — har submit uchun `crypto.randomUUID()` yaratib, retry'da
+  ayni kalitni yuboring; `data.idempotent: true` bo'lsa "avval qabul
+  qilingan" deb ko'rsating (ikkinchi muvaffaqiyat toast'i emas).
+- [2026-10-14] 🆕 [api-gateway/finance] — `POST /finance/operator-payments`
+  ixtiyoriy `Idempotency-Key` sarlavhasini qabul qiladi: ayni kalitli
+  takroriy so'rov pulni qayta yechmaydi, 200 va `data.idempotent: true`
+  qaytaradi. To'lov qarzdan (`earned - paid`) oshsa 400 "To'lov miqdori
+  operatorga qarzdan oshib ketdi"; MAIN kassada naqd yetmasa 400
+  "Insufficient cash balance" — ikkala holatda HECH NARSA yozilmaydi
+  (to'lov qatori, kassa chiqimi va P&L yozuvi bitta tranzaksiyada)
+  (FJVqcUTv). → **Frontendda:** 🔧 `finance-operators` formasida `comment`
+  o'rniga `note` (2DCQKd37), har submit uchun `Idempotency-Key`, 400
+  javobidagi `message` ni ko'rsating.
+- [2026-10-14] ✏️ [api-gateway/finance] — `POST /finance/financial-balance/entries`:
+  takroriy `Idempotency-Key` endi HTTP **200** (ilgari HTTP 201, body 200) va
+  `data.idempotent: true` bilan mavjud yozuvni qaytaradi; yangi yozuv — 201,
+  nol summa — 200 `skipped`. Kalit aktor bo'yicha nom fazosida saqlanadi
+  (cSNJN7GP). → **Frontendda:** `FinancialEntryModal` 200 ni ham muvaffaqiyat
+  deb qabul qilsin; `idempotent: true` da "yozuv avval saqlangan" deb ko'rsating.
+- [2026-10-14] 🔧 [finance] — `GET /finance/financial-balance` market qatori
+  (`markets.allMarketCashboxes[].balance`) — kassaning IMZOLI balansi
+  (musbat = marketga qarzmiz), Σ balance = `markets.marketPayable`, karta
+  "jami"si esa `marketsTotalBalans = −marketPayable` (IaMK2tf2, 2026-10-12
+  yozuviga aniqlik). → **Frontendda:** 🔧 `lib/financialBalance.ts:134`
+  `-Math.abs(rawBalance)` ni `-rawBalance` ga almashtiring (xom `balance`
+  EMAS — aks holda qatorlar yig'indisi "jami" ga teskari ishorali bo'ladi);
+  shunda market bizga qarzdor bo'lsa musbat ko'rinadi va Σ qatorlar = jami.
+  Sanoq — `nonZeroCount`, `truncated: true` bo'lsa "top-500" yozuvi.
+- [2026-10-14] 🟢 [finance] — `financial-balance/history` `source_type`
+  tekshiruvi finance-service ichida ham (RMQ chaqiruvchilari 500 emas 400
+  oladi) (b1QxU3qa); `financial-balance/top-impacts` da son bo'lmagan
+  `page`/`limit` sukut qiymatiga tushadi (vmLTsAok). Frontendda o'zgarish shart emas.
+
+### 2026-10-14 — Guruh F (buyurtma va pochta) tekshiruvi
+
+- [2026-10-14] ✏️ [order] — `GET /orders` (va `order.find_all_enriched` /
+  `findByIdEnriched` ishlatadigan barcha boyitilgan javoblar) har buyurtmada
+  `courier: { id, name, phone_number } | null` qaytaradi (xWsCAA5N). Manba:
+  `courier_id`, u bo'sh bo'lsa (bekor qilish oqimi) — buyurtma pochtasining
+  kuryeri; filial/hudud pochtasi (`courier_id = 0`) — `null`. Maosh, tarif,
+  login chiqmaydi. `fetch_all=true` — bitta so'rovda eng ko'pi 5000 qator,
+  `total` esa haqiqiy jami (`total_pages > 1` yoki `total > data.length` —
+  ro'yxat kesilgan).
+  → **Frontendda:** 🔧 `exportOrdersToExcel.ts` `getCourierName` endi
+  `order.courier.name` ni oladi (o'zgarish shart emas). `orders/index.tsx`
+  dagi 100 talik sahifalash siklini bitta `fetch_all=true` so'rovga
+  almashtiring; `total > data.length` bo'lsa "eksport to'liq emas — filtrni
+  toraytiring" ogohlantirishini ko'rsating (jimgina kesmang). Haqiqiy
+  `.xlsx` (`xlsx-js-style`/`exceljs`) va "Umumiy" yig'indi qatori —
+  frontend ishi. `printLabelPdf.ts` yorlig'ida kuryer ismi/telefoni endi
+  to'ladi.
+
+- [2026-10-14] ✏️ [order] — `PATCH /orders/:id` va `/orders/:id/full`
+  dagi `items[]` endi `product_name` ni saqlaydi (tashqi, katalogsiz
+  satr: `{ product_id: null, product_name, quantity }`). Satrlar buyurtma
+  bilan bitta tranzaksiyada almashtiriladi. 400 holatlari (hech narsa
+  o'chirilmaydi): `items: []`; satrda `product_id` ham, bo'sh bo'lmagan
+  `product_name` ham yo'q; `product_id` raqam emas; `quantity` butun son
+  emas yoki < 1 (52NJNGaH). Hamkor API (`order.update_full`) yuboradigan
+  nomlar ham endi yo'qolmaydi; hamkor `items: []` yuborsa ham 400.
+  → **Frontendda:** 🔧 `newOrderUpdateRules.ts` `normalizeItems` satrni
+  `product_id ?? 'name:' + product_name` bo'yicha kalitlasin va
+  `product_id` yo'q satrni tashlab yubormasin; payloadda tashqi satr
+  `{ product_name, quantity }` (yoki `product_id: null` bilan) ketsin.
+  `new_orderUpdate.tsx` da mahsulot ro'yxati o'zgargan-u payload bo'sh
+  bo'lsa jimgina yopmasdan ogohlantirish chiqsin; barcha mahsulot
+  o'chirilsa backend 400 qaytaradi — `message` ni ko'rsating.
+
+- [2026-10-14] ✏️ [api-gateway/logistics] — `GET /post/orders/:id`,
+  `/post/orders/rejected/:id` va `GET /post/return-requests/list` ichidagi
+  boyitilgan obyektlarning oq ro'yxati aniqlashtirildi (VfgcnxDa). 12-oktabr
+  versiyasi pochta detali ishlatadigan maxfiy bo'lmagan maydonlarni ham
+  kesib qo'ygan edi — qaytarildi:
+  `market` = `id/name/phone_number`;
+  `customer` = `id/name/phone_number/extra_number/address/district_id/region_id`;
+  `district` = `id/name/sato_code/region_id/assigned_region/region/assignedToRegion`
+  (`region`/`assignedToRegion` ichida `id/name/sato_code`).
+  `market_tg_token`, `username`, `salary`, `tariff_*`, `commission_*`,
+  `settings`, `password`, `refresh_token` hech qachon chiqmaydi.
+  → **Frontendda:** 🔧 `PostOrder.market/customer/district` tiplarini shu
+  ro'yxatga toraytiring (`Market` tipidagi `username/salary/tariff_home`
+  pochta detalida endi yo'q); `printMode.ts` (`extra_number`) va
+  `dispatchRegion.ts` (`assigned_region`) avvalgidek ishlaydi.
+
+### 2026-10-14 — SMS kartalari qayta tekshiruvi (3fRbyadQ, 8auPBa1O, sVByLMnt)
+
+- [2026-10-14] ✏️ [notification/sms] — `GET /notifications/sms/report` javobiga
+  qo'shimcha maydonlar: `months` (`[{ month: 'YYYY-MM', total, delivered, failed,
+  parts, cost, untariffed }]`) va `by_class` (`[{ message_class, ... }]`); `days`
+  va `totals` o'zgarmagan. `from`/`to` faqat sana (`YYYY-MM-DD`) bo'lsa endi
+  Toshkent kuni sifatida o'qiladi (`to` kuni ham KIRADI); zona bilan ISO
+  (`...T00:00:00+05:00`) avvalgidek. `days[].day` endi server vaqt zonasidan
+  qat'i nazar to'g'ri Toshkent sanasi (8auPBa1O). → **Frontendda:** 🔧
+  `SmsReportTab` da oylik yig'indi va sinf kesimini ko'rsatish (ixtiyoriy);
+  hozirgi `+05:00` bilan yuborish ishlayveradi.
+- [2026-10-14] 🟢 [notification] — yangi bildirishnoma turi `sms.balance_low`
+  (CRITICAL, `system`, o'chirib bo'lmaydi): SMS provayder balansi
+  `SMS_BALANCE_ALERT_THRESHOLD` dan tushsa adminlar inboxiga, Toshkent kuniga
+  bir marta (`data: { day, provider, balance, threshold }`). Avval tur katalogda
+  yo'qligi sabab dispatch 400 bilan yiqilib, ogohlantirish umuman kelmasdi.
+  → **Frontendda:** `GET /notifications/types` dan yorliq avtomatik keladi;
+  maxsus ikonka kerak bo'lsa — `sms.` prefiksi.
+- [2026-10-14] 🟢 [notification/sms] — reklama SMS tungi taqiqi
+  (`NOTIF_PROMO_QUIET_HOURS`, Toshkent) endi YUBORISH paytida ham tekshiriladi:
+  navbatda turgan reklama taqiq oynasida ketmaydi, oyna tugashiga suriladi
+  (sVByLMnt). Kampaniya tarixidagi `pending` shunday qatorlarni ham o'z ichiga
+  oladi. → Frontendda o'zgarish shart emas.
+
+### 2026-10-14 — Guruh E: analitika / dashboard
+
+- [2026-10-14] ⚠️ [analytics] — `GET /analytics/dashboard?all=true` ("Barchasi")
+  endi HAQIQIY butun davr EMAS: 12-oktabrdagi yozuvdagi `clamped: false`,
+  `effective_from` = 1970 BEKOR. Oyna eng so'nggi **366 kun** (Toshkent kuni
+  boshidan) bilan cheklanadi (audit C3; chegarasiz oyna tarix o'sgani sari
+  2,5 s byudjetdan chiqib 503 berardi). Javob yuqori darajasida (admin, market
+  va kuryer dashboardi): `clamped: true`, `effective_from`, `effective_to`
+  (ISO, qo'llangan oyna), `max_span_days: 366`; `message` —
+  `"Dashboard infos (oxirgi 366 kun)"`. Market/kuryer dashboardida `myStat`
+  ichida ham `applied_range` bor. Oddiy sana oralig'ida bu maydonlar yo'q
+  (uN1tjjGu).
+  → **Frontendda:** 🔧 "Barchasi" yozuvi ostida `clamped` bo'lsa
+  "Oxirgi 366 kun: {effective_from} – {effective_to}" ni ko'rsating
+  (Toshkent sanasi, `DD.MM.YYYY`); "butun davr" deb yozmang.
+- [2026-10-14] ✏️ [analytics] — reyting meta'lari (`topMarketsMeta`,
+  `topBranchesMeta`, `marketRatingMeta`, `rankingMeta`, kuryer dashboardida
+  `topCouriersMeta`) endi `min_orders`, `filtered_out` dan tashqari reyting
+  HISOBLANGAN davrni ham beradi: `from`, `to` (ISO, Toshkent kuni
+  chegaralari). Teng ulushda ko'proq buyurtmali qator oldinda (PQt3n1N0,
+  9zbSDkUI).
+  → **Frontendda:** 🔧 "Top marketlar / filiallar / kuryerlar" kartasi
+  sarlavhasida davrni meta'dan yozing (masalan "01.09 – 18.09"); bo'sh
+  bo'lsa "kamida 30 buyurtma kerak" EMAS — `filtered_out > 0` bo'lsa
+  "{filtered_out} ta {min_orders} tadan kam buyurtmali", aks holda "Bu davrda
+  buyurtma yo'q". Bo'sh kartaga `compact` uzating (`DashboardPage.tsx`
+  `<TopPerformers … compact />`, ≤120–170px) — 9zbSDkUI TC4/TC6.
+- [2026-10-14] ⚠️ [analytics] — `GET /analytics/dashboard`: filial xodimining
+  filiali (JWT'da `branch_id` yo'q va branch-service javob bermadi) yoki
+  market operatorining marketi (identity javob bermadi) aniqlanmasa endi
+  **503** (ilgari 200 + kompaniya bo'yicha raqamlar / soxta nollar). Filial
+  dashboard'i (`branchDashboard`) tushsa `failed_parts: ['branchDashboard']`.
+  Filial dashboard'i endi order bo'laklari bilan parallel olinadi — filial
+  roli uchun javob vaqti ~2 baravar qisqardi (VkwhHqvW).
+  → **Frontendda:** 🔧 503 da "Ma'lumot olinmadi, qayta urinib ko'ring"
+  holatini ko'rsating (0 lar emas); `failed_parts` dagi bo'limni "olinmadi"
+  deb belgilang.
+- [2026-10-14] ✏️ [analytics] — kuryer roli uchun `GET /analytics/dashboard`
+  da `topCouriers` endi to'ldiriladi (ilgari doim `[]`): tanlangan davr
+  bo'yicha top-10, har qator faqat `courier_id`, `courier_name`,
+  `total_orders`, `successful_orders`, `success_rate` (pul maydonlari yo'q).
+  Yangi: `topCouriersMeta` (`min_orders`, `filtered_out`, `from`, `to`),
+  `myRank` (so'rovchining to'liq reytingdagi o'rni, yo'q bo'lsa `null`),
+  `myRanking` (o'z qatori). Reyting olinmasa —
+  `failed_parts: ['topCouriers']` (5tUEVG1B).
+  → **Frontendda:** 🔧 kuryer dashboardida reyting kartasi; o'z qatorini
+  `courier_id === user.id` (yoki `myRank`) bo'yicha ajrating, top-10 dan
+  tashqarida bo'lsa pastida "Siz: {myRank}-o'rin" qatorini (`myRanking`)
+  ko'rsating.
+- [2026-10-14] 🔧 [analytics] — `GET /analytics/revenue` kontrakti
+  (2026-10-08, faAfgvW1) qayta tekshirildi: `data[]` (`period`, `label`,
+  `ordersCount`, `revenue`), `summary {totalRevenue, totalOrders,
+  avgRevenue}`, `chart {labels, values}` to'ldirilgan, raqamli kalitlar yo'q
+  (2Fj7iw1k). Backend o'zgarishi yo'q.
+  → **Frontendda:** 🔧 `FinancialAnalysis.tsx`: `rawRevenuePoints` zaxira
+  yo'lini olib tashlab `data` dan o'qing; chartData ga
+  `orders: ordersCount` va `avgOrderValue = revenue / ordersCount` qo'shing;
+  "Aralash" (Combo) — ikki o'q: `Bar dataKey="orders"` (o'ng o'q),
+  `Line dataKey="revenue"` (chap o'q); tooltip'da daromad + buyurtma soni +
+  o'rtacha qiymat; grafik tepasida davr yakuni chipi:
+  "Jami: {summary.totalRevenue} so'm · {summary.totalOrders} ta · o'rtacha
+  {totalRevenue/totalOrders} so'm". `RevenueResponse` tipiga `summary?`.
+- [2026-10-14] 🟢 [analytics] — `GET /analytics/kpi`: `averageFulfillmentHours`
+  va `onTimeRate` endi order-service'da bitta SQL agregatidan
+  (`order.analytics.fulfillment_stats`) — qiymatlar o'sha formula, javob
+  shakli o'zgarmagan; KPI endi bitta parallel bosqichda (≤ 5 RMQ chaqiruv)
+  qaytadi. Bu bo'lak olinmasa `failed_parts: ['fulfillment']` (ilgari butun
+  KPI 503) (mKS1mjNr).
+  → **Frontendda:** o'zgarish shart emas; `failed_parts` da `fulfillment`
+  bo'lsa yetkazish vaqti/SLA ni "olinmadi" deb ko'rsating.
+
+### 2026-10-14 — Bildirishnoma auditoriyasi va kampaniya navbati (W8aerwL6, xHPdpj0W)
+
+- [2026-10-14] ✏️ [notification] — `POST /notifications/dispatch` endi
+  mijoz va superadminni ham nishonlaydi (W8aerwL6). Yangi ixtiyoriy
+  maydonlar: `include_customers: boolean`, `confirm_all_customers: boolean`,
+  `segment: { region_id?, district_id?, market_id?, last_order_from?,
+  last_order_to?, min_orders? }` (segment — mijozning BUYURTMALARI bo'yicha,
+  faqat mijozlarga qo'llanadi). Qoidalar: `roles:['customer']` bayroqsiz →
+  400 (matn nima qilishni aytadi); `include_customers: true` segmentsiz va
+  `confirm_all_customers: true` siz → 400; segment mijozsiz → 400.
+  `roles:['superadmin']` endi ishlaydi; `broadcast: true` — barcha xodimlar
+  (superadmin ham), mijozlar faqat `include_customers` bilan. Sinxron
+  dispatch chegarasi 5000 (oshsa 400, jimgina kesilmaydi).
+  → **Frontendda:** 🔧 "Xabar yuborish" formasiga "Mijozlar" bo'limi:
+  `include_customers` + segment filtrlari (hudud/tuman/market/oxirgi buyurtma
+  oralig'i/min buyurtmalar), segmentsiz "Barcha mijozlar" tanlansa alohida
+  tasdiq (checkbox) → `confirm_all_customers: true`. 400 matnini foydalanuvchiga
+  ko'rsating.
+- [2026-10-14] 🆕 [notification] — `POST /notifications/audience/preview`
+  (SUPERADMIN/ADMIN; hech narsa yubormaydi). Body — dispatch'dagi nishon
+  maydonlari (`recipient_id(s)`, `roles`, `broadcast`, `include_customers`,
+  `confirm_all_customers`, `segment`). Javob `data`: `{ exact, total,
+  by_role: {rol: son}, by_channel: { in_app, realtime, push, sms, email: 0,
+  telegram: null }, explicit, not_found, limits: { dispatch_max: 5000,
+  campaign_max }, dispatch_allowed, campaign_allowed, warnings: [...] }`.
+  Telefon/ism QAYTMAYDI. `warnings`: `includes_customers`, `all_customers`,
+  `recipients_not_found`, `over_dispatch_cap_use_campaign`, `over_campaign_cap`.
+  → **Frontendda:** 🔧 yuborishdan OLDIN tasdiqlash oynasi (BeePost
+  send-message namunasi): matn, "N ta qabul qiluvchi", rollar kesimi, kanal
+  bo'yicha yaroqlilar; `dispatch_allowed: false` bo'lsa kampaniya orqali
+  yuborishni taklif qiling.
+- [2026-10-14] 🆕 [notification] — Kampaniya navbati (xHPdpj0W), hammasi
+  SUPERADMIN/ADMIN:
+  - `POST /notifications/campaigns` → **HTTP 202** `{ campaign_id, status:
+    'queued', total, scheduled_at, duplicate }`. **`Idempotency-Key` sarlavhasi
+    majburiy** (yoki body `idempotency_key`): ayni kalit bilan takror → o'sha
+    kampaniya (`duplicate: true`, yangi yaratilmaydi); ayni kalit + boshqa
+    mazmun → 409. Body: `type` (katalog), `title`, `body?`, `data?`, `link?`,
+    `category?`, `priority?`, `channels?` (faqat `in_app|realtime|push`;
+    `sms/telegram/email` → 400), nishon (dispatch bilan bir xil yoki
+    `recipient_ids` — boshqa nishon bilan birga emas), `scheduled_at?` (ISO,
+    ≤90 kun). Chegara 20 000 (env `NOTIFICATION_CAMPAIGN_MAX_FANOUT`), oshsa 400.
+  - `GET /notifications/campaigns?page&limit&status` — tarix (yangilari
+    birinchi), `meta` bilan.
+  - `GET /notifications/campaigns/:id` — progress: `status`
+    (`queued|running|done|failed|cancelled`), `total/sent/failed/skipped`,
+    `progress_pct`, `batches_done`, `created_by`, `audience`, `scheduled_at`,
+    `started_at`, `finished_at`, `last_error`.
+  - `POST /notifications/campaigns/:id/cancel` → 200; yakunlangan — 409.
+  → **Frontendda:** 🔧 katta yuborish (5000+ yoki ommaviy e'lon) uchun
+  `/notifications/dispatch` o'rniga kampaniya: har "Yuborish" bosilishi uchun
+  bitta UUID (qayta urinishda o'sha kalit), 202 dan keyin
+  `GET /campaigns/:id` ni 2–3 s da poll qilib progress-bar; tarix sahifasi
+  va "Bekor qilish" tugmasi. Progress real vaqtda emas — partiya (200 ta)
+  qadamlari bilan yangilanadi.
+
+### 2026-10-14 — Bildirishnoma: push, sozlamalar, kanal tanlash, eskalatsiya (Guruh C)
+
+- [2026-10-14] 🟢 [notification] — Web Push (kf0uVbyg): `GET /notifications/push/public-key`
+  → `{ enabled, public_key }` (faqat PUBLIC kalit), `POST /notifications/push/subscribe`
+  (endpoint bo'yicha idempotent — qayta chaqirish yangi qator yaratmaydi), `DELETE
+  /notifications/push/subscribe` (faqat o'z obunasi; begona/yo'q endpoint — 404). Prod'da
+  VAPID kalitlari hozircha yo'q → `enabled:false`, subscribe 503.
+  → **Frontendda:** 🔧 `enabled:false` bo'lsa `PushManager.subscribe` CHAQIRILMASIN (503);
+  logout'dan OLDIN `DELETE /notifications/push/subscribe`.
+- [2026-10-14] ✏️ [notification] — `POST /notifications/dispatch`: `recipient_ids` har elementi
+  faqat musbat butun son (bigint) — aks holda 400 va hech narsa yozilmaydi (BoMa1A1R). 500
+  javoblarida endi xom DB matni yo'q — faqat `Internal server error`.
+  → **Frontendda:** 🟢 o'zgarish shart emas (forma raqamli id yuboradi).
+- [2026-10-14] ⚠️ [notification] — kanal tanlash (7Ec56EIw): dispatch `channels` bersa katalogdagi
+  `allowed_channels` bilan KESISHMA olinadi. `GET /notifications/types` har turida yangi
+  `allowed_channels` maydoni. `*.manual` (admin "Xabar yuborish") va `x.` turlarda — barcha kanal
+  (o'zgarish yo'q); katalog turlarida (masalan `order.sold`) faqat ruxsat etilgan kanallar.
+  → **Frontendda:** 🟢 admin forma `*.manual` yuboradi — ta'sir yo'q; kanal tanlovi UI'da
+  `allowed_channels` dan foydalanish mumkin.
+- [2026-10-14] ✏️ [notification] — dispatch javobida yangi `skipped_by_preference` (son).
+  Hamma qabul qiluvchi sozlama bilan filtrlansa — 400 EMAS, `dispatched: 0`,
+  `skipped_by_preference: N`, xabar `Skipped by recipient preferences — nothing dispatched`.
+  ⚠️ `marketing` kategoriyasi (shu jumladan `marketing.manual`) — yozuv yo'q foydalanuvchiga
+  ketmaydi (default O'CHIQ, rozilik `scope: marketing, enabled: true` bilan).
+  → **Frontendda:** 🔧 "Xabar yuborish" natijasida `skipped_by_preference` ni ko'rsating
+  (`dispatched: 0` muvaffaqiyatsizlik emas).
+- [2026-10-14] 🆕 [notification] — foydalanuvchi sozlamalari (mP1WGG1W): RMQ
+  `notification.preferences.get` / `notification.preferences.update`. Gateway marshrutlari
+  `GET /notifications/preferences` va `PATCH /notifications/preferences` (`user_id` faqat
+  JWT'dan, rol talab qilinmaydi) — gateway kartasida (hali deploy qilinmagan).
+  GET javobi: `{ items: [{ scope, channel, enabled, updated_at }], channels: ['all','in_app',
+  'realtime','push','sms','email'], defaults: { marketing: false, other: true }, locked_types }`.
+  PATCH tanasi: `{ items: [{ scope: 'order' | 'order.sold' | …, channel, enabled: true|false|null }] }`
+  (`null` — sukutga qaytarish). Critical (`locked_types`) turni o'chirish — 400. `in_app`
+  (yoki `all`) o'chirilsa — tur butunlay o'chadi.
+  → **Frontendda:** 🔧 sozlamalar sahifasida kategoriya × kanal jadvali; `locked_types` disabled.
+- [2026-10-14] 🔧 [notification/identity] — tinch soatlar: `user.settings.notifications.quiet_hours
+  = { from: 'HH:MM', to: 'HH:MM' }` (Toshkent vaqti; mavjud settings PATCH orqali, migratsiya
+  yo'q). Critical bo'lmagan PUSH oyna oxiriga suriladi (tashlanmaydi). ⏳ identity
+  `contacts_by_ids` javobiga `quiet_hours` qo'shilgach ishlaydi.
+  → **Frontendda:** 🔧 sozlamalarda "Tinch soatlar" (from/to) maydoni — `mergeSettings` bilan.
+- [2026-10-14] 🟢 [notification] — inbox `delivery` JSONB'da yangi holatlar: `push:
+  'no_subscription' | 'no_provider' | 'skipped'` (+ `push_reason: 'muted'|'online'|'quiet_hours'`,
+  `push_deferred_until`, `push_attempts`, `push_retry_at`), `<kanal>: 'skipped'` +
+  `<kanal>_reason: 'muted'`, `sms: 'not_eligible'` + `sms_reason: 'no_phone'`, critical uchun
+  `escalation: 'scheduled'|'skipped'|'blocked'|'sms'`, `escalation_due_at`, `escalated_at`.
+  → **Frontendda:** 🟢 ixtiyoriy — admin diagnostikasida ko'rsatish mumkin.
+
+### 2026-10-14 — Guruh G (AI buyurtma)
+
+- [2026-10-14] 🟢 [order/ai] — `POST /orders/ai-parse` preview'ida yangi
+  ixtiyoriy kalit `district_source: 'ai'` (5Z1ZvvzE): deterministik rezolver
+  tumanni topolmaganda (imlo xatosi, viloyat aytilmagan) arzon model tumanni
+  INDEKS bilan tanladi (viloyat qulfi + SOATO tekshiruvidan o'tgan). Kalit
+  faqat shu holatda bor; shakl boshqacha o'zgarmagan.
+  → **Frontendda:** (ixtiyoriy) 🔧 tuman maydoni yonida "AI taklifi —
+  tekshiring" belgisi. O'zgarish shart emas.
+
+- [2026-10-14] ✏️ [order/ai] — `POST /orders/ai-confirm` har buyurtmasida
+  yangi ixtiyoriy `ai_item_index` (0..29) — ai-parse preview'idagi `index`
+  (Cp2v3ZJ7, vncdmXOy). `draft_id` + `ai_item_index` berilsa backend BARQAROR
+  dublikat kaliti (`ai:<market>:<draft>:<index>`) ishlatadi: ayni band ikkinchi
+  marta HECH QACHON yaratilmaydi (sahifa yangilansa ham), va operator
+  o'zgartirgan maydonlar server tomonda audit qilinadi. Berilmasa — eski
+  imzo-dedupe (10 daqiqa) va audit'siz.
+  Natija: `ok:true` elementlarida endi `idempotent_replay: boolean` —
+  `true` = bu band avval yaratilgan, xuddi o'sha `order_id` qaytdi (yangi
+  buyurtma YO'Q). Boshqa draft'dan ayni mazmun 10 daqiqa ichida kelsa —
+  avvalgidek `ok:false, code:'duplicate_recent'` (+ `order_id`).
+  → **Frontendda:** 🔧 `buildAiConfirmPayload` da har buyurtmaga
+  `ai_item_index: preview.index` qo'shing (qayta yuborishda O'ZGARTIRMANG);
+  `ok:true` (shu jumladan `idempotent_replay:true`) kartalarni qulflang va
+  qayta yubormang — retry'da faqat `ok:false` bo'lganlarni yuboring
+  (`createdSigs` faqat qulaylik, haqiqiy himoya backendda).
+  `idempotent_replay:true` ni "allaqachon yaratilgan #<order_id>" deb
+  ko'rsating (xato EMAS).
+- [2026-10-14] 🆕 [order/ai] — `GET /orders/:id/ai-trace` (faqat
+  SUPERADMIN/ADMIN; boshqalar 403) — AI buyurtma audit izi (vncdmXOy):
+  `source_text` (maskalangan, telefonlar `[TEL_n]`; 30 kundan keyin `null`,
+  `source_purged:true`), `model`, `prompt_version`, `ai_suggestion` (AI
+  taklifi; telefon faqat `phone_masked`), `edited_fields` (operator
+  o'zgartirgan maydonlar — server hisoblagan), `confirmed_by`,
+  `cost.{draft_cost_uzs, order_cost_uzs, calls, linked_orders}`.
+  Buyurtma AI'dan yaratilmagan bo'lsa 404.
+  → **Frontendda:** 🔧 (ixtiyoriy) buyurtma tafsilotida admin uchun
+  "AI izi" bo'limi; 404 = oddiy buyurtma, bo'limni yashiring.
+
+- [2026-10-14] ✏️ [ai] — `GET /ai/status` javobiga `model_policy`
+  qo'shildi: `{ ok: boolean, order, vision, classify }`, har biri
+  `'ok' | 'weak' | 'unknown'` (LP3RKvXY). `weak` — ekstraksiya modeli
+  kuchsiz modelga (masalan Haiku) pasaytirilgan; `unknown` — model nomi narx
+  jadvalida yo'q (xato yozilgan). Servis baribir ishlaydi.
+  → **Frontendda:** 🔧 AI admin dashboard'ida `model_policy.ok === false`
+  bo'lsa QIZIL belgi ("Ekstraksiya modeli pasaytirilgan: <models.order>")
+  ko'rsating. Qolgan maydonlar o'zgarmagan.
+
 ### 2026-10-12 — 1-kun backend kartalari
 
 - [2026-10-12] ✏️ [order/logistics] — superadminning mavjud

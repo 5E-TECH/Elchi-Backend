@@ -249,7 +249,8 @@ describe('POST finance/financial-balance/entries — takroriy bosish (GtAoqHlk)'
     await fx.record(expense, 'k-1');
     await fx.record(expense, 'k-1');
     const [a, b] = fx.dedupKeys();
-    expect(a).toBe('k-1');
+    // (cSNJN7GP) aktor nom fazosi — tizim kalitlari bilan to'qnashmaydi.
+    expect(a).toBe('manual-entry:1:k-1');
     expect(a).toBe(b);
     expect(fx.financeClient.send.mock.calls[0][1]).toMatchObject({
       ...expense,

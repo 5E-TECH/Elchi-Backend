@@ -18,6 +18,7 @@ import {
   registerDecorator,
   ValidationOptions,
 } from 'class-validator';
+import type { AudienceSegmentInput } from '../audience/audience-request';
 
 // class-validator's @IsNotEmpty allows whitespace-only strings; this rejects them.
 function IsNotBlank(validationOptions?: ValidationOptions) {
@@ -43,7 +44,8 @@ function IsNotBlank(validationOptions?: ValidationOptions) {
  *   - `recipient_id`            → one user
  *   - `recipient_ids`           → explicit list of users
  *   - `roles`                   → every (employee/market) user with that role
- *   - `broadcast: true`         → every active user
+ *   - `broadcast: true`         → every staff user (superadmin ham, W8aerwL6)
+ *   - `include_customers: true` → mijozlar (segment yoki confirm_all_customers bilan)
  *
  * Telegram relay (optional): set `telegram` to also push the message to the
  * market's connected group via the existing telegram_markets config.
@@ -54,10 +56,18 @@ export class DispatchNotificationDto {
   @Matches(/^\d+$/)
   recipient_id?: string;
 
+  /**
+   * (BoMa1A1R) `recipient_id` bilan BIR XIL qoida — har element faqat raqam.
+   * Avval faqat `@IsString` edi: "abc" bigint ustunigacha yetib, xom Postgres
+   * xatosi (`invalid input syntax for type bigint`) bilan 500 qaytarardi.
+   * ⚠️ RMQ'da ValidationPipe yo'q — servis `dispatch()` ham aynan shuni
+   * tekshiradi (ichki chaqiruvchilar uchun).
+   */
   @IsOptional()
   @IsArray()
   @ArrayNotEmpty()
   @IsString({ each: true })
+  @Matches(/^\d+$/, { each: true })
   recipient_ids?: string[];
 
   @IsOptional()
@@ -68,6 +78,29 @@ export class DispatchNotificationDto {
   @IsOptional()
   @IsBoolean()
   broadcast?: boolean;
+
+  /**
+   * (W8aerwL6) Mijozlarni ham nishonlash. Segment filtri YOKI
+   * `confirm_all_customers: true` bilan birga bo'lishi SHART (aks holda 400).
+   * `roles:['customer']` ham faqat shu bayroq bilan ishlaydi.
+   */
+  @IsOptional()
+  @IsBoolean()
+  include_customers?: boolean;
+
+  /** (W8aerwL6) Segmentsiz BARCHA mijozlarga — aniq tasdiq. */
+  @IsOptional()
+  @IsBoolean()
+  confirm_all_customers?: boolean;
+
+  /**
+   * (W8aerwL6) Mijoz segmenti (buyurtmalar bo'yicha, order-service):
+   * hudud/tuman/market/oxirgi buyurtma oralig'i/min buyurtmalar soni.
+   * Faqat mijozlarga qo'llanadi.
+   */
+  @IsOptional()
+  @IsObject()
+  segment?: AudienceSegmentInput;
 
   /**
    * Fine-grained event key, convention `{domain}.{event}` e.g. `order.sold`.

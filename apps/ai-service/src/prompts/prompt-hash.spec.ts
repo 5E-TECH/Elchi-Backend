@@ -4,6 +4,8 @@ import {
   ORDER_EXTRACT_SYSTEM,
 } from './order-extract.prompt';
 import { ORDER_EXTRACT_SCHEMA } from './order-extract.schema';
+import { DISTRICT_PICK_SYSTEM } from './district-pick.prompt';
+import { DISTRICT_PICK_SCHEMA } from './district-pick.schema';
 import { PRODUCT_DISAMBIG_SYSTEM } from './product-disambiguate.prompt';
 import { PRODUCT_DISAMBIG_SCHEMA } from './product-disambiguate.schema';
 
@@ -33,6 +35,11 @@ const LOCKED = {
     'c2d12f1d7e514955261fa657725871a73c1b416d30aa8b4ad0ca1677ad5be4ab',
   PRODUCT_DISAMBIG_SCHEMA:
     '370b4539e409c0753b6b506185b5c59be7695f890f7cdc292d3baae708d5fb6b',
+  // 5Z1ZvvzE — tuman LLM fallback'i.
+  DISTRICT_PICK_SYSTEM:
+    'a92075508a9d691639f8cb301310301304dc260bea8d4047a0c6a997f2706628',
+  DISTRICT_PICK_SCHEMA:
+    '370b4539e409c0753b6b506185b5c59be7695f890f7cdc292d3baae708d5fb6b',
 } as const;
 
 function sha256(text: string): string {
@@ -59,6 +66,16 @@ describe("prompt/sxema sha256 qulfi (cSUBv0tY #9 — kesh buzilishini erta ko'rs
   it('JSON.stringify(PRODUCT_DISAMBIG_SCHEMA)', () => {
     expect(sha256(JSON.stringify(PRODUCT_DISAMBIG_SCHEMA))).toBe(
       LOCKED.PRODUCT_DISAMBIG_SCHEMA,
+    );
+  });
+
+  it('DISTRICT_PICK_SYSTEM (5Z1ZvvzE)', () => {
+    expect(sha256(DISTRICT_PICK_SYSTEM)).toBe(LOCKED.DISTRICT_PICK_SYSTEM);
+  });
+
+  it('JSON.stringify(DISTRICT_PICK_SCHEMA) (5Z1ZvvzE)', () => {
+    expect(sha256(JSON.stringify(DISTRICT_PICK_SCHEMA))).toBe(
+      LOCKED.DISTRICT_PICK_SCHEMA,
     );
   });
 

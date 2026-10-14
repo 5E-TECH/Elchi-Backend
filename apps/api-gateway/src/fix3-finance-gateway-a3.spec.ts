@@ -108,6 +108,16 @@ const courierUser = (id: string) => ({
 });
 
 describe('TMgL1zvq — tolov tokeni faqat Idempotency-Key dan', () => {
+  // Soat qotiriladi: kalitsiz ikki so'rov BIR XIL soniyada kelsa ham (eski
+  // 30 s bucket'da yutilardi) ikki alohida token bo'lishi kerak.
+  let nowSpy: jest.SpyInstance<number, []>;
+  beforeEach(() => {
+    nowSpy = jest.spyOn(Date, 'now').mockReturnValue(1_790_000_005_000);
+  });
+  afterEach(() => {
+    nowSpy.mockRestore();
+  });
+
   it('market: kalitsiz ikki bosish dedup qilinmaydi', async () => {
     const env = setup();
     route(env.financeClient, {
@@ -134,8 +144,11 @@ describe('TMgL1zvq — tolov tokeni faqat Idempotency-Key dan', () => {
       env.financeClient,
       'finance.cashbox.payment_market',
     );
-    expect(first.dedup_epoch).toBe('');
-    expect(second.dedup_epoch).toBe('');
+    // (TMgL1zvq) Kalitsiz — har so'rovga YANGI tasodifiy token (bo'sh emas:
+    // RMQ qayta yetkazilishi baribir dedup bo'ladi), soatga bog'liq emas.
+    expect(first.dedup_epoch).toMatch(/^gw:[0-9a-f-]{36}$/);
+    expect(second.dedup_epoch).toMatch(/^gw:[0-9a-f-]{36}$/);
+    expect(second.dedup_epoch).not.toBe(first.dedup_epoch);
     // payment_date tarixga baribir yoziladi.
     expect(second.payment_date).toBe('2026-10-01T06:00:09.000Z');
   });
@@ -223,9 +236,51 @@ describe('TMgL1zvq — tolov tokeni faqat Idempotency-Key dan', () => {
       env.financeClient,
       'finance.cashbox.payment_branch_main',
     ).map((payload) => payload.dedup_epoch);
-    expect(tokens[0]).toBe('');
-    expect(tokens[1]).toBe('');
+    expect(tokens[0]).toMatch(/^gw:/);
+    expect(tokens[1]).toMatch(/^gw:/);
+    expect(tokens[1]).not.toBe(tokens[0]);
     expect(tokens[2]).toBe('fe-branch-key');
+  });
+
+  it.each([
+    ['spend', 'spendMoney', 'finance.cashbox.spend'],
+    ['fill', 'fillCashbox', 'finance.cashbox.fill'],
+  ] as const)(
+    'kassa %s: kalitsiz ikki bir xil so`rov — ikki xil token; kalit — aynan kalit',
+    async (_label, method, cmd) => {
+      const env = setup();
+      route(env.financeClient, {
+        [cmd]: () => ({ statusCode: 200, data: {} }),
+      });
+      const call = (controller: any, key?: string) =>
+        controller[method](superadmin, { amount: 100 }, key);
+
+      await call(env.controller);
+      await call(env.controller);
+      await call(env.controller, ' fe-fill-key ');
+
+      const tokens = payloadsOf(env.financeClient, cmd).map(
+        (payload) => payload.dedup_epoch,
+      );
+      expect(tokens[0]).toMatch(/^gw:/);
+      expect(tokens[1]).toMatch(/^gw:/);
+      expect(tokens[1]).not.toBe(tokens[0]);
+      expect(tokens[2]).toBe('fe-fill-key');
+    },
+  );
+
+  it('255 belgidan uzun Idempotency-Key — 400, finance chaqirilmaydi', async () => {
+    const env = setup();
+    route(env.financeClient, {});
+
+    await expect(
+      env.controller.paymentToMarket(
+        superadmin,
+        { market_id: '201', amount: 1000, payment_method: 'cash' } as any,
+        'k'.repeat(256),
+      ),
+    ).rejects.toMatchObject({ status: 400 });
+    expect(env.financeClient.send).not.toHaveBeenCalled();
   });
 });
 

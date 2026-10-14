@@ -336,7 +336,7 @@ describe('NotificationInboxService — delivery, fan-out, types', () => {
     it('Qisman: realtime ketdi, email provayderi yo‘q → "Partially dispatched", no_provider=[email]', async () => {
       const res = await service.dispatch({
         recipient_id: '42',
-        type: 'system.announcement',
+        type: 'system.manual',
         title: 'E’lon',
         channels: ['in_app', 'realtime', 'email'],
       } as any);

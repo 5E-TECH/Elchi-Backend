@@ -28,6 +28,12 @@ import {
   PushDeliveryService,
 } from './push/push-delivery.service';
 import type { PushDeliverInput } from './push/push-delivery.service';
+import { NotificationPreferencesService } from './preferences/notification-preferences.service';
+import {
+  ESCALATE_PATTERN,
+  NotificationEscalationService,
+} from './escalation/notification-escalation.service';
+import type { EscalateInput } from './escalation/notification-escalation.service';
 
 @Controller()
 export class NotificationServiceController {
@@ -37,6 +43,8 @@ export class NotificationServiceController {
     private readonly inboxService: NotificationInboxService,
     private readonly pushSubscriptions: PushSubscriptionService,
     private readonly pushDelivery: PushDeliveryService,
+    private readonly preferences: NotificationPreferencesService,
+    private readonly escalation: NotificationEscalationService,
   ) {}
 
   private executeAndAck<T>(
@@ -269,6 +277,35 @@ export class NotificationServiceController {
   @MessagePattern({ cmd: PUSH_DELIVER_PATTERN })
   pushDeliver(@Payload() data: PushDeliverInput, @Ctx() context: RmqContext) {
     return this.executeAndAck(context, () => this.pushDelivery.deliver(data));
+  }
+
+  // ==================== Sozlamalar (mP1WGG1W) ====================
+
+  /** `GET /notifications/preferences` — `user_id` FAQAT JWT'dan (gateway). */
+  @MessagePattern({ cmd: 'notification.preferences.get' })
+  preferencesGet(
+    @Payload() data: { user_id?: string },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.preferences.get(data));
+  }
+
+  /** `PATCH /notifications/preferences` — `{ user_id (JWT), items: [...] }`. */
+  @MessagePattern({ cmd: 'notification.preferences.update' })
+  preferencesUpdate(
+    @Payload() data: { user_id?: string; items?: unknown },
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () => this.preferences.update(data));
+  }
+
+  /**
+   * (7Ec56EIw #5) Outbox iste'molchisi — CRITICAL xabar N daqiqada
+   * o'qilmagan bo'lsa SMS eskalatsiyasi (ATIGI BIR MARTA).
+   */
+  @MessagePattern({ cmd: ESCALATE_PATTERN })
+  escalate(@Payload() data: EscalateInput, @Ctx() context: RmqContext) {
+    return this.executeAndAck(context, () => this.escalation.handle(data));
   }
 
   // ==================== Audit-log reads (gateway fan-in) ====================

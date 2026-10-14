@@ -17,14 +17,12 @@ import type { SmsDlrInput } from './sms-dlr.service';
 import { SmsGateService } from './sms-gate.service';
 import { SmsOtpService } from './sms-otp.service';
 import type { SendOtpInput } from './sms-otp.service';
-import { SmsOutboxService } from './sms-outbox.service';
+import { SmsOutboxService, smsReportRange } from './sms-outbox.service';
 import { SmsProviderAccountsService } from './sms-provider-accounts.service';
 import type { UpsertAccountInput } from './sms-provider-accounts.service';
 import { SmsProviderRegistry } from './sms-provider.registry';
 import { SmsTemplateService } from './sms-template.service';
 import type { UpsertTemplateInput } from './sms-template.service';
-
-const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** Oddiy validatsiya xatosi (Error) → 400; RpcException o'zgarishsiz. */
 const asRpc = async <T>(work: () => Promise<T> | T): Promise<T> => {
@@ -114,18 +112,10 @@ export class SmsController {
     @Ctx() context: RmqContext,
   ) {
     return this.run(context, () => {
-      const to = data?.to ? new Date(data.to) : new Date();
-      const from = data?.from
-        ? new Date(data.from)
-        : new Date(to.getTime() - 30 * DAY_MS);
-      if (
-        Number.isNaN(from.getTime()) ||
-        Number.isNaN(to.getTime()) ||
-        from >= to
-      ) {
-        throw new Error("from/to noto'g'ri");
-      }
-      return this.outbox.costReport(from, to);
+      // (8auPBa1O TC11) Kun chegaralari Toshkent bo'yicha (smsReportRange).
+      const range = smsReportRange(data?.from, data?.to);
+      if (!range) throw new Error("from/to noto'g'ri");
+      return this.outbox.costReport(range.from, range.to);
     });
   }
 

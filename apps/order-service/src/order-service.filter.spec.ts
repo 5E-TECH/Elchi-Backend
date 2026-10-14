@@ -335,13 +335,23 @@ describe('OrderServiceService filters', () => {
     for (const call of rangeSpy.mock.calls) {
       expect(call).toEqual([from, to, true]);
     }
+    // (uN1tjjGu) all=true ham 366 kunlik chegaradan o'tadi (audit C3): SQL'ga
+    // 1970 yil EMAS, qisqartirilgan oyna boshi (12.10.2025 00:00 Toshkent)
+    // ketadi.
+    const dateParams = qb.andWhere.mock.calls.flatMap(([, params]) =>
+      Object.values(params ?? {}).filter(
+        (value): value is Date => value instanceof Date,
+      ),
+    );
+    expect(dateParams.length).toBeGreaterThan(0);
     expect(
-      qb.andWhere.mock.calls.some(([, params]) =>
-        Object.values(params ?? {}).some(
-          (value) =>
-            value instanceof Date &&
-            value.toISOString() === '1969-12-31T19:00:00.000Z',
-        ),
+      dateParams.some(
+        (value) => value.toISOString() === '1969-12-31T19:00:00.000Z',
+      ),
+    ).toBe(false);
+    expect(
+      dateParams.some(
+        (value) => value.toISOString() === '2025-10-11T19:00:00.000Z',
       ),
     ).toBe(true);
   });

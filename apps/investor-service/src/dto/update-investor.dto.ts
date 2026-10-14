@@ -17,4 +17,12 @@ export class UpdateInvestorDto {
   @IsOptional()
   @IsString()
   description?: string;
+
+  /**
+   * vpKijXce: investor login (users.id) bilan bog'lash. `null` — bog'lanishni
+   * uzish. Servis musbat butun son va takrorlanmasligini tekshiradi.
+   */
+  @IsOptional()
+  @IsString()
+  user_id?: string | null;
 }

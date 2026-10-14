@@ -13,6 +13,10 @@ import {
 } from './user-service.service';
 import { AuthService } from './auth/auth.service';
 import { OtpService } from './otp/otp.service';
+import {
+  AUDIENCE_RESOLVE_PATTERN,
+  type AudienceResolveInput,
+} from './audience/audience-resolver';
 import type { OtpRequestInput, OtpVerifyInput } from './otp/otp.service';
 import type {
   CreateCustomerPayload,
@@ -538,6 +542,21 @@ export class IdentityController {
   ) {
     return this.executeAndAck(context, () =>
       this.userService.findUsersByIds(payload?.ids),
+    );
+  }
+
+  /**
+   * (W8aerwL6) Bildirishnoma auditoriyasi — FAQAT ichki RMQ (notification-
+   * service). Ism va TELEFON qaytaradi, rol tekshiruvi yo'q: gateway'da HTTP
+   * marshrut sifatida OCHILMAYDI (gateway-no-audience spec'i tekshiradi).
+   */
+  @MessagePattern({ cmd: AUDIENCE_RESOLVE_PATTERN })
+  resolveAudience(
+    @Payload() payload: AudienceResolveInput,
+    @Ctx() context: RmqContext,
+  ) {
+    return this.executeAndAck(context, () =>
+      this.userService.resolveAudience(payload ?? {}),
     );
   }
 

@@ -1974,6 +1974,36 @@
         ]
       }
     },
+    "/orders/{id}/ai-trace": {
+      "get": {
+        "operationId": "OrderGatewayController_aiTrace",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "1024",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "AI buyurtma audit izi: maskalangan matn, model, AI taklifi, edited_fields, xarajat",
+        "tags": [
+          "Orders"
+        ]
+      }
+    },
     "/orders/ai-confirm": {
       "post": {
         "operationId": "OrderGatewayController_aiConfirm",
@@ -6599,7 +6629,17 @@
     "/finance/operator-payments": {
       "post": {
         "operationId": "FinanceGatewayController_createOperatorPayment",
-        "parameters": [],
+        "parameters": [
+          {
+            "name": "idempotency-key",
+            "required": false,
+            "in": "header",
+            "description": "Har to'lov uchun bitta kalit (retry'da ayni kalit). Takroriy so'rov 200 va data.idempotent: true qaytaradi (FJVqcUTv).",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
         "requestBody": {
           "required": true,
           "content": {
@@ -6745,6 +6785,188 @@
         "summary": "List an operator payouts",
         "tags": [
           "Finance"
+        ]
+      }
+    },
+    "/notifications/audience/preview": {
+      "post": {
+        "operationId": "NotificationCampaignGatewayController_previewAudience",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AudiencePreviewRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Yuborishdan OLDIN: aniq qabul qiluvchilar soni, rollar kesimi, kanal bo‘yicha yaroqlilar (hech narsa yuborilmaydi)",
+        "tags": [
+          "Notification campaigns"
+        ]
+      }
+    },
+    "/notifications/campaigns": {
+      "post": {
+        "operationId": "NotificationCampaignGatewayController_createCampaign",
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateNotificationCampaignRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Ommaviy yuborish — darhol 202 { campaign_id }, fonda partiyalab (Idempotency-Key majburiy; takror — mavjud kampaniya)",
+        "tags": [
+          "Notification campaigns"
+        ]
+      },
+      "get": {
+        "operationId": "NotificationCampaignGatewayController_listCampaigns",
+        "parameters": [
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 1,
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": 20,
+              "type": "number"
+            }
+          },
+          {
+            "name": "status",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "draft",
+                "queued",
+                "running",
+                "done",
+                "failed",
+                "cancelled"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kampaniyalar tarixi (yangilari birinchi)",
+        "tags": [
+          "Notification campaigns"
+        ]
+      }
+    },
+    "/notifications/campaigns/{id}": {
+      "get": {
+        "operationId": "NotificationCampaignGatewayController_getCampaign",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "7",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Kampaniya progressi: status, total/sent/failed/skipped, progress_pct",
+        "tags": [
+          "Notification campaigns"
+        ]
+      }
+    },
+    "/notifications/campaigns/{id}/cancel": {
+      "post": {
+        "operationId": "NotificationCampaignGatewayController_cancelCampaign",
+        "parameters": [
+          {
+            "name": "id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "example": "7",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Bekor qilish — keyingi partiyalar boshlanmaydi",
+        "tags": [
+          "Notification campaigns"
         ]
       }
     },
@@ -7005,6 +7227,54 @@
           }
         ],
         "summary": "Mark one of my notifications read (or unread)",
+        "tags": [
+          "Notification"
+        ]
+      }
+    },
+    "/notifications/preferences": {
+      "get": {
+        "operationId": "NotificationGatewayController_getPreferences",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Current user's notification preferences",
+        "tags": [
+          "Notification"
+        ]
+      },
+      "patch": {
+        "operationId": "NotificationGatewayController_updatePreferences",
+        "parameters": [],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateNotificationPreferencesRequestDto"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Update current user preferences (critical types cannot be disabled → 400)",
         "tags": [
           "Notification"
         ]
@@ -9113,6 +9383,155 @@
         ]
       }
     },
+    "/investors/me": {
+      "get": {
+        "operationId": "InvestorGatewayController_getMyProfile",
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Investor: o'z profili va yig'indisi (investitsiya, foiz, to'langan/kutilayotgan foyda)",
+        "tags": [
+          "Investor"
+        ]
+      }
+    },
+    "/investors/me/dashboard": {
+      "get": {
+        "operationId": "InvestorGatewayController_getMyDashboard",
+        "parameters": [
+          {
+            "name": "months",
+            "required": false,
+            "in": "query",
+            "description": "1..36, default 12",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Investor: dashboard kartalari + oylik foyda grafigi (o'ziniki)",
+        "tags": [
+          "Investor"
+        ]
+      }
+    },
+    "/investors/me/investments": {
+      "get": {
+        "operationId": "InvestorGatewayController_getMyInvestments",
+        "parameters": [
+          {
+            "name": "from_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "to_date",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Investor: o'z investitsiyalari",
+        "tags": [
+          "Investor"
+        ]
+      }
+    },
+    "/investors/me/profits": {
+      "get": {
+        "operationId": "InvestorGatewayController_getMyProfits",
+        "parameters": [
+          {
+            "name": "is_paid",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "example": "true",
+              "type": "string"
+            }
+          },
+          {
+            "name": "page",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          },
+          {
+            "name": "limit",
+            "required": false,
+            "in": "query",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Investor: o'z foyda tarixi",
+        "tags": [
+          "Investor"
+        ]
+      }
+    },
     "/investors": {
       "post": {
         "operationId": "InvestorGatewayController_createInvestor",
@@ -9193,6 +9612,44 @@
           }
         ],
         "summary": "List investors (pagination + search + status)",
+        "tags": [
+          "Investor"
+        ]
+      }
+    },
+    "/investors/{investor_id}/dashboard": {
+      "get": {
+        "operationId": "InvestorGatewayController_getInvestorDashboard",
+        "parameters": [
+          {
+            "name": "investor_id",
+            "required": true,
+            "in": "path",
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "months",
+            "required": false,
+            "in": "query",
+            "description": "1..36, default 12",
+            "schema": {
+              "type": "number"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": ""
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ],
+        "summary": "Investor dashboard (nazorat): kartalar + oylik foyda grafigi",
         "tags": [
           "Investor"
         ]
@@ -14183,6 +14640,13 @@
             "example": "3f9b1c9e-5a7d-4c1e-9b3a-2d4e6f8a0b1c",
             "description": "ai-parse javobidagi draft_id — AI xarajatini yaratilgan buyurtmaga bog‘lash uchun."
           },
+          "ai_item_index": {
+            "type": "number",
+            "example": 0,
+            "minimum": 0,
+            "maximum": 29,
+            "description": "Preview’dagi `index` (ai-parse javobi). `draft_id` bilan birga BARQAROR dublikat kaliti (`ai:<market>:<draft>:<index>`) va audit (edited_fields) uchun. Qayta yuborishda O‘ZGARTIRMANG."
+          },
           "items": {
             "maxItems": 50,
             "type": "array",
@@ -15581,6 +16045,255 @@
           "amount"
         ]
       },
+      "AudienceSegmentDto": {
+        "type": "object",
+        "properties": {
+          "region_id": {
+            "type": "string",
+            "example": "5",
+            "description": "Buyurtma hududi"
+          },
+          "district_id": {
+            "type": "string",
+            "example": "41",
+            "description": "Buyurtma tumani"
+          },
+          "market_id": {
+            "type": "string",
+            "example": "12",
+            "description": "Market"
+          },
+          "last_order_from": {
+            "type": "string",
+            "example": "2026-09-01",
+            "description": "Oxirgi buyurtma shu sanadan keyin"
+          },
+          "last_order_to": {
+            "type": "string",
+            "example": "2026-10-01",
+            "description": "Oxirgi buyurtma shu sanadan oldin (\"uxlab qolgan\" mijozlar)"
+          },
+          "min_orders": {
+            "type": "number",
+            "example": 2,
+            "description": "Kamida shuncha buyurtma"
+          }
+        }
+      },
+      "AudiencePreviewRequestDto": {
+        "type": "object",
+        "properties": {
+          "roles": {
+            "example": [
+              "courier",
+              "superadmin"
+            ],
+            "description": "Rollar. `superadmin` ham bo'ladi; `customer` — faqat include_customers bilan",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "broadcast": {
+            "type": "boolean",
+            "example": false,
+            "description": "Barcha xodimlar (superadmin ham), mijozsiz"
+          },
+          "include_customers": {
+            "type": "boolean",
+            "example": true,
+            "description": "Mijozlarni ham nishonlash — segment YOKI confirm_all_customers bilan (aks holda 400)"
+          },
+          "confirm_all_customers": {
+            "type": "boolean",
+            "example": false,
+            "description": "Segmentsiz BARCHA mijozlarga — aniq tasdiq"
+          },
+          "segment": {
+            "$ref": "#/components/schemas/AudienceSegmentDto"
+          },
+          "recipient_id": {
+            "type": "string",
+            "example": "42"
+          },
+          "recipient_ids": {
+            "example": [
+              "42",
+              "43"
+            ],
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "CreateNotificationCampaignRequestDto": {
+        "type": "object",
+        "properties": {
+          "roles": {
+            "example": [
+              "courier",
+              "superadmin"
+            ],
+            "description": "Rollar. `superadmin` ham bo'ladi; `customer` — faqat include_customers bilan",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "broadcast": {
+            "type": "boolean",
+            "example": false,
+            "description": "Barcha xodimlar (superadmin ham), mijozsiz"
+          },
+          "include_customers": {
+            "type": "boolean",
+            "example": true,
+            "description": "Mijozlarni ham nishonlash — segment YOKI confirm_all_customers bilan (aks holda 400)"
+          },
+          "confirm_all_customers": {
+            "type": "boolean",
+            "example": false,
+            "description": "Segmentsiz BARCHA mijozlarga — aniq tasdiq"
+          },
+          "segment": {
+            "$ref": "#/components/schemas/AudienceSegmentDto"
+          },
+          "type": {
+            "type": "string",
+            "example": "marketing.manual",
+            "description": "GET /notifications/types katalogidan (yoki `x.` prefiksli)"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "order",
+              "finance",
+              "branch",
+              "logistics",
+              "account",
+              "system",
+              "marketing"
+            ]
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high",
+              "critical"
+            ]
+          },
+          "title": {
+            "type": "string",
+            "example": "Yangi tarif"
+          },
+          "body": {
+            "type": "string",
+            "example": "1-noyabrdan yangi tariflar amal qiladi."
+          },
+          "data": {
+            "type": "object",
+            "example": {
+              "promo": "nov"
+            }
+          },
+          "link": {
+            "type": "string",
+            "example": "/tariffs"
+          },
+          "channels": {
+            "type": "array",
+            "example": [
+              "in_app",
+              "realtime"
+            ],
+            "description": "Faqat in_app / realtime / push (SMS — alohida epik)",
+            "items": {
+              "type": "string",
+              "enum": [
+                "in_app",
+                "realtime",
+                "push"
+              ]
+            }
+          },
+          "recipient_ids": {
+            "example": [
+              "42",
+              "43"
+            ],
+            "description": "Aniq ro‘yxat — roles/broadcast/include_customers bilan birga EMAS",
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "scheduled_at": {
+            "type": "string",
+            "example": "2026-10-20T09:00:00+05:00",
+            "description": "Rejalashtirish (≤90 kun). Berilmasa — darhol"
+          },
+          "idempotency_key": {
+            "type": "string",
+            "example": "b4f1c2e0-campaign-1",
+            "description": "Idempotency-Key sarlavhasi o‘rniga (sarlavha ustun)"
+          }
+        },
+        "required": [
+          "type",
+          "title"
+        ]
+      },
+      "NotificationPreferenceItemDto": {
+        "type": "object",
+        "properties": {
+          "scope": {
+            "type": "string",
+            "example": "order",
+            "description": "Kategoriya (order, marketing, …) yoki aniq tur (order.sold)"
+          },
+          "channel": {
+            "type": "string",
+            "enum": [
+              "all",
+              "in_app",
+              "realtime",
+              "push",
+              "sms",
+              "email"
+            ],
+            "example": "push"
+          },
+          "enabled": {
+            "type": "object",
+            "example": false,
+            "nullable": true,
+            "description": "null — sozlamani olib tashlash (sukutga qaytish)"
+          }
+        },
+        "required": [
+          "scope",
+          "channel",
+          "enabled"
+        ]
+      },
+      "UpdateNotificationPreferencesRequestDto": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NotificationPreferenceItemDto"
+            }
+          }
+        },
+        "required": [
+          "items"
+        ]
+      },
       "PushSubscriptionKeysDto": {
         "type": "object",
         "properties": {
@@ -15702,6 +16415,24 @@
             "type": "boolean",
             "example": false,
             "description": "Send to every active user"
+          },
+          "include_customers": {
+            "type": "boolean",
+            "example": false,
+            "description": "Mijozlarni ham — segment YOKI confirm_all_customers bilan (aks holda 400)"
+          },
+          "confirm_all_customers": {
+            "type": "boolean",
+            "example": false,
+            "description": "Segmentsiz BARCHA mijozlarga — aniq tasdiq"
+          },
+          "segment": {
+            "description": "Mijoz segmenti (buyurtmalar bo‘yicha) — faqat mijozlarga",
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AudienceSegmentDto"
+              }
+            ]
           },
           "type": {
             "type": "string",
@@ -16827,6 +17558,11 @@
           },
           "description": {
             "type": "string"
+          },
+          "user_id": {
+            "type": "string",
+            "example": "25",
+            "description": "users.id (investor)"
           }
         },
         "required": [
@@ -16852,6 +17588,12 @@
           },
           "description": {
             "type": "string"
+          },
+          "user_id": {
+            "type": "object",
+            "example": "25",
+            "nullable": true,
+            "description": "users.id (investor); null — uzish"
           }
         }
       },

@@ -222,7 +222,45 @@ describe('BranchServiceService', () => {
     expect(res.data.id).toBe('c1');
   });
 
-  it('deleteBranch marks branch as deleted', async () => {
+  /**
+   * (T4eu8kxu) deleteBranch pul darvozasi: `order.branch_can_delete`,
+   * `order.settlement.branch_summary` va finance BRANCH kassasi cmd bo'yicha
+   * javob beradi. Sukut — hammasi nol (o'chirish ruxsat).
+   */
+  const routeDeleteChecks = (opts: {
+    work?: unknown;
+    summary?: unknown;
+    cashbox?: unknown;
+    financeError?: unknown;
+    summaryError?: unknown;
+  }) => {
+    orderClient.send.mockImplementation((pattern: { cmd: string }) => {
+      if (pattern.cmd === 'order.branch_can_delete') {
+        return of(
+          opts.work ?? { data: { active_orders: 0, active_batches: 0 } },
+        );
+      }
+      if (pattern.cmd === 'order.settlement.branch_summary') {
+        return opts.summaryError
+          ? throwError(() => opts.summaryError)
+          : of(opts.summary ?? { data: { branch_payable: 0 } });
+      }
+      return of({ data: [] });
+    });
+    financeClient.send.mockImplementation((pattern: { cmd: string }) => {
+      if (pattern.cmd === 'finance.cashbox.find_by_user') {
+        return opts.financeError
+          ? throwError(() => opts.financeError)
+          : of(
+              opts.cashbox ?? {
+                data: { balance: 0, balance_cash: 0, balance_card: 0 },
+              },
+            );
+      }
+      return of({ data: {} });
+    });
+  };
+  const activeBranch = () => {
     branchRepo.findOne.mockResolvedValue({
       id: 'b1',
       status: 'active',
@@ -233,11 +271,125 @@ describe('BranchServiceService', () => {
       status: 'inactive',
       isDeleted: true,
     });
+  };
+  const deleteError = async () => {
+    try {
+      await service.deleteBranch('b1', { id: '1', roles: ['admin'] });
+    } catch (error) {
+      return (error as RpcException).getError() as {
+        statusCode: number;
+        message: string;
+      };
+    }
+    throw new Error('deleteBranch rad etilmadi');
+  };
+
+  it('deleteBranch marks branch as deleted', async () => {
+    activeBranch();
+    routeDeleteChecks({});
 
     const res = await service.deleteBranch('b1', { id: '1', roles: ['admin'] });
 
     expect(res.statusCode).toBe(200);
     expect(res.data.id).toBe('b1');
+    // (T4eu8kxu) pul tekshiruvi aynan shu filial bo'yicha so'raladi.
+    expect(orderClient.send).toHaveBeenCalledWith(
+      { cmd: 'order.settlement.branch_summary' },
+      { branch_id: 'b1' },
+    );
+    expect(financeClient.send).toHaveBeenCalledWith(
+      { cmd: 'finance.cashbox.find_by_user' },
+      { user_id: 'b1', cashbox_type: 'branch' },
+    );
+  });
+
+  it('T4eu8kxu TC1: HQ`ga qarzi bor filial — 400, xabarda summa, o`chirilmaydi', async () => {
+    activeBranch();
+    routeDeleteChecks({ summary: { data: { branch_payable: 33780000 } } });
+
+    const error = await deleteError();
+
+    expect(error.statusCode).toBe(400);
+    expect(error.message).toContain("33 780 000 so'm qarzi bor");
+    expect(branchRepo.save).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['musbat', { balance: 150000.5, balance_cash: 150000.5, balance_card: 0 }],
+    ['manfiy', { balance: -20000, balance_cash: -20000, balance_card: 0 }],
+    [
+      'sof nol, lekin naqd/karta qoldiq',
+      { balance: 0, balance_cash: 500, balance_card: -500 },
+    ],
+  ])(
+    'T4eu8kxu TC2: BRANCH kassasi %s — 400, o`chirilmaydi',
+    async (_label, cashbox) => {
+      activeBranch();
+      routeDeleteChecks({ cashbox: { data: cashbox } });
+
+      const error = await deleteError();
+
+      expect(error.statusCode).toBe(400);
+      expect(error.message).toContain('filial kassasida qoldiq bor');
+      expect(branchRepo.save).not.toHaveBeenCalled();
+    },
+  );
+
+  it('T4eu8kxu TC3: qarz 0 va kassa yo`q (finance 404) — o`chiriladi', async () => {
+    activeBranch();
+    routeDeleteChecks({
+      financeError: new RpcException({ statusCode: 404, message: 'nf' }),
+    });
+
+    const res = await service.deleteBranch('b1', { id: '1', roles: ['admin'] });
+
+    expect(res.statusCode).toBe(200);
+    expect(branchRepo.save).toHaveBeenCalledWith(
+      expect.objectContaining({ isDeleted: true }),
+    );
+  });
+
+  it('T4eu8kxu: taqsimlanmagan qoldiq (branch_payable manfiy) o`chirishni to`smaydi', async () => {
+    activeBranch();
+    routeDeleteChecks({ summary: { data: { branch_payable: -5000 } } });
+
+    const res = await service.deleteBranch('b1', { id: '1', roles: ['admin'] });
+
+    expect(res.statusCode).toBe(200);
+  });
+
+  it.each([
+    ['finance yiqildi', { financeError: new Error('connection closed') }],
+    [
+      'finance 500',
+      { financeError: new RpcException({ statusCode: 500, message: 'x' }) },
+    ],
+    ['finance buzuq javob', { cashbox: { data: null } }],
+    ['finance balans son emas', { cashbox: { data: { balance: 'abc' } } }],
+    ['order summary yiqildi', { summaryError: new Error('timeout') }],
+    ['order summary buzuq', { summary: { data: {} } }],
+  ])(
+    'T4eu8kxu TC4 (fail-closed): %s — 503, o`chirilmaydi',
+    async (_label, opts) => {
+      activeBranch();
+      routeDeleteChecks(opts as never);
+
+      const error = await deleteError();
+
+      expect(error.statusCode).toBe(503);
+      expect(branchRepo.save).not.toHaveBeenCalled();
+    },
+  );
+
+  it('T4eu8kxu: order.branch_can_delete bo`sh javobi endi o`tkazib yuborilmaydi (fail-closed)', async () => {
+    activeBranch();
+    routeDeleteChecks({ work: { data: null } });
+
+    const error = await deleteError();
+
+    expect(error.statusCode).toBe(400);
+    expect(error.message).toContain('buyurtmalar xizmati javob bermadi');
+    expect(branchRepo.save).not.toHaveBeenCalled();
   });
 
   it('onModuleInit auto-creates HQ with HQ-TSHKNT code', async () => {

@@ -4051,38 +4051,108 @@ export class OrderLifecycleService {
     );
   }
 
-  private async replaceOrderItems(
-    orderId: string,
-    items?: Array<{ product_id: string; quantity?: number }>,
-  ): Promise<number> {
-    try {
-      await this.orderItemRepo.delete({ order_id: orderId });
-    } catch (error) {
-      this.handleDbError(error);
+  /**
+   * (52NJNGaH) `updateFull` dagi `items` — ESKI SATRLAR O'CHIRILISHIDAN OLDIN
+   * tekshiriladi va normallashtiriladi.
+   *
+   * Ilgari `replaceOrderItems` avval hamma satrni o'chirib, keyin faqat
+   * `{product_id, quantity}` yozardi: tashqi (katalogsiz, `product_id = null`)
+   * buyurtmada `product_name` butunlay yo'qolardi, bo'sh yoki `product_id`
+   * siz ro'yxat esa buyurtmani MAHSULOTSIZ qoldirardi (qaytarib bo'lmaydi).
+   *
+   * Qoidalar (yaratishdagi IDG1z5y9 bilan bir xil):
+   *  - ro'yxat bo'sh bo'lmasin — buyurtmada kamida bitta mahsulot bo'ladi;
+   *  - har satrda `product_id` (raqam) YOKI bo'sh bo'lmagan `product_name`;
+   *  - `quantity` — butun son, kamida 1 (berilmasa 1).
+   * Xato — 400, bazaga hech narsa tegmaydi.
+   */
+  private normalizeReplacementItems(
+    items: Array<{
+      product_id?: string | null;
+      product_name?: string | null;
+      quantity?: number;
+    }>,
+  ): Array<{
+    product_id: string | null;
+    product_name: string | null;
+    quantity: number;
+  }> {
+    if (!Array.isArray(items) || !items.length) {
+      this.badRequest(
+        "items bo'sh bo'lmasligi kerak — buyurtmada kamida bitta mahsulot bo'ladi",
+      );
     }
 
-    const normalizedItems = (items ?? []).map((item) => ({
+    return items.map((item, index) => {
+      const rawProductId = item?.product_id;
+      const productId =
+        rawProductId === null || typeof rawProductId === 'undefined'
+          ? ''
+          : String(rawProductId).trim();
+      const productName =
+        typeof item?.product_name === 'string' ? item.product_name.trim() : '';
+
+      if (!productId && !productName) {
+        this.badRequest(
+          `items[${index}]: product_id yoki product_name bo'lishi kerak`,
+        );
+      }
+      if (productId && !/^\d+$/.test(productId)) {
+        this.badRequest(`items[${index}].product_id raqam bo'lishi kerak`);
+      }
+      if (productName.length > 255) {
+        this.badRequest(
+          `items[${index}].product_name 255 belgidan oshmasligi kerak`,
+        );
+      }
+
+      const quantity =
+        item?.quantity === null || typeof item?.quantity === 'undefined'
+          ? 1
+          : Number(item.quantity);
+      if (!Number.isInteger(quantity) || quantity < 1) {
+        this.badRequest(
+          `items[${index}].quantity kamida 1 bo'lgan butun son bo'lishi kerak`,
+        );
+      }
+
+      return {
+        product_id: productId || null,
+        product_name: productName || null,
+        quantity,
+      };
+    });
+  }
+
+  /**
+   * (52NJNGaH) Buyurtma satrlarini almashtiradi — `product_name` ham yoziladi.
+   * O'chirish va yozish chaqiruvchining TRANZAKSIYASIDA (`manager`): yozish
+   * yiqilsa eski satrlar ham qaytadi (ilgari tranzaksiyasiz edi).
+   * `items` oldindan `normalizeReplacementItems` dan o'tgan bo'lishi shart.
+   */
+  private async replaceOrderItems(
+    orderId: string,
+    items: Array<{
+      product_id: string | null;
+      product_name: string | null;
+      quantity: number;
+    }>,
+    manager: EntityManager,
+  ): Promise<number> {
+    const itemRepo = manager.getRepository(OrderItem);
+    await itemRepo.delete({ order_id: orderId });
+
+    const rows = items.map((item) => ({
       product_id: item.product_id,
-      quantity: item.quantity ?? 1,
+      product_name: item.product_name,
+      quantity: item.quantity,
       order_id: orderId,
     }));
 
-    if (!normalizedItems.length) {
-      return 0;
-    }
+    // Use explicit insert so order_id is always written and never treated as DEFAULT/null.
+    await itemRepo.createQueryBuilder().insert().values(rows).execute();
 
-    try {
-      // Use explicit insert so order_id is always written and never treated as DEFAULT/null.
-      await this.orderItemRepo
-        .createQueryBuilder()
-        .insert()
-        .values(normalizedItems)
-        .execute();
-    } catch (error) {
-      this.handleDbError(error);
-    }
-
-    return normalizedItems.reduce((sum, item) => sum + (item.quantity ?? 1), 0);
+    return rows.reduce((sum, item) => sum + item.quantity, 0);
   }
 
   /**
@@ -4185,6 +4255,9 @@ export class OrderLifecycleService {
       }>;
     },
     requester?: { id: string; roles?: string[] },
+    // vncdmXOy: ai-confirm'dan kelgan AI belgisi (order-service controller
+    // oq ro'yxatdan o'tkazgan) — CREATED yozuvining metadata'siga qo'shiladi.
+    opts?: { auditMetadata?: Record<string, unknown> | null },
   ) {
     // fix3 C6 (RBAC-05, LC-07, LC-14): SUPERADMIN/ADMIN dan boshqa
     // yaratuvchining hayot sikli/saqlash maydonlari olib tashlanadi —
@@ -4378,7 +4451,8 @@ export class OrderLifecycleService {
           source: dto.source ?? Order_source.INTERNAL,
         },
         ...this.custody.auditActor(requester),
-        metadata: { operator_id: operatorId },
+        // operator_id OXIRIDA — AI metadata uni hech qachon almashtirmaydi.
+        metadata: { ...(opts?.auditMetadata ?? {}), operator_id: operatorId },
         // 2WRzdWpZ: faqat raqam + summa — mijoz ismi/telefoni/manzili YO'Q.
         description: ActivityDescribeUz.orderCreated(savedId, dto.total_price),
       });
@@ -8309,7 +8383,11 @@ export class OrderLifecycleService {
       qr_code_token?: string | null;
       external_id?: string | null;
       source?: Order_source;
-      items?: Array<{ product_id: string; quantity?: number }>;
+      items?: Array<{
+        product_id?: string | null;
+        product_name?: string | null;
+        quantity?: number;
+      }>;
     },
     requester?: { id?: string; roles?: string[]; note?: string | null },
   ) {
@@ -8433,7 +8511,11 @@ export class OrderLifecycleService {
       external_id?: string | null;
       source?: Order_source;
       proof_files?: string[] | null;
-      items?: Array<{ product_id: string; quantity?: number }>;
+      items?: Array<{
+        product_id?: string | null;
+        product_name?: string | null;
+        quantity?: number;
+      }>;
     },
     requester?: {
       id?: string;
@@ -8605,10 +8687,17 @@ export class OrderLifecycleService {
       );
     }
 
-    if (dto.items) {
-      order.product_quantity = await this.replaceOrderItems(
-        order.id,
-        dto.items,
+    // (52NJNGaH) items avval tekshiriladi (xato — 400, hech narsa
+    // o'chirilmaydi), almashtirish esa pastda buyurtma bilan BITTA
+    // tranzaksiyada. Ilgari satrlar tranzaksiyadan tashqarida, tekshiruvsiz
+    // o'chirilardi va `product_name` yozilmasdi.
+    const replacementItems = dto.items
+      ? this.normalizeReplacementItems(dto.items)
+      : null;
+    if (replacementItems) {
+      order.product_quantity = replacementItems.reduce(
+        (sum, item) => sum + item.quantity,
+        0,
       );
     }
 
@@ -8619,6 +8708,9 @@ export class OrderLifecycleService {
       const orderRepo = manager.getRepository(Order);
       const trackingRepo = manager.getRepository(OrderTracking);
       const custodyRepo = manager.getRepository(OrderCustodyEvent);
+      if (replacementItems) {
+        await this.replaceOrderItems(order.id, replacementItems, manager);
+      }
       await orderRepo.save(order);
 
       const canceledPostAccepted =

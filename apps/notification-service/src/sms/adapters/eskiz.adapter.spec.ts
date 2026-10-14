@@ -1,4 +1,4 @@
-import { EskizAdapter } from './eskiz.adapter';
+import { EskizAdapter, parseEskizTime } from './eskiz.adapter';
 import { SmsProviderError } from '../sms.port';
 
 const json = (status: number, body: unknown) =>
@@ -129,6 +129,23 @@ describe('EskizAdapter', () => {
         body: { status: '???' },
       }),
     ).toBeNull();
+  });
+
+  it('(8auPBa1O) DLR status_date is Tashkent wall-clock time, not server-TZ time', () => {
+    const adapter = new EskizAdapter(creds, jest.fn() as never);
+    const at = (status_date: string) =>
+      adapter.parseDeliveryReport({
+        query: { cmid: 'x' },
+        body: { status: 'DELIVRD', status_date },
+      })?.at;
+    // Eskiz "2026-10-14 10:17:30" — Toshkent 10:17 = 05:17Z.
+    expect(at('2026-10-14 10:17:30')).toEqual(new Date('2026-10-14T05:17:30Z'));
+    expect(at('2026-10-14T10:17')).toEqual(new Date('2026-10-14T05:17:00Z'));
+    // Zona berilgan qiymat o'zgarishsiz.
+    expect(at('2026-10-14T10:17:30Z')).toEqual(
+      new Date('2026-10-14T10:17:30Z'),
+    );
+    expect(parseEskizTime('garbage')).toBeNull();
   });
 
   it('reads the balance', async () => {

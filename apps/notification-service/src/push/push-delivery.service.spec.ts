@@ -146,9 +146,11 @@ describe('PushDeliveryService', () => {
       }),
     );
     expect(patchFor('2')[0]).toEqual({ push: 'no_subscription' });
+    // `retryable` berilmagan (provayder 4xx kabi) — darhol yakuniy `failed`.
     expect(patchFor('3')[0]).toEqual({
       push: 'failed',
       push_error: 'HTTP 500: oops',
+      push_attempts: 1,
     });
     // subscriptions are loaded once for all recipients, not per user
     expect(subscriptions.find).toHaveBeenCalledTimes(1);
@@ -200,8 +202,10 @@ describe('PushDeliveryService', () => {
     expect(builder.andWhere).toHaveBeenCalledWith(
       expect.stringContaining('escalated_at'),
     );
-    // SMS kanali bor — faqat CRITICAL qatorlar SMS'ga uzatiladi (Jht84wGp #8).
-    expect(smsDispatch.escalate).toHaveBeenCalledWith(['1']);
+    // (Jht84wGp TUZATISH / 7Ec56EIw #5) SMS bu yerda DARHOL ketmaydi — faqat
+    // belgi; SMS'ni N daqiqadan keyin `notification.escalate` handleri
+    // (o'qilmagan bo'lsa, ATIGI BIR MARTA) yuboradi.
+    expect(smsDispatch.escalate).not.toHaveBeenCalled();
   });
 
   it('marks push as failed (push_disabled) when VAPID is not configured', async () => {

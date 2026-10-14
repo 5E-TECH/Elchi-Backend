@@ -4,6 +4,7 @@ import {
   Logger,
   OnModuleDestroy,
   OnModuleInit,
+  Optional,
 } from '@nestjs/common';
 import { ClientProxy } from '@nestjs/microservices';
 import {
@@ -16,6 +17,7 @@ import {
   type AiRequester,
   type RawOrderExtraction,
 } from '@app/common';
+import { DistrictLlmFallbackService } from './district-llm-fallback';
 import { ProductResolverService } from './product-resolver.service';
 import type { ResolvedAiItem } from './product-resolver.service';
 import type {
@@ -114,6 +116,10 @@ export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
     @Inject('LOGISTICS') private readonly logisticsClient: ClientProxy,
     @Inject('IDENTITY') private readonly identityClient: ClientProxy,
     private readonly idempotencyService: IdempotencyService,
+    // 5Z1ZvvzE: tuman LLM fallback'i. Ixtiyoriy — berilmasa (spec) faqat
+    // deterministik rezolver.
+    @Optional()
+    private readonly districtFallback?: DistrictLlmFallbackService,
   ) {}
 
   /**
@@ -179,23 +185,30 @@ export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
       this.loadDefaultTariff(marketId),
     ]);
 
-    const items = await this.productResolver.resolveOrders(
-      marketId,
-      orders,
-      {
-        requester: this.requesterOf(req.requester),
-        trace_id: textOrNull(req.trace_id),
-        draft_id: textOrNull(req.draft_id),
-        deadline_at: Number(req.deadline_at),
-      },
-      catalog,
-    );
+    const aiCtx = {
+      requester: this.requesterOf(req.requester),
+      trace_id: textOrNull(req.trace_id),
+      draft_id: textOrNull(req.draft_id),
+      deadline_at: Number(req.deadline_at),
+    };
+    // Mahsulot disambiguation va tuman LLM fallback'i PARALLEL (umumiy
+    // muddat ichida). Fallback faqat risky buyurtmalar uchun chaqiriladi.
+    const [items, resolvedDistricts] = await Promise.all([
+      this.productResolver.resolveOrders(marketId, orders, aiCtx, catalog),
+      this.districtFallback
+        ? this.districtFallback.refine(
+            orders.map((o) => this.districtQuery(o)),
+            districts,
+            { market_id: marketId, ...aiCtx },
+          )
+        : Promise.resolve(districts),
+    ]);
 
     const previews = orders.map((raw, index) =>
       this.toPreview(
         index,
         raw,
-        districts[index] ?? null,
+        resolvedDistricts[index] ?? null,
         items[index] ?? [],
         defaultTariff,
       ),
@@ -210,12 +223,9 @@ export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
   private async resolveDistricts(
     orders: readonly RawExtraction[],
   ): Promise<(DistrictTextResolution | null)[]> {
-    const queries: DistrictTextQuery[] = orders.map((o) => ({
-      region_name: optText(o.region_name),
-      district_name: optText(o.district_name),
-      address: optText(o.address),
-      full_address: optText(o.full_address),
-    }));
+    const queries: DistrictTextQuery[] = orders.map((o) =>
+      this.districtQuery(o),
+    );
     const chunks: DistrictTextQuery[][] = [];
     for (let i = 0; i < queries.length; i += DISTRICT_BATCH_MAX) {
       chunks.push(queries.slice(i, i + DISTRICT_BATCH_MAX));
@@ -249,6 +259,15 @@ export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
       );
       return orders.map(() => null);
     }
+  }
+
+  private districtQuery(o: RawExtraction): DistrictTextQuery {
+    return {
+      region_name: optText(o.region_name),
+      district_name: optText(o.district_name),
+      address: optText(o.address),
+      full_address: optText(o.full_address),
+    };
   }
 
   /** Marketning `default_tariff` i; xato/yo'q bo'lsa null (where_deliver 'center'). */
@@ -405,6 +424,10 @@ export class AiPreviewService implements OnModuleInit, OnModuleDestroy {
       comment,
       is_replacement: isReplacement,
       operator,
+      // 5Z1ZvvzE: tumanni LLM fallback'i tanladi (faqat shu holatda kalit bor).
+      ...(districtId && district?.llm_picked === true
+        ? { district_source: 'ai' as const }
+        : {}),
     };
   }
 

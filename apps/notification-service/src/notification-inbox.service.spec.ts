@@ -205,11 +205,14 @@ describe('NotificationInboxService', () => {
       title: 'E’lon',
     } as any);
 
+    // (W8aerwL6) yangi auditoriya patterni — `identity.user.find_all` EMAS
+    // (u superadmin/mijozni chiqarib tashlaydi); PII minimal.
     expect(rmqSendMock).toHaveBeenCalledWith(
       identityClient,
-      { cmd: 'identity.user.find_all' },
+      { cmd: 'identity.audience.resolve' },
       expect.objectContaining({
-        query: expect.objectContaining({ role: 'courier' }),
+        roles: ['courier'],
+        fields: 'minimal',
       }),
     );
     expect(res.data.dispatched).toBe(2);
@@ -239,7 +242,7 @@ describe('NotificationInboxService', () => {
   it('push channel: rows start as delivery.push=queued and are enqueued in the SAME transaction', async () => {
     const res = await service.dispatch({
       recipient_ids: ['42', '43'],
-      type: 'order.created',
+      type: 'order.manual',
       title: 'Yangi buyurtma',
       channels: ['in_app', 'push'],
     } as any);
@@ -265,7 +268,7 @@ describe('NotificationInboxService', () => {
     await expect(
       service.dispatch({
         recipient_id: '42',
-        type: 'order.created',
+        type: 'order.manual',
         title: 'Yangi buyurtma',
         channels: ['in_app', 'realtime', 'push'],
       } as any),
@@ -276,7 +279,7 @@ describe('NotificationInboxService', () => {
   it('SMS channel: queued in the same transaction and reported per channel (not a bare 201)', async () => {
     const res = await service.dispatch({
       recipient_ids: ['42', '43'],
-      type: 'order.created',
+      type: 'order.manual',
       title: 'Yangi buyurtma',
       channels: ['in_app', 'sms'],
     } as any);
@@ -306,7 +309,7 @@ describe('NotificationInboxService', () => {
       service.dispatch({
         broadcast: false,
         recipient_ids: Array.from({ length: 300 }, (_, i) => String(i + 1)),
-        type: 'marketing.promo',
+        type: 'marketing.manual',
         title: 'x',
         channels: ['sms'],
       } as any),

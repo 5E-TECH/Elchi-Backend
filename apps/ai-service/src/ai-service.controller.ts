@@ -1,4 +1,9 @@
-import { Controller, HttpException, Logger } from '@nestjs/common';
+import {
+  Controller,
+  HttpException,
+  Logger,
+  OnApplicationBootstrap,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import {
   Ctx,
@@ -12,6 +17,11 @@ import {
   ClaudeService,
   RmqService,
   executeAndAck,
+  type AiDistrictPickRequest,
+  type AiDistrictPickResponse,
+  type AiDraftAttachPreviewRequest,
+  type AiDraftConfirmContextRequest,
+  type AiDraftLinkItem,
   type AiOrderExtractRequest,
   type AiOrderExtractResponse,
   type AiProductDisambiguateRequest,
@@ -21,6 +31,12 @@ import {
 } from '@app/common';
 import { errorRes } from '../../../libs/common/helpers/response';
 import { AiBudgetService } from './budget/ai-budget.service';
+import { AiDraftService } from './draft/ai-draft.service';
+import { DistrictPickService } from './district-pick/district-pick.service';
+import {
+  evaluateModelPolicy,
+  modelPolicyProblems,
+} from './models/ai-model-policy';
 import { OrderExtractService } from './order-extract/order-extract.service';
 import { ProductDisambiguateService } from './product-disambiguate/product-disambiguate.service';
 import { runAiHandler } from './rpc/run-ai-handler';
@@ -42,7 +58,7 @@ const LOG_ERROR_MAX_CHARS = 300;
  *   ga o'raydi — xabar DLQ'ga ketadi, requeue bo'lmaydi.
  */
 @Controller()
-export class AiServiceController {
+export class AiServiceController implements OnApplicationBootstrap {
   private readonly logger = new Logger(AiServiceController.name);
 
   constructor(
@@ -53,7 +69,23 @@ export class AiServiceController {
     private readonly disambiguate: ProductDisambiguateService,
     private readonly usage: AiUsageService,
     private readonly budget: AiBudgetService,
+    private readonly drafts: AiDraftService,
+    private readonly districtPick: DistrictPickService,
   ) {}
+
+  /**
+   * LP3RKvXY #2 (TC3): ekstraksiya modeli kuchsiz/noma'lum bo'lsa startda
+   * ERROR — boot YIQILMAYDI (ega qarori), holat `ai.status.model_policy` da.
+   */
+  onApplicationBootstrap(): void {
+    const models = this.currentModels();
+    for (const problem of modelPolicyProblems(
+      models,
+      evaluateModelPolicy(models),
+    )) {
+      this.logger.error(problem);
+    }
+  }
 
   @MessagePattern({ cmd: 'ai.health' })
   health(@Ctx() ctx: RmqContext) {
@@ -100,6 +132,25 @@ export class AiServiceController {
     );
   }
 
+  /**
+   * 5Z1ZvvzE: tuman LLM fallback'i — faqat INDEKS (`choice`). `runAiHandler`
+   * ichida: eskirgan xabar Anthropic'ga bormaydi, AI xatosi throw bo'lmaydi.
+   */
+  @MessagePattern({ cmd: 'ai.district.pick' })
+  pickDistricts(
+    @Payload() data: AiDistrictPickRequest,
+    @Ctx() ctx: RmqContext,
+  ): Promise<AiDistrictPickResponse> {
+    return executeAndAck(this.rmqService, ctx, () =>
+      runAiHandler(
+        data,
+        (dl) => this.districtPick.pick(data, dl),
+        this.logger,
+        'ai.district.pick',
+      ),
+    );
+  }
+
   @MessagePattern({ cmd: 'ai.cap.raise' })
   raiseCap(
     @Payload()
@@ -125,15 +176,80 @@ export class AiServiceController {
     );
   }
 
+  /**
+   * ai-confirm natijasi: xarajat jurnaliga order_ids va (vncdmXOy) audit
+   * iziga `ai_order_draft_item` (order_id, item_index, edited_fields).
+   * `items` berilmasa (eski gateway) — faqat jurnal, xulq avvalgidek.
+   * Draft bog'lanishi BIRINCHI — nizo tekshiruvining asosiy manbai.
+   */
   @MessagePattern({ cmd: 'ai.usage.link_orders' })
   linkOrders(
     @Payload()
-    data: { draft_id: string; order_ids: string[]; market_id: string },
+    data: {
+      draft_id: string;
+      order_ids: string[];
+      market_id: string;
+      items?: AiDraftLinkItem[];
+      confirmed_by?: string;
+    },
     @Ctx() ctx: RmqContext,
   ) {
     return executeAndAck(this.rmqService, ctx, () =>
-      this.adminCall('ai.usage.link_orders', () =>
-        this.usage.linkOrders(data?.draft_id, data?.order_ids, data?.market_id),
+      this.adminCall('ai.usage.link_orders', async () => {
+        const draft = Array.isArray(data?.items)
+          ? await this.drafts.linkItems(
+              data.draft_id,
+              data.market_id,
+              data.items,
+              data.confirmed_by,
+            )
+          : null;
+        const usage = await this.usage.linkOrders(
+          data?.draft_id,
+          data?.order_ids,
+          data?.market_id,
+        );
+        return draft ? { ...usage, ...draft } : usage;
+      }),
+    );
+  }
+
+  /** vncdmXOy: AI taklifi snapshot'i (gateway ai-parse oxirida, fire-and-forget). */
+  @MessagePattern({ cmd: 'ai.draft.attach_preview' })
+  attachPreview(
+    @Payload() data: AiDraftAttachPreviewRequest,
+    @Ctx() ctx: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, ctx, () =>
+      this.adminCall('ai.draft.attach_preview', () =>
+        this.drafts.attachPreview(
+          data?.draft_id,
+          data?.market_id,
+          data?.previews,
+        ),
+      ),
+    );
+  }
+
+  /** vncdmXOy: ai-confirm audit konteksti (model, prompt, snapshot, xarajat). */
+  @MessagePattern({ cmd: 'ai.draft.confirm_context' })
+  confirmContext(
+    @Payload() data: AiDraftConfirmContextRequest,
+    @Ctx() ctx: RmqContext,
+  ) {
+    return executeAndAck(this.rmqService, ctx, () =>
+      this.adminCall('ai.draft.confirm_context', () =>
+        this.drafts.confirmContext(data?.market_id, data?.draft_ids),
+      ),
+    );
+  }
+
+  /** vncdmXOy: `GET /orders/:id/ai-trace` (SUPERADMIN/ADMIN) — null: AI emas. */
+  @MessagePattern({ cmd: 'ai.draft.trace_by_order' })
+  traceByOrder(@Payload() data: { order_id: string }, @Ctx() ctx: RmqContext) {
+    return executeAndAck(this.rmqService, ctx, () =>
+      this.adminCall('ai.draft.trace_by_order', () =>
+        this.drafts.traceByOrder(data?.order_id),
       ),
     );
   }
@@ -144,20 +260,12 @@ export class AiServiceController {
    * status so'rovining o'zi hech qachon yiqilmaydi.
    */
   private async buildStatus(): Promise<AiStatusResponse> {
+    const models = this.currentModels();
     return {
       enabled: this.claude.isEnabled(),
       key_state: this.claude.keyState().state,
-      models: {
-        order: this.modelName('AI_ORDER_MODEL', AI_MODEL_DEFAULTS.order),
-        vision: this.modelName(
-          'AI_ORDER_VISION_MODEL',
-          AI_MODEL_DEFAULTS.vision,
-        ),
-        classify: this.modelName(
-          'AI_CLASSIFY_MODEL',
-          AI_MODEL_DEFAULTS.classify,
-        ),
-      },
+      models,
+      model_policy: evaluateModelPolicy(models),
       cap: await this.readCap(),
       usage_persist_failures: this.readPersistFailures(),
     };
@@ -191,6 +299,14 @@ export class AiServiceController {
     } catch {
       return 0;
     }
+  }
+
+  private currentModels(): AiStatusResponse['models'] {
+    return {
+      order: this.modelName('AI_ORDER_MODEL', AI_MODEL_DEFAULTS.order),
+      vision: this.modelName('AI_ORDER_VISION_MODEL', AI_MODEL_DEFAULTS.vision),
+      classify: this.modelName('AI_CLASSIFY_MODEL', AI_MODEL_DEFAULTS.classify),
+    };
   }
 
   private modelName(key: string, fallback: string): string {

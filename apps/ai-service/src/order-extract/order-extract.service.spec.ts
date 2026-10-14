@@ -8,7 +8,11 @@ import {
   type ClaudeService,
   type ExtractJsonOptions,
 } from '@app/common';
-import { ORDER_EXTRACT_SYSTEM } from '../prompts/order-extract.prompt';
+import type { AiDraftService } from '../draft/ai-draft.service';
+import {
+  ORDER_EXTRACT_PROMPT_VERSION,
+  ORDER_EXTRACT_SYSTEM,
+} from '../prompts/order-extract.prompt';
 import { ORDER_EXTRACT_SCHEMA } from '../prompts/order-extract.schema';
 import {
   ORDER_EXTRACT_MAX_TOKENS,
@@ -397,5 +401,63 @@ describe('OrderExtractService', () => {
     expect(logged).not.toContain('Maxfiy');
     expect(logged).not.toContain('901234567');
     expect(logged).not.toContain('90 123 45 67');
+  });
+});
+
+describe('OrderExtractService — audit izi (vncdmXOy)', () => {
+  const okData = { orders: [rawOrder()] };
+
+  function build(result: unknown) {
+    const recordExtraction = jest.fn().mockResolvedValue(undefined);
+    const extractJson = jest.fn().mockResolvedValue(result);
+    const values: Record<string, unknown> = {
+      AI_ORDER_MODEL: 'claude-sonnet-5',
+    };
+    const service = new OrderExtractService(
+      { extractJson } as unknown as ClaudeService,
+      { get: (k: string) => values[k] } as unknown as ConfigService,
+      { recordExtraction } as unknown as AiDraftService,
+    );
+    return { service, recordExtraction };
+  }
+
+  it('maskalangan matn, model, prompt versiyasi va LLM xom chiqishi (tokenlar bilan) yoziladi', async () => {
+    const { service, recordExtraction } = build({
+      ok: true,
+      data: okData,
+      model: 'claude-sonnet-5',
+      attempts: 1,
+      usage: {},
+    });
+    const req = baseReq({ text: 'Ali 90 123 45 67 Andijon Asaka 3 ta atir' });
+    const res = await service.extract(req);
+    expect(res.ok).toBe(true);
+    expect(recordExtraction).toHaveBeenCalledTimes(1);
+    const arg = recordExtraction.mock.calls[0][0] as Record<string, unknown>;
+    expect(arg).toMatchObject({
+      draftId: req.draft_id,
+      marketId: '121',
+      userId: '7',
+      model: 'claude-sonnet-5',
+      promptVersion: ORDER_EXTRACT_PROMPT_VERSION,
+      outcome: 'ok',
+      originalText: req.text,
+    });
+    expect(String(arg.maskedText)).toContain('[TEL_1]');
+    expect(String(arg.maskedText)).not.toContain('90 123 45 67');
+    expect(JSON.stringify(arg.rawExtraction)).toContain('[TEL_1]');
+  });
+
+  it("AI chaqirilmagan ('disabled', attempts 0) → yozilmaydi; xato natija ham yoziladi", async () => {
+    const off = build({ ok: false, reason: 'disabled', attempts: 0 });
+    await off.service.extract(baseReq());
+    expect(off.recordExtraction).not.toHaveBeenCalled();
+
+    const refused = build({ ok: false, reason: 'refused', attempts: 1 });
+    await refused.service.extract(baseReq());
+    expect(refused.recordExtraction.mock.calls[0][0]).toMatchObject({
+      outcome: 'refused',
+      rawExtraction: null,
+    });
   });
 });

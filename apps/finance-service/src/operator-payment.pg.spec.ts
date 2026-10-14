@@ -129,6 +129,83 @@ describePg('FJVqcUTv - operator tolovi, haqiqiy Postgres', () => {
     }
   });
 
+  it('muvaffaqiyatli tolov: tolov qatori, MAIN chiqimi va P&L yozuvi birga commit', async () => {
+    const res = await service.createOperatorPayment({
+      operator_id: '42',
+      amount: 5000,
+      paid_by_id: '9',
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(await db.getRepository(OperatorPayment).count()).toBe(1);
+    const history = await db.getRepository(CashboxHistory).find();
+    expect(history).toHaveLength(1);
+    expect(history[0]).toMatchObject({
+      source_type: 'salary',
+      operation_type: 'expense',
+      source_id: String(res.data.id),
+    });
+    const ledger = await db.getRepository(FinancialBalanceHistory).find();
+    expect(ledger).toHaveLength(1);
+    expect(Number(ledger[0].amount)).toBe(-5000);
+    const cashbox = await db.getRepository(Cashbox).findOneByOrFail({
+      user_id: '0',
+      cashbox_type: Cashbox_type.MAIN,
+    });
+    expect(Number(cashbox.balance_cash)).toBe(5000);
+  });
+
+  it('ayni Idempotency-Key bilan ikki marta: bitta tolov, pul bir marta yechiladi', async () => {
+    const first = await service.createOperatorPayment({
+      operator_id: '42',
+      amount: 4000,
+      idempotency_key: 'fe-key-1',
+    });
+    const second = await service.createOperatorPayment({
+      operator_id: '42',
+      amount: 4000,
+      idempotency_key: 'fe-key-1',
+    });
+
+    expect(first.statusCode).toBe(201);
+    expect(second.statusCode).toBe(200);
+    expect(second.data).toMatchObject({
+      id: first.data.id,
+      idempotent: true,
+    });
+    expect(await db.getRepository(OperatorPayment).count()).toBe(1);
+    expect(await db.getRepository(CashboxHistory).count()).toBe(1);
+    expect(await db.getRepository(FinancialBalanceHistory).count()).toBe(1);
+    const cashbox = await db.getRepository(Cashbox).findOneByOrFail({
+      user_id: '0',
+      cashbox_type: Cashbox_type.MAIN,
+    });
+    expect(Number(cashbox.balance_cash)).toBe(6000);
+  });
+
+  it('parallel ikki tolov operator qarzidan oshmaydi (advisory qulf)', async () => {
+    await db
+      .getRepository(Cashbox)
+      .update(
+        { user_id: '0', cashbox_type: Cashbox_type.MAIN },
+        { balance: 100000, balance_cash: 100000 },
+      );
+
+    const results = await Promise.allSettled([
+      service.createOperatorPayment({ operator_id: '42', amount: 15000 }),
+      service.createOperatorPayment({ operator_id: '42', amount: 15000 }),
+    ]);
+
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((r) => r.status === 'rejected')).toHaveLength(1);
+    expect(await db.getRepository(OperatorPayment).count()).toBe(1);
+    const cashbox = await db.getRepository(Cashbox).findOneByOrFail({
+      user_id: '0',
+      cashbox_type: Cashbox_type.MAIN,
+    });
+    expect(Number(cashbox.balance_cash)).toBe(85000);
+  });
+
   it('OperatorPayment softDelete uchun DeleteDateColumn mavjud emas', async () => {
     await expect(
       db.getRepository(OperatorPayment).softDelete({ id: '1' }),

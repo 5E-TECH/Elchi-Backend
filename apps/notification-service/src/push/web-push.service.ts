@@ -26,7 +26,21 @@ export interface PushSendResult {
   gone: number;
   /** Birinchi xato matni (delivery.push_error uchun). */
   error: string | null;
+  /**
+   * (Jht84wGp TC6) Vaqtinchalik xato bormi — provayder 5xx / 429 yoki
+   * tarmoq/timeout (status kodi yo'q). Bunday holatda qayta urinish bo'ladi;
+   * 4xx (yaroqsiz payload, VAPID mos emas) — qayta urinish foydasiz.
+   */
+  retryable?: boolean;
 }
+
+/** Vaqtinchalik (qayta urinsa o'tishi mumkin) provayder xatosi. */
+export const isRetryablePushError = (error: unknown): boolean => {
+  const statusCode = (error as { statusCode?: number })?.statusCode;
+  return (
+    typeof statusCode !== 'number' || statusCode >= 500 || statusCode === 429
+  );
+};
 
 /** Bir partiyadagi parallel yuborishlar soni. */
 const SEND_BATCH_SIZE = 100;
@@ -137,7 +151,8 @@ export class WebPushService implements OnModuleInit {
 
     const okIds: string[] = [];
     const goneIds: string[] = [];
-    const failures: Array<{ id: string; error: string }> = [];
+    const failures: Array<{ id: string; error: string; retryable: boolean }> =
+      [];
 
     for (let start = 0; start < subs.length; start += SEND_BATCH_SIZE) {
       if (start > 0) await sleep(BATCH_PAUSE_MS);
@@ -166,7 +181,11 @@ export class WebPushService implements OnModuleInit {
           goneIds.push(sub.id);
           return;
         }
-        failures.push({ id: sub.id, error: errorMessage(outcome.reason) });
+        failures.push({
+          id: sub.id,
+          error: errorMessage(outcome.reason),
+          retryable: isRetryablePushError(outcome.reason),
+        });
       });
     }
 
@@ -191,6 +210,7 @@ export class WebPushService implements OnModuleInit {
     result.failed = failures.length;
     result.error =
       failures[0]?.error ?? (goneIds.length ? 'subscription_gone' : null);
+    result.retryable = failures.some((failure) => failure.retryable);
     return result;
   }
 }

@@ -110,11 +110,32 @@ export class OrderAnalyticsService {
       : new Date(dayStart.getTime() + 24 * 60 * 60 * 1000);
   }
 
+  /**
+   * Analitika oynasi + javob uchun `applied_range`.
+   *
+   * (uN1tjjGu) `all=true` ("Barchasi") CHEGARANI CHETLAB O'TMAYDI (audit C3,
+   * wt8 o'lchovi): u 1970-01-01 → `endDate` (yo'q bo'lsa hozir) deb so'raladi
+   * va boshqa keng oraliqlar kabi eng so'nggi `MAX_ANALYTICS_SPAN_DAYS` kunga
+   * qisqartiriladi. Ilgari (4dfb0ec) `all` oynani butunlay ochib yuborardi —
+   * tarix uzaygan sari dashboard 2,5 s lik analitika byudjetidan (VkwhHqvW)
+   * chiqib 503 berardi, `getCourierStats`/`getTopCouriers` ning pochta id
+   * ro'yxati esa Postgres'ning 65 535 parametr chegarasiga urilib kuryerlarni
+   * JIM bo'sh qaytarardi. Qisqartirish jim emas: `applied_range.clamped` va
+   * `requested_*: null` ("butun davr" so'ralgan) javobda ko'rinadi.
+   * Haqiqiy butun davr uchun oldindan yig'ilgan (kunlik rollup) jadval kerak.
+   */
   private analyticsDateRange(
     startDate?: string,
     endDate?: string,
-    unbounded = false,
+    all = false,
   ) {
+    if (all) {
+      startDate = '1970-01-01';
+      endDate =
+        endDate && String(endDate).trim().length > 0
+          ? endDate
+          : new Date().toISOString();
+    }
     const UZB_OFFSET_MS = 5 * 60 * 60 * 1000;
 
     const parseUzDate = (value: string, endOfDay: boolean): Date | null => {
@@ -179,7 +200,7 @@ export class OrderAnalyticsService {
     const requestedStart = start;
     const requestedEnd = end;
     const span = end.getTime() - start.getTime();
-    if (!unbounded && span > OrderAnalyticsService.MAX_ANALYTICS_SPAN_MS) {
+    if (span > OrderAnalyticsService.MAX_ANALYTICS_SPAN_MS) {
       const clampedStart = this.ceilToTashkentDayStart(
         new Date(end.getTime() - OrderAnalyticsService.MAX_ANALYTICS_SPAN_MS),
       );
@@ -195,43 +216,28 @@ export class OrderAnalyticsService {
       start,
       end,
       applied_range: {
-        requested_from: requestedStart.toISOString(),
-        requested_to: requestedEnd.toISOString(),
+        // (uN1tjjGu) `all` — "butun davr" so'ralgan: aniq so'ralgan sana yo'q.
+        requested_from: all ? null : requestedStart.toISOString(),
+        requested_to: all ? null : requestedEnd.toISOString(),
         applied_from: start.toISOString(),
         applied_to: end.toISOString(),
         clamped: start.getTime() !== requestedStart.getTime(),
-        max_span_days: unbounded
-          ? null
-          : OrderAnalyticsService.MAX_ANALYTICS_SPAN_DAYS,
+        max_span_days: OrderAnalyticsService.MAX_ANALYTICS_SPAN_DAYS,
       },
     };
   }
 
   /**
-   * (uN1tjjGu) `all=true` butun tarixni qamraydi. Bu yo'ldagi hisoblar
-   * SQL agregatsiya qiladi; oddiy keng sana so'rovlari esa chegaralangan.
+   * (uN1tjjGu) `all=true` ham `analyticsDateRange` dagi chegaradan o'tadi —
+   * dashboardning barcha bo'laklari (overview, market/kuryer jadvallari,
+   * reytinglar) AYNI oynada hisoblanadi.
    */
   private resolveAnalyticsRange(
     startDate: string | undefined,
     endDate: string | undefined,
     all: boolean,
   ) {
-    if (!all) {
-      return this.analyticsDateRange(startDate, endDate);
-    }
-    const range = this.analyticsDateRange(
-      '1970-01-01',
-      new Date().toISOString(),
-      true,
-    );
-    return {
-      ...range,
-      applied_range: {
-        ...range.applied_range,
-        requested_from: null,
-        requested_to: null,
-      },
-    };
+    return this.analyticsDateRange(startDate, endDate, all);
   }
 
   private soldStatuses() {
@@ -344,7 +350,10 @@ export class OrderAnalyticsService {
     }
 
     if (range) {
-      query.andWhere('t.created_at BETWEEN :start AND :end', range);
+      query.andWhere('t.created_at BETWEEN :start AND :end', {
+        start: range.start,
+        end: range.end,
+      });
     }
 
     const row = await query.getRawOne<{ count?: string | number }>();
@@ -384,7 +393,10 @@ export class OrderAnalyticsService {
     ).select('COUNT(*)', 'count');
 
     if (range) {
-      query.andWhere('o.createdAt BETWEEN :start AND :end', range);
+      query.andWhere('o.createdAt BETWEEN :start AND :end', {
+        start: range.start,
+        end: range.end,
+      });
     }
 
     const row = await query.getRawOne<{ count?: string | number }>();
@@ -1628,7 +1640,7 @@ export class OrderAnalyticsService {
           success_rate: successRate,
         };
       })
-      .sort((a, b) => b.success_rate - a.success_rate)
+      .sort(OrderAnalyticsService.compareRanking)
       .slice(0, limit);
 
     return this.rankingResult(
@@ -1636,6 +1648,7 @@ export class OrderAnalyticsService {
       threshold,
       totalsRaw.filter((row) => Number(row.total_orders) < threshold).length,
       includeMeta,
+      { from: fromDate, to: toDate },
     );
   }
 
@@ -1643,14 +1656,38 @@ export class OrderAnalyticsService {
     return Number.isFinite(value) && value >= 1 ? Math.floor(value) : 1;
   }
 
+  /**
+   * (PQt3n1N0) Reyting tartibi: muvaffaqiyat ulushi, teng bo'lsa — buyurtmalar
+   * soni. `>= 30` chegarasi olib tashlangach 1 buyurtmali 100% market 59
+   * buyurtmali 100% marketdan oldinga chiqib qolmasin.
+   */
+  private static readonly compareRanking = (
+    a: { success_rate: number; total_orders: number },
+    b: { success_rate: number; total_orders: number },
+  ): number =>
+    b.success_rate - a.success_rate || b.total_orders - a.total_orders;
+
+  /**
+   * (PQt3n1N0, 9zbSDkUI) `include_meta` da reyting qatorlari bilan birga
+   * chegara (`min_orders`), shu sababli tushib qolganlar soni
+   * (`filtered_out`) va reyting HISOBLANGAN davr (`from`/`to`, ISO) qaytadi —
+   * frontend bo'sh holat sababini va "qaysi davr" yorlig'ini serverdan oladi.
+   */
   private rankingResult<T>(
     items: T[],
     minOrders: number,
     filteredOut: number,
     includeMeta: boolean,
+    period?: { from?: Date | null; to?: Date | null },
   ) {
     return includeMeta
-      ? { items, min_orders: minOrders, filtered_out: filteredOut }
+      ? {
+          items,
+          min_orders: minOrders,
+          filtered_out: filteredOut,
+          from: period?.from ? period.from.toISOString() : null,
+          to: period?.to ? period.to.toISOString() : null,
+        }
       : items;
   }
 
@@ -1696,7 +1733,10 @@ export class OrderAnalyticsService {
       .getRawMany<{ post_id: string; total: string; successful: string }>();
 
     if (!rows.length) {
-      return this.rankingResult([], threshold, 0, includeMeta);
+      return this.rankingResult([], threshold, 0, includeMeta, {
+        from: start,
+        to: end,
+      });
     }
 
     const posts = await this.getPostsByIds(
@@ -1741,9 +1781,12 @@ export class OrderAnalyticsService {
     ).length;
     const result = ranked
       .filter((row) => row.total_orders >= threshold)
-      .sort((a, b) => b.success_rate - a.success_rate)
+      .sort(OrderAnalyticsService.compareRanking)
       .slice(0, limit);
-    return this.rankingResult(result, threshold, filteredOut, includeMeta);
+    return this.rankingResult(result, threshold, filteredOut, includeMeta, {
+      from: start,
+      to: end,
+    });
   }
 
   async getTopBranches(
@@ -1825,13 +1868,14 @@ export class OrderAnalyticsService {
           success_rate: successRate,
         };
       })
-      .sort((a, b) => b.success_rate - a.success_rate)
+      .sort(OrderAnalyticsService.compareRanking)
       .slice(0, limit);
     return this.rankingResult(
       result,
       threshold,
       eligible.filter((row) => Number(row.total_orders) < threshold).length,
       includeMeta,
+      { from: fromDate, to: toDate },
     );
   }
 
@@ -1944,7 +1988,7 @@ export class OrderAnalyticsService {
     if (range) {
       totalOrdersQuery.andWhere(
         'COALESCE(o.assigned_at, o.createdAt) BETWEEN :start AND :end',
-        range,
+        { start: range.start, end: range.end },
       );
       soldAggregateQuery.andWhere('o.sold_at BETWEEN :startMs AND :endMs', {
         startMs: String(range.start.getTime()),
@@ -1976,6 +2020,86 @@ export class OrderAnalyticsService {
       canceledOrders,
       profit,
       successRate,
+      // (uN1tjjGu) kuryer dashboardi ham qo'llangan oraliqni ko'rsin.
+      applied_range: range.applied_range,
+    };
+  }
+
+  /** (mKS1mjNr) KPI SLA chegarasi: yaratilgandan 24 soat ichida sotilgan. */
+  private static readonly FULFILLMENT_SLA_MS = 24 * 60 * 60 * 1000;
+
+  /**
+   * (mKS1mjNr) KPI "o'rtacha yetkazish vaqti" va "o'z vaqtida" ulushi —
+   * BITTA SQL agregatsiyasi.
+   *
+   * ⚠️ ILGARI analytics-service davrdagi BARCHA sotilgan buyurtmalarni
+   * `order.find_all` orqali 200 talik sahifalarda tortardi (4 status ×
+   * 100 sahifa = 80 000 qatorgacha, har sahifa alohida RMQ) va JS'da
+   * `sold_at − createdAt` ni yig'ardi — ma'lumot o'sishi bilan KPI gateway'ning
+   * 10 s chegarasiga urilardi. Mantiq O'SHA: o'chirilmagan, statusi SOLD /
+   * PAID / CLOSED / PARTLY_PAID, `createdAt` oynada, `sold_at` bor va farq
+   * > 0; SLA — farq ≤ 24 soat. Farq ms da: `sold_at` (epoch ms, bigint)
+   * minus `createdAt` ning epoch ms i (JS `Date` kabi ms gacha kesilgan).
+   * Oyna chegaralari Toshkent kuni bo'yicha `analyticsDateRange` dan (SQL'da
+   * qo'shimcha `AT TIME ZONE` yo'q — instantlar solishtiriladi).
+   * Postgres SUM/COUNT natijasi SATR keladi — `Number()` bilan.
+   */
+  async getFulfillmentStats(
+    startDate?: string,
+    endDate?: string,
+    branchId?: string,
+  ) {
+    const { start, end, applied_range } = this.analyticsDateRange(
+      startDate,
+      endDate,
+    );
+    const statuses = [
+      Order_status.SOLD,
+      Order_status.PAID,
+      Order_status.CLOSED,
+      Order_status.PARTLY_PAID,
+    ];
+    const deliveryMs =
+      '(o.sold_at::bigint - FLOOR(EXTRACT(EPOCH FROM o.createdAt) * 1000))';
+
+    const row = await this.applyAnalyticsBranchScope(
+      this.orderRepo
+        .createQueryBuilder('o')
+        .where('o.isDeleted = :isDeleted', { isDeleted: false })
+        .andWhere('o.status IN (:...fulfillmentStatuses)', {
+          fulfillmentStatuses: statuses,
+        })
+        .andWhere('o.createdAt BETWEEN :start AND :end', { start, end })
+        .andWhere('o.sold_at IS NOT NULL')
+        .andWhere(`${deliveryMs} > 0`),
+      branchId,
+    )
+      .select('COUNT(*)', 'delivered_count')
+      .addSelect(`COALESCE(SUM(${deliveryMs}), 0)::float8`, 'delivery_ms_total')
+      .addSelect(
+        `COUNT(*) FILTER (WHERE ${deliveryMs} <= :fulfillmentSlaMs)`,
+        'on_time_count',
+      )
+      .setParameter(
+        'fulfillmentSlaMs',
+        OrderAnalyticsService.FULFILLMENT_SLA_MS,
+      )
+      .getRawOne<{
+        delivered_count: string | number | null;
+        delivery_ms_total: string | number | null;
+        on_time_count: string | number | null;
+      }>();
+
+    const toNumber = (value: unknown) => {
+      const parsed = Number(value ?? 0);
+      return Number.isFinite(parsed) ? parsed : 0;
+    };
+    return {
+      deliveredCount: toNumber(row?.delivered_count),
+      deliveryMsTotal: toNumber(row?.delivery_ms_total),
+      onTimeCount: toNumber(row?.on_time_count),
+      slaMs: OrderAnalyticsService.FULFILLMENT_SLA_MS,
+      applied_range,
     };
   }
 
@@ -1997,7 +2121,11 @@ export class OrderAnalyticsService {
     endDate?: string,
     all = false,
   ) {
-    const { start, end } = this.analyticsDateRange(startDate, endDate, all);
+    const { start, end, applied_range } = this.analyticsDateRange(
+      startDate,
+      endDate,
+      all,
+    );
     const soldStatuses = this.soldStatuses();
     const startMs = String(start.getTime());
     const endMs = String(end.getTime());
@@ -2049,6 +2177,8 @@ export class OrderAnalyticsService {
       inProgress,
       profit: Number(soldAggregate?.profit ?? 0),
       successRate,
+      // (uN1tjjGu) market dashboardi ham qo'llangan oraliqni ko'rsin.
+      applied_range,
     };
   }
 

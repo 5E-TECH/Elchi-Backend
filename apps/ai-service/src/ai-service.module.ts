@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
+import { TypeOrmModule } from '@nestjs/typeorm';
 import {
   AppLoggerModule,
   ClaudeModule,
@@ -9,6 +10,12 @@ import {
 } from '@app/common';
 import { AiServiceController } from './ai-service.controller';
 import { AiBudgetService } from './budget/ai-budget.service';
+import { AiDraftService } from './draft/ai-draft.service';
+import { DistrictPickService } from './district-pick/district-pick.service';
+import {
+  AiOrderDraft,
+  AiOrderDraftItem,
+} from './entities/ai-order-draft.entity';
 import { OrderExtractService } from './order-extract/order-extract.service';
 import { ProductDisambiguateService } from './product-disambiguate/product-disambiguate.service';
 import { AiUsageModule } from './usage/ai-usage.module';
@@ -33,6 +40,8 @@ import { AiUsageService } from './usage/ai-usage.service';
     RmqModule,
     DatabaseModule,
     AiUsageModule,
+    // vncdmXOy: AI buyurtma audit izi (ai_order_draft, ai_order_draft_item).
+    TypeOrmModule.forFeature([AiOrderDraft, AiOrderDraftItem]),
     // Xarajat jurnali (sink) va global kunlik shift (budget guard) portlari.
     ClaudeModule.forRoot({
       imports: [AiUsageModule],
@@ -41,6 +50,11 @@ import { AiUsageService } from './usage/ai-usage.service';
     }),
   ],
   controllers: [AiServiceController],
-  providers: [OrderExtractService, ProductDisambiguateService],
+  providers: [
+    OrderExtractService,
+    ProductDisambiguateService,
+    AiDraftService,
+    DistrictPickService,
+  ],
 })
 export class AiServiceModule {}

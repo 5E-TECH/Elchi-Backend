@@ -205,6 +205,13 @@ const COURIER_REGION_SYNC_FAILED_MESSAGE =
  * (+ baza) < gateway 20 s.
  */
 const COURIER_HOLDINGS_RPC_TIMEOUT_MS = 5000;
+/**
+ * (T4eu8kxu) Filial o'chirishdan oldingi pul tekshiruvi (HQ'ga qarz +
+ * BRANCH kassasi) — fail-closed: javob kelmasa o'chirish rad etiladi.
+ */
+const BRANCH_MONEY_RPC_TIMEOUT_MS = 5000;
+const BRANCH_MONEY_CHECK_UNAVAILABLE_MESSAGE =
+  "Filialni o'chirib bo'lmaydi — filialning HQ'ga qarzi va kassa qoldig'ini tekshirib bo'lmadi (moliya/buyurtmalar xizmati javob bermadi). Birozdan so'ng qayta urinib ko'ring";
 const COURIER_TARGET_MANAGER_RPC_TIMEOUT_MS = 5000;
 const COURIER_REGION_SYNC_TIMEOUT_MS = 5000;
 const COURIER_REGION_RESTORE_TIMEOUT_MS = 3000;
@@ -249,6 +256,9 @@ type CourierHoldings = {
   /** Solishtirish uchun (javobga chiqmaydi): `legs` = naqd + karta. */
   tiyin: { balance: number; legs: number; pending: number; carry: number };
 };
+
+/** (T4eu8kxu) Filial BRANCH kassasi qoldig'i, tiyinda (balans, naqd, karta). */
+type CashboxTiyin = { balance: number; cash: number; card: number };
 
 /** O'tkazish tranzaksiyasi natijasi — qaytarish (revert) shu bilan ishlaydi. */
 type CourierBranchSwap = {
@@ -5164,6 +5174,74 @@ export class BranchServiceService implements OnModuleInit {
     return { orders, batches };
   }
 
+  /**
+   * (T4eu8kxu) Filialning pul qoldig'i — o'chirishdan oldin, tiyinda.
+   *
+   * • `payableTiyin` — `order.settlement.branch_summary` dagi
+   *   `branch_payable` (PENDING + COURIER_SETTLED qatorlarning
+   *   `branch_amount` yig'indisi − taqsimlanmagan qoldiq): filial HQ'ga
+   *   qancha qarz. Manager paneli ham aynan shu raqamni ko'rsatadi.
+   * • `cashbox` — finance BRANCH kassasi (balans, naqd, karta). Finance 404 —
+   *   kassa yo'q, ya'ni pul ham yo'q (`null`).
+   *
+   * Fail-closed: javob kelmasa, shakli buzuq bo'lsa yoki son bo'lmasa —
+   * THROW (chaqiruvchi 503 qaytaradi, o'chirish bo'lmaydi). Ikki RPC
+   * parallel, har biri `BRANCH_MONEY_RPC_TIMEOUT_MS` bilan.
+   */
+  private async loadBranchMoneyHoldings(
+    branchId: string,
+  ): Promise<{ payableTiyin: number; cashbox: CashboxTiyin | null }> {
+    const [summaryResponse, cashboxResponse] = await Promise.all([
+      lastValueFrom(
+        this.orderClient
+          .send<{
+            data?: { branch_payable?: unknown } | null;
+          }>(
+            { cmd: 'order.settlement.branch_summary' },
+            { branch_id: branchId },
+          )
+          .pipe(timeout(BRANCH_MONEY_RPC_TIMEOUT_MS)),
+      ),
+      lastValueFrom(
+        this.financeClient
+          .send<{
+            data?: Record<string, unknown> | null;
+          }>(
+            { cmd: 'finance.cashbox.find_by_user' },
+            { user_id: branchId, cashbox_type: Cashbox_type.BRANCH },
+          )
+          .pipe(timeout(BRANCH_MONEY_RPC_TIMEOUT_MS)),
+      ).catch((error: unknown) => {
+        if (this.isRpcNotFound(error)) {
+          return null;
+        }
+        throw error;
+      }),
+    ]);
+
+    const summary = summaryResponse?.data;
+    if (!summary || typeof summary !== 'object') {
+      throw new Error("order.settlement.branch_summary: data yo'q");
+    }
+    const payableTiyin = this.toTiyin(summary.branch_payable, 'branch_payable');
+
+    if (cashboxResponse === null) {
+      return { payableTiyin, cashbox: null };
+    }
+    const cashbox = cashboxResponse?.data;
+    if (!cashbox || typeof cashbox !== 'object' || Array.isArray(cashbox)) {
+      throw new Error("finance.cashbox.find_by_user (BRANCH): data yo'q");
+    }
+    return {
+      payableTiyin,
+      cashbox: {
+        balance: this.toTiyin(cashbox.balance, 'balance'),
+        cash: this.toTiyin(cashbox.balance_cash, 'balance_cash'),
+        card: this.toTiyin(cashbox.balance_card, 'balance_card'),
+      },
+    };
+  }
+
   async deleteBranch(id: string, requester?: RequesterContext) {
     await this.assertCanWriteBranch(id, requester);
     const branch = await this.getBranchOrThrow(id);
@@ -5183,37 +5261,58 @@ export class BranchServiceService implements OnModuleInit {
       );
     }
 
-    type CanDeleteShape = {
-      active_orders?: number;
-      active_batches?: number;
-    };
-    let canDelete: CanDeleteShape | null = null;
-    try {
-      const response = await lastValueFrom(
-        this.orderClient
-          .send<{
-            data?: CanDeleteShape;
-          }>({ cmd: 'order.branch_can_delete' }, { branch_id: branch.id })
-          .pipe(timeout(5000)),
-      );
-      canDelete = response?.data ?? null;
-    } catch (error) {
+    // (T4eu8kxu) Ikki tekshiruv PARALLEL (har biri <= 5 s): ketma-ket
+    // bo'lsa eng yomon holat 10 s — gateway'ning 8 s chegarasidan oshib,
+    // admin timeout ko'rgan paytda o'chirish baribir bajarilishi mumkin edi.
+    const [workResult, moneyResult] = await Promise.allSettled([
+      this.loadBranchOpenWork(String(branch.id)),
+      this.loadBranchMoneyHoldings(String(branch.id)),
+    ]);
+
+    // (T4eu8kxu) `loadBranchOpenWork` — buzuq/bo'sh javob ham xato
+    // (ilgari `data` yo'q javob tekshiruvni jimgina o'tkazib yuborardi).
+    if (workResult.status === 'rejected') {
       this.logger.warn(
-        `deleteBranch: order.branch_can_delete failed (branch=${String(branch.id)}): ${this.describeRpcFailure(error)}`,
+        `deleteBranch: order.branch_can_delete failed (branch=${String(branch.id)}): ${this.describeRpcFailure(workResult.reason)}`,
       );
       this.badRequest(
         "Filialni o'chirib bo'lmaydi — buyurtmalar xizmati javob bermadi, filialdagi faol buyurtmalarni tekshirib bo'lmadi. Birozdan so'ng qayta urinib ko'ring",
       );
     }
+    const work = workResult.value;
+    if (work.orders > 0 || work.batches > 0) {
+      this.badRequest(
+        `Filialni o'chirib bo'lmaydi — unga ${work.orders} ta yakunlanmagan buyurtma va ${work.batches} ta faol partiya bog'langan.`,
+      );
+    }
 
-    if (canDelete) {
-      const orders = Number(canDelete.active_orders ?? 0);
-      const batches = Number(canDelete.active_batches ?? 0);
-      if (orders > 0 || batches > 0) {
-        this.badRequest(
-          `Filialni o'chirib bo'lmaydi — unga ${orders} ta yakunlanmagan buyurtma va ${batches} ta faol partiya bog'langan.`,
-        );
-      }
+    // (T4eu8kxu) PUL DARVOZASI. SOLD/PAID buyurtma "faol" emas, lekin uning
+    // hisob-kitob qatori PENDING/COURIER_SETTLED bo'lib filialning HQ'ga
+    // qarzini tashkil qiladi; BRANCH kassasidagi naqd ham shu filialga
+    // bog'liq. Tekshiruvsiz o'chirilsa pul filiallar ro'yxatidan g'oyib
+    // bo'lib, ledgerda mavjud bo'lmagan branch_id ga osilib qolardi.
+    if (moneyResult.status === 'rejected') {
+      this.logger.warn(
+        `deleteBranch: pul tekshiruvi yiqildi (branch=${String(branch.id)}): ${this.describeRpcFailure(moneyResult.reason)}`,
+      );
+      throw new RpcException(
+        errorRes(BRANCH_MONEY_CHECK_UNAVAILABLE_MESSAGE, 503),
+      );
+    }
+    const money = moneyResult.value;
+    if (money.payableTiyin > 0) {
+      this.badRequest(
+        `Filialni o'chirib bo'lmaydi — filialning HQ'ga ${this.formatSomAmount(money.payableTiyin)} so'm qarzi bor (sotilgan, lekin HQ'ga topshirilmagan savdo). Avval hisob-kitob qiling.`,
+      );
+    }
+    const cashbox = money.cashbox;
+    if (
+      cashbox &&
+      (cashbox.balance !== 0 || cashbox.cash !== 0 || cashbox.card !== 0)
+    ) {
+      this.badRequest(
+        `Filialni o'chirib bo'lmaydi — filial kassasida qoldiq bor: ${this.formatSomAmount(cashbox.balance)} so'm (naqd ${this.formatSomAmount(cashbox.cash)}, karta ${this.formatSomAmount(cashbox.card)}). Avval kassani nolga keltiring (HQ'ga topshiring).`,
+      );
     }
 
     const deletedName = branch.name;

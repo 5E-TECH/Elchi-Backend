@@ -4,6 +4,7 @@ import {
   NotificationCategory,
   NotificationChannel,
   NotificationPriority,
+  endOfTashkentDay,
   startOfTashkentDay,
 } from '@app/common';
 import { NotificationInboxService } from '../notification-inbox.service';
@@ -44,6 +45,8 @@ export class SmsBalanceMonitor implements OnModuleInit {
 
     const day = startOfTashkentDay(now).getTime();
     if (this.lastAlertDay === day) return 'already_alerted';
+    // Toshkent sanasi 'YYYY-MM-DD': kun oxiri (18:59:59.999Z) UTC'da ham shu sana.
+    const dayKey = endOfTashkentDay(now).toISOString().slice(0, 10);
     const recipientIds = String(
       this.config.get('SMS_ALERT_RECIPIENT_IDS') ?? '',
     )
@@ -59,7 +62,15 @@ export class SmsBalanceMonitor implements OnModuleInit {
       roles: ['admin'],
       ...(recipientIds.length ? { recipient_ids: recipientIds } : {}),
       channels: [NotificationChannel.IN_APP, NotificationChannel.REALTIME],
-      group_key: `sms-balance-low-${day}`,
+      // (8auPBa1O TC13) Tur katalogda (libs/common notification-types) —
+      // aks holda dispatch 400 bilan yiqilib, ogohlantirish umuman yetmasdi.
+      group_key: `sms:balance_low:${dayKey}`,
+      data: {
+        day: dayKey,
+        provider: adapter.provider,
+        balance,
+        threshold,
+      },
     } as never);
     this.lastAlertDay = day;
     this.logger.warn(

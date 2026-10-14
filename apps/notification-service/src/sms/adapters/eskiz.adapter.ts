@@ -6,6 +6,7 @@ import {
   SmsSendInput,
   SmsSendResult,
 } from '../sms.port';
+import { TASHKENT_OFFSET_MINUTES } from '@app/common';
 import { asText } from '../sms-phone.util';
 
 export interface EskizCredentials {
@@ -36,6 +37,32 @@ const ESKIZ_STATUS: Record<string, SmsDlrStatus> = {
   EXPIRED: 'expired',
   FAILED: 'failed',
   ERROR: 'failed',
+};
+
+const LOCAL_TIME_RE =
+  /^(\d{4})-(\d{2})-(\d{2})[ T](\d{2}):(\d{2})(?::(\d{2}))?$/;
+
+/**
+ * Eskiz `status_date` ("2026-10-14 10:17:30") — vaqt zonasisiz, Toshkent
+ * devor soati. `new Date(...)` uni SERVER TZ'ida o'qirdi (prod UTC → 5 soat
+ * siljish). Zona ko'rsatilgan qiymat (Z / +05:00) o'zgarishsiz o'qiladi.
+ */
+export const parseEskizTime = (value: string): Date | null => {
+  const match = LOCAL_TIME_RE.exec(value.trim());
+  const date = match
+    ? new Date(
+        Date.UTC(
+          Number(match[1]),
+          Number(match[2]) - 1,
+          Number(match[3]),
+          Number(match[4]),
+          Number(match[5]),
+          Number(match[6] ?? 0),
+        ) -
+          TASHKENT_OFFSET_MINUTES * 60_000,
+      )
+    : new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
 };
 
 /**
@@ -103,12 +130,12 @@ export class EskizAdapter implements SmsPort {
     const providerStatus = asText(body.status).trim().toUpperCase();
     const status = ESKIZ_STATUS[providerStatus];
     if (!clientMessageId || !status) return null;
-    const at = new Date(asText(body.status_date ?? body.updated_at));
+    const at = parseEskizTime(asText(body.status_date ?? body.updated_at));
     return {
       clientMessageId,
       status,
       providerStatus,
-      at: Number.isNaN(at.getTime()) ? new Date() : at,
+      at: at ?? new Date(),
     };
   }
 

@@ -1949,6 +1949,100 @@ export class OrderServiceService {
     );
   }
 
+  /** (xWsCAA5N) Haqiqiy kuryer id'si; `'0'` — filial/hudud pochtasi (kuryersiz). */
+  private realCourierId(value: unknown): string | null {
+    const id =
+      typeof value === 'string' || typeof value === 'number'
+        ? String(value).trim()
+        : '';
+    return /^\d+$/.test(id) && id !== '0' ? id : null;
+  }
+
+  /**
+   * (xWsCAA5N) Pochta → kuryer id (`logistics_schema.posts.courier_id`).
+   *
+   * Bitta PK so'rovi (RMQ emas): natija identity so'rovidan OLDIN kerak —
+   * RMQ ketma-ket ikkinchi aylanma beradi. Sxemalararo o'qish bu servisda
+   * allaqachon bor (`findAll` → `courier_post_history`). Xato boyitishni
+   * yiqitmaydi — kuryer `courier_id` bo'yicha qoladi.
+   */
+  private async loadPostCourierIds(
+    postIds: string[],
+  ): Promise<Map<string, string>> {
+    const ids = [...new Set(postIds.filter((id) => /^\d+$/.test(id)))];
+    if (!ids.length) return new Map();
+    try {
+      const rows: Array<{ id: unknown; courier_id: unknown }> =
+        await this.dataSource.query(
+          `SELECT "id"::text AS "id", "courier_id"::text AS "courier_id"
+           FROM "logistics_schema"."posts"
+           WHERE "id" = ANY($1::bigint[])`,
+          [ids],
+        );
+      const result = new Map<string, string>();
+      for (const row of rows ?? []) {
+        const courierId = this.realCourierId(row?.courier_id);
+        if (courierId) result.set(String(row.id), courierId);
+      }
+      return result;
+    } catch (error) {
+      this.logger.warn(
+        `enrichOrders: pochta kuryerlarini o'qib bo'lmadi: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+      return new Map();
+    }
+  }
+
+  /**
+   * (xWsCAA5N) Kuryer xulosasi — `identity.user.find_by_ids` (tor select),
+   * 500 talik bo'laklarda (identity shu chegarani qo'yadi). Javobga faqat
+   * `{id, name, phone_number}` chiqadi. Xato — bo'sh xarita.
+   */
+  private async loadCourierSummaries(
+    courierIds: string[],
+  ): Promise<
+    Map<
+      string,
+      { id: string; name: string | null; phone_number: string | null }
+    >
+  > {
+    const result = new Map<
+      string,
+      { id: string; name: string | null; phone_number: string | null }
+    >();
+    if (!courierIds.length) return result;
+
+    const chunks: string[][] = [];
+    for (let i = 0; i < courierIds.length; i += 500) {
+      chunks.push(courierIds.slice(i, i + 500));
+    }
+    const responses = await Promise.all(
+      chunks.map((ids) =>
+        rmqSend<{ data?: Array<Record<string, unknown>> }>(
+          this.identityClient,
+          { cmd: 'identity.user.find_by_ids' },
+          { ids },
+        ).catch(() => ({ data: [] })),
+      ),
+    );
+    const text = (value: unknown) =>
+      typeof value === 'string' && value.trim() ? value.trim() : null;
+    for (const res of responses) {
+      for (const user of Array.isArray(res?.data) ? res.data : []) {
+        const id = this.realCourierId(user?.id);
+        if (!id) continue;
+        result.set(id, {
+          id,
+          name: text(user.name),
+          phone_number: text(user.phone_number),
+        });
+      }
+    }
+    return result;
+  }
+
   private async enrichOrders(rows: Order[]) {
     if (!rows.length) return [];
 
@@ -1973,44 +2067,68 @@ export class OrderServiceService {
       ),
     ];
 
-    const [marketsRes, customersRes, districtsRes, regionsRes, productsRes] =
-      await Promise.all([
-        marketIds.length
-          ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
-              this.identityClient,
-              { cmd: 'identity.market.find_by_ids' },
-              { ids: marketIds },
-            ).catch(() => ({ data: [] }))
-          : { data: [] as Array<{ id: string; [key: string]: any }> },
-        customerIds.length
-          ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
-              this.identityClient,
-              { cmd: 'identity.customer.find_by_ids' },
-              { ids: customerIds },
-            ).catch(() => ({ data: [] }))
-          : { data: [] as Array<{ id: string; [key: string]: any }> },
-        districtIds.length
-          ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
-              this.logisticsClient,
-              { cmd: 'logistics.district.find_by_ids' },
-              { ids: districtIds },
-            ).catch(() => ({ data: [] }))
-          : { data: [] as Array<{ id: string; [key: string]: any }> },
-        regionIds.length
-          ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
-              this.logisticsClient,
-              { cmd: 'logistics.region.find_by_ids' },
-              { ids: regionIds },
-            ).catch(() => ({ data: [] }))
-          : { data: [] as Array<{ id: string; [key: string]: any }> },
-        productIds.length
-          ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
-              this.catalogClient,
-              { cmd: 'catalog.product.find_by_ids' },
-              { ids: productIds },
-            ).catch(() => ({ data: [] }))
-          : { data: [] },
-      ]);
+    // (xWsCAA5N) Kuryer: `order.courier_id`, bo'sh bo'lsa (bekor qilish
+    // oqimi uni null qiladi) — buyurtma pochtasining kuryeri.
+    const postCourierByPostId = await this.loadPostCourierIds(
+      rows
+        .filter((r) => !this.realCourierId(r.courier_id))
+        .map((r) => String(r.post_id ?? '').trim()),
+    );
+    const courierIdOf = (row: Order): string | null =>
+      this.realCourierId(row.courier_id) ??
+      postCourierByPostId.get(String(row.post_id ?? '').trim()) ??
+      null;
+    const courierIds = [
+      ...new Set(
+        rows.map(courierIdOf).filter((id): id is string => Boolean(id)),
+      ),
+    ];
+
+    const [
+      marketsRes,
+      customersRes,
+      districtsRes,
+      regionsRes,
+      productsRes,
+      couriers,
+    ] = await Promise.all([
+      marketIds.length
+        ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
+            this.identityClient,
+            { cmd: 'identity.market.find_by_ids' },
+            { ids: marketIds },
+          ).catch(() => ({ data: [] }))
+        : { data: [] as Array<{ id: string; [key: string]: any }> },
+      customerIds.length
+        ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
+            this.identityClient,
+            { cmd: 'identity.customer.find_by_ids' },
+            { ids: customerIds },
+          ).catch(() => ({ data: [] }))
+        : { data: [] as Array<{ id: string; [key: string]: any }> },
+      districtIds.length
+        ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
+            this.logisticsClient,
+            { cmd: 'logistics.district.find_by_ids' },
+            { ids: districtIds },
+          ).catch(() => ({ data: [] }))
+        : { data: [] as Array<{ id: string; [key: string]: any }> },
+      regionIds.length
+        ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
+            this.logisticsClient,
+            { cmd: 'logistics.region.find_by_ids' },
+            { ids: regionIds },
+          ).catch(() => ({ data: [] }))
+        : { data: [] as Array<{ id: string; [key: string]: any }> },
+      productIds.length
+        ? rmqSend<{ data: Array<{ id: string; [key: string]: any }> }>(
+            this.catalogClient,
+            { cmd: 'catalog.product.find_by_ids' },
+            { ids: productIds },
+          ).catch(() => ({ data: [] }))
+        : { data: [] },
+      this.loadCourierSummaries(courierIds),
+    ]);
 
     const toMap = (arr: Array<{ id: string; [key: string]: any }>) =>
       new Map(
@@ -2045,6 +2163,11 @@ export class OrderServiceService {
       region: row.region_id
         ? this.stripRegionDistricts(regionMap.get(row.region_id) ?? null)
         : null,
+      // (xWsCAA5N) Faqat {id, name, phone_number} — maosh/tarif/login yo'q.
+      courier: (() => {
+        const courierId = courierIdOf(row);
+        return courierId ? (couriers.get(courierId) ?? null) : null;
+      })(),
       items: (row.items ?? []).map((item) => ({
         ...item,
         product: item.product_id
@@ -2383,10 +2506,21 @@ export class OrderServiceService {
       payload.assigned_at = parsed;
     }
 
-    if (payload.items) {
+    if (Array.isArray(payload.items)) {
+      // (52NJNGaH) Ilgari `String(item.product_id)` tashqi (katalogsiz) satrni
+      // "null"/"undefined" matniga aylantirar va `product_name` ni tashlab
+      // yuborardi. Endi null saqlanadi, nom uzatiladi; to'liq tekshiruv —
+      // `updateFull` (normalizeReplacementItems).
       payload.items = payload.items.map((item: any) => ({
-        product_id: String(item.product_id),
-        quantity: item.quantity ?? 1,
+        product_id:
+          item?.product_id === null ||
+          typeof item?.product_id === 'undefined' ||
+          String(item.product_id).trim() === ''
+            ? null
+            : String(item.product_id).trim(),
+        product_name:
+          typeof item?.product_name === 'string' ? item.product_name : null,
+        quantity: item?.quantity ?? 1,
       }));
     }
 

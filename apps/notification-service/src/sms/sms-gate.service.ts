@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { MoreThanOrEqual, Repository } from 'typeorm';
+import { EntityManager, MoreThanOrEqual, Repository } from 'typeorm';
 import { startOfTashkentDay, TASHKENT_OFFSET_MINUTES } from '@app/common';
 import { SmsOutbox } from '../entities/sms-outbox.entity';
 import { SmsConfigService } from './sms-config.service';
@@ -51,7 +51,24 @@ export class SmsGateService {
    * Navbatga qo'yishdan OLDIN: kill-switch, fan-out chegarasi, kunlik kvota.
    * Har biri rad etsa — XATO (jimgina kesish yoki "muvaffaqiyat" yo'q).
    */
-  async assertCanEnqueue(count: number, now = new Date()): Promise<void> {
+  async assertCanEnqueue(
+    count: number,
+    now = new Date(),
+    manager?: EntityManager,
+  ): Promise<void> {
+    this.assertEnabledAndFanout(count);
+    const usedToday = await this.usedToday(now, manager);
+    if (usedToday + count > this.config.dailyCap) {
+      throw new SmsBlockedError(
+        'daily_cap_exceeded',
+        `Kunlik SMS kvotasi tugadi: bugun ${usedToday} ta, so'ralgan ${count}, chegara ${this.config.dailyCap} (SMS_DAILY_CAP, Toshkent kuni)`,
+        { used: usedToday, requested: count, cap: this.config.dailyCap },
+      );
+    }
+  }
+
+  /** Kill-switch va fan-out chegarasi (DB'siz). */
+  assertEnabledAndFanout(count: number): void {
     if (!this.config.enabled) {
       throw new SmsBlockedError(
         'sms_disabled',
@@ -65,19 +82,15 @@ export class SmsGateService {
         { requested: count, max: this.config.maxFanout },
       );
     }
-    const usedToday = await this.usedToday(now);
-    if (usedToday + count > this.config.dailyCap) {
-      throw new SmsBlockedError(
-        'daily_cap_exceeded',
-        `Kunlik SMS kvotasi tugadi: bugun ${usedToday} ta, so'ralgan ${count}, chegara ${this.config.dailyCap} (SMS_DAILY_CAP, Toshkent kuni)`,
-        { used: usedToday, requested: count, cap: this.config.dailyCap },
-      );
-    }
   }
 
-  /** Bugun (Toshkent kuni) navbatga qo'yilgan SMS soni. */
-  usedToday(now = new Date()): Promise<number> {
-    return this.outbox.count({
+  /**
+   * Bugun (Toshkent kuni) navbatga qo'yilgan SMS soni. `manager` — kvota
+   * qulfi olingan tranzaksiya (3fRbyadQ #5: sanash va INSERT bitta qulf ostida).
+   */
+  usedToday(now = new Date(), manager?: EntityManager): Promise<number> {
+    const repo = manager ? manager.getRepository(SmsOutbox) : this.outbox;
+    return repo.count({
       where: { created_at: MoreThanOrEqual(startOfTashkentDay(now)) },
     });
   }

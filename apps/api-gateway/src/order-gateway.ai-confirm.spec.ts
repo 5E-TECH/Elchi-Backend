@@ -253,7 +253,11 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
     expect(res).toEqual({
       statusCode: 200,
       message: 'success',
-      data: { results: [{ index: 0, ok: true, order_id: '1000' }] },
+      data: {
+        results: [
+          { index: 0, ok: true, order_id: '1000', idempotent_replay: false },
+        ],
+      },
     });
 
     const [customerCall] = sendsOf(fx.identity, 'identity.customer.create');
@@ -643,10 +647,27 @@ describe('OrderGatewayController — POST /orders/ai-confirm', () => {
 
     const links = sendsOf(fx.ai, 'ai.usage.link_orders');
     expect(links).toHaveLength(2);
+    // vncdmXOy: shu xabarda draft ↔ buyurtma (items) va tasdiqlagan.
+    // ai_item_index yuborilmagan (eski frontend) → item_index/edited_fields null.
     expect(links.map(([, payload]) => payload)).toEqual(
       expect.arrayContaining([
-        { draft_id: draftA, order_ids: [ids[0], ids[1]], market_id: MARKET_ID },
-        { draft_id: draftB, order_ids: [ids[2]], market_id: MARKET_ID },
+        {
+          draft_id: draftA,
+          order_ids: [ids[0], ids[1]],
+          market_id: MARKET_ID,
+          items: [
+            { item_index: null, order_id: ids[0], edited_fields: null },
+            { item_index: null, order_id: ids[1], edited_fields: null },
+          ],
+          confirmed_by: MARKET_ID,
+        },
+        {
+          draft_id: draftB,
+          order_ids: [ids[2]],
+          market_id: MARKET_ID,
+          items: [{ item_index: null, order_id: ids[2], edited_fields: null }],
+          confirmed_by: MARKET_ID,
+        },
       ]),
     );
   });

@@ -3,6 +3,11 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { DataSource, EntityManager, In, Repository } from 'typeorm';
 import type { QueryDeepPartialEntity } from 'typeorm/query-builder/QueryPartialEntity';
 import { randomUUID } from 'crypto';
+import {
+  endOfTashkentDay,
+  startOfTashkentDay,
+  tashkentDayRange,
+} from '@app/common';
 import { SmsOutbox } from '../entities/sms-outbox.entity';
 import { Notification } from '../entities/notification.entity';
 import { SmsConfigService } from './sms-config.service';
@@ -57,13 +62,52 @@ const RETRY_MAX_MS = 30 * 60_000;
 /** Shu muddatdan uzoq `processing` da turgan qator — jarayon qulagan, qayta navbatga. */
 const STUCK_PROCESSING_MS = 15 * 60_000;
 const INSERT_CHUNK = 500;
+/**
+ * Kunlik kvota qulfi (3fRbyadQ #5). Scheduler qulfi
+ * (`notification.sms-outbox.tick`) va integration-service qulfidan BOSHQA nom.
+ */
+export const SMS_QUOTA_LOCK_NAME = 'notification.sms-outbox.quota';
 const MAX_ERROR = 500;
 
 /**
  * Xarajat hisobotidagi Toshkent kuni — SMS modulida `AT TIME ZONE` FAQAT shu
  * yerda. Kvota va tungi taqiq esa umumiy `@app/common` qoidasi orqali.
+ *
+ * (8auPBa1O TC11) Kun MATN sifatida qaytadi ('YYYY-MM-DD'): `::date` ni
+ * node-pg JS Date'ga (server TZ yarim tuni) aylantirardi, keyingi
+ * `toISOString()` esa UTC'ga qaytarib — TZ=Asia/Tashkent serverda har kun
+ * bitta oldingi sanaga tushardi (qo'shaloq konversiya).
  */
-const SMS_TASHKENT_DAY_SQL = `(o."created_at" AT TIME ZONE 'Asia/Tashkent')::date`;
+const SMS_TASHKENT_DAY_SQL = `to_char(o."created_at" AT TIME ZONE 'Asia/Tashkent', 'YYYY-MM-DD')`;
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/**
+ * Xarajat hisoboti oralig'i (8auPBa1O #6, TC11) — `[from, to)`, Toshkent kuni:
+ * - 'YYYY-MM-DD' → o'sha Toshkent kunining boshi / (to uchun) kun OXIRIGACHA
+ *   kiradi — `new Date('2026-10-01')` (UTC yarim tuni = Toshkent 05:00) EMAS;
+ * - to'liq ISO (zona bilan) → o'zgarishsiz lahza;
+ * - berilmasa: bugungi Toshkent kuni bilan tugaydigan oxirgi 30 kun.
+ * Yaroqsiz qiymat → null (chaqiruvchi 400 qaytaradi).
+ */
+export const smsReportRange = (
+  rawFrom: string | null | undefined,
+  rawTo: string | null | undefined,
+  now = new Date(),
+): { from: Date; to: Date } | null => {
+  const range = tashkentDayRange(rawFrom || null, rawTo || null);
+  const to = range.end
+    ? DATE_ONLY_RE.test(String(rawTo).trim())
+      ? new Date(range.end.getTime() + 1)
+      : range.end
+    : new Date(endOfTashkentDay(now).getTime() + 1);
+  const from =
+    range.start ?? startOfTashkentDay(new Date(to.getTime() - 30 * DAY_MS));
+  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from >= to)
+    return null;
+  return { from, to };
+};
 
 /** OTP kodi DB'da yuborilgandan keyin qolmasin (rkz0yBxr: ochiq kod hech qayerda). */
 const redactSecurity = (row: SmsOutbox) =>
@@ -132,7 +176,8 @@ export class SmsOutboxService {
       }
     }
 
-    await this.gate.assertCanEnqueue(valid.length, now);
+    // Kill-switch va fan-out — qulfsiz, arzon tekshiruv (kvota qulf ichida qayta).
+    this.gate.assertEnabledAndFanout(valid.length);
 
     const rows = valid.map((input) => {
       let text = input.text;
@@ -170,11 +215,18 @@ export class SmsOutboxService {
       };
     });
 
-    const repo = options.manager
-      ? options.manager.getRepository(SmsOutbox)
-      : this.repo;
-    const ids: string[] = [];
-    try {
+    // (3fRbyadQ #5) Kvota FAIL-CLOSED va POYGASIZ: sanash + INSERT bitta
+    // tranzaksiyada, global advisory xact-lock ostida. Qulfsiz ikki parallel
+    // dispatch ikkalasi ham "bugun 490/500" ni ko'rib, birgalikda kvotadan
+    // oshib ketardi (pul). Qulf COMMIT/ROLLBACK da o'zi bo'shaydi; chaqiruvchi
+    // tranzaksiyasi (`manager`) bo'lsa — o'sha tranzaksiya oxirigacha turadi.
+    const write = async (manager: EntityManager): Promise<string[]> => {
+      await manager.query('SELECT pg_advisory_xact_lock(hashtext($1))', [
+        SMS_QUOTA_LOCK_NAME,
+      ]);
+      await this.gate.assertCanEnqueue(valid.length, now, manager);
+      const repo = manager.getRepository(SmsOutbox);
+      const ids: string[] = [];
       for (let start = 0; start < rows.length; start += INSERT_CHUNK) {
         const result = await repo.insert(
           rows.slice(start, start + INSERT_CHUNK),
@@ -183,6 +235,13 @@ export class SmsOutboxService {
           ...result.identifiers.map((identifier) => String(identifier.id)),
         );
       }
+      return ids;
+    };
+    let ids: string[];
+    try {
+      ids = options.manager
+        ? await write(options.manager)
+        : await this.dataSource.transaction(write);
     } catch (error) {
       if ((error as { code?: string })?.code === '23505') {
         throw new SmsDuplicateError(rows.map((row) => row.client_message_id));
@@ -233,11 +292,24 @@ export class SmsOutboxService {
     return Array.isArray(rows[0]) ? (rows[0] as SmsOutbox[]) : rows;
   }
 
-  /** Jarayon qulab `processing` da qolgan qatorlar — qayta navbatga. */
+  /**
+   * Jarayon qulab `processing` da qolgan qatorlar — qayta navbatga.
+   * (3fRbyadQ TC10) Bu ham URINISH hisoblanadi: provayder SMS'ni qabul qilgan
+   * bo'lishi mumkin (javobni yozishga ulgurmay qulagan), shuning uchun
+   * `max_attempts` ga yetgan qator CHEKSIZ qayta yuborilmaydi — terminal
+   * `failed`. Aks holda har qulashda bitta SMS yana va yana ketardi.
+   */
   private async recoverStuck(now: Date) {
     const result: unknown = await this.dataSource.query(
       `UPDATE "notification_schema"."sms_outbox"
-          SET "status" = 'pending', "last_error" = 'recovered: processing timed out', "updated_at" = NOW()
+          SET "attempts" = "attempts" + 1,
+              "status" = CASE WHEN "attempts" + 1 >= "max_attempts" THEN 'failed' ELSE 'pending' END,
+              "retry_count" = CASE WHEN "attempts" + 1 >= "max_attempts" THEN "retry_count" ELSE "retry_count" + 1 END,
+              "next_retry_at" = NULL,
+              "text" = CASE WHEN "message_class" = 'security' AND "attempts" + 1 >= "max_attempts"
+                            THEN regexp_replace("text", '\\d{4,8}', '******', 'g') ELSE "text" END,
+              "last_error" = 'recovered: processing timed out',
+              "updated_at" = NOW()
         WHERE "status" = 'processing' AND "updated_at" < $1`,
       [new Date(now.getTime() - STUCK_PROCESSING_MS)],
     );
@@ -246,6 +318,34 @@ export class SmsOutboxService {
       this.logger.warn(
         `SMS: ${affected} ta qotgan 'processing' qator qayta navbatga qo'yildi`,
       );
+  }
+
+  /**
+   * Egallangan, lekin YUBORILMAGAN qatorlarni qaytaradi (graceful shutdown,
+   * 3fRbyadQ TC11): urinish SARFLANMAYDI — provayderga hech narsa ketmagan.
+   * Faqat `processing` dagilar (boshqa holatga o'tganini qaytarmaydi).
+   */
+  async releaseClaimed(ids: string[]) {
+    if (!ids.length) return;
+    await this.dataSource.query(
+      `UPDATE "notification_schema"."sms_outbox"
+          SET "status" = 'pending', "updated_at" = NOW()
+        WHERE "id" = ANY($1::bigint[]) AND "status" = 'processing'`,
+      [ids],
+    );
+  }
+
+  /**
+   * (sVByLMnt #3) Yuborish paytida tungi taqiqqa tushgan reklama — taqiq
+   * tugashiga suriladi: urinish SARFLANMAYDI, qator tashlanmaydi.
+   */
+  async deferUntil(id: string, until: Date) {
+    await this.dataSource.query(
+      `UPDATE "notification_schema"."sms_outbox"
+          SET "status" = 'pending', "scheduled_at" = $2, "updated_at" = NOW()
+        WHERE "id" = $1 AND "status" = 'processing'`,
+      [id, until],
+    );
   }
 
   async markAccepted(
@@ -394,10 +494,7 @@ export class SmsOutboxService {
       [from, to],
     );
     const days = rows.map((row) => ({
-      day:
-        row.day instanceof Date
-          ? row.day.toISOString().slice(0, 10)
-          : String(row.day).slice(0, 10),
+      day: String(row.day),
       message_class: String(row.message_class),
       total: Number(row.total),
       delivered: Number(row.delivered),
@@ -417,9 +514,18 @@ export class SmsOutboxService {
       }),
       { total: 0, delivered: 0, failed: 0, parts: 0, cost: 0, untariffed: 0 },
     );
+    // Oylik va sinf kesimidagi yig'indi (8auPBa1O #6) — kunlik qatorlardan.
+    const months = this.rollup(days, (row) => row.day.slice(0, 7), 'month');
+    const byClass = this.rollup(
+      days,
+      (row) => row.message_class,
+      'message_class',
+    );
     const finished = totals.delivered + totals.failed;
     return {
       days,
+      months,
+      by_class: byClass,
       totals: {
         ...totals,
         success_rate: finished
@@ -430,6 +536,51 @@ export class SmsOutboxService {
           this.config.tariff('promo') !== null,
       },
     };
+  }
+
+  private rollup<K extends string>(
+    days: Array<{
+      day: string;
+      message_class: string;
+      total: number;
+      delivered: number;
+      failed: number;
+      parts: number;
+      cost: number;
+      untariffed: number;
+    }>,
+    keyOf: (row: (typeof days)[number]) => string,
+    label: K,
+  ) {
+    const groups = new Map<string, Record<string, number>>();
+    for (const row of days) {
+      const key = keyOf(row);
+      const acc = groups.get(key) ?? {
+        total: 0,
+        delivered: 0,
+        failed: 0,
+        parts: 0,
+        cost: 0,
+        untariffed: 0,
+      };
+      for (const field of [
+        'total',
+        'delivered',
+        'failed',
+        'parts',
+        'cost',
+        'untariffed',
+      ] as const)
+        acc[field] += row[field];
+      groups.set(key, acc);
+    }
+    return [...groups.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(
+        ([key, values]) =>
+          ({ [label]: key, ...values }) as Record<K, string> &
+            Record<string, number | string>,
+      );
   }
 
   async countByCampaign(campaignIds: string[]) {

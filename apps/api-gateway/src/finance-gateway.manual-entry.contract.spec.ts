@@ -49,17 +49,49 @@ describe('cSNJN7GP - manual financial balance entry contract', () => {
 
   beforeEach(() => finance.send.mockClear());
 
-  it('passes the original Idempotency-Key to finance-service', async () => {
+  it('passes the Idempotency-Key (actor-namespaced) to finance-service', async () => {
     const response = await request(app.getHttpServer())
       .post('/finance/financial-balance/entries')
       .set('Idempotency-Key', 'manual-1')
       .send(body);
 
     expect(response.status).toBe(201);
+    // (cSNJN7GP) Mijoz kaliti tizim kalitlari (`investor-profit:<id>`) bilan
+    // to'qnasha olmasin — `manual-entry:<aktor>:` nom fazosi.
     expect(finance.send).toHaveBeenCalledWith(
       { cmd: 'finance.financial_balance.record' },
-      { ...body, created_by: '9', dedup_key: 'manual-1' },
+      { ...body, created_by: '9', dedup_key: 'manual-entry:9:manual-1' },
     );
+  });
+
+  it('tizim kalitiga o`xshash mijoz kaliti tizim yozuvi bilan to`qnashmaydi', async () => {
+    await request(app.getHttpServer())
+      .post('/finance/financial-balance/entries')
+      .set('Idempotency-Key', 'investor-profit:12')
+      .send(body);
+
+    const [, payload] = finance.send.mock.calls[0] as unknown as [
+      unknown,
+      { dedup_key: string },
+    ];
+    expect(payload.dedup_key).toBe('manual-entry:9:investor-profit:12');
+  });
+
+  it('takroriy kalit: finance mavjud yozuvni 200 bilan qaytaradi — HTTP ham 200', async () => {
+    finance.send.mockReturnValueOnce(
+      of({
+        statusCode: 200,
+        message: 'ledger entry already recorded',
+        data: { id: '57', idempotent: true },
+      }),
+    );
+    const response = await request(app.getHttpServer())
+      .post('/finance/financial-balance/entries')
+      .set('Idempotency-Key', 'manual-1')
+      .send(body);
+
+    expect(response.status).toBe(200);
+    expect(response.body.data).toEqual({ id: '57', idempotent: true });
   });
 
   it('rejects missing Idempotency-Key with 400', async () => {

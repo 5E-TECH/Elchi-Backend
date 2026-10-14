@@ -63,6 +63,25 @@ describe('2DCQKd37 - POST /finance/operator-payments kontrakti', () => {
     );
   });
 
+  it('FJVqcUTv: Idempotency-Key bo`lsa finance-service ga idempotency_key bo`lib uzatiladi', async () => {
+    const result = await request(app.getHttpServer())
+      .post('/finance/operator-payments')
+      .set('Idempotency-Key', ' fe-op-1 ')
+      .send({ operator_id: '42', amount: 1000, note: 'Oylik' });
+
+    expect(result.status).toBe(201);
+    expect(finance.send).toHaveBeenCalledWith(
+      { cmd: 'finance.operator.payment.create' },
+      {
+        operator_id: '42',
+        amount: 1000,
+        note: 'Oylik',
+        paid_by_id: '9',
+        idempotency_key: 'fe-op-1',
+      },
+    );
+  });
+
   it('comment bilan 400 va finance-service chaqirilmaydi', async () => {
     const result = await request(app.getHttpServer())
       .post('/finance/operator-payments')

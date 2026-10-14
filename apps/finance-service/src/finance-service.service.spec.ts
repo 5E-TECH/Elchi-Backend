@@ -1094,6 +1094,104 @@ describe('FinanceServiceService operator earnings & payments', () => {
       service.createOperatorPayment({ operator_id: '42', amount: 0 }),
     ).rejects.toBeTruthy();
   });
+
+  it('FJVqcUTv: qarz tranzaksiya ulanishida (queryRunner.manager) o`qiladi', async () => {
+    const manager = makeManager();
+    const { service, queryRunner } = makeService(manager);
+    const balanceSpy = jest
+      .spyOn(service, 'findOperatorBalance')
+      .mockResolvedValue({ data: { balance: 0 } } as never);
+
+    await expect(
+      service.createOperatorPayment({ operator_id: '42', amount: 100 }),
+    ).rejects.toMatchObject({ error: { statusCode: 400 } });
+    expect(balanceSpy).toHaveBeenCalledWith(
+      { operator_id: '42' },
+      queryRunner.manager,
+    );
+  });
+
+  it('FJVqcUTv: ayni Idempotency-Key bilan takroriy to`lov pulni qayta yechmaydi va qarzni tekshirmaydi', async () => {
+    const manager = makeManager();
+    const { service, queryRunner } = makeService(manager);
+    const balanceSpy = jest.spyOn(service, 'findOperatorBalance');
+    manager.findOne.mockImplementation(
+      (entity: { name: string }, opts: any) => {
+        if (entity.name === 'CashboxHistory') {
+          expect(opts.where).toMatchObject({
+            source_type: 'salary',
+            operation_type: 'expense',
+            source_user_id: '42',
+            dedup_epoch: 'operator-payment:fe-key-1',
+          });
+          return Promise.resolve({ id: 'h1', source_id: 'p1' });
+        }
+        if (entity.name === 'OperatorPayment') {
+          return Promise.resolve({
+            id: 'p1',
+            operator_id: '42',
+            amount: 15000,
+          });
+        }
+        return Promise.resolve(null);
+      },
+    );
+
+    const res = await service.createOperatorPayment({
+      operator_id: '42',
+      amount: 15000,
+      idempotency_key: ' fe-key-1 ',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data).toMatchObject({ id: 'p1', idempotent: true });
+    expect(balanceSpy).not.toHaveBeenCalled();
+    expect(manager.save).not.toHaveBeenCalled();
+    expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+    expect(queryRunner.rollbackTransaction).not.toHaveBeenCalled();
+    expect(queryRunner.release).toHaveBeenCalledTimes(1);
+  });
+
+  it('FJVqcUTv: kalit bilan birinchi to`lov kassa tarixiga kalitni yozadi', async () => {
+    const manager = makeManager();
+    const { service } = makeService(manager);
+    jest.spyOn(service, 'findOperatorBalance').mockResolvedValue({
+      data: { balance: 30000 },
+    } as never);
+    manager.findOne.mockImplementation((entity: { name: string }) =>
+      entity.name === 'Cashbox'
+        ? Promise.resolve({
+            id: 'c1',
+            user_id: '0',
+            cashbox_type: 'main',
+            balance_cash: 25000,
+            balance_card: 0,
+            balance: 25000,
+          })
+        : Promise.resolve(null),
+    );
+    manager.save.mockImplementation((entity: any) =>
+      Promise.resolve({
+        id: entity.operator_id ? 'p1' : (entity.id ?? 'h1'),
+        ...entity,
+      }),
+    );
+
+    const res = await service.createOperatorPayment({
+      operator_id: '42',
+      amount: 15000,
+      idempotency_key: 'fe-key-2',
+    });
+
+    expect(res.statusCode).toBe(201);
+    expect(manager.save).toHaveBeenCalledWith(
+      expect.objectContaining({
+        source_type: 'salary',
+        source_id: 'p1',
+        dedup_epoch: 'operator-payment:fe-key-2',
+      }),
+    );
+  });
 });
 
 describe('FinanceServiceService manual branch cashbox operations', () => {
@@ -1431,9 +1529,38 @@ describe('FinanceServiceService financial balance ledger', () => {
 
     expect(first.statusCode).toBe(201);
     expect(second.statusCode).toBe(200);
-    expect(second.data).toEqual(entry);
+    // (cSNJN7GP) takroriy so'rov aniq belgilanadi.
+    expect(second.data).toEqual({ ...entry, idempotent: true });
     expect(manager.save).toHaveBeenCalledTimes(1);
     expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(2);
+  });
+
+  it('cSNJN7GP: buyurtma yozuvining takroriy yetkazilishi summa farq qilsa ham 409 EMAS (outbox DLQ ga tushmasin)', async () => {
+    const manager = makeManager({
+      findOne: jest.fn().mockResolvedValue({
+        id: 'fbh-sale',
+        amount: 25000,
+        created_by: null,
+        related_user_id: null,
+        comment: 'Sotuv foydasi',
+      }),
+      save: jest.fn(),
+    });
+    const { service, queryRunner } = makeService(manager);
+
+    const res = await service.recordFinancialBalance({
+      amount: 30000,
+      source_type: 'sell_profit' as any,
+      order_id: '1001',
+      dedup_key: 'sale:1700000000000',
+      comment: 'Sotuv foydasi (qayta)',
+    });
+
+    expect(res.statusCode).toBe(200);
+    expect(res.data).toMatchObject({ id: 'fbh-sale', idempotent: true });
+    expect(manager.save).not.toHaveBeenCalled();
+    expect(queryRunner.commitTransaction).toHaveBeenCalledTimes(1);
+    expect(queryRunner.rollbackTransaction).not.toHaveBeenCalled();
   });
 
   it('rejects reusing a manual key for a different amount', async () => {
@@ -1475,6 +1602,16 @@ describe('FinanceServiceService financial balance ledger', () => {
 
     expect(res.message).toMatch(/zero amount/);
     expect(dataSource.createQueryRunner).not.toHaveBeenCalled();
+  });
+
+  it('b1QxU3qa: enumga kirmagan source_type — 400 (Postgres 500 emas), so`rov bazaga bormaydi', async () => {
+    const manager = makeManager();
+    const { service, financialHistoryRepo } = makeService(manager);
+
+    await expect(
+      service.findFinancialBalanceHistory({ source_type: 'sell' as any }),
+    ).rejects.toMatchObject({ error: { statusCode: 400 } });
+    expect(financialHistoryRepo.findAndCount).not.toHaveBeenCalled();
   });
 
   it('returns history rows plus the current balance', async () => {

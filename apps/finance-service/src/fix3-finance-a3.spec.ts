@@ -1143,6 +1143,34 @@ describe('C2 / CODE-22 — moliyaviy balans sana filtri Toshkent kuni', () => {
     });
   });
 
+  it.each([
+    [{ page: 1, limit: 10000 }, 0, 100, { page: 1, limit: 100 }],
+    [{ page: NaN, limit: NaN }, 0, 20, { page: 1, limit: 20 }],
+    [{ page: 2.7, limit: 10.9 }, 10, 10, { page: 2, limit: 10 }],
+  ])(
+    'vmLTsAok: top-impacts %j → OFFSET %d, LIMIT %d (100 dan oshmaydi, NaN yo`q)',
+    async (input, expectedSkip, expectedTake, expectedPagination) => {
+      const { service, financialHistoryRepo } = makeService();
+      const skip = jest.fn().mockReturnThis();
+      const take = jest.fn().mockReturnThis();
+      financialHistoryRepo.createQueryBuilder.mockReturnValue({
+        addSelect: jest.fn().mockReturnThis(),
+        where: jest.fn().mockReturnThis(),
+        orderBy: jest.fn().mockReturnThis(),
+        addOrderBy: jest.fn().mockReturnThis(),
+        skip,
+        take,
+        getManyAndCount: jest.fn().mockResolvedValue([[], 250]),
+      });
+
+      const result = await service.financialBalanceTopImpacts(input);
+
+      expect(skip).toHaveBeenCalledWith(expectedSkip);
+      expect(take).toHaveBeenCalledWith(expectedTake);
+      expect(result.data.pagination).toMatchObject(expectedPagination);
+    },
+  );
+
   it('findCashboxByUser (turi berilmagan, barcha kassalar) ham sana filtrini qo`llaydi', async () => {
     const { service, cashboxRepo, historyRepo } = makeService();
     cashboxRepo.find.mockResolvedValue([{ id: 'c1' }]);

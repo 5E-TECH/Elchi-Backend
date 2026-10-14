@@ -49,14 +49,20 @@ describe('AnalyticsServiceService', () => {
   });
 
   it('getDashboard returns courier-specific payload for courier role', async () => {
-    rmqSendMock.mockResolvedValueOnce({
-      data: {
-        totalOrders: 7,
-        soldOrders: 0,
-        canceledOrders: 2,
-        successRate: 0,
-      },
-    });
+    rmqSendMock.mockImplementation((_client: any, pattern: any) =>
+      Promise.resolve(
+        pattern?.cmd === 'order.analytics.courier_stat'
+          ? {
+              data: {
+                totalOrders: 7,
+                soldOrders: 0,
+                canceledOrders: 2,
+                successRate: 0,
+              },
+            }
+          : { data: { items: [], min_orders: 1, filtered_out: 0 } },
+      ),
+    );
 
     const res = await service.getDashboard(
       { id: 'u1', roles: ['courier'] },
@@ -80,6 +86,8 @@ describe('AnalyticsServiceService', () => {
       },
     ]);
     expect(res.data.topCouriers).toEqual([]);
+    // Kompaniya bo'yicha kuryer statistikasi (pul maydonlari bilan) kuryerga
+    // so'ralmaydi; reyting esa (5tUEVG1B) pulsiz `top_couriers` dan.
     expect(
       rmqSendMock.mock.calls.some(
         ([, pattern]) => pattern?.cmd === 'order.analytics.courier_stats',
@@ -89,7 +97,7 @@ describe('AnalyticsServiceService', () => {
       rmqSendMock.mock.calls.some(
         ([, pattern]) => pattern?.cmd === 'order.analytics.top_couriers',
       ),
-    ).toBe(false);
+    ).toBe(true);
   });
 
   it('getDashboard returns market-specific payload for market role', async () => {

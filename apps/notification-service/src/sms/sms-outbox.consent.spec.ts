@@ -11,13 +11,20 @@ describe('SmsOutboxService promo consent boundary', () => {
   const insert = jest.fn().mockResolvedValue({ identifiers: [{ id: '1' }] });
   const partition = jest.fn();
   const gate = {
+    assertEnabledAndFanout: jest.fn(),
     assertCanEnqueue: jest.fn().mockResolvedValue(undefined),
     scheduleFor: jest.fn((_: unknown, now: Date) => now),
   };
+  const manager = {
+    query: jest.fn().mockResolvedValue([]),
+    getRepository: () => ({ insert }),
+  };
   const service = new SmsOutboxService(
-    { insert } as never,
     {} as never,
     {} as never,
+    {
+      transaction: (work: (m: unknown) => Promise<unknown>) => work(manager),
+    } as never,
     { provider: 'eskiz', cost: () => null } as never,
     gate as never,
     {

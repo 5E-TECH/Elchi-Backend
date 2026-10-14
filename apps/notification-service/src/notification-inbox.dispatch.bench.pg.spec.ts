@@ -130,7 +130,7 @@ describePg(
 
     /** Realtime emit kechikishi (ms) — har senariy o'zi o'rnatadi. */
     let emitLatencyMs = 0;
-    /** identity.user.find_all sahifasi kechikishi (ms). */
+    /** identity.audience.resolve sahifasi kechikishi (ms). */
     let identityLatencyMs = 0;
     let emitCount = 0;
 
@@ -373,7 +373,9 @@ describePg(
     it('roles:[logist] 5000 (identity 50 sahifa) — BITTA guruh emit', async () => {
       const page = (pageNo: number) => ({
         data: {
-          items: Array.from({ length: 100 }, (_, i) => ({
+          // 50 sahifadan keyin bo'sh (yangi yig'uvchi `meta.total` ga emas,
+          // bo'sh/to'liq bo'lmagan sahifaga qarab to'xtaydi).
+          items: Array.from({ length: pageNo <= 50 ? 100 : 0 }, (_, i) => ({
             id: String(RECIPIENT_BASE + (pageNo - 1) * 100 + i),
             role: 'logist',
           })),
@@ -387,7 +389,13 @@ describePg(
               setTimeout(resolve, identityLatencyMs),
             );
           }
-          return page(Number(payload?.query?.page ?? 1));
+          // (W8aerwL6) identity.audience.resolve — keyset kursor (`after_id`).
+          const after = payload?.after_id;
+          const pageNo =
+            after === null || after === undefined
+              ? 1
+              : Math.floor((Number(after) - RECIPIENT_BASE) / 100) + 2;
+          return page(pageNo);
         },
       );
       const rolesDto = () => ({

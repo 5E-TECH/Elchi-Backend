@@ -107,6 +107,31 @@ Cloudflare Tunnel. Deploy is driven by `.github/workflows/deploy.yml`.
 > git-ignored and CI runs a gitleaks scan. See
 > `docs/audit/SECRET_ROTATION_RUNBOOK.md`.
 
+### AI (ai-service) — majburiy deploy tartibi (LP3RKvXY)
+
+`deploy.yml` `.env.production` ni repodan OLMAYDI va faqat fayl YO'Q bo'lsa
+zaxiradan tiklaydi — eski fayl jim qoladi; rollback kodni qaytaradi, `.env` ni
+emas. Shuning uchun tartib QAT'IY:
+
+1. SSH → serverdagi `.env.production` ga AI kalitlari QO'LDA qo'shiladi:
+   `ANTHROPIC_API_KEY=sk-ant-…` (faqat shu yerda), `AI_ORDER_MODEL`,
+   `AI_ORDER_VISION_MODEL`, `AI_CLASSIFY_MODEL`, `AI_DAILY_USD_CAP`, … (ro'yxat —
+   `.env.example` "AI Order" bo'limi). `AI_ORDER_ENABLED=false` bilan boshlang.
+2. Repodagi `.env.example` ga faqat bo'sh qiymat yoki `__REPLACE_WITH_…__`
+   placeholder yoziladi (gitleaks allowlist). Kalit HECH QACHON
+   `docker-compose.prod.yml` `environment:` blokiga literal yozilmaydi
+   (`apps/ai-service/src/models/deploy-secrets.guard.spec.ts`).
+3. Shundan KEYIN `main` ga merge/push. Teskari tartibda kod chiqadi-yu AI jim
+   o'chiq qoladi (`/ai/status` → `key_state: 'missing'`).
+4. Deploydan keyin `GET /ai/status`: `key_state: 'ok'` va
+   `model_policy.ok: true` (ekstraksiya modeli Haiku'ga pasaytirilmagan). E2E
+   o'tgach `AI_ORDER_ENABLED=true` → faqat `api-gateway` qayta yaratiladi.
+
+⚠️ `libs/` yoki `docker-compose.prod.yml` o'zgarsa `deploy.yml` `DEPLOY_ALL=true`
+va `RUN_MIGRATIONS=true` qiladi (14 servis qayta quriladi) — ClaudeService
+`libs/common/src/ai` da, ya'ni AI'dagi kichik o'zgarish ham to'liq deploy.
+Buni ish vaqtidan tashqari qiling.
+
 ## Documentation
 
 - `docs/BACKEND_MAP.md` — authoritative service/endpoint/entity map (read this

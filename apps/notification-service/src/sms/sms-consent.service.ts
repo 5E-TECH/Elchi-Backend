@@ -50,7 +50,13 @@ export class SmsConsentService {
     recipients: T[],
     now = new Date(),
   ): Promise<{ allowed: T[]; blocked: T[] }> {
-    const phones = [...new Set(recipients.map((r) => r.phone))];
+    // (sVByLMnt) Rozilik FAQAT normallashtirilgan raqam (+998XXXXXXXXX) bo'yicha
+    // qidiriladi: grant() ham shunday saqlaydi. '998901234567' / '90 123 45 67'
+    // kabi yozuv rozilikni "topmay" qolmasin; normallashmaydigan raqam — blok.
+    const normalized = recipients.map((r) => normalizeSmsPhone(r.phone));
+    const phones = [
+      ...new Set(normalized.filter((p): p is string => p !== null)),
+    ];
     const rows = phones.length
       ? await this.repo.find({
           where: { phone: In(phones), channel: 'sms' },
@@ -65,8 +71,9 @@ export class SmsConsentService {
     const minGrantedAt = now.getTime() - this.ttlDays * DAY_MS;
     const allowed: T[] = [];
     const blocked: T[] = [];
-    for (const recipient of recipients) {
-      const consent = latest.get(recipient.phone);
+    for (const [index, recipient] of recipients.entries()) {
+      const phone = normalized[index];
+      const consent = phone ? latest.get(phone) : undefined;
       const ok =
         !!consent &&
         consent.granted &&

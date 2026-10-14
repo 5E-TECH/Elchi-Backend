@@ -32,6 +32,7 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 import type { Response } from 'express';
+import { randomUUID } from 'node:crypto';
 import { firstValueFrom, TimeoutError, timeout } from 'rxjs';
 import { Roles } from './auth/roles.decorator';
 import { JwtAuthGuard } from './auth/jwt-auth.guard';
@@ -1911,9 +1912,40 @@ export class FinanceGatewayController {
     return this.attachCreatedByUsersToHistory(response);
   }
 
-  // (TMgL1zvq) Kalitsiz haqiqiy ikkita bir xil to'lov vaqtga qarab yutilmasin.
+  /**
+   * (TMgL1zvq / FJVqcUTv) Mijozning `Idempotency-Key` sarlavhasi — trim
+   * qilingan; bo'sh bo'lsa ''. 255 belgidan uzun kalit — 400 (u kassa
+   * tarixining dedup ustuniga yoziladi).
+   */
+  private readIdempotencyKey(idempotencyKey?: string): string {
+    const key = String(idempotencyKey ?? '').trim();
+    if (key.length > 255) {
+      throw new BadRequestException(
+        'Idempotency-Key 255 belgidan oshmasligi kerak',
+      );
+    }
+    return key;
+  }
+
+  /**
+   * (TMgL1zvq) Qo'lda pul o'tkazmasining dedup tokeni.
+   *
+   * • Kalit bor — aynan shu kalit: ikki marta bosish / retry pulni bir marta
+   *   o'tkazadi, takroriy javobda `data.idempotent: true`.
+   * • Kalit yo'q — HAR HTTP so'rov uchun YANGI tasodifiy token. Ilgari bu
+   *   yerda `floor(Date.now()/30 s)` li barmoq izi edi: ikki HAQIQIY bir xil
+   *   to'lov bitta 30 s oynasiga tushsa ikkinchisi jimgina yutilardi (pul
+   *   kirmasdi, javob 200). Endi kalitsiz ikki so'rov — ikki alohida to'lov,
+   *   soatga bog'liq emas.
+   *   Bo'sh token ('') EMAS: u (a) gateway→finance RMQ xabarining qayta
+   *   yetkazilishini dedup qilmay qo'yardi (P0-3 himoyasi yo'qolardi),
+   *   (b) kassa tarixida `source_id` ni NULL qilardi (unique indeks
+   *   himoyasidan chiqib), (c) hamkor daftariga `market:<payment_date>`
+   *   kaliti ketib, bir kunlik ikki to'lovdan biri yutilardi.
+   */
   private resolveTransferToken(idempotencyKey?: string): string {
-    return String(idempotencyKey ?? '').trim();
+    const key = this.readIdempotencyKey(idempotencyKey);
+    return key.length > 0 ? key : `gw:${randomUUID()}`;
   }
 
   // NOTE: the per-order FIFO settlement advance is no longer triggered from the
@@ -2300,24 +2332,28 @@ export class FinanceGatewayController {
     @Headers('idempotency-key') idempotencyKey?: string,
     @Res({ passthrough: true }) res?: Response,
   ) {
-    const dedupKey = String(idempotencyKey ?? '').trim();
-    if (!dedupKey || dedupKey.length > 255) {
+    const clientKey = String(idempotencyKey ?? '').trim();
+    if (!clientKey || clientKey.length > 255) {
       throw new BadRequestException('Idempotency-Key must be 1-255 characters');
     }
+    const actorId = String(req.user?.sub ?? '');
     return this.send<{ statusCode?: number; data?: unknown }>(
       { cmd: 'finance.financial_balance.record' },
       {
         ...dto,
         created_by: req.user?.sub ?? null,
-        dedup_key: dedupKey,
+        // (cSNJN7GP) Mijoz kaliti tizim kalitlari (`investor-profit:<id>`,
+        // `operator-payment:<id>` — ular ham buyurtmasiz, ayni
+        // (source_type, dedup_key) unikal indeksida) bilan to'qnashmasin:
+        // aks holda admin yuborgan kalit investor to'lovining P&L yozuvini
+        // "takroriy" deb yutib yuborishi mumkin edi. Aktor bo'yicha nom
+        // fazosi — boshqa adminning kaliti ham to'qnashmaydi.
+        dedup_key: `manual-entry:${actorId}:${clientKey}`,
       },
     ).then((result) => {
-      // (cSNJN7GP) Nol summada daftar yozuvi yo'q: HTTP ham body kabi 200.
-      if (
-        dto.amount === 0 &&
-        result?.statusCode === 200 &&
-        result.data == null
-      ) {
+      // (cSNJN7GP) Nol summa (yozuv yo'q) va takroriy kalit (mavjud yozuv
+      // qaytadi) — finance 200; HTTP ham 200 (yangi yozuv — 201).
+      if (result?.statusCode === 200) {
         res?.status(200);
       }
       return result;
@@ -2839,13 +2875,27 @@ export class FinanceGatewayController {
   @ApiBearerAuth()
   @ApiOperation({ summary: 'Record a payout to an operator' })
   @ApiBody({ type: CreateOperatorPaymentRequestDto })
+  @ApiHeader({
+    name: 'idempotency-key',
+    required: false,
+    description:
+      "Har to'lov uchun bitta kalit (retry'da ayni kalit). Takroriy so'rov 200 va data.idempotent: true qaytaradi (FJVqcUTv).",
+  })
   createOperatorPayment(
     @Body() dto: CreateOperatorPaymentRequestDto,
     @Req() req: { user?: JwtUser },
+    @Headers('idempotency-key') idempotencyKey?: string,
   ) {
+    // (FJVqcUTv) Kalit ixtiyoriy (FE hali yubormaydi); bo'lsa ikki marta
+    // bosilgan "To'lovni saqlash" operatorga ikki marta to'lamaydi.
+    const key = this.readIdempotencyKey(idempotencyKey);
     return this.send(
       { cmd: 'finance.operator.payment.create' },
-      { ...dto, paid_by_id: req.user?.sub ?? null },
+      {
+        ...dto,
+        paid_by_id: req.user?.sub ?? null,
+        ...(key ? { idempotency_key: key } : {}),
+      },
     );
   }
 

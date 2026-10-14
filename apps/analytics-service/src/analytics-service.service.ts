@@ -45,11 +45,25 @@ type RevenuePeriod = 'daily' | 'weekly' | 'monthly' | 'yearly';
 
 /** Moliyaviy hisobot `cashflowHistory` sahifasining yuqori chegarasi. */
 const MAX_REPORT_PAGE_LIMIT = 100;
-const ANALYTICS_READ_OPTIONS = Object.freeze({
+/**
+ * (VkwhHqvW) Analitika o'qish chaqiruvlari: bitta urinish, 2,5 s. Dashboard
+ * eng ko'pi IKKI ketma-ket bosqich (rol aniqlash → parallel bo'laklar) =
+ * 5 s < gateway `timeout(8000)`; KPI/revenue — bitta parallel bosqich.
+ * `analytics-budget.spec.ts` buni sekin order-service bilan tekshiradi.
+ */
+export const ANALYTICS_READ_OPTIONS = Object.freeze({
   timeoutMs: 2500,
   retries: 0,
   deadlineMs: 2500,
 });
+
+/** (5tUEVG1B) Kuryer dashboardidagi reytingda ko'rsatiladigan qatorlar. */
+const COURIER_LEADERBOARD_SIZE = 10;
+/**
+ * Kuryer o'z o'rnini (`myRank`) top-10 dan tashqarida ham bilishi uchun
+ * order-service'dan so'raladigan to'liq reyting chegarasi (kuryerlar soni).
+ */
+const COURIER_LEADERBOARD_SCAN_LIMIT = 500;
 
 @Injectable()
 export class AnalyticsServiceService {
@@ -104,6 +118,57 @@ export class AnalyticsServiceService {
         message: `Analitika ${part} ma'lumoti hozir olinmadi`,
       });
     }
+  }
+
+  /**
+   * (uN1tjjGu) "Barchasi" (`all=true`) javobining oyna meta'si. order-service
+   * butun davrni eng so'nggi `max_span_days` kunga qisqartiradi (audit C3) —
+   * javob buni JIM qoldirmaydi: `clamped`, `effective_from`, `effective_to`
+   * (qo'llangan oyna, ISO) va xabar "oxirgi N kun". Eski order-service
+   * (`applied_range` yo'q) — `null`.
+   */
+  private allTimeRangeMeta(source: unknown): {
+    meta: {
+      clamped: boolean | null;
+      effective_from: string | null;
+      effective_to: string | null;
+      max_span_days: number | null;
+    };
+    message: string;
+  } {
+    const applied =
+      source && typeof source === 'object'
+        ? ((source as { applied_range?: unknown }).applied_range as
+            | Record<string, unknown>
+            | null
+            | undefined)
+        : null;
+    const clamped =
+      typeof applied?.clamped === 'boolean' ? applied.clamped : null;
+    const maxSpanDays =
+      typeof applied?.max_span_days === 'number' &&
+      Number.isFinite(applied.max_span_days)
+        ? applied.max_span_days
+        : null;
+    const message =
+      clamped === true
+        ? `Dashboard infos (oxirgi ${maxSpanDays ?? '?'} kun)`
+        : clamped === false
+          ? 'Dashboard infos (barcha tarix)'
+          : 'Dashboard infos (all time)';
+    return {
+      meta: {
+        clamped,
+        effective_from:
+          typeof applied?.applied_from === 'string'
+            ? applied.applied_from
+            : null,
+        effective_to:
+          typeof applied?.applied_to === 'string' ? applied.applied_to : null,
+        max_span_days: maxSpanDays,
+      },
+      message,
+    };
   }
 
   /**
@@ -286,7 +351,20 @@ export class AnalyticsServiceService {
     }));
   }
 
-  private ranking(response: unknown) {
+  /**
+   * (PQt3n1N0, 9zbSDkUI) `include_meta` reyting javobi: qatorlar + meta
+   * (`min_orders`, `filtered_out`, reyting davri `from`/`to`). Eski
+   * order-service massiv qaytarsa — meta `null`.
+   */
+  private ranking(response: unknown): {
+    items: any[];
+    meta: {
+      min_orders: number;
+      filtered_out: number;
+      from: string | null;
+      to: string | null;
+    } | null;
+  } {
     const value = this.unwrap<any>(response as any);
     if (Array.isArray(value)) return { items: value, meta: null };
     const items = Array.isArray(value?.items) ? value.items : [];
@@ -295,9 +373,42 @@ export class AnalyticsServiceService {
         ? {
             min_orders: Number(value.min_orders),
             filtered_out: Number(value.filtered_out),
+            from: typeof value.from === 'string' ? value.from : null,
+            to: typeof value.to === 'string' ? value.to : null,
           }
         : null;
     return { items, meta };
+  }
+
+  /**
+   * (5tUEVG1B) Kuryer dashboardidagi reyting. Maxfiylik: boshqa kuryerlarning
+   * PUL maydonlari (profit, maosh, tarif) va identity qatori YUBORILMAYDI —
+   * order-service javobidan qat'i nazar faqat oq ro'yxatdagi 5 maydon.
+   * `myRank` — so'rovchining to'liq reytingdagi o'rni (chegaradan o'tmagan
+   * yoki davrda buyurtmasi yo'q bo'lsa `null`), `myRanking` — o'z qatori.
+   */
+  private courierLeaderboard(response: unknown, requesterId: string) {
+    const { items, meta } = this.ranking(response);
+    const rows = items.map((row: any) => ({
+      courier_id:
+        row?.courier_id !== null && row?.courier_id !== undefined
+          ? String(row.courier_id)
+          : null,
+      courier_name:
+        typeof row?.courier_name === 'string' ? row.courier_name : null,
+      total_orders: this.parseNumber(row?.total_orders),
+      successful_orders: this.parseNumber(row?.successful_orders),
+      success_rate: this.parseNumber(row?.success_rate),
+    }));
+    const index = requesterId
+      ? rows.findIndex((row) => row.courier_id === requesterId)
+      : -1;
+    return {
+      items: rows.slice(0, COURIER_LEADERBOARD_SIZE),
+      meta,
+      myRank: index >= 0 ? index + 1 : null,
+      myRanking: index >= 0 ? rows[index] : null,
+    };
   }
 
   /**
@@ -477,6 +588,17 @@ export class AnalyticsServiceService {
     };
   }
 
+  /**
+   * ⚠️ (mKS1mjNr) KPI yo'lidan olib tashlandi (`fulfillment_stats` SQL).
+   * Hozir FAQAT `getOrderReport` (`byRegion`, `topProducts`) ishlatadi —
+   * oraliqdagi barcha buyurtmalar `order.items` bilan 200 talik sahifalarda
+   * (≤ 20 000 qator) RMQ orqali tortiladi; `getFinanceReport` ishlatmaydi.
+   * Reja: order-service'da `order.analytics.region_distribution`
+   * (`GROUP BY region_id`) va `order.analytics.top_products`
+   * (`order_items` ⋈ `orders`, `SUM(quantity) GROUP BY product_id LIMIT 10`)
+   * agregatlari, `countOrdersByStatus` dagi 9 ta chaqiruv o'rniga bitta
+   * `GROUP BY status` — shunda hisobot ham ≤ 5 RMQ chaqiruv bo'ladi.
+   */
   private async collectOrders(query: Record<string, any>) {
     const limit = 200;
     let page = 1;
@@ -543,12 +665,24 @@ export class AnalyticsServiceService {
       return requester;
     }
 
+    // (VkwhHqvW) identity javob bermasa — 503. Ilgari xato `null` ga
+    // yutilardi va operator O'Z user id'si market id deb olinib, dashboard
+    // soxta nollar bilan 200 qaytarardi. Marketi umuman yo'q operator
+    // (javob bor, `market_id` yo'q) — avvalgidek bo'sh ro'yxat (fail-closed).
     const operatorRes = await rmqSend<any>(
       this.identityClient,
       { cmd: 'identity.user.find_by_id' },
       { id: requester.id },
       ANALYTICS_READ_OPTIONS,
-    ).catch(() => null);
+    ).catch((error: unknown) => {
+      this.logger.warn(
+        `Analytics market operatori aniqlanmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw new RpcException({
+        statusCode: 503,
+        message: "Analitika market ma'lumoti hozir olinmadi",
+      });
+    });
     const operatorData = this.unwrap<any>(operatorRes);
     const marketId = operatorData?.market_id;
 
@@ -562,20 +696,23 @@ export class AnalyticsServiceService {
     };
   }
 
-  private async resolveRequesterBranchDashboard(
+  /**
+   * (VkwhHqvW) Filial dashboard'i — filial id ALLAQACHON aniqlangan.
+   * Ilgari bu yerda filial yana qaytadan aniqlanardi va chaqiruv 5 ta
+   * order bo'lagidan KEYIN ketma-ket bajarilardi: filial roli uchun eng
+   * yomon holat 4 × 2,5 s = 10 s — gateway'ning 8 s chegarasidan uzun.
+   * Endi u order bo'laklari bilan PARALLEL ketadi.
+   */
+  private async fetchBranchDashboard(
+    branchId: string,
     requester: RequesterContext | undefined,
     filter: {
       startDate?: string;
       endDate?: string;
       period?: string;
       all?: boolean;
-    } = {},
+    },
   ) {
-    const branchId = await this.resolveRequesterBranchId(requester);
-    if (!branchId) {
-      return null;
-    }
-
     const dashboardRes = await rmqSend<any>(
       this.branchClient,
       { cmd: 'branch.dashboard' },
@@ -586,8 +723,15 @@ export class AnalyticsServiceService {
     return this.unwrap<any>(dashboardRes) ?? null;
   }
 
+  /**
+   * So'rovchining filiali: avval JWT `branch_id`, bo'lmasa branch-service.
+   * `failClosed` (dashboard): branch-service javob bermasa 503 — filial
+   * doirasini aniqlay olmagan holda kompaniya bo'yicha raqamlar chiqmasin
+   * (VkwhHqvW: 2,5 s / qayta urinishsiz rejimda bu ehtimol oshgan edi).
+   */
   private async resolveRequesterBranchId(
     requester: RequesterContext | undefined,
+    failClosed = false,
   ): Promise<string | null> {
     if (!requester?.id) {
       return null;
@@ -601,7 +745,16 @@ export class AnalyticsServiceService {
       { cmd: 'branch.user.find_by_user' },
       { user_id: requester.id, requester },
       ANALYTICS_READ_OPTIONS,
-    ).catch(() => null);
+    ).catch((error: unknown) => {
+      if (!failClosed) return null;
+      this.logger.warn(
+        `Analytics filial aniqlanmadi: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      throw new RpcException({
+        statusCode: 503,
+        message: "Analitika filial ma'lumoti hozir olinmadi",
+      });
+    });
     const assignmentData = this.unwrap<any>(assignmentRes);
     return assignmentData?.branch_id ? String(assignmentData.branch_id) : null;
   }
@@ -633,8 +786,10 @@ export class AnalyticsServiceService {
       roles.has(Roles.BRANCH) ||
       roles.has(Roles.MANAGER) ||
       roles.has(Roles.REGISTRATOR);
+    // (VkwhHqvW) filial aniqlanmasa (branch-service xatosi) — 503, kompaniya
+    // bo'yicha raqamlar emas.
     const branchId = isBranchRole
-      ? await this.resolveRequesterBranchId(requester)
+      ? await this.resolveRequesterBranchId(requester, true)
       : null;
     const scopedRange = branchId
       ? {
@@ -644,14 +799,33 @@ export class AnalyticsServiceService {
       : dashboardRange;
 
     if (roles.has(Roles.COURIER)) {
-      const myStat = await this.readPart(
-        this.orderClient,
-        'order.analytics.courier_stat',
-        { requester, ...dashboardRange },
-        failedParts,
-        'myStat',
-      );
+      // (5tUEVG1B) kuryer o'z o'rnini ko'rsin: reyting tanlangan davr
+      // bo'yicha `order.analytics.top_couriers` dan (PQt3n1N0), parallel.
+      const [myStat, topCouriersRes] = await Promise.all([
+        this.readPart(
+          this.orderClient,
+          'order.analytics.courier_stat',
+          { requester, ...dashboardRange },
+          failedParts,
+          'myStat',
+        ),
+        this.readPart(
+          this.orderClient,
+          'order.analytics.top_couriers',
+          {
+            ...dashboardRange,
+            limit: COURIER_LEADERBOARD_SCAN_LIMIT,
+            include_meta: true,
+          },
+          failedParts,
+          'topCouriers',
+        ),
+      ]);
       this.requirePart(myStat, 'myStat');
+      const leaderboard = this.courierLeaderboard(
+        topCouriersRes,
+        String(requester?.id ?? ''),
+      );
       const unwrappedMyStat = this.unwrap<any>(myStat);
       const courierScopedStats = unwrappedMyStat
         ? [
@@ -665,16 +839,23 @@ export class AnalyticsServiceService {
           ]
         : [];
 
+      const courierAllTime = isAllTime
+        ? this.allTimeRangeMeta(unwrappedMyStat)
+        : null;
       return successRes(
         {
           myStat: unwrappedMyStat,
           couriers: courierScopedStats,
-          topCouriers: [],
-          degraded: false,
-          failed_parts: [],
+          topCouriers: leaderboard.items,
+          topCouriersMeta: leaderboard.meta,
+          myRank: leaderboard.myRank,
+          myRanking: leaderboard.myRanking,
+          degraded: failedParts.length > 0,
+          failed_parts: failedParts.sort(),
+          ...(courierAllTime?.meta ?? {}),
         },
         200,
-        'Dashboard infos',
+        courierAllTime?.message ?? 'Dashboard infos',
       );
     }
 
@@ -714,10 +895,14 @@ export class AnalyticsServiceService {
         ),
       ]);
       this.requirePart(myStat, 'myStat');
+      const unwrappedMarketStat = this.unwrap<any>(myStat);
+      const marketAllTime = isAllTime
+        ? this.allTimeRangeMeta(unwrappedMarketStat)
+        : null;
 
       return successRes(
         {
-          myStat: this.unwrap(myStat),
+          myStat: unwrappedMarketStat,
           markets: this.ownMarketStatsRows(
             markets,
             String(marketRequester?.id ?? ''),
@@ -727,58 +912,66 @@ export class AnalyticsServiceService {
           topOperators: this.unwrap(topOperators as any) ?? [],
           degraded: failedParts.length > 0,
           failed_parts: failedParts.sort(),
+          ...(marketAllTime?.meta ?? {}),
         },
         200,
-        'Dashboard infos',
+        marketAllTime?.message ?? 'Dashboard infos',
       );
     }
 
-    const [orders, markets, couriers, topMarkets, topBranches] =
-      await Promise.all([
-        this.readPart(
-          this.orderClient,
-          'order.analytics.overview',
-          scopedRange,
-          failedParts,
-          'overview',
-        ),
-        this.readPart(
-          this.orderClient,
-          'order.analytics.market_stats',
-          scopedRange,
-          failedParts,
-          'markets',
-        ),
-        this.readPart(
-          this.orderClient,
-          'order.analytics.courier_stats',
-          scopedRange,
-          failedParts,
-          'couriers',
-        ),
-        this.readPart(
-          this.orderClient,
-          'order.analytics.top_markets',
-          { ...scopedRange, include_meta: true },
-          failedParts,
-          'topMarkets',
-        ),
-        this.readPart(
-          this.orderClient,
-          'order.analytics.top_branches',
-          { ...scopedRange, include_meta: true },
-          failedParts,
-          'topBranches',
-        ),
-      ]);
+    const branchDashboardFilter = {
+      ...normalized,
+      period: filter.period,
+      all: filter.all,
+    };
+    const [
+      orders,
+      markets,
+      couriers,
+      topMarkets,
+      topBranches,
+      branchDashboard,
+    ] = await Promise.all([
+      this.readPart(
+        this.orderClient,
+        'order.analytics.overview',
+        scopedRange,
+        failedParts,
+        'overview',
+      ),
+      this.readPart(
+        this.orderClient,
+        'order.analytics.market_stats',
+        scopedRange,
+        failedParts,
+        'markets',
+      ),
+      this.readPart(
+        this.orderClient,
+        'order.analytics.courier_stats',
+        scopedRange,
+        failedParts,
+        'couriers',
+      ),
+      this.readPart(
+        this.orderClient,
+        'order.analytics.top_markets',
+        { ...scopedRange, include_meta: true },
+        failedParts,
+        'topMarkets',
+      ),
+      this.readPart(
+        this.orderClient,
+        'order.analytics.top_branches',
+        { ...scopedRange, include_meta: true },
+        failedParts,
+        'topBranches',
+      ),
+      isBranchRole && branchId
+        ? this.fetchBranchDashboard(branchId, requester, branchDashboardFilter)
+        : Promise.resolve(null),
+    ]);
     this.requirePart(orders, 'overview');
-    const branchDashboard = isBranchRole
-      ? await this.resolveRequesterBranchDashboard(requester, {
-          ...normalized,
-          period: filter.period,
-          all: filter.all,
-        })
-      : null;
     if (isBranchRole && branchId && branchDashboard === null) {
       failedParts.push('branchDashboard');
     }
@@ -788,7 +981,7 @@ export class AnalyticsServiceService {
       ordersOverview,
       isRegistrator,
     );
-    const appliedRange = ordersOverview?.applied_range;
+    const allTime = isAllTime ? this.allTimeRangeMeta(ordersOverview) : null;
 
     return successRes(
       {
@@ -802,16 +995,10 @@ export class AnalyticsServiceService {
         branchDashboard,
         degraded: failedParts.length > 0,
         failed_parts: failedParts.sort(),
-        ...(isAllTime
-          ? {
-              clamped: appliedRange?.clamped ?? null,
-              effective_from: appliedRange?.applied_from ?? null,
-              effective_to: appliedRange?.applied_to ?? null,
-            }
-          : {}),
+        ...(allTime?.meta ?? {}),
       },
       200,
-      isAllTime ? 'Dashboard infos (barcha tarix)' : 'Dashboard infos',
+      allTime?.message ?? 'Dashboard infos',
     );
   }
 
@@ -895,79 +1082,55 @@ export class AnalyticsServiceService {
           ? 'monthly'
           : 'daily';
     const failedParts: string[] = [];
-    const [overview, revenue, courierStats, topMarkets] = await Promise.all([
-      this.readPart(
-        this.orderClient,
-        'order.analytics.overview',
-        normalized,
-        failedParts,
-        'overview',
-      ),
-      this.readPart(
-        this.orderClient,
-        'order.analytics.revenue',
-        { ...normalized, period: revenuePeriod },
-        failedParts,
-        'revenue',
-      ),
-      this.readPart(
-        this.orderClient,
-        'order.analytics.courier_stats',
-        normalized,
-        failedParts,
-        'couriers',
-      ),
-      this.readPart(
-        this.orderClient,
-        'order.analytics.top_markets',
-        { limit: 10, ...normalized, include_meta: true },
-        failedParts,
-        'topMarkets',
-      ),
-    ]);
+    // (mKS1mjNr) Order-service'ga 5 ta chaqiruv, hammasi PARALLEL (bitta
+    // 2,5 s bosqich). Ilgari yetkazish vaqti uchun sotilgan buyurtmalar
+    // 4 status × 200 talik sahifalab (100 sahifagacha) tortilardi.
+    const [overview, revenue, courierStats, topMarkets, fulfillment] =
+      await Promise.all([
+        this.readPart(
+          this.orderClient,
+          'order.analytics.overview',
+          normalized,
+          failedParts,
+          'overview',
+        ),
+        this.readPart(
+          this.orderClient,
+          'order.analytics.revenue',
+          { ...normalized, period: revenuePeriod },
+          failedParts,
+          'revenue',
+        ),
+        this.readPart(
+          this.orderClient,
+          'order.analytics.courier_stats',
+          normalized,
+          failedParts,
+          'couriers',
+        ),
+        this.readPart(
+          this.orderClient,
+          'order.analytics.top_markets',
+          { limit: 10, ...normalized, include_meta: true },
+          failedParts,
+          'topMarkets',
+        ),
+        this.readPart(
+          this.orderClient,
+          'order.analytics.fulfillment_stats',
+          normalized,
+          failedParts,
+          'fulfillment',
+        ),
+      ]);
     this.requirePart(overview, 'overview');
 
-    const soldStatuses = [
-      Order_status.SOLD,
-      Order_status.PAID,
-      Order_status.CLOSED,
-      Order_status.PARTLY_PAID,
-    ];
-
-    let soldOrdersResult;
-    try {
-      soldOrdersResult = await Promise.all(
-        soldStatuses.map((status) =>
-          this.collectOrders({
-            status,
-            start_day: normalized.startDate,
-            end_day: normalized.endDate,
-          }),
-        ),
-      );
-    } catch {
-      throw new RpcException({
-        statusCode: 503,
-        message: 'Analitika buyurtmalari hozir olinmadi',
-      });
-    }
-    const soldOrders = soldOrdersResult.flatMap((res) => res.items);
-
-    let deliveryMsTotal = 0;
-    let deliveryCount = 0;
-    let onTimeCount = 0; // 24 soat ichida yetkazilganlar (SLA)
-    const SLA_MS = 24 * 60 * 60 * 1000;
-    for (const order of soldOrders) {
-      const createdAt = this.parseDateValue(order?.createdAt);
-      const soldAt = order?.sold_at ? new Date(Number(order.sold_at)) : null;
-      if (!createdAt || !soldAt || Number.isNaN(soldAt.getTime())) continue;
-      const diff = soldAt.getTime() - createdAt.getTime();
-      if (diff > 0) {
-        deliveryMsTotal += diff;
-        deliveryCount += 1;
-        if (diff <= SLA_MS) onTimeCount += 1;
-      }
-    }
+    // (mKS1mjNr) SQL agregat (`getFulfillmentStats`); qiymatlar SATR kelishi
+    // mumkin — parseNumber. Formulalar eski JS hisobi bilan AYNAN bir xil.
+    const fulfillmentData = this.unwrap<any>(fulfillment as any);
+    const deliveryCount = this.parseNumber(fulfillmentData?.deliveredCount);
+    const deliveryMsTotal = this.parseNumber(fulfillmentData?.deliveryMsTotal);
+    const onTimeCount = this.parseNumber(fulfillmentData?.onTimeCount);
 
     const overviewData = this.unwrap<any>(overview as any);
     const revenueData = this.unwrapRevenue(revenue);

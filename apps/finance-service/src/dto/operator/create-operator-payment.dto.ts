@@ -4,6 +4,7 @@ import {
   IsPositive,
   IsString,
   Matches,
+  MaxLength,
 } from 'class-validator';
 
 export class CreateOperatorPaymentDto {
@@ -34,4 +35,14 @@ export class CreateOperatorPaymentDto {
   @IsOptional()
   @IsString()
   note?: string | null;
+
+  /**
+   * (FJVqcUTv) Gateway'dagi `Idempotency-Key` sarlavhasi. Bo'lsa — ayni
+   * operator uchun ayni kalit bilan kelgan takroriy so'rov pulni ikkinchi
+   * marta yechmaydi, mavjud to'lovni `idempotent: true` bilan qaytaradi.
+   */
+  @IsOptional()
+  @IsString()
+  @MaxLength(255)
+  idempotency_key?: string | null;
 }
